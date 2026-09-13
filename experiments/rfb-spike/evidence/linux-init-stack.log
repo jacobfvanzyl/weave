@@ -1,0 +1,19 @@
+#0  0x00007f3bb34b9312 in __syscall_cancel_arch () from /usr/lib64/libc.so.6
+#0  0x00007f3bb34b9312 in __syscall_cancel_arch () from /usr/lib64/libc.so.6
+#1  0x00007f3bb34ad52c in __internal_syscall_cancel () from /usr/lib64/libc.so.6
+#2  0x00007f3bb34ad574 in __syscall_cancel () from /usr/lib64/libc.so.6
+#3  0x00007f3bb3527426 in ppoll () from /usr/lib64/libc.so.6
+#4  0x00007f3bb3324125 in g_main_context_iterate_unlocked.isra () from /usr/lib64/libglib-2.0.so.0
+#5  0x00007f3bb33241e3 in g_main_context_iteration () from /usr/lib64/libglib-2.0.so.0
+#6  0x00007f3bbc8679f8 in base::MessagePumpGlib::Run(base::MessagePump::Delegate*) () at ../../base/message_loop/message_pump_glib.cc:766
+#7  0x00007f3bbc7ffe59 in base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::Run(bool, base::TimeDelta) () at ../../base/task/sequence_manager/thread_controller_with_message_pump_impl.cc:656
+#8  0x00007f3bbc7c7957 in base::RunLoop::Run(base::Location const&) () at ../../base/run_loop.cc:135
+#9  0x00007f3bbb615a78 in first_run::internal::ShowEulaDialog() () at ../../chrome/browser/first_run/first_run_internal_linux.cc:69
+#10 0x00007f3bbadf2efe in ChromeBrowserMainParts::PreMainMessageLoopRunImpl() () at ../../chrome/browser/chrome_browser_main.cc:1760
+#11 0x00007f3bbadf2df9 in ChromeBrowserMainParts::PreMainMessageLoopRun() () at ../../chrome/browser/chrome_browser_main.cc:1491
+#13 0x00007f3bba167835 in content::StartupTaskRunner::RunAllTasksNow(bool) () at ../../base/functional/callback.h:155
+#14 0x00007f3bb9ba99e7 in content::BrowserMainLoop::CreateStartupTasks() () at ../../content/browser/browser_main_loop.cc:937
+#15 0x00007f3bb9babfe5 in content::BrowserMainRunnerImpl::Initialize(content::MainFunctionParams) () at ../../content/browser/browser_main_runner_impl.cc:135
+#16 0x00007f3bb6cb85c0 in CefMainRunner::RunMainProcess(content::MainFunctionParams) () at ../../cef/libcef/browser/main_runner.cc:385
+#17 0x00007f3bb6d4a4b8 in ChromeMainDelegateCef::RunProcess(std::__Cr::basic_string<char, std::__Cr::char_traits<char>, std::__Cr::allocator<char> > const&, content::MainFunctionParams) () at ../../cef/libcef/common/chrome/chrome_main_delegate_cef.cc:518
+[Inferior 1 (process 1116109) detached]

@@ -1,0 +1,10 @@
+{
+  "mac": {
+    "exit": 1,
+    "log": "apple-link-mac.log"
+  },
+  "ios": {
+    "exit": 1,
+    "log": "apple-link-ios.log"
+  }
+}

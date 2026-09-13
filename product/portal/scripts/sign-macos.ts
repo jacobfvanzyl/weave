@@ -59,9 +59,9 @@ if (!requirement.includes(`identifier "${identifier}"`) || requirement.includes(
 }
 
 // The PTY owner and its addon form one matching release with the Host.
-for (const component of ['weave-terminal-service', 'terminal-vt.node']) {
+for (const component of ['weave-terminal-service', 'terminal-vt.node', 'weave-browser-service']) {
   const file = join(dirname(target), component);
-  if (!(await stat(file)).isFile()) throw new Error(`Missing Terminal Service component: ${component}`);
+  if (!(await stat(file)).isFile()) throw new Error(`Missing Host component: ${component}`);
   await run(['--force', '--sign', identity, '--identifier', `${identifier}.${component.replaceAll('.', '-')}`, '--timestamp=none', file]);
   await run(['--verify', '--strict', '--verbose=2', file]);
 }

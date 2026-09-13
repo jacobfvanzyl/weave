@@ -1,0 +1,5 @@
+<!doctype html><meta charset="utf-8"><style>body{margin:0;font:18px sans-serif;background:#ddd} .box{width:240px;height:120px;margin:30px;background:#387ca5;color:white;padding:20px;box-sizing:border-box}</style><div class="box" style="will-change:transform" id="child">Child localhost origin</div><script>
+const fixed=new URL(location).searchParams.get('position');let x=0;
+function frame(){document.querySelector('#child').style.transform=`translateX(${x++%180}px)`;requestAnimationFrame(frame)}
+if(fixed===null)frame();else document.querySelector('#child').style.transform=`translateX(${Number(fixed)}px)`;
+</script>

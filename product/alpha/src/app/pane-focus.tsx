@@ -50,8 +50,9 @@ export class PaneFocusOwner {
   }
   didFocus(id: string) {
     // A native acknowledgement may arrive after a newer request was made.
-    if (this.inFlight && this.target !== id) { this.schedule(); return; }
+    if (this.inFlight && this.target !== id) { this.schedule(); return false; }
     this.focused = id; this.publish(id);
+    return true;
   }
   didBlur(id: string) {
     const lostPaneFocus = this.focused === id;
@@ -92,7 +93,16 @@ export class PaneFocusOwner {
       const focused = await adapter.focus(() => this.connected && this.target === id && !this.blocked() && adapter.available());
       if (focused && this.target === id && this.adapters.get(id) === adapter) this.focused = id;
     } catch { /* A hidden or removed native surface reports readiness again if it returns. */ }
-    finally { this.inFlight = false; if (this.target !== id) this.schedule(); }
+    finally {
+      this.inFlight = false;
+      if (this.target !== id) {
+        // An older focusWeb/native-focus IPC can finish after a pointer has
+        // already selected and focused another Pane. Reassert that target;
+        // its earlier acknowledgement no longer proves native responder state.
+        this.focused = undefined;
+        this.schedule();
+      }
+    }
   }
   connect() {
     this.connected = true;
@@ -114,7 +124,10 @@ export class PaneFocusOwner {
       if (element.closest(overlaySelector)) return;
       if (this.browseOnly && !element.closest(editableSelector + ', [data-slot="native-terminal"]')) return;
       const id = element.closest<HTMLElement>('[data-pane-focus-id]')?.dataset.paneFocusId;
-      if (id) this.request(id);
+      if (id) {
+        if (this.softwareKeyboard && element.closest('[data-slot="pane-top-rail"]')) this.browse(id);
+        else this.request(id);
+      }
       // Mouse actions on ordinary chrome must not strand the keyboard on a
       // button. Keep normal focus behavior for menus and editable fields.
       if (event.button === 0 && !(document.activeElement as HTMLElement | null)?.matches(editableSelector) && !element.closest(`${editableSelector}, [aria-haspopup], [role="separator"]`) && element.closest('button')) event.preventDefault();

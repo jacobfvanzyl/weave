@@ -89,6 +89,7 @@
   --zed-text-disabled: #45475a;
   --zed-icon-muted: #7f849c;
   --zed-accent: #cba6f7;
+  --zed-peach: #fab387;
   --zed-focus: #b4befe;
   --terminal-focus: #89b4fa;
   --terminal-focus-foreground: var(--zed-rail-background);
@@ -174,6 +175,7 @@
   --font-mono: "JetBrains Mono Nerd Font", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --color-status-bar: var(--status-bar);
   --color-title-bar: var(--title-bar);
+  --color-peach: var(--zed-peach);
   --color-terminal-focus: var(--terminal-focus);
   --color-terminal-focus-foreground: var(--terminal-focus-foreground);
   --color-status-active: var(--status-active);
@@ -280,7 +282,7 @@
 [data-slot="sidebar-toggle-rail"] { -webkit-app-region: no-drag; }
 
 /* Keep the buttons' native no-drag hit regions registered while hiding artwork. */
-[data-slot="terminal-top-rail"][data-hover-actions]:not(:hover):not(:focus-within):not([data-native-hover]) button svg {
+:is([data-slot="terminal-top-rail"], [data-slot="pane-top-rail"])[data-hover-actions]:not(:hover):not(:focus-within):not([data-native-hover]) button svg {
   opacity: 0;
 }
 
@@ -370,7 +372,7 @@
 [data-agent-seam="overlap"][data-input-owner="agent"] > #agent-conversation { position: relative; z-index: 2; }
 
 /* Only the pane at the outside bottom-right follows the OS window corner. */
-[data-slot="terminal-focus-border"][data-window-bottom-right] { border-bottom-right-radius: var(--alpha-window-corner-radius, 0px); }
+:is([data-slot="terminal-focus-border"], [data-slot="pane-focus-border"])[data-window-bottom-right] { border-bottom-right-radius: var(--alpha-window-corner-radius, 0px); }
 [data-slot="thread-pane"][data-window-bottom-right] { --agent-bottom-right-radius: var(--alpha-window-corner-radius, 0px); }
 
 /* Native terminal underlays show through only their own DOM ancestor chain.

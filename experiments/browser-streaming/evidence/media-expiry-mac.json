@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "platform": "darwin",
+  "browser": "Chrome/153.0.8010.36",
+  "expired": true,
+  "before": {
+    "peers": 1,
+    "captures": 1
+  },
+  "after": {
+    "peers": 0,
+    "captures": 0
+  },
+  "browserAvailable": true,
+  "expiryMs": 30000
+}

@@ -1,3 +1,6 @@
+import { connect as connectSocket, type Socket } from 'node:net';
+import { lstat } from 'node:fs/promises';
+import { PORTAL_BROWSER_RFB_PATH, browserProfileId } from '@weave/product-protocol';
 import { encodeHostMessage, decodeHostMessage } from '@weave/product-protocol';
 import { ThreadMembershipError } from './catalog.ts';
 import { hostVersion } from './version.ts';
@@ -16,6 +19,7 @@ import {
   type PortalPrincipalSummary,
   type PortalRpcMethod,
   TERMINAL_EVENT_METHOD,
+  BROWSER_EVENT_METHOD,
   WORKSPACE_FILE_RPC_METHODS,
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
 } from '@weave/product-protocol';
@@ -161,6 +165,11 @@ const rpcWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) =>
               method: TERMINAL_EVENT_METHOD,
               params: notification,
             }),
+          (notification) => {
+            if (upgraded.socket.readyState !== WebSocket.OPEN || upgraded.socket.bufferedAmount > 256 * 1024) return false;
+            send(upgraded.socket, { jsonrpc: '2.0', method: BROWSER_EVENT_METHOD, params: notification });
+            return true;
+          },
         );
         stopMonitor = activeCredentialMonitor(
           portal,
@@ -254,6 +263,70 @@ const rpcWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) =>
   upgraded.socket.onclose = () => {
     stopMonitor?.();
     session?.close();
+  };
+  return upgraded.response;
+};
+
+const browserRfbWebSocket = (request: Request, portal: Portal, upgrade: HostUpgrade) => {
+  const denied = validateUpgrade(request, portal);
+  if (denied) return denied;
+  const upgraded = upgrade(request), socket = upgraded.socket;
+  const challenge = portal.security.challenge(PORTAL_BROWSER_RFB_PATH, request.headers.get('origin') ?? undefined);
+  let principal: PortalPrincipal | undefined;
+  let lease: Awaited<ReturnType<Portal['bindBrowserStream']>> | undefined;
+  let stream: Socket | undefined;
+  let closed = false, bound = false;
+  const stop = (code = 1000, reason = 'Browser display detached.') => {
+    if (closed) return;
+    closed = true; clearTimeout(timeout); stream?.destroy(); lease?.close();
+    if (socket.readyState === WebSocket.OPEN) socket.close(code, reason);
+  };
+  const timeout = setTimeout(() => stop(1008, 'Browser attachment timed out.'), 10000);
+  socket.onopen = () => sendJson(socket, challenge);
+  socket.onclose = () => stop();
+  let queue = Promise.resolve(), queuedBytes = 0;
+  socket.onmessage = event => {
+    const size = typeof event.data === 'string' ? Buffer.byteLength(event.data) : event.data.byteLength;
+    // RFB input is tiny. Bound both untrusted frames and pipelined writes.
+    if (size > 65536 || (queuedBytes += size) > 131072) { stop(1009, 'Browser input exceeded its limit.'); return; }
+    queue = queue.then(async () => {
+      if (closed) return;
+      try {
+        if (!principal) {
+          if (typeof event.data !== 'string') throw new Error('Expected browser authentication');
+          principal = await portal.security.authenticate(challenge, parsePortalAuthResponse(JSON.parse(event.data)));
+          if (closed) return;
+          sendJson(socket, { type: PORTAL_AUTHENTICATED_TYPE, principal: principalSummary(principal) });
+        } else if (!bound) {
+          if (typeof event.data !== 'string') throw new Error('Expected browser attachment');
+          const message = JSON.parse(event.data);
+          if (message.type !== 'browser.rfb.bind' || Object.keys(message).some(key => !['type', 'ticket'].includes(key))) throw new Error('Invalid browser attachment');
+          lease = await portal.bindBrowserStream(principal, browserProfileId(message.ticket), () => stop(1008, 'Browser viewing permission ended.'));
+          if (closed) { lease.close(); return; }
+          const metadata = await lstat(lease.path);
+          if (!metadata.isSocket() || metadata.uid !== process.getuid?.() || metadata.mode & 0o077) throw new Error('Unsafe browser transport');
+          if (closed || !lease.active()) { lease.close(); return; }
+          const connection = connectSocket(lease.path); stream = connection;
+          connection.on('error', () => stop(1011, 'Browser transport unavailable.'));
+          connection.on('close', () => stop(1000, 'Browser runtime disconnected.'));
+          await new Promise<void>((resolve, reject) => { connection.once('connect', resolve); connection.once('error', reject); connection.once('close', () => reject(new Error('Browser transport closed'))); });
+          if (closed || !lease.active()) { connection.destroy(); return; }
+          bound = true; clearTimeout(timeout);
+          sendJson(socket, { type: 'browser.rfb.ready' });
+          connection.on('data', (bytes: Buffer) => {
+            if (closed || !lease?.active()) { stop(); return; }
+            // Disconnect a slow viewer rather than accumulating stale framebuffer data.
+            if (socket.bufferedAmount + bytes.byteLength > 4 * 1024 * 1024) { stop(1013, 'Browser display fell behind; reconnect.'); return; }
+            if (socket.send(bytes) === 0) stop(1013, 'Browser display could not be queued.');
+          });
+        } else {
+          if (typeof event.data === 'string' || !lease?.active() || !stream) throw new Error('Expected binary RFB data');
+          if (stream.writableLength + size > 131072) { stop(1013, 'Browser input fell behind.'); return; }
+          stream.write(event.data);
+        }
+      } catch { stop(1008, 'Browser authentication or attachment unavailable.'); }
+    }).finally(() => { queuedBytes -= size; });
+    return queue;
   };
   return upgraded.response;
 };
@@ -370,6 +443,7 @@ export const startPortalServer = (
       const response = path === PORTAL_PAIR_PATH ? pairingWebSocket(request, portal, upgrade)
         : path === PORTAL_RPC_PATH ? rpcWebSocket(request, portal, upgrade)
         : path === PORTAL_ACP_PATH ? acpWebSocket(request, portal, upgrade)
+        : path === PORTAL_BROWSER_RFB_PATH ? browserRfbWebSocket(request, portal, upgrade)
         : new Response('Not found.', { status: 404 });
       // Bun can call websocket.open synchronously inside upgrade. Install the
       // authentication/session handlers first so the initial challenge is never lost.

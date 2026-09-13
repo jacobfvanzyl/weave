@@ -1,0 +1,199 @@
+[
+  {
+    "sent": {
+      "id": 1,
+      "method": "Target.setDiscoverTargets",
+      "params": {
+        "discover": true
+      }
+    }
+  },
+  {
+    "method": "Target.targetCreated",
+    "params": {
+      "targetInfo": {
+        "targetId": "23EB68B6E1E7B4FF828E7383F7C94B48",
+        "type": "browser_ui",
+        "title": "Omnibox Popup",
+        "url": "chrome://omnibox-popup.top-chrome/",
+        "attached": false,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "method": "Target.targetCreated",
+    "params": {
+      "targetInfo": {
+        "targetId": "36B01724C8FBCF94A047B301F1DA25D9",
+        "type": "page",
+        "title": "about:blank",
+        "url": "about:blank",
+        "attached": false,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "method": "Target.targetCreated",
+    "params": {
+      "targetInfo": {
+        "targetId": "9506F7EB2C3203B94E0E1F385977978A",
+        "type": "browser_ui",
+        "title": "Omnibox Popup",
+        "url": "chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html",
+        "attached": false,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "method": "Target.targetCreated",
+    "params": {
+      "targetInfo": {
+        "targetId": "A53719DDB5754D37AC3827ACC0CE2153",
+        "type": "page",
+        "title": "CEF foundation fixture",
+        "url": "http://127.0.0.1:19380/fixture.html?mcp=1",
+        "attached": false,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "id": 1,
+    "result": {}
+  },
+  {
+    "sent": {
+      "id": 2,
+      "method": "Target.createTarget",
+      "params": {
+        "url": "about:blank",
+        "background": true
+      }
+    }
+  },
+  {
+    "method": "Target.targetCreated",
+    "params": {
+      "targetInfo": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293",
+        "type": "other",
+        "title": "",
+        "url": "",
+        "attached": false,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "id": 2,
+    "result": {
+      "targetId": "A5496A8A527DD28B9A89B39F06FE8293"
+    }
+  },
+  {
+    "method": "Target.targetInfoChanged",
+    "params": {
+      "targetInfo": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293",
+        "type": "page",
+        "title": "about:blank",
+        "url": "about:blank",
+        "attached": false,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "sent": {
+      "id": 3,
+      "method": "Target.getTargetInfo",
+      "params": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293"
+      }
+    }
+  },
+  {
+    "id": 3,
+    "result": {
+      "targetInfo": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293",
+        "type": "page",
+        "title": "about:blank",
+        "url": "about:blank",
+        "attached": false,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "sent": {
+      "id": 4,
+      "method": "Target.attachToTarget",
+      "params": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293",
+        "flatten": true
+      }
+    }
+  },
+  {
+    "method": "Target.targetInfoChanged",
+    "params": {
+      "targetInfo": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293",
+        "type": "page",
+        "title": "about:blank",
+        "url": "about:blank",
+        "attached": true,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      }
+    }
+  },
+  {
+    "method": "Target.attachedToTarget",
+    "params": {
+      "sessionId": "9CB21977CE2840B7EB2B2DB446787E0D",
+      "targetInfo": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293",
+        "type": "page",
+        "title": "about:blank",
+        "url": "about:blank",
+        "attached": true,
+        "canAccessOpener": false,
+        "browserContextId": "392778546BE6D56208069CB999780A0E"
+      },
+      "waitingForDebugger": false
+    }
+  },
+  {
+    "id": 4,
+    "result": {
+      "sessionId": "9CB21977CE2840B7EB2B2DB446787E0D"
+    }
+  },
+  {
+    "sent": {
+      "id": 5,
+      "method": "Target.closeTarget",
+      "params": {
+        "targetId": "A5496A8A527DD28B9A89B39F06FE8293"
+      }
+    }
+  },
+  {
+    "id": 5,
+    "result": {
+      "success": true
+    }
+  }
+]

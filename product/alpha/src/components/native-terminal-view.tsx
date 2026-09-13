@@ -60,7 +60,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
         overlayWasOpen = overlay;
         const focusToken = requestedFocus.current;
         const shouldFocus = !owner && (Boolean(focusToken) || restoreFocus);
-        const frameElement = element.closest<HTMLElement>('[data-slot="terminal-focus-border"]');
+        const frameElement = element.closest<HTMLElement>('[data-slot="pane-focus-border"], [data-slot="terminal-focus-border"]');
         const frameStyle = frameElement && getComputedStyle(frameElement);
         const color = frameStyle?.getPropertyValue(frameElement?.closest('[data-agent-focused="true"]') ? '--sidebar-selected' : '--terminal-focus').trim();
         const focusBorder = frameStyle && /^#[0-9a-f]{6}$/i.test(color ?? '') ? {

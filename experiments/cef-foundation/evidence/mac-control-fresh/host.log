@@ -1,0 +1,18 @@
+13/09/2026 11:50:21 Listening for VNC connections on TCP port 15931
+{"event":"sandbox-canary","role":"browser","pid":76418,"readAllowed":true,"errno":0}
+{"event":"initializing"}
+
+DevTools listening on ws://127.0.0.1:19329/devtools/browser/93e8cb87-4093-4955-91ab-30fa229d8f7f
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+{"event":"sandbox-canary","role":"renderer","pid":76462,"readAllowed":true,"errno":0}
+{"event":"sandbox-canary","role":"renderer","pid":76461,"readAllowed":true,"errno":0}
+{"event":"paint","count":1,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"loaded","status":200}
+{"event":"paint","count":61,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":241,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":301,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":361,"width":800,"height":600,"dirtyRects":1,"viewers":0}

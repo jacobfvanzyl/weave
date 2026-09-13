@@ -191,6 +191,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
         bridge?.registerPluginInstance(nativeTerminal)
+        bridge?.registerPluginInstance(NativeBrowserPlugin())
         guard let webView else { return }
         let container = WeaveSurfaceContainer(frame: webView.frame)
         container.backgroundColor = UIColor(red: 30 / 255, green: 30 / 255, blue: 46 / 255, alpha: 1)
@@ -243,11 +244,16 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             let nativeSmoke = ProcessInfo.processInfo.arguments.contains("--native-terminal-smoke")
             var drivenStages = Set<String>()
             var configured = false
-            for _ in 0..<900 {
+            for attempt in 0..<900 {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 if live {
+                    if attempt % 10 == 0,
+                       let debug = try? await webView.evaluateJavaScript("JSON.stringify({href:location.href,ready:document.readyState,acceptanceReady:window.alphaAcceptanceReady === true,hasInput:Boolean(window.alphaAcceptanceInput),text:document.body?.innerText.slice(0,2000)})"), let debug = debug as? String {
+                        try? Data(debug.utf8).write(to: documents.appendingPathComponent("acceptance-page.json"), options: .atomic)
+                    }
                     if !configured, let data = try? Data(contentsOf: documents.appendingPathComponent("host-acceptance-input.json")),
-                       let input = String(data: data, encoding: .utf8), !webView.isLoading {
+                       let input = String(data: data, encoding: .utf8), !webView.isLoading,
+                       (try? await webView.evaluateJavaScript("window.alphaAcceptanceReady === true")) as? Bool == true {
                         do {
                             _ = try await webView.evaluateJavaScript("window.alphaAcceptanceNativeSmoke = \(nativeSmoke ? "true" : "false"); window.alphaAcceptanceInput = " + input)
                             configured = true

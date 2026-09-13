@@ -1,0 +1,180 @@
+{
+  "clipping": {
+    "frames": 4,
+    "materials": {
+      "5": 13,
+      "10": 4
+    },
+    "stateCounts": {
+      "blend:SrcOver": 17,
+      "nonemptyMask": 1
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 901120.0,
+    "rasterBytesExamined": 901120.0,
+    "replayExitCode": 0,
+    "replayedFrames": 4,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 901120,
+    "nativeMaskUploadedBytes": 115200,
+    "peakCachedMaskBytes": 115200,
+    "comparison": {
+      "reference": "clipping-reference.png",
+      "replay": "55270-42142222210048-frame-4.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 13,
+      "meanAbsoluteRGBAError": 0.0002536458333333333,
+      "pixelsOverTolerance": 33,
+      "fractionOverTolerance": 6.875e-05,
+      "differenceBoundsInclusive": [
+        246,
+        200,
+        269,
+        299
+      ],
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "effects": {
+    "frames": 4,
+    "materials": {
+      "5": 18,
+      "10": 10,
+      "4": 2
+    },
+    "stateCounts": {
+      "blend:SrcOver": 30,
+      "foregroundFilters": 2
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 2359296.0,
+    "rasterBytesExamined": 2359296.0,
+    "replayExitCode": 1,
+    "replayedFrames": 2,
+    "rejection": "REPLAY_REJECTED: frame 3, pass 0x1, quad 0: unsupported pass filters",
+    "nativeResourceUploadedBytes": 0,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0
+  },
+  "iframe": {
+    "frames": 6,
+    "materials": {
+      "5": 23,
+      "10": 19
+    },
+    "stateCounts": {
+      "blend:SrcOver": 42
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 3276800.0,
+    "rasterBytesExamined": 4849664.0,
+    "replayExitCode": 0,
+    "replayedFrames": 6,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 3276800,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0,
+    "comparison": {
+      "reference": "iframe-reference.png",
+      "replay": "56299-41489387181056-frame-6.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 0,
+      "meanAbsoluteRGBAError": 0.0,
+      "pixelsOverTolerance": 0,
+      "fractionOverTolerance": 0.0,
+      "differenceBoundsInclusive": null,
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "opacity": {
+    "frames": 4,
+    "materials": {
+      "5": 4,
+      "10": 2
+    },
+    "stateCounts": {
+      "blend:SrcOver": 6
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 262144.0,
+    "rasterBytesExamined": 262144.0,
+    "replayExitCode": 0,
+    "replayedFrames": 4,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 262144,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0,
+    "comparison": {
+      "reference": "opacity-reference.png",
+      "replay": "55612-8263520184320-frame-4.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 1,
+      "meanAbsoluteRGBAError": 0.06318697916666667,
+      "pixelsOverTolerance": 0,
+      "fractionOverTolerance": 0.0,
+      "differenceBoundsInclusive": null,
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "primitives": {
+    "frames": 4,
+    "materials": {
+      "5": 12,
+      "10": 3
+    },
+    "stateCounts": {
+      "blend:SrcOver": 15
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 786432.0,
+    "rasterBytesExamined": 786432.0,
+    "replayExitCode": 0,
+    "replayedFrames": 4,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 786432,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0,
+    "comparison": {
+      "reference": "primitives-reference.png",
+      "replay": "54934-45028440235520-frame-4.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 0,
+      "meanAbsoluteRGBAError": 0.0,
+      "pixelsOverTolerance": 0,
+      "fractionOverTolerance": 0.0,
+      "differenceBoundsInclusive": null,
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "transforms-advanced": {
+    "frames": 5,
+    "materials": {
+      "5": 5,
+      "10": 4
+    },
+    "stateCounts": {
+      "blend:SrcOver": 9
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 753664.0,
+    "rasterBytesExamined": 753664.0,
+    "replayExitCode": 1,
+    "replayedFrames": 3,
+    "rejection": "REPLAY_REJECTED: frame 4, pass 0x1, quad 0: unsupported non-translation transform",
+    "nativeResourceUploadedBytes": 0,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0
+  }
+}

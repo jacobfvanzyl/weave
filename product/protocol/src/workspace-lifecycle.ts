@@ -8,6 +8,7 @@ export type WorkspaceClosePlan = {
   token: string;
   terminals: { terminalId: string; title: string; dirty: boolean }[];
   threads: { threadId: string; title: string; dirty: boolean }[];
+  browsers?: { pageId: string; profileId: string; title: string; dirty: boolean; generation?: string }[];
 };
 export type WorkspaceLifecycleRpcContracts = {
   'workspace.close.preview': { params: { hostId: string; workspaceId: string }; result: { plan: WorkspaceClosePlan } };
@@ -17,8 +18,8 @@ const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid workspace close request.');
   return value as Record<string, unknown>;
 };
-const text = (value: unknown) => {
-  if (typeof value !== 'string' || !value.trim() || value.length > 1000 || value.includes('\0')) throw new Error('Invalid workspace close identity.');
+const text = (value: unknown, limit = 1000) => {
+  if (typeof value !== 'string' || !value.trim() || value.length > limit || value.includes('\0')) throw new Error('Invalid workspace close identity.');
   return value;
 };
 const flag = (value: unknown) => {
@@ -34,8 +35,10 @@ export function parseWorkspaceLifecycleResult<M extends WorkspaceLifecycleRpcMet
   if (method === 'workspace.close') return { composition: parseWorkspaceComposition(input.composition) } as WorkspaceLifecycleRpcContracts[M]['result'];
   const plan = record(input.plan);
   if (!Array.isArray(plan.terminals) || !Array.isArray(plan.threads)) throw new Error('Invalid workspace close consequences.');
+  if (plan.browsers !== undefined && (!Array.isArray(plan.browsers) || plan.browsers.length > 128)) throw new Error('Invalid browser close consequences.');
   return { plan: { workspaceId: text(plan.workspaceId), name: text(plan.name), token: text(plan.token),
     terminals: plan.terminals.map((value) => { const item = record(value); return { terminalId: text(item.terminalId), title: text(item.title), dirty: flag(item.dirty) }; }),
     threads: plan.threads.map((value) => { const item = record(value); return { threadId: text(item.threadId), title: text(item.title), dirty: flag(item.dirty) }; }),
+    ...(Array.isArray(plan.browsers) ? { browsers: plan.browsers.map(value => { const item = record(value); return { pageId: text(item.pageId), profileId: text(item.profileId), title: text(item.title, 1024), dirty: flag(item.dirty), ...(item.generation === undefined ? {} : { generation: text(item.generation) }) }; }) } : {}),
   } } as WorkspaceLifecycleRpcContracts[M]['result'];
 }

@@ -1,0 +1,46 @@
+
+(process:1054478): Spice-WARNING **: 09:37:23.900: ../server/reds.cpp:3450:do_spice_init: spice: allowing multiple client connections
+{"event":"ready","compatVersion":1,"multiClient":true}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":-64613352,"type":1}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":-64613352,"type":2}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":-64613352,"type":3}
+{"event":"channel","action":2,"connection":-64613352,"type":5}
+{"event":"channel","action":2,"connection":-64613352,"type":4}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":1340847721,"type":1}
+
+(process:1054478): Spice-WARNING **: 09:37:28.895: ../server/reds.cpp:987:reds_fill_channels: sent 3 out of 4
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":1340847721,"type":4}
+{"event":"channel","action":2,"connection":1340847721,"type":3}
+{"event":"channel","action":2,"connection":1340847721,"type":2}
+{"event":"channel","action":3,"connection":1340847721,"type":3}
+{"event":"channel","action":3,"connection":1340847721,"type":4}
+{"event":"channel","action":3,"connection":1340847721,"type":2}
+{"event":"channel","action":3,"connection":1340847721,"type":1}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":-1038638647,"type":1}
+
+(process:1054478): Spice-WARNING **: 09:37:36.550: ../server/reds.cpp:987:reds_fill_channels: sent 3 out of 4
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":-1038638647,"type":2}
+{"event":"channel","action":2,"connection":-1038638647,"type":4}
+{"event":"channel","action":2,"connection":-1038638647,"type":3}
+{"event":"channel","action":3,"connection":-1038638647,"type":3}
+{"event":"channel","action":3,"connection":-1038638647,"type":1}
+{"event":"channel","action":3,"connection":-1038638647,"type":2}
+{"event":"channel","action":3,"connection":-1038638647,"type":4}
+{"event":"channel","action":3,"connection":-64613352,"type":3}
+{"event":"channel","action":3,"connection":-64613352,"type":5}
+{"event":"channel","action":3,"connection":-64613352,"type":4}
+{"event":"channel","action":3,"connection":-64613352,"type":1}
+{"event":"channel","action":3,"connection":-64613352,"type":2}

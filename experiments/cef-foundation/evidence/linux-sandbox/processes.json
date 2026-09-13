@@ -1,0 +1,211 @@
+[
+  {
+    "pid": 1408867,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --ozone-platform=headless --password-store=basic --no-first-run --no-default-browser-check 127.0.0.1 15931 480 /var/home/admin/weave-cef-foundation/profile-sandbox http://127.0.0.1:19380/fixture.html ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408859",
+      "NSpid": "1408867",
+      "NoNewPrivs": "0",
+      "Seccomp": "0",
+      "Seccomp_filters": "0",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026531836]",
+      "user": "user:[4026531837]",
+      "net": "net:[4026531833]"
+    },
+    "uidMap": "         0          0 4294967295\n"
+  },
+  {
+    "pid": 1408891,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=zygote --no-zygote-sandbox --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408867",
+      "NSpid": "1408891",
+      "NoNewPrivs": "1",
+      "Seccomp": "0",
+      "Seccomp_filters": "0",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026531836]",
+      "user": "user:[4026531837]",
+      "net": "net:[4026531833]"
+    },
+    "uidMap": "         0          0 4294967295\n"
+  },
+  {
+    "pid": 1408892,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=zygote --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408867",
+      "NSpid": "1408892\t1",
+      "NoNewPrivs": "1",
+      "Seccomp": "0",
+      "Seccomp_filters": "0",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026534780]",
+      "user": "user:[4026534774]",
+      "net": "net:[4026534781]"
+    },
+    "uidMap": "      1000       1000          1\n"
+  },
+  {
+    "pid": 1408894,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=zygote --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408892",
+      "NSpid": "1408894\t3",
+      "NoNewPrivs": "1",
+      "Seccomp": "0",
+      "Seccomp_filters": "0",
+      "CapEff": "0000000000200000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026534780]",
+      "user": "user:[4026534774]",
+      "net": "net:[4026534781]"
+    },
+    "uidMap": "      1000       1000          1\n"
+  },
+  {
+    "pid": 1408918,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=gpu-process --ozone-platform=headless --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt --gpu-preferences=YAAAAAAAAAAgAQAEAAAAAAAAAAAAAGAASAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAoAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAACAAAAAAAAAA= --use-gl=disabled --shared-files --metrics-shmem-handle=4,i,6503581848891834319,971102732754993598,262144 --field-trial-handle=3,i,4184715577906862798,18343441234975558438,262144 --disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay --variations-seed-version --pseudonymization-salt-handle=7,i,14843052526619580866,145317161036768837 ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408891",
+      "NSpid": "1408918",
+      "NoNewPrivs": "1",
+      "Seccomp": "2",
+      "Seccomp_filters": "1",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026531836]",
+      "user": "user:[4026531837]",
+      "net": "net:[4026531833]"
+    },
+    "uidMap": "         0          0 4294967295\n"
+  },
+  {
+    "pid": 1408922,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=broker ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408918",
+      "NSpid": "1408922",
+      "NoNewPrivs": "1",
+      "Seccomp": "2",
+      "Seccomp_filters": "1",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026531836]",
+      "user": "user:[4026531837]",
+      "net": "net:[4026531833]"
+    },
+    "uidMap": "         0          0 4294967295\n"
+  },
+  {
+    "pid": 1408923,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none --mute-audio --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt --shared-files=v8_context_snapshot_data:100 --metrics-shmem-handle=4,i,263792959534043194,14403692486470252975,524288 --field-trial-handle=3,i,4184715577906862798,18343441234975558438,262144 --disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay --variations-seed-version --pseudonymization-salt-handle=7,i,14843052526619580866,14531716103676883768,4 --trace-process-track-uuid=3190708989122997041 ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408867",
+      "NSpid": "1408923",
+      "NoNewPrivs": "1",
+      "Seccomp": "0",
+      "Seccomp_filters": "0",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026531836]",
+      "user": "user:[4026531837]",
+      "net": "net:[4026531833]"
+    },
+    "uidMap": "         0          0 4294967295\n"
+  },
+  {
+    "pid": 1408939,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --mute-audio --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt --shared-files=v8_context_snapshot_data:100 --metrics-shmem-handle=4,i,11260920501779162592,5862091168952207183,524288 --field-trial-handle=3,i,4184715577906862798,18343441234975558438,262144 --disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay --variations-seed-version --pseudonymization-salt-handle=7,i,14843052526619580866,14531716103676883768,4 --trace-process-track-uuid=3190708990060038890 ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408894",
+      "NSpid": "1408939\t4\t1",
+      "NoNewPrivs": "1",
+      "Seccomp": "2",
+      "Seccomp_filters": "1",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026534777]",
+      "user": "user:[4026534774]",
+      "net": "net:[4026534781]"
+    },
+    "uidMap": "      1000       1000          1\n"
+  },
+  {
+    "pid": 1408960,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=renderer --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt --disable-background-timer-throttling --remote-debugging-port=19329 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=6 --launch-time-ticks=172952122157 --shared-files=v8_context_snapshot_data:100 --metrics-shmem-handle=4,i,9036242907123377382,13512114418392411770,2097152 --field-trial-handle=3,i,4184715577906862798,18343441234975558438,262144 --disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay --variations-seed-version --pseudonymization-salt-handle=7,i,148430525266195 ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408894",
+      "NSpid": "1408960\t12\t1",
+      "NoNewPrivs": "1",
+      "Seccomp": "2",
+      "Seccomp_filters": "1",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026534861]",
+      "user": "user:[4026534774]",
+      "net": "net:[4026534781]"
+    },
+    "uidMap": "      1000       1000          1\n"
+  },
+  {
+    "pid": 1408961,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=renderer --enable-crash-reporter=, --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt --disable-background-timer-throttling --remote-debugging-port=19329 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=5 --launch-time-ticks=172952124304 --shared-files=v8_context_snapshot_data:100 --metrics-shmem-handle=4,i,4834525519552209562,5498813301734211735,2097152 --field-trial-handle=3,i,4184715577906862798,18343441234975558438,262144 --disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay --variations-seed-version --pseudonymization-salt-handle=7,i,1484305252661958 ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408894",
+      "NSpid": "1408961\t13\t1",
+      "NoNewPrivs": "1",
+      "Seccomp": "2",
+      "Seccomp_filters": "1",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026534862]",
+      "user": "user:[4026534774]",
+      "net": "net:[4026534781]"
+    },
+    "uidMap": "      1000       1000          1\n"
+  },
+  {
+    "pid": 1410199,
+    "command": "/var/home/admin/weave-cef-foundation/runtime/cef-foundation --type=renderer --enable-crash-reporter=, --extension-process --change-stack-guard-on-fork=enable --user-data-dir=/var/home/admin/weave-cef-foundation/profile-sandbox --locales-dir-path=/var/home/admin/weave-cef-foundation/runtime/locales --log-severity=warning --resources-dir-path=/var/home/admin/weave-cef-foundation/runtime --foundation-canary=/var/home/admin/weave-cef-foundation/canary.txt --disable-background-timer-throttling --remote-debugging-port=19329 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=12 --launch-time-ticks=172990201954 --shared-files=v8_context_snapshot_data:100 --metrics-shmem-handle=4,i,16100470957712332231,8794081827351342273,2097152 --field-trial-handle=3,i,4184715577906862798,18343441234975558438,262144 --disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay --variations-seed-version --pseudonymization-salt-handl ",
+    "status": {
+      "Name": "cef-foundation",
+      "PPid": "1408894",
+      "NSpid": "1410199\t69\t1",
+      "NoNewPrivs": "1",
+      "Seccomp": "2",
+      "Seccomp_filters": "1",
+      "CapEff": "0000000000000000"
+    },
+    "namespaces": {
+      "pid": "pid:[4026534863]",
+      "user": "user:[4026534774]",
+      "net": "net:[4026534781]"
+    },
+    "uidMap": "      1000       1000          1\n"
+  }
+]

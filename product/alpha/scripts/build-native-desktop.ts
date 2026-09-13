@@ -1,3 +1,4 @@
+import './prepare-native-browser';
 import './prepare-native-terminal';
 import { prepareNodeApiHeaders } from '../../scripts/native-headers';
 import { join, resolve } from 'node:path';
@@ -13,3 +14,6 @@ await run(['xcrun', 'clang++', '-std=c++17', `-DWEAVE_ACCEPTANCE=${process.env.V
   '-I', headers, '-I', join(native, 'include'),
   join(root, 'native/ghostty/WeaveTerminalRenderer.mm'), join(root, 'native/ghostty/electron-terminal.mm'),
   join(native, 'lib/libghostty-vt.a'), '-framework', 'AppKit', '-framework', 'CoreText', '-o', join(native, 'weave-terminal.node')]);
+
+const browser = join(root, 'native/.build/browser/macos');
+await run(['xcrun', 'clang++', '-std=c++17', '-O2', '-fobjc-arc', '-fmodules', '-shared', '-undefined', 'dynamic_lookup', '-I', headers, '-I', join(browser, 'include'), join(root, 'native/browser/WeaveBrowserSurface.mm'), join(root, 'native/browser/electron-browser.mm'), join(browser, 'libvncclient.a'), '-lz', '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', join(browser, 'weave-browser.node')]);

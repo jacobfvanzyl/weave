@@ -84,5 +84,6 @@ export function reconcileWorkspacePresentation(state: WorkspacePresentation, hos
   const missing = workspaces.filter(({ workspaceId }) => !present.has(workspaceKey({ hostId, workspaceId })));
   const active = next.activeWorkspace;
   for (const { workspaceId } of missing) next = activateWorkspace(next, { hostId, workspaceId });
-  return next === state ? state : { ...next, activeWorkspace: active ?? next.activeWorkspace };
+  const activeWorkspace = active ?? next.activeWorkspace ?? (next.openWorkspaces[0] && workspaceKey(next.openWorkspaces[0]));
+  return next === state && activeWorkspace === state.activeWorkspace ? state : { ...next, activeWorkspace };
 }

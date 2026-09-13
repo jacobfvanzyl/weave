@@ -1,0 +1,13 @@
+solutions = [{
+  "name": "src",
+  "url": "https://github.com/chromium/chromium.git",
+  "managed": False,
+  "custom_deps": {},
+  "custom_vars": {
+    "checkout_pgo_profiles": False,
+    "checkout_android": False,
+    "checkout_ios": False,
+    "checkout_fuchsia": False
+  }
+}]
+target_os = []

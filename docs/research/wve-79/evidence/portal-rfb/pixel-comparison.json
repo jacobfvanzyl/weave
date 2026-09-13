@@ -1,0 +1,12 @@
+{
+  "mac": {
+    "width": 1000,
+    "height": 800,
+    "differentPixels": 0
+  },
+  "linuxPriorTransportRun": {
+    "width": 1000,
+    "height": 800,
+    "differentPixels": 0
+  }
+}

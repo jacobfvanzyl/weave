@@ -1,0 +1,22 @@
+{
+  "UTM.dmg": {
+    "bytes": 250021057,
+    "sha256": "a8435c93cfb5f8bbfeea4b134cfad1ac66b67632b75e438c63b1a8ae043bef0e",
+    "url": "https://github.com/utmapp/UTM/releases/download/v4.7.5/UTM.dmg"
+  },
+  "UTM-Remote.ipa": {
+    "bytes": 34171465,
+    "sha256": "04e238b7efaf44d4b7f55dd8e3a5b23d08b040c2a60f8a166ed72409c60aca5e",
+    "url": "https://github.com/utmapp/UTM/releases/download/v4.7.5/UTM-Remote.ipa"
+  },
+  "CocoaSpice.tar.gz": {
+    "bytes": 825018,
+    "sha256": "4e9f787d6edc21287f5648570ecd7fca07640c559b00c269503798f592783373",
+    "url": "https://codeload.github.com/utmapp/CocoaSpice/tar.gz/127033fa3e59cd49678f49ed54f8adfc060afb56"
+  },
+  "spice-0.16.0.tar.bz2": {
+    "bytes": 1682389,
+    "sha256": "0a6ec9528f05371261bbb2d46ff35e7b5c45ff89bb975a99af95a5f20ff4717d",
+    "url": "https://www.spice-space.org/download/releases/spice-0.16.0.tar.bz2"
+  }
+}

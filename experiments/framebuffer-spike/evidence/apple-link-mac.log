@@ -1,0 +1,104 @@
+While building module 'CocoaSpiceRenderer' imported from /Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/include/CSCursor.h:18:
+In file included from <module-includes>:1:
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/include/CSMetalRenderer.h:26:56: warning: cannot find protocol definition for 'CSRenderer'
+   26 | @interface CSMetalRenderer : NSObject<MTKViewDelegate, CSRenderer>
+      |                                                        ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/include/CSMetalRenderer.h:21:11: note: protocol 'CSRenderer' has no definition
+   21 | @protocol CSRenderer;
+      |           ^
+1 warning generated.
+In file included from /Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/CSCursor.m:20:
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/CSDisplay+Renderer_Protected.h:21:23: warning: duplicate definition of category 'Renderer' on interface 'CSDisplay' [-Wobjc-duplicate-category-definition]
+   21 | @interface CSDisplay (Renderer)
+      |                       ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/include/CSDisplay+Renderer.h:23:12: note: previous definition is here
+   23 | @interface CSDisplay (Renderer)
+      |            ^
+1 warning generated.
+In file included from /Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/CSDisplay+Renderer.m:19:
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/CSDisplay+Renderer_Protected.h:21:23: warning: duplicate definition of category 'Renderer' on interface 'CSDisplay' [-Wobjc-duplicate-category-definition]
+   21 | @interface CSDisplay (Renderer)
+      |                       ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/include/CSDisplay+Renderer.h:23:12: note: previous definition is here
+   23 | @interface CSDisplay (Renderer)
+      |            ^
+1 warning generated.
+In file included from /Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/CSDisplay.m:22:
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/CSDisplay+Renderer_Protected.h:21:23: warning: duplicate definition of category 'Renderer' on interface 'CSDisplay' [-Wobjc-duplicate-category-definition]
+   21 | @interface CSDisplay (Renderer)
+      |                       ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/include/CSDisplay+Renderer.h:23:12: note: previous definition is here
+   23 | @interface CSDisplay (Renderer)
+      |            ^
+1 warning generated.
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/CSSession.m:33:23: warning: duplicate definition of category 'Sharing' on interface 'CSSession' [-Wobjc-duplicate-category-definition]
+   33 | @interface CSSession (Sharing)
+      |                       ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpice/include/CSSession+Sharing.h:25:12: note: previous definition is here
+   25 | @interface CSSession (Sharing)
+      |            ^
+1 warning generated.
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/CSMetalRenderer.m:64:23: warning: convenience initializer should not invoke an initializer on 'super' [-Wobjc-designated-initializers]
+   64 |     if (self = [super init]) {
+      |                       ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/CSMetalRenderer.m:62:1: warning: convenience initializer missing a 'self' call to another initializer [-Wobjc-designated-initializers]
+   62 | - (nullable instancetype)initWithRenderSource:(id<CSRenderSource>)renderSource atOffset:(CGPoint)offset {
+      | ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/CSMetalRenderer.m:50:17: warning: method definition for 'initWithRenderSource:device:' not found [-Wincomplete-implementation]
+   50 | @implementation _CSRendererSourceData
+      |                 ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/CSMetalRenderer.m:43:1: note: method 'initWithRenderSource:device:' declared here
+   43 | - (nullable instancetype)initWithRenderSource:(id<CSRenderSource>)renderSource device:(id<MTLDevice>)device;
+      | ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/CSMetalRenderer.m:50:17: warning: method definition for 'initWithRenderSource:atOffset:device:' not found [-Wincomplete-implementation]
+   50 | @implementation _CSRendererSourceData
+      |                 ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/CSMetalRenderer.m:44:1: note: method 'initWithRenderSource:atOffset:device:' declared here
+   44 | - (nullable instancetype)initWithRenderSource:(id<CSRenderSource>)renderSource atOffset:(CGPoint)offset device:(id<MTLDevice>)device NS_DESIGNATED_INITIALIZER;
+      | ^
+/Users/jaco/Documents/VeeZee/weave/experiments/framebuffer-spike/.build/CocoaSpice-127033fa3e59cd49678f49ed54f8adfc060afb56/Sources/CocoaSpiceRenderer/CSMetalRenderer.m:438:1: warning: non-void function does not return a value [-Wreturn-type]
+  438 | }
+      | ^
+5 warnings generated.
+ld: warning: Could not find or use auto-linked framework 'CoreAudioTypes': framework 'CoreAudioTypes' not found
+Undefined symbols for architecture arm64:
+  "_gst_plugin_adder_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_app_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_audioconvert_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_audiorate_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_audioresample_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_audiotestsrc_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_autodetect_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_coreelements_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_gio_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_jpeg_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_osxaudio_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_playback_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_typefindfunctions_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_videoconvert_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_videofilter_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_videorate_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_videoscale_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_videotestsrc_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+  "_gst_plugin_volume_register", referenced from:
+      _gst_ios_init in gst_ios_init-7a3439.o
+ld: symbol(s) not found for architecture arm64
+clang: error: linker command failed with exit code 1 (use -v to see invocation)

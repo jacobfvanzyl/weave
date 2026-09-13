@@ -1,5 +1,6 @@
+import { projectLocalAgentPanes, type LocalAgentPane } from './local-agent-panes';
 import { useEffect, useRef, useState } from 'react';
-import { terminalPaneTargets, type TerminalLayoutNode, type TerminalSummary, type WorkspaceComposition, type Workspace, type WorkspaceClosePlan } from '@weave/product-protocol';
+import { paneTargets, terminalPaneTargets, type TerminalLayoutNode, type TerminalSummary, type WorkspaceComposition, type Workspace, type WorkspaceClosePlan } from '@weave/product-protocol';
 import { PortalTransportError, type DirectHostClient } from '@/portal-client';
 import type { AlphaExecutionContext } from './alpha-controller';
 import { reconcileWorkspacePresentation, activateWorkspace, closeWorkspace, emptyWorkspacePresentation, loadWorkspacePresentation, saveWorkspacePresentation, workspaceKey, type WorkspacePresentation, type WorkspaceReference } from './workspace-presentation';
@@ -32,13 +33,14 @@ export type WorkspaceCompositionActions = {
 const newPane = (executionContextId: string, launchDirectory?: string): TerminalLayoutNode => ({ kind: 'terminal', nodeId: crypto.randomUUID(), paneId: crypto.randomUUID(), terminalId: null, executionContextId, ...(launchDirectory ? { launchDirectory } : {}) });
 const mapLayout = (node: TerminalLayoutNode | null, transform: (node: TerminalLayoutNode) => TerminalLayoutNode): TerminalLayoutNode | null =>
   node && transform(node.kind === 'split' ? { ...node, children: [mapLayout(node.children[0], transform)!, mapLayout(node.children[1], transform)!] } : node);
-export function useWorkspaceCompositions(contexts: AlphaExecutionContext[], connections: CompositionConnection[], connectionsLoaded = true) {
+export function useWorkspaceCompositions(contexts: AlphaExecutionContext[], connections: CompositionConnection[], connectionsLoaded = true, localPanes: LocalAgentPane[] = []) {
   const [presentation, setPresentation] = useState(emptyWorkspacePresentation);
   const [compositions, setCompositions] = useState<Record<string, WorkspaceComposition>>({});
   const [terminals, setTerminals] = useState<Record<string, TerminalSummary[]>>({});
   const [loading, setLoading] = useState(true), [pending, setPending] = useState(false), [error, setError] = useState<string>();
   const state = useRef({ presentation, compositions, terminals, contexts, connections });
   state.current = { presentation, compositions, terminals, contexts, connections };
+  const localPanesRef = useRef(localPanes); localPanesRef.current = localPanes;
   const mounted = useRef(true), writes = useRef(Promise.resolve()), saving = useRef(Promise.resolve());
   const load = useRef<Promise<void> | undefined>(undefined);
   useEffect(() => {
@@ -67,10 +69,10 @@ export function useWorkspaceCompositions(contexts: AlphaExecutionContext[], conn
     const focusedPanes = { ...state.current.presentation.focusedPanes };
     const maximizedPanes = { ...state.current.presentation.maximizedPanes };
     let changed = false;
-    for (const workspace of composition.workspaces) {
+    for (const workspace of projectLocalAgentPanes(composition, localPanesRef.current).workspaces) {
       const key = workspaceKey({ hostId: composition.hostId, workspaceId: workspace.workspaceId });
-      const panes = terminalPaneTargets([workspace]);
-      if (focusedPanes[key] && !panes.some((pane) => pane.paneId === focusedPanes[key])) {
+      const panes = paneTargets([workspace]);
+      if ((focusedPanes[key] || panes.length) && !panes.some((pane) => pane.paneId === focusedPanes[key])) {
         if (panes[0]) focusedPanes[key] = panes[0].paneId; else delete focusedPanes[key];
         changed = true;
       }
@@ -182,5 +184,6 @@ export function useWorkspaceCompositions(contexts: AlphaExecutionContext[], conn
     collapse: (id) => updatePresentation((value) => ({ ...value, collapsedWorkspaces: value.collapsedWorkspaces.includes(id) ? value.collapsedWorkspaces.filter((item) => item !== id) : [...value.collapsedWorkspaces, id] })),
     refresh,
   };
-  return { model: { presentation, compositions, terminals, loading, pending, error }, actions };
+  const projected = Object.fromEntries(Object.entries(compositions).map(([id, composition]) => [id, projectLocalAgentPanes(composition, localPanes)]));
+  return { model: { presentation, compositions: projected, terminals, loading, pending, error }, actions };
 }

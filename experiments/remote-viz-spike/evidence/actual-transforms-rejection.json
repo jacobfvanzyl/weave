@@ -1,0 +1,20 @@
+{
+  "actualChromiumCapture": true,
+  "exitCode": 1,
+  "firstRejectedFrame": 4,
+  "error": "REPLAY_REJECTED: frame 4, pass 0x1, quad 6: unsupported quad material 9 in pass 0x1, quad 6",
+  "material": "kTextureContent",
+  "source": "Chromium scrollbar texture at x=615, y=300",
+  "otherObservedUnsupportedState": {
+    "mask": "rounded scrollbar thumb",
+    "bounds": [
+      618,
+      318,
+      9,
+      32
+    ],
+    "radius": 4.5
+  },
+  "successfulFramesBeforeRejection": "three startup frames with one solid quad each; not page-content replay",
+  "conclusion": "Capture and resource reuse passed; page replay remains unproven"
+}

@@ -1,0 +1,14 @@
+{
+  "mac": {
+    "synthetic-server": 0,
+    "synthetic-a": 0,
+    "synthetic-b": 0,
+    "synthetic-b-reconnect": 0
+  },
+  "linux": {
+    "synthetic-server": 0,
+    "synthetic-a": 0,
+    "synthetic-b": 0,
+    "synthetic-b-reconnect": 0
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "host": "mac",
+  "transport": "webrtc",
+  "dpr": 1,
+  "client": "macOS",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 83320,
+  "clientPid": 83393,
+  "startedAt": 1789287843.010587
+}

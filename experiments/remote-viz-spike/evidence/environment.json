@@ -1,0 +1,11 @@
+{
+  "date": "2026-09-12",
+  "macFreeMiB": 175,
+  "bazziteFreeGiB": 109,
+  "bazziteRAMGiB": 31,
+  "bazziteLogicalCPUs": 8,
+  "chromiumDocumentedMinimumDiskGB": 100,
+  "buildDirectory": "/var/home/admin/weave-viz-spike",
+  "sourceCheckoutStarted": true,
+  "diskReserveGiB": 25
+}

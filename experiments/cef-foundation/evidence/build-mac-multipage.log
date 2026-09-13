@@ -1,0 +1,16 @@
+/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app: replacing existing signature
+--prepared:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (Renderer).app
+--prepared:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (Plugin).app
+--prepared:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (GPU).app
+--validated:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (Renderer).app
+--validated:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (Plugin).app
+--validated:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (GPU).app
+--prepared:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper.app
+--prepared:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (Alerts).app
+--validated:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper.app
+--validated:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/CEFRFB Helper (Alerts).app
+--prepared:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/Chromium Embedded Framework.framework
+--validated:/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app/Contents/Frameworks/Chromium Embedded Framework.framework
+/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app: valid on disk
+/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app: satisfies its Designated Requirement
+/Users/jaco/Documents/VeeZee/weave/experiments/cef-foundation/.build/CEFFoundation.app

@@ -1,5 +1,5 @@
 import { test } from './test-support.ts';
-import { readText, removePath, stat, temporaryDirectory } from './host-files.ts';
+import { writeText, readText, removePath, stat, temporaryDirectory } from './host-files.ts';
 import {
   PORTAL_PAIR_REQUEST_TYPE,
   PORTAL_PAIRING_TOKEN_ALGORITHM,
@@ -93,6 +93,34 @@ const authenticate = async (
     signature: await credential.sign(portalAuthChallengePayload(challenge)),
   });
 };
+
+test('Browser Profile grants are explicit, survive authentication and do not follow Workspace grants', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-profile-grants-' });
+  try {
+    const security = await PortalSecurity.open(config(root));
+    const profileId = crypto.randomUUID(), otherProfile = crypto.randomUUID();
+    const credential = await pair(security, {
+      actions: ['browser.profile.inspect', 'browser.profile.control', 'context.file.read'],
+      executionContextIds: ['allowed'], agentIds: [], workspaceIds: ['workspace-a'], browserProfileIds: [profileId],
+    });
+    const principal = await authenticate(security, credential);
+    await security.authorize(principal, 'browser.profile.control', { browserProfileId: profileId, workspaceId: 'workspace-b' });
+    await assertRejects(() => security.authorize(principal, 'browser.profile.control', { browserProfileId: otherProfile, workspaceId: 'workspace-a' }), PortalSecurityError);
+    await assertRejects(() => security.authorize(principal, 'context.file.read', { executionContextId: 'denied' }), PortalSecurityError);
+    const human = await authenticate(security, await pair(security));
+    await security.authorize(human, 'browser.profile.control', { browserProfileId: profileId });
+    await security.authorize(human, 'browser.profile.control', { browserProfileId: otherProfile });
+    const wildcard = await authenticate(security, await pair(security, {
+      actions: ['browser.profile.control'], executionContextIds: [], agentIds: [], browserProfileIds: ['*'],
+    }));
+    await assertRejects(() => security.authorize(wildcard, 'browser.profile.control', { browserProfileId: profileId }), PortalSecurityError);
+    const reopened = await PortalSecurity.open(config(root));
+    const restored = await authenticate(reopened, credential);
+    await reopened.authorize(restored, 'browser.profile.control', { browserProfileId: profileId });
+    await reopened.revokeCredential(restored.credentialId);
+    await assertRejects(() => reopened.authorize(restored, 'browser.profile.control', { browserProfileId: profileId }), PortalSecurityError);
+  } finally { await removePath(root, { recursive: true }); }
+});
 
 test('Portal Pairing Tokens are one-time and Host identity survives restart', async () => {
   const root = await temporaryDirectory({ prefix: 'weave-portal-security-' });
@@ -302,4 +330,45 @@ test('Portal does not infer broader directory grants when reopening an older pai
   } finally {
     await removePath(root, { recursive: true });
   }
+});
+
+
+test('trusted human Profile access survives restart and rotation while restricted pairings remain scoped', async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-human-profiles-' });
+  try {
+    const security = await PortalSecurity.open(config(root));
+    const credential = await pair(security), profileId = crypto.randomUUID();
+    const principal = await authenticate(security, credential);
+    await security.authorize(principal, 'browser.profile.control', { browserProfileId: profileId });
+    const agent = await authenticate(security, await pair(security, { ...security.defaultGrants(), trustedHuman: false, browserProfileIds: [profileId] }));
+    await security.authorize(agent, 'browser.profile.control', { browserProfileId: profileId });
+    await assertRejects(() => security.authorize(agent, 'browser.profile.control', { browserProfileId: crypto.randomUUID() }), PortalSecurityError);
+    const restricted = await authenticate(security, await pair(security, { ...security.defaultGrants(), actions: ['browser.profile.control'] }));
+    await assertRejects(() => security.authorize(restricted, 'browser.profile.control', { browserProfileId: profileId }), PortalSecurityError);
+    const reopened = await PortalSecurity.open(config(root));
+    const restored = await authenticate(reopened, credential);
+    await reopened.authorize(restored, 'browser.profile.control', { browserProfileId: crypto.randomUUID() });
+    const key = await generatePortalKey(), rotated = await reopened.rotate(restored, key.publicKey);
+    const next = await authenticate(reopened, { ...key, credentialId: rotated });
+    await reopened.authorize(next, 'browser.profile.control', { browserProfileId: crypto.randomUUID() });
+  } finally { await removePath(root, { recursive: true }); }
+});
+
+for (const browserPrefix of ['browser.profile.', 'browser.']) test(`legacy unrestricted human pairings missing ${browserPrefix} gain Profile access without broadening explicit scopes`, async () => {
+  const root = await temporaryDirectory({ prefix: 'weave-legacy-human-profiles-' });
+  try {
+    const security = await PortalSecurity.open(config(root));
+    const human = await pair(security), profileId = crypto.randomUUID();
+    const scoped = await pair(security, { ...security.defaultGrants(), trustedHuman: false, browserProfileIds: [profileId] });
+    const path = join(config(root).stateDirectory, 'security.json'), state = JSON.parse(await readText(path));
+    const old = state.credentials.find((item: any) => item.credentialId === human.credentialId);
+    delete old.grants.trustedHuman;
+    old.grants.actions = old.grants.actions.filter((action: string) => !action.startsWith(browserPrefix));
+    await writeText(path, JSON.stringify(state));
+    const reopened = await PortalSecurity.open(config(root));
+    await reopened.authorize(await authenticate(reopened, human), 'browser.profile.control', { browserProfileId: crypto.randomUUID() });
+    const agent = await authenticate(reopened, scoped);
+    await reopened.authorize(agent, 'browser.profile.control', { browserProfileId: profileId });
+    await assertRejects(() => reopened.authorize(agent, 'browser.profile.control', { browserProfileId: crypto.randomUUID() }), PortalSecurityError);
+  } finally { await removePath(root, { recursive: true }); }
 });

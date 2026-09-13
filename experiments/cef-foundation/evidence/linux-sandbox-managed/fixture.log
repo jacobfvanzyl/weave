@@ -1,0 +1,11 @@
+127.0.0.1 - - [13/Sep/2026 12:57:24] "GET /fixture.html HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:24] "GET /fixture.html?native-second=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:24] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:24] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:24] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:24] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:41] "GET /fixture.html?mcp=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:41] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:41] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:57:42] "GET /api/ping?click=1 HTTP/1.1" 200 -
+[tailscale-ssh: process died: signal: terminated]

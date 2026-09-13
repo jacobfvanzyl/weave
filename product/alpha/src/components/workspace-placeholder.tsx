@@ -24,6 +24,7 @@ export function WorkspacePlaceholder({
   footerActions,
   headerActions,
   showFooter = true,
+  showHeader = true,
   inputFocusRequest,
   preserveDraft = false,
 }: {
@@ -32,6 +33,7 @@ export function WorkspacePlaceholder({
   footerActions?: ReactNode;
   headerActions?: ReactNode;
   showFooter?: boolean;
+  showHeader?: boolean;
   preserveDraft?: boolean;
   inputFocusRequest?: number | null;
 }) {
@@ -54,11 +56,11 @@ export function WorkspacePlaceholder({
         "relative flex min-h-0 min-w-0 flex-1 flex-col bg-background",
         className,
       )}
-      data-slot="thread-pane"
+      data-slot={showHeader ? "thread-pane" : "agent-pane-content"}
       data-agent-input-focused={Boolean(thread && focusTarget === agentFocusId(thread.id)) || undefined}
     >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-slot="thread-pane-contents">
-        <header
+        {showHeader && <header
           className="flex h-[var(--rail-height)] shrink-0 items-center gap-1 border-b bg-sidebar-selected px-2 text-foreground"
           data-slot="thread-top-rail"
         >
@@ -85,7 +87,7 @@ export function WorkspacePlaceholder({
               )
           )}
           {headerActions && <div className="ml-auto flex shrink-0 items-center gap-1">{headerActions}</div>}
-        </header>
+        </header>}
 
         {reconnecting
           ? (
@@ -121,6 +123,7 @@ export function WorkspacePlaceholder({
             ? (
               <ChatPane
                 model={model.transcript}
+                draftKey={thread.id}
                 actions={actions}
                 focusRequest={inputFocusRequest !== undefined ? inputFocusRequest ?? undefined : shouldFocusComposer
                   ? model.composerFocusRequest

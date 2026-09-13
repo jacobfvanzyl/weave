@@ -1,0 +1,63 @@
+{
+  "date": "2026-09-12",
+  "host": "Linux x86_64 Chrome for Testing 153.0.8010.36",
+  "path": "native receiver -> disposable adapter -> authenticated Portal RPC -> compiled independent Browser Service -> extension/WebRTC",
+  "streams": [
+    {
+      "firstSample": "2026-09-12T18:40:06.565Z",
+      "lastSample": "2026-09-12T18:50:00.566Z",
+      "generation": 1,
+      "video": {
+        "framesDecoded": 17837,
+        "framesPerSecond": 29,
+        "frameWidth": 960,
+        "frameHeight": 640,
+        "decoderImplementation": "VideoToolbox"
+      },
+      "maximumReceivedAudioEnergy": 0.012297756973191637,
+      "audioPlaying": true,
+      "audioRecording": false,
+      "route": "Tailscale IPv6 UDP"
+    }
+  ],
+  "events": [
+    {
+      "at": "2026-09-12T18:38:53.971Z",
+      "event": "ready",
+      "platform": "linux"
+    },
+    {
+      "at": "2026-09-12T18:40:04.768Z",
+      "event": "frame",
+      "generation": 1,
+      "width": 960,
+      "height": 640
+    },
+    {
+      "at": "2026-09-12T18:49:06.265Z",
+      "event": "click",
+      "generation": 1
+    },
+    {
+      "at": "2026-09-12T18:49:11.334Z",
+      "event": "click",
+      "generation": 1
+    },
+    {
+      "at": "2026-09-12T18:49:30.643Z",
+      "event": "click",
+      "generation": 1
+    }
+  ],
+  "visualChecks": [
+    "Native Mac Test click incremented remote counter to 1",
+    "Synthetic tone started and stopped"
+  ],
+  "limits": [
+    "Existing native receiver, not Alpha UI",
+    "Synthetic DPR-1 fixture",
+    "Audio telemetry, no new acoustic confirmation",
+    "iPad build installed but launch was blocked by device lock; Portal-backed cross-device acceptance pending",
+    "Final disconnect-backpressure and ICE queue bounds reviewed and checked separately after this Linux binary was built"
+  ]
+}

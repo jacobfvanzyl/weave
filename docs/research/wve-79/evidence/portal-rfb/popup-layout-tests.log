@@ -1,0 +1,10 @@
+bun test v1.3.14 (0d9b296a)
+
+product/portal/src/browser-pane-layout_test.ts:
+(pass) popup overflow preserves the existing tree and rejects its unplaced descendants [1.00ms]
+(pass) an unplaced popup is rejected after native opener closure while already placed pages survive [0.08ms]
+
+ 2 pass
+ 0 fail
+ 6 expect() calls
+Ran 2 tests across 1 file. [26.00ms]

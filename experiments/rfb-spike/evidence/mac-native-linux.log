@@ -1,0 +1,108 @@
+13/09/2026 08:54:40 VNC server supports protocol version 3.8 (viewer 3.8)
+13/09/2026 08:54:40 We have 1 security types to read
+13/09/2026 08:54:40 0) Received security type 1
+13/09/2026 08:54:40 Selecting security type 1 (0/1 in the list)
+13/09/2026 08:54:40 Selected Security Scheme 1
+13/09/2026 08:54:40 No authentication needed
+13/09/2026 08:54:40 VNC authentication succeeded
+13/09/2026 08:54:40 Desktop name "WVE-79 RFB display spike"
+13/09/2026 08:54:40 Connected to VNC server, using protocol version 3.8
+13/09/2026 08:54:40 VNC server default format:
+13/09/2026 08:54:40   32 bits per pixel.
+13/09/2026 08:54:40   Least significant byte first in each pixel.
+13/09/2026 08:54:40   TRUE colour: max red 255 green 255 blue 255, shift red 16 green 8 blue 0
+{"event":"connected","audio":false}
+{"event":"present","width":800,"height":600,"updates":1,"presentations":1,"marker":0,"toggle":0}
+13/09/2026 08:54:40 client2server supported messages (bit flags)
+13/09/2026 08:54:40 00: 00ff 0081 0000 0000 - 0000 0000 0000 0000
+13/09/2026 08:54:40 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 08:54:40 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 08:54:40 18: 0000 0000 0000 0000 - 0000 0000 0000 0008
+13/09/2026 08:54:40 server2client supported messages (bit flags)
+13/09/2026 08:54:40 00: 001f 0080 0000 0000 - 0000 0000 0000 0000
+13/09/2026 08:54:40 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 08:54:40 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 08:54:40 18: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 08:54:40 Connected to Server "unknown (LibVNCServer 0.9.15)"
+{"event":"present","width":800,"height":600,"updates":31,"presentations":31,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":61,"presentations":61,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":91,"presentations":91,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":121,"presentations":121,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":151,"presentations":151,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":181,"presentations":181,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":211,"presentations":211,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":241,"presentations":241,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":271,"presentations":271,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":301,"presentations":301,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":331,"presentations":331,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":361,"presentations":361,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":391,"presentations":391,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":421,"presentations":421,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":451,"presentations":451,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":481,"presentations":481,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":511,"presentations":511,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":541,"presentations":541,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":571,"presentations":571,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":601,"presentations":601,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":631,"presentations":631,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":661,"presentations":661,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":691,"presentations":691,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":721,"presentations":721,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":751,"presentations":751,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":781,"presentations":781,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":811,"presentations":811,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":841,"presentations":841,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":871,"presentations":871,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":901,"presentations":901,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":931,"presentations":931,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":961,"presentations":961,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":991,"presentations":991,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1021,"presentations":1021,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1051,"presentations":1051,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1081,"presentations":1081,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1111,"presentations":1111,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1141,"presentations":1141,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1171,"presentations":1171,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1201,"presentations":1201,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1231,"presentations":1231,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1261,"presentations":1261,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1291,"presentations":1291,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1321,"presentations":1321,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1351,"presentations":1351,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1381,"presentations":1381,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1411,"presentations":1411,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1441,"presentations":1441,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1471,"presentations":1471,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1501,"presentations":1501,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1531,"presentations":1531,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1561,"presentations":1561,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1591,"presentations":1591,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1621,"presentations":1621,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1651,"presentations":1651,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1681,"presentations":1681,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1711,"presentations":1711,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1741,"presentations":1741,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1771,"presentations":1771,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1801,"presentations":1801,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1831,"presentations":1831,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1861,"presentations":1861,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1891,"presentations":1891,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1921,"presentations":1921,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1951,"presentations":1951,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":1981,"presentations":1981,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2011,"presentations":2011,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2041,"presentations":2041,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2071,"presentations":2071,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2101,"presentations":2101,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2131,"presentations":2131,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2161,"presentations":2161,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2191,"presentations":2191,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2221,"presentations":2221,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2251,"presentations":2251,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2281,"presentations":2281,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2311,"presentations":2311,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2341,"presentations":2341,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2371,"presentations":2371,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2401,"presentations":2401,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2431,"presentations":2431,"marker":0,"toggle":0}
+{"event":"present","width":800,"height":600,"updates":2461,"presentations":2461,"marker":0,"toggle":0}

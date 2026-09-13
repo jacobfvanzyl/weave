@@ -1,0 +1,21 @@
+{"event":"sandbox-canary","role":"browser","pid":1441145,"readAllowed":true,"errno":0}
+{"event":"initializing"}
+13/09/2026 12:58:44 Unable to establish connection with systemd socket
+13/09/2026 12:58:44 Listening for VNC connections on TCP port 15931
+
+DevTools listening on ws://127.0.0.1:19329/devtools/browser/19ebff81-dccd-4664-9410-a5fd576f662c
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+{"event":"sandbox-canary","role":"renderer","pid":1,"readAllowed":false,"errno":1}
+{"event":"sandbox-canary","role":"renderer","pid":1,"readAllowed":false,"errno":1}
+[1441145:1441145:0913/125844.864465:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.Get: object_path= /org/freedesktop/portal/desktop: org.freedesktop.DBus.Error.InvalidArgs: No such interface “org.freedesktop.portal.FileChooser”
+{"event":"loaded","status":200}
+{"event":"paint","count":1,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"sandbox-canary","role":"renderer","pid":1,"readAllowed":false,"errno":1}
+{"event":"paint","count":61,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":241,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":301,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":361,"width":800,"height":600,"dirtyRects":1,"viewers":0}

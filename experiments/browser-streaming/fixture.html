@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;background:#f5f5f5;font:18px system-ui;color:#101820">
+<header style="padding:16px;background:#101820;color:white"><strong id="title"></strong> · Chromium → native WebRTC</header>
+<main style="padding:20px">
+<button id="audio" style="padding:14px" onclick="tone()">Play quiet test tone</button>
+<button style="padding:14px" onclick="document.querySelector('#clicks').textContent=++clicks">Test click</button>
+<span id="clicks">0</span>
+<p id="geometry"></p><p>Readable text: Aa Bb 0123456789 · <span style="color:#a00">red</span> · <span style="color:#070">green</span> · <span style="color:#00a">blue</span></p>
+<input placeholder="Keyboard and focus fixture" style="padding:12px;font-size:18px" />
+<canvas id="canvas" width="1000" height="340" style="max-width:100%"></canvas>
+</main><script>
+const tab = new URL(location.href).searchParams.get('tab') || 'A';
+title.textContent = 'Browser spike — tab ' + tab;
+let clicks = 0, n = 0, ac;
+function tone() { if (ac) { ac.close(); ac=undefined; audio.textContent='Play quiet test tone'; return; }
+ ac=new AudioContext();const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=tab==='A'?440:660;g.gain.value=.025;o.connect(g).connect(ac.destination);o.start();audio.textContent='Stop test tone'; }
+setInterval(()=>{ geometry.textContent=`Viewport ${innerWidth} × ${innerHeight} · DPR ${devicePixelRatio}`;
+ const x=canvas.getContext('2d');x.fillStyle=tab==='A'?'#d7e9f7':'#f5e5ce';x.fillRect(0,0,1000,340);
+ x.fillStyle='#101820';x.font='22px system-ui';x.fillText(`Tab ${tab} · Frame ${n++} · ${Date.now()}`,20,50);x.fillRect(n%900,90,60,100);
+},33);
+</script></body></html>

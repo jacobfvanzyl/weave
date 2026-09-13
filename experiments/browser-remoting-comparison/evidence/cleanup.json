@@ -1,0 +1,8 @@
+{
+  "benchmarkHostProcessesRemaining": 0,
+  "benchmarkNativeMacProcessesRemaining": 0,
+  "ipad": "Original RFB Spike bundle restored after both benchmark apps exited",
+  "audio": "disabled throughout",
+  "productBackend": "unchanged",
+  "note": "Task build dependencies, profiles, source and evidence retained; unrelated runtime processes preserved"
+}

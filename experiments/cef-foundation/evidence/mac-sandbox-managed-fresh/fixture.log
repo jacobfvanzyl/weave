@@ -1,0 +1,6 @@
+127.0.0.1 - - [13/Sep/2026 11:49:36] "GET /fixture.html HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:49:36] "GET /fixture.html?native-second=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:49:36] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:49:36] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:49:36] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:49:36] "GET /favicon.ico HTTP/1.1" 200 -

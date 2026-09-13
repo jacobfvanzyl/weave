@@ -1,0 +1,10 @@
+import { chmod, cp, mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+const root = resolve(import.meta.dir, '..');
+const linux = process.argv.includes('--linux');
+const output = join(root, 'dist', ...(linux ? ['linux-x64'] : []));
+await mkdir(output, { recursive: true });
+const build = Bun.spawn(['bun', 'build', '--compile', ...(linux ? ['--target=bun-linux-x64'] : []), '--outfile', join(output, 'weave-browser-service'), join(root, 'src/browser-service/main.ts')], { stdout: 'inherit', stderr: 'inherit' });
+if (await build.exited !== 0) throw new Error('Browser Service build failed');
+await chmod(join(output, 'weave-browser-service'), 0o755);
+await cp(join(root, 'browser-extension'), join(output, 'browser-extension'), { recursive: true });

@@ -1,0 +1,28 @@
+{"event":"sandbox-canary","role":"browser","pid":1441935,"readAllowed":true,"errno":0}
+{"event":"initializing"}
+13/09/2026 12:59:03 Unable to establish connection with systemd socket
+13/09/2026 12:59:03 Listening for VNC connections on TCP port 15931
+
+DevTools listening on ws://127.0.0.1:19329/devtools/browser/01825a47-fe1b-4856-b1fc-e1e78a2bb84e
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+[1441935:1441935:0913/125903.469308:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.Get: object_path= /org/freedesktop/portal/desktop: org.freedesktop.DBus.Error.InvalidArgs: No such interface “org.freedesktop.portal.FileChooser”
+{"event":"sandbox-canary","role":"renderer","pid":1442001,"readAllowed":true,"errno":0}
+{"event":"sandbox-canary","role":"renderer","pid":1441999,"readAllowed":true,"errno":0}
+{"event":"paint","count":1,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"loaded","status":200}
+{"event":"paint","count":61,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"sandbox-canary","role":"renderer","pid":1442112,"readAllowed":true,"errno":0}
+{"event":"paint","count":121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":241,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":301,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":361,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":421,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":481,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":541,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":601,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":661,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":721,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":781,"width":800,"height":600,"dirtyRects":1,"viewers":0}

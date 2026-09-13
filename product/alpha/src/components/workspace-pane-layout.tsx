@@ -2,7 +2,7 @@ import { useRef, useState, type CSSProperties } from 'react';
 import type { TerminalLayoutNode } from '@weave/product-protocol';
 
 type Rect = { x: number; y: number; width: number; height: number };
-type Pane = { node: Extract<TerminalLayoutNode, { kind: 'terminal' }>; rect: Rect };
+type Pane = { node: Exclude<TerminalLayoutNode, { kind: 'split' }>; rect: Rect };
 type Divider = { node: Extract<TerminalLayoutNode, { kind: 'split' }>; rect: Rect };
 const full: Rect = { x: 0, y: 0, width: 100, height: 100 };
 const dividerWidth = 1;
@@ -16,7 +16,7 @@ const style = (rect: Rect): CSSProperties => ({ position: 'absolute', left: `${r
 export function paneGeometry(root: TerminalLayoutNode, ratios: Record<string, number> = {}) {
   const panes: Pane[] = []; const dividers: Divider[] = [];
   const visit = (node: TerminalLayoutNode, rect: Rect) => {
-    if (node.kind === 'terminal') { panes.push({ node, rect }); return; }
+    if (node.kind !== 'split') { panes.push({ node, rect }); return; }
     const ratio = ratios[node.nodeId] ?? node.ratio;
     dividers.push({ node: { ...node, ratio }, rect });
     if (node.axis === 'horizontal') {
@@ -54,7 +54,7 @@ export function WorkspacePaneLayout({ layout, maximized, active, setRatio, rende
     })}
     {!expanded && dividers.map(({ node, rect }) => {
       const horizontal = node.axis === 'horizontal';
-      return <div key={node.nodeId} role='separator' tabIndex={0} aria-label='Resize terminal panes' aria-orientation={horizontal ? 'vertical' : 'horizontal'} aria-valuemin={10} aria-valuemax={90} aria-valuenow={Math.round(node.ratio * 100)}
+      return <div key={node.nodeId} role='separator' tabIndex={0} aria-label='Resize panes' aria-orientation={horizontal ? 'vertical' : 'horizontal'} aria-valuemin={10} aria-valuemax={90} aria-valuenow={Math.round(node.ratio * 100)}
         className='absolute z-10 touch-none bg-muted-foreground/50 hover:bg-primary focus-visible:bg-primary'
         style={horizontal ? { left: `calc(${rect.x + rect.width * node.ratio}% - ${dividerWidth}px)`, top: `${rect.y}%`, height: `${rect.height}%`, width: dividerWidth, cursor: 'col-resize' } : { top: `calc(${rect.y + rect.height * node.ratio}% - ${dividerWidth}px)`, left: `${rect.x}%`, width: `${rect.width}%`, height: dividerWidth, cursor: 'row-resize' }}
         onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); drag.current = { id: node.nodeId, ratio: node.ratio }; }}

@@ -107,3 +107,30 @@ test('terminal removal collapses nested splits, preserves Workspaces, and serial
     expect((await new CompositionStore(root).get('host'))).toEqual(empty);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('mixed Pane migration, Thread moves and archive reconciliation preserve other content and stable identities', async () => {
+  const { paneTargets } = await import('@weave/product-protocol');
+  const root = await mkdtemp(join(tmpdir(), 'weave-agent-panes-'));
+  try {
+    const directory = join(root, 'compositions'); await mkdir(directory);
+    const file = join(directory, `host-${createHash('sha256').update('host').digest('hex')}.json`);
+    const terminal = { ...pane('shell'), kind: 'terminal' as const, executionContextId: 'context' };
+    await writeFile(file, JSON.stringify({ schemaVersion: 2, hostId: 'host', revision: 7, workspaces: [{ workspaceId: 'source', name: 'Source', layout: terminal }, { workspaceId: 'destination', name: 'Destination', layout: null }] }));
+    const store = new CompositionStore(root); await store.migrate('host', []);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ schemaVersion: 3, revision: 7 });
+    const members = Array.from({ length: 20 }, (_, index) => ({ threadId: `thread-${index}`, workspaceId: 'source' }));
+    const migrated = await store.reconcileThreads('host', members);
+    expect(paneTargets(migrated.workspaces)).toHaveLength(21);
+    expect(paneTargets(migrated.workspaces)[0]).toEqual(terminal);
+    expect(await store.reconcileThreads('host', members)).toEqual(migrated);
+    const first = paneTargets(migrated.workspaces).find(pane => pane.kind === 'agent' && pane.threadId === 'thread-0')!;
+    const moved = await store.reconcileThreads('host', members.map(thread => thread.threadId === 'thread-0' ? { ...thread, workspaceId: 'destination' } : thread));
+    expect(moved.workspaces[1]!.layout).toEqual(first);
+    const pruned = await store.reconcileTerminals('host', async () => new Set());
+    expect(paneTargets(pruned.workspaces)).toHaveLength(20);
+    const archived = await store.reconcileThreads('host', members.slice(1));
+    expect(archived.workspaces[1]!.layout).toBeNull();
+    expect(paneTargets(archived.workspaces)).toHaveLength(19);
+    expect(await new CompositionStore(root).get('host')).toEqual(archived);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

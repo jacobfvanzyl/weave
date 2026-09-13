@@ -1,0 +1,142 @@
+{
+  "run": "mac-webrtc-dpr1-interface-pilot",
+  "host": "mac",
+  "transport": "webrtc",
+  "dpr": 1,
+  "client": "macOS",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 83320,
+  "clientPid": 83393,
+  "startedAt": 1789287843.010587,
+  "exit": {
+    "client": 5,
+    "reference": true
+  },
+  "phases": [
+    {
+      "meanDecodeMs": 1.9730000000000025,
+      "meanJitterBufferMs": 0.020999999999993246,
+      "phase": 1,
+      "name": "idle",
+      "windowSeconds": 2.8660884583368897,
+      "receivedDistinctFPS": 0,
+      "frameGapP95Ms": null,
+      "receivedMbps": 0.0005509702939113402,
+      "clientCPUPercentOneCore": 3.399971525318514,
+      "clientRSSMiB": 89.625,
+      "hostCPUPercentOneCoreApprox": null,
+      "hostSummedRSSMiBApprox": null
+    },
+    {
+      "meanDecodeMs": 1.2988181818181814,
+      "meanJitterBufferMs": 0.033454545454543586,
+      "phase": 2,
+      "name": "input",
+      "windowSeconds": 12.010810749983648,
+      "receivedDistinctFPS": 0,
+      "frameGapP95Ms": null,
+      "receivedMbps": 0.0001469067309415319,
+      "clientCPUPercentOneCore": 2.4988291494206694,
+      "clientRSSMiB": 91.97916666666667,
+      "hostCPUPercentOneCoreApprox": 12.753200198793682,
+      "hostSummedRSSMiBApprox": 1711.9359375
+    },
+    {
+      "meanDecodeMs": 1.7303676880222838,
+      "meanJitterBufferMs": 23.972808333333333,
+      "phase": 3,
+      "name": "scroll",
+      "windowSeconds": 13.04696687500109,
+      "receivedDistinctFPS": 29.96053333511046,
+      "frameGapP95Ms": 35.35809791792417,
+      "receivedMbps": 0.19258150537669924,
+      "clientCPUPercentOneCore": 7.925338228540335,
+      "clientRSSMiB": 93.56129807692308,
+      "hostCPUPercentOneCoreApprox": 28.64196485993168,
+      "hostSummedRSSMiBApprox": 1427.3792613636363
+    },
+    {
+      "meanDecodeMs": 2.047272222222222,
+      "meanJitterBufferMs": 16.26288055555555,
+      "phase": 4,
+      "name": "animation",
+      "windowSeconds": 12.97615004167892,
+      "receivedDistinctFPS": 30.000170780660607,
+      "frameGapP95Ms": 35.0217687577242,
+      "receivedMbps": 0.027900919033145847,
+      "clientCPUPercentOneCore": 8.808026672721835,
+      "clientRSSMiB": 93.73557692307692,
+      "hostCPUPercentOneCoreApprox": 26.96132033159071,
+      "hostSummedRSSMiBApprox": 1400.9765625
+    },
+    {
+      "meanDecodeMs": 2.0518472222222215,
+      "meanJitterBufferMs": 13.501708333333331,
+      "phase": 5,
+      "name": "dense",
+      "windowSeconds": 13.285006666672416,
+      "receivedDistinctFPS": 29.998683694681397,
+      "frameGapP95Ms": 35.19747916725464,
+      "receivedMbps": 2.3782616441545072,
+      "clientCPUPercentOneCore": 8.927020392460312,
+      "clientRSSMiB": 91.89302884615384,
+      "hostCPUPercentOneCoreApprox": 54.04902747066681,
+      "hostSummedRSSMiBApprox": 1430.5426136363637
+    }
+  ],
+  "inputLatencyMs": {
+    "n": 14,
+    "p50": 1026.3151458202628,
+    "p95": 1034.1756562556839,
+    "max": 1035.4384166712407
+  },
+  "inputTimeouts": 0,
+  "imageSize": [
+    960,
+    640
+  ],
+  "receivedSize": [
+    960,
+    640
+  ],
+  "staticRGB": {
+    "pixels": 528000,
+    "meanAbsoluteChannelError": 2.3969286616161614,
+    "fractionPixelsOver2": 0.23627272727272727,
+    "maxChannelError": 115,
+    "fineTextRegionMeanAbsoluteChannelError": 2.3865088383838384,
+    "fineTextRegionFractionOver2": 0.2500189393939394
+  },
+  "referenceState": {
+    "phase": 6,
+    "clicks": 15,
+    "width": 960,
+    "height": 640,
+    "dpr": 1
+  },
+  "selectedRoute": {
+    "localCandidateId": {
+      "address": "192.168.1.144",
+      "candidateType": "host",
+      "id": "Id3SGkaFm",
+      "ip": "192.168.1.144",
+      "protocol": "udp",
+      "type": "local-candidate"
+    },
+    "remoteCandidateId": {
+      "address": "192.168.1.144",
+      "candidateType": "host",
+      "id": "IXMbogM+2",
+      "ip": "192.168.1.144",
+      "protocol": "udp",
+      "type": "remote-candidate"
+    }
+  },
+  "audioPlayingObserved": false,
+  "probeConversionP95Ms": 0.202283333055675
+}

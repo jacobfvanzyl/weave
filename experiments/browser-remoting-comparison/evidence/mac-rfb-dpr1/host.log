@@ -1,0 +1,73 @@
+13/09/2026 10:39:12 Listening for VNC connections on TCP port 15921
+{"event":"initializing"}
+
+DevTools listening on ws://127.0.0.1:19229/devtools/browser/63af3f71-cb3a-4f53-a417-67be3b440e08
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+{"event":"loaded","status":200}
+{"event":"paint","count":1,"width":960,"height":640,"dirtyRects":1,"viewers":0}
+13/09/2026 10:39:13 Got connection from client 100.97.206.8
+13/09/2026 10:39:13   0 other clients
+{"event":"viewer-joined","viewers":1}
+13/09/2026 10:39:13 Client Protocol Version 3.8
+13/09/2026 10:39:13 Protocol version sent 3.8, using 3.8
+13/09/2026 10:39:13 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 10:39:13 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 10:39:13 Pixel format for client 100.97.206.8:
+13/09/2026 10:39:13   32 bpp, depth 24, little endian
+13/09/2026 10:39:13   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:39:13 Enabling X-style cursor updates for client 100.97.206.8
+13/09/2026 10:39:13 Enabling full-color cursor updates for client 100.97.206.8
+13/09/2026 10:39:13 Enabling cursor position updates for client 100.97.206.8
+13/09/2026 10:39:13 Enabling KeyboardLedState protocol extension for client 100.97.206.8
+13/09/2026 10:39:13 Enabling NewFBSize protocol extension for client 100.97.206.8
+13/09/2026 10:39:13 Enabling ExtDesktopSize protocol extension for client 100.97.206.8
+13/09/2026 10:39:13 Enabling SupportedMessages protocol extension for client 100.97.206.8
+13/09/2026 10:39:13 Enabling SupportedEncodings protocol extension for client 100.97.206.8
+13/09/2026 10:39:13 Enabling ServerIdentity protocol extension for client 100.97.206.8
+13/09/2026 10:39:13 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 10:39:13 Using ZRLE encoding for client 100.97.206.8
+13/09/2026 10:39:13 Sending rfbEncodingExtDesktopSize for size (960x640) 
+{"event":"paint","count":61,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":121,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":181,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":241,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":301,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":361,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":421,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":481,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":541,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":601,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":661,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":721,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":781,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":841,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":901,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":961,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1021,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1081,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1141,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1201,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1261,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1321,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1381,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1441,"width":960,"height":640,"dirtyRects":1,"viewers":1}
+{"event":"viewer-left","viewers":0}
+13/09/2026 10:40:45 Client 100.97.206.8 gone
+13/09/2026 10:40:45 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 10:40:45  FramebufferUpdate   :   1470 |         0/        0 (  0.0%)
+13/09/2026 10:40:45  ZRLE                :   1471 |  14184002/1971162472 ( 99.3%)
+13/09/2026 10:40:45  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 10:40:45  SupportedEncoding   :      1 |        96/       96 (  0.0%)
+13/09/2026 10:40:45  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 10:40:45  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 10:40:45  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 10:40:45  ExtendedDesktopSize :      1 |        32/       32 (  0.0%)
+13/09/2026 10:40:45  TOTALS              :   2947 |  14184515/1971162985 ( 99.3%)
+13/09/2026 10:40:45 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 10:40:45  PointerEvent        :     50 |       300/      300 (  0.0%)
+13/09/2026 10:40:45  FramebufferUpdate   :   1472 |     14720/    14720 (  0.0%)
+13/09/2026 10:40:45  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 10:40:45  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 10:40:45  TOTALS              :   1524 |     15100/    15100 (  0.0%)

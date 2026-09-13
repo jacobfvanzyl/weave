@@ -1,0 +1,16 @@
+{
+  "host": "linux",
+  "transport": "rfb",
+  "dpr": 2,
+  "client": "macOS",
+  "extensionVariant": "extension",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 1276832,
+  "clientPid": 91398,
+  "startedAt": 1789288464.861024
+}

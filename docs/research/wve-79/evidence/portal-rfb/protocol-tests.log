@@ -1,0 +1,61 @@
+bun test v1.3.14 (0d9b296a)
+
+product/protocol/src/index.test.ts:
+(pass) Portal protocol > preserves exact Host context paths and accepts legacy summaries without guessing [0.38ms]
+(pass) Portal protocol > parses the bounded visible Browser capability and ergonomic commands [0.17ms]
+(pass) Portal protocol > parses the key-authentication and pairing envelopes [0.15ms]
+(pass) Portal protocol > parses an attachment without leaking implementation details [0.05ms]
+(pass) Portal protocol > parses provisional Thread lifecycle requests and results [0.09ms]
+(pass) Portal protocol > parses host-local project removal requests and results [0.02ms]
+(pass) Portal protocol > binds capabilities to a stable Host and authenticated principal [0.06ms]
+(pass) Portal protocol > parses project registration and Git repository identity [0.05ms]
+(pass) Portal protocol > rejects malformed Thread state [0.03ms]
+(pass) Portal protocol > parses bounded Workspace file requests and results [0.19ms]
+(pass) Portal protocol > routes Terminal contracts through the Portal protocol [0.21ms]
+(pass) Portal protocol > requires conditional writes and validates watch notifications and typed errors [0.07ms]
+(pass) Thread attention carries freshness separately from archive lifecycle and accepts older Hosts [0.14ms]
+(pass) Workspace directory availability preserves canonical identity and rejects unknown states [0.04ms]
+(pass) requires stored Thread membership and rejects null creation or move targets [0.06ms]
+
+product/protocol/src/terminals.test.ts:
+(pass) Terminal protocol > exposes the complete persistent Terminal lifecycle [0.04ms]
+(pass) Terminal protocol > parses a coherent snapshot and attachment response [0.06ms]
+(pass) Terminal protocol > rejects invalid dimensions, attachment modes, cursors, and input [0.06ms]
+(pass) Terminal protocol > accepts raw whitespace and control input "\r" [0.01ms]
+(pass) Terminal protocol > accepts raw whitespace and control input " "
+(pass) Terminal protocol > accepts raw whitespace and control input "\t"
+(pass) Terminal protocol > parses sequenced output, title, exit, and resync notifications [0.05ms]
+(pass) Terminal protocol > parses typed control, retention, and resource errors [0.04ms]
+(pass) screen replacements validate the authoritative grid and payload [0.04ms]
+
+product/protocol/src/browser-pages.test.ts:
+(pass) Browser page wire summaries strip native paths and require a live runtime generation [0.19ms]
+(pass) only bounded viewports and explicit input methods cross the public browser boundary [0.12ms]
+(pass) navigation rejects credentials and privileged schemes; RFB authentication has its own audience [0.06ms]
+
+product/protocol/src/browser-profiles.test.ts:
+(pass) Host Profile contracts reject Workspace addressing and client-supplied storage paths [0.13ms]
+(pass) Profile responses reject duplicate identities and malformed revisions [0.07ms]
+
+product/protocol/src/composition.test.ts:
+(pass) composition RPC round trips stable identities and ordered split layouts [0.20ms]
+(pass) composition boundary rejects ambiguous identities and unbounded or malformed layouts [0.13ms]
+(pass) a terminal can occur only once across all panes and tabs of a workspace [0.05ms]
+(pass) mixed Pane layouts preserve content identities and reject duplicate Thread ownership [0.06ms]
+
+product/protocol/src/browser-stream.test.ts:
+(pass) browser contracts bind views to Workspaces and retain only supported signaling [0.18ms]
+(pass) browser boundaries reject privileged URL schemes, unbounded media and invalid geometry [0.11ms]
+
+product/protocol/src/workspace-lifecycle.test.ts:
+(pass) workspace close requires a typed confirmation and exact consequence token [0.28ms]
+
+product/protocol/src/browser-panes.test.ts:
+(pass) Browser Pane creation validates Workspace, URL, revision and permitted parameters [0.13ms]
+(pass) Browser Pane close requires explicit confirmation and never exposes the private display path [0.04ms]
+(pass) Workspace close parsing retains the browser page generation and uncertain-work consequence [0.03ms]
+
+ 39 pass
+ 0 fail
+ 175 expect() calls
+Ran 39 tests across 8 files. [27.00ms]

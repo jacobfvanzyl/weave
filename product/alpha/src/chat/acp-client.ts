@@ -110,6 +110,7 @@ export type AcpSessionClientOptions = {
   protocols?: string[];
   WebSocket?: WebSocketConstructor;
   onEvent(event: AcpTranscriptEvent): void;
+  onClose?(): void;
 };
 
 export class AcpSessionClient {
@@ -164,6 +165,7 @@ export class AcpSessionClient {
       });
     this.connection = app.connect(stream);
     this.agent = this.connection.agent;
+    void this.connection.closed.then(() => options.onClose?.(), () => options.onClose?.());
   }
 
   async initializeAndLoad(input: {

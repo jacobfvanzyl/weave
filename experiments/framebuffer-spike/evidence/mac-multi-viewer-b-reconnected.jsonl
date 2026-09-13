@@ -1,0 +1,6 @@
+{"event":"channel","type":1,"action":10,"seconds":0.022}
+{"event":"channel","type":2,"action":10,"seconds":0.045}
+{"event":"channel","type":4,"action":10,"seconds":0.046}
+{"event":"channel","type":3,"action":10,"seconds":0.046}
+{"event":"primary","width":640,"height":360,"format":32}
+{"event":"result","updates":48,"changes":48,"firstFrame":117,"lastFrame":164,"audioStarts":0,"audioPackets":0,"audioSamples":0,"audioRMS":0.000000,"closed":0}

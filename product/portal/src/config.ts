@@ -14,6 +14,7 @@ export type AgentDefinition = {
   env: Record<string, string>;
 };
 export type PortalConfig = {
+  browser?: { executable: string; cefExecutable?: string };
   listen: { hostname: string; port: number };
   displayName: string;
   tls?: { certificateFile: string; privateKeyFile: string };
@@ -139,6 +140,15 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
 
   unique(executionContexts.map((workspace) => workspace.executionContextId), 'executionContextId');
   unique(agents.map((agent) => agent.agentId), 'agentId');
+  let browser: PortalConfig['browser'];
+  if (root.browser !== undefined) {
+    const input = object(root.browser, 'browser');
+    const executable = text(input.executable ?? input.cefExecutable, 'browser.executable or browser.cefExecutable');
+    if (!isAbsolute(executable)) throw new Error('browser.executable must be an absolute path.');
+    const cefExecutable = input.cefExecutable === undefined ? undefined : text(input.cefExecutable, 'browser.cefExecutable');
+    if (cefExecutable && !isAbsolute(cefExecutable)) throw new Error('browser.cefExecutable must be an absolute path.');
+    browser = { executable, ...(cefExecutable ? { cefExecutable } : {}) };
+  }
   return {
     listen: { hostname, port: Number(port) },
     displayName,
@@ -148,6 +158,7 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
     threadEventRetentionLimit: Number(threadEventRetentionLimit),
     executionContexts,
     agents,
+    ...(browser ? { browser } : {}),
   };
 };
 

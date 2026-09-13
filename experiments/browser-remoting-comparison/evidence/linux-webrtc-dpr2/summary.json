@@ -1,0 +1,143 @@
+{
+  "run": "linux-webrtc-dpr2",
+  "host": "linux",
+  "transport": "webrtc",
+  "dpr": 2,
+  "client": "macOS",
+  "extensionVariant": "extension",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 1273089,
+  "clientPid": 90206,
+  "startedAt": 1789288357.725622,
+  "exit": {
+    "client": 0,
+    "reference": true
+  },
+  "phases": [
+    {
+      "meanDecodeMs": 4.3329999999999895,
+      "meanJitterBufferMs": 10.094999999999965,
+      "phase": 1,
+      "name": "idle",
+      "windowSeconds": 2.471151583333267,
+      "receivedDistinctFPS": 0,
+      "frameGapP95Ms": null,
+      "receivedMbps": 8.414057435820668e-05,
+      "clientCPUPercentOneCore": 3.091163936476011,
+      "clientRSSMiB": 104.0546875,
+      "hostCPUPercentOneCoreApprox": null,
+      "hostSummedRSSMiBApprox": null
+    },
+    {
+      "meanDecodeMs": 3.0791363636363633,
+      "meanJitterBufferMs": 0.03659090909090658,
+      "phase": 2,
+      "name": "input",
+      "windowSeconds": 24.00263695832109,
+      "receivedDistinctFPS": 0,
+      "frameGapP95Ms": null,
+      "receivedMbps": 0.00020693580828946533,
+      "clientCPUPercentOneCore": 2.99101193120648,
+      "clientRSSMiB": 109.80208333333333,
+      "hostCPUPercentOneCoreApprox": 13.108015954686906,
+      "hostSummedRSSMiBApprox": 1849.3363095238096
+    },
+    {
+      "meanDecodeMs": 2.7752247838616717,
+      "meanJitterBufferMs": 29.905884726224787,
+      "phase": 3,
+      "name": "scroll",
+      "windowSeconds": 13.23849354169215,
+      "receivedDistinctFPS": 28.022948510069487,
+      "frameGapP95Ms": 62.267993749992485,
+      "receivedMbps": 0.6271680166404086,
+      "clientCPUPercentOneCore": 5.911837344834066,
+      "clientRSSMiB": 121.3125,
+      "hostCPUPercentOneCoreApprox": 162.63475840798864,
+      "hostSummedRSSMiBApprox": 1677.5287642045455
+    },
+    {
+      "meanDecodeMs": 3.4545248618784545,
+      "meanJitterBufferMs": 28.593430939226522,
+      "phase": 4,
+      "name": "animation",
+      "windowSeconds": 12.938783166668145,
+      "receivedDistinctFPS": 15.087526659842593,
+      "frameGapP95Ms": 69.08580832969164,
+      "receivedMbps": 0.007506920113888473,
+      "clientCPUPercentOneCore": 6.407680502595668,
+      "clientRSSMiB": 120.19110576923077,
+      "hostCPUPercentOneCoreApprox": 89.85695955694497,
+      "hostSummedRSSMiBApprox": 1648.49765625
+    },
+    {
+      "meanDecodeMs": 3.6881239669421495,
+      "meanJitterBufferMs": 21.911442148760322,
+      "phase": 5,
+      "name": "dense",
+      "windowSeconds": 13.278961499978323,
+      "receivedDistinctFPS": 20.386788919047657,
+      "frameGapP95Ms": 72.19343957549427,
+      "receivedMbps": 2.451471227207499,
+      "clientCPUPercentOneCore": 7.397862471699507,
+      "clientRSSMiB": 104.86658653846153,
+      "hostCPUPercentOneCoreApprox": 187.82221547032856,
+      "hostSummedRSSMiBApprox": 1656.5994318181818
+    }
+  ],
+  "inputLatencyMs": {
+    "n": 24,
+    "p50": 1060.8730833482696,
+    "p95": 1071.4816520659951,
+    "max": 1077.6691249920987
+  },
+  "inputTimeouts": 0,
+  "imageSize": [
+    1920,
+    1280
+  ],
+  "receivedSize": [
+    1920,
+    1280
+  ],
+  "staticRGB": {
+    "pixels": 2112000,
+    "meanAbsoluteChannelError": 1.92305413510101,
+    "fractionPixelsOver2": 0.1806941287878788,
+    "maxChannelError": 134,
+    "fineTextRegionMeanAbsoluteChannelError": 2.030026830808081,
+    "fineTextRegionFractionOver2": 0.18711647727272726
+  },
+  "referenceState": {
+    "phase": 6,
+    "clicks": 24,
+    "width": 960,
+    "height": 640,
+    "dpr": 2
+  },
+  "selectedRoute": {
+    "localCandidateId": {
+      "address": "100.97.206.8",
+      "candidateType": "host",
+      "id": "IlCWyLmJ7",
+      "ip": "100.97.206.8",
+      "protocol": "udp",
+      "type": "local-candidate"
+    },
+    "remoteCandidateId": {
+      "address": "100.79.27.114",
+      "candidateType": "host",
+      "id": "IgHY6v/FT",
+      "ip": "100.79.27.114",
+      "protocol": "udp",
+      "type": "remote-candidate"
+    }
+  },
+  "audioPlayingObserved": false,
+  "probeConversionP95Ms": 0.7242125007905996
+}

@@ -1,0 +1,16 @@
+{
+  "host": "linux",
+  "transport": "webrtc",
+  "dpr": 2,
+  "client": "iPadOS",
+  "extensionVariant": "extension-minfps",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 1299605,
+  "clientPid": 1771,
+  "startedAt": 1789289147.079045
+}

@@ -1,0 +1,218 @@
+{
+  "source": "https://cef-builds.spotifycdn.com/index.json",
+  "checked": "2026-09-12",
+  "cefNewestListedByChromiumVersion": {
+    "macosarm64": [
+      {
+        "cef": "154.0.4+g843529b+chromium-154.0.8037.17",
+        "chromium": "154.0.8037.17",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_macosarm64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-11T04:45:06.875000Z"
+          },
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_macosarm64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-11T04:44:58.067000Z"
+          }
+        ]
+      },
+      {
+        "cef": "154.0.1+gd8d9e94+chromium-154.0.8037.7",
+        "chromium": "154.0.8037.7",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_macosarm64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-09T04:41:05.555000Z"
+          },
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_macosarm64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-09T04:40:53.785000Z"
+          }
+        ]
+      },
+      {
+        "cef": "152.0.6+g708dc14+chromium-152.0.7977.83",
+        "chromium": "152.0.7977.83",
+        "channel": "stable",
+        "files": [
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_macosarm64_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-07T04:25:09.510000Z"
+          },
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_macosarm64.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-07T04:24:58.711000Z"
+          }
+        ]
+      }
+    ],
+    "macosx64": [
+      {
+        "cef": "154.0.4+g843529b+chromium-154.0.8037.17",
+        "chromium": "154.0.8037.17",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_macosx64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-12T07:04:24.843000Z"
+          },
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_macosx64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-12T06:55:05.387000Z"
+          }
+        ]
+      },
+      {
+        "cef": "154.0.1+gd8d9e94+chromium-154.0.8037.7",
+        "chromium": "154.0.8037.7",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_macosx64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-10T07:09:21.829000Z"
+          },
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_macosx64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-10T07:04:48.357000Z"
+          }
+        ]
+      },
+      {
+        "cef": "152.0.6+g708dc14+chromium-152.0.7977.83",
+        "chromium": "152.0.7977.83",
+        "channel": "stable",
+        "files": [
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_macosx64_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-07T06:47:31.687000Z"
+          },
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_macosx64.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-07T06:45:39.084000Z"
+          }
+        ]
+      }
+    ],
+    "linux64": [
+      {
+        "cef": "154.0.4+g843529b+chromium-154.0.8037.17",
+        "chromium": "154.0.8037.17",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_linux64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-11T04:16:05.742000Z"
+          },
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_linux64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-11T04:15:32.891000Z"
+          }
+        ]
+      },
+      {
+        "cef": "154.0.1+gd8d9e94+chromium-154.0.8037.7",
+        "chromium": "154.0.8037.7",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_linux64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-09T06:05:43.876000Z"
+          },
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_linux64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-09T06:05:09.455000Z"
+          }
+        ]
+      },
+      {
+        "cef": "152.0.6+g708dc14+chromium-152.0.7977.83",
+        "chromium": "152.0.7977.83",
+        "channel": "stable",
+        "files": [
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_linux64.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-07T03:59:52.822000Z"
+          },
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_linux64_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-07T03:58:58.670000Z"
+          }
+        ]
+      }
+    ],
+    "linuxarm64": [
+      {
+        "cef": "154.0.4+g843529b+chromium-154.0.8037.17",
+        "chromium": "154.0.8037.17",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_linuxarm64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-11T09:06:44.491000Z"
+          },
+          {
+            "name": "cef_binary_154.0.4+g843529b+chromium-154.0.8037.17_linuxarm64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-11T09:05:47.996000Z"
+          }
+        ]
+      },
+      {
+        "cef": "154.0.1+gd8d9e94+chromium-154.0.8037.7",
+        "chromium": "154.0.8037.7",
+        "channel": "beta",
+        "files": [
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_linuxarm64_beta.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-09T07:00:41.353000Z"
+          },
+          {
+            "name": "cef_binary_154.0.1+gd8d9e94+chromium-154.0.8037.7_linuxarm64_beta_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-09T06:59:47.793000Z"
+          }
+        ]
+      },
+      {
+        "cef": "152.0.6+g708dc14+chromium-152.0.7977.83",
+        "chromium": "152.0.7977.83",
+        "channel": "stable",
+        "files": [
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_linuxarm64.tar.bz2",
+            "type": "standard",
+            "lastModified": "2026-09-07T06:28:58.427000Z"
+          },
+          {
+            "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_linuxarm64_minimal.tar.bz2",
+            "type": "minimal",
+            "lastModified": "2026-09-07T06:26:55.897000Z"
+          }
+        ]
+      }
+    ]
+  }
+}

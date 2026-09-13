@@ -4,6 +4,23 @@ import { useDesktopTitlebar } from './use-desktop-titlebar';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); delete (navigator as any).windowControlsOverlay; });
 
+it('activates a draggable Pane rail from native clicks without clicking its controls or a modal underlay', () => {
+  let receive!: (point: { x: number; y: number }) => void;
+  const stop = vi.fn(), select = vi.fn(), control = vi.fn();
+  vi.stubGlobal('weaveDesktop', { onTitlebarClick: (listener: typeof receive) => { receive = listener; return stop; } });
+  function Harness() { useDesktopTitlebar(); return <header data-slot='pane-top-rail' data-window-top-rail onClick={select}><span>Agent</span><button onClick={control}>Archive</button></header>; }
+  const view = render(<Harness />);
+  let hit: Element = view.getByText('Agent');
+  vi.spyOn(document, 'elementFromPoint').mockImplementation(() => hit);
+  act(() => receive({ x: 400, y: 12 })); expect(select).toHaveBeenCalledOnce();
+  hit = view.getByRole('button'); act(() => receive({ x: 500, y: 12 }));
+  expect(select).toHaveBeenCalledOnce(); expect(control).not.toHaveBeenCalled();
+  const modal = document.createElement('div'); modal.setAttribute('role', 'dialog'); document.body.append(modal);
+  vi.spyOn(modal, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 100, 100));
+  hit = view.getByText('Agent'); act(() => receive({ x: 400, y: 12 })); expect(select).toHaveBeenCalledOnce();
+  modal.remove(); view.unmount(); expect(stop).toHaveBeenCalledOnce();
+});
+
 it('reveals only the terminal rail under the native titlebar pointer and clears it on exit', async () => {
   let receive: (point: { x: number; y: number } | null) => void = () => {};
   const stop = vi.fn();

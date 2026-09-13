@@ -138,8 +138,10 @@ static NSString *printableText(NSString *text) {
   return [self.terminal sendMouseAt:[self convertPoint:event.locationInWindow fromView:nil] button:button action:action modifiers:weaveKeyModifiers(event.modifierFlags)];
 }
 - (void)mouseDown:(NSEvent *)event {
-  [self.window makeFirstResponder:self];
+  // Claim the Pane before AppKit acknowledges its responder. Otherwise the
+  // acknowledgement looks like passive restoration and re-focuses the composer.
   if (self.event) self.event(@{@"kind": @"focus", @"intent": @"pointer"});
+  [self.window makeFirstResponder:self];
   self.selecting = ![self reportMouse:event button:1 action:0];
   if (self.selecting) { self.selectionAnchor = [self cellAt:[self convertPoint:event.locationInWindow fromView:nil]]; self.selection = NSMakeRange(self.selectionAnchor, 0); self.needsDisplay = YES; }
 }
@@ -202,9 +204,11 @@ static NSString *printableText(NSString *text) {
 @property(nonatomic) napi_threadsafe_function callback;
 @property(nonatomic) BOOL inputFailed;
 @property(nonatomic) BOOL failureReported;
+@property(nonatomic, strong) id mouseMonitor;
 @end
 @implementation WeaveNativeSurface @end
 static NSMutableDictionary<NSNumber *, WeaveNativeSurface *> *surfaces;
+static NSMutableDictionary<NSNumber *, WeaveNativeSurface *> *windowObservers;
 static int64_t nextId = 1;
 static napi_value undefined(napi_env env) { napi_value value; napi_get_undefined(env, &value); return value; }
 static napi_value error(napi_env env, const char *message) { napi_throw_error(env, NULL, message); return NULL; }
@@ -223,6 +227,50 @@ static void eventJs(napi_env env, napi_value callback, void *context, void *data
   napi_call_function(env, undefined(env), callback, 1, &value, &ignored);
 }
 static void releaseEventContext(napi_env env, void *data, void *hint) { CFBridgingRelease(data); }
+// Electron consumes DOM pointer events over draggable title rails. Observe the
+// native click without consuming it, leaving AppKit's window dragging intact.
+static napi_value watchWindow(napi_env env, napi_callback_info info) {
+  size_t count = 2, length; napi_value args[2]; void *bytes;
+  napi_get_cb_info(env, info, &count, args, NULL, NULL);
+  if (count != 2 || napi_get_buffer_info(env, args[0], &bytes, &length) != napi_ok || length != sizeof(void *)) return error(env, "Invalid native window");
+  NSView *parent = (__bridge NSView *)(*(void **)bytes);
+  if (!parent.window) return error(env, "Native window is unavailable");
+  WeaveNativeSurface *entry = [WeaveNativeSurface new];
+  napi_value name; napi_create_string_utf8(env, "weave-window-pointer", NAPI_AUTO_LENGTH, &name);
+  void *context = (void *)CFBridgingRetain(entry);
+  napi_threadsafe_function callback;
+  if (napi_create_threadsafe_function(env, args[1], NULL, name, 256, 1, context, releaseEventContext, context, eventJs, &callback) != napi_ok) {
+    CFBridgingRelease(context); return error(env, "Window event bridge failed");
+  }
+  entry.callback = callback;
+  __weak NSWindow *window = parent.window;
+  __weak WeaveNativeSurface *weakEntry = entry;
+  entry.mouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown handler:^NSEvent *(NSEvent *event) {
+    WeaveNativeSurface *current = weakEntry;
+    if (current.callback && event.window == window) {
+      NSView *content = window.contentView;
+      NSPoint point = [content convertPoint:event.locationInWindow fromView:nil];
+      NSDictionary *value = @{@"x": @(point.x), @"y": @(content.isFlipped ? point.y : content.bounds.size.height - point.y)};
+      void *retained = (void *)CFBridgingRetain(value);
+      if (napi_call_threadsafe_function(current.callback, retained, napi_tsfn_nonblocking) != napi_ok) CFBridgingRelease(retained);
+    }
+    return event;
+  }];
+  int64_t id = nextId++; windowObservers[@(id)] = entry;
+  napi_value result; napi_create_int64(env, id, &result); return result;
+}
+static napi_value unwatchWindow(napi_env env, napi_callback_info info) {
+  size_t count = 1; napi_value arg; int64_t id;
+  napi_get_cb_info(env, info, &count, &arg, NULL, NULL);
+  if (count != 1 || napi_get_value_int64(env, arg, &id) != napi_ok) return error(env, "Invalid window observer");
+  WeaveNativeSurface *entry = windowObservers[@(id)];
+  if (entry) {
+    [NSEvent removeMonitor:entry.mouseMonitor]; entry.mouseMonitor = nil;
+    napi_release_threadsafe_function(entry.callback, napi_tsfn_abort); entry.callback = NULL;
+    [windowObservers removeObjectForKey:@(id)];
+  }
+  return undefined(env);
+}
 static WeaveNativeSurface *surface(napi_env env, napi_value id) {
   int64_t number = 0;
   if (napi_get_value_int64(env, id, &number) != napi_ok) return nil;
@@ -397,6 +445,7 @@ static napi_value acceptance(napi_env env, napi_callback_info info) {
 static napi_value initialize(napi_env env, napi_value exports) {
   napi_value codec; napi_create_string_utf8(env, WeaveTerminalRenderer.codecIdentity.UTF8String, NAPI_AUTO_LENGTH, &codec); napi_set_named_property(env, exports, "codec", codec);
   surfaces = [NSMutableDictionary dictionary];
+  windowObservers = [NSMutableDictionary dictionary];
   const napi_property_descriptor properties[] = {
 #if WEAVE_ACCEPTANCE
     {"acceptance", NULL, acceptance, NULL, NULL, NULL, napi_default, NULL},
@@ -404,6 +453,7 @@ static napi_value initialize(napi_env env, napi_value exports) {
     {"create", NULL, create, NULL, NULL, NULL, napi_default, NULL}, {"layout", NULL, layout, NULL, NULL, NULL, napi_default, NULL},
     {"write", NULL, write, NULL, NULL, NULL, napi_default, NULL}, {"focus", NULL, focus, NULL, NULL, NULL, napi_default, NULL},
     {"inspect", NULL, inspect, NULL, NULL, NULL, napi_default, NULL}, {"close", NULL, close, NULL, NULL, NULL, napi_default, NULL},
+    {"watchWindow", NULL, watchWindow, NULL, NULL, NULL, napi_default, NULL}, {"unwatchWindow", NULL, unwatchWindow, NULL, NULL, NULL, napi_default, NULL},
   };
   napi_define_properties(env, exports, sizeof(properties)/sizeof(properties[0]), properties); return exports;
 }

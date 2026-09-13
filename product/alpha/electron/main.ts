@@ -1,3 +1,4 @@
+import { installNativeBrowsers } from './native-browser';
 import { app, BrowserWindow, ipcMain, Menu, ClipboardItem, clipboard, net, protocol, screen, session, shell } from 'electron';
 import { join, relative, resolve } from 'node:path';
 import { release } from 'node:os';
@@ -30,6 +31,7 @@ else {
       webPreferences: { preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
     });
     const native = installNativeTerminals(window);
+    const browsers = installNativeBrowsers(window);
     const contents = window.webContents;
     const hostWindow = window;
     let topRailHeight = 32;
@@ -121,6 +123,7 @@ else {
           }
           handled.add(stageKey);
           if (stage === 'native-pane-focus') {
+            await writeFile(join(evidence, 'pane-layout.png'), (await contents.capturePage()).toPNG());
             await contents.executeJavaScript('window.alphaAcceptanceStage = undefined');
           } else if (stage === 'native-terminal') {
             await paste("printf 'WEAVE_NATIVE_PASTE_OK\\n'"); key('Enter');
@@ -154,7 +157,7 @@ else {
       if (result?.passed && !await contents.executeJavaScript('isSecureContext && typeof require === "undefined" && typeof window.ipcRenderer === "undefined"')) throw new Error('Renderer isolation check failed');
       await mkdir(evidence, { recursive: true });
       if (result?.passed) {
-        const png = native.acceptance('capture');
+        const png = await contents.executeJavaScript(`Boolean(document.querySelector('[data-slot="native-browser-input"]'))`) ? browsers.capture() : native.acceptance('capture');
         if (png) await writeFile(join(evidence, 'native-reattached.png'), png);
       }
       await writeFile(join(evidence, 'result.json'), JSON.stringify(result ?? { passed: false, error: 'Timed out' }));

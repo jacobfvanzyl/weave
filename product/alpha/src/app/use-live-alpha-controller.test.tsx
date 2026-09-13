@@ -8,6 +8,7 @@ import {
 } from "@/portal-client";
 import { loadPortalConnections } from "./portal-connection-storage";
 import { useLiveAlphaController } from "./use-live-alpha-controller";
+import { paneTargets, type WorkspaceComposition, type Workspace } from '@weave/product-protocol';
 
 vi.mock("@capacitor/preferences", () => ({ Preferences: { get: vi.fn(async () => ({ value: null })), set: vi.fn(async () => undefined) } }));
 
@@ -229,7 +230,7 @@ describe("useLiveAlphaController", () => {
     );
     expect(result.current.model.transcript?.title).toBeNull();
     expect(result.current.model.threads?.[0]).toMatchObject({
-      title: "Weave",
+      title: "",
       updatedAt: "2026-08-28T06:05:00.000Z",
     });
     expect(client.snapshot).toHaveBeenCalledOnce();
@@ -930,7 +931,7 @@ describe("useLiveAlphaController", () => {
       attach: vi.fn(async (id: string) => current.threads.find((thread) => thread.threadId === id)),
       archiveThread: vi.fn(async (id: string) => archive(id)),
       getWorkspaceComposition: vi.fn(async () => ({ composition: {
-        schemaVersion: 2, hostId: 'host-1', revision: 0,
+        schemaVersion: 3, hostId: 'host-1', revision: 0,
         workspaces: ['workspace', 'other-workspace'].map((workspaceId) => ({ workspaceId, name: workspaceId, layout: null })),
       } })),
       listTerminals: vi.fn(async () => ({ terminals: [] })), close: vi.fn(),
@@ -1224,4 +1225,158 @@ it('releases navigation after the first prompt is accepted, while retaining its 
   expect(result.current.model.selectedThreadId).toBe('host-1:draft-2');
   expect(result.current.model.error).toBeUndefined();
   expect(result.current.model.transcript?.turn.status).toBe('idle');
+});
+
+it('binds Agent Pane commands to their own Thread even after another Pane is selected', async () => {
+  let emit!: ConstructorParameters<typeof DirectHostClient>[2];
+  const first = snapshot.threads[0]!;
+  const second = { ...first, threadId: 'thread-2', title: 'Second' };
+  const client = { snapshot: vi.fn(async () => ({ ...snapshot, threads: [first, second] })), close: vi.fn(),
+    attach: vi.fn(async () => first), prompt: vi.fn(async () => {}), cancelPrompt: vi.fn(async () => {}),
+    respondToPermission: vi.fn(), respondToElicitation: vi.fn(), setMode: vi.fn(async () => {}), setConfigOption: vi.fn(async () => {}),
+  } as unknown as DirectHostClient;
+  const { result } = renderHook(() => useLiveAlphaController((_url, _signer, onEvent) => { emit = onEvent; return client; }));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  act(() => { emit({ type: 'history/reset', sessionId: 'same-upstream-id' }, 'thread-1'); emit({ type: 'history/reset', sessionId: 'same-upstream-id' }, 'thread-2'); });
+  const firstPane = result.current.forThread!('host-1:thread-1');
+  await act(async () => { await result.current.actions.selectThread('host-1:thread-2'); });
+  await act(async () => { await firstPane.actions.sendPrompt('for the first pane'); await firstPane.actions.cancelPrompt(); await firstPane.actions.setMode('plan'); await firstPane.actions.setConfigOption('model', 'chosen'); });
+  act(() => { firstPane.actions.respondToPermission('request', 'allow'); firstPane.actions.respondToElicitation('request', { action: 'cancel' }); });
+  expect(client.prompt).toHaveBeenLastCalledWith([{ type: 'text', text: 'for the first pane' }], 'thread-1');
+  expect(client.cancelPrompt).toHaveBeenLastCalledWith('thread-1');
+  expect(client.setMode).toHaveBeenLastCalledWith('plan', 'thread-1');
+  expect(client.setConfigOption).toHaveBeenLastCalledWith('model', 'chosen', 'thread-1');
+  expect(client.respondToPermission).toHaveBeenLastCalledWith('request', 'allow', 'thread-1');
+  expect(client.respondToElicitation).toHaveBeenLastCalledWith('request', { action: 'cancel' }, 'thread-1');
+  expect(result.current.forThread!('host-1:thread-2').model.transcript?.entries).toHaveLength(0);
+});
+
+
+it.each([['agent', 'agent'], ['agent', 'terminal'], ['terminal', 'agent']] as const)('splits %s into %s beside its source using Host-owned identities', async (sourceType, type) => {
+  const record = { ...snapshot.threads[0]!, workspaceId: 'work', agentId: 'source-agent' };
+  let current = { ...snapshot, capabilities: [...snapshot.capabilities, 'workspace.composition.get', 'workspace.composition.replace'], threads: [record] };
+  let composition: WorkspaceComposition = { schemaVersion: 3, hostId: 'host-1', revision: 1, workspaces: [{ workspaceId: 'work', name: 'Work', layout: sourceType === 'agent'
+    ? { kind: 'agent', nodeId: 'source-node', paneId: 'source', threadId: record.threadId }
+    : { kind: 'terminal', nodeId: 'source-node', paneId: 'source', terminalId: 'terminal', executionContextId: record.executionContextId } }] };
+  const client = {
+    snapshot: vi.fn(async () => current), close: vi.fn(), listTerminals: vi.fn(async () => ({ terminals: [] })),
+    getWorkspaceComposition: vi.fn(async () => ({ composition })),
+    createThread: vi.fn(async (context, agentId, _title, workspaceId) => {
+      const thread = { ...record, threadId: 'created', executionContextId: context, agentId, workspaceId };
+      current = { ...current, threads: [...current.threads, thread] };
+      composition = { ...composition, revision: 2, workspaces: [{ ...composition.workspaces[0]!, layout: { kind: 'split', nodeId: 'host-insertion', axis: 'horizontal', ratio: .5, children: [composition.workspaces[0]!.layout!, { kind: 'agent', nodeId: 'created-node', paneId: 'created-pane', threadId: thread.threadId }] } }] };
+      return thread;
+    }),
+    replaceWorkspaceComposition: vi.fn(async (_host, revision, workspaces: Workspace[]) => {
+      expect(revision).toBe(composition.revision);
+      composition = { ...composition, revision: revision + 1, workspaces }; return { composition };
+    }),
+  };
+  const { result } = renderHook(() => useLiveAlphaController(() => client as unknown as DirectHostClient));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  await act(async () => result.current.actions.splitPane!({ hostId: 'host-1', workspaceId: 'work' }, 'source', 'vertical', type));
+  const displayed = result.current.model.workspaceCompositions!.compositions['host-1']!;
+  expect(displayed.workspaces[0]?.layout).toMatchObject({ kind: 'split', axis: 'vertical', children: [{ paneId: 'source' }, { kind: type }] });
+  expect(paneTargets(displayed.workspaces)).toHaveLength(2);
+  expect(client.createThread).not.toHaveBeenCalled();
+  if (type === 'agent') {
+    expect(paneTargets(composition.workspaces)).toHaveLength(1);
+    expect(client.replaceWorkspaceComposition).not.toHaveBeenCalled();
+    expect(result.current.model.threads?.find(thread => thread.draft)).toMatchObject({ executionContextId: record.executionContextId, draft: true, title: 'Draft' });
+  }
+});
+
+function localPaneHarness() {
+  let current = { ...snapshot, capabilities: ['workspace.composition.get', 'workspace.composition.replace'], threads: [{ ...snapshot.threads[0]!, workspaceId: 'work' }] };
+  let composition: WorkspaceComposition = { schemaVersion: 3, hostId: 'host-1', revision: 1, workspaces: [{ workspaceId: 'work', name: 'Work', layout: { kind: 'agent', nodeId: 'source-node', paneId: 'source', threadId: 'thread-1' } }] };
+  const client = {
+    snapshot: vi.fn(async () => current), close: vi.fn(), listTerminals: vi.fn(async () => ({ terminals: [] })),
+    getWorkspaceComposition: vi.fn(async () => ({ composition })),
+    replaceWorkspaceComposition: vi.fn(async (_host, _revision, workspaces: Workspace[]) => ({ composition: composition = { ...composition, revision: composition.revision + 1, workspaces } })),
+    createThreadDraft: vi.fn(), discardThreadDraft: vi.fn(), archiveThread: vi.fn(),
+    createThread: vi.fn(async (_context, _agent, _title, workspaceId) => {
+      const thread = { ...current.threads[0]!, threadId: `created-${current.threads.length}`, workspaceId, acpSessionId: 'created-session' };
+      current = { ...current, threads: [...current.threads, thread] };
+      composition = { ...composition, revision: composition.revision + 1, workspaces: [{ ...composition.workspaces[0]!, layout: { kind: 'split', nodeId: 'host-insertion', axis: 'horizontal', ratio: .5, children: [composition.workspaces[0]!.layout!, { kind: 'agent', nodeId: thread.threadId + '-node', paneId: thread.threadId + '-pane', threadId: thread.threadId }] } }] };
+      return thread;
+    }),
+    attach: vi.fn(async () => current.threads[0]), prompt: vi.fn(async () => undefined),
+  };
+  const hook = renderHook(() => useLiveAlphaController(() => client as unknown as DirectHostClient));
+  return { ...hook, client, composition: () => composition,
+    open: async () => { await act(async () => hook.result.current.actions.splitPane!({ hostId: 'host-1', workspaceId: 'work' }, 'source', 'vertical', 'agent')); return hook.result.current.model.threads!.find(thread => thread.id === hook.result.current.model.selectedThreadId)!; },
+    focusSource: () => act(() => hook.result.current.workspaceActions!.focus({ hostId: 'host-1', workspaceId: 'work' }, 'source')),
+  };
+}
+
+it('keeps empty draft creation and focus disposal entirely local, including after Host refresh', async () => {
+  const h = localPaneHarness();
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const draft = await h.open();
+  expect(draft.draft).toBe(true);
+  await act(async () => h.result.current.attachThread!(draft.id));
+  await act(async () => h.result.current.workspaceActions!.refresh());
+  expect(h.result.current.model.selectedThreadId).toBe(draft.id);
+  h.focusSource();
+  expect(h.result.current.model.threads!.some(thread => thread.draft)).toBe(false);
+  for (const call of [h.client.createThread, h.client.createThreadDraft, h.client.discardThreadDraft, h.client.archiveThread, h.client.attach, h.client.replaceWorkspaceComposition]) expect(call).not.toHaveBeenCalled();
+});
+
+it('retains several typed drafts across pane activation and discards only the empty one', async () => {
+  const h = localPaneHarness();
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const first = await h.open();
+  act(() => h.result.current.actions.setDraftText!(first.id, 'Keep this text'));
+  h.focusSource();
+  const second = await h.open();
+  act(() => h.result.current.actions.setDraftText!(second.id, 'Keep this too'));
+  h.focusSource();
+  const empty = await h.open();
+  await act(async () => h.result.current.actions.selectThread(first.id));
+  expect(h.result.current.model.selectedThreadId).toBe(first.id);
+  expect(h.result.current.model.threads!.filter(thread => thread.draft).map(thread => thread.id)).toEqual([first.id, second.id]);
+  expect(h.result.current.model.threads!.some(thread => thread.id === empty.id)).toBe(false);
+  expect(h.client.createThread).not.toHaveBeenCalled();
+  expect(h.client.attach).not.toHaveBeenCalled();
+});
+
+it('promotes once on first send, preserves split direction and sends to the exact new Thread', async () => {
+  const h = localPaneHarness();
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const draft = await h.open();
+  await act(async () => Promise.all([h.result.current.forThread!(draft.id).actions.sendPrompt('First message'), h.result.current.forThread!(draft.id).actions.sendPrompt('Duplicate')]));
+  expect(h.client.createThread).toHaveBeenCalledExactlyOnceWith('weave', 'codex', undefined, 'work');
+  expect(h.client.prompt).toHaveBeenCalledExactlyOnceWith([{ type: 'text', text: 'First message' }], 'created-1');
+  expect(h.composition().workspaces[0]!.layout).toMatchObject({ axis: 'vertical', children: [{ paneId: 'source' }, { paneId: 'created-1-pane' }] });
+  expect(h.result.current.model.threads!.some(thread => thread.draft)).toBe(false);
+});
+
+it('keeps a failed creation local and retries a failed layout write without creating a second Thread', async () => {
+  const h = localPaneHarness();
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const draft = await h.open();
+  act(() => h.result.current.actions.setDraftText!(draft.id, 'Retain me'));
+  h.client.createThread.mockRejectedValueOnce(new Error('Provider unavailable'));
+  await act(async () => { await expect(h.result.current.forThread!(draft.id).actions.sendPrompt('Retain me')).rejects.toThrow('Provider unavailable'); });
+  expect(h.result.current.model.threads!.some(thread => thread.id === draft.id)).toBe(true);
+  h.client.replaceWorkspaceComposition.mockRejectedValueOnce(new Error('Revision changed'));
+  await act(async () => { await expect(h.result.current.forThread!(draft.id).actions.sendPrompt('Retain me')).rejects.toThrow('Revision changed'); });
+  await act(async () => h.result.current.forThread!(draft.id).actions.sendPrompt('Retain me'));
+  expect(h.client.createThread).toHaveBeenCalledTimes(2); // one rejected creation, one successful creation
+  expect(h.client.prompt).toHaveBeenCalledExactlyOnceWith([{ type: 'text', text: 'Retain me' }], 'created-1');
+});
+
+it('does not steal focus when a first-send creation completes after activating another pane', async () => {
+  const h = localPaneHarness();
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const draft = await h.open();
+  const create = h.client.createThread.getMockImplementation()!;
+  let release!: () => void;
+  h.client.createThread.mockImplementationOnce(async (...args) => { await new Promise<void>(resolve => { release = resolve; }); return create(...args); });
+  let sending!: Promise<void> | void;
+  await act(async () => { sending = h.result.current.forThread!(draft.id).actions.sendPrompt('First message'); });
+  h.focusSource();
+  await act(async () => { release(); await sending; });
+  expect(h.result.current.model.selectedThreadId).toBe('host-1:thread-1');
+  expect(h.client.prompt).toHaveBeenCalledOnce();
 });

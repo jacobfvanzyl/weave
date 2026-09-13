@@ -1,0 +1,77 @@
+13/09/2026 12:08:06 Unable to establish connection with systemd socket
+13/09/2026 12:08:06 Listening for VNC connections on TCP port 15921
+{"event":"initializing"}
+
+DevTools listening on ws://127.0.0.1:19229/devtools/browser/b4548e47-b732-42af-852f-c620f50131bc
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+[1343361:1343361:0913/120806.879542:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.Get: object_path= /org/freedesktop/portal/desktop: org.freedesktop.DBus.Error.InvalidArgs: No such interface “org.freedesktop.portal.FileChooser”
+{"event":"loaded","status":200}
+{"event":"paint","count":1,"width":1920,"height":1280,"dirtyRects":1,"viewers":0}
+13/09/2026 12:08:13 Got connection from client 100.125.236.27
+13/09/2026 12:08:13   0 other clients
+{"event":"viewer-joined","viewers":1}
+13/09/2026 12:08:13 Normal socket connection
+13/09/2026 12:08:13 Client Protocol Version 3.8
+13/09/2026 12:08:13 Protocol version sent 3.8, using 3.8
+13/09/2026 12:08:13 Send channel security type 'none'
+13/09/2026 12:08:13 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 12:08:13 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 12:08:13 Pixel format for client 100.125.236.27:
+13/09/2026 12:08:13   32 bpp, depth 24, little endian
+13/09/2026 12:08:13   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 12:08:13 Enabling X-style cursor updates for client 100.125.236.27
+13/09/2026 12:08:13 Enabling full-color cursor updates for client 100.125.236.27
+13/09/2026 12:08:13 Enabling cursor position updates for client 100.125.236.27
+13/09/2026 12:08:13 Enabling KeyboardLedState protocol extension for client 100.125.236.27
+13/09/2026 12:08:13 Enabling NewFBSize protocol extension for client 100.125.236.27
+13/09/2026 12:08:13 Enabling ExtDesktopSize protocol extension for client 100.125.236.27
+13/09/2026 12:08:13 Enabling SupportedMessages protocol extension for client 100.125.236.27
+13/09/2026 12:08:13 Enabling SupportedEncodings protocol extension for client 100.125.236.27
+13/09/2026 12:08:13 Enabling ServerIdentity protocol extension for client 100.125.236.27
+13/09/2026 12:08:13 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 12:08:13 Using ZRLE encoding for client 100.125.236.27
+13/09/2026 12:08:13 Sending rfbEncodingExtDesktopSize for size (1920x1280) 
+{"event":"paint","count":61,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":121,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":181,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":241,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":301,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":361,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":421,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":481,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":541,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":601,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":661,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":721,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":781,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":841,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":901,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":961,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1021,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1081,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1141,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1201,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1261,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1321,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1381,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"paint","count":1441,"width":1920,"height":1280,"dirtyRects":1,"viewers":1}
+{"event":"viewer-left","viewers":0}
+13/09/2026 12:09:45 Client 100.125.236.27 gone
+13/09/2026 12:09:45 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 12:09:45  FramebufferUpdate   :   1159 |         0/        0 (  0.0%)
+13/09/2026 12:09:45  ZRLE                :   1159 |  36773410/1118636240 ( 96.7%)
+13/09/2026 12:09:45  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 12:09:45  SupportedEncoding   :      1 |       104/      104 (  0.0%)
+13/09/2026 12:09:45  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 12:09:45  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 12:09:45  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 12:09:45  ExtendedDesktopSize :      1 |        32/       32 (  0.0%)
+13/09/2026 12:09:45  TOTALS              :   2324 |  36773931/1118636761 ( 96.7%)
+13/09/2026 12:09:45 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 12:09:45  PointerEvent        :     50 |       300/      300 (  0.0%)
+13/09/2026 12:09:45  FramebufferUpdate   :   1161 |     11610/    11610 (  0.0%)
+13/09/2026 12:09:45  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 12:09:45  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 12:09:45  TOTALS              :   1213 |     11990/    11990 (  0.0%)

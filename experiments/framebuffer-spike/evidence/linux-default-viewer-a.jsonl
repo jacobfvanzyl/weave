@@ -1,0 +1,13 @@
+{"event":"channel","type":1,"action":10,"seconds":0.033}
+{"event":"channel","type":3,"action":10,"seconds":0.086}
+{"event":"channel","type":2,"action":10,"seconds":0.087}
+{"event":"channel","type":5,"action":10,"seconds":0.087}
+{"event":"audio-start","format":1,"channels":2,"frequency":48000}
+{"event":"channel","type":4,"action":10,"seconds":0.096}
+{"event":"primary","width":640,"height":360,"format":32}
+{"event":"channel","type":4,"action":12,"seconds":4.028}
+{"event":"channel","type":2,"action":12,"seconds":4.029}
+{"event":"channel","type":5,"action":12,"seconds":4.030}
+{"event":"channel","type":3,"action":12,"seconds":4.033}
+{"event":"channel","type":1,"action":12,"seconds":4.035}
+{"event":"result","updates":40,"changes":40,"firstFrame":10,"lastFrame":49,"audioStarts":1,"audioPackets":170,"audioSamples":163200,"audioRMS":0.038765,"closed":5}

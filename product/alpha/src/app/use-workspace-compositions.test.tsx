@@ -25,7 +25,7 @@ it('keeps WebSocket failures out of workspace alerts without hiding actionable c
 
 it('accepts Host exit cleanup, removes stale focus and maximization, and never provisions replacement panes', async () => {
   const pane = (id: string) => ({ kind: 'terminal' as const, executionContextId: 'workspace', nodeId: id, paneId: id, terminalId: id });
-  let composition: import('@weave/product-protocol').WorkspaceComposition = { schemaVersion: 2, hostId: 'host', revision: 4, workspaces: [{ workspaceId: 'tab', name: 'Existing', layout: { kind: 'split', nodeId: 'split', axis: 'horizontal', ratio: 0.4, children: [pane('one'), pane('two')] } }] };
+  let composition: import('@weave/product-protocol').WorkspaceComposition = { schemaVersion: 3, hostId: 'host', revision: 4, workspaces: [{ workspaceId: 'tab', name: 'Existing', layout: { kind: 'split', nodeId: 'split', axis: 'horizontal', ratio: 0.4, children: [pane('one'), pane('two')] } }] };
   const client = { listTerminals: vi.fn(async () => ({ terminals: [] })), getWorkspaceComposition: vi.fn(async () => ({ composition })), replaceWorkspaceComposition: vi.fn(), createTerminal: vi.fn() } as unknown as CompositionClient;
   const executionContexts = [{ id: 'host:workspace', hostId: 'host', executionContextId: 'workspace' }] as AlphaExecutionContext[];
   const { result } = renderHook(() => useWorkspaceCompositions(executionContexts, [{ hostId: 'host', available: true, supported: true, client }]));

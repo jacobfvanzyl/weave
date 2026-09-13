@@ -1,0 +1,143 @@
+{
+  "run": "linux-webrtc-dpr2-ipad-minfps",
+  "host": "linux",
+  "transport": "webrtc",
+  "dpr": 2,
+  "client": "iPadOS",
+  "extensionVariant": "extension-minfps",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 1301973,
+  "clientPid": 2684,
+  "startedAt": 1789289208.6272929,
+  "exit": {
+    "client": 0,
+    "reference": true
+  },
+  "phases": [
+    {
+      "meanDecodeMs": 4.605627118644067,
+      "meanJitterBufferMs": 26.52089830508474,
+      "phase": 1,
+      "name": "idle",
+      "windowSeconds": 4.935218041668122,
+      "receivedDistinctFPS": 0,
+      "frameGapP95Ms": null,
+      "receivedMbps": 0.002124391308450908,
+      "clientCPUPercentOneCore": 11.732242134120112,
+      "clientRSSMiB": 58.7578125,
+      "hostCPUPercentOneCoreApprox": 68.8953261585799,
+      "hostSummedRSSMiBApprox": 1931.2447916666667
+    },
+    {
+      "meanDecodeMs": 4.532235714285715,
+      "meanJitterBufferMs": 68.90088,
+      "phase": 2,
+      "name": "input",
+      "windowSeconds": 25.04462212499493,
+      "receivedDistinctFPS": 0,
+      "frameGapP95Ms": null,
+      "receivedMbps": 0.0026067565861915545,
+      "clientCPUPercentOneCore": 11.721183101536916,
+      "clientRSSMiB": 58.801875,
+      "hostCPUPercentOneCoreApprox": 71.33910721839645,
+      "hostSummedRSSMiBApprox": 1815.0404829545455
+    },
+    {
+      "meanDecodeMs": 4.54207182320442,
+      "meanJitterBufferMs": 153.2205706371191,
+      "phase": 3,
+      "name": "scroll",
+      "windowSeconds": 13.209449208334263,
+      "receivedDistinctFPS": 30.02555176350517,
+      "frameGapP95Ms": 36.57773958730104,
+      "receivedMbps": 0.5853511763049281,
+      "clientCPUPercentOneCore": 12.057101599955615,
+      "clientRSSMiB": 58.98317307692308,
+      "hostCPUPercentOneCoreApprox": 167.39046183963063,
+      "hostSummedRSSMiBApprox": 1664.3167613636363
+    },
+    {
+      "meanDecodeMs": 4.534975000000002,
+      "meanJitterBufferMs": 117.13977499999993,
+      "phase": 4,
+      "name": "animation",
+      "windowSeconds": 12.968127083338914,
+      "receivedDistinctFPS": 30.001007991340632,
+      "frameGapP95Ms": 36.40573541706544,
+      "receivedMbps": 0.01530933302013164,
+      "clientCPUPercentOneCore": 12.355445712192294,
+      "clientRSSMiB": 59.50600961538461,
+      "hostCPUPercentOneCoreApprox": 147.5138520713899,
+      "hostSummedRSSMiBApprox": 1637.980078125
+    },
+    {
+      "meanDecodeMs": 5.0335303867403285,
+      "meanJitterBufferMs": 79.14380662983424,
+      "phase": 5,
+      "name": "dense",
+      "windowSeconds": 13.252728999999817,
+      "receivedDistinctFPS": 15.481264707182541,
+      "frameGapP95Ms": 73.597708332818,
+      "receivedMbps": 2.4898945937702353,
+      "clientCPUPercentOneCore": 9.710653313601345,
+      "clientRSSMiB": 60.55048076923077,
+      "hostCPUPercentOneCoreApprox": 190.70039693133614,
+      "hostSummedRSSMiBApprox": 1648.2826704545455
+    }
+  ],
+  "inputLatencyMs": {
+    "n": 24,
+    "p50": 118.00814583330066,
+    "p95": 200.9864958319666,
+    "max": 213.28041666129138
+  },
+  "inputTimeouts": 0,
+  "imageSize": [
+    1920,
+    1280
+  ],
+  "receivedSize": [
+    1920,
+    1280
+  ],
+  "staticRGB": {
+    "pixels": 2112000,
+    "meanAbsoluteChannelError": 1.4099499684343435,
+    "fractionPixelsOver2": 0.1772689393939394,
+    "maxChannelError": 105,
+    "fineTextRegionMeanAbsoluteChannelError": 1.5725962752525253,
+    "fineTextRegionFractionOver2": 0.17921401515151514
+  },
+  "referenceState": {
+    "phase": 6,
+    "clicks": 24,
+    "width": 960,
+    "height": 640,
+    "dpr": 2
+  },
+  "selectedRoute": {
+    "localCandidateId": {
+      "address": "100.125.236.27",
+      "candidateType": "host",
+      "id": "IV/+nqfRO",
+      "ip": "100.125.236.27",
+      "protocol": "udp",
+      "type": "local-candidate"
+    },
+    "remoteCandidateId": {
+      "address": "100.79.27.114",
+      "candidateType": "host",
+      "id": "IPKCHnftA",
+      "ip": "100.79.27.114",
+      "protocol": "udp",
+      "type": "remote-candidate"
+    }
+  },
+  "audioPlayingObserved": false,
+  "probeConversionP95Ms": 0.7564166662632488
+}

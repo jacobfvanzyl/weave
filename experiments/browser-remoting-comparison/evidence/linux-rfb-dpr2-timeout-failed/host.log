@@ -1,0 +1,53 @@
+13/09/2026 11:30:31 Unable to establish connection with systemd socket
+13/09/2026 11:30:31 Listening for VNC connections on TCP port 15921
+{"event":"initializing"}
+
+DevTools listening on ws://127.0.0.1:19229/devtools/browser/aaf10eb8-6500-42e0-82aa-57c0f116c437
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+[1268710:1268710:0913/113031.956280:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.Get: object_path= /org/freedesktop/portal/desktop: org.freedesktop.DBus.Error.InvalidArgs: No such interface “org.freedesktop.portal.FileChooser”
+{"event":"loaded","status":200}
+{"event":"paint","count":1,"width":1920,"height":1280,"dirtyRects":1,"viewers":0}
+13/09/2026 11:30:35 Got connection from client 100.97.206.8
+13/09/2026 11:30:35   0 other clients
+13/09/2026 11:30:35 Normal socket connection
+{"event":"viewer-joined","viewers":1}
+13/09/2026 11:30:35 Client Protocol Version 3.8
+13/09/2026 11:30:35 Protocol version sent 3.8, using 3.8
+13/09/2026 11:30:35 Send channel security type 'none'
+13/09/2026 11:30:35 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 11:30:35 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 11:30:35 Pixel format for client 100.97.206.8:
+13/09/2026 11:30:35   32 bpp, depth 24, little endian
+13/09/2026 11:30:35   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 11:30:35 Enabling X-style cursor updates for client 100.97.206.8
+13/09/2026 11:30:35 Enabling full-color cursor updates for client 100.97.206.8
+13/09/2026 11:30:35 Enabling cursor position updates for client 100.97.206.8
+13/09/2026 11:30:35 Enabling KeyboardLedState protocol extension for client 100.97.206.8
+13/09/2026 11:30:35 Enabling NewFBSize protocol extension for client 100.97.206.8
+13/09/2026 11:30:35 Enabling ExtDesktopSize protocol extension for client 100.97.206.8
+13/09/2026 11:30:35 Enabling SupportedMessages protocol extension for client 100.97.206.8
+13/09/2026 11:30:35 Enabling SupportedEncodings protocol extension for client 100.97.206.8
+13/09/2026 11:30:35 Enabling ServerIdentity protocol extension for client 100.97.206.8
+13/09/2026 11:30:35 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 11:30:35 Using ZRLE encoding for client 100.97.206.8
+13/09/2026 11:30:35 Sending rfbEncodingExtDesktopSize for size (1920x1280) 
+{"event":"viewer-left","viewers":0}
+13/09/2026 11:30:35 rfbProcessClientNormalMessage: read: Connection reset by peer
+13/09/2026 11:30:35 Client 100.97.206.8 gone
+13/09/2026 11:30:35 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 11:30:35  FramebufferUpdate   :      1 |         0/        0 (  0.0%)
+13/09/2026 11:30:35  ZRLE                :      1 |    183156/  9830400 ( 98.1%)
+13/09/2026 11:30:35  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 11:30:35  SupportedEncoding   :      1 |       104/      104 (  0.0%)
+13/09/2026 11:30:35  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 11:30:35  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 11:30:35  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 11:30:35  ExtendedDesktopSize :      1 |        32/       32 (  0.0%)
+13/09/2026 11:30:35  TOTALS              :      8 |    183677/  9830921 ( 98.1%)
+13/09/2026 11:30:35 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 11:30:35  FramebufferUpdate   :      2 |        20/       20 (  0.0%)
+13/09/2026 11:30:35  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 11:30:35  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 11:30:35  TOTALS              :      4 |       100/      100 (  0.0%)

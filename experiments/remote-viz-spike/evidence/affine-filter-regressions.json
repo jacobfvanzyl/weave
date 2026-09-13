@@ -1,0 +1,223 @@
+{
+  "clipping": {
+    "frames": 4,
+    "materials": {
+      "5": 13,
+      "10": 4
+    },
+    "stateCounts": {
+      "blend:SrcOver": 17,
+      "nonemptyMask": 1
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 901120.0,
+    "rasterBytesExamined": 901120.0,
+    "replayExitCode": 0,
+    "replayedFrames": 4,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 901120,
+    "nativeMaskUploadedBytes": 115200,
+    "peakCachedMaskBytes": 115200,
+    "filteredPassQuads": 0,
+    "antialiasedPasses": 0,
+    "comparison": {
+      "reference": "clipping-reference.png",
+      "replay": "55270-42142222210048-frame-4.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 13,
+      "maxRGBChannelError": 13,
+      "maxAlphaError": 0,
+      "meanAbsoluteRGBAError": 0.0002536458333333333,
+      "pixelsOverTolerance": 33,
+      "fractionOverTolerance": 6.875e-05,
+      "differenceBoundsInclusive": [
+        246,
+        200,
+        269,
+        299
+      ],
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "iframe": {
+    "frames": 6,
+    "materials": {
+      "5": 23,
+      "10": 19
+    },
+    "stateCounts": {
+      "blend:SrcOver": 42
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 3276800.0,
+    "rasterBytesExamined": 4849664.0,
+    "replayExitCode": 0,
+    "replayedFrames": 6,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 3276800,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0,
+    "filteredPassQuads": 0,
+    "antialiasedPasses": 0,
+    "comparison": {
+      "reference": "iframe-reference.png",
+      "replay": "56299-41489387181056-frame-6.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 0,
+      "maxRGBChannelError": 0,
+      "maxAlphaError": 0,
+      "meanAbsoluteRGBAError": 0.0,
+      "pixelsOverTolerance": 0,
+      "fractionOverTolerance": 0.0,
+      "differenceBoundsInclusive": null,
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "opacity": {
+    "frames": 4,
+    "materials": {
+      "5": 4,
+      "10": 2
+    },
+    "stateCounts": {
+      "blend:SrcOver": 6
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 262144.0,
+    "rasterBytesExamined": 262144.0,
+    "replayExitCode": 0,
+    "replayedFrames": 4,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 262144,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0,
+    "filteredPassQuads": 0,
+    "antialiasedPasses": 0,
+    "comparison": {
+      "reference": "opacity-reference.png",
+      "replay": "55612-8263520184320-frame-4.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 1,
+      "maxRGBChannelError": 1,
+      "maxAlphaError": 0,
+      "meanAbsoluteRGBAError": 0.06318697916666667,
+      "pixelsOverTolerance": 0,
+      "fractionOverTolerance": 0.0,
+      "differenceBoundsInclusive": null,
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "primitives": {
+    "frames": 4,
+    "materials": {
+      "5": 12,
+      "10": 3
+    },
+    "stateCounts": {
+      "blend:SrcOver": 15
+    },
+    "sameResourceTransformChanges": 0,
+    "resourcePayloadBytes": 786432.0,
+    "rasterBytesExamined": 786432.0,
+    "replayExitCode": 0,
+    "replayedFrames": 4,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 786432,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0,
+    "filteredPassQuads": 0,
+    "antialiasedPasses": 0,
+    "comparison": {
+      "reference": "primitives-reference.png",
+      "replay": "54934-45028440235520-frame-4.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 0,
+      "maxRGBChannelError": 0,
+      "maxAlphaError": 0,
+      "meanAbsoluteRGBAError": 0.0,
+      "pixelsOverTolerance": 0,
+      "fractionOverTolerance": 0.0,
+      "differenceBoundsInclusive": null,
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  },
+  "transforms-mask-animated": {
+    "frames": 28,
+    "materials": {
+      "5": 278,
+      "10": 150,
+      "9": 75
+    },
+    "stateCounts": {
+      "blend:SrcOver": 503,
+      "nonemptyMask": 25
+    },
+    "sameResourceTransformChanges": 22,
+    "resourcePayloadBytes": 3281240.0,
+    "rasterBytesExamined": 37738700.0,
+    "replayExitCode": 0,
+    "replayedFrames": 28,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 3281240,
+    "nativeMaskUploadedBytes": 1152,
+    "peakCachedMaskBytes": 1152,
+    "filteredPassQuads": 0,
+    "antialiasedPasses": 0
+  },
+  "transforms-mask-static": {
+    "frames": 7,
+    "materials": {
+      "5": 47,
+      "10": 24,
+      "9": 12
+    },
+    "stateCounts": {
+      "blend:SrcOver": 83,
+      "nonemptyMask": 4
+    },
+    "sameResourceTransformChanges": 1,
+    "resourcePayloadBytes": 3281240.0,
+    "rasterBytesExamined": 6038192.0,
+    "replayExitCode": 0,
+    "replayedFrames": 7,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 3281240,
+    "nativeMaskUploadedBytes": 1152,
+    "peakCachedMaskBytes": 1152,
+    "filteredPassQuads": 0,
+    "antialiasedPasses": 0,
+    "comparison": {
+      "reference": "transforms-mask-static-reference.png",
+      "replay": "50577-18021685875712-frame-7.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 21,
+      "maxRGBChannelError": 21,
+      "maxAlphaError": 0,
+      "meanAbsoluteRGBAError": 0.000184375,
+      "pixelsOverTolerance": 13,
+      "fractionOverTolerance": 2.7083333333333332e-05,
+      "differenceBoundsInclusive": [
+        618,
+        318,
+        626,
+        349
+      ],
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  }
+}

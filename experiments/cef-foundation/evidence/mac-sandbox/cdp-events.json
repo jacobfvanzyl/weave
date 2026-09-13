@@ -1,0 +1,380 @@
+[
+  {
+    "method": "Runtime.consoleAPICalled",
+    "params": {
+      "type": "log",
+      "args": [
+        {
+          "type": "string",
+          "value": "fixture-ready"
+        }
+      ],
+      "executionContextId": 3,
+      "timestamp": 1789292380322.932,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "functionName": "",
+            "scriptId": "7",
+            "url": "http://127.0.0.1:19380/fixture.html?mcp=1",
+            "lineNumber": 3,
+            "columnNumber": 102
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "Runtime.consoleAPICalled",
+    "params": {
+      "type": "log",
+      "args": [
+        {
+          "type": "string",
+          "value": "fixture-click"
+        },
+        {
+          "type": "number",
+          "value": 1,
+          "description": "1"
+        }
+      ],
+      "executionContextId": 3,
+      "timestamp": 1789292382589.671,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "functionName": "onclick",
+            "scriptId": "58",
+            "url": "http://127.0.0.1:19380/fixture.html?mcp=1",
+            "lineNumber": 2,
+            "columnNumber": 359
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "Runtime.consoleAPICalled",
+    "params": {
+      "type": "log",
+      "args": [
+        {
+          "type": "string",
+          "value": "cdp-validation"
+        }
+      ],
+      "executionContextId": 3,
+      "timestamp": 1789292454385.396,
+      "stackTrace": {
+        "callFrames": [
+          {
+            "functionName": "",
+            "scriptId": "69",
+            "url": "",
+            "lineNumber": 0,
+            "columnNumber": 8
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "Network.requestWillBeSent",
+    "params": {
+      "requestId": "57528.9",
+      "loaderId": "2C5828DD2DF7DA56C4E9F30958E97B04",
+      "documentURL": "http://127.0.0.1:19380/fixture.html?mcp=1",
+      "request": {
+        "url": "http://127.0.0.1:19380/api/ping?cdp=1",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"macOS\"",
+          "Referer": "http://127.0.0.1:19380/fixture.html?mcp=1",
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not?A_Brand\";v=\"24\", \"Chromium\";v=\"152\"",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "mixedContentType": "none",
+        "initialPriority": "High",
+        "referrerPolicy": "strict-origin-when-cross-origin",
+        "isSameSite": true
+      },
+      "timestamp": 190270.120891,
+      "wallTime": 1789292454.385508,
+      "initiator": {
+        "type": "script",
+        "stack": {
+          "callFrames": [
+            {
+              "functionName": "",
+              "scriptId": "69",
+              "url": "",
+              "lineNumber": 0,
+              "columnNumber": 30
+            }
+          ]
+        }
+      },
+      "redirectHasExtraInfo": false,
+      "type": "Fetch",
+      "frameId": "A53719DDB5754D37AC3827ACC0CE2153",
+      "hasUserGesture": false
+    }
+  },
+  {
+    "method": "Network.responseReceived",
+    "params": {
+      "requestId": "57528.9",
+      "loaderId": "2C5828DD2DF7DA56C4E9F30958E97B04",
+      "timestamp": 190270.121754,
+      "type": "Fetch",
+      "response": {
+        "url": "http://127.0.0.1:19380/api/ping?cdp=1",
+        "status": 200,
+        "statusText": "OK",
+        "headers": {
+          "Content-Length": "39",
+          "Date": "Sun, 13 Sep 2026 09:40:54 GMT",
+          "Content-Type": "application/json",
+          "Server": "BaseHTTP/0.6 Python/3.13.6"
+        },
+        "mimeType": "application/json",
+        "charset": "",
+        "connectionReused": true,
+        "connectionId": 447,
+        "remoteIPAddress": "127.0.0.1",
+        "remotePort": 19380,
+        "fromDiskCache": false,
+        "fromServiceWorker": false,
+        "fromPrefetchCache": false,
+        "encodedDataLength": 144,
+        "timing": {
+          "requestTime": 190270.12112,
+          "proxyStart": -1,
+          "proxyEnd": -1,
+          "dnsStart": -1,
+          "dnsEnd": -1,
+          "connectStart": -1,
+          "connectEnd": -1,
+          "sslStart": -1,
+          "sslEnd": -1,
+          "workerStart": -1,
+          "workerReady": -1,
+          "workerFetchStart": -1,
+          "workerRespondWithSettled": -1,
+          "sendStart": 0.122,
+          "sendEnd": 0.142,
+          "pushStart": 0,
+          "pushEnd": 0,
+          "receiveHeadersStart": 0.397,
+          "receiveHeadersEnd": 0.423
+        },
+        "responseTime": 1789292454386.121,
+        "protocol": "http/1.0",
+        "alternateProtocolUsage": "unspecifiedReason",
+        "securityState": "secure"
+      },
+      "hasExtraInfo": true,
+      "frameId": "A53719DDB5754D37AC3827ACC0CE2153"
+    }
+  },
+  {
+    "method": "Debugger.paused",
+    "params": {
+      "callFrames": [
+        {
+          "callFrameId": "8997890286797355510.3.0",
+          "functionName": "window.debugProbe",
+          "functionLocation": {
+            "scriptId": "7",
+            "lineNumber": 3,
+            "columnNumber": 50
+          },
+          "location": {
+            "scriptId": "7",
+            "lineNumber": 3,
+            "columnNumber": 67
+          },
+          "url": "",
+          "scopeChain": [
+            {
+              "type": "local",
+              "object": {
+                "type": "object",
+                "className": "Object",
+                "description": "Object",
+                "objectId": "8997890286797355510.3.1"
+              },
+              "name": "window.debugProbe",
+              "startLocation": {
+                "scriptId": "7",
+                "lineNumber": 3,
+                "columnNumber": 50
+              },
+              "endLocation": {
+                "scriptId": "7",
+                "lineNumber": 3,
+                "columnNumber": 93
+              }
+            },
+            {
+              "type": "global",
+              "object": {
+                "type": "object",
+                "className": "Window",
+                "description": "Window",
+                "objectId": "8997890286797355510.3.2"
+              }
+            }
+          ],
+          "this": {
+            "type": "object",
+            "className": "Window",
+            "description": "Window",
+            "objectId": "8997890286797355510.3.3"
+          },
+          "canBeRestarted": true
+        },
+        {
+          "callFrameId": "8997890286797355510.3.1",
+          "functionName": "",
+          "functionLocation": {
+            "scriptId": "70",
+            "lineNumber": 0,
+            "columnNumber": 0
+          },
+          "location": {
+            "scriptId": "70",
+            "lineNumber": 0,
+            "columnNumber": 7
+          },
+          "url": "",
+          "scopeChain": [
+            {
+              "type": "global",
+              "object": {
+                "type": "object",
+                "className": "Window",
+                "description": "Window",
+                "objectId": "8997890286797355510.3.4"
+              }
+            }
+          ],
+          "this": {
+            "type": "object",
+            "className": "Window",
+            "description": "Window",
+            "objectId": "8997890286797355510.3.5"
+          },
+          "canBeRestarted": true
+        }
+      ],
+      "reason": "other",
+      "hitBreakpoints": []
+    }
+  },
+  {
+    "method": "Debugger.resumed",
+    "params": {}
+  },
+  {
+    "method": "Debugger.paused",
+    "params": {
+      "callFrames": [
+        {
+          "callFrameId": "8997890286797355510.3.0",
+          "functionName": "window.debugProbe",
+          "functionLocation": {
+            "scriptId": "7",
+            "lineNumber": 3,
+            "columnNumber": 50
+          },
+          "location": {
+            "scriptId": "7",
+            "lineNumber": 3,
+            "columnNumber": 77
+          },
+          "url": "",
+          "scopeChain": [
+            {
+              "type": "local",
+              "object": {
+                "type": "object",
+                "className": "Object",
+                "description": "Object",
+                "objectId": "8997890286797355510.3.6"
+              },
+              "name": "window.debugProbe",
+              "startLocation": {
+                "scriptId": "7",
+                "lineNumber": 3,
+                "columnNumber": 50
+              },
+              "endLocation": {
+                "scriptId": "7",
+                "lineNumber": 3,
+                "columnNumber": 93
+              }
+            },
+            {
+              "type": "global",
+              "object": {
+                "type": "object",
+                "className": "Window",
+                "description": "Window",
+                "objectId": "8997890286797355510.3.7"
+              }
+            }
+          ],
+          "this": {
+            "type": "object",
+            "className": "Window",
+            "description": "Window",
+            "objectId": "8997890286797355510.3.8"
+          },
+          "canBeRestarted": true
+        },
+        {
+          "callFrameId": "8997890286797355510.3.1",
+          "functionName": "",
+          "functionLocation": {
+            "scriptId": "70",
+            "lineNumber": 0,
+            "columnNumber": 0
+          },
+          "location": {
+            "scriptId": "70",
+            "lineNumber": 0,
+            "columnNumber": 7
+          },
+          "url": "",
+          "scopeChain": [
+            {
+              "type": "global",
+              "object": {
+                "type": "object",
+                "className": "Window",
+                "description": "Window",
+                "objectId": "8997890286797355510.3.9"
+              }
+            }
+          ],
+          "this": {
+            "type": "object",
+            "className": "Window",
+            "description": "Window",
+            "objectId": "8997890286797355510.3.10"
+          },
+          "canBeRestarted": true
+        }
+      ],
+      "reason": "step",
+      "hitBreakpoints": []
+    }
+  },
+  {
+    "method": "Debugger.resumed",
+    "params": {}
+  }
+]

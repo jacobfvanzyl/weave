@@ -1,0 +1,16 @@
+{
+  "reference": "experiments/rfb-spike/evidence/cef-mac-resized-reference.png",
+  "replay": "experiments/rfb-spike/evidence/cef-mac-resized-rfb.png",
+  "width": 1000,
+  "height": 700,
+  "tolerancePerChannel": 0,
+  "maxChannelError": 0,
+  "maxRGBChannelError": 0,
+  "maxAlphaError": 0,
+  "meanAbsoluteRGBAError": 0.0,
+  "pixelsOverTolerance": 0,
+  "fractionOverTolerance": 0.0,
+  "differenceBoundsInclusive": null,
+  "diffGain": 8,
+  "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+}

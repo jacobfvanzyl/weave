@@ -1,0 +1,43 @@
+13/09/2026 09:04:56 VNC server supports protocol version 3.8 (viewer 3.8)
+13/09/2026 09:04:56 We have 1 security types to read
+13/09/2026 09:04:56 0) Received security type 1
+13/09/2026 09:04:56 Selecting security type 1 (0/1 in the list)
+13/09/2026 09:04:56 Selected Security Scheme 1
+13/09/2026 09:04:56 No authentication needed
+13/09/2026 09:04:56 VNC authentication succeeded
+13/09/2026 09:04:56 Desktop name "WVE-79 RFB display spike"
+13/09/2026 09:04:56 Connected to VNC server, using protocol version 3.8
+13/09/2026 09:04:56 VNC server default format:
+13/09/2026 09:04:56   32 bits per pixel.
+13/09/2026 09:04:56   Least significant byte first in each pixel.
+13/09/2026 09:04:56   TRUE colour: max red 255 green 255 blue 255, shift red 16 green 8 blue 0
+13/09/2026 09:04:56 client2server supported messages (bit flags)
+13/09/2026 09:04:56 00: 00ff 0081 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:04:56 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:04:56 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:04:56 18: 0000 0000 0000 0000 - 0000 0000 0000 0008
+13/09/2026 09:04:56 server2client supported messages (bit flags)
+13/09/2026 09:04:56 00: 001f 0080 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:04:56 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:04:56 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:04:56 18: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:04:56 Connected to Server "unknown (LibVNCServer 0.9.15)"
+{"event":"frame","seconds":0.025,"width":800,"height":600,"marker":20,"toggle":0,"mismatchedPixels":0}
+{"event":"frame","seconds":1.084,"width":800,"height":600,"marker":50,"toggle":0,"mismatchedPixels":0}
+13/09/2026 09:04:58 Sending dimensions 1000x700
+13/09/2026 09:04:58 Updated desktop size: 1000x700
+{"event":"frame","seconds":2.204,"width":1000,"height":700,"marker":81,"toggle":0,"mismatchedPixels":0}
+{"event":"frame","seconds":3.254,"width":1000,"height":700,"marker":111,"toggle":1,"mismatchedPixels":0}
+{"event":"frame","seconds":4.331,"width":1000,"height":700,"marker":141,"toggle":1,"mismatchedPixels":0}
+13/09/2026 09:05:00 Updated desktop size: 800x1000
+{"event":"frame","seconds":5.417,"width":800,"height":1000,"marker":171,"toggle":1,"mismatchedPixels":0}
+{"event":"frame","seconds":6.493,"width":800,"height":1000,"marker":201,"toggle":0,"mismatchedPixels":0}
+{"event":"frame","seconds":7.573,"width":800,"height":1000,"marker":231,"toggle":0,"mismatchedPixels":0}
+{"event":"frame","seconds":8.635,"width":800,"height":1000,"marker":261,"toggle":0,"mismatchedPixels":0}
+13/09/2026 09:05:05 Updated desktop size: 960x640
+{"event":"frame","seconds":9.704,"width":960,"height":640,"marker":291,"toggle":0,"mismatchedPixels":0}
+{"event":"frame","seconds":10.785,"width":960,"height":640,"marker":321,"toggle":1,"mismatchedPixels":0}
+{"event":"frame","seconds":11.838,"width":960,"height":640,"marker":351,"toggle":1,"mismatchedPixels":0}
+{"event":"frame","seconds":12.890,"width":960,"height":640,"marker":381,"toggle":1,"mismatchedPixels":0}
+{"event":"frame","seconds":13.953,"width":960,"height":640,"marker":411,"toggle":1,"mismatchedPixels":0}
+{"event":"result","updates":398,"checkedFrames":392,"mismatchedPixels":0,"allocations":4,"firstMarker":20,"lastMarker":412,"toggleChanges":3,"width":960,"height":640}

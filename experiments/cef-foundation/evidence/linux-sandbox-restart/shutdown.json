@@ -1,0 +1,17 @@
+[
+  {
+    "pid": 84268,
+    "exit": 0,
+    "forced": false
+  },
+  {
+    "pid": 84267,
+    "exit": 0,
+    "forced": false
+  },
+  {
+    "pid": 84265,
+    "exit": 1,
+    "forced": false
+  }
+]

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { nativeSoftwareKeyboard, nativeTerminalBridge } from '@/terminal/native-terminal';
+import { paneOverlayOpen } from './pane-focus';
 
 // Native traffic lights overlay whichever rail occupies the window's top-left.
 // Observe rendered position so docking, splits, sidebar visibility and zoom all
@@ -8,17 +9,23 @@ export function useDesktopTitlebar(reserveSidebarToggle = false) {
   useEffect(() => {
     const setHeight = window.weaveDesktop?.setTopRailHeight;
     const overlay = (navigator as Navigator & { windowControlsOverlay?: EventTarget & { visible: boolean; getTitlebarAreaRect(): DOMRect } }).windowControlsOverlay;
-    const selector = '[data-slot="global-top-rail"], [data-slot="sidebar-header"], [data-slot="thread-top-rail"], [data-slot="terminal-top-rail"]';
-    const paneSelector = '[data-slot="terminal-focus-border"], [data-slot="thread-pane"]';
+    const selector = '[data-slot="global-top-rail"], [data-slot="sidebar-header"], [data-slot="thread-top-rail"], [data-slot="terminal-top-rail"], [data-slot="pane-top-rail"]';
+    const paneSelector = '[data-slot="pane-focus-border"], [data-slot="terminal-focus-border"], [data-slot="thread-pane"]';
     const observed = new Set<HTMLElement>();
     let titlebarPointer: { x: number; y: number } | null = null;
     const updateHover = () => {
-      for (const rail of document.querySelectorAll<HTMLElement>('[data-slot="terminal-top-rail"][data-hover-actions]')) {
+      for (const rail of document.querySelectorAll<HTMLElement>('[data-slot="terminal-top-rail"][data-hover-actions], [data-slot="pane-top-rail"][data-hover-actions]')) {
         const rect = rail.getBoundingClientRect();
         rail.toggleAttribute('data-native-hover', Boolean(titlebarPointer && rect.width > 0 && rect.height > 0 && titlebarPointer.x >= rect.left && titlebarPointer.x < rect.right && titlebarPointer.y >= rect.top && titlebarPointer.y < rect.bottom));
       }
     };
     const stopPointer = window.weaveDesktop?.onTitlebarPointer?.((point) => { titlebarPointer = point; updateHover(); });
+    const stopClick = window.weaveDesktop?.onTitlebarClick?.(point => {
+      if (paneOverlayOpen()) return;
+      const hit = document.elementFromPoint(point.x, point.y);
+      if (hit?.closest('button, a, input, textarea, select, [role="button"], [role="separator"]')) return;
+      hit?.closest<HTMLElement>('[data-slot="pane-top-rail"][data-window-top-rail]')?.click();
+    });
     let frame: number | undefined, previousMetrics = '', disposed = false, geometryRevision = 0;
     const measure = () => {
       frame = undefined;
@@ -82,6 +89,7 @@ export function useDesktopTitlebar(reserveSidebarToggle = false) {
     return () => {
       disposed = true;
       stopPointer?.();
+      stopClick?.();
       titlebarPointer = null; updateHover();
       if (frame !== undefined) cancelAnimationFrame(frame);
       resize.disconnect(); mutations.disconnect();

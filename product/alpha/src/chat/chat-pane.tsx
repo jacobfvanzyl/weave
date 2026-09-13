@@ -1,3 +1,4 @@
+import { composerDrafts, composerDraftListeners, writeComposerDraft, type ComposerDraft } from './composer-drafts';
 import { useComposerPaneFocus } from '@/app/pane-focus';
 import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
@@ -71,6 +72,7 @@ import { Context, ContextContent, ContextTrigger } from '@/components/ai-element
 import { cn } from '@/lib/utils';
 
 export type ChatPaneActions = {
+  setDraftText?(threadId: string, text: string): void;
   sendPrompt(text: string): Promise<void> | void;
   cancelPrompt(): Promise<void> | void;
   respondToPermission(requestId: string, optionId: string): void;
@@ -368,19 +370,6 @@ const composerRows = (text: string) => {
   return lineCount === 1 ? 2 : Math.min(8, Math.max(3, lineCount));
 };
 
-type ComposerDraft = {
-  revision: number;
-  text: string;
-};
-
-const composerDrafts = new Map<string, ComposerDraft>();
-const composerDraftListeners = new Map<string, Set<(draft: ComposerDraft) => void>>();
-
-const writeComposerDraft = (sessionId: string, draft: ComposerDraft) => {
-  composerDrafts.set(sessionId, draft);
-  composerDraftListeners.get(sessionId)?.forEach((listener) => listener(draft));
-};
-
 function ContextUsage({ usage }: { usage: AcpTranscript['usage'] }) {
   if (!usage) return null;
   return (
@@ -396,14 +385,17 @@ function Composer({
   actions,
   focusRequest,
   discardDraftOnUnmount,
+  draftKey,
 }: {
   model: AcpTranscript;
   actions: ChatPaneActions;
   focusRequest?: number;
   discardDraftOnUnmount?: boolean;
+  draftKey?: string;
 }) {
+  const composerKey = draftKey ?? model.sessionId;
   const [draft, setDraft] = useState<ComposerDraft>(
-    () => composerDrafts.get(model.sessionId) ?? { revision: 0, text: '' },
+    () => composerDrafts.get(composerKey) ?? { revision: 0, text: '' },
   );
   const draftRef = useRef(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -411,19 +403,19 @@ function Composer({
   const running = model.turn.status === 'running';
   const text = draft.text;
   useEffect(() => {
-    const listeners = composerDraftListeners.get(model.sessionId) ?? new Set();
+    const listeners = composerDraftListeners.get(composerKey) ?? new Set();
     const updateDraft = (nextDraft: ComposerDraft) => {
       draftRef.current = nextDraft;
       setDraft(nextDraft);
     };
     listeners.add(updateDraft);
-    composerDraftListeners.set(model.sessionId, listeners);
+    composerDraftListeners.set(composerKey, listeners);
     return () => {
       listeners.delete(updateDraft);
-      if (listeners.size === 0) composerDraftListeners.delete(model.sessionId);
-      if (discardDraftOnUnmount) composerDrafts.delete(model.sessionId);
+      if (listeners.size === 0) composerDraftListeners.delete(composerKey);
+      if (discardDraftOnUnmount) composerDrafts.delete(composerKey);
     };
-  }, [discardDraftOnUnmount, model.sessionId]);
+  }, [discardDraftOnUnmount, composerKey]);
   useEffect(() => {
     if (paneFocus || focusRequest === undefined) return;
     let frame: number | undefined;
@@ -447,14 +439,15 @@ function Composer({
   }, [focusRequest, paneFocus]);
   const setText = (next: string) => {
     const updated = { revision: draftRef.current.revision + 1, text: next };
-    writeComposerDraft(model.sessionId, updated);
+    writeComposerDraft(composerKey, updated);
+    actions.setDraftText?.(composerKey, next);
   };
   const submit = async () => {
     const prompt = text.trim();
     if (!prompt || running) return;
     const submittedDraft = draftRef.current;
     const clearedDraft = { revision: submittedDraft.revision + 1, text: '' };
-    writeComposerDraft(model.sessionId, clearedDraft);
+    writeComposerDraft(composerKey, clearedDraft);
     if (
       !paneFocus && (Capacitor.isNativePlatform() ||
       window.matchMedia?.('(max-width: 767px)').matches)
@@ -462,15 +455,18 @@ function Composer({
       textareaRef.current?.blur();
     }
     try {
-      await actions.sendPrompt(prompt);
+      const sending = actions.sendPrompt(prompt);
+      actions.setDraftText?.(composerKey, '');
+      await sending;
     } catch {
-      const currentDraft = composerDrafts.get(model.sessionId);
+      const currentDraft = composerDrafts.get(composerKey);
       if (currentDraft?.revision !== clearedDraft.revision) return;
       const restoredDraft = {
         revision: currentDraft.revision + 1,
         text: submittedDraft.text,
       };
-      writeComposerDraft(model.sessionId, restoredDraft);
+      writeComposerDraft(composerKey, restoredDraft);
+      actions.setDraftText?.(composerKey, restoredDraft.text);
     }
   };
 
@@ -541,11 +537,13 @@ export function ChatPane({
   actions,
   focusRequest,
   discardDraftOnUnmount,
+  draftKey,
 }: {
   model: AcpTranscript;
   actions: ChatPaneActions;
   focusRequest?: number;
   discardDraftOnUnmount?: boolean;
+  draftKey?: string;
 }) {
   const running = model.turn.status === 'running';
   return (
@@ -585,7 +583,8 @@ export function ChatPane({
         </MessageScroller>
       </MessageScrollerProvider>
       <Composer
-        key={model.sessionId}
+        key={draftKey ?? model.sessionId}
+        draftKey={draftKey}
         model={model}
         actions={actions}
         focusRequest={focusRequest}

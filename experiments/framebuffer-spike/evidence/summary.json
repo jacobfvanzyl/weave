@@ -1,0 +1,161 @@
+{
+  "tests": {
+    "linux-default-viewer-a": {
+      "event": "result",
+      "updates": 40,
+      "changes": 40,
+      "firstFrame": 10,
+      "lastFrame": 49,
+      "audioStarts": 1,
+      "audioPackets": 170,
+      "audioSamples": 163200,
+      "audioRMS": 0.038765,
+      "closed": 5
+    },
+    "linux-default-viewer-b-reconnected": {
+      "event": "result",
+      "updates": 50,
+      "changes": 50,
+      "firstFrame": 119,
+      "lastFrame": 168,
+      "audioStarts": 1,
+      "audioPackets": 211,
+      "audioSamples": 202560,
+      "audioRMS": 0.038832,
+      "closed": 0
+    },
+    "linux-default-viewer-b": {
+      "event": "result",
+      "updates": 59,
+      "changes": 59,
+      "firstFrame": 50,
+      "lastFrame": 108,
+      "audioStarts": 1,
+      "audioPackets": 254,
+      "audioSamples": 243840,
+      "audioRMS": 0.038829,
+      "closed": 0
+    },
+    "linux-multi-viewer-a": {
+      "event": "result",
+      "updates": 196,
+      "changes": 196,
+      "firstFrame": 10,
+      "lastFrame": 205,
+      "audioStarts": 1,
+      "audioPackets": 844,
+      "audioSamples": 810240,
+      "audioRMS": 0.038864,
+      "closed": 0
+    },
+    "linux-multi-viewer-b-reconnected": {
+      "event": "result",
+      "updates": 50,
+      "changes": 50,
+      "firstFrame": 126,
+      "lastFrame": 175,
+      "audioStarts": 0,
+      "audioPackets": 0,
+      "audioSamples": 0,
+      "audioRMS": 0.0,
+      "closed": 0
+    },
+    "linux-multi-viewer-b": {
+      "event": "result",
+      "updates": 66,
+      "changes": 66,
+      "firstFrame": 50,
+      "lastFrame": 115,
+      "audioStarts": 0,
+      "audioPackets": 0,
+      "audioSamples": 0,
+      "audioRMS": 0.0,
+      "closed": 0
+    },
+    "mac-default-viewer-a": {
+      "event": "result",
+      "updates": 32,
+      "changes": 32,
+      "firstFrame": 17,
+      "lastFrame": 48,
+      "audioStarts": 1,
+      "audioPackets": 122,
+      "audioSamples": 117120,
+      "audioRMS": 0.038829,
+      "closed": 5
+    },
+    "mac-default-viewer-b-reconnected": {
+      "event": "result",
+      "updates": 46,
+      "changes": 46,
+      "firstFrame": 124,
+      "lastFrame": 169,
+      "audioStarts": 1,
+      "audioPackets": 176,
+      "audioSamples": 168960,
+      "audioRMS": 0.038827,
+      "closed": 0
+    },
+    "mac-default-viewer-b": {
+      "event": "result",
+      "updates": 65,
+      "changes": 65,
+      "firstFrame": 48,
+      "lastFrame": 112,
+      "audioStarts": 1,
+      "audioPackets": 255,
+      "audioSamples": 244800,
+      "audioRMS": 0.038829,
+      "closed": 0
+    },
+    "mac-multi-viewer-a": {
+      "event": "result",
+      "updates": 184,
+      "changes": 184,
+      "firstFrame": 10,
+      "lastFrame": 193,
+      "audioStarts": 1,
+      "audioPackets": 725,
+      "audioSamples": 696000,
+      "audioRMS": 0.038828,
+      "closed": 0
+    },
+    "mac-multi-viewer-b-reconnected": {
+      "event": "result",
+      "updates": 48,
+      "changes": 48,
+      "firstFrame": 117,
+      "lastFrame": 164,
+      "audioStarts": 0,
+      "audioPackets": 0,
+      "audioSamples": 0,
+      "audioRMS": 0.0,
+      "closed": 0
+    },
+    "mac-multi-viewer-b": {
+      "event": "result",
+      "updates": 58,
+      "changes": 58,
+      "firstFrame": 49,
+      "lastFrame": 106,
+      "audioStarts": 0,
+      "audioPackets": 0,
+      "audioSamples": 0,
+      "audioRMS": 0.0,
+      "closed": 0
+    }
+  },
+  "scope": {
+    "producer": "synthetic 640x360 full bitmaps, 10 Hz target; SPICE lossless QUIC image encoding; video off",
+    "client": "native arm64 macOS spice-client-glib diagnostic callbacks, no presentation or audio device",
+    "linuxTransport": "SSH loopback forwarding over Tailscale; not a direct-SPICE transport acceptance",
+    "appleLink": "unmodified CocoaSpice source; SDK macOS/iOS arm64; extracted UTM release frameworks"
+  },
+  "pins": {
+    "CocoaSpice": "127033fa3e59cd49678f49ed54f8adfc060afb56",
+    "UTM": "v4.7.5",
+    "macServerSourceDeclaredByUTM": "spice-0.14.3 plus UTM patches",
+    "linuxServerPackage": "spice-server-0.16.0-2.fc43.x86_64",
+    "clientSourceDeclaredByUTM": "spice-gtk-0.42 plus UTM patches"
+  }
+}

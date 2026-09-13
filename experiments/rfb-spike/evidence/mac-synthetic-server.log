@@ -1,0 +1,170 @@
+13/09/2026 09:04:55 Listening for VNC connections on TCP port 15913
+{"event":"ready","audio":false}
+13/09/2026 09:04:56 Got connection from client 127.0.0.1
+13/09/2026 09:04:56   0 other clients
+{"event":"joined","viewer":1,"viewers":1}
+13/09/2026 09:04:56 Client Protocol Version 3.8
+13/09/2026 09:04:56 Protocol version sent 3.8, using 3.8
+13/09/2026 09:04:56 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 09:04:56 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 09:04:56 Pixel format for client 127.0.0.1:
+13/09/2026 09:04:56   32 bpp, depth 24, little endian
+13/09/2026 09:04:56   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:04:56 Enabling X-style cursor updates for client 127.0.0.1
+13/09/2026 09:04:56 Enabling full-color cursor updates for client 127.0.0.1
+13/09/2026 09:04:56 Enabling cursor position updates for client 127.0.0.1
+13/09/2026 09:04:56 Enabling KeyboardLedState protocol extension for client 127.0.0.1
+13/09/2026 09:04:56 Enabling NewFBSize protocol extension for client 127.0.0.1
+13/09/2026 09:04:56 Enabling ExtDesktopSize protocol extension for client 127.0.0.1
+13/09/2026 09:04:56 Enabling SupportedMessages protocol extension for client 127.0.0.1
+13/09/2026 09:04:56 Enabling SupportedEncodings protocol extension for client 127.0.0.1
+13/09/2026 09:04:56 Enabling ServerIdentity protocol extension for client 127.0.0.1
+13/09/2026 09:04:56 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 09:04:56 Using ZRLE encoding for client 127.0.0.1
+13/09/2026 09:04:56 Sending rfbEncodingExtDesktopSize for size (800x600) 
+13/09/2026 09:04:58 Client requested resolution change to (1000x700)
+13/09/2026 09:04:58 Pixel format for client 127.0.0.1:
+13/09/2026 09:04:58   32 bpp, depth 24, little endian
+13/09/2026 09:04:58   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:04:58 Pixel format for client 127.0.0.1:
+13/09/2026 09:04:58   32 bpp, depth 24, little endian
+13/09/2026 09:04:58   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+{"event":"viewport","viewer":1,"width":1000,"height":700}
+13/09/2026 09:04:58 Sending rfbEncodingExtDesktopSize for size (1000x700) resize successful
+{"event":"click","viewer":1,"x":50,"y":60,"toggle":1}
+13/09/2026 09:04:59 Got connection from client 127.0.0.1
+13/09/2026 09:04:59   1 other clients
+{"event":"joined","viewer":2,"viewers":2}
+13/09/2026 09:04:59 Client Protocol Version 3.8
+13/09/2026 09:04:59 Protocol version sent 3.8, using 3.8
+13/09/2026 09:04:59 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 09:04:59 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 09:04:59 Pixel format for client 127.0.0.1:
+13/09/2026 09:04:59   32 bpp, depth 24, little endian
+13/09/2026 09:04:59   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:04:59 Enabling X-style cursor updates for client 127.0.0.1
+13/09/2026 09:04:59 Enabling full-color cursor updates for client 127.0.0.1
+13/09/2026 09:04:59 Enabling cursor position updates for client 127.0.0.1
+13/09/2026 09:04:59 Enabling KeyboardLedState protocol extension for client 127.0.0.1
+13/09/2026 09:04:59 Enabling NewFBSize protocol extension for client 127.0.0.1
+13/09/2026 09:04:59 Enabling ExtDesktopSize protocol extension for client 127.0.0.1
+13/09/2026 09:04:59 Enabling SupportedMessages protocol extension for client 127.0.0.1
+13/09/2026 09:04:59 Enabling SupportedEncodings protocol extension for client 127.0.0.1
+13/09/2026 09:04:59 Enabling ServerIdentity protocol extension for client 127.0.0.1
+13/09/2026 09:04:59 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 09:04:59 Using ZRLE encoding for client 127.0.0.1
+13/09/2026 09:04:59 Sending rfbEncodingExtDesktopSize for size (1000x700) 
+13/09/2026 09:05:00 Client requested resolution change to (800x1000)
+13/09/2026 09:05:00 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:00   32 bpp, depth 24, little endian
+13/09/2026 09:05:00   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:05:00 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:00   32 bpp, depth 24, little endian
+13/09/2026 09:05:00   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:05:00 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:00   32 bpp, depth 24, little endian
+13/09/2026 09:05:00   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:05:00 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:00   32 bpp, depth 24, little endian
+13/09/2026 09:05:00   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+{"event":"viewport","viewer":2,"width":800,"height":1000}
+13/09/2026 09:05:00 Sending rfbEncodingExtDesktopSize for size (800x1000) resize successful
+13/09/2026 09:05:00 Sending rfbEncodingExtDesktopSize for size (800x1000) 
+{"event":"click","viewer":2,"x":50,"y":60,"toggle":0}
+{"event":"left","viewer":2,"viewers":1}
+13/09/2026 09:05:03 Client 127.0.0.1 gone
+13/09/2026 09:05:03 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 09:05:03  FramebufferUpdate   :    113 |         0/        0 (  0.0%)
+13/09/2026 09:05:03  ZRLE                :    113 |     21405/350000000 (100.0%)
+13/09/2026 09:05:03  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 09:05:03  SupportedEncoding   :      1 |        96/       96 (  0.0%)
+13/09/2026 09:05:03  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 09:05:03  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 09:05:03  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 09:05:03  ExtendedDesktopSize :      2 |        64/       64 (  0.0%)
+13/09/2026 09:05:03  TOTALS              :    233 |     21950/350000545 (100.0%)
+13/09/2026 09:05:03 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 09:05:03  PointerEvent        :      2 |        12/       12 (  0.0%)
+13/09/2026 09:05:03  SetDesktopSize      :      1 |        24/       24 (  0.0%)
+13/09/2026 09:05:03  FramebufferUpdate   :    117 |      1170/     1170 (  0.0%)
+13/09/2026 09:05:03  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 09:05:03  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 09:05:03  TOTALS              :    122 |      1286/     1286 (  0.0%)
+13/09/2026 09:05:04 Got connection from client 127.0.0.1
+13/09/2026 09:05:04   1 other clients
+{"event":"joined","viewer":3,"viewers":2}
+13/09/2026 09:05:04 Client Protocol Version 3.8
+13/09/2026 09:05:04 Protocol version sent 3.8, using 3.8
+13/09/2026 09:05:04 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 09:05:04 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 09:05:04 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:04   32 bpp, depth 24, little endian
+13/09/2026 09:05:04   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:05:04 Enabling X-style cursor updates for client 127.0.0.1
+13/09/2026 09:05:04 Enabling full-color cursor updates for client 127.0.0.1
+13/09/2026 09:05:04 Enabling cursor position updates for client 127.0.0.1
+13/09/2026 09:05:04 Enabling KeyboardLedState protocol extension for client 127.0.0.1
+13/09/2026 09:05:04 Enabling NewFBSize protocol extension for client 127.0.0.1
+13/09/2026 09:05:04 Enabling ExtDesktopSize protocol extension for client 127.0.0.1
+13/09/2026 09:05:04 Enabling SupportedMessages protocol extension for client 127.0.0.1
+13/09/2026 09:05:04 Enabling SupportedEncodings protocol extension for client 127.0.0.1
+13/09/2026 09:05:04 Enabling ServerIdentity protocol extension for client 127.0.0.1
+13/09/2026 09:05:04 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 09:05:04 Using ZRLE encoding for client 127.0.0.1
+13/09/2026 09:05:04 Sending rfbEncodingExtDesktopSize for size (800x1000) 
+13/09/2026 09:05:05 Client requested resolution change to (960x640)
+13/09/2026 09:05:05 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:05   32 bpp, depth 24, little endian
+13/09/2026 09:05:05   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:05:05 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:05   32 bpp, depth 24, little endian
+13/09/2026 09:05:05   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:05:05 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:05   32 bpp, depth 24, little endian
+13/09/2026 09:05:05   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:05:05 Pixel format for client 127.0.0.1:
+13/09/2026 09:05:05   32 bpp, depth 24, little endian
+13/09/2026 09:05:05   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+{"event":"viewport","viewer":3,"width":960,"height":640}
+13/09/2026 09:05:05 Sending rfbEncodingExtDesktopSize for size (960x640) resize successful
+13/09/2026 09:05:05 Sending rfbEncodingExtDesktopSize for size (960x640) 
+{"event":"click","viewer":3,"x":50,"y":60,"toggle":1}
+{"event":"left","viewer":3,"viewers":1}
+13/09/2026 09:05:08 Client 127.0.0.1 gone
+13/09/2026 09:05:08 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 09:05:08  FramebufferUpdate   :    112 |         0/        0 (  0.0%)
+13/09/2026 09:05:08  ZRLE                :    112 |     20730/296038400 (100.0%)
+13/09/2026 09:05:08  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 09:05:08  SupportedEncoding   :      1 |        96/       96 (  0.0%)
+13/09/2026 09:05:08  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 09:05:08  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 09:05:08  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 09:05:08  ExtendedDesktopSize :      2 |        64/       64 (  0.0%)
+13/09/2026 09:05:08  TOTALS              :    231 |     21275/296038945 (100.0%)
+13/09/2026 09:05:08 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 09:05:08  PointerEvent        :      2 |        12/       12 (  0.0%)
+13/09/2026 09:05:08  SetDesktopSize      :      1 |        24/       24 (  0.0%)
+13/09/2026 09:05:08  FramebufferUpdate   :    116 |      1160/     1160 (  0.0%)
+13/09/2026 09:05:08  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 09:05:08  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 09:05:08  TOTALS              :    121 |      1276/     1276 (  0.0%)
+{"event":"left","viewer":1,"viewers":0}
+13/09/2026 09:05:10 Client 127.0.0.1 gone
+13/09/2026 09:05:10 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 09:05:10  FramebufferUpdate   :    394 |         0/        0 (  0.0%)
+13/09/2026 09:05:10  ZRLE                :    394 |     71409/1058211200 (100.0%)
+13/09/2026 09:05:10  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 09:05:10  SupportedEncoding   :      1 |        96/       96 (  0.0%)
+13/09/2026 09:05:10  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 09:05:10  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 09:05:10  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 09:05:10  ExtendedDesktopSize :      4 |       128/      128 (  0.0%)
+13/09/2026 09:05:10  TOTALS              :    797 |     72018/1058211809 (100.0%)
+13/09/2026 09:05:10 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 09:05:10  PointerEvent        :      2 |        12/       12 (  0.0%)
+13/09/2026 09:05:10  SetDesktopSize      :      1 |        24/       24 (  0.0%)
+13/09/2026 09:05:10  FramebufferUpdate   :    400 |      4000/     4000 (  0.0%)
+13/09/2026 09:05:10  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 09:05:10  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 09:05:10  TOTALS              :    405 |      4116/     4116 (  0.0%)
+{"event":"stopped","frame":502}

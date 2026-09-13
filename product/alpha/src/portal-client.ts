@@ -1,3 +1,4 @@
+import { type BrowserPageRpcMethod, type BrowserPaneRpcMethod, type BrowserProfileRpcMethod, parsePortalAuthChallenge, parsePortalAuthenticated, portalAuthChallengePayload, PORTAL_BROWSER_RFB_PATH, PORTAL_AUTH_RESPONSE_TYPE } from '@weave/product-protocol';
 import { encodeHostMessage, decodeHostMessage } from '@weave/product-protocol';
 import {
   type AgentSummary,
@@ -215,7 +216,10 @@ export class DirectHostClient {
   private readonly baseUrl: URL;
   private readonly WebSocket: ReturnType<typeof authenticatedPortalWebSocket>;
   private rpc: JsonRpcWebSocket;
-  private acp?: AcpSessionClient;
+  private sessions = new Map<string, { acp: AcpSessionClient; thread: ThreadSummary }>();
+  private attaching = new Map<string, Promise<ThreadSummary>>();
+  private closed = false;
+  private connectingSessions = new Map<string, { token: symbol; acp?: AcpSessionClient }>();
   private activeThread?: ThreadSummary;
   private readonly workspaceFileWatchListeners = new Map<
     string,
@@ -237,7 +241,7 @@ export class DirectHostClient {
 
   constructor(
     hostUrl: string,
-    credential: PortalCredentialSigner,
+    private readonly credential: PortalCredentialSigner,
     private readonly onAcpEvent: (event: AcpTranscriptEvent, threadId?: string) => void,
     onUnexpectedClose?: (error: Error) => void,
   ) {
@@ -277,26 +281,54 @@ export class DirectHostClient {
   }
 
   async attach(threadId: string) {
+    if (this.closed) throw new Error('Host connection is closed.');
+    const existing = this.sessions.get(threadId);
+    if (existing) { this.activeThread = existing.thread; return existing.thread; }
+    const pending = this.attaching.get(threadId);
+    if (pending) return pending;
+    const token = Symbol(threadId);
+    this.connectingSessions.set(threadId, { token });
+    const operation = this.attachSession(threadId, token);
+    this.attaching.set(threadId, operation);
+    try { return await operation; }
+    finally { if (this.attaching.get(threadId) === operation) this.attaching.delete(threadId); }
+  }
+
+  private async attachSession(threadId: string, token: symbol) {
     const prepared = await this.request("thread.attach", { threadId });
-    this.acp?.close();
-    this.activeThread = prepared.thread;
-    this.onAcpEvent({
-      type: "history/reset",
-      sessionId: prepared.thread.acpSessionId,
-    }, threadId);
+    if (this.closed || this.connectingSessions.get(threadId)?.token !== token) throw new Error('Thread attachment was closed.');
+    this.onAcpEvent({ type: "history/reset", sessionId: prepared.thread.acpSessionId }, threadId);
     const url = new URL(this.baseUrl);
     url.pathname = prepared.connection.path;
     url.searchParams.set("threadId", prepared.connection.threadId);
-    this.acp = new AcpSessionClient({
-      url: url.toString(),
-      WebSocket: this.WebSocket,
-      onEvent: (event) => this.onAcpEvent(event, threadId),
+    const acp = new AcpSessionClient({ url: url.toString(), WebSocket: this.WebSocket,
+      onEvent: (event) => { if (!this.closed) this.onAcpEvent(event, threadId); },
+      onClose: () => { if (this.sessions.get(threadId)?.acp === acp) this.sessions.delete(threadId); },
     });
-    await this.acp.initializeAndLoad({
-      sessionId: prepared.thread.acpSessionId,
-      cwd: prepared.connection.cwd,
-    });
-    return prepared.thread;
+    this.connectingSessions.set(threadId, { token, acp });
+    try {
+      await acp.initializeAndLoad({ sessionId: prepared.thread.acpSessionId, cwd: prepared.connection.cwd });
+      if (this.closed || this.connectingSessions.get(threadId)?.token !== token) throw new Error('Thread attachment was closed.');
+      this.sessions.set(threadId, { acp, thread: prepared.thread });
+      this.activeThread = prepared.thread;
+      return prepared.thread;
+    } catch (error) { acp.close(); throw error; }
+    finally { if (this.connectingSessions.get(threadId)?.token === token) this.connectingSessions.delete(threadId); }
+  }
+
+  private session(threadId = this.activeThread?.threadId) {
+    const session = threadId && this.sessions.get(threadId);
+    if (!session) throw new Error('Attach to this Thread first.');
+    return session.acp;
+  }
+
+  private closeSession(threadId: string) {
+    this.attaching.delete(threadId);
+    this.connectingSessions.get(threadId)?.acp?.close();
+    this.connectingSessions.delete(threadId);
+    this.sessions.get(threadId)?.acp.close();
+    this.sessions.delete(threadId);
+    if (this.activeThread?.threadId === threadId) this.activeThread = undefined;
   }
 
   async createThread(executionContextId: string, agentId: string, title?: string, workspaceId?: string) {
@@ -327,11 +359,7 @@ export class DirectHostClient {
   }
 
   async discardThreadDraft(threadId: string) {
-    if (this.activeThread?.threadId === threadId) {
-      this.acp?.close();
-      this.acp = undefined;
-      this.activeThread = undefined;
-    }
+    this.closeSession(threadId);
     await this.request("thread.draft.discard", { threadId });
   }
 
@@ -352,14 +380,10 @@ export class DirectHostClient {
     return (await this.request('thread.assign', { threadId, hostId, workspaceId, expectedRevision })).thread;
   }
 
-  async archiveThread(threadId: string) {
-    const archived = (await this.request("thread.archive", { threadId }))
+  async archiveThread(threadId: string, stopActive = false) {
+    const archived = (await this.request("thread.archive", { threadId, stopActive }))
       .thread;
-    if (this.activeThread?.threadId === threadId) {
-      this.acp?.close();
-      this.acp = undefined;
-      this.activeThread = undefined;
-    }
+    this.closeSession(threadId);
     return archived;
   }
 
@@ -621,36 +645,17 @@ export class DirectHostClient {
     return result;
   }
 
-  async prompt(content: ContentBlock[]) {
-    if (!this.acp || !this.activeThread) {
-      throw new Error("Attach to a Thread first.");
-    }
-    await this.acp.prompt(content);
+  async prompt(content: ContentBlock[], threadId?: string) { await this.session(threadId).prompt(content); }
+  async cancelPrompt(threadId?: string) { await this.session(threadId).cancel(); }
+  respondToPermission(requestId: string, optionId: string, threadId?: string) {
+    return this.session(threadId).respondToPermission(requestId, { outcome: "selected", optionId });
   }
-
-  async cancelPrompt() {
-    await this.acp?.cancel();
+  respondToElicitation(requestId: string, response: CreateElicitationResponse, threadId?: string) {
+    return this.session(threadId).respondToElicitation(requestId, response);
   }
-
-  respondToPermission(requestId: string, optionId: string) {
-    return (
-      this.acp?.respondToPermission(requestId, {
-        outcome: "selected",
-        optionId,
-      }) ?? false
-    );
-  }
-
-  respondToElicitation(requestId: string, response: CreateElicitationResponse) {
-    return this.acp?.respondToElicitation(requestId, response) ?? false;
-  }
-
-  async setMode(modeId: string) {
-    await this.acp?.setMode(modeId);
-  }
-
-  async setConfigOption(optionId: string, value: string | boolean) {
-    await this.acp?.setConfigOption(optionId, value);
+  async setMode(modeId: string, threadId?: string) { await this.session(threadId).setMode(modeId); }
+  async setConfigOption(optionId: string, value: string | boolean, threadId?: string) {
+    await this.session(threadId).setConfigOption(optionId, value);
   }
 
   close() {
@@ -659,7 +664,12 @@ export class DirectHostClient {
     this.pendingTerminalNotifications.clear();
     this.overflowedTerminalAttachments.clear();
     this.pendingTerminalNotifications.clear();
-    this.acp?.close();
+    this.closed = true;
+    this.attaching.clear();
+    for (const { acp } of this.connectingSessions.values()) acp?.close();
+    this.connectingSessions.clear();
+    for (const { acp } of this.sessions.values()) acp.close();
+    this.sessions.clear();
     this.rpc.close();
   }
 
@@ -711,6 +721,25 @@ export class DirectHostClient {
     }
     listener.cursor = notification.sequence;
     listener.onEvent(notification);
+  }
+
+  browserRequest<M extends BrowserPageRpcMethod | BrowserPaneRpcMethod | BrowserProfileRpcMethod>(method: M, params: PortalRpcParams<M>): Promise<PortalRpcResult<M>> {
+    return this.request(method, params);
+  }
+
+  browserDisplay() {
+    const url = new URL(this.baseUrl); url.pathname = PORTAL_BROWSER_RFB_PATH; url.search = ''; url.hash = '';
+    return {
+      url: url.toString(),
+      authorize: async (value: unknown) => {
+        const challenge = parsePortalAuthChallenge(value);
+        if (challenge.hostId !== this.credential.hostId || challenge.audience !== PORTAL_BROWSER_RFB_PATH || Date.parse(challenge.expiresAt) <= Date.now()) throw new Error('Browser display identity does not match this Host');
+        return { type: PORTAL_AUTH_RESPONSE_TYPE, credentialId: this.credential.credentialId, signature: await this.credential.sign(portalAuthChallengePayload(challenge)) };
+      },
+      authenticated: (value: unknown) => {
+        if (parsePortalAuthenticated(value).principal.credentialId !== this.credential.credentialId) throw new Error('Browser authenticated a different credential');
+      },
+    };
   }
 
   private async request<Method extends PortalRpcMethod>(

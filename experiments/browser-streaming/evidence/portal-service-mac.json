@@ -1,0 +1,71 @@
+{
+  "date": "2026-09-12",
+  "host": "macOS Chrome 153.0.8010.36",
+  "path": "native receiver -> disposable adapter -> authenticated Portal RPC -> independent Browser Service -> capture extension/WebRTC",
+  "video": {
+    "frameWidth": 960,
+    "decoderImplementation": "VideoToolbox",
+    "framesPerSecond": 19,
+    "frameHeight": 640,
+    "framesDecoded": 10551
+  },
+  "audioPlaying": true,
+  "audioRecording": false,
+  "maximumReceivedAudioEnergy": 0.008130169772241388,
+  "events": [
+    {
+      "at": "2026-09-12T18:28:41.075Z",
+      "event": "frame",
+      "generation": 1,
+      "width": 960,
+      "height": 640
+    },
+    {
+      "at": "2026-09-12T18:34:23.200Z",
+      "event": "click",
+      "generation": 1
+    },
+    {
+      "at": "2026-09-12T18:34:36.657Z",
+      "event": "frame",
+      "generation": 2,
+      "width": 800,
+      "height": 600
+    },
+    {
+      "at": "2026-09-12T18:34:50.958Z",
+      "event": "viewerError",
+      "error": "Error: Browser input is stale or not authorized"
+    },
+    {
+      "at": "2026-09-12T18:34:51.192Z",
+      "event": "click",
+      "generation": 2
+    },
+    {
+      "at": "2026-09-12T18:35:05.891Z",
+      "event": "click",
+      "generation": 2
+    },
+    {
+      "at": "2026-09-12T18:35:06.735Z",
+      "event": "frame",
+      "generation": 2,
+      "width": 800,
+      "height": 600
+    }
+  ],
+  "visualChecks": [
+    "Native Test click incremented remote counter to 1",
+    "Resize displayed 800x600 at generation 2",
+    "Stale click left counter at 1 and produced a rejection",
+    "Tab B displayed its independent counter at 0",
+    "Test tone started and was stopped"
+  ],
+  "limits": [
+    "Synthetic pages and DPR 1",
+    "Existing receiver app, not Alpha Browser UI",
+    "Audio telemetry, not independent acoustic confirmation",
+    "No general keyboard/IME/files/clipboard acceptance"
+  ]
+}

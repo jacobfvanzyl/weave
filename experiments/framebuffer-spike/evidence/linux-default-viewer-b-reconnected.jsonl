@@ -1,0 +1,8 @@
+{"event":"channel","type":1,"action":10,"seconds":0.021}
+{"event":"channel","type":2,"action":10,"seconds":0.081}
+{"event":"channel","type":4,"action":10,"seconds":0.081}
+{"event":"channel","type":3,"action":10,"seconds":0.082}
+{"event":"channel","type":5,"action":10,"seconds":0.082}
+{"event":"audio-start","format":1,"channels":2,"frequency":48000}
+{"event":"primary","width":640,"height":360,"format":32}
+{"event":"result","updates":50,"changes":50,"firstFrame":119,"lastFrame":168,"audioStarts":1,"audioPackets":211,"audioSamples":202560,"audioRMS":0.038832,"closed":0}

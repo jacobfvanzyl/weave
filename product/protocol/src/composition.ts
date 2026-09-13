@@ -3,11 +3,16 @@ export const COMPOSITION_TERMINAL_CREATION_CAPABILITY = 'workspace.composition.t
 // Readers still accept null to recover arrangements saved by older Hosts.
 export const COMPOSITION_RPC_METHODS = ['workspace.composition.get', 'workspace.composition.replace'] as const;
 export type CompositionRpcMethod = typeof COMPOSITION_RPC_METHODS[number];
-export type TerminalLayoutNode =
+export type PaneLayoutNode =
   | { kind: 'terminal'; nodeId: string; paneId: string; terminalId: string | null; executionContextId: string; launchDirectory?: string }
-  | { kind: 'split'; nodeId: string; axis: 'horizontal' | 'vertical'; ratio: number; children: [TerminalLayoutNode, TerminalLayoutNode] };
+  | { kind: 'agent'; nodeId: string; paneId: string; threadId: string }
+  | { kind: 'browser'; nodeId: string; paneId: string; profileId: string; lastCommittedUrl: string }
+  | { kind: 'split'; nodeId: string; axis: 'horizontal' | 'vertical'; ratio: number; children: [PaneLayoutNode, PaneLayoutNode] };
+// Compatibility name for callers that operate on the split tree.
+export type TerminalLayoutNode = PaneLayoutNode;
+export type PaneNode = Exclude<PaneLayoutNode, { kind: 'split' }>;
 export type Workspace = { workspaceId: string; name: string; layout: TerminalLayoutNode | null };
-export type WorkspaceComposition = { schemaVersion: 2; hostId: string; revision: number; workspaces: Workspace[] };
+export type WorkspaceComposition = { schemaVersion: 3; hostId: string; revision: number; workspaces: Workspace[] };
 export type CompositionRpcContracts = {
   'workspace.composition.get': { params: { hostId: string }; result: { composition: WorkspaceComposition } };
   'workspace.composition.replace': {
@@ -34,9 +39,10 @@ const revision = (value: unknown): number => {
   return value as number;
 };
 export function parseWorkspaces(value: unknown, options: { allowDuplicateTerminals?: boolean } = {}): Workspace[] {
-  if (!Array.isArray(value) || value.length > 64) throw new Error('Composition supports at most 64 workspace tabs.');
+  if (!Array.isArray(value) || value.length > 64) throw new Error('Composition supports at most 64 Workspaces.');
   const ids = new Set<string>();
   const terminals = new Set<string>();
+  const threads = new Set<string>();
   let panes = 0;
   const unique = (value: unknown) => {
     const result = id(value);
@@ -55,6 +61,20 @@ export function parseWorkspaces(value: unknown, options: { allowDuplicateTermina
       if (terminalId) terminals.add(terminalId);
       return { kind: 'terminal', nodeId, paneId: unique(node.paneId), terminalId, executionContextId: id(node.executionContextId), ...(node.launchDirectory === undefined ? {} : { launchDirectory: path(node.launchDirectory) }) };
     }
+    if (node.kind === 'agent' || node.kind === 'browser') {
+      if (++panes > 128) throw new Error('Composition supports at most 128 panes.');
+      const paneId = unique(node.paneId);
+      if (node.kind === 'agent') {
+        const threadId = id(node.threadId);
+        if (threads.has(threadId)) throw new Error('A Thread can only occupy one Agent Pane.');
+        threads.add(threadId);
+        return { kind: 'agent', nodeId, paneId, threadId };
+      }
+      if (typeof node.lastCommittedUrl !== 'string' || node.lastCommittedUrl.length > 16384) throw new Error('Invalid browser URL.');
+      const url = new URL(node.lastCommittedUrl);
+      if (!['https:', 'http:', 'about:'].includes(url.protocol)) throw new Error('Unsupported browser URL.');
+      return { kind: 'browser', nodeId, paneId, profileId: id(node.profileId), lastCommittedUrl: node.lastCommittedUrl };
+    }
     if (node.kind !== 'split' || !['horizontal', 'vertical'].includes(String(node.axis)) ||
         typeof node.ratio !== 'number' || !Number.isFinite(node.ratio) || node.ratio < 0.1 || node.ratio > 0.9 ||
         !Array.isArray(node.children) || node.children.length !== 2) throw new Error('Invalid composition split.');
@@ -64,14 +84,14 @@ export function parseWorkspaces(value: unknown, options: { allowDuplicateTermina
   return value.map((value) => {
     const tab = record(value);
     const workspaceId = unique(tab.workspaceId);
-    if (typeof tab.name !== 'string' || !tab.name.trim() || tab.name.length > 120) throw new Error('Invalid workspace tab name.');
+    if (typeof tab.name !== 'string' || !tab.name.trim() || tab.name.length > 120) throw new Error('Invalid Workspace name.');
     return { workspaceId, name: tab.name.trim(), layout: tab.layout === null ? null : layout(tab.layout) };
   });
 }
 export function parseWorkspaceComposition(value: unknown, options: { allowDuplicateTerminals?: boolean } = {}): WorkspaceComposition {
   const input = record(value);
-  if (input.schemaVersion !== 2) throw new Error('Unsupported composition schema version.');
-  return { schemaVersion: 2, hostId: id(input.hostId), revision: revision(input.revision), workspaces: parseWorkspaces(input.workspaces, options) };
+  if (input.schemaVersion !== 2 && input.schemaVersion !== 3) throw new Error('Unsupported composition schema version.');
+  return { schemaVersion: 3, hostId: id(input.hostId), revision: revision(input.revision), workspaces: parseWorkspaces(input.workspaces, options) };
 }
 export function parseCompositionRpcParams<M extends CompositionRpcMethod>(method: M, value: unknown): CompositionRpcContracts[M]['params'] {
   const input = record(value);
@@ -82,12 +102,15 @@ export function parseCompositionRpcParams<M extends CompositionRpcMethod>(method
 export function parseCompositionRpcResult(value: unknown) {
   return { composition: parseWorkspaceComposition(record(value).composition) };
 }
-export function terminalPaneTargets(workspaces: Workspace[]) {
-  const targets: Array<{ paneId: string; terminalId: string | null; executionContextId: string; launchDirectory?: string }> = [];
-  const visit = (node: TerminalLayoutNode) => {
-    if (node.kind === 'terminal') targets.push(node);
-    else node.children.forEach(visit);
+export function paneTargets(workspaces: Workspace[]): PaneNode[] {
+  const targets: PaneNode[] = [];
+  const visit = (node: PaneLayoutNode) => {
+    if (node.kind === 'split') node.children.forEach(visit);
+    else targets.push(node);
   };
-  workspaces.forEach((tab) => { if (tab.layout) visit(tab.layout); });
+  workspaces.forEach((workspace) => { if (workspace.layout) visit(workspace.layout); });
   return targets;
+}
+export function terminalPaneTargets(workspaces: Workspace[]) {
+  return paneTargets(workspaces).filter((node) => node.kind === 'terminal');
 }

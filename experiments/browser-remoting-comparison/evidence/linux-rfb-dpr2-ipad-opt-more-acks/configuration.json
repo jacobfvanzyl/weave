@@ -1,0 +1,18 @@
+{
+  "host": "linux",
+  "transport": "rfb",
+  "dpr": 2,
+  "client": "iPadOS",
+  "rfbNoPresent": "0",
+  "rfbMoreAcks": "1",
+  "extensionVariant": "extension",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 1347010,
+  "clientPid": 31793,
+  "startedAt": 1789290602.492629
+}

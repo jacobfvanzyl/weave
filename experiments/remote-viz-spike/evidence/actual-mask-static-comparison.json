@@ -1,0 +1,19 @@
+{
+  "reference": "transforms-mask-static-reference.png",
+  "replay": "50577-18021685875712-frame-7.png",
+  "width": 800,
+  "height": 600,
+  "tolerancePerChannel": 2,
+  "maxChannelError": 21,
+  "meanAbsoluteRGBAError": 0.000184375,
+  "pixelsOverTolerance": 13,
+  "fractionOverTolerance": 2.7083333333333332e-05,
+  "differenceBoundsInclusive": [
+    618,
+    318,
+    626,
+    349
+  ],
+  "diffGain": 8,
+  "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+}

@@ -1,0 +1,16 @@
+127.0.0.1 - - [13/Sep/2026 11:51:09] "GET /fixture.html HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:09] "GET /fixture.html?native-second=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:09] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:09] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:09] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:09] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:51] "GET /fixture.html?force=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:51] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:51:51] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:52:45] "GET /fixture.html?native-second=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:52:45] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:52:45] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:52:48] "GET /fixture.html?mcp=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:52:48] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:52:48] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:52:50] "GET /api/ping?click=1 HTTP/1.1" 200 -

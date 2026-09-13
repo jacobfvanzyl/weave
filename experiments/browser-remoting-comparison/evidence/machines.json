@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-13",
+  "mac": {
+    "model": "Mac16,12",
+    "cpu": "Apple M4",
+    "logicalCPUs": 10
+  },
+  "linux": {
+    "kernel": "7.2.3-ogc3.1.fc44.x86_64",
+    "cpu": "Intel Core i7-7700 @ 3.60GHz",
+    "cores": 4,
+    "logicalCPUs": 8
+  },
+  "ipad": {
+    "model": "iPad Air 11-inch (M3)",
+    "modelIdentifier": "iPad15,3"
+  },
+  "browsers": {
+    "cef": "152.0.6+g708dc14 / Chromium 152.0.7977.83",
+    "chrome": "153.0.8010.36"
+  },
+  "conditions": "Existing developer machines; other user workloads were not stopped. CPU and latency results are indicative, not laboratory measurements."
+}

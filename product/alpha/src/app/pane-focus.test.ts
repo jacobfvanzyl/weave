@@ -63,6 +63,27 @@ it('restores on app activation but does not take focus while the app is inactive
   window.dispatchEvent(new Event('focus')); await settle();
   expect(document.activeElement).toBe(terminal.element); expect(terminal.focus).toHaveBeenCalledTimes(2);
 });
+it('reasserts a clicked native terminal after an older composer handoff completes', async () => {
+  const terminalElement = document.createElement('div'); document.body.append(terminalElement);
+  let responder = 'web';
+  const terminalFocus = vi.fn(() => { responder = 'terminal'; return true; });
+  owner.register('terminal', { element: terminalElement, available: () => true, focus: terminalFocus });
+  const composer = document.createElement('textarea'); document.body.append(composer);
+  let finishWebFocus!: () => void;
+  owner.register('agent', { element: composer, available: () => true, focus: async (isCurrent) => {
+    await new Promise<void>(resolve => { finishWebFocus = resolve; });
+    // Native focusWeb has already crossed IPC and cannot be cancelled.
+    responder = 'web';
+    if (!isCurrent()) return false;
+    composer.focus(); return true;
+  } });
+  owner.request('agent'); await settle();
+  owner.request('terminal'); responder = 'terminal'; owner.didFocus('terminal');
+  finishWebFocus(); await settle();
+  expect(owner.snapshot()).toBe('terminal');
+  expect(responder).toBe('terminal');
+  expect(terminalFocus).toHaveBeenCalledOnce();
+});
 it('waits until a pointer drag finishes before restoring pane focus', async () => {
   const terminal = pane('terminal'); owner.request('terminal'); await settle();
   const separator = document.createElement('div'); separator.setAttribute('role', 'separator'); separator.tabIndex = 0; document.body.append(separator);

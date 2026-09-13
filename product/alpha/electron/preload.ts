@@ -33,11 +33,28 @@ const close = (input: { surfaceId: string }) => {
 contextBridge.exposeInMainWorld('weaveDesktop', Object.freeze({
   runtime: 'electron', platform: 'macos',
   setTopRailHeight: (height: number, overlayHeight: number) => ipcRenderer.invoke('weave:top-rail-height', height, overlayHeight),
+  onTitlebarClick: (listener: (point: { x: number; y: number }) => void) => {
+    const receive = (_event: Electron.IpcRendererEvent, point: { x: number; y: number }) => listener(point);
+    ipcRenderer.on('weave:titlebar-click', receive);
+    return () => ipcRenderer.removeListener('weave:titlebar-click', receive);
+  },
   onTitlebarPointer: (listener: (point: { x: number; y: number } | null) => void) => {
     const receive = (_event: Electron.IpcRendererEvent, point: { x: number; y: number } | null) => listener(point);
     ipcRenderer.on('weave:titlebar-pointer', receive);
     return () => ipcRenderer.removeListener('weave:titlebar-pointer', receive);
   },
+  nativeBrowser: Object.freeze({
+    create: () => ipcRenderer.invoke('weave:browser', 'create'),
+    connect: (input: unknown) => ipcRenderer.invoke('weave:browser', 'connect', input),
+    control: (input: unknown) => ipcRenderer.invoke('weave:browser', 'control', input),
+    layout: (input: unknown) => ipcRenderer.invoke('weave:browser', 'layout', input),
+    close: (input: unknown) => ipcRenderer.invoke('weave:browser', 'close', input),
+    addListener: async (_event: string, listener: (value: unknown) => void) => {
+      const receive = (_sender: Electron.IpcRendererEvent, value: unknown) => listener(value);
+      ipcRenderer.on('weave:browser:event', receive);
+      return { remove: async () => { ipcRenderer.removeListener('weave:browser:event', receive); } };
+    },
+  }),
   nativeTerminal: Object.freeze({
     create: () => invoke('create'),
     layout: (input: unknown) => invoke('layout', input),

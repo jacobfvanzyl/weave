@@ -1,0 +1,1 @@
+{"synthetic": true, "pixelChecks": "pass", "checks": ["movement", "render-pass dependency", "front-to-back ordering", "scissor", "premultiplied opacity", "persistent MTLTexture reuse", "BGRA channel order", "texture orientation", "premultiplied texture alpha", "child pass crop", "nonzero pass origin", "Src replacement"], "uploadedBytes": [3072, 0, 0]}

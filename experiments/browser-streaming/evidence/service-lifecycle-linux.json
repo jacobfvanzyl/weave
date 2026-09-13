@@ -1,0 +1,13 @@
+{
+  "date": "2026-09-12",
+  "passed": true,
+  "platform": "linux",
+  "browser": "Chrome/153.0.8010.36",
+  "independentServiceProcess": true,
+  "isolatedProfiles": true,
+  "unattendedTicks": { "before": 10, "after": 36 },
+  "sameBrowserAfterReconnect": true,
+  "cookieAfterReopen": true,
+  "staleRejected": true,
+  "scope": "Isolated browser-service-acceptance.ts run; not a running Portal restart or Alpha product acceptance"
+}

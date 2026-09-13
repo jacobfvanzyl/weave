@@ -1,0 +1,9 @@
+127.0.0.1 - - [13/Sep/2026 11:38:05] "GET /fixture.html HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:38:05] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:38:05] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:39:40] "GET /fixture.html?mcp=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:39:40] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:39:40] "GET /favicon.ico HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:39:42] "GET /api/ping?click=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:40:54] "GET /fixture.html?cdp-created=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 11:40:54] "GET /api/ping?cdp=1 HTTP/1.1" 200 -

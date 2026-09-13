@@ -1,0 +1,453 @@
+{
+  "affine": {
+    "capture": "1003609-8607117569280-frame-5.json",
+    "state": [
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          0,
+          0,
+          230,
+          110
+        ],
+        "source": [
+          0.25,
+          0.5,
+          230.0,
+          110.0
+        ],
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          380.25,
+          0.0,
+          1.0,
+          0.0,
+          420.5,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "5",
+          "mask_filter_is_empty": true
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          0,
+          0,
+          242,
+          116
+        ],
+        "source": [
+          0.0,
+          0.0,
+          230.1556854248047,
+          116.0
+        ],
+        "transform": [
+          0.9510565400123596,
+          0.30901700208113475,
+          0.0,
+          70.0,
+          0.0,
+          0.9510565400123596,
+          0.0,
+          250.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "6",
+          "mask_filter_is_empty": true
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          0,
+          0,
+          230,
+          110
+        ],
+        "source": [
+          0.0,
+          0.0,
+          230.0,
+          110.0
+        ],
+        "transform": [
+          0.875,
+          0.0,
+          0.0,
+          70.0,
+          0.0,
+          0.875,
+          0.0,
+          60.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "7",
+          "mask_filter_is_empty": true
+        }
+      }
+    ]
+  },
+  "effects": {
+    "capture": "1003358-2559803610112-frame-5.json",
+    "state": [
+      {
+        "pass": "AggregatedRenderPass/0x4",
+        "material": 10,
+        "rect": [
+          0,
+          0,
+          240,
+          120
+        ],
+        "source": [
+          0.0,
+          0.0,
+          240.0,
+          120.0
+        ],
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "7",
+          "mask_filter_is_empty": true
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 4,
+        "rect": [
+          0,
+          0,
+          240,
+          120
+        ],
+        "source": null,
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          30.0,
+          0.0,
+          1.0,
+          0.0,
+          30.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": [
+          {
+            "type": 8,
+            "amount": 2.0
+          }
+        ],
+        "extra": {
+          "resource_id_unsigned": "0",
+          "mask_filter_is_empty": true,
+          "blur_uses_decal": true,
+          "filter_output_rect": [
+            -6,
+            -6,
+            252,
+            132
+          ]
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          0,
+          0,
+          255,
+          255
+        ],
+        "source": [
+          0.0,
+          0.0,
+          255.0,
+          255.0
+        ],
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "8",
+          "mask_filter_is_empty": true
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          255,
+          0,
+          254,
+          255
+        ],
+        "source": [
+          1.0,
+          0.0,
+          254.0,
+          255.0
+        ],
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "9",
+          "mask_filter_is_empty": true
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          0,
+          255,
+          255,
+          254
+        ],
+        "source": [
+          0.0,
+          1.0,
+          255.0,
+          254.0
+        ],
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "10",
+          "mask_filter_is_empty": true
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          255,
+          255,
+          254,
+          254
+        ],
+        "source": [
+          1.0,
+          1.0,
+          254.0,
+          254.0
+        ],
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "11",
+          "mask_filter_is_empty": true
+        }
+      }
+    ]
+  },
+  "transforms-advanced": {
+    "capture": "1003979-55370721481728-frame-5.json",
+    "state": [
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          0,
+          0,
+          230,
+          110
+        ],
+        "source": [
+          0.0,
+          0.0,
+          230.0,
+          110.0
+        ],
+        "transform": [
+          0.9659258262890683,
+          -0.25881904510252074,
+          0.0,
+          70.0,
+          0.25881904510252074,
+          0.9659258262890683,
+          0.0,
+          270.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "4",
+          "mask_filter_is_empty": true
+        }
+      },
+      {
+        "pass": "AggregatedRenderPass/0x1",
+        "material": 10,
+        "rect": [
+          0,
+          0,
+          288,
+          138
+        ],
+        "source": [
+          0.0,
+          0.0,
+          288.0,
+          138.0
+        ],
+        "transform": [
+          1.0,
+          0.0,
+          0.0,
+          70.0,
+          0.0,
+          1.0,
+          0.0,
+          60.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "filters": null,
+        "extra": {
+          "resource_id_unsigned": "5",
+          "mask_filter_is_empty": true
+        }
+      }
+    ]
+  }
+}

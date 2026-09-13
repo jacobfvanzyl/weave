@@ -28,12 +28,19 @@ export const PORTAL_ACTIONS = [
   'agent.use',
   'terminal.observe',
   'terminal.control',
+  'browser.observe',
+  'browser.control',
+  'browser.profile.inspect',
+  'browser.profile.manage',
+  'browser.profile.control',
   'credential.rotate',
   'credential.revoke',
 ] as const;
 
 export type PortalAction = typeof PORTAL_ACTIONS[number];
 export type PortalResource = {
+  browserProfileId?: string;
+  workspaceId?: string;
   executionContextId?: string;
   agentId?: string;
   threadId?: string;
@@ -43,6 +50,10 @@ export type PortalGrants = {
   actions: PortalAction[];
   executionContextIds: string[];
   agentIds: string[];
+  workspaceIds?: string[];
+  browserProfileIds?: string[];
+  /** Set by Host-issued human pairing, never inherited by ACP agent credentials. */
+  trustedHuman?: boolean;
 };
 
 type StoredCredential = {
@@ -194,6 +205,9 @@ const normalizeGrants = (grants: PortalGrants): PortalGrants => ({
   actions: unique(grants.actions).filter((action) => PORTAL_ACTIONS.includes(action)),
   executionContextIds: unique(grants.executionContextIds.filter(Boolean)),
   agentIds: unique(grants.agentIds.filter(Boolean)),
+  ...(grants.workspaceIds ? { workspaceIds: unique(grants.workspaceIds.filter(Boolean)) } : {}),
+  ...(typeof grants.trustedHuman === 'boolean' ? { trustedHuman: grants.trustedHuman } : {}),
+  ...(grants.browserProfileIds ? { browserProfileIds: unique(grants.browserProfileIds.filter(Boolean)) } : {}),
 });
 
 const credentialSummary = (
@@ -326,6 +340,8 @@ export class PortalSecurity {
       actions: [...PORTAL_ACTIONS],
       executionContextIds: [...this.#executionContextIds],
       agentIds: this.config.agents.map((agent) => agent.agentId),
+      workspaceIds: ['*'],
+      trustedHuman: true,
     };
   }
 
@@ -702,6 +718,12 @@ export class PortalSecurity {
     resource: PortalResource = {},
   ) {
     if (!principal.grants.actions.includes(action)) return false;
+    if (action === 'browser.profile.inspect' || action === 'browser.profile.control') {
+      // Full human pairing includes current and future Host Profiles. Agent and
+      // restricted credentials still need concrete IDs; '*' is never a Profile grant.
+      const trustedHuman = principal.grants.trustedHuman === true && PORTAL_ACTIONS.every(action => principal.grants.actions.includes(action));
+      if (!resource.browserProfileId || (!trustedHuman && !principal.grants.browserProfileIds?.includes(resource.browserProfileId))) return false;
+    } else if ((action === 'browser.observe' || action === 'browser.control') && (!resource.workspaceId || !principal.grants.workspaceIds?.some(id => id === '*' || id === resource.workspaceId))) return false;
     if (
       resource.executionContextId &&
       !principal.grants.executionContextIds.includes(resource.executionContextId)
@@ -729,6 +751,8 @@ export class PortalSecurity {
       ...(resource.agentId ? { agentId: resource.agentId } : {}),
       ...(resource.threadId ? { threadId: resource.threadId } : {}),
       ...(resource.terminalId ? { terminalId: resource.terminalId } : {}),
+      ...(resource.workspaceId ? { workspaceId: resource.workspaceId } : {}),
+      ...(resource.browserProfileId ? { browserProfileId: resource.browserProfileId } : {}),
     });
     throw new PortalSecurityError(
       'RESOURCE_UNAVAILABLE',
@@ -829,18 +853,23 @@ export class PortalSecurity {
 
   async #upgradeAdministrativeGrants() {
     const newlyAddedActions: PortalAction[] = ['context.manage'];
-    const legacyActions = PORTAL_ACTIONS.filter((action) => !newlyAddedActions.includes(action));
+    const legacyActions = PORTAL_ACTIONS.filter((action) => !newlyAddedActions.includes(action) && !action.startsWith('browser.'));
     const configuredAgentIds = this.config.agents.map(({ agentId }) => agentId);
     const upgrade = (grants: PortalGrants) => {
-      if (grants.actions.includes('context.manage')) return false;
       const wasAdministrative = legacyActions.every((action) => grants.actions.includes(action)) &&
         configuredAgentIds.every((agentId) => grants.agentIds.includes(agentId)) &&
         [...this.#executionContextIds].every((id) => grants.executionContextIds.includes(id));
       if (!wasAdministrative) return false;
-      const actions = unique([...grants.actions, ...newlyAddedActions]);
-      const changed = actions.length !== grants.actions.length;
-      grants.actions = actions;
-      return changed;
+      const before = JSON.stringify(grants);
+      grants.actions = unique([...grants.actions, ...newlyAddedActions]);
+      // Existing unrestricted default pairings predate the human marker. Never
+      // broaden credentials with an explicit Profile scope or an explicit opt-out.
+      if (grants.trustedHuman === undefined && grants.browserProfileIds === undefined &&
+          (!grants.workspaceIds || grants.workspaceIds.includes('*'))) {
+        grants.trustedHuman = true;
+        grants.actions = unique([...grants.actions, 'browser.observe', 'browser.control', 'browser.profile.inspect', 'browser.profile.manage', 'browser.profile.control']);
+      }
+      return JSON.stringify(grants) !== before;
     };
     let changed = false;
     for (const { grants } of this.#state.credentials) {

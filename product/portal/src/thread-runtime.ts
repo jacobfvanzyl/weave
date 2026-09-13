@@ -337,14 +337,14 @@ export class HostedThread {
     return () => { if (!this.#closing) this.#accepting = accepting; };
   }
 
-  async stopForWorkspaceClose() {
+  async stopForClose(reason = 'Workspace closed.') {
     this.#accepting = false;
     if (this.#activePromptAttachmentId) {
       await this.#process.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.thread.acpSessionId } }).catch(() => undefined);
       const deadline = Date.now() + 750;
       while (this.#activePromptAttachmentId && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    await this.close('Workspace closed.');
+    await this.close(reason);
   }
 
   async archive() {

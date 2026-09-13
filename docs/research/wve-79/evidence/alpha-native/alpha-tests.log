@@ -1,0 +1,10 @@
+$ bun --bun run vitest run
+
+ RUN  v4.1.11 /Users/jaco/Documents/VeeZee/weave/product/alpha
+
+
+ Test Files  58 passed (58)
+      Tests  288 passed (288)
+   Start at  19:17:12
+   Duration  7.55s (transform 4.36s, setup 9.73s, import 20.92s, tests 18.13s, environment 8.08s)
+

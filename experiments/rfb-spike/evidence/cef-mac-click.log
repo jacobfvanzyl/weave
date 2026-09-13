@@ -1,0 +1,25 @@
+13/09/2026 09:08:41 VNC server supports protocol version 3.8 (viewer 3.8)
+13/09/2026 09:08:41 We have 1 security types to read
+13/09/2026 09:08:41 0) Received security type 1
+13/09/2026 09:08:41 Selecting security type 1 (0/1 in the list)
+13/09/2026 09:08:41 Selected Security Scheme 1
+13/09/2026 09:08:41 No authentication needed
+13/09/2026 09:08:41 VNC authentication succeeded
+13/09/2026 09:08:41 Desktop name "WVE-79 Chromium framebuffer"
+13/09/2026 09:08:41 Connected to VNC server, using protocol version 3.8
+13/09/2026 09:08:41 VNC server default format:
+13/09/2026 09:08:41   32 bits per pixel.
+13/09/2026 09:08:41   Least significant byte first in each pixel.
+13/09/2026 09:08:41   TRUE colour: max red 255 green 255 blue 255, shift red 16 green 8 blue 0
+13/09/2026 09:08:42 client2server supported messages (bit flags)
+13/09/2026 09:08:42 00: 00ff 0081 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:08:42 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:08:42 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:08:42 18: 0000 0000 0000 0000 - 0000 0000 0000 0008
+13/09/2026 09:08:42 server2client supported messages (bit flags)
+13/09/2026 09:08:42 00: 001f 0080 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:08:42 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:08:42 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:08:42 18: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:08:42 Connected to Server "unknown (LibVNCServer 0.9.15)"
+{"frames":3,"width":800,"height":600,"saved":true}

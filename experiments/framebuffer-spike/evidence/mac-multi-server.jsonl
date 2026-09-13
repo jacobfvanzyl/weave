@@ -1,0 +1,46 @@
+
+(process:93501): Spice-WARNING **: 08:36:35.329: ../server/reds.c:3540:do_spice_init: spice: allowing multiple client connections
+{"event":"ready","compatVersion":1,"multiClient":true}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":16807,"type":1}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":16807,"type":5}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":16807,"type":2}
+{"event":"channel","action":2,"connection":16807,"type":4}
+{"event":"channel","action":2,"connection":16807,"type":3}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":470211272,"type":1}
+
+(process:93501): Spice-WARNING **: 08:36:40.371: ../server/reds.c:1062:reds_fill_channels: sent 3 out of 4
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":470211272,"type":2}
+{"event":"channel","action":2,"connection":470211272,"type":4}
+{"event":"channel","action":2,"connection":470211272,"type":3}
+{"event":"channel","action":3,"connection":470211272,"type":3}
+{"event":"channel","action":3,"connection":470211272,"type":2}
+{"event":"channel","action":3,"connection":470211272,"type":4}
+{"event":"channel","action":3,"connection":470211272,"type":1}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":823564440,"type":1}
+
+(process:93501): Spice-WARNING **: 08:36:47.370: ../server/reds.c:1062:reds_fill_channels: sent 3 out of 4
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":1,"connection":0,"type":0}
+{"event":"channel","action":2,"connection":823564440,"type":2}
+{"event":"channel","action":2,"connection":823564440,"type":4}
+{"event":"channel","action":2,"connection":823564440,"type":3}
+{"event":"channel","action":3,"connection":823564440,"type":3}
+{"event":"channel","action":3,"connection":823564440,"type":4}
+{"event":"channel","action":3,"connection":823564440,"type":1}
+{"event":"channel","action":3,"connection":823564440,"type":2}
+{"event":"channel","action":3,"connection":16807,"type":3}
+{"event":"channel","action":3,"connection":16807,"type":5}
+{"event":"channel","action":3,"connection":16807,"type":2}
+{"event":"channel","action":3,"connection":16807,"type":4}
+{"event":"channel","action":3,"connection":16807,"type":1}

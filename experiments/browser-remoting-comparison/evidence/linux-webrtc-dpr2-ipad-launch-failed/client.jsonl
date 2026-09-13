@@ -1,0 +1,3 @@
+Error: Unable to decode environment variables. Please pass only strings for keys and data.
+Usage: devicectl device process launch [<options>] --device <uuid|ecid|serial_number|udid|name|dns_name> <bundle-identifier-or-path> [<command-line-arguments> ...]
+  See 'devicectl device process launch --help' for more information.

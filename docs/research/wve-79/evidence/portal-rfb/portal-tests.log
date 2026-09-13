@@ -1,0 +1,390 @@
+bun test v1.3.14 (0d9b296a)
+
+src/browser-profile-rpc_test.ts:
+(pass) authenticated Profile RPC uses Host scope and filters profiles without Workspace or filesystem grants [29.40ms]
+
+src/browser-pane-rpc_test.ts:
+(pass) Browser Pane creation is idempotent, move preserves its page, and shared close checks generation and confirmation [334.88ms]
+(pass) Profile scope hides browser Workspaces and layout overwrites cannot bypass page lifetime or membership [315.81ms]
+(pass) Workspace close includes browser consequences and invalidates confirmation after runtime replacement [310.95ms]
+(pass) revocation during page creation cannot publish a Pane and retry recovers the same page [326.86ms]
+(pass) unattended popups inherit their Profile and appear to the right; native closure removes only that Pane [2189.22ms]
+(pass) closing an opener before popup placement closes the unplaced page too [355.73ms]
+(pass) a Browser Pane can create a Workspace without a Terminal or execution directory [339.54ms]
+
+src/config_test.ts:
+(pass) Portal permits a loopback-only development listener without TLS [0.22ms]
+(pass) Portal can start without preconfigured projects [0.02ms]
+(pass) Portal requires TLS and an explicit origin policy for non-loopback listeners [0.09ms]
+(pass) Portal accepts TLS files and an explicit browser-origin policy [0.04ms]
+(pass) Portal example permits every shipped Alpha host [0.26ms]
+
+src/repository-identity_test.ts:
+(pass) Git remote normalization matches cross-Host SSH and HTTPS repositories [0.13ms]
+(pass) repository identity prefers upstream, then origin, then alphabetic fetch remotes [0.15ms]
+
+src/workspace-catalog_test.ts:
+(pass) Workspace contexts canonicalize aliases while preserving existing IDs [527.74ms]
+(pass) Workspace contexts preserve the filesystem root and deduplicate concurrent aliases [749.49ms]
+(pass) Workspace catalog durably registers valid Host-local directories [315.43ms]
+(pass) Workspace catalog durably removes configured projects [105.71ms]
+(pass) Workspace catalog rejects an unavailable path without persisting it [0.76ms]
+(pass) Pinned contexts survive missing directories and reject symlink and inode replacements [748.50ms]
+(pass) Legacy unavailable registrations remain inspectable without inventing a canonical identity [213.66ms]
+
+src/operations_test.ts:
+(pass) stale ACP recovery preserves files and live gateways, and recovers a killed listener [20.65ms]
+(pass) Host shutdown bounds a provider that ignores SIGTERM and reaps its descendants [2018.69ms]
+(pass) diagnostics separates filesystem, provider, trust and network failures [217.28ms]
+
+src/server_test.ts:
+(pass) Portal closes a backpressured Terminal socket with a retryable resync reason [0.07ms]
+(pass) Portal RPC exposes persistent Terminal control and observer attachments [232.60ms]
+(pass) Alpha registers and removes a durable project through its chosen Portal [596.52ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) Alpha-facing Portal creates and prompts an ACP Thread over the product protocol [634.44ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) Portal preflights draft config without listing it and promotes the same session on first prompt [855.30ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+(pass) Portal archives and restores durable Threads without conflating active prompts or ACP deletion [1065.66ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+(pass) Portal replays durable Thread events after a daemon restart [822.48ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load error
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) Portal replaces a missing empty ACP session and closes the failed provider [936.51ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) Portal gives opted-in clients stable cursor replay without changing ordinary ACP replay [508.11ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+(pass) Portal persists bounded replay gaps and enforces monotonic acknowledgements [1052.95ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/resume
+[agent] wrote session/resume
+[agent] response session/resume error
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/resume
+[agent] wrote session/resume
+[agent] response session/resume error
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/resume
+[agent] wrote session/resume
+[agent] response session/resume error
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+(pass) Portal recovers an uncertain prompt with durable fenced runtime generations [1220.08ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+(pass) Portal exposes an explicit unavailable state when an Agent cannot resume [637.87ms]
+(pass) Portal rejects an unpaired key before exposing metadata [164.06ms]
+(pass) Portal revocation rejects active requests and new key proofs [175.97ms]
+(pass) Alpha-facing Portal exposes typed Workspace file operations and connection-scoped changes [967.93ms]
+(pass) Authenticated context summaries preserve Host identity and filter canonical paths by grants [856.40ms]
+(pass) Authenticated compositions enforce ownership and revisions, survive restart, and reject orphaned terminals [639.16ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+(pass) Global attention and pending permissions survive conversation detachment without hidden ACP attachments [1248.35ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) Unavailable registered directories preserve authenticated layouts and terminals without rebinding execution [1212.11ms]
+(pass) composition writes create distinct pane terminals once across retries, concurrent devices and restart [537.10ms]
+(pass) terminal exits remove shared panes without attachments, and startup prunes exits missed while offline [464.84ms]
+
+src/managed-browser-pages_test.ts:
+(pass) concurrent retries produce one live page; a Profile reuses its runtime and another Profile does not [21.33ms]
+(pass) shutdown retains identities and restart requires explicit Restore with a new command generation [14.69ms]
+(pass) runtime loss is visible and a retry cannot silently recreate live page state [13.17ms]
+(pass) popups inherit the owning Profile; late title changes cannot resurrect a closed page [7.67ms]
+(pass) failed catalog writes are not returned as persisted pages on retry [7.62ms]
+(pass) invalid URLs cannot create a runtime and shutdown rejects new lifecycle work [1.06ms]
+(pass) live runtime metadata cannot override the validated durable title and URL [7.38ms]
+
+src/local-acp_test.ts:
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load
+(pass) Zed-facing local ACP lists, reloads, resumes, and continues a Portal-owned Thread [1265.90ms]
+(pass) Zed-facing session identity scopes the same raw Thread ID by Portal Host [0.06ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) Agent title updates persist in Portal and appear in Zed session listing after restart [814.45ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/load
+[agent] wrote session/load
+[agent] response session/load error
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) Zed-facing load follows a provider session replaced during empty Thread recovery [1232.64ms]
+(pass) stdio ACP connector exits when the Portal gateway closes [280.16ms]
+
+src/directory-identity_test.ts:
+(pass) Persistent directory identity resolves the actual volume and canonical path [193.71ms]
+(pass) Volume pins survive device renumbering but reject a replacement volume, inode, or path [21.53ms]
+(pass) Legacy pins gain a volume UUID only after the complete old identity matches [18.73ms]
+(pass) Unavailable volume inspection retains pins and recovers without re-registration [10.11ms]
+
+src/thread-journal_test.ts:
+(pass) Thread journal clears only non-conversational state for provider replacement [1.39ms]
+
+src/composition-store_test.ts:
+(pass) migration preserves identities, recovers ambiguous Threads into dedicated Workspaces, and resumes after the layout write [3.43ms]
+(pass) unsupported persisted compositions fail closed without replacing layout data [0.66ms]
+(pass) schema-2 migration preserves assignments and resumes after recovering destinations before saving Threads [1.67ms]
+(pass) terminal removal collapses nested splits, preserves Workspaces, and serializes with provisioning [1.55ms]
+(pass) mixed Pane migration, Thread moves and archive reconciliation preserve other content and stable identities [2.08ms]
+
+src/browser-service_test.ts:
+(pass) independent callers retain the same browser and persistent Workspace profile [191.20ms]
+(pass) Workspace profiles and command generations are isolated [125.07ms]
+(pass) browser loss stays unavailable instead of silently replacing live state [3065.13ms]
+(pass) profile exclusion preserves files and startup failure releases only its lock [186.40ms]
+(pass) unsafe profiles are rejected; CDP events and errors retain upstream behavior [67.63ms]
+(pass) existing live service is never replaced and closed clients cannot reopen [4.59ms]
+(pass) service restart requires a fresh handshake and oversized calls cannot mutate state [73.74ms]
+(pass) configured clients start one independent owner and disposing callers preserves it [77.97ms]
+
+src/browser-page-rpc_test.ts:
+(pass) authenticated binary RFB uses a single-use ticket and ends on RPC loss or revocation [5011.72ms]
+
+src/host-runtime_test.ts:
+(pass) Bun subprocesses replace the environment, report exits, and drain both streams [23.86ms]
+(pass) Host files preserve exclusive creation, append and private permissions [1.38ms]
+(pass) Host shuts down open WebSockets and removes its private ACP socket before rebinding [132.76ms]
+
+src/browsers_test.ts:
+(pass) another connection cannot signal or control a grant; observers cannot claim input [0.56ms]
+(pass) revocation stops renewal and releases the service peer [0.18ms]
+(pass) disconnect during an awaited attachment revokes its late result [0.33ms]
+(pass) revocation during attachment cannot establish a view [0.12ms]
+(pass) misaddressed service events revoke the view instead of reaching another Workspace [0.07ms]
+
+src/browser-rpc_test.ts:
+(pass) authenticated Portal browser RPC enforces Workspace grants, connection ownership and credential revocation [217.50ms]
+
+src/security_test.ts:
+(pass) Browser Profile grants are explicit, survive authentication and do not follow Workspace grants [7.23ms]
+(pass) Portal Pairing Tokens are one-time and Host identity survives restart [3.37ms]
+(pass) Portal Pairing Tokens use a strict minimal signed JWT profile [4.88ms]
+(pass) Portal credential rotation is explicit and interruption-safe [5.40ms]
+(pass) Portal authorization applies resource grants without revealing denied resources [2.16ms]
+(pass) Portal does not infer broader directory grants when reopening an older pairing [3.32ms]
+(pass) trusted human Profile access survives restart and rotation while restricted pairings remain scoped [6.78ms]
+(pass) legacy unrestricted human pairings gain Profile access without broadening explicit scopes [4.37ms]
+
+src/workspace-close_test.ts:
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) close confirms exact consequences, stops terminals, archives agents and restores without orphan membership [590.70ms]
+(pass) close refuses stale plans and failed stops without removing the live workspace [220.80ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) last terminal exit and last thread move clean up empty workspaces; layout writes cannot orphan terminals [624.83ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) thread.create beginning work invalidates a clean preview and confirmed close cancels its pending turn [1217.83ms]
+[agent] request initialize
+[agent] wrote initialize
+[agent] response initialize
+[agent] request session/new
+[agent] wrote session/new
+[agent] response session/new
+(pass) thread.draft.create beginning work invalidates a clean preview and confirmed close cancels its pending turn [1246.95ms]
+
+src/workspace-files_test.ts:
+(pass) Workspace files retain a filesystem-root context without treating it as unavailable [2.32ms]
+(pass) Workspace files list directories and read and hash UTF-8 files [5.18ms]
+(pass) Workspace file listings and limited searches are deterministic and bounded [3.33ms]
+(pass) Workspace files require create-only or hash-conditional writes [3.68ms]
+(pass) Workspace files serialize competing conditional writes [2.58ms]
+(pass) Workspace files create, move, delete, and search within bounded roots [4.04ms]
+(pass) Workspace files reject traversal, symlinks, binary content, and oversized payloads [1.64ms]
+(pass) Workspace file watches normalize changes and belong to one client session [12.28ms]
+
+src/browser-profiles_test.ts:
+(pass) named Profiles survive catalog recreation; concurrent renames reject lost updates [2.58ms]
+(pass) malformed and unsafe Profile catalogs fail closed without replacing data [1.34ms]
+(pass) Profile IPC shares one runtime per identity, isolates data and retains catalog after owner restart [252.13ms]
+(pass) Profile runtime loss remains unavailable and cannot be replaced by another open call [3065.41ms]
+
+src/browser-pages_test.ts:
+(pass) Profile access is explicit; metadata management and Workspace wildcards do not grant browser identity [18.55ms]
+(pass) latest focus owns resize and input; stale clients and passive viewers cannot take control [10.07ms]
+(pass) attachment tickets are credential-bound, single-use, and close with their RPC owner [4.35ms]
+(pass) revocation and runtime loss retire streams without closing the browser [4.68ms]
+(pass) focus transitions remain ordered and disconnect during resize cannot publish ownership [3.79ms]
+(pass) revocation while resolving a page prevents stream binding [2.36ms]
+(pass) unredeemed tickets expire and cannot leave stale viewport ownership behind [2.92ms]
+(pass) a stalled service fails viewing closed instead of postponing revocation checks [2005.64ms]
+
+src/terminals_test.ts:
+(pass) TerminalAccess creates, lists, snapshots, and reconnects persistent terminals [1.47ms]
+(pass) TerminalAccess allows shared writers and read-only observers [3.97ms]
+(pass) TerminalAccess absorbs output captured during attach instead of replaying it twice [3.42ms]
+(pass) TerminalAccess still delivers captured attach output to existing attachments [4.76ms]
+(pass) TerminalAccess snapshots metadata changed during attach capture [3.15ms]
+(pass) TerminalAccess rejects an attach when the Terminal exits during capture [1.95ms]
+(pass) TerminalAccess preserves output emitted after the backend snapshot boundary [3.16ms]
+(pass) TerminalAccess detaches views without closing and requires the controller to close [0.84ms]
+(pass) TerminalAccess reports a replay gap rather than returning partial retained output [3.72ms]
+(pass) TerminalAccess releases control when the transport rejects its backlog [1.84ms]
+(pass) TerminalAccess delivers exit to healthy attachments when another sender throws [1.87ms]
+(pass) shared attachments accept both devices while size follows the last input device [1.52ms]
+(pass) a session disconnected while attachment lookup is pending cannot leave an orphan controller [0.73ms]
+(pass) new Weave shells receive themed visual-mode defaults without replacing explicit Host overrides [0.42ms]
+(pass) size changes replace all attachment screens before post-capture output [3.96ms]
+
+ 134 pass
+ 0 fail
+ 293 expect() calls
+Ran 134 tests across 23 files. [46.50s]

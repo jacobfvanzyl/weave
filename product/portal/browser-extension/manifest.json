@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Weave Browser Capture",
+  "version": "0.1.0",
+  "permissions": ["tabCapture", "offscreen", "activeTab", "storage"],
+  "action": {},
+  "background": { "service_worker": "worker.js" }
+}

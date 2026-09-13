@@ -1,0 +1,310 @@
+// WVE-79 diagnostic spike. Not production code or a stable wire protocol.
+// Include only from display.cc at the pinned revision. See README.md.
+#ifndef COMPONENTS_VIZ_SERVICE_DISPLAY_VIZ_REMOTE_CAPTURE_H_
+#define COMPONENTS_VIZ_SERVICE_DISPLAY_VIZ_REMOTE_CAPTURE_H_
+
+#include <cstdlib>
+#include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/process/process_handle.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
+#include "base/time/time.h"
+#include "base/trace_event/traced_value.h"
+#include "components/viz/service/display/aggregated_frame.h"
+#include "components/viz/common/quads/solid_color_draw_quad.h"
+#include "components/viz/common/quads/texture_draw_quad.h"
+#include "components/viz/common/quads/aggregated_render_pass_draw_quad.h"
+#include "cc/paint/render_surface_filters.h"
+#include "components/viz/service/display/display_resource_provider_software.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkImageInfo.h"
+
+namespace viz {
+namespace remote_capture_spike {
+
+struct Resource {
+  int generation = 0;
+  int width = 0;
+  int height = 0;
+  std::string file;
+  std::vector<uint8_t> pixels;
+};
+struct Recorder {
+  int frame = 0;
+  int next_generation = 0;
+  std::map<uint32_t, Resource> resources;
+  scoped_refptr<base::SequencedTaskRunner> writer;
+};
+
+// Viz calls this on its display sequence. Copy pixels before releasing the
+// scoped read lock; a sequenced worker writes owned bytes and commits JSON last.
+static void Capture(const AggregatedFrame& frame,
+                    DisplayResourceProvider* provider,
+                    const void* display,
+                    float device_scale_factor) {
+  const char* configured = std::getenv("WEAVE_VIZ_CAPTURE_DIR");
+  if (!configured || !*configured || frame.render_pass_list.empty())
+    return;
+  static auto* recorders = new std::map<const void*, Recorder>;
+  Recorder& recorder = (*recorders)[display];
+  // Deliberately bounded: six seconds at 30 FPS, three at 60 FPS.
+  if (recorder.frame >= 180)
+    return;
+  const int sequence = ++recorder.frame;
+  const std::string prefix =
+      base::NumberToString(base::GetCurrentProcId()) + "-" +
+      base::NumberToString(reinterpret_cast<uintptr_t>(display));
+  base::trace_event::TracedValueJSON value;
+  value.SetInteger("capture_schema", 1);
+  value.SetString("capture_session", prefix);
+  value.SetString("chromium_revision",
+                  "507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c");
+  value.SetInteger("frame", sequence);
+  value.SetDouble("device_scale_factor", device_scale_factor);
+  value.SetDouble("server_monotonic_us",
+                  base::TimeTicks::Now().since_origin().InMicrosecondsF());
+  value.SetBoolean("software_provider", provider->IsSoftware());
+  value.SetString("pixel_format", "BGRA8-premultiplied-sRGB-top-left");
+  value.SetString("quad_order", "front-to-back");
+  value.BeginArray("render_passes");
+  // Avoid AggregatedFrame::AsValueInto's trace-category/VLOG gate.
+  for (const auto& pass : frame.render_pass_list) {
+    value.BeginDictionary();
+    pass->AsValueInto(&value);
+    value.BeginArray("quad_extensions");
+    for (const DrawQuad* quad : pass->quad_list) {
+      value.BeginDictionary();
+      value.SetString("resource_id_unsigned",
+                      base::NumberToString(quad->resource_id.GetUnsafeValue()));
+      value.SetBoolean("mask_filter_is_empty",
+                       quad->shared_quad_state->mask_filter_info.IsEmpty());
+      const auto& mask = quad->shared_quad_state->mask_filter_info;
+      if (!mask.IsEmpty()) {
+        const auto& rounded = mask.rounded_corner_bounds();
+        const auto bounds = rounded.rect();
+        value.BeginDictionary("mask");
+        value.SetBoolean("has_gradient", mask.HasGradientMask());
+        value.BeginArray("bounds");
+        value.AppendDouble(bounds.x());
+        value.AppendDouble(bounds.y());
+        value.AppendDouble(bounds.width());
+        value.AppendDouble(bounds.height());
+        value.EndArray();
+        value.BeginArray("radii");
+        for (auto corner : {gfx::RRectF::Corner::kUpperLeft,
+                            gfx::RRectF::Corner::kUpperRight,
+                            gfx::RRectF::Corner::kLowerRight,
+                            gfx::RRectF::Corner::kLowerLeft}) {
+          const auto radius = rounded.GetCornerRadii(corner);
+          value.AppendDouble(radius.x());
+          value.AppendDouble(radius.y());
+        }
+        value.EndArray();
+        value.EndDictionary();
+      }
+      if (quad->material == DrawQuad::Material::kTextureContent) {
+        const auto* texture = TextureDrawQuad::MaterialCast(quad);
+        value.BeginArray("texture_background_rgba");
+        value.AppendDouble(texture->background_color.fR);
+        value.AppendDouble(texture->background_color.fG);
+        value.AppendDouble(texture->background_color.fB);
+        value.AppendDouble(texture->background_color.fA);
+        value.EndArray();
+      }
+      if (quad->material == DrawQuad::Material::kSolidColor) {
+        const auto& c = SolidColorDrawQuad::MaterialCast(quad)->color;
+        value.BeginArray("solid_color_rgba");
+        value.AppendDouble(c.fR);
+        value.AppendDouble(c.fG);
+        value.AppendDouble(c.fB);
+        value.AppendDouble(c.fA);
+        value.EndArray();
+      }
+      if (quad->material == DrawQuad::Material::kAggregatedRenderPass) {
+        const auto* pass_quad = AggregatedRenderPassDrawQuad::MaterialCast(quad);
+        if (pass_quad->filters.size() == 1 &&
+            pass_quad->filters.at(0).type() == cc::FilterOperation::BLUR) {
+          value.SetBoolean("blur_uses_decal",
+                           pass_quad->filters.at(0).blur_tile_mode() ==
+                               SkTileMode::kDecal);
+          auto filter = cc::RenderSurfaceFilters::BuildImageFilter(
+              pass_quad->filters);
+          if (auto sk_filter = cc::PaintFilter::GetSkFilter(filter.get())) {
+            SkMatrix matrix;
+            matrix.setTranslate(pass_quad->filters_origin.x(),
+                                pass_quad->filters_origin.y());
+            matrix.postScale(pass_quad->filters_scale.x(),
+                             pass_quad->filters_scale.y());
+            const auto bounds = sk_filter->filterBounds(
+                gfx::RectToSkIRect(quad->rect), matrix,
+                SkImageFilter::kForward_MapDirection);
+            value.BeginArray("filter_output_rect");
+            value.AppendInteger(bounds.x());
+            value.AppendInteger(bounds.y());
+            value.AppendInteger(bounds.width());
+            value.AppendInteger(bounds.height());
+            value.EndArray();
+          }
+        }
+      }
+      value.EndDictionary();
+    }
+    value.EndArray();
+    value.EndDictionary();
+  }
+  value.EndArray();
+
+  std::set<uint32_t> seen;
+  std::map<int, int> materials;
+  std::vector<std::pair<std::string, std::vector<uint8_t>>> uploads;
+  bool complete = provider->IsSoftware();
+  int reused = 0;
+  size_t raster_bytes_examined = 0;
+  size_t resource_payload_bytes = 0;
+  const base::TimeTicks extraction_started = base::TimeTicks::Now();
+  value.BeginArray("resources");
+  for (const auto& pass : frame.render_pass_list) {
+    for (const DrawQuad* quad : pass->quad_list) {
+      ++materials[static_cast<int>(quad->material)];
+      if (quad->resource_id == kInvalidResourceId)
+        continue;
+      const uint32_t id = quad->resource_id.GetUnsafeValue();
+      if (!seen.insert(id).second)
+        continue;
+      value.BeginDictionary();
+      value.SetString("id", base::NumberToString(id));
+      if (!provider->IsSoftware() ||
+          !provider->IsResourceSoftwareBacked(quad->resource_id)) {
+        complete = false;
+        value.SetString("error", "GPU resource extraction is not implemented");
+        value.EndDictionary();
+        continue;
+      }
+      auto* software = static_cast<DisplayResourceProviderSoftware*>(provider);
+      DisplayResourceProviderSoftware::ScopedReadLockSkImage lock(
+          software, quad->resource_id);
+      if (!lock.valid()) {
+        complete = false;
+        value.SetString("error", "software resource read lock unavailable");
+        value.EndDictionary();
+        continue;
+      }
+      const SkImage* image = lock.sk_image();
+      const int width = image->width();
+      const int height = image->height();
+      if (width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
+          static_cast<size_t>(width) * height > 16777216) {
+        complete = false;
+        value.SetString("error", "resource exceeds diagnostic size limit");
+        value.EndDictionary();
+        continue;
+      }
+      const size_t row_bytes = static_cast<size_t>(width) * 4;
+      std::vector<uint8_t> pixels(row_bytes * height);
+      const auto info = SkImageInfo::Make(width, height, kBGRA_8888_SkColorType,
+                                         kPremul_SkAlphaType,
+                                         SkColorSpace::MakeSRGB());
+      if (!image->readPixels(nullptr, info, pixels.data(), row_bytes, 0, 0)) {
+        complete = false;
+        value.SetString("error", "software readPixels failed");
+        value.EndDictionary();
+        continue;
+      }
+      raster_bytes_examined += pixels.size();
+      Resource& previous = recorder.resources[id];
+      const bool changed = previous.width != width || previous.height != height ||
+                           previous.pixels != pixels;
+      if (changed) {
+        previous.generation = ++recorder.next_generation;
+        previous.width = width;
+        previous.height = height;
+        previous.file = prefix + "-resource-" + base::NumberToString(id) +
+                        "-" + base::NumberToString(previous.generation) + ".bgra";
+        previous.pixels = pixels;
+        resource_payload_bytes += pixels.size();
+        uploads.emplace_back(previous.file, std::move(pixels));
+      } else {
+        ++reused;
+      }
+      value.SetInteger("generation", previous.generation);
+      value.SetInteger("width", width);
+      value.SetInteger("height", height);
+      value.SetInteger("row_bytes", static_cast<int>(row_bytes));
+      value.SetBoolean("origin_top_left",
+                       provider->GetOrigin(quad->resource_id) ==
+                           kTopLeft_GrSurfaceOrigin);
+      value.SetString("file", previous.file);
+      value.SetBoolean("uploaded", changed);
+      value.EndDictionary();
+    }
+  }
+  value.EndArray();
+  value.BeginArray("deleted_resources");
+  // This is conservative capture-cache eviction on last-frame absence, not a
+  // claim that Chromium returned the underlying resource to its producer.
+  for (auto it = recorder.resources.begin(); it != recorder.resources.end();) {
+    if (!seen.contains(it->first)) {
+      value.AppendString(base::NumberToString(it->first));
+      it = recorder.resources.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  value.EndArray();
+  value.BeginArray("materials");
+  for (const auto& [material, count] : materials) {
+    value.BeginDictionary();
+    value.SetInteger("material", material);
+    value.SetInteger("count", count);
+    value.EndDictionary();
+  }
+  value.EndArray();
+  value.SetBoolean("all_referenced_resource_pixels_copied", complete);
+  value.SetInteger("reused_resources", reused);
+  value.SetDouble("raster_bytes_examined", raster_bytes_examined);
+  value.SetDouble("resource_payload_bytes", resource_payload_bytes);
+  value.SetDouble("extraction_us",
+                  (base::TimeTicks::Now() - extraction_started).InMicrosecondsF());
+  // This assertion covers resource payloads only. A decoder must still reject
+  // unsupported quad/state semantics rather than assume trace JSON is lossless.
+  if (!recorder.writer) {
+    recorder.writer = base::ThreadPool::CreateSequencedTaskRunner(
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+         base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+  }
+  recorder.writer->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::FilePath directory, std::string name,
+             std::vector<std::pair<std::string, std::vector<uint8_t>>> blobs,
+             std::string json) {
+            if (!base::CreateDirectory(directory)) {
+              LOG(ERROR) << "VIZ_CAPTURE cannot create directory";
+              return;
+            }
+            for (const auto& [file, bytes] : blobs) {
+              if (!base::WriteFile(directory.AppendASCII(file), bytes)) {
+                LOG(ERROR) << "VIZ_CAPTURE resource write failed";
+                return;
+              }
+            }
+            if (!base::WriteFile(directory.AppendASCII(name), json))
+              LOG(ERROR) << "VIZ_CAPTURE frame write failed";
+          },
+          base::FilePath::FromUTF8Unsafe(configured),
+          prefix + "-frame-" + base::NumberToString(sequence) + ".json",
+          std::move(uploads), value.ToJSON()));
+}
+}  // namespace remote_capture_spike
+}  // namespace viz
+#endif

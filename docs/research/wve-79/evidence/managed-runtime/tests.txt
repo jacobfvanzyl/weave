@@ -1,0 +1,33 @@
+bun test v1.3.14 (0d9b296a)
+
+product/portal/src/browser-profile-rpc_test.ts:
+(pass) authenticated Profile RPC uses Host scope and filters profiles without Workspace or filesystem grants [30.09ms]
+
+product/portal/src/managed-browser-pages_test.ts:
+(pass) concurrent retries produce one live page; a Profile reuses its runtime and another Profile does not [24.91ms]
+(pass) shutdown retains identities and restart requires explicit Restore with a new command generation [14.20ms]
+(pass) runtime loss is visible and a retry cannot silently recreate live page state [16.10ms]
+(pass) popups inherit the owning Profile; late title changes cannot resurrect a closed page [7.86ms]
+(pass) failed catalog writes are not returned as persisted pages on retry [7.70ms]
+(pass) invalid URLs cannot create a runtime and shutdown rejects new lifecycle work [1.03ms]
+
+product/portal/src/browser-service_test.ts:
+(pass) independent callers retain the same browser and persistent Workspace profile [226.33ms]
+(pass) Workspace profiles and command generations are isolated [138.53ms]
+(pass) browser loss stays unavailable instead of silently replacing live state [3063.39ms]
+(pass) profile exclusion preserves files and startup failure releases only its lock [133.12ms]
+(pass) unsafe profiles are rejected; CDP events and errors retain upstream behavior [66.18ms]
+(pass) existing live service is never replaced and closed clients cannot reopen [4.40ms]
+(pass) service restart requires a fresh handshake and oversized calls cannot mutate state [75.35ms]
+(pass) configured clients start one independent owner and disposing callers preserves it [77.77ms]
+
+product/portal/src/browser-profiles_test.ts:
+(pass) named Profiles survive catalog recreation; concurrent renames reject lost updates [1.90ms]
+(pass) malformed and unsafe Profile catalogs fail closed without replacing data [1.11ms]
+(pass) Profile IPC shares one runtime per identity, isolates data and retains catalog after owner restart [199.26ms]
+(pass) Profile runtime loss remains unavailable and cannot be replaced by another open call [3064.21ms]
+
+ 19 pass
+ 0 fail
+ 96 expect() calls
+Ran 19 tests across 4 files. [7.20s]

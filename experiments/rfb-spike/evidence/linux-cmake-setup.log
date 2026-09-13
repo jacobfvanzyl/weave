@@ -1,0 +1,6 @@
+Collecting cmake
+  Downloading cmake-4.4.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (7.0 kB)
+Downloading cmake-4.4.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (30.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 30.2/30.2 MB 4.0 MB/s  0:00:07
+Installing collected packages: cmake
+Successfully installed cmake-4.4.3

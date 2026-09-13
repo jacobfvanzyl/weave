@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { terminalPaneTargets, parseWorkspaceComposition, parseWorkspaces, type CompositionErrorData, type WorkspaceComposition, type Workspace, type TerminalLayoutNode } from '@weave/product-protocol';
+import { paneTargets, terminalPaneTargets, parseWorkspaceComposition, parseWorkspaces, type CompositionErrorData, type WorkspaceComposition, type Workspace, type TerminalLayoutNode } from '@weave/product-protocol';
 
 export class CompositionError extends Error {
   constructor(readonly data: CompositionErrorData) {
@@ -49,10 +49,10 @@ export class CompositionStore {
         assignments.set(executionContextId, converted.length === 1 ? converted[0]!.workspaceId : null);
         workspaces.push(...converted);
       }
-      try { await this.#load(hostId); }
+      try { await this.#save(await this.#load(hostId)); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        await this.#save(parseWorkspaceComposition({ schemaVersion: 2, hostId, revision: 0, workspaces }));
+        await this.#save(parseWorkspaceComposition({ schemaVersion: 3, hostId, revision: 0, workspaces }));
       }
       return assignments;
     });
@@ -94,6 +94,7 @@ export class CompositionStore {
           changed = true;
           return null;
         }
+        if (node.kind !== 'split') return node;
         const left = prune(node.children[0]), right = prune(node.children[1]);
         return left && right ? { ...node, children: [left, right] } : left ?? right;
       };
@@ -102,6 +103,48 @@ export class CompositionStore {
       const next = parseWorkspaceComposition({ ...current, revision: current.revision + 1, workspaces });
       await this.#save(next);
       return next;
+    });
+  }
+  // Thread membership owns placement. Reconciliation preserves existing Pane
+  // identities, including when thread.assign moves a conversation to a Workspace.
+  reconcileThreads(hostId: string, threads: Array<{ threadId: string; workspaceId: string }>) {
+    return this.#serialize(async () => {
+      const current = await this.#load(hostId);
+      const membership = new Map(threads.map(thread => [thread.threadId, thread.workspaceId]));
+      const existing = new Map(paneTargets(current.workspaces).filter(node => node.kind === 'agent').map(node => [node.threadId, node]));
+      const present = new Set<string>();
+      const prune = (node: TerminalLayoutNode | null, workspaceId: string): TerminalLayoutNode | null => {
+        if (!node) return null;
+        if (node.kind === 'agent') {
+          if (membership.get(node.threadId) !== workspaceId) return null;
+          present.add(node.threadId); return node;
+        }
+        if (node.kind !== 'split') return node;
+        const left = prune(node.children[0], workspaceId), right = prune(node.children[1], workspaceId);
+        return left && right ? { ...node, children: [left, right] } : left ?? right;
+      };
+      const workspaces = current.workspaces.map(workspace => ({ ...workspace, layout: prune(workspace.layout, workspace.workspaceId) }));
+      for (const thread of threads) {
+        if (present.has(thread.threadId)) continue;
+        const workspace = workspaces.find(workspace => workspace.workspaceId === thread.workspaceId);
+        if (!workspace) throw new Error('Thread Workspace is unavailable.');
+        const pane: TerminalLayoutNode = existing.get(thread.threadId) ?? { kind: 'agent', nodeId: crypto.randomUUID(), paneId: crypto.randomUUID(), threadId: thread.threadId };
+        // Split the shallowest leaf to keep large existing Workspaces within
+        // the protocol's depth bound during migration and repeated creation.
+        const insert = (root: TerminalLayoutNode | null): TerminalLayoutNode => {
+          if (!root) return pane;
+          const queue = [root]; let target = root;
+          while (queue.length) { target = queue.shift()!; if (target.kind !== 'split') break; queue.push(...target.children); }
+          const replace = (node: TerminalLayoutNode): TerminalLayoutNode => node === target
+            ? { kind: 'split', nodeId: crypto.randomUUID(), axis: 'horizontal', ratio: 0.5, children: [node, pane] }
+            : node.kind === 'split' ? { ...node, children: [replace(node.children[0]), replace(node.children[1])] } : node;
+          return replace(root);
+        };
+        workspace.layout = insert(workspace.layout);
+      }
+      if (JSON.stringify(workspaces) === JSON.stringify(current.workspaces)) return current;
+      const next = parseWorkspaceComposition({ ...current, revision: current.revision + 1, workspaces });
+      await this.#save(next); return next;
     });
   }
   pruneEmpty(hostId: string, occupied: Set<string>) {

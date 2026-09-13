@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>Viz resource reuse</title>
+<style>
+body { margin:0; background:#102032; color:white; font:18px sans-serif; }
+#card { position:absolute; left:30px; top:130px; width:230px; height:130px;
+  background:#387ca5; padding:20px; box-sizing:border-box; will-change:transform; }
+button,input { font:inherit; margin:16px; padding:8px; }
+#scroll { position:absolute; top:300px; left:30px; width:600px; height:200px; overflow:auto; background:#203c48; }
+</style>
+<button id="move">Move card</button><button id="animate">Animate</button><input placeholder="Type here">
+<div id="card">Server-rasterized text<br>Cached texture test</div>
+<div id="scroll"><div style="height:1000px;padding:16px">Scroll top<br><br><br><br>More content</div></div>
+<button id="append" style="position:absolute;left:14px;top:520px">Add row</button>
+<script>
+const card=document.querySelector('#card'); let moved=false, clicks=0, running=false, tick=0, insertedRows=0;
+document.querySelector('#move').onclick=()=>{moved=!moved;card.style.transform=`translateX(${moved?400:0}px)`;clicks++};
+document.querySelector('#animate').onclick=()=>{running=!running};
+document.querySelector('#append').onclick=()=>{const row=document.createElement('div');row.textContent=`Inserted row ${++insertedRows}`;document.querySelector('#scroll > div').prepend(row)};
+function frame(){if(running){tick++;card.style.transform=`translateX(${tick%400}px)`}requestAnimationFrame(frame)}frame();
+window.spikeState=()=>({clicks,tick,insertedRows,transform:card.style.transform,scrollTop:document.querySelector('#scroll').scrollTop,input:document.querySelector('input').value});
+if(new URL(location).searchParams.has('auto')) setTimeout(()=>{running=true},500);
+</script>

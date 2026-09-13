@@ -1,283 +1,80 @@
-import { useComposerPaneFocus } from '@/app/pane-focus';
-import { useEffect, useState, useRef } from 'react';
-import type { TerminalOutputSource } from '@/terminal/output-stream';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { useRef } from 'react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { WorkspaceComposition, Workspace, TerminalLayoutNode } from '@weave/product-protocol';
-import type { AlphaController } from '@/app/alpha-controller';
-import { useLiveAlphaController } from '@/app/use-live-alpha-controller';
-import { type DirectHostClient, type HostSnapshot } from '@/portal-client';
-import { AlphaShell } from './alpha-shell';
+import { expect, it, vi } from 'vitest';
+import { useComposerPaneFocus, usePaneFocus, type PaneFocusOwner } from '@/app/pane-focus';
+import { usePaneFixture } from '@/test-fixtures/pane-controller';
+import { TerminalFirstShell } from './terminal-first-shell';
 
-const storage = vi.hoisted(() => new Map<string, string>());
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-vi.mock('@capacitor/preferences', () => ({ Preferences: {
-  get: vi.fn(async ({ key }: { key: string }) => ({ value: storage.get(key) ?? null })),
-  set: vi.fn(async ({ key, value }: { key: string; value: string }) => { storage.set(key, value); }),
-} }));
-vi.mock('@/app/portal-connection-storage', () => ({
-  loadPortalConnections: async () => ({ connections: ['one', 'two'].map((hostId) => ({ hostId, displayName: hostId, hostUrl: `ws://${hostId}.test`, credentialId: hostId, keyId: hostId })) }),
-  savePortalConnections: vi.fn(),
-}));
-vi.mock('./terminal-view', () => ({ TerminalView: ({ output, onInput, dimAmount }: { output?: TerminalOutputSource; onInput(data: string): void; dimAmount?: number }) => {
-  const [text, setText] = useState('');
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useComposerPaneFocus(ref);
-  useEffect(() => output?.subscribe({ reset: async (value) => { setText(new TextDecoder().decode(value)); }, write: async (value) => { setText((current) => current + new TextDecoder().decode(value)); } }), [output]);
-  return <div data-slot='native-terminal' data-dim-amount={dimAmount}><textarea ref={ref} aria-label='Terminal input' value={text} onChange={(event) => onInput(event.target.value)} /></div>;
-} }));
-beforeEach(() => {
-  storage.clear();
-  localStorage.clear();
-  const refs = ['one', 'two'].map((hostId) => ({ hostId, workspaceId: `initial-${hostId}` }));
-  storage.set('weave.workspace-presentation.v2', JSON.stringify({ schemaVersion: 2, openWorkspaces: refs, recentWorkspaces: [], focusedPanes: {}, maximizedPanes: {}, collapsedWorkspaces: [] }));
+vi.mock('@/app/use-alpha-terminals', () => ({ useAlphaTerminals: () => ({ model: { attachmentId: 'shell', attachmentMode: 'shared', tabs: [{ title: 'Shell' }] }, actions: {} }) }));
+let focusOwner: PaneFocusOwner;
+vi.mock('./terminal-view', () => ({ TerminalView: () => { const ref = useRef<HTMLTextAreaElement>(null); useComposerPaneFocus(ref); focusOwner = usePaneFocus()!; return <textarea ref={ref} aria-label='Terminal input' />; } }));
+
+it('keeps the clicked terminal selected when an older native-to-composer handoff refocuses the web view', async () => {
+  const user = userEvent.setup();
+  function App() { const fixture = usePaneFixture(); return <TerminalFirstShell controller={fixture.controller} />; }
+  render(<App />);
+  const composer = within(screen.getByRole('region', { name: 'Agent pane first' })).getByRole('textbox') as HTMLTextAreaElement;
+  const terminal = screen.getByRole('textbox', { name: 'Terminal input' });
+  await user.click(composer);
+  const agentId = composer.closest<HTMLElement>('[data-pane-focus-id]')!.dataset.paneFocusId!;
+  const terminalId = terminal.closest<HTMLElement>('[data-pane-focus-id]')!.dataset.paneFocusId!;
+  let finish!: () => void;
+  const unregister = focusOwner.register(agentId, { element: composer, available: () => true, focus: async isCurrent => {
+    await new Promise<void>(resolve => { finish = resolve; });
+    // Electron restores the previously active DOM input when focusWeb completes.
+    composer.blur(); composer.focus(); return isCurrent();
+  } });
+  try {
+    act(() => focusOwner.restoreTarget());
+    await waitFor(() => expect(finish).toBeDefined());
+    act(() => { focusOwner.request(terminalId); fireEvent.focusIn(terminal); });
+    await act(async () => finish());
+    await waitFor(() => expect(terminal).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Terminal Shell' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Agent first' })).toHaveAttribute('aria-pressed', 'false');
+  } finally { unregister(); }
 });
 
-it('renders independent terminal and agent selection, compact groups, and non-destructive view closure', async () => {
-  let contentWidth = 1000;
-  let resizeContent: (() => void) | undefined;
-  const bounds = HTMLElement.prototype.getBoundingClientRect;
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (this.matches('[role=menu], [role=menuitem], [role=menuitemradio]')) return new DOMRect(0, 32, 200, 200);
-    return this.dataset.slot === 'sidebar-inset' ? new DOMRect(0, 0, contentWidth, 800) : bounds.call(this);
-  });
-  const Observer = globalThis.ResizeObserver;
-  vi.stubGlobal('ResizeObserver', class extends Observer {
-    constructor(callback: ResizeObserverCallback) {
-      super(callback);
-      this.notify = () => callback([], this);
-    }
-    notify: () => void;
-    override observe(element: Element, options?: ResizeObserverOptions) {
-      super.observe(element, options);
-      if (element.getAttribute('data-slot') === 'sidebar-inset') resizeContent = this.notify;
-    }
-  });
+it('renders independent conversations in one Workspace with shared rails, borders and one focused Pane', async () => {
   const user = userEvent.setup();
-  const arrangements = new Map<string, WorkspaceComposition>();
-  const snapshots = new Map<string, HostSnapshot>();
-  const makeClient = (hostId: string) => {
-    const snapshot: HostSnapshot = {
-      hostId, displayName: hostId, capabilities: ['workspace.composition.get', 'workspace.composition.replace', 'workspace.composition.terminal-create', 'terminal.attach'],
-      executionContexts: [{ executionContextId: 'workspace', name: `Checkout ${hostId}`, canonicalPath: '/code/weave', availability: 'available' }],
-      agents: [{ agentId: 'agent', name: 'Agent' }], archivedThreads: [],
-      threads: [{ attention: { state: hostId === 'one' ? 'working' : 'waiting', observedAt: new Date().toISOString(), generation: 1 }, threadId: 'thread', executionContextId: 'workspace', agentId: 'agent', title: `Agent on ${hostId}`, status: 'active', workspaceId: `initial-${hostId}`, membershipRevision: 0, acpSessionId: 'session', createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z' }],
-    };
-    snapshots.set(hostId, snapshot);
-    arrangements.set(hostId, { schemaVersion: 2, hostId, revision: 0, workspaces: [{ workspaceId: `initial-${hostId}`, name: `Initial ${hostId}`, layout: null }] });
-    const terminals = new Map<string, { terminalId: string; executionContextId: string; title: string; cols: number; rows: number; status: string }>();
-    const create = () => { const terminal = { terminalId: `${hostId}-terminal${terminals.size ? `-${terminals.size + 1}` : ''}`, executionContextId: 'workspace', title: 'Shell', currentDirectory: '/code/weave', initialDirectory: '/code/weave', cols: 80, rows: 24, status: 'running' }; terminals.set(terminal.terminalId, terminal); return terminal; };
-    const provision = (node: TerminalLayoutNode): TerminalLayoutNode => node.kind === 'split' ? { ...node, children: [provision(node.children[0]), provision(node.children[1])] } : node.terminalId ? node : { ...node, terminalId: create().terminalId };
-    return {
-      snapshot: vi.fn(async () => snapshot), close: vi.fn(), attach: vi.fn(async () => snapshot.threads[0]),
-      getWorkspaceComposition: vi.fn(async () => ({ composition: arrangements.get(hostId) ?? { schemaVersion: 2, hostId, revision: 0, workspaces: [] } })),
-      replaceWorkspaceComposition: vi.fn(async (_id: string, revision: number, tabs: Workspace[]) => {
-        if ((arrangements.get(hostId)?.revision ?? 0) !== revision) throw new Error('stale revision');
-        const composition: WorkspaceComposition = { schemaVersion: 2, hostId, revision: revision + 1, workspaces: tabs.map((tab) => ({ ...tab, layout: tab.layout ? provision(tab.layout) : null })) };
-        arrangements.set(hostId, composition); return { composition };
-      }),
-      assignThread: vi.fn(async (_threadId, _hostId, workspaceId, expectedRevision) => { if (snapshot.threads[0]!.membershipRevision !== expectedRevision) throw new Error('stale membership'); snapshot.threads[0] = { ...snapshot.threads[0]!, workspaceId, membershipRevision: expectedRevision + 1 }; return snapshot.threads[0]; }),
-      createTerminal: vi.fn(async () => ({ terminal: create() })),
-      listTerminals: vi.fn(async () => ({ terminals: [...terminals.values()] })),
-      attachTerminal: vi.fn(async (_executionContextId: string, terminalId: string) => ({ attachment: { attachmentId: `${terminalId}-attachment`, mode: 'shared' }, snapshot: { terminal: terminals.get(terminalId), data: new TextEncoder().encode('ready'), generation: 1, cursor: 5 }, startEvents: vi.fn() })),
-      detachTerminal: vi.fn(async () => undefined), closeTerminal: vi.fn(async () => undefined), inputTerminal: vi.fn(async () => undefined), resizeTerminal: vi.fn(async () => undefined),
-    };
-  };
-  const one = makeClient('one'); const two = makeClient('two');
-  let controller: AlphaController;
-  const factory = (url: string) => (url.includes('one') ? one : two) as unknown as DirectHostClient;
-  function App() { controller = useLiveAlphaController(factory); return <AlphaShell controller={controller} />; }
-  const rendered = render(<App />);
+  let fixture!: ReturnType<typeof usePaneFixture>;
+  function App() { fixture = usePaneFixture(); return <TerminalFirstShell controller={fixture.controller} />; }
+  const view = render(<App />);
+  expect(view.container.querySelectorAll('[data-slot="pane-top-rail"]')).toHaveLength(3);
+  expect(view.container.querySelectorAll('[data-slot="pane-focus-border"]')).toHaveLength(3);
+  expect(view.container.querySelector('#agent-conversation')).not.toBeInTheDocument();
+  expect(view.container.querySelector('[data-slot="thread-top-rail"]')).not.toBeInTheDocument();
+  const first = within(screen.getByRole('region', { name: 'Agent pane first' }));
+  const second = within(screen.getByRole('region', { name: 'Agent pane second' }));
+  await user.click(first.getByRole('textbox', { name: 'Message agent' })); await user.keyboard('first message');
+  await user.click(second.getByRole('textbox', { name: 'Message agent' })); await user.keyboard('second message');
+  expect(first.getByRole('textbox')).toHaveValue('first message');
+  expect(second.getByRole('textbox')).toHaveValue('second message');
+  await user.click(first.getByRole('button', { name: 'Send message' }));
+  expect(fixture.send).toHaveBeenCalledWith('first', 'first message');
+  await user.click(second.getByRole('button', { name: 'Send message' }));
+  expect(fixture.send).toHaveBeenCalledWith('second', 'second message');
+  expect(view.container.querySelectorAll('[data-slot="pane-focus-border"].border-terminal-focus')).toHaveLength(1);
+  expect(screen.getByRole('button', { name: 'Agent second' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('button', { name: 'Terminal Shell' })).toHaveAttribute('aria-pressed', 'false');
+  await user.click(screen.getByRole('button', { name: 'Workspace Other' }));
+  expect(screen.queryByRole('region', { name: 'Agent pane first' })).not.toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Agent pane third' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Agent second' })).toHaveAttribute('aria-pressed', 'false');
+  expect(screen.getByRole('button', { name: 'Agent third' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.queryByText('Last visible agent. Activate to reopen.')).not.toBeInTheDocument();
+});
 
-  await waitFor(() => expect(screen.getAllByRole('button', { name: /^Agent Agent on/ })).toHaveLength(2));
-  expect(rendered.container.querySelector('[data-slot="global-bottom-rail"]')).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Agent conversation' })).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Toggle threads' }));
-  expect(screen.queryByRole('button', { name: 'Connections' })).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Toggle threads' }));
-  expect(screen.getByRole('button', { name: 'Connections' })).toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Agent Agent on two' }));
-  await user.click(screen.getByRole('button', { name: 'Workspace Initial one' }));
-  await user.click(screen.getByRole('button', { name: 'Close agent pane' }));
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Agent Agent on two' })).toHaveAttribute('data-agent-pane-state', 'last-visible');
-  await user.click(screen.getByRole('button', { name: 'Workspace Initial two' }));
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toBeInTheDocument();
-  expect(screen.queryByRole('main', { name: 'Terminal workspace' })).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Close agent pane' })).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Maximize agent pane' })).toBeDisabled();
-
-  await act(async () => { await controller.workspaceActions!.open('one:workspace'); await controller.workspaceActions!.refresh(); });
-  const first = controller!.model.workspaceCompositions!.presentation.openWorkspaces[2]!;
-  await act(async () => { await controller.actions.assignThread!('one:thread', first.workspaceId); });
-  await user.click(screen.getByRole('button', { name: 'Agent Agent on one' }));
-  const originalInput = await screen.findByRole('textbox', { name: 'Terminal input' });
-  await waitFor(() => expect(originalInput).toHaveValue('ready'));
-  let conversationRegion = screen.getByRole('region', { name: 'Selected agent conversation' });
-  const group = conversationRegion.closest('[data-group]')!;
-  const agentTile = () => screen.getByRole('button', { name: 'Agent Agent on one' });
-  expect(agentTile()).toHaveAttribute('data-agent-pane-state', 'visible');
-  expect(agentTile()).toHaveAttribute('aria-pressed', 'true');
-  expect(group).toHaveStyle({ flexDirection: 'row' });
-  await user.click(screen.getByRole('button', { name: 'Maximize agent pane' }));
-  expect(originalInput.closest('[data-panel]')).toHaveAttribute('hidden');
-  expect(originalInput.isConnected).toBe(true);
-  await user.click(screen.getByRole('button', { name: 'Restore agent pane' }));
-  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(originalInput);
-  await user.click(screen.getByRole('button', { name: 'Close agent pane' }));
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-  expect(controller!.model.selectedThreadId).toBe('one:thread');
-  expect(agentTile()).toHaveAttribute('data-agent-pane-state', 'last-visible');
-  expect(agentTile()).toHaveAttribute('aria-pressed', 'false');
-  expect(agentTile()).toHaveClass('ring-primary');
-  expect(agentTile()).toHaveAccessibleDescription(/Last visible agent. Activate to reopen/);
-  await user.click(agentTile());
-  expect(agentTile()).toHaveAttribute('data-agent-pane-state', 'visible');
-  expect(agentTile()).not.toHaveClass('ring-primary');
-  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(originalInput);
-  conversationRegion = screen.getByRole('region', { name: 'Selected agent conversation' });
-  act(() => { contentWidth = 750; resizeContent!(); });
-  expect(group).toHaveStyle({ flexDirection: 'column' });
-  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(originalInput);
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toBe(conversationRegion);
-  act(() => { contentWidth = 900; resizeContent!(); });
-  expect(group).toHaveStyle({ flexDirection: 'row' });
-  const root = rendered.container.querySelector(`[data-workspace-id="${first.workspaceId}"]`)! as HTMLElement;
-  const rowKinds = () => [...root.querySelectorAll('[data-pane-id], [data-thread-id]')].map(item => item.hasAttribute('data-thread-id') ? 'agent' : 'terminal');
-  expect(rowKinds()).toEqual(['terminal', 'agent']);
-  expect(within(root).getByRole('button', { name: 'Agent Agent on one' })).not.toHaveTextContent('/code/weave');
-  const openDockMenu = async () => {
-    await user.click(screen.getByRole('button', { name: 'Sidebar actions' }));
-    await user.hover(await screen.findByRole('menuitem', { name: 'Agent pane position' }));
-    return screen.findByRole('menuitemradio', { name: 'Left Dock' });
-  };
-  await openDockMenu();
-  expect(screen.getByRole('menuitemradio', { name: 'Right Dock' })).toHaveAttribute('aria-checked', 'true');
-  await user.click(screen.getByRole('menuitemradio', { name: 'Left Dock' }));
-  expect(rowKinds()).toEqual(['agent', 'terminal']);
-  expect(group.querySelector('[data-panel]')).toHaveAttribute('id', 'agent-conversation');
-  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(originalInput);
-  expect(JSON.parse(localStorage.getItem('weave.alpha.agent-dock.v1')!)).toEqual({ schemaVersion: 1, position: 'left' });
-  await openDockMenu();
-  expect(screen.getByRole('menuitemradio', { name: 'Left Dock' })).toHaveAttribute('aria-checked', 'true');
-  await user.click(screen.getByRole('menuitemradio', { name: 'Right Dock' }));
-  expect(group.querySelector('[data-panel]')).toHaveAttribute('id', 'terminal-workspace');
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toBe(conversationRegion);
-  await user.click(screen.getByRole('button', { name: 'Toggle threads' }));
-  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(originalInput);
-  await user.click(screen.getByRole('button', { name: 'Toggle threads' }));
-  await user.click(screen.getByRole('button', { name: 'Split right' }));
-  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Maximize terminal' })).toHaveLength(2));
-  expect(screen.getAllByRole('textbox', { name: 'Terminal input' })[0]).toBe(originalInput);
-  await user.click(screen.getAllByRole('button', { name: 'Maximize terminal' })[0]!);
-  expect(conversationRegion.closest('[data-panel]')).toHaveAttribute('hidden');
-  expect(agentTile()).toHaveAttribute('data-agent-pane-state', 'last-visible');
-  await user.click(screen.getByRole('button', { name: 'Restore terminal' }));
-  expect(agentTile()).toHaveAttribute('data-agent-pane-state', 'visible');
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toBe(conversationRegion);
-  await user.click(screen.getByRole('button', { name: 'Close agent pane' }));
-  await user.click(screen.getAllByRole('button', { name: 'Maximize terminal' })[0]!);
-  await user.click(screen.getByRole('button', { name: 'Restore terminal' }));
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-  await user.click(agentTile());
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toBeInTheDocument();
-  expect(one.closeTerminal).not.toHaveBeenCalled();
-  expect(controller!.model.selectedThreadId).toBe('one:thread');
-  rendered.unmount();
-}, 15000);
-
-it('keeps the terminal mounted while archiving selects a replacement or removes the agent pane', async () => {
-  const user = userEvent.setup();
-  const makeClient = (hostId: string) => {
-    let snapshot: HostSnapshot = {
-      hostId, displayName: hostId,
-      capabilities: ['thread.archive', 'thread.restore', 'workspace.composition.get', 'workspace.composition.replace'],
-      executionContexts: [{ executionContextId: 'context', name: 'Code', canonicalPath: '/code', availability: 'available' }],
-      agents: [{ agentId: 'agent', name: 'Agent' }], archivedThreads: [],
-      threads: ['first', 'next'].map((threadId) => ({
-        threadId, executionContextId: 'context', agentId: 'agent', title: `${hostId} ${threadId}`,
-        workspaceId: `initial-${hostId}`, membershipRevision: 0, status: 'active', acpSessionId: `${hostId}-${threadId}`,
-        createdAt: '2026-09-11T00:00:00Z', updatedAt: '2026-09-11T00:00:00Z',
-      })),
-    };
-    const terminal = { terminalId: 'terminal', executionContextId: 'context', title: 'Shell', cols: 80, rows: 24, status: 'running' };
-    return {
-      snapshot: vi.fn(async () => snapshot), attach: vi.fn(async (id: string) => snapshot.threads.find((thread) => thread.threadId === id)), close: vi.fn(),
-      archiveThread: vi.fn(async (id: string) => {
-        const archived = { ...snapshot.threads.find((thread) => thread.threadId === id)!, status: 'archived' as const, archivedAt: '2026-09-11T00:00:01Z' };
-        snapshot = { ...snapshot, threads: snapshot.threads.filter((thread) => thread.threadId !== id), archivedThreads: [...snapshot.archivedThreads, archived] };
-        return archived;
-      }),
-      getWorkspaceComposition: vi.fn(async () => ({ composition: {
-        schemaVersion: 2, hostId, revision: 0, workspaces: [{ workspaceId: `initial-${hostId}`, name: hostId,
-          layout: { kind: 'terminal', nodeId: 'node', paneId: 'pane', terminalId: 'terminal', executionContextId: 'context' },
-        }],
-      } })),
-      listTerminals: vi.fn(async () => ({ terminals: [terminal] })),
-      attachTerminal: vi.fn(async () => ({ attachment: { attachmentId: 'attachment', mode: 'shared' }, snapshot: { terminal, data: new TextEncoder().encode('ready'), generation: 1, cursor: 5 }, startEvents: vi.fn() })),
-      detachTerminal: vi.fn(async () => undefined), resizeTerminal: vi.fn(async () => undefined), inputTerminal: vi.fn(async () => undefined),
-    };
-  };
-  const one = makeClient('one'), two = makeClient('two');
-  const factory = (url: string) => (url.includes('one') ? one : two) as unknown as DirectHostClient;
-  let controller!: AlphaController;
-  function App() { controller = useLiveAlphaController(factory); return <AlphaShell controller={controller} />; }
+it('archives a completed Agent Pane without confirmation and preserves its neighbors', async () => {
+  const user = userEvent.setup(); let fixture!: ReturnType<typeof usePaneFixture>;
+  function App() { fixture = usePaneFixture(); fixture.controller.model.threads![0]!.attention = { state: 'completed', observedAt: new Date().toISOString() }; return <TerminalFirstShell controller={fixture.controller} />; }
   render(<App />);
-  await screen.findByRole('button', { name: 'Agent one first' });
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Agent conversation' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole('button', { name: 'Agent one first' }));
-  const terminal = await screen.findByRole('textbox', { name: 'Terminal input' });
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toHaveTextContent('one first');
-  await user.click(screen.getByRole('button', { name: 'Maximize agent pane' }));
-  await act(async () => controller.actions.archiveThread('one:first'));
-  expect(controller.model.selectedThreadId).toBe('one:next');
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toHaveTextContent('one next');
-  await act(async () => controller.actions.archiveThread('one:next'));
-  expect(controller.model.selectedThreadId).toBeUndefined();
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('separator', { name: 'Resize terminal workspace and agent conversation' })).not.toBeInTheDocument();
+  const terminal = screen.getByRole('textbox', { name: 'Terminal input' });
+  const first = within(screen.getByRole('region', { name: 'Agent pane first' }));
+  await user.click(first.getByRole('button', { name: 'Archive agent pane' }));
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Agent pane first' })).not.toBeInTheDocument());
+  expect(fixture.archive).toHaveBeenCalledWith('first', false);
   expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(terminal);
-  expect(terminal.closest('[data-panel]')).not.toHaveAttribute('hidden');
-  expect(screen.queryByRole('button', { name: 'Agent conversation' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole('button', { name: 'Agent two first' }));
-  await user.click(screen.getByRole('button', { name: 'Workspace one' }));
-  const activeTerminal = screen.getByRole('textbox', { name: 'Terminal input' });
-  await act(async () => controller.actions.archiveThread('two:first'));
-  expect(controller.model.selectedThreadId).toBeUndefined();
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-  expect(screen.getByRole('textbox', { name: 'Terminal input' })).toBe(activeTerminal);
-  expect(two.attach).not.toHaveBeenCalledWith('next');
-
-  await act(async () => controller.actions.createThread('one:context', undefined, 'initial-one'));
-  let composer = await screen.findByRole('textbox', { name: 'Message agent' });
-  await waitFor(() => expect(document.activeElement).toBe(composer));
-  const active = screen.getByRole('textbox', { name: 'Terminal input' }).closest('[data-focused]')!;
-  expect(active).toHaveAttribute('data-focused', 'true');
-  expect(active).not.toHaveAttribute('data-dimmed');
-  expect(active.querySelector('[data-slot="native-terminal"]')).toHaveAttribute('data-dim-amount', '0');
-  expect(active.querySelector('[data-slot="terminal-focus-border"]')).toHaveClass('border-sidebar-selected');
-  expect(document.querySelector('[data-slot="thread-top-rail"]')).toHaveClass('bg-sidebar-selected', 'text-foreground');
-
-  const draftId = controller.model.selectedThreadId;
-  await user.click(screen.getByRole('button', { name: 'Close agent pane' }));
-  expect(controller.model.threads?.some((thread) => thread.id === draftId)).toBe(false);
-  expect(document.querySelector(`[data-thread-id="${draftId}"]`)).not.toBeInTheDocument();
-  expect(controller.model.selectedThreadId).toBeUndefined();
-  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Terminal input' })));
-  await act(async () => controller.actions.createThread('one:context', undefined, 'initial-one'));
-  composer = await screen.findByRole('textbox', { name: 'Message agent' });
-  await waitFor(() => expect(document.activeElement).toBe(composer));
-  await user.click(screen.getByRole('button', { name: 'Maximize terminal' }));
-  expect(screen.queryByRole('region', { name: 'Selected agent conversation' })).not.toBeInTheDocument();
-  await act(async () => controller.actions.createThread('one:context', undefined, 'initial-one'));
-  composer = await screen.findByRole('textbox', { name: 'Message agent' });
-  await waitFor(() => expect(document.activeElement).toBe(composer));
-  expect(screen.getByRole('region', { name: 'Selected agent conversation' })).toBeInTheDocument();
-
+  expect(screen.getByRole('region', { name: 'Agent pane second' })).toBeInTheDocument();
 });

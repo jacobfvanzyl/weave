@@ -1,0 +1,25 @@
+{
+  "runs": [
+    "linux-rfb-dpr1",
+    "linux-rfb-dpr1-repeat",
+    "linux-rfb-dpr2-ipad",
+    "linux-rfb-dpr2-retry",
+    "linux-webrtc-dpr1",
+    "linux-webrtc-dpr1-minfps",
+    "linux-webrtc-dpr2",
+    "linux-webrtc-dpr2-ipad-minfps",
+    "linux-webrtc-dpr2-minfps",
+    "mac-rfb-dpr1",
+    "mac-webrtc-dpr1"
+  ],
+  "successfulInputResponses": 264,
+  "checks": [
+    "clean native exits",
+    "24 decoded input responses with no timeouts",
+    "matching CSS geometry, DPR and raster dimensions",
+    "static phase and DOM click count",
+    "exact RFB RGB content",
+    "WebRTC audio playback false",
+    "monotonic bounded frame markers"
+  ]
+}

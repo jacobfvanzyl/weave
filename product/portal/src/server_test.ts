@@ -597,7 +597,7 @@ test('Portal preflights draft config without listing it and promotes the same se
       'Resource is unavailable.',
     );
 
-    await rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 2, workspaces: ['draft-source', 'draft-destination'].map((id) => ({ workspaceId: id, name: id, layout: { kind: 'terminal', nodeId: `${id}-node`, paneId: `${id}-pane`, executionContextId: 'workspace', terminalId: null } })) });
+    await rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: (await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }) as any).composition.revision, workspaces: ['draft-source', 'draft-destination'].map((id) => ({ workspaceId: id, name: id, layout: { kind: 'terminal', nodeId: `${id}-node`, paneId: `${id}-pane`, executionContextId: 'workspace', terminalId: null } })) });
     const prepared = await rpc.request('thread.draft.create', {
       workspaceId: 'draft-source',
       executionContextId: 'workspace',
@@ -792,10 +792,10 @@ test('Portal archives and restores durable Threads without conflating active pro
       domain: 'thread-lifecycle',
       code: 'THREAD_BUSY',
     });
-    await prompting;
+    const promptOutcome = prompting.catch(() => undefined);
 
     const archived = await rpc.request('thread.archive', {
-      threadId: created.thread.threadId,
+      threadId: created.thread.threadId, stopActive: true,
     }) as {
       thread: {
         threadId: string;
@@ -804,6 +804,7 @@ test('Portal archives and restores durable Threads without conflating active pro
         archivedAt?: string;
       };
     };
+    await promptOutcome;
     assertEquals(archived.thread.threadId, created.thread.threadId);
     assertEquals(archived.thread.acpSessionId, created.thread.acpSessionId);
     assertEquals(archived.thread.status, 'archived');
@@ -2221,7 +2222,7 @@ test('Authenticated compositions enforce ownership and revisions, survive restar
     const second = await connect();
     const capabilities = await first.request('portal.capabilities') as { capabilities: string[] };
     assertEquals(capabilities.capabilities.includes('workspace.composition.replace'), true);
-    const initial = { composition: { schemaVersion: 2, hostId: portal.security.hostId, revision: 0, workspaces: [] } };
+    const initial = { composition: { schemaVersion: 3, hostId: portal.security.hostId, revision: 0, workspaces: [] } };
     assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), initial);
     const { terminal } = await first.request('terminal.create', { executionContextId: 'allowed', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
     const { terminal: privateTerminal } = await first.request('terminal.create', { executionContextId: 'private', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
@@ -2402,8 +2403,9 @@ test('Unavailable registered directories preserve authenticated layouts and term
   let rpc = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/rpc`, credential);
   try {
     const { terminal } = await rpc.request('terminal.create', { executionContextId: 'stable' }) as { terminal: { terminalId: string } };
-    const saved = await rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 0, workspaces: [{ workspaceId: 'tab', name: 'Existing work', layout: { kind: 'terminal', executionContextId: 'stable', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }] });
+    await rpc.request('workspace.composition.replace', { hostId: portal.security.hostId, expectedRevision: 0, workspaces: [{ workspaceId: 'tab', name: 'Existing work', layout: { kind: 'terminal', executionContextId: 'stable', nodeId: 'node', paneId: 'pane', terminalId: terminal.terminalId } }] });
     const { thread } = await rpc.request('thread.create', { workspaceId: 'tab', executionContextId: 'stable', agentId: 'fake' }) as { thread: { threadId: string } };
+    const saved = await rpc.request('workspace.composition.get', { hostId: portal.security.hostId });
     const acp = await RpcSocket.open(`ws://127.0.0.1:${server.addr.port}/acp?threadId=${thread.threadId}`, credential);
     try {
       await acp.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
@@ -2491,7 +2493,7 @@ test('composition writes create distinct pane terminals once across retries, con
 
     await assertRejects(() => replace(first));
     assertEquals((await backend.list()).length, 1);
-    assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), { composition: { schemaVersion: 2, hostId: portal.security.hostId, revision: 0, workspaces: [] } });
+    assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), { composition: { schemaVersion: 3, hostId: portal.security.hostId, revision: 0, workspaces: [] } });
     const concurrent = await Promise.allSettled([replace(first), replace(second)]);
     assertEquals(concurrent.filter((result) => result.status === 'fulfilled').length, 1);
     assertEquals(creates, 3); // first shell reused; only the failed second shell retried

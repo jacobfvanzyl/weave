@@ -1,0 +1,1 @@
+{"synthetic": true, "passed": true, "checks": ["normalized texture matches tile pixels", "strict scaled source bounds", "native rounded mask interior/corner/origin", "bottom-left resource rejection", "gradient rejection", "unequal radius rejection", "translucent masked Src rejection"]}

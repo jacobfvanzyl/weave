@@ -13,6 +13,8 @@ type Addon = {
   focus(id: number): void;
   inspect(id: number): string;
   close(id: number): void;
+  watchWindow(parent: Buffer, event: (json: string) => void): number;
+  unwatchWindow(id: number): void;
   acceptance?(action: string, value: string): Buffer | undefined;
 };
 /** A window owns view capabilities. The renderer never receives a native pointer,
@@ -21,6 +23,11 @@ export function installNativeTerminals(window: BrowserWindow) {
   const addon = createRequire(import.meta.url)(join(app.getAppPath(), 'weave-terminal.node')) as Addon;
   const surfaces = new Map<string, number>();
   const contents = window.webContents;
+  const pointerObserver = addon.watchWindow(window.getNativeWindowHandle(), json => {
+    if (contents.isDestroyed()) return;
+    const point = JSON.parse(json), zoom = contents.getZoomFactor();
+    if (Number.isFinite(point.x) && Number.isFinite(point.y)) contents.send('weave:titlebar-click', { x: point.x / zoom, y: point.y / zoom });
+  });
   const streams = new Map<string, MessagePortMain>();
   const activation = (kind: 'window-focus' | 'window-blur') => { if (!contents.isDestroyed()) contents.send(`${channel}:event`, { surfaceId: '', kind }); };
   window.on('focus', () => activation('window-focus'));
@@ -89,7 +96,7 @@ export function installNativeTerminals(window: BrowserWindow) {
   ipcMain.handle(channel, handler);
   contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) clear(); });
   contents.on('render-process-gone', clear);
-  window.once('closed', () => { clear(); ipcMain.removeHandler(channel); });
+  window.once('closed', () => { addon.unwatchWindow(pointerObserver); clear(); ipcMain.removeHandler(channel); });
   return { acceptance: (action: string, value = '') => {
     if (!ALPHA_ACCEPTANCE || !addon.acceptance) throw new Error('Native acceptance is unavailable.');
     return addon.acceptance(action, value);

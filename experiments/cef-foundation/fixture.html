@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><title>CEF foundation fixture</title>
+<style>body{font:18px system-ui;background:#f4f6fa;color:#192333;margin:32px}button,input{font:inherit;padding:8px}#bar{width:120px;height:20px;background:gold;animation:slide 2s infinite alternate linear}@keyframes slide{to{transform:translateX(300px)}}</style>
+<h1>CEF foundation validation</h1><label>Name <input id="name" aria-label="Name"></label><button id="click" onclick="window.clicks++;document.querySelector('#count').textContent=window.clicks;console.log('fixture-click',window.clicks);fetch('/api/ping?click='+window.clicks)">Test click</button><p>Clicks: <span id="count">0</span></p><div id="bar"></div>
+<script>window.clicks=0;window.debugProbe=function(){let value=40; debugger; return value+2;};console.log('fixture-ready');fetch('/api/ping?load=1').then(x=>x.json()).then(x=>window.networkResult=x);</script>

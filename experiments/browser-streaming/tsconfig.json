@@ -1,0 +1,5 @@
+{
+  "extends": "../../product/portal/tsconfig.json",
+  "compilerOptions": {"typeRoots": ["../../product/portal/node_modules/@types"]},
+  "include": ["*.ts"]
+}

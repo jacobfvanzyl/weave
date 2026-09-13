@@ -22,6 +22,9 @@ A71000000000000000000001 = {isa = PBXBuildFile; fileRef = A710000000000000000000
 		A65000000000000000000001 = {isa = PBXBuildFile; fileRef = A65000000000000000000002; };
 		A65000000000000000000003 = {isa = PBXBuildFile; fileRef = A65000000000000000000004; };
 		A65000000000000000000005 /* GHOSTTY-LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = A65000000000000000000006; };
+A79000000000000000000001 = {isa = PBXBuildFile; fileRef = A79000000000000000000002; };
+A79000000000000000000003 = {isa = PBXBuildFile; fileRef = A79000000000000000000004; };
+A79000000000000000000005 = {isa = PBXBuildFile; fileRef = A79000000000000000000006; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +46,9 @@ A71000000000000000000003 = {isa = PBXFileReference; explicitFileType = wrapper.c
 		A65000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalPlugin.swift; sourceTree = "<group>"; };
 		A65000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = WeaveTerminalRenderer.mm; path = ../../native/ghostty/WeaveTerminalRenderer.mm; sourceTree = SOURCE_ROOT; };
 		A65000000000000000000006 /* GHOSTTY-LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = GHOSTTY-LICENSE; path = ../../native/.build/ios/GHOSTTY-LICENSE; sourceTree = SOURCE_ROOT; };
+A79000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBrowserPlugin.swift; sourceTree = "<group>"; };
+A79000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = WeaveBrowserSurface.mm; path = ../../native/browser/WeaveBrowserSurface.mm; sourceTree = SOURCE_ROOT; };
+A79000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = text; name = LIBVNC-LICENSE; path = ../../native/.build/browser/ios/LIBVNC-LICENSE; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,6 +88,9 @@ A71000000000000000000005 = {isa = PBXFrameworksBuildPhase; buildActionMask = 214
 			children = (
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				A65000000000000000000002,
+ A79000000000000000000002,
+ A79000000000000000000004,
+ A79000000000000000000006,
 				A65000000000000000000004,
 				A65000000000000000000006,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
@@ -166,6 +175,7 @@ A71000000000000000000006 = {isa = PBXNativeTarget; buildConfigurationList = A710
 			buildActionMask = 2147483647;
 			files = (
 				A65000000000000000000005 /* GHOSTTY-LICENSE in Resources */,
+ A79000000000000000000005,
 				A73000000000000000000001 /* TerminalFonts in Resources */,
 				504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */,
 				A13FC1412F00000100A00001 /* PrivacyInfo.xcprivacy in Resources */,
@@ -187,6 +197,8 @@ A71000000000000000000006 = {isa = PBXNativeTarget; buildConfigurationList = A710
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A65000000000000000000001,
+ A79000000000000000000001,
+ A79000000000000000000003,
 				A65000000000000000000003,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -344,8 +356,8 @@ A71000000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 214748
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
                 SWIFT_OBJC_BRIDGING_HEADER = "App/NativeTerminal-Bridging-Header.h";
-                HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../../native/ghostty", "$(SRCROOT)/../../native/.build/ios/include");
-                OTHER_LDFLAGS = ("$(inherited)", "$(SRCROOT)/../../native/.build/ios/lib/libghostty-vt.a", "-lc++");
+                HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../../native/ghostty", "$(SRCROOT)/../../native/browser", "$(SRCROOT)/../../native/.build/browser/ios/include", "$(SRCROOT)/../../native/.build/ios/include");
+                OTHER_LDFLAGS = ("$(inherited)", "$(SRCROOT)/../../native/.build/ios/lib/libghostty-vt.a", "$(SRCROOT)/../../native/.build/browser/ios/libvncclient.a", "-lz", "-lc++");
                 CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				TARGETED_DEVICE_FAMILY = "1,2";
 				SUPPORTS_MACCATALYST = NO;
@@ -372,8 +384,8 @@ A71000000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 214748
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
                 SWIFT_OBJC_BRIDGING_HEADER = "App/NativeTerminal-Bridging-Header.h";
-                HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../../native/ghostty", "$(SRCROOT)/../../native/.build/ios/include");
-                OTHER_LDFLAGS = ("$(inherited)", "$(SRCROOT)/../../native/.build/ios/lib/libghostty-vt.a", "-lc++");
+                HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../../native/ghostty", "$(SRCROOT)/../../native/browser", "$(SRCROOT)/../../native/.build/browser/ios/include", "$(SRCROOT)/../../native/.build/ios/include");
+                OTHER_LDFLAGS = ("$(inherited)", "$(SRCROOT)/../../native/.build/ios/lib/libghostty-vt.a", "$(SRCROOT)/../../native/.build/browser/ios/libvncclient.a", "-lz", "-lc++");
                 CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				TARGETED_DEVICE_FAMILY = "1,2";
 				SUPPORTS_MACCATALYST = NO;

@@ -1,4 +1,14 @@
+import { insertBrowserPane, removeBrowserPane, reconcileBrowserPanes } from './browser-pane-layout.ts';
+import { BROWSER_PANE_RPC_METHODS, BROWSER_PANES_CAPABILITY, parseBrowserPaneRpcParams, parseBrowserPage, type BrowserPaneRpcMethod, type BrowserPaneRpcContracts } from '@weave/product-protocol';
+import type { ManagedPageSummary } from './browser-service/managed-pages.ts';
+import { ManagedBrowserAccess, type ManagedBrowserSession } from './browser-pages.ts';
+import { BROWSER_PAGE_RPC_METHODS, BROWSER_PAGES_CAPABILITY, type BrowserPageRpcMethod, type BrowserPageRpcContracts } from '@weave/product-protocol';
+import { BrowserProfileAccess } from './browser-profiles.ts';
+import { BROWSER_PROFILE_RPC_METHODS, BROWSER_PROFILES_CAPABILITY, type BrowserProfileRpcMethod, type BrowserProfileRpcContracts } from '@weave/product-protocol';
 import { assertLegacyCutover } from './terminal-service/maintenance.ts';
+import { BrowserAccess, type BrowserBackend, type BrowserSession } from './browsers.ts';
+import { BrowserServiceClient } from './browser-service/client.ts';
+import { BROWSER_RPC_METHODS, BROWSER_STREAM_CAPABILITY, type BrowserRpcMethod, type BrowserRpcContracts, type BrowserNotification } from '@weave/product-protocol';
 import { createHash } from 'node:crypto';
 import { realpath } from './host-files.ts';
 import {
@@ -21,6 +31,7 @@ import {
   type WorkspaceComposition,
   COMPOSITION_TERMINAL_CREATION_CAPABILITY,
   type TerminalLayoutNode,
+  paneTargets,
   terminalPaneTargets,
   type WorkspaceFileWatchNotification,
 } from '@weave/product-protocol';
@@ -42,6 +53,8 @@ export class PortalRpcSession {
   readonly #portal: Portal;
   readonly #watches: WorkspaceFileWatchSession;
   readonly #terminals?: PortalTerminalSession;
+  readonly #browsers?: BrowserSession;
+  readonly #browserPages?: ManagedBrowserSession;
   #closed = false;
 
   constructor(
@@ -49,10 +62,14 @@ export class PortalRpcSession {
     watches: WorkspaceFileWatchSession,
     terminals: PortalTerminalSession | undefined,
     readonly principal: PortalPrincipal,
+    browsers?: BrowserSession,
+    browserPages?: ManagedBrowserSession,
   ) {
     this.#portal = portal;
     this.#watches = watches;
     this.#terminals = terminals;
+    this.#browsers = browsers;
+    this.#browserPages = browserPages;
   }
 
   async request<Method extends PortalRpcMethod>(
@@ -60,6 +77,14 @@ export class PortalRpcSession {
     params: PortalRpcParams<Method>,
   ): Promise<PortalRpcResult<Method>> {
     if (this.#closed) throw new Error('Portal RPC session is closed.');
+    if (BROWSER_PAGE_RPC_METHODS.includes(method as BrowserPageRpcMethod)) {
+      if (!this.#browserPages) throw new Error('Managed Browser Service is not configured.');
+      return await this.#browserPages.request(method as BrowserPageRpcMethod, params as BrowserPageRpcContracts[BrowserPageRpcMethod]['params']) as PortalRpcResult<Method>;
+    }
+    if (BROWSER_RPC_METHODS.includes(method as BrowserRpcMethod)) {
+      if (!this.#browsers) throw new Error('Browser Service is not configured.');
+      return await this.#browsers.request(method as BrowserRpcMethod, params as BrowserRpcContracts[BrowserRpcMethod]['params']) as PortalRpcResult<Method>;
+    }
     await this.#portal.authorizeRequest(this.principal, method, params);
     if (method === 'context.file.watch.start') {
       return await this.#watches.start(
@@ -99,6 +124,8 @@ export class PortalRpcSession {
     this.#closed = true;
     this.#watches.close();
     this.#terminals?.close();
+    void this.#browsers?.close();
+    this.#browserPages?.close();
   }
 }
 
@@ -127,6 +154,10 @@ export class Portal {
   readonly #runtimeStates: RuntimeStateStore;
   readonly #workspaceFiles: WorkspaceFileService;
   readonly #terminals?: TerminalAccess;
+  readonly #browsers?: BrowserAccess;
+  readonly #browserProfiles?: BrowserProfileAccess;
+  readonly #browserBackend?: BrowserBackend;
+  readonly #browserPages?: ManagedBrowserAccess;
   readonly #workspaceCatalog: ExecutionContextCatalog;
   readonly #compositions: CompositionStore;
   readonly security: PortalSecurity;
@@ -136,6 +167,9 @@ export class Portal {
   readonly #liveRuntimes = new Map<string, HostedThread>();
   readonly #drafts = new Map<string, ThreadSummary>();
   #lifecycleQueue = Promise.resolve();
+  #browserReconcileTimer?: ReturnType<typeof setInterval>;
+  #browserReconcile?: Promise<unknown>;
+  #closing = false;
   readonly #closingWorkspaces = new Set<string>();
 
   private constructor(
@@ -148,6 +182,7 @@ export class Portal {
     terminals: TerminalAccess | undefined,
     security: PortalSecurity,
     compositions: CompositionStore,
+    browserBackend?: BrowserBackend,
   ) {
     this.#catalog = catalog;
     this.#journal = journal;
@@ -156,7 +191,11 @@ export class Portal {
     this.#compositions = compositions;
     this.#workspaceFiles = workspaceFiles;
     this.#terminals = terminals;
+    this.#browserBackend = browserBackend;
+    this.#browsers = browserBackend && !browserBackend.managedPagesEnabled ? new BrowserAccess(browserBackend) : undefined;
     this.security = security;
+    this.#browserPages = browserBackend?.managedPagesEnabled && browserBackend.managedPage ? new ManagedBrowserAccess({ managedPage: browserBackend.managedPage.bind(browserBackend) }, security) : undefined;
+    this.#browserProfiles = browserBackend?.profile ? new BrowserProfileAccess({ profile: browserBackend.profile.bind(browserBackend) }, security) : undefined;
     this.#executionContexts = new Map(
       workspaceCatalog.list().map((
         workspace,
@@ -169,7 +208,7 @@ export class Portal {
 
   static async open(
     config: PortalConfig,
-    options: { terminalBackend?: TerminalExecution | false } = {},
+    options: { terminalBackend?: TerminalExecution | false; browserBackend?: BrowserBackend | false } = {},
   ) {
     const catalog = new ThreadCatalog(config.stateDirectory);
     const workspaceCatalog = await ExecutionContextCatalog.open(
@@ -218,8 +257,16 @@ export class Portal {
       terminals,
       security,
       compositions,
+      options.browserBackend === false ? undefined : options.browserBackend ?? (config.browser ? new BrowserServiceClient(config.stateDirectory, config.browser.executable, config.browser.cefExecutable) : undefined),
     );
     await portal.#pruneEmptyWorkspaces();
+    if (portal.#browserPages) {
+      portal.#browserReconcileTimer = setInterval(() => {
+        if (portal!.#browserReconcile || portal!.#closing) return;
+        portal!.#browserReconcile = portal!.#mutateLifecycle(() => portal!.#reconcileBrowserPanes()).catch(error => console.error('Could not reconcile Browser Panes:', error)).finally(() => { portal!.#browserReconcile = undefined; });
+      }, 1000);
+      portal.#browserReconcileTimer.unref();
+    }
     return portal;
   }
 
@@ -230,6 +277,11 @@ export class Portal {
     authorized = false,
   ): Promise<PortalRpcResult<Method>> {
     if (!authorized) await this.authorizeRequest(principal, method, params);
+    if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) {
+      if (!this.#browserProfiles) throw new Error('Browser Profiles are not configured.');
+      return await this.#browserProfiles.request(principal, method as BrowserProfileRpcMethod, params as BrowserProfileRpcContracts[BrowserProfileRpcMethod]['params']) as PortalRpcResult<Method>;
+    }
+    if (BROWSER_PANE_RPC_METHODS.includes(method as BrowserPaneRpcMethod)) return await this.#browserPaneRequest(principal, method as BrowserPaneRpcMethod, params as BrowserPaneRpcContracts[BrowserPaneRpcMethod]['params']) as PortalRpcResult<Method>;
     switch (method) {
       case 'portal.capabilities':
         return {
@@ -262,6 +314,9 @@ export class Portal {
             'credential.revoke',
             ...WORKSPACE_FILE_RPC_METHODS,
             ...(this.#terminals ? TERMINAL_RPC_METHODS : []),
+            ...(this.#browsers ? [BROWSER_STREAM_CAPABILITY, ...BROWSER_RPC_METHODS] : []),
+            ...(this.#browserProfiles ? [BROWSER_PROFILES_CAPABILITY, ...BROWSER_PROFILE_RPC_METHODS] : []),
+            ...(this.#browserPages ? [BROWSER_PAGES_CAPABILITY, ...BROWSER_PAGE_RPC_METHODS, BROWSER_PANES_CAPABILITY, ...BROWSER_PANE_RPC_METHODS] : []),
             'acp.v1',
           ],
         } as PortalRpcResult<Method>;
@@ -303,7 +358,7 @@ export class Portal {
           try {
             const plan = await this.#workspaceClosePlan(principal, input.hostId, input.workspaceId);
             if (plan.token !== input.token) throw new Error('The workspace changed. Review its current contents before closing.');
-            if (!input.confirmed && [...plan.terminals, ...plan.threads].some((item) => item.dirty)) throw new Error('This workspace has active or uncertain work. Confirmation is required.');
+            if (!input.confirmed && [...plan.terminals, ...plan.threads, ...(plan.browsers ?? [])].some((item) => item.dirty)) throw new Error('This workspace has active or uncertain work. Confirmation is required.');
             this.#closingWorkspaces.add(input.workspaceId);
             try {
               const members = this.#workspaceThreads().filter((thread) => thread.workspaceId === input.workspaceId);
@@ -311,9 +366,13 @@ export class Portal {
               // failure, retain the workspace so the remaining work is recoverable.
               const stopped = await Promise.allSettled([
                 this.#terminals?.stopWorkspaceTerminals(plan.terminals.map((terminal) => terminal.terminalId)),
+                ...((plan.browsers ?? []).map(async browser => {
+                  await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: browser.profileId });
+                  await this.#closeBrowserPage(browser.pageId, browser.profileId, browser.generation);
+                })),
                 ...members.map(async (thread) => {
                   const runtime = this.#runtimes.get(thread.threadId);
-                  if (runtime) await (await runtime).stopForWorkspaceClose();
+                  if (runtime) await (await runtime).stopForClose();
                   this.#runtimes.delete(thread.threadId);
                   this.#liveRuntimes.delete(thread.threadId);
                 }),
@@ -363,12 +422,31 @@ export class Portal {
             const available = await this.#terminals?.knownTerminalIds(pane.executionContextId) ?? new Set<string>();
             if (pane.terminalId !== null && !available.has(pane.terminalId)) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
           }
+          for (const pane of paneTargets(current.workspaces)) if (pane.kind === 'browser') await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: pane.profileId });
+          const currentPanes = new Map(paneTargets(current.workspaces).map(pane => [pane.paneId, pane]));
+          const nextPanes = new Map(paneTargets(next).map(pane => [pane.paneId, pane]));
+          // Content lifetime belongs to its service, never to a layout overwrite.
+          for (const pane of currentPanes.values()) {
+            if (pane.kind === 'terminal') continue;
+            const retained = nextPanes.get(pane.paneId);
+            if (!retained || JSON.stringify(retained) !== JSON.stringify(pane)) throw new Error('Close or move the Pane through its content lifecycle before removing it.');
+          }
+          for (const workspace of next) for (const pane of paneTargets([workspace])) {
+            if (pane.kind === 'browser') {
+              if (!currentPanes.has(pane.paneId)) throw new Error('Create Browser Panes through the browser content lifecycle.');
+              if (!current.workspaces.find(item => item.workspaceId === workspace.workspaceId && paneTargets([item]).some(node => node.paneId === pane.paneId))) throw new Error('Move Browser Panes through the browser content lifecycle.');
+            }
+            if (pane.kind !== 'agent') continue;
+            const thread = this.#workspaceThreads().find(thread => thread.threadId === pane.threadId);
+            if (!thread || thread.workspaceId !== workspace.workspaceId || !currentPanes.has(pane.paneId)) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+            await this.security.authorize(principal, 'thread.inspect', { threadId: thread.threadId, executionContextId: thread.executionContextId, agentId: thread.agentId });
+          }
           const retainedTerminals = new Set(terminalPaneTargets(next).map((pane) => pane.terminalId));
           const liveTerminals = await this.#terminals?.knownTerminalIds() ?? new Set<string>();
           if (terminalPaneTargets(current.workspaces).some((pane) => pane.terminalId && liveTerminals.has(pane.terminalId) && !retainedTerminals.has(pane.terminalId))) throw new Error('Close the workspace or terminal before removing its layout.');
           const provision = async (node: TerminalLayoutNode): Promise<TerminalLayoutNode> => {
             if (node.kind === 'split') return { ...node, children: [await provision(node.children[0]), await provision(node.children[1])] };
-            if (node.terminalId) return node;
+            if (node.kind !== 'terminal' || node.terminalId) return node;
             await this.security.authorize(principal, 'terminal.control', { executionContextId: node.executionContextId });
             if (!this.#terminals) throw new Error('Terminals are unavailable on this Host.');
             const terminal = await this.#terminals.ensurePaneTerminal(node.executionContextId, current.revision, node.paneId, node.launchDirectory);
@@ -478,7 +556,12 @@ export class Portal {
             const runtime = this.#runtimes.get(input.threadId);
             if (runtime) {
               try {
-                await (await runtime).archive();
+                const active = await runtime;
+                const release = active.reserveWorkspaceClose();
+                try {
+                  if (input.stopActive) await active.stopForClose('Thread archived.');
+                  else await active.archive();
+                } finally { release(); }
               } catch (cause) {
                 if (cause instanceof ThreadPromptActiveError) {
                   throw new PortalThreadLifecycleError();
@@ -518,6 +601,7 @@ export class Portal {
             thread,
             changed,
           );
+          await this.#pruneEmptyWorkspaces();
           return { thread } as PortalRpcResult<Method>;
         });
       }
@@ -610,6 +694,11 @@ export class Portal {
       terminalId?: string;
       mode?: 'observe' | 'control' | 'shared';
     };
+    if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) { await this.security.assertActive(principal); return; }
+    if (BROWSER_PANE_RPC_METHODS.includes(method as BrowserPaneRpcMethod)) {
+      await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: (params as { profileId: string }).profileId });
+      await this.security.authorize(principal, 'context.manage'); return;
+    }
     if (method.startsWith('browser.')) throw new Error('Browser is unavailable.');
     if (method === 'thread.create' || method === 'thread.draft.create') {
       const workspaceId = (params as PortalRpcParams<'thread.create'>).workspaceId;
@@ -680,6 +769,7 @@ export class Portal {
     principal: PortalPrincipal,
     send: (notification: WorkspaceFileWatchNotification) => void,
     sendTerminal?: (notification: TerminalNotification) => unknown,
+    sendBrowser?: (notification: BrowserNotification) => unknown,
   ) {
     return new PortalRpcSession(
       this,
@@ -689,7 +779,14 @@ export class Portal {
         sendTerminal ?? (() => undefined),
       ),
       principal,
+      this.#browsers?.connect((workspaceId, control) => this.#authorizeBrowser(principal, workspaceId, control), sendBrowser ?? (() => false)),
+      this.#browserPages?.connect(principal),
     );
+  }
+
+  bindBrowserStream(principal: PortalPrincipal, ticket: string, close: () => void) {
+    if (!this.#browserPages) throw new Error('Managed Browser Service is not configured.');
+    return this.#browserPages.bind(principal, ticket, close);
   }
 
   async connectThread(
@@ -776,6 +873,12 @@ export class Portal {
   }
 
   async close() {
+    this.#closing = true;
+    clearInterval(this.#browserReconcileTimer);
+    await this.#browserReconcile;
+    this.#browserPages?.close();
+    if (this.#browsers) await this.#browsers.close();
+    else this.#browserBackend?.dispose();
     const runtimes = await Promise.allSettled(this.#runtimes.values());
     await Promise.all(
       runtimes.flatMap((result) => result.status === 'fulfilled' ? [result.value.close()] : []),
@@ -793,13 +896,117 @@ export class Portal {
     await this.#compositions.get(this.security.hostId);
   }
 
+  async #reconcileBrowserPanes() {
+    if (this.#closing || !this.#browserBackend?.managedPage) return;
+    const current = await this.#compositions.get(this.security.hostId);
+    const profiles = new Set(paneTargets(current.workspaces).flatMap(pane => pane.kind === 'browser' ? [pane.profileId] : []));
+    if (!profiles.size) return;
+    const pages: ManagedPageSummary[] = [];
+    for (const profileId of profiles) {
+      const result = await this.#browserBackend.managedPage<{ pages: ManagedPageSummary[] }>('page.list', { profileId });
+      // Use the same validated metadata that is exposed through public RPC.
+      pages.push(...result.pages.map(page => ({ ...parseBrowserPage(page), ...(page.openerPageId ? { openerPageId: page.openerPageId } : {}) })));
+    }
+    const next = reconcileBrowserPanes(current.workspaces, pages, profiles);
+    if (next.changed) {
+      await this.#compositions.replace(this.security.hostId, current.revision, next.workspaces, async () => undefined);
+      await this.#pruneEmptyWorkspaces();
+    }
+    for (const pageId of next.rejected) {
+      const page = pages.find(page => page.pageId === pageId)!;
+      await this.#browserBackend.managedPage('page.close', { pageId, generation: page.generation });
+      console.error('Browser popup could not be placed because the Workspace layout is full:', pageId);
+    }
+  }
+
+  async #closeBrowserPage(pageId: string, profileId: string, generation?: string) {
+    const backend = this.#browserBackend!;
+    await backend.managedPage!('page.close', { pageId, generation });
+    // The native close acknowledgement stops the opener from spawning more pages.
+    // Close only children that have not acquired their own Pane; placed pages survive.
+    const placed = new Set(paneTargets((await this.#compositions.get(this.security.hostId)).workspaces).map(pane => pane.paneId));
+    const { pages } = await backend.managedPage!<{ pages: ManagedPageSummary[] }>('page.list', { profileId });
+    for (const page of pages) if (page.openerPageId === pageId && !placed.has(page.pageId)) await this.#closeBrowserPage(page.pageId, profileId, page.generation);
+  }
+
+  async #browserPaneRequest(principal: PortalPrincipal, method: BrowserPaneRpcMethod, raw: BrowserPaneRpcContracts[BrowserPaneRpcMethod]['params']) {
+    const input = parseBrowserPaneRpcParams(method, raw);
+    const backend = this.#browserBackend;
+    if (!this.#browserPages || !backend?.managedPage) throw new Error('Managed Browser Service is not configured.');
+    return this.#mutateLifecycle(async () => {
+      if (input.hostId !== this.security.hostId) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+      await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+      const current = await this.#compositions.get(input.hostId);
+      const existingWorkspace = current.workspaces.find(workspace => paneTargets([workspace]).some(pane => pane.paneId === input.paneId));
+      const existing = existingWorkspace && paneTargets([existingWorkspace]).find(pane => pane.paneId === input.paneId);
+      if (existing && (existing.kind !== 'browser' || existing.profileId !== input.profileId)) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+      if (existingWorkspace) await this.#validateAssignment(principal, input.hostId, existingWorkspace.workspaceId);
+      if (method === 'browser.pane.create' && existing && 'url' in input) {
+        if (existingWorkspace!.workspaceId !== input.workspaceId) throw new Error('Browser Pane is already in another Workspace');
+        const { pages } = await backend.managedPage!<{ pages: ManagedPageSummary[] }>('page.list', { profileId: input.profileId });
+        const page = pages.find(page => page.pageId === input.paneId);
+        if (!page) throw new Error('Browser page metadata is unavailable');
+        await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+        await this.#authorizeWorkspaceAssignment(principal, existingWorkspace!);
+        return { composition: this.#visibleComposition(principal, current), page: parseBrowserPage(page) };
+      }
+      if (method === 'browser.pane.close' && !existing) return { composition: this.#visibleComposition(principal, current) };
+      if (current.revision !== input.expectedRevision) throw new CompositionError({ domain: 'composition', code: 'STALE_REVISION', currentRevision: current.revision });
+      if (method === 'browser.pane.create' && 'url' in input) {
+        const workspace = current.workspaces.find(workspace => workspace.workspaceId === input.workspaceId);
+        if (!workspace && !input.workspaceName) throw new Error('A name is required for a new Browser Workspace');
+        const target: Workspace = workspace ?? { workspaceId: input.workspaceId, name: input.workspaceName!, layout: null };
+        if (this.#closingWorkspaces.has(target.workspaceId)) throw new Error('Workspace is closing.');
+        await this.#authorizeWorkspaceAssignment(principal, target);
+        const pane = { kind: 'browser' as const, nodeId: crypto.randomUUID(), paneId: input.paneId, profileId: input.profileId, lastCommittedUrl: input.url };
+        const next = insertBrowserPane(workspace ? current.workspaces : [...current.workspaces, target], input.workspaceId, pane, input.sourcePaneId, input.axis);
+        const page = parseBrowserPage(await backend.managedPage!<ManagedPageSummary>('page.create', { profileId: input.profileId, pageId: input.paneId, url: input.url }));
+        for (const item of paneTargets(next)) if (item.kind === 'browser' && item.paneId === pane.paneId) item.lastCommittedUrl = page.url;
+        const composition = await this.#compositions.replace(input.hostId, current.revision, next, async () => {
+          await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+          await this.#authorizeWorkspaceAssignment(principal, target);
+        });
+        return { composition: this.#visibleComposition(principal, composition), page: parseBrowserPage(page) };
+      }
+      if (!existing || existing.kind !== 'browser') throw new Error('Browser Pane is unavailable');
+      if (method === 'browser.pane.close' && 'confirmed' in input) {
+        const { pages } = await backend.managedPage!<{ pages: ManagedPageSummary[] }>('page.list', { profileId: input.profileId });
+        const page = pages.find(page => page.pageId === input.paneId);
+        if (page?.available && !input.confirmed) throw new Error('Confirm closure of the live browser page; unsaved browser work may be lost.');
+        await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+        await this.#authorizeWorkspaceAssignment(principal, existingWorkspace!);
+        await this.#closeBrowserPage(input.paneId, input.profileId, input.generation);
+        const composition = await this.#compositions.replace(input.hostId, current.revision, removeBrowserPane(current.workspaces, input.paneId), async () => undefined);
+        const pruned = await this.#pruneEmptyWorkspaces();
+        return { composition: this.#visibleComposition(principal, pruned.revision >= composition.revision ? pruned : composition) };
+      }
+      if (!('workspaceId' in input)) throw new Error('Invalid Browser Pane operation');
+      await this.#validateAssignment(principal, input.hostId, input.workspaceId);
+      const removed = removeBrowserPane(current.workspaces, input.paneId);
+      const next = insertBrowserPane(removed, input.workspaceId, existing, input.sourcePaneId, input.axis);
+      const composition = await this.#compositions.replace(input.hostId, current.revision, next, async () => {
+        await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+        await this.#authorizeWorkspaceAssignment(principal, existingWorkspace!);
+        await this.#authorizeWorkspaceAssignment(principal, current.workspaces.find(workspace => workspace.workspaceId === input.workspaceId)!);
+      });
+      const pruned = await this.#pruneEmptyWorkspaces();
+      return { composition: this.#visibleComposition(principal, pruned.revision >= composition.revision ? pruned : composition) };
+    });
+  }
+
   #visibleComposition(principal: PortalPrincipal, composition: WorkspaceComposition) {
-    return { ...composition, workspaces: composition.workspaces.filter((workspace) => this.#workspaceContextIds(workspace).every((executionContextId) => this.security.allows(principal, 'context.inspect', { executionContextId }))) };
+    return { ...composition, workspaces: composition.workspaces.filter((workspace) => this.#workspaceContextIds(workspace).every((executionContextId) => this.security.allows(principal, 'context.inspect', { executionContextId })) && paneTargets([workspace]).every(pane => {
+      if (pane.kind === 'browser') return this.security.allows(principal, 'browser.profile.inspect', { browserProfileId: pane.profileId }) || this.security.allows(principal, 'browser.profile.control', { browserProfileId: pane.profileId });
+      if (pane.kind !== 'agent') return true;
+      const thread = this.#workspaceThreads().find(thread => thread.threadId === pane.threadId);
+      return Boolean(thread && this.security.allows(principal, 'thread.inspect', { threadId: thread.threadId, executionContextId: thread.executionContextId, agentId: thread.agentId }));
+    })) };
   }
 
   #workspaceThreads() { return [...this.#catalog.list('active'), ...this.#drafts.values()]; }
 
-  #pruneEmptyWorkspaces() {
+  async #pruneEmptyWorkspaces() {
+    await this.#compositions.reconcileThreads(this.security.hostId, this.#workspaceThreads());
     return this.#compositions.pruneEmpty(this.security.hostId, new Set(this.#workspaceThreads().map((thread) => thread.workspaceId)));
   }
 
@@ -815,13 +1022,27 @@ export class Portal {
     if (panes.length && !this.#terminals) throw new Error('Terminal state is unavailable. The workspace cannot be closed.');
     const terminals = await this.#terminals?.closePlan(panes.flatMap((pane) => pane.terminalId ? [pane.terminalId] : [])) ?? [];
     const threads = members.map((thread) => ({ threadId: thread.threadId, title: thread.title || 'Agent', dirty: !['idle', 'completed'].includes(this.#liveRuntimes.get(thread.threadId)?.attention().state ?? 'uncertain') }));
+    const browsers = [];
+    for (const pane of paneTargets([workspace])) if (pane.kind === 'browser') {
+      await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: pane.profileId });
+      if (!this.#browserBackend?.managedPage) throw new Error('Browser state is unavailable. The Workspace cannot be closed.');
+      const { pages } = await this.#browserBackend.managedPage<{ pages: ManagedPageSummary[] }>('page.list', { profileId: pane.profileId });
+      const page = pages.find(page => page.pageId === pane.paneId);
+      browsers.push({ pageId: pane.paneId, profileId: pane.profileId, title: page?.title || 'Browser', dirty: page?.available ?? true, ...(page?.generation ? { generation: page.generation } : {}) });
+    }
     // A confirmation is tied to exactly these members and their live activity.
-    const token = createHash('sha256').update(JSON.stringify([workspace, terminals, threads, members.map((thread) => [thread.threadId, thread.membershipRevision])])).digest('hex');
-    return { workspaceId, name: workspace.name, token, terminals, threads };
+    const token = createHash('sha256').update(JSON.stringify([workspace, terminals, threads, browsers, members.map((thread) => [thread.threadId, thread.membershipRevision])])).digest('hex');
+    return { workspaceId, name: workspace.name, token, terminals, threads, ...(browsers.length ? { browsers } : {}) };
   }
 
   #workspaceContextIds(workspace: Workspace) {
     return [...new Set([...terminalPaneTargets([workspace]).map((pane) => pane.executionContextId), ...[...this.#catalog.list(), ...this.#drafts.values()].filter((thread) => thread.workspaceId === workspace.workspaceId).map((thread) => thread.executionContextId)])];
+  }
+  async #authorizeBrowser(principal: PortalPrincipal, workspaceId: string, control: boolean) {
+    await this.security.authorize(principal, control ? 'browser.control' : 'browser.observe', { workspaceId });
+    const workspace = (await this.#compositions.get(this.security.hostId)).workspaces.find(workspace => workspace.workspaceId === workspaceId);
+    if (!workspace || this.#closingWorkspaces.has(workspaceId)) throw new PortalSecurityError('RESOURCE_UNAVAILABLE', 'Resource is unavailable.');
+    for (const executionContextId of this.#workspaceContextIds(workspace)) await this.security.authorize(principal, 'context.inspect', { executionContextId });
   }
 
   async #ensureThreadWorkspace(executionContextId: string) {
@@ -836,8 +1057,13 @@ export class Portal {
     if (typeof workspaceId !== 'string' || !workspaceId.trim()) throw new Error('A Workspace is required.');
     const workspace = (await this.#compositions.get(hostId)).workspaces.find((item) => item.workspaceId === workspaceId);
     if (!workspace) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+    await this.#authorizeWorkspaceAssignment(principal, workspace);
+  }
+
+  async #authorizeWorkspaceAssignment(principal: PortalPrincipal, workspace: Workspace) {
     await this.security.authorize(principal, 'context.manage');
     for (const executionContextId of this.#workspaceContextIds(workspace)) await this.security.authorize(principal, 'context.inspect', { executionContextId });
+    if (!this.#visibleComposition(principal, { schemaVersion: 3, hostId: this.security.hostId, revision: 0, workspaces: [workspace] }).workspaces.length) throw new PortalSecurityError('RESOURCE_UNAVAILABLE', 'Resource is unavailable.');
   }
 
   #thread(threadId: string): ThreadSummary {

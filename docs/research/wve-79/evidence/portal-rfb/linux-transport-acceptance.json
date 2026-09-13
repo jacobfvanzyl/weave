@@ -1,0 +1,14 @@
+{
+  "state": "/tmp/wve-rfb-portal-Iy4Brx",
+  "focusHandoff": true,
+  "authorizedInput": true,
+  "nativeRfb": {
+    "external": true,
+    "width": 1000,
+    "height": 800,
+    "bytes": 5093
+  },
+  "unattendedAfterRpcDisconnect": true,
+  "revokedDisplayBrowserAlive": true,
+  "success": true
+}

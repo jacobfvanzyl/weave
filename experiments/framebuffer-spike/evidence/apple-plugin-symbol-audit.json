@@ -1,0 +1,52 @@
+{
+  "mac": {
+    "frameworksInspected": 47,
+    "requiredStaticPluginsMissingFromLink": [
+      "_gst_plugin_adder_register",
+      "_gst_plugin_app_register",
+      "_gst_plugin_audioconvert_register",
+      "_gst_plugin_audiorate_register",
+      "_gst_plugin_audioresample_register",
+      "_gst_plugin_audiotestsrc_register",
+      "_gst_plugin_autodetect_register",
+      "_gst_plugin_coreelements_register",
+      "_gst_plugin_gio_register",
+      "_gst_plugin_jpeg_register",
+      "_gst_plugin_osxaudio_register",
+      "_gst_plugin_playback_register",
+      "_gst_plugin_typefindfunctions_register",
+      "_gst_plugin_videoconvert_register",
+      "_gst_plugin_videofilter_register",
+      "_gst_plugin_videorate_register",
+      "_gst_plugin_videoscale_register",
+      "_gst_plugin_videotestsrc_register",
+      "_gst_plugin_volume_register"
+    ],
+    "foundInBundledNonQemuFrameworks": []
+  },
+  "ios": {
+    "frameworksInspected": 38,
+    "requiredStaticPluginsMissingFromLink": [
+      "_gst_plugin_adder_register",
+      "_gst_plugin_app_register",
+      "_gst_plugin_audioconvert_register",
+      "_gst_plugin_audiorate_register",
+      "_gst_plugin_audioresample_register",
+      "_gst_plugin_audiotestsrc_register",
+      "_gst_plugin_autodetect_register",
+      "_gst_plugin_coreelements_register",
+      "_gst_plugin_gio_register",
+      "_gst_plugin_jpeg_register",
+      "_gst_plugin_osxaudio_register",
+      "_gst_plugin_playback_register",
+      "_gst_plugin_typefindfunctions_register",
+      "_gst_plugin_videoconvert_register",
+      "_gst_plugin_videofilter_register",
+      "_gst_plugin_videorate_register",
+      "_gst_plugin_videoscale_register",
+      "_gst_plugin_videotestsrc_register",
+      "_gst_plugin_volume_register"
+    ],
+    "foundInBundledNonQemuFrameworks": []
+  }
+}

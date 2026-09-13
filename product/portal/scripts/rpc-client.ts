@@ -105,7 +105,7 @@ export const pairPortalCredential = async (
   return { ...key, credentialId: paired.principal.credentialId };
 };
 
-const authentication = async (
+export const authentication = async (
   socket: WebSocket,
   credential: PortalCredentialSigner,
 ) => {
@@ -163,6 +163,7 @@ export class RpcSocket {
     { resolve(value: unknown): void; reject(cause: unknown): void }
   >();
   readonly notifications: JsonRpcMessage[] = [];
+  onNotification?: (message: JsonRpcMessage) => void;
   #nextId = 0;
 
   private constructor(socket: WebSocket) {
@@ -184,7 +185,8 @@ export class RpcSocket {
           );
         } else pending.resolve(message.result);
       } else {
-        this.notifications.push(message);
+        if (this.onNotification) this.onNotification(message);
+        else this.notifications.push(message);
       }
     };
     socket.onclose = (event) => {

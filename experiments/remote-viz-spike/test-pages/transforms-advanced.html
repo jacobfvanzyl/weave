@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>Viz affine transform coverage</title>
+<style>
+body{margin:0;background:#102032;color:white;font:18px sans-serif}
+.card{position:absolute;left:70px;width:230px;height:110px;padding:16px;box-sizing:border-box;background:#387ca5;will-change:transform;transform-origin:0 0}
+#scaled{top:60px;transform:scale(1.25)}
+#rotated{top:270px;transform:rotate(15deg)}
+</style>
+<div class="card" id="scaled">Scaled compositor layer</div>
+<div class="card" id="rotated">Rotated compositor layer</div>

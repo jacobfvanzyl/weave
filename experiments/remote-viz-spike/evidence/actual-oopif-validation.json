@@ -1,0 +1,32 @@
+{
+  "capture": {
+    "oopifStatic": true,
+    "fixture": "iframe.html",
+    "browser": "HeadlessChrome/153.0.8010.36",
+    "targets": [
+      {
+        "type": "page",
+        "url": "http://127.0.0.1:45021/iframe.html"
+      },
+      {
+        "type": "iframe",
+        "url": "http://localhost:45021/child.html?position=80"
+      }
+    ]
+  },
+  "reference": {
+    "oopifStatic": true,
+    "fixture": "iframe.html",
+    "browser": "HeadlessChrome/153.0.8010.36",
+    "targets": [
+      {
+        "type": "page",
+        "url": "http://127.0.0.1:39883/iframe.html"
+      },
+      {
+        "type": "iframe",
+        "url": "http://localhost:39883/child.html?position=80"
+      }
+    ]
+  }
+}

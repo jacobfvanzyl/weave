@@ -1,0 +1,4 @@
+# Retain recorded console output, captures, and upstream patch context verbatim.
+experiments/**/evidence/** -text -whitespace
+docs/research/wve-79/evidence/** -text -whitespace
+experiments/remote-viz-spike/server/chromium-patches/*.patch -text -whitespace

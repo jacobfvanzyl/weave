@@ -1,0 +1,21 @@
+{
+  "date": "2026-09-13",
+  "synthetic": {
+    "device": "iPad Air 11-inch M3",
+    "host": "Linux over direct Tailscale RFB",
+    "userConfirmed": "Animation, click, and shared resize all work",
+    "audio": "deferred by user"
+  },
+  "browser": {
+    "device": "iPad Air 11-inch M3",
+    "host": "Linux over direct Tailscale RFB",
+    "engine": "CEF 152.0.6 / Chromium 152.0.7977.83",
+    "userConfirmed": "Browser animation, click, and shared resize work",
+    "confirmedBehaviors": [
+      "Gold bar animates on the real Chromium page",
+      "Test click increments the page Clicks counter",
+      "Claim viewport resizes the page on both native viewers"
+    ],
+    "audio": "deferred by user"
+  }
+}

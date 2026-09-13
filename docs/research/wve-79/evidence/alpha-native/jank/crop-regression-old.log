@@ -1,0 +1,14 @@
+Retained fixture state: /tmp/wve-rfb-portal-hHM87w
+10 | 
+11 | const binary = process.env.CEF_BINARY, decoder = process.env.BROWSER_RFB_SNAPSHOT_BINARY;
+12 | if (!binary || (!decoder && !process.env.BROWSER_CAPTURE_READY)) throw new Error('CEF_BINARY plus a native decoder or external capture marker is required');
+13 | const root = await mkdtemp('/tmp/wve-rfb-portal-');
+14 | const evidence = process.env.BROWSER_EVIDENCE ?? '/tmp/wve79-rfb-portal-acceptance.json';
+15 | const assert = (value: unknown, reason: string) => { if (!value) throw new Error(reason); };
+                                                                                ^
+error: Same-size focus damaged framebuffer pixels: {"width":1000,"height":800,"differentPixels":783963}
+
+      at assert (/Users/jaco/Documents/VeeZee/weave/product/portal/scripts/browser-rfb-portal-acceptance.ts:15:76)
+      at /Users/jaco/Documents/VeeZee/weave/product/portal/scripts/browser-rfb-portal-acceptance.ts:88:3
+
+Bun v1.3.14 (macOS arm64)

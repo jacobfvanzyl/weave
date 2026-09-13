@@ -1,0 +1,16 @@
+{
+  "reference": "experiments/cef-foundation/evidence/linux-sandbox/cdp-reference.png",
+  "replay": "experiments/cef-foundation/evidence/linux-sandbox/rfb-received.png",
+  "width": 800,
+  "height": 600,
+  "tolerancePerChannel": 0,
+  "maxChannelError": 0,
+  "maxRGBChannelError": 0,
+  "maxAlphaError": 0,
+  "meanAbsoluteRGBAError": 0.0,
+  "pixelsOverTolerance": 0,
+  "fractionOverTolerance": 0.0,
+  "differenceBoundsInclusive": null,
+  "diffGain": 8,
+  "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+}

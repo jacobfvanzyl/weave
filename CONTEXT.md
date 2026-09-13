@@ -5,7 +5,7 @@ Weave is a working environment that organizes human and agent activity around se
 ## Language
 
 **Workspace**:
-A named arrangement of Terminal Panes and active Threads on exactly one Host, existing only while it contains at least one of them. Its identity is independent of directories, which are described by its terminals' current locations.
+A named arrangement of Terminal Panes, Browser Panes and Agent Panes on exactly one Host, existing only while it contains at least one of them. Its identity is independent of directories, which are described by its terminals' current locations.
 _Avoid_: Project, repository, directory parent, Workspace Tab
 
 **Execution Context**:
@@ -49,7 +49,7 @@ The format generation of a Host’s Workspace Composition, advanced by an identi
 _Avoid_: Composition Revision, client version, release version
 
 **Client Presentation State**:
-A client's independently recoverable selection and arrangement over all Workspaces on its connected Hosts: active Workspace, Focused Pane, selected Thread, ordering and collapsed sections. Workspace existence is shared across devices.
+A client's independently recoverable selection and arrangement over all Workspaces on its connected Hosts: one active Workspace and one Focused Pane, ordering and collapsed sections. Workspace existence is shared across devices.
 _Avoid_: Workspace state, shared layout
 
 **Thread**:
@@ -61,7 +61,7 @@ An active Thread's required membership in one Workspace on the same Host. An arc
 _Avoid_: Execution Context, process ownership, active selection
 
 **Pane**:
-A region within a Workspace that presents Workspace content. The active product uses Terminal Panes; conversations have an independent selection and do not require a Pane in that arrangement.
+A region in one Workspace presenting a Terminal, a browser page or a Thread. All Pane types participate in the same composition and focus model.
 _Avoid_: Sidebar, window
 
 **Pane Identity**:
@@ -69,7 +69,7 @@ The durable identity of one Pane, preserved while the Pane moves or swaps. A Ter
 _Avoid_: Pane position, content identity, layout identity
 
 **Unavailable Pane State**:
-The recoverable presentation of an existing Pane while its Host is disconnected or its live terminal is reconnecting. A confirmed terminal exit removes the Pane; it never becomes an empty or replacement target.
+The recoverable presentation of an existing Pane while its Host is disconnected, its live Terminal is reconnecting, or its browser page awaits explicit restoration after runtime loss. A confirmed Terminal exit removes its Pane, while browser runtime loss preserves the Browser Pane's identity, placement, Profile and last committed URL without promising recovery of live page state.
 _Avoid_: Broken Pane, placeholder Pane, missing Pane type
 
 **Dirty Pane**:
@@ -89,7 +89,7 @@ A Workspace containing a Dirty Pane or an active or uncertain Agent Turn, so clo
 _Avoid_: Modified tab, unsaved layout
 
 **Close Transaction**:
-The coordinated stopping of live work before a Pane or Workspace is removed from every device. Closing a Workspace preserves its conversations as archived Threads.
+The coordinated stopping of live work, with confirmation of active-work consequences, before a Pane or Workspace is removed from every device. Closing a Browser Pane ends its page; closing a Workspace preserves its conversations as archived Threads.
 _Avoid_: Layout deletion, dismiss, hide
 
 **Idle Terminal**:
@@ -116,15 +116,22 @@ _Avoid_: Default editor, global editor
 The ordered set of pinned files durably owned by one Editor Pane and shared with its Workspace Composition. Previews and the client's active-file choice are not part of it.
 _Avoid_: Open files, recent files, preview tabs
 
-**Thread Pane**:
-The conversation region presenting the independently selected Thread from any connected Host. Its selection and lifetime are independent of open terminal Workspaces.
-_Avoid_: Agent pane, chat window
+**Agent Pane**:
+A Pane presenting one Thread, or a local Agent Draft before the first message is sent, in a Workspace that may contain several Agent Panes. Closing it archives its Thread after active work is handled, and moving it preserves the Thread’s conversation and Execution Context.
+_Avoid_: Thread switcher, global agent dock, cross-Workspace selection
 
-**Browser Session**:
-The single ephemeral web-browsing context presented by a Browser Pane. Its ordered Browser Tabs share cookies and site data until the user resets it or quits Alpha.
-Human operation is the Phase 1 product contract; agent observation and control belong to a separately scoped Phase 2.
-_Avoid_: Preview, hidden browser, agent browser
+**Agent Draft**:
+A local, unsent conversation shown in an Agent Pane before it becomes a Host-owned Thread. An empty draft disappears when another Pane is activated; a draft containing text remains until sent or explicitly discarded.
+_Avoid_: Archived Thread, provider session, Recovery Draft
 
-**Browser Tab**:
-A human-visible page and navigation history within one Browser Session. Closing the last Browser Tab immediately creates a fresh blank Browser Tab.
-_Avoid_: Workspace, Pane, hidden browser
+**Browser Profile**:
+A named, persistent browser identity on one Host, containing cookies, site storage and browser settings shared by every Browser Pane using it across that Host's Workspaces. Its lifetime is independent of Panes and Workspaces, and it survives client disconnection and browser process restarts.
+_Avoid_: Browser Session, Workspace-owned profile, client profile
+
+**Browser Pane**:
+A single Host-owned browser page and its navigation history, belonging to one Workspace and using one Browser Profile on the same Host; moving it between that Host's Workspaces preserves its Profile and live page. Its lifetime is independent of client viewing or focus, including during authorized agent work, and explicit closure ends the page and removes the Pane for every client through a Close Transaction.
+_Avoid_: Browser Tab, Browser Session, tab container, client-owned page
+
+**Browser Profile Grant**:
+An explicit authorization for an Agent to use a Browser Profile's shared browser identity and inspect, control and debug its pages across Workspaces on that Host. Workspace membership does not confer or restrict this browser authorization, which does not grant access to other Profiles or change filesystem execution permissions; fully trusted human clients can use all Profiles on their paired Host without individual Profile Grants.
+_Avoid_: Workspace browser permission, Pane-only debugger access, Host-wide browser access

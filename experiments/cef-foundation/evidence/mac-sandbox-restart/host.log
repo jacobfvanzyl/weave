@@ -1,0 +1,16 @@
+13/09/2026 11:58:13 Listening for VNC connections on TCP port 15931
+{"event":"sandbox-canary","role":"browser","pid":83696,"readAllowed":true,"errno":0}
+{"event":"initializing"}
+
+DevTools listening on ws://127.0.0.1:19329/devtools/browser/5d1f2d8d-a270-4a2f-8b27-63c3859999fa
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+{"event":"sandbox-canary","role":"renderer","pid":83705,"readAllowed":false,"errno":1}
+{"event":"sandbox-canary","role":"renderer","pid":83704,"readAllowed":false,"errno":1}
+{"event":"loaded","status":200}
+{"event":"paint","count":1,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":61,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":241,"width":800,"height":600,"dirtyRects":1,"viewers":0}

@@ -1,0 +1,4 @@
+13/09/2026 10:07:44 Unable to establish connection with systemd socket
+13/09/2026 10:07:44 Listening for VNC connections on TCP port 15916
+[0913/100744.573063:ERROR:base/i18n/icu_util.cc:237] Invalid file descriptor to ICU data received.
+[tailscale-ssh: process died: signal: trace/breakpoint trap (core dumped)]

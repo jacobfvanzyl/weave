@@ -1,0 +1,10 @@
+{
+  "version": "153.0.8010.36",
+  "revision": "507c6ee3e2f3b2ca0e660547e5b9ea4820c67f4c",
+  "repository": "https://chromium.googlesource.com/chromium/src.git",
+  "sourceMirror": "https://github.com/chromium/chromium",
+  "target": "headless_shell",
+  "buildPlatform": "Linux x86_64",
+  "status": "source checkout, dependency sync, hooks, bootstrap, GN generation and patched display.o compilation passed; headless_shell building",
+  "depotToolsRevision": "36a8df4ad006eaa0572fb446edb8145fe5403592"
+}

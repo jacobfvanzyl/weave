@@ -182,7 +182,7 @@ describe('Portal protocol', () => {
 
   test('binds capabilities to a stable Host and authenticated principal', () => {
     expect(parsePortalRpcResult('portal.capabilities', {
-      protocolVersion: 6,
+      protocolVersion: 8,
       hostId: 'host-1',
       displayName: 'Portal',
       principal: {
@@ -192,7 +192,7 @@ describe('Portal protocol', () => {
       },
       capabilities: ['thread.list'],
     })).toEqual({
-      protocolVersion: 6,
+      protocolVersion: 8,
       hostId: 'host-1',
       displayName: 'Portal',
       principal: {

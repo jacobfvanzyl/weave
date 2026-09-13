@@ -1,0 +1,609 @@
+{"event":"initializing"}
+13/09/2026 10:11:19 Unable to establish connection with systemd socket
+13/09/2026 10:11:19 Listening for VNC connections on TCP port 15916
+
+DevTools listening on ws://127.0.0.1:19229/devtools/browser/82f2ccef-c658-4aba-a734-cd6c2e8d3811
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+[1119501:1119501:0913/101119.536514:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.Get: object_path= /org/freedesktop/portal/desktop: org.freedesktop.DBus.Error.InvalidArgs: No such interface “org.freedesktop.portal.FileChooser”
+{"event":"loaded","status":200}
+{"event":"paint","count":1,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":61,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":241,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":301,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":361,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":421,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":481,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":541,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":601,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":661,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":721,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":781,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":841,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":901,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":961,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1021,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1081,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1141,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1201,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1261,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1321,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1381,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+13/09/2026 10:12:06 Got connection from client 100.97.206.8
+13/09/2026 10:12:06   0 other clients
+13/09/2026 10:12:06 Normal socket connection
+{"event":"viewer-joined","viewers":1}
+13/09/2026 10:12:06 Client Protocol Version 3.8
+13/09/2026 10:12:06 Protocol version sent 3.8, using 3.8
+13/09/2026 10:12:06 Send channel security type 'none'
+13/09/2026 10:12:06 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 10:12:06 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 10:12:06 Pixel format for client 100.97.206.8:
+13/09/2026 10:12:06   32 bpp, depth 24, little endian
+13/09/2026 10:12:06   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:12:06 Enabling X-style cursor updates for client 100.97.206.8
+13/09/2026 10:12:06 Enabling full-color cursor updates for client 100.97.206.8
+13/09/2026 10:12:06 Enabling cursor position updates for client 100.97.206.8
+13/09/2026 10:12:06 Enabling KeyboardLedState protocol extension for client 100.97.206.8
+13/09/2026 10:12:06 Enabling NewFBSize protocol extension for client 100.97.206.8
+13/09/2026 10:12:06 Enabling ExtDesktopSize protocol extension for client 100.97.206.8
+13/09/2026 10:12:06 Enabling SupportedMessages protocol extension for client 100.97.206.8
+13/09/2026 10:12:06 Enabling SupportedEncodings protocol extension for client 100.97.206.8
+13/09/2026 10:12:06 Enabling ServerIdentity protocol extension for client 100.97.206.8
+13/09/2026 10:12:06 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 10:12:06 Using ZRLE encoding for client 100.97.206.8
+13/09/2026 10:12:06 Sending rfbEncodingExtDesktopSize for size (800x600) 
+13/09/2026 10:12:07 Got connection from client 100.125.236.27
+13/09/2026 10:12:07   1 other clients
+{"event":"viewer-joined","viewers":2}
+13/09/2026 10:12:07 Normal socket connection
+13/09/2026 10:12:07 Client Protocol Version 3.8
+13/09/2026 10:12:07 Protocol version sent 3.8, using 3.8
+13/09/2026 10:12:07 Send channel security type 'none'
+13/09/2026 10:12:07 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 10:12:07 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 10:12:07 Pixel format for client 100.125.236.27:
+13/09/2026 10:12:07   32 bpp, depth 24, little endian
+13/09/2026 10:12:07   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:12:07 Enabling X-style cursor updates for client 100.125.236.27
+13/09/2026 10:12:07 Enabling full-color cursor updates for client 100.125.236.27
+13/09/2026 10:12:07 Enabling cursor position updates for client 100.125.236.27
+13/09/2026 10:12:07 Enabling KeyboardLedState protocol extension for client 100.125.236.27
+13/09/2026 10:12:07 Enabling NewFBSize protocol extension for client 100.125.236.27
+13/09/2026 10:12:07 Enabling ExtDesktopSize protocol extension for client 100.125.236.27
+13/09/2026 10:12:07 Enabling SupportedMessages protocol extension for client 100.125.236.27
+13/09/2026 10:12:07 Enabling SupportedEncodings protocol extension for client 100.125.236.27
+13/09/2026 10:12:07 Enabling ServerIdentity protocol extension for client 100.125.236.27
+13/09/2026 10:12:07 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 10:12:07 Using ZRLE encoding for client 100.125.236.27
+13/09/2026 10:12:07 Sending rfbEncodingExtDesktopSize for size (800x600) 
+{"event":"paint","count":1441,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1501,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1561,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1621,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1681,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1741,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1801,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1861,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":1921,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+13/09/2026 10:12:25 Got connection from client 100.97.206.8
+13/09/2026 10:12:25   2 other clients
+13/09/2026 10:12:25 Normal socket connection
+{"event":"viewer-joined","viewers":3}
+13/09/2026 10:12:25 Client Protocol Version 3.8
+13/09/2026 10:12:25 Protocol version sent 3.8, using 3.8
+13/09/2026 10:12:25 Send channel security type 'none'
+13/09/2026 10:12:25 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 10:12:25 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 10:12:25 Pixel format for client 100.97.206.8:
+13/09/2026 10:12:25   32 bpp, depth 24, little endian
+13/09/2026 10:12:25   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:12:25 Enabling X-style cursor updates for client 100.97.206.8
+13/09/2026 10:12:25 Enabling full-color cursor updates for client 100.97.206.8
+13/09/2026 10:12:25 Enabling cursor position updates for client 100.97.206.8
+13/09/2026 10:12:25 Enabling KeyboardLedState protocol extension for client 100.97.206.8
+13/09/2026 10:12:25 Enabling NewFBSize protocol extension for client 100.97.206.8
+13/09/2026 10:12:25 Enabling ExtDesktopSize protocol extension for client 100.97.206.8
+13/09/2026 10:12:25 Enabling SupportedMessages protocol extension for client 100.97.206.8
+13/09/2026 10:12:25 Enabling SupportedEncodings protocol extension for client 100.97.206.8
+13/09/2026 10:12:25 Enabling ServerIdentity protocol extension for client 100.97.206.8
+13/09/2026 10:12:25 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 10:12:25 Using ZRLE encoding for client 100.97.206.8
+13/09/2026 10:12:25 Sending rfbEncodingExtDesktopSize for size (800x600) 
+{"event":"viewer-left","viewers":2}
+13/09/2026 10:12:27 Client 100.97.206.8 gone
+13/09/2026 10:12:27 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 10:12:27  FramebufferUpdate   :      1 |         0/        0 (  0.0%)
+13/09/2026 10:12:27  ZRLE                :      1 |     50759/  1920000 ( 97.4%)
+13/09/2026 10:12:27  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 10:12:27  SupportedEncoding   :      1 |       104/      104 (  0.0%)
+13/09/2026 10:12:27  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 10:12:27  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 10:12:27  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 10:12:27  ExtendedDesktopSize :      1 |        32/       32 (  0.0%)
+13/09/2026 10:12:27  TOTALS              :      8 |     51280/  1920521 ( 97.3%)
+13/09/2026 10:12:27 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 10:12:27  FramebufferUpdate   :      3 |        30/       30 (  0.0%)
+13/09/2026 10:12:27  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 10:12:27  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 10:12:27  TOTALS              :      5 |       110/      110 (  0.0%)
+{"event":"paint","count":1981,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2041,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2101,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2161,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2221,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2281,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2341,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2401,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2461,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2521,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2581,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2641,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2701,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2761,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2821,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2881,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":2941,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3001,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3061,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3121,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3181,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3241,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3301,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3361,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3421,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3481,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3541,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3601,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3661,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3721,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3781,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3841,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3901,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":3961,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4021,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4081,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4141,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4201,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4261,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4321,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4381,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4441,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4501,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+Warning: maxDynamicUniformBuffersPerPipelineLayout artificially reduced from 507904 to 16 to fit dynamic offset allocation limit.
+Warning: maxDynamicStorageBuffersPerPipelineLayout artificially reduced from 507904 to 16 to fit dynamic offset allocation limit.
+[1125423:1125423:0913/101419.572790:ERROR:services/on_device_model/ml/gpu_blocklist.cc:120] Unable to get gpu adapter
+[1125423:1125429:0913/101419.574389:ERROR:services/on_device_model/ml/gpu_blocklist.cc:120] Unable to get gpu adapter
+{"event":"paint","count":4561,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4621,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4681,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4741,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4801,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4861,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4921,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":4981,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5041,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5101,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5161,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5221,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5281,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5341,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5401,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5461,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5521,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5581,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5641,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5701,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5761,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5821,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5881,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":5941,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6001,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6061,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6121,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6181,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6241,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6301,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6361,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6421,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6481,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6541,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6601,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6661,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6721,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6781,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6841,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6901,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":6961,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7021,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7081,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7141,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7201,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7261,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7321,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7381,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7441,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7501,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7561,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7621,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7681,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7741,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7801,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7861,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7921,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":7981,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8041,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8101,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8161,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8221,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8281,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8341,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8401,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8461,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8521,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8581,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8641,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8701,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8761,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8821,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8881,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":8941,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9001,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9061,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9121,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9181,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9241,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9301,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9361,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9421,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9481,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9541,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9601,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9661,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9721,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9781,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9841,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9901,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":9961,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10021,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10081,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10141,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10201,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10261,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10321,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10381,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10441,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10501,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10561,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10621,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10681,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10741,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10801,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10861,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10921,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":10981,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11041,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11101,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11161,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11221,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11281,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11341,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11401,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11461,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11521,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11581,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11641,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11701,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11761,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11821,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11881,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":11941,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12001,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12061,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12121,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12181,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12241,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12301,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12361,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12421,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12481,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12541,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12601,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12661,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12721,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12781,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12841,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12901,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":12961,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13021,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13081,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13141,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13201,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13261,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13321,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13381,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13441,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13501,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13561,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13621,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13681,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13741,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13801,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13861,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13921,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":13981,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14041,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14101,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14161,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14221,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14281,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14341,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14401,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14461,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14521,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14581,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14641,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14701,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14761,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":14821,"width":800,"height":600,"dirtyRects":1,"viewers":2}
+13/09/2026 10:20:02 Client requested resolution change to (800x1000)
+13/09/2026 10:20:02 Pixel format for client 100.125.236.27:
+13/09/2026 10:20:02   32 bpp, depth 24, little endian
+13/09/2026 10:20:02   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:20:02 Pixel format for client 100.97.206.8:
+13/09/2026 10:20:02   32 bpp, depth 24, little endian
+13/09/2026 10:20:02   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:20:02 Pixel format for client 100.125.236.27:
+13/09/2026 10:20:02   32 bpp, depth 24, little endian
+13/09/2026 10:20:02   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:20:02 Pixel format for client 100.97.206.8:
+{"event":"viewport","width":800,"height":1000}
+13/09/2026 10:20:02   32 bpp, depth 24, little endian
+13/09/2026 10:20:02   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:20:02 Sending rfbEncodingExtDesktopSize for size (800x1000) resize successful
+13/09/2026 10:20:02 Sending rfbEncodingExtDesktopSize for size (800x1000) 
+{"event":"paint","count":14881,"width":800,"height":1000,"dirtyRects":1,"viewers":2}
+13/09/2026 10:20:04 Client requested resolution change to (1000x700)
+13/09/2026 10:20:04 Pixel format for client 100.125.236.27:
+13/09/2026 10:20:04   32 bpp, depth 24, little endian
+13/09/2026 10:20:04   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:20:04 Pixel format for client 100.97.206.8:
+13/09/2026 10:20:04   32 bpp, depth 24, little endian
+13/09/2026 10:20:04   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:20:04 Pixel format for client 100.125.236.27:
+13/09/2026 10:20:04   32 bpp, depth 24, little endian
+13/09/2026 10:20:04   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 10:20:04 Pixel format for client 100.97.206.8:
+13/09/2026 10:20:04   32 bpp, depth 24, little endian
+13/09/2026 10:20:04   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+{"event":"viewport","width":1000,"height":700}
+13/09/2026 10:20:04 Sending rfbEncodingExtDesktopSize for size (1000x700) resize successful
+13/09/2026 10:20:04 Sending rfbEncodingExtDesktopSize for size (1000x700) 
+{"event":"paint","count":14941,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15001,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15061,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15121,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15181,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15241,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15301,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15361,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15421,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15481,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15541,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15601,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15661,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15721,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15781,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15841,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15901,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":15961,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16021,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16081,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16141,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16201,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16261,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16321,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16381,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16441,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16501,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16561,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16621,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16681,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16741,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16801,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16861,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16921,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":16981,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17041,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17101,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17161,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17221,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17281,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17341,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17401,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17461,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17521,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17581,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17641,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17701,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17761,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17821,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17881,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":17941,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18001,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18061,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18121,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18181,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18241,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18301,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18361,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18421,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18481,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18541,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18601,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18661,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18721,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18781,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18841,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18901,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":18961,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19021,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19081,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19141,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19201,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19261,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19321,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19381,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19441,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19501,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19561,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19621,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19681,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19741,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19801,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19861,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19921,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":19981,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20041,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20101,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20161,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20221,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20281,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20341,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20401,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20461,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20521,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20581,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20641,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20701,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20761,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20821,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20881,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":20941,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21001,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21061,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21121,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21181,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21241,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21301,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21361,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21421,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21481,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21541,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21601,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21661,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21721,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21781,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21841,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21901,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":21961,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22021,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22081,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22141,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22201,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22261,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22321,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22381,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22441,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22501,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22561,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22621,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22681,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22741,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22801,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22861,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22921,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":22981,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23041,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23101,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23161,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23221,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23281,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23341,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23401,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23461,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23521,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23581,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23641,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23701,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23761,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23821,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23881,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":23941,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24001,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24061,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24121,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24181,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24241,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24301,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24361,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24421,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24481,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24541,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24601,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24661,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24721,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24781,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24841,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24901,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":24961,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25021,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25081,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25141,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25201,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25261,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25321,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25381,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25441,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25501,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25561,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25621,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25681,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25741,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25801,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25861,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25921,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":25981,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":26041,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"paint","count":26101,"width":1000,"height":700,"dirtyRects":1,"viewers":2}
+{"event":"viewer-left","viewers":1}
+13/09/2026 10:26:19 Client 100.125.236.27 gone
+13/09/2026 10:26:19 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 10:26:19  FramebufferUpdate   :  22493 |         0/        0 (  0.0%)
+13/09/2026 10:26:19  ZRLE                :  22493 |   1107107/276351636 ( 99.6%)
+13/09/2026 10:26:19  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 10:26:19  SupportedEncoding   :      1 |       104/      104 (  0.0%)
+13/09/2026 10:26:19  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 10:26:19  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 10:26:19  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 10:26:19  ExtendedDesktopSize :      3 |        96/       96 (  0.0%)
+13/09/2026 10:26:19  TOTALS              :  44994 |   1107692/276352221 ( 99.6%)
+13/09/2026 10:26:19 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 10:26:19  SetDesktopSize      :      1 |        24/       24 (  0.0%)
+13/09/2026 10:26:19  PointerEvent        :      2 |        12/       12 (  0.0%)
+13/09/2026 10:26:19  FramebufferUpdate   :  22498 |    224980/   224980 (  0.0%)
+13/09/2026 10:26:19  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 10:26:19  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+{"event":"viewer-left","viewers":0}
+13/09/2026 10:26:19  TOTALS              :  22503 |    225096/   225096 (  0.0%)
+13/09/2026 10:26:19 Client 100.97.206.8 gone
+13/09/2026 10:26:19 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 10:26:19  FramebufferUpdate   :  24750 |         0/        0 (  0.0%)
+13/09/2026 10:26:19  ZRLE                :  24750 |   1163715/302242036 ( 99.6%)
+13/09/2026 10:26:19  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 10:26:19  SupportedEncoding   :      1 |       104/      104 (  0.0%)
+13/09/2026 10:26:19  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 10:26:19  PointerPos          :      2 |        24/       24 (  0.0%)
+13/09/2026 10:26:19  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 10:26:19  ExtendedDesktopSize :      3 |        96/       96 (  0.0%)
+13/09/2026 10:26:19  TOTALS              :  49509 |   1164312/302242633 ( 99.6%)
+13/09/2026 10:26:19 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 10:26:19  PointerEvent        :      2 |        12/       12 (  0.0%)
+13/09/2026 10:26:19  SetDesktopSize      :      1 |        24/       24 (  0.0%)
+13/09/2026 10:26:19  FramebufferUpdate   :  24755 |    247550/   247550 (  0.0%)
+13/09/2026 10:26:19  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 10:26:19  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 10:26:19  TOTALS              :  24760 |    247666/   247666 (  0.0%)

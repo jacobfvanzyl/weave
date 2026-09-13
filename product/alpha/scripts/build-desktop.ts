@@ -19,6 +19,8 @@ for (const [entry, name, format] of [['main', 'main.mjs', 'esm'], ['preload', 'p
   if (!result.success) throw new AggregateError(result.logs, 'Electron build failed');
 }
 await cp(resolve(root, 'native/.build/macos/weave-terminal.node'), resolve(stage, 'weave-terminal.node'));
+await cp(resolve(root, 'native/.build/browser/macos/weave-browser.node'), resolve(stage, 'weave-browser.node'));
+await cp(resolve(root, 'native/.build/browser/macos/LIBVNC-LICENSE'), resolve(stage, 'LIBVNC-LICENSE'));
 await cp(resolve(root, 'native/ghostty/LICENSE'), resolve(stage, 'GHOSTTY-LICENSE'));
 const manifest = await Bun.file(resolve(root, 'package.json')).json();
 await writeFile(resolve(stage, 'package.json'), JSON.stringify({ name: 'weave-alpha', productName: 'Weave Alpha', version: manifest.version, main: 'main.mjs', type: 'module', private: true }));

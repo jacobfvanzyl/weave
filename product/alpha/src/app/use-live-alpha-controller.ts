@@ -1,5 +1,8 @@
+import { composerDrafts, moveComposerDraft, writeComposerDraft } from '@/chat/composer-drafts';
 import { showWorkspaceHostIdentity, workspaceKey } from './workspace-presentation';
-import { COMPOSITION_TERMINAL_CREATION_CAPABILITY } from '@weave/product-protocol';
+import { projectLocalAgentPanes, validateLocalAgentPane, materializeAgentPane, type LocalAgentPane } from './local-agent-panes';
+import { placePaneBeside } from './agent-pane-split';
+import { paneTargets, COMPOSITION_TERMINAL_CREATION_CAPABILITY } from '@weave/product-protocol';
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import type { HostSnapshot } from "@/portal-client";
@@ -31,7 +34,6 @@ import {
   savePortalConnections,
 } from "./portal-connection-storage";
 import { useAppResume } from "./use-app-resume";
-import { useSavedThreadSelection } from "./use-saved-thread-selection";
 import { ThreadReadState } from './thread-read-state';
 import { useWorkspaceCompositions } from "./use-workspace-compositions";
 import { useAlphaTerminals } from "./use-alpha-terminals";
@@ -92,7 +94,6 @@ const withTimeout = async <Value>(
 
 const mapThread = (
   thread: HostSnapshot["threads"][number],
-  workspaceName: string,
   connection: PersistedPortalConnection,
   agents: Map<string, string>,
   supportsThreadLifecycle: boolean,
@@ -101,7 +102,7 @@ const mapThread = (
   id: resourceId(connection.hostId, thread.threadId),
   threadId: thread.threadId,
   hostId: connection.hostId,
-  title: thread.title || workspaceName,
+  title: thread.title ?? "",
   agentName: agents.get(thread.agentId) || thread.agentId,
   hostName: connection.displayName,
   supportsThreadLifecycle,
@@ -151,7 +152,6 @@ const mapHostExecutionContexts = (
         .map((thread) =>
           mapThread(
             thread,
-            workspace.name,
             connection,
             agents,
             supportsThreadLifecycle,
@@ -203,16 +203,9 @@ const mapHostArchivedThreads = (
   const agents = new Map(
     snapshot.agents.map((agent) => [agent.agentId, agent.name]),
   );
-  const executionContexts = new Map(
-    snapshot.executionContexts.map((workspace) => [
-      workspace.executionContextId,
-      workspace.name,
-    ]),
-  );
   return snapshot.archivedThreads.map((thread) =>
     mapThread(
       thread,
-      executionContexts.get(thread.executionContextId) || thread.executionContextId,
       connection,
       agents,
       true,
@@ -259,6 +252,7 @@ const applySessionInfoToThread = (
 export function useLiveAlphaController(
   clientFactory: HostClientFactory = createHostClient,
 ): AlphaController {
+  const [browserCreation, setBrowserCreation] = useState<AlphaViewModel['browserCreation']>();
   const [connections, setConnections] = useState<PersistedPortalConnection[]>(
     [],
   );
@@ -271,10 +265,16 @@ export function useLiveAlphaController(
   >({});
   const [statuses, setStatuses] = useState<HostStatuses>({});
   const [hostErrors, setHostErrors] = useState<HostErrors>({});
+  const [paneErrors, setPaneErrors] = useState<Record<string, string | undefined>>({});
   const [selectedThreadId, setSelectedThreadId] = useState<string>();
   const [loadingThreadId, setLoadingThreadId] = useState<string>();
   const [creatingThreadExecutionContextId, setCreatingThreadExecutionContextId] =
     useState<string>();
+  const [localPanes, setLocalPanes] = useState<LocalAgentPane[]>([]);
+  const localPanesRef = useRef(localPanes);
+  const updateLocalPanes = (update: (panes: LocalAgentPane[]) => LocalAgentPane[]) => {
+    const next = update(localPanesRef.current); localPanesRef.current = next; setLocalPanes(next);
+  };
   const [localThreadDraft, setLocalThreadDraft] = useState<LocalThreadDraft>();
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [composerFocusThreadId, setComposerFocusThreadId] = useState<string>();
@@ -738,10 +738,11 @@ export function useLiveAlphaController(
     const agents = new Map(snapshot.agents.map((agent) => [agent.agentId, agent.name]));
     return snapshot.threads.map((thread) => {
       const context = snapshot.executionContexts.find((item) => item.executionContextId === thread.executionContextId);
-      return { ...mapThread(thread, context?.name ?? 'Thread', connection, agents, true, resourceId(connection.hostId, thread.executionContextId)), workingDirectory: context?.canonicalPath, completionUnread: threadReadState.unread(resourceId(connection.hostId, thread.threadId)) };
+      return { ...mapThread(thread, connection, agents, true, resourceId(connection.hostId, thread.executionContextId)), workingDirectory: context?.canonicalPath, completionUnread: threadReadState.unread(resourceId(connection.hostId, thread.threadId)) };
     });
   });
   if (localThreadDraft) allThreads.unshift(localThreadDraft.thread);
+  allThreads.unshift(...localPanes.map(pane => pane.thread));
   const selected = allThreads.find((thread) => thread.id === selectedThreadId);
   const selectedConnection = connections.find(
     (connection) => connection.hostId === selected?.hostId,
@@ -755,7 +756,8 @@ export function useLiveAlphaController(
     supported: Boolean(snapshots[connection.hostId]?.capabilities.includes("workspace.composition.get") && snapshots[connection.hostId]?.capabilities.includes("workspace.composition.replace")),
     createsTerminals: Boolean(snapshots[connection.hostId]?.capabilities.includes(COMPOSITION_TERMINAL_CREATION_CAPABILITY)),
     client: clientsRef.current.get(connection.hostId),
-  })), connectionsLoaded);
+  })), connectionsLoaded, localPanes);
+  const presentationRef = useRef(workspaceController.model.presentation); presentationRef.current = workspaceController.model.presentation;
   // Terminal attachments are owned by individual composition panes. No Thread selection retargets them.
   const terminalController = useAlphaTerminals({});
   const aggregateStatus = Object.values(statuses).includes("connected")
@@ -788,14 +790,25 @@ export function useLiveAlphaController(
       focusComposer(id);
       return;
     }
-    if (id === selectedThreadIdRef.current && !loadingThreadId) return;
+
     const thread = allThreads.find((candidate) => candidate.id === id);
+    const localPane = localPanesRef.current.find(pane => pane.thread.id === id);
+    if (localPane && thread?.workspaceId) {
+      workspaceController.actions.focus({ hostId: thread.hostId, workspaceId: thread.workspaceId }, localPane.pane.paneId);
+      focusComposer(id); return;
+    }
     const client = thread ? clientsRef.current.get(thread.hostId) : undefined;
     const snapshot = thread ? snapshots[thread.hostId] : undefined;
     const workspace = snapshot?.executionContexts.find(
       (candidate) => candidate.executionContextId === thread?.executionContextId,
     );
     if (!thread || !client) return;
+    if (thread.workspaceId) {
+      const ref = { hostId: thread.hostId, workspaceId: thread.workspaceId };
+      const workspace = workspaceController.model.compositions[thread.hostId]?.workspaces.find(item => item.workspaceId === thread.workspaceId);
+      const pane = workspace && paneTargets([workspace]).find(pane => pane.kind === 'agent' && pane.threadId === thread.threadId);
+      if (pane) workspaceController.actions.focus(ref, pane.paneId);
+    }
     const previousSelectedThreadId =
       selectedThreadIdRef.current === draft?.thread.id ? undefined : selectedThreadIdRef.current;
     const previousActiveThreadId =
@@ -851,6 +864,89 @@ export function useLiveAlphaController(
     }
   });
 
+  const openLocalAgentPane = (hostId: string, workspaceId: string, executionContextId: string, agentId: string, sourcePaneId?: string, axis: 'horizontal' | 'vertical' = 'vertical') => {
+    const composition = workspaceController.model.compositions[hostId];
+    if (!composition?.workspaces.some(workspace => workspace.workspaceId === workspaceId)) throw new Error('Workspace is unavailable.');
+    const context = persistedExecutionContexts.find(context => context.hostId === hostId && context.executionContextId === executionContextId);
+    const threadId = crypto.randomUUID(), paneId = crypto.randomUUID();
+    const reference = { hostId, workspaceId };
+    const draft: LocalAgentPane = {
+      thread: { id: resourceId(hostId, threadId), threadId, hostId, workspaceId, executionContextId, contextId: context?.id,
+        title: 'Draft', agentName: snapshots[hostId]?.agents.find(agent => agent.agentId === agentId)?.name ?? agentId,
+        hostName: connections.find(connection => connection.hostId === hostId)?.displayName ?? hostId,
+        supportsThreadLifecycle: false, status: 'active', membershipRevision: 0, updatedAt: new Date().toISOString(), workingDirectory: context?.canonicalPath, draft: true },
+      agentId, pane: { kind: 'agent', nodeId: crypto.randomUUID(), paneId, threadId }, sourcePaneId,
+      splitNodeId: crypto.randomUUID(), axis, ratio: .5, text: '', sending: false,
+    };
+    // The current model already includes other drafts. Validate just this addition.
+    validateLocalAgentPane(composition, [draft]);
+    updateLocalPanes(panes => [...panes, draft]);
+    setTranscripts(current => ({ ...current, [draft.thread.id]: createTranscript(threadId) }));
+    workspaceController.actions.focus(reference, paneId);
+    selectedThreadIdRef.current = draft.thread.id; setSelectedThreadId(draft.thread.id); focusComposer(draft.thread.id);
+  };
+
+  const discardLocalPane = (id: string) => {
+    const draft = localPanesRef.current.find(pane => pane.thread.id === id);
+    if (!draft || draft.sending) return;
+    updateLocalPanes(panes => panes.filter(pane => pane !== draft).map(pane => pane.sourcePaneId === draft.pane.paneId ? { ...pane, sourcePaneId: draft.sourcePaneId, axis: draft.axis, beforeSource: draft.beforeSource } : pane));
+    composerDrafts.delete(id);
+    const ref = { hostId: draft.thread.hostId, workspaceId: draft.thread.workspaceId! };
+    if (presentationRef.current.activeWorkspace === workspaceKey(ref) && presentationRef.current.focusedPanes[workspaceKey(ref)] === draft.pane.paneId) {
+      const workspace = workspaceController.model.compositions[ref.hostId]?.workspaces.find(item => item.workspaceId === ref.workspaceId);
+      const remaining = workspace ? paneTargets([workspace]).filter(pane => pane.paneId !== draft.pane.paneId) : [];
+      const next = remaining.find(pane => pane.paneId === draft.sourcePaneId) ?? remaining[0];
+      if (next) workspaceController.actions.focus(ref, next.paneId);
+    }
+    setTranscripts(current => { const next = { ...current }; delete next[id]; return next; });
+    setPaneErrors(current => { const next = { ...current }; delete next[id]; return next; });
+  };
+
+  const sendLocalPane = async (id: string, text: string) => {
+    const draft = localPanesRef.current.find(pane => pane.thread.id === id);
+    if (!draft || draft.sending || !text.trim()) return;
+    const hostId = draft.thread.hostId, workspaceId = draft.thread.workspaceId;
+    if (!workspaceId) throw new Error('Workspace is unavailable.');
+    const client = clientsRef.current.get(hostId);
+    if (!client || statuses[hostId] !== 'connected') throw new Error('Host is unavailable.');
+    updateLocalPanes(panes => panes.map(pane => pane === draft ? { ...pane, sending: true } : pane));
+    let remoteId: string | undefined;
+    try {
+      // Validate the destination before creating anything. A failed creation
+      // retains the local draft; a failed layout write retains the created ID.
+      const before = (await client.getWorkspaceComposition(hostId)).composition;
+      if (!before.workspaces.some(workspace => workspace.workspaceId === workspaceId)) throw new Error('Workspace is unavailable.');
+      const created = draft.createdThreadId
+        ? (await client.snapshot()).threads.find(thread => thread.threadId === draft.createdThreadId)
+        : await client.createThread(draft.thread.executionContextId, draft.agentId, undefined, workspaceId);
+      if (!created) throw new Error('The created Thread is unavailable.');
+      updateLocalPanes(panes => panes.map(pane => pane.thread.id === id ? { ...pane, createdThreadId: created.threadId } : pane));
+      const current = (await client.getWorkspaceComposition(hostId)).composition;
+      const pane = paneTargets(current.workspaces).find(pane => pane.kind === 'agent' && pane.threadId === created.threadId);
+      if (!pane) throw new Error('The created Agent Pane is unavailable.');
+      await client.replaceWorkspaceComposition(hostId, current.revision, materializeAgentPane(current, localPanesRef.current, draft, pane));
+      remoteId = resourceId(hostId, created.threadId);
+      moveComposerDraft(id, remoteId);
+      updateSnapshot(hostId, await client.snapshot());
+      await workspaceController.actions.refresh();
+      const presentation = presentationRef.current;
+      const keepFocus = presentation.activeWorkspace === workspaceKey({ hostId, workspaceId }) && presentation.focusedPanes[workspaceKey({ hostId, workspaceId })] === draft.pane.paneId;
+      updateLocalPanes(panes => panes.filter(item => item.thread.id !== id).map(item => item.sourcePaneId === draft.pane.paneId ? { ...item, sourcePaneId: pane.paneId } : item));
+      if (keepFocus) workspaceController.actions.focus({ hostId, workspaceId }, pane.paneId);
+      await client.attach(created.threadId);
+      const content = [{ type: 'text' as const, text }];
+      setTranscripts(current => ({ ...current, [remoteId!]: queueOptimisticPrompt(current[remoteId!] ?? createTranscript(created.acpSessionId), `local-${crypto.randomUUID()}`, content) }));
+      await client.prompt(content, created.threadId);
+    } catch (cause) {
+      if (remoteId) {
+        if (!composerDrafts.get(remoteId)?.text) writeComposerDraft(remoteId, { revision: (composerDrafts.get(remoteId)?.revision ?? 0) + 1, text });
+        setPaneErrors(current => ({ ...current, [remoteId!]: cause instanceof Error ? cause.message : String(cause) }));
+        setTranscripts(current => current[remoteId!] ? { ...current, [remoteId!]: reduceAcpEvent(current[remoteId!]!, { type: 'turn/failed', error: cause instanceof Error ? cause.message : String(cause) }) } : current);
+      }
+      throw cause;
+    } finally { updateLocalPanes(panes => panes.map(pane => pane.thread.id === id ? { ...pane, sending: false } : pane)); }
+  };
+
   const createThread = async (executionContextId?: string, placementId?: string, workspaceId?: string, target?: { context: AlphaExecutionContext; snapshot: HostSnapshot }) => {
     const workspaceModel = target?.context ??
       persistedExecutionContexts.find((candidate) => candidate.id === executionContextId) ??
@@ -895,6 +991,11 @@ export function useLiveAlphaController(
     );
     const agent = snapshot?.agents[0];
     if (!client || !workspace || !agent) return;
+    if (snapshot.capabilities.includes('workspace.composition.get')) {
+      try { openLocalAgentPane(placement.hostId, workspaceId, placement.executionContextId, agent.agentId); }
+      catch (cause) { reportActionError(cause); }
+      return;
+    }
     const supportsDrafts = snapshot.capabilities.includes("thread.draft");
     const previousSelectedThreadId = selectedThreadIdRef.current;
     const previousActiveThreadId = activeThreadIdsRef.current.get(
@@ -968,15 +1069,16 @@ export function useLiveAlphaController(
     }
   };
 
-  const archiveThread = async (id: string) => {
+  const archiveThread = async (id: string, stopActive = false) => {
     const thread = allThreads.find((candidate) => candidate.id === id);
     const client = thread ? clientsRef.current.get(thread.hostId) : undefined;
     if (!thread || !client) return;
     setBusy(true);
     setError(undefined);
     try {
-      await client.archiveThread(thread.threadId);
+      await client.archiveThread(thread.threadId, stopActive);
       updateSnapshot(thread.hostId, await client.snapshot());
+      await workspaceController.actions.refresh();
     } catch (cause) {
       reportActionError(cause);
       throw cause;
@@ -996,6 +1098,7 @@ export function useLiveAlphaController(
     try {
       await client.restoreThread(thread.threadId);
       updateSnapshot(thread.hostId, await client.snapshot());
+      await workspaceController.actions.refresh();
     } catch (cause) {
       reportActionError(cause);
       throw cause;
@@ -1004,14 +1107,31 @@ export function useLiveAlphaController(
     }
   };
 
-  useSavedThreadSelection(selectedThreadId, Boolean(selected && !selected.draft),
-    allThreads.filter((thread) => !thread.draft && statuses[thread.hostId] === "connected").map((thread) => thread.id), selectThread);
+  // Workspace presentation is the only selection authority. Thread selection
+  // is derived from its focused Agent Pane, never restored independently.
+  const activeRef = workspaceController.model.presentation.openWorkspaces.find(ref => workspaceKey(ref) === workspaceController.model.presentation.activeWorkspace);
+  const activeWorkspace = activeRef && workspaceController.model.compositions[activeRef.hostId]?.workspaces.find(workspace => workspace.workspaceId === activeRef.workspaceId);
+  const activePanes = activeWorkspace ? paneTargets([activeWorkspace]) : [];
+  const focusedPane = activePanes.find(pane => pane.paneId === workspaceController.model.presentation.focusedPanes[workspaceKey(activeRef!)]) ?? activePanes[0];
+  const focusedThreadId = activeRef && focusedPane?.kind === 'agent' ? resourceId(activeRef.hostId, focusedPane.threadId) : undefined;
+  useEffect(() => {
+    selectedThreadIdRef.current = focusedThreadId; setSelectedThreadId(focusedThreadId);
+  }, [focusedThreadId]);
+
+  useEffect(() => {
+    for (const draft of localPanesRef.current) {
+      const composition = workspaceController.model.compositions[draft.thread.hostId];
+      const removed = statuses[draft.thread.hostId] === 'connected' && composition && !composition.workspaces.some(workspace => workspace.workspaceId === draft.thread.workspaceId);
+      if (removed || (!draft.sending && !draft.createdThreadId && !draft.text.trim() && draft.thread.id !== focusedThreadId)) discardLocalPane(draft.thread.id);
+    }
+  }, [focusedThreadId, localPanes, JSON.stringify(Object.values(workspaceController.model.compositions).map(composition => [composition.hostId, composition.revision]))]);
 
   const selectedTranscript = selectedThreadId && loadingThreadId !== selectedThreadId ? transcripts[selectedThreadId] : undefined;
   const observedRunning = selected?.attention && Date.now() - Date.parse(selected.attention.observedAt) < 15_000 &&
     (selected.attention.state === "working" || selected.attention.state === "waiting");
 
   const model: AlphaViewModel = {
+    browserCreation,
     platform: window.weaveDesktop?.platform ?? Capacitor.getPlatform(),
     connectionsLoaded,
     connectionsOpen,
@@ -1053,9 +1173,14 @@ export function useLiveAlphaController(
       : error,
   };
 
-  return {
+  const controller: AlphaController = {
     model,
-    workspaceActions: { ...workspaceController.actions, close: async (...args) => { await workspaceController.actions.close(...args); await refreshHost(args[0].hostId); } },
+    workspaceActions: { ...workspaceController.actions,
+      setRatio: async (ref, nodeId, ratio) => {
+        if (localPanesRef.current.some(pane => pane.splitNodeId === nodeId)) updateLocalPanes(panes => panes.map(pane => pane.splitNodeId === nodeId ? { ...pane, ratio } : pane));
+        else await workspaceController.actions.setRatio(ref, nodeId, ratio);
+      }, close: async (...args) => { await workspaceController.actions.close(...args); await refreshHost(args[0].hostId); } },
+    browserClient: (hostId) => statuses[hostId] === "connected" ? clientsRef.current.get(hostId) : undefined,
     terminalClient: (hostId) => statuses[hostId] === "connected" ? clientsRef.current.get(hostId) : undefined,
     actions: {
       setSearchQuery,
@@ -1216,6 +1341,13 @@ export function useLiveAlphaController(
         const thread = allThreads.find((thread) => thread.id === id);
         const client = thread && clientsRef.current.get(thread.hostId);
         if (!client || !thread) return;
+        const local = localPanesRef.current.find(pane => pane.thread.id === id);
+        if (local) {
+          const composition = workspaceController.model.compositions[thread.hostId];
+          if (!composition?.workspaces.some(workspace => workspace.workspaceId === workspaceId)) { reportActionError(new Error('Workspace is unavailable.')); return; }
+          updateLocalPanes(panes => panes.map(pane => pane === local ? { ...pane, thread: { ...pane.thread, workspaceId }, sourcePaneId: undefined } : pane));
+          workspaceController.actions.focus({ hostId: thread.hostId, workspaceId }, local.pane.paneId); return;
+        }
         try {
           const changed = await client.assignThread(thread.threadId, thread.hostId, workspaceId, thread.membershipRevision ?? 0);
           if (thread.draft) {
@@ -1230,9 +1362,72 @@ export function useLiveAlphaController(
         } catch (cause) { updateSnapshot(thread.hostId, await client.snapshot()); reportActionError(cause); }
       },
       createThread,
+      newBrowserPane: (hostId, workspaceId) => {
+        if (!snapshots[hostId]?.capabilities.includes('browser.panes.v1')) { reportActionError(new Error('This Host does not support Browser Panes yet.')); return; }
+        const target = workspaceId ?? crypto.randomUUID();
+        const workspace = workspaceController.model.compositions[hostId]?.workspaces.find(workspace => workspace.workspaceId === target);
+        const sourcePaneId = workspace && (workspaceController.model.presentation.focusedPanes[workspaceKey({hostId,workspaceId:target})] ?? paneTargets([workspace])[0]?.paneId);
+        setBrowserCreation({paneId:crypto.randomUUID(),hostId,workspaceId:target,...(workspaceId ? {} : {workspaceName:'Browser'}),sourcePaneId,axis:'vertical',profileId:localStorage.getItem(`weave.browser.profile:${hostId}:${target}`) ?? undefined});
+      },
+      cancelBrowserPane: () => setBrowserCreation(undefined),
+      createBrowserPane: async (profileId, url) => {
+        if (!browserCreation) throw new Error('Browser creation is unavailable');
+        const client = clientsRef.current.get(browserCreation.hostId);
+        if (!client) throw new Error('Host is unavailable');
+        const before = (await client.getWorkspaceComposition(browserCreation.hostId)).composition;
+        const sourceDraft = localPanesRef.current.find(draft => draft.pane.paneId === browserCreation.sourcePaneId);
+        const paneId = browserCreation.paneId;
+        await client.browserRequest('browser.pane.create', { ...browserCreation, paneId, profileId, url, expectedRevision: before.revision, sourcePaneId: sourceDraft ? sourceDraft.sourcePaneId ?? paneTargets(before.workspaces.filter(workspace => workspace.workspaceId === browserCreation.workspaceId))[0]?.paneId : browserCreation.sourcePaneId });
+        if (sourceDraft) updateLocalPanes(panes => panes.map(draft => draft === sourceDraft ? { ...draft, sourcePaneId: paneId, axis: browserCreation.axis, beforeSource: true } : draft));
+        localStorage.setItem(`weave.browser.profile:${browserCreation.hostId}:${browserCreation.workspaceId}`, profileId);
+        await workspaceController.actions.refresh();
+        workspaceController.actions.focus(browserCreation, paneId);
+        setBrowserCreation(undefined);
+      },
+      splitPane: async (reference, sourcePaneId, axis, type) => {
+        const { hostId, workspaceId } = reference;
+        const client = clientsRef.current.get(hostId);
+        if (!client || statuses[hostId] !== 'connected') throw new Error('Host is unavailable.');
+
+        if (creatingThreadRef.current) throw new Error('Another Pane is being created.');
+        creatingThreadRef.current = true;
+        try {
+          const before = (await client.getWorkspaceComposition(hostId)).composition;
+          const display = projectLocalAgentPanes(before, localPanesRef.current);
+          const origin = paneTargets(display.workspaces.filter(workspace => workspace.workspaceId === workspaceId)).find(pane => pane.paneId === sourcePaneId);
+          if (!origin) throw new Error('Source Pane is unavailable.');
+          if (type === 'browser') {
+            if (!snapshots[hostId]?.capabilities.includes('browser.panes.v1')) throw new Error('This Host does not support Browser Panes yet.');
+            const profileId = origin.kind === 'browser' ? origin.profileId : localStorage.getItem(`weave.browser.profile:${hostId}:${workspaceId}`) ?? undefined;
+            setBrowserCreation({ paneId: crypto.randomUUID(), hostId, workspaceId, sourcePaneId, axis, profileId }); return;
+          }
+          if (origin.kind === 'terminal' && type === 'terminal') {
+            // Keep the established current-directory inheritance for shells.
+            await workspaceController.actions.split(reference, sourcePaneId, axis);
+            return;
+          }
+          const record = origin.kind === 'agent' ? snapshots[hostId]?.threads.find(thread => thread.threadId === origin.threadId) : undefined;
+          const sourceDraft = localPanesRef.current.find(draft => draft.pane.paneId === sourcePaneId);
+          const executionContextId = origin.kind === 'terminal' ? origin.executionContextId : record?.executionContextId ?? sourceDraft?.thread.executionContextId ?? snapshots[hostId]?.executionContexts[0]?.executionContextId;
+          if (!executionContextId) throw new Error('Source execution directory is unavailable.');
+          if (type === 'terminal') {
+            const pane = { kind: 'terminal' as const, nodeId: crypto.randomUUID(), paneId: crypto.randomUUID(), terminalId: null, executionContextId };
+            await client.replaceWorkspaceComposition(hostId, before.revision, sourceDraft ? materializeAgentPane(before, localPanesRef.current, sourceDraft, pane) : placePaneBeside(before.workspaces, workspaceId, sourcePaneId, pane, axis));
+            if (sourceDraft) updateLocalPanes(panes => panes.map(draft => draft === sourceDraft ? { ...draft, sourcePaneId: pane.paneId, axis, beforeSource: true } : draft));
+            await workspaceController.actions.refresh();
+            workspaceController.actions.focus(reference, pane.paneId);
+            return;
+          }
+          const agentId = record?.agentId ?? sourceDraft?.agentId ?? snapshots[hostId]?.agents[0]?.agentId;
+          if (!agentId) throw new Error('No agent is available on this Host.');
+          openLocalAgentPane(hostId, workspaceId, executionContextId, agentId, sourcePaneId, axis);
+        } finally { creatingThreadRef.current = false; }
+      },
       selectThread,
       setFocusedAgentThread: (id) => { if (threadReadState.focus(id)) refreshThreadReadState((value) => value + 1); },
+      setDraftText: (id, text) => updateLocalPanes(panes => panes.map(pane => pane.thread.id === id ? { ...pane, text } : pane)),
       discardThreadDraft: async (id) => {
+        if (localPanesRef.current.some(pane => pane.thread.id === id)) { discardLocalPane(id); return; }
         if (localThreadDraftRef.current?.thread.id !== id || promotingThreadIdRef.current === id) return;
         if (selectedThreadIdRef.current === id) {
           selectedThreadIdRef.current = undefined; setSelectedThreadId(undefined); setLoadingThreadId(undefined);
@@ -1475,4 +1670,52 @@ export function useLiveAlphaController(
         }),
     },
   };
+  controller.attachThread = async (id) => {
+    const thread = allThreads.find(thread => thread.id === id);
+    if (!thread) throw new Error('Thread is unavailable.');
+    if (thread.draft) return;
+    const client = clientsRef.current.get(thread.hostId);
+    if (!client || statuses[thread.hostId] !== 'connected') throw new Error('Host is unavailable.');
+    await client.attach(thread.threadId);
+  };
+  controller.forThread = (id) => {
+    const thread = allThreads.find(thread => thread.id === id);
+    const transcript = transcripts[id];
+    const client = () => {
+      const value = thread && clientsRef.current.get(thread.hostId);
+      if (!value || statuses[thread!.hostId] !== 'connected') throw new Error('Host is unavailable.');
+      return value;
+    };
+    const perform = async (operation: () => Promise<unknown> | unknown, rethrow = false) => {
+      setPaneErrors(current => ({ ...current, [id]: undefined }));
+      try { await operation(); }
+      catch (cause) {
+        setPaneErrors(current => ({ ...current, [id]: cause instanceof Error ? cause.message : String(cause) }));
+        if (rethrow) throw cause;
+      }
+    };
+    const running = localPanes.some(pane => pane.thread.id === id && pane.sending) || thread?.attention && Date.now() - Date.parse(thread.attention.observedAt) < 15_000 && ['working', 'waiting'].includes(thread.attention.state);
+    return { ...controller, model: { ...model, selectedThreadId: id, loadingThreadId: transcript ? undefined : id,
+      transcript: transcript && running && transcript.turn.status === 'idle' ? { ...transcript, turn: { status: 'running' } } : transcript,
+      busy: localPanes.some(pane => pane.thread.id === id && pane.sending), error: paneErrors[id] }, actions: { ...controller.actions,
+      sendPrompt: (text) => perform(async () => {
+        if (thread?.draft) { await sendLocalPane(id, text); return; }
+        const target = client();
+        await target.attach(thread!.threadId);
+        const content = [{ type: 'text' as const, text }];
+        setTranscripts(current => ({ ...current, [id]: queueOptimisticPrompt(current[id] ?? createTranscript(thread!.threadId), `local-${crypto.randomUUID()}`, content) }));
+        try { await target.prompt(content, thread!.threadId); }
+        catch (cause) {
+          setTranscripts(current => ({ ...current, [id]: reduceAcpEvent(current[id]!, { type: 'turn/failed', error: cause instanceof Error ? cause.message : String(cause) }) }));
+          throw cause;
+        }
+      }, true),
+      cancelPrompt: () => perform(() => client().cancelPrompt(thread!.threadId)),
+      respondToPermission: (requestId, optionId) => { void perform(() => client().respondToPermission(requestId, optionId, thread!.threadId)); },
+      respondToElicitation: (requestId, response) => { void perform(() => client().respondToElicitation(requestId, response, thread!.threadId)); },
+      setMode: (modeId) => perform(() => client().setMode(modeId, thread!.threadId)),
+      setConfigOption: (optionId, value) => perform(() => client().setConfigOption(optionId, value, thread!.threadId)),
+    } };
+  };
+  return controller;
 }

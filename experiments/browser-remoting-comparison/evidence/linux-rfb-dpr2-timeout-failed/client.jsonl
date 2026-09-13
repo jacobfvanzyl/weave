@@ -1,0 +1,31 @@
+13/09/2026 10:30:35 VNC server supports protocol version 3.8 (viewer 3.8)
+13/09/2026 10:30:35 We have 1 security types to read
+13/09/2026 10:30:35 0) Received security type 1
+13/09/2026 10:30:35 Selecting security type 1 (0/1 in the list)
+13/09/2026 10:30:35 Selected Security Scheme 1
+13/09/2026 10:30:35 No authentication needed
+13/09/2026 10:30:35 VNC authentication succeeded
+13/09/2026 10:30:35 Desktop name "WVE-79 Chromium framebuffer"
+13/09/2026 10:30:35 Connected to VNC server, using protocol version 3.8
+13/09/2026 10:30:35 VNC server default format:
+13/09/2026 10:30:35   32 bits per pixel.
+13/09/2026 10:30:35   Least significant byte first in each pixel.
+13/09/2026 10:30:35   TRUE colour: max red 255 green 255 blue 255, shift red 16 green 8 blue 0
+{"event":"connected","audio":false}
+{"event":"stats","t":186051.027383,"phase":-1,"frames":0,"rxBytes":69,"tcpStatsOk":true,"cpuSeconds":0.115863,"rssBytes":87474176}
+{"event":"phase","phase":0,"t":186051.037314,"width":1920,"height":1280}
+{"event":"frame","t":186051.037314,"phase":0,"sequence":0}
+{"event":"present","width":1920,"height":1280,"updates":1,"presentations":1,"marker":0,"toggle":0}
+13/09/2026 10:30:35 client2server supported messages (bit flags)
+13/09/2026 10:30:35 00: 00ff 0081 0000 0000 - 0000 0000 0000 0000
+13/09/2026 10:30:35 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 10:30:35 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 10:30:35 18: 0000 0000 0000 0000 - 0000 0000 0000 0008
+13/09/2026 10:30:35 server2client supported messages (bit flags)
+13/09/2026 10:30:35 00: 001f 0080 0000 0000 - 0000 0000 0000 0000
+13/09/2026 10:30:35 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 10:30:35 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 10:30:35 18: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 10:30:35 Connected to Server "unknown (LibVNCServer 0.9.15)"
+13/09/2026 10:30:35 Connection timed out
+{"event":"disconnected"}

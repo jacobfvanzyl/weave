@@ -1,0 +1,69 @@
+{
+  "test": "eight native handoffs through real Chromium/WebRTC",
+  "results": [
+    {
+      "generation": 5,
+      "width": 800,
+      "height": 600,
+      "owner": "iPad",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 540
+    },
+    {
+      "generation": 6,
+      "width": 960,
+      "height": 640,
+      "owner": "Mac",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 533
+    },
+    {
+      "generation": 7,
+      "width": 800,
+      "height": 600,
+      "owner": "iPad",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 526
+    },
+    {
+      "generation": 8,
+      "width": 960,
+      "height": 640,
+      "owner": "Mac",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 532
+    },
+    {
+      "generation": 9,
+      "width": 800,
+      "height": 600,
+      "owner": "iPad",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 534
+    },
+    {
+      "generation": 10,
+      "width": 960,
+      "height": 640,
+      "owner": "Mac",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 536
+    },
+    {
+      "generation": 11,
+      "width": 800,
+      "height": 600,
+      "owner": "iPad",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 536
+    },
+    {
+      "generation": 12,
+      "width": 960,
+      "height": 640,
+      "owner": "Mac",
+      "bothNativeReceiversReady": true,
+      "requestToObservedFramesMs": 540
+    }
+  ]
+}

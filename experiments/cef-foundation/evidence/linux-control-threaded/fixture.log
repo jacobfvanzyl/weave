@@ -1,0 +1,4 @@
+127.0.0.1 - - [13/Sep/2026 12:59:03] "GET /fixture.html HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:59:03] "GET /api/ping?load=1 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Sep/2026 12:59:03] "GET /favicon.ico HTTP/1.1" 200 -
+[tailscale-ssh: process died: signal: terminated]

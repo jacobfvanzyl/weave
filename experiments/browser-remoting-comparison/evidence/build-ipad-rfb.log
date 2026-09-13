@@ -1,0 +1,341 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj -scheme RFBSpike -configuration Debug -destination generic/platform=iOS -derivedDataPath experiments/browser-remoting-comparison/.build/ipad-rfb -allowProvisioningUpdates build
+
+2026-09-13 10:23:21.486 xcodebuild[82584:6972653] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (1 target)
+    Target 'RFBSpike' in project 'RFBBench' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -x objective-c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+Build description signature: 6913c333cd94cadfa817b442ce5132b0
+Build description path: /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/XCBuildData/6913c333cd94cadfa817b442ce5132b0.xcbuilddata
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex
+
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBBench-bf80afb54a1a44e1ac16b9767dacbe10-VFS-iphoneos/all-product-headers.yaml
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFBBench.xcodeproj
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBBench-bf80afb54a1a44e1ac16b9767dacbe10-VFS-iphoneos/all-product-headers.yaml
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.DependencyMetadataFileList (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.DependencyMetadataFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.hmap (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-project-headers.hmap (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-project-headers.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-own-target-headers.hmap (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-own-target-headers.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-generated-files.hmap (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-generated-files.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.DependencyStaticMetadataFileList (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.DependencyStaticMetadataFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-all-target-headers.hmap (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-all-target-headers.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-all-non-framework-target-headers.hmap (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-all-non-framework-target-headers.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/e6072d4f65d7061329687fe24e3d63a7-common-args.resp (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/e6072d4f65d7061329687fe24e3d63a7-common-args.resp
+-fobjc-arc -fmodules -gmodules '-fmodules-cache-path=/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/ModuleCache.noindex' -fpascal-strings -O2 '-DOBJC_OLD_DISPATCH_PROTOTYPES=1' -g '-fvisibility=hidden' -iquote /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-generated-files.hmap -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-own-target-headers.hmap -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-all-target-headers.hmap -iquote /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike-project-headers.hmap -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/include -I/Users/jaco/Documents/VeeZee/weave/experiments/rfb-spike/.build/libvncserver-LibVNCServer-0.9.15/include -I/Users/jaco/Documents/VeeZee/weave/experiments/rfb-spike/.build/lib-ios/include -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/DerivedSources-normal/arm64 -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/DerivedSources/arm64 -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/DerivedSources -F/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBSpike.LinkFileList (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBSpike.LinkFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/DerivedSources/Entitlements.plist (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/DerivedSources/Entitlements.plist
+
+MkDir /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /bin/mkdir -p /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app
+
+ProcessProductPackaging /Users/jaco/Library/Developer/Xcode/UserData/Provisioning\ Profiles/1278477d-abe5-4732-9142-95486c312aa0.mobileprovision /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app/embedded.mobileprovision (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-productPackagingUtility /Users/jaco/Library/Developer/Xcode/UserData/Provisioning\ Profiles/1278477d-abe5-4732-9142-95486c312aa0.mobileprovision -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app/embedded.mobileprovision
+
+ProcessProductPackaging "" /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.app.xcent (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+    Entitlements:
+    
+    {
+    "application-identifier" = "942HB89NL5.com.veezee.browser-spike";
+    "com.apple.developer.team-identifier" = 942HB89NL5;
+    "get-task-allow" = 1;
+}
+    
+    builtin-productPackagingUtility -entitlements -format xml -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.app.xcent
+
+ProcessProductPackagingDER /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.app.xcent /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.app.xcent.der (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /usr/bin/derq query -f xml -i /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.app.xcent -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.app.xcent.der --raw
+
+ProcessInfoPlistFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app/Info.plist /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFB-ios.plist (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-infoPlistUtility /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/RFB-ios.plist -producttype com.apple.product-type.application -genpkginfo /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app/PkgInfo -expandbuildsettings -format binary -platform iphoneos -requiredArchitecture arm64 -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app/Info.plist
+
+ScanDependencies /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/RFBApp.m normal arm64 objective-c com.apple.compilers.llvm.clang.1_0.compiler (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+    Using response file: /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/e6072d4f65d7061329687fe24e3d63a7-common-args.resp
+    
+    builtin-ScanDependencies -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.o.scan -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -x objective-c -ivfsstatcache /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache -target arm64-apple-ios17.0 -fmessage-length\=0 -fdiagnostics-show-note-include-stack -fmacro-backtrace-limit\=0 -fno-color-diagnostics -fmodules-prune-interval\=86400 -fmodules-prune-after\=345600 -fbuild-session-file\=/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/ModuleCache.noindex/Session.modulevalidation -fmodules-validate-once-per-build-session -Wnon-modular-include-in-framework-module -Werror\=non-modular-include-in-framework-module -Wno-trigraphs -Wno-missing-field-initializers -Wno-missing-prototypes -Wno-return-type -Wno-implicit-atomic-properties -Wno-objc-interface-ivars -Wno-arc-repeated-use-of-weak -Wno-missing-braces -Wparentheses -Wswitch -Wno-unused-function -Wno-unused-label -Wno-unused-parameter -Wno-unused-variable -Wunused-value -Wno-empty-body -Wno-uninitialized -Wno-unknown-pragmas -Wno-shadow -Wno-four-char-constants -Wno-conversion -Wno-constant-conversion -Wno-int-conversion -Wno-bool-conversion -Wno-enum-conversion -Wno-float-conversion -Wno-non-literal-null-conversion -Wno-objc-literal-conversion -Wshorten-64-to-32 -Wpointer-sign -Wno-newline-eof -Wno-selector -Wno-strict-selector-match -Wno-undeclared-selector -Wno-deprecated-implementations -Wno-implicit-fallthrough -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -fstrict-aliasing -Wprotocol -Wdeprecated-declarations -Wno-sign-conversion -Wno-infinite-recursion -Wno-comma -Wno-block-capture-autoreleasing -Wno-strict-prototypes -Wno-semicolon-before-method-body @/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/e6072d4f65d7061329687fe24e3d63a7-common-args.resp -MMD -MT dependencies -MF /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.d --serialize-diagnostics /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.dia -c /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/RFBApp.m -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.o
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stdarg-685REH72YS93PFSDAAV70Y6PB.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stdarg-685REH72YS93PFSDAAV70Y6PB.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stddef-A1V8GZTM46NQKVPSQDD6JVLQR.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stddef-A1V8GZTM46NQKVPSQDD6JVLQR.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ptrcheck-6OEW9OL87ZUYMA8N8007LXPM.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ptrcheck-6OEW9OL87ZUYMA8N8007LXPM.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stdbool-32XO5NEODKJ11LPM8XPN9523U.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stdbool-32XO5NEODKJ11LPM8XPN9523U.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_float-8YZVTNBSFOOWQXK8C0DUSVTDA.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_float-8YZVTNBSFOOWQXK8C0DUSVTDA.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ptrauth-3UCY2DPGFZR3HJZU9AHS9Y5YD.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ptrauth-3UCY2DPGFZR3HJZU9AHS9Y5YD.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_AvailabilityInternal-AZJ4TA3ZRC518F9X8FC2RIUYE.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_AvailabilityInternal-AZJ4TA3ZRC518F9X8FC2RIUYE.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_DarwinFoundation1-6674XY2G5W4RUJO62H6K8CKO.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_DarwinFoundation1-6674XY2G5W4RUJO62H6K8CKO.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_limits-16PJCXWRVTEI6D2GXL5H27SE6.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_limits-16PJCXWRVTEI6D2GXL5H27SE6.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_DarwinFoundation2-141ZJISY9ZVGI9LX4KUO72PZ.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_DarwinFoundation2-141ZJISY9ZVGI9LX4KUO72PZ.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stdint-2GLEUPT6QWFMA0ATDO397HBI4.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_stdint-2GLEUPT6QWFMA0ATDO397HBI4.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_DarwinFoundation3-CJ5X9U50QUX4SMI670YBT9TI5.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_DarwinFoundation3-CJ5X9U50QUX4SMI670YBT9TI5.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_inttypes-1LQDVWWE316OSHAR1FVMS9HOQ.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/_Builtin_inttypes-1LQDVWWE316OSHAR1FVMS9HOQ.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/zlib-A19T01Y2IHO9EFWLML8ZO6XAG.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/zlib-A19T01Y2IHO9EFWLML8ZO6XAG.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Darwin-3S75YHAU7GEQ85CVYFR8LX91H.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Darwin-3S75YHAU7GEQ85CVYFR8LX91H.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ObjectiveC-CNV38C6TXXWNNW8K8CDBZK6DW.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ObjectiveC-CNV38C6TXXWNNW8K8CDBZK6DW.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/os_object-3W8MV5EN4R3JASQINDHYUBIMM.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/os_object-3W8MV5EN4R3JASQINDHYUBIMM.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/os_workgroup-28BE93DYCO9HDZ6CGLJR7SQIC.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/os_workgroup-28BE93DYCO9HDZ6CGLJR7SQIC.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Dispatch-6260BR3FDSB5AU7Q78GPQDDN8.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Dispatch-6260BR3FDSB5AU7Q78GPQDDN8.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/XPC-1PLMUJZ7QXKB744BHU56UGP5T.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/XPC-1PLMUJZ7QXKB744BHU56UGP5T.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreFoundation-8KLIQ47LPE2XGJPKCAZW025ZZ.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreFoundation-8KLIQ47LPE2XGJPKCAZW025ZZ.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CFNetwork-O94YITDEYPAP8EK9H5G0M3S5.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CFNetwork-O94YITDEYPAP8EK9H5G0M3S5.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Security-7J9OPLSXZTXQ6VK65UBHF5UJO.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Security-7J9OPLSXZTXQ6VK65UBHF5UJO.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreGraphics-5ADWMN168HO7HHUCKG06IK8FH.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreGraphics-5ADWMN168HO7HHUCKG06IK8FH.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Foundation-63H3FLVBYIA3SNNN4I2Q4IJXH.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Foundation-63H3FLVBYIA3SNNN4I2Q4IJXH.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ImageIO-CTA58QRLZX9Z93N5JC0585GUI.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/ImageIO-CTA58QRLZX9Z93N5JC0585GUI.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreText-ERB4I7C60KXCKU46QV5AFFUS9.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreText-ERB4I7C60KXCKU46QV5AFFUS9.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Symbols-VRB334UZ9OIMPS1OEC1R4CWP.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Symbols-VRB334UZ9OIMPS1OEC1R4CWP.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/UIUtilities-88LEDQXQKRQTR2QT2CMO0OR4N.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/UIUtilities-88LEDQXQKRQTR2QT2CMO0OR4N.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/FileProvider-BROEOGZWWJ1EQS4FXM5F2L8Z7.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/FileProvider-BROEOGZWWJ1EQS4FXM5F2L8Z7.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/UserNotifications-90Q2PG37U3RKTMA3RSMRXFZU9.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/UserNotifications-90Q2PG37U3RKTMA3RSMRXFZU9.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/IOSurface-7CU59PHS0MUDUFD9HTZS5IZEG.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/IOSurface-7CU59PHS0MUDUFD9HTZS5IZEG.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Metal-2QO7OVUB9LP7ZW7GU8G1J61L2.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/Metal-2QO7OVUB9LP7ZW7GU8G1J61L2.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/OpenGLES-BNCMPHQULW9TVW2UCAX7MV82G.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/OpenGLES-BNCMPHQULW9TVW2UCAX7MV82G.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreVideo-3XYR0EN0Z1WNFJ6T666FV1A2X.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreVideo-3XYR0EN0Z1WNFJ6T666FV1A2X.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreImage-AXSWW15XD3UNV7PY4MA7STJ4Q.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/CoreImage-AXSWW15XD3UNV7PY4MA7STJ4Q.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/QuartzCore-DOIXTHGWCUVWZN8BO0PRFXCBF.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/QuartzCore-DOIXTHGWCUVWZN8BO0PRFXCBF.scan
+
+PrecompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/UIKit-14IJ38687VDFGGAO85F3R57EJ.scan
+    cd /
+    builtin-precompileModule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/ExplicitPrecompiledModules/UIKit-14IJ38687VDFGGAO85F3R57EJ.scan
+
+CompileC /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/RFBApp.m normal arm64 objective-c com.apple.compilers.llvm.clang.1_0.compiler (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+    Using response file: /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/e6072d4f65d7061329687fe24e3d63a7-common-args.resp
+    
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -x objective-c -ivfsstatcache /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache -target arm64-apple-ios17.0 -fmessage-length\=0 -fdiagnostics-show-note-include-stack -fmacro-backtrace-limit\=0 -fno-color-diagnostics -fmodules-prune-interval\=86400 -fmodules-prune-after\=345600 -fbuild-session-file\=/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/ModuleCache.noindex/Session.modulevalidation -fmodules-validate-once-per-build-session -Wnon-modular-include-in-framework-module -Werror\=non-modular-include-in-framework-module -Wno-trigraphs -Wno-missing-field-initializers -Wno-missing-prototypes -Wno-return-type -Wno-implicit-atomic-properties -Wno-objc-interface-ivars -Wno-arc-repeated-use-of-weak -Wno-missing-braces -Wparentheses -Wswitch -Wno-unused-function -Wno-unused-label -Wno-unused-parameter -Wno-unused-variable -Wunused-value -Wno-empty-body -Wno-uninitialized -Wno-unknown-pragmas -Wno-shadow -Wno-four-char-constants -Wno-conversion -Wno-constant-conversion -Wno-int-conversion -Wno-bool-conversion -Wno-enum-conversion -Wno-float-conversion -Wno-non-literal-null-conversion -Wno-objc-literal-conversion -Wshorten-64-to-32 -Wpointer-sign -Wno-newline-eof -Wno-selector -Wno-strict-selector-match -Wno-undeclared-selector -Wno-deprecated-implementations -Wno-implicit-fallthrough -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -fstrict-aliasing -Wprotocol -Wdeprecated-declarations -Wno-sign-conversion -Wno-infinite-recursion -Wno-comma -Wno-block-capture-autoreleasing -Wno-strict-prototypes -Wno-semicolon-before-method-body @/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/e6072d4f65d7061329687fe24e3d63a7-common-args.resp -MMD -MT dependencies -MF /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.d --serialize-diagnostics /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.dia -c /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/RFBApp.m -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBApp.o
+/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/RFBApp.m:239:21: warning: 'atomic' attribute on property 'window' does not match the property inherited from 'UIApplicationDelegate' [-Wproperty-attribute-mismatch]
+  239 | @property UIWindow *window;
+      |                     ^
+In module 'UIKit' imported from /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/RFBApp.m:10:
+/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/System/Library/Frameworks/UIKit.framework/Headers/UIApplication.h:454:51: note: property declared here
+  454 | @property (nullable, nonatomic, strong) UIWindow *window API_AVAILABLE(ios(5.0));
+      |                                                   ^
+1 warning generated.
+
+Ld /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app/RFBSpike normal (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-ios17.0 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -O2 -L/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos -L/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos -L/Users/jaco/Documents/VeeZee/weave/experiments/rfb-spike/.build/lib-ios -F/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos -F/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos -filelist /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBSpike.LinkFileList -Xlinker -dead_strip -Xlinker -object_path_lto -Xlinker /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBSpike_lto.o -Xlinker -dependency_info -Xlinker /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/Objects-normal/arm64/RFBSpike_dependency_info.dat -fobjc-arc -fobjc-link-runtime -lz -framework UIKit -framework QuartzCore -framework ImageIO -lvncclient -Xlinker -no_adhoc_codesign -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app/RFBSpike
+
+CodeSign /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+    Signing Identity:     "Apple Development: jaco@veezee.xyz (HGZD22KNFG)"
+    Provisioning Profile: "iOS Team Provisioning Profile: com.veezee.browser-spike"
+                          (1278477d-abe5-4732-9142-95486c312aa0)
+    
+    /usr/bin/codesign --force --sign 192C23384319388359851AFE24D282185176E910 --entitlements /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Intermediates.noindex/RFBBench.build/Debug-iphoneos/RFBSpike.build/RFBSpike.app.xcent --timestamp\=none --generate-entitlement-der /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app
+
+RegisterExecutionPolicyException /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-RegisterExecutionPolicyException /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app
+
+Validate /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-validationUtility /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app -shallow-bundle -infoplist-subpath Info.plist
+warning: All interface orientations must be supported unless the app requires full screen. (in target 'RFBSpike' from project 'RFBBench')
+
+Touch /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app (in target 'RFBSpike' from project 'RFBBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /usr/bin/touch -c /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-rfb/Build/Products/Debug-iphoneos/RFBSpike.app
+
+** BUILD SUCCEEDED **
+

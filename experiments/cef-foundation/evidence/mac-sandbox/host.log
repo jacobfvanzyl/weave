@@ -1,0 +1,183 @@
+13/09/2026 11:37:57 Listening for VNC connections on TCP port 15931
+{"event":"sandbox-canary","role":"browser","pid":57491,"readAllowed":true,"errno":0}
+{"event":"initializing"}
+
+DevTools listening on ws://127.0.0.1:19329/devtools/browser/1ab8f5df-8488-4208-9a40-a1627d246642
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+{"event":"sandbox-canary","role":"renderer","pid":57528,"readAllowed":false,"errno":1}
+{"event":"sandbox-canary","role":"renderer","pid":57526,"readAllowed":false,"errno":1}
+{"event":"paint","count":1,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"loaded","status":200}
+{"event":"paint","count":61,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":241,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":301,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":361,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":421,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":481,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":541,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":601,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":661,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":721,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":781,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":841,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":901,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":961,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1021,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1081,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1141,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1201,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1261,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1321,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1381,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1441,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1501,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1561,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1621,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1681,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1741,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1801,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1861,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1921,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":1981,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2041,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2101,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2161,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2221,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2281,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2341,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2401,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2461,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2521,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2581,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2641,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2701,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2761,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2821,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"loaded","status":200}
+{"event":"paint","count":2881,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":2941,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3001,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3061,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"sandbox-canary","role":"renderer","pid":59320,"readAllowed":false,"errno":1}
+{"event":"sandbox-canary","role":"renderer","pid":59321,"readAllowed":false,"errno":1}
+{"event":"paint","count":3121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+[57491:7210538:0913/113946.836176:ERROR:cef/libcef/browser/browser_info_manager.cc:858] Timeout of new browser info response for frame 20-B066167528C3F16BA52045385A1D25B4 (has_rfh=1)
+{"event":"paint","count":3241,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3301,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+[57491:7210538:0913/113948.852659:ERROR:cef/libcef/browser/browser_info_manager.cc:858] Timeout of new browser info response for frame 20-1FC7A3D3860BE92C71A30EFF51B82590 (has_rfh=1)
+{"event":"paint","count":3361,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3421,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3481,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3541,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3601,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3661,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3721,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3781,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3841,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3901,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":3961,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4021,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4081,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4141,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4201,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4261,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4321,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4381,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4441,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4501,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4561,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4621,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4681,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4741,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4801,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4861,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4921,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":4981,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5041,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5101,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5161,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5221,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5281,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5341,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5401,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5461,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5521,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5581,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5641,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5701,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5761,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5821,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5881,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":5941,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6001,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6061,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6121,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6181,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6241,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6301,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6361,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6421,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6481,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6541,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6601,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6661,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6721,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6781,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6841,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6901,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":6961,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":7021,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":7081,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":7141,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"paint","count":7201,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+{"event":"sandbox-canary","role":"renderer","pid":60353,"readAllowed":false,"errno":1}
+{"event":"paint","count":7261,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+13/09/2026 11:40:55 Got connection from client 127.0.0.1
+13/09/2026 11:40:55   0 other clients
+{"event":"viewer-joined","viewers":1}
+13/09/2026 11:40:55 Client Protocol Version 3.8
+13/09/2026 11:40:55 Protocol version sent 3.8, using 3.8
+13/09/2026 11:40:55 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 11:40:55 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 11:40:55 Pixel format for client 127.0.0.1:
+13/09/2026 11:40:55   32 bpp, depth 24, little endian
+13/09/2026 11:40:55   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 11:40:55 Enabling X-style cursor updates for client 127.0.0.1
+13/09/2026 11:40:55 Enabling full-color cursor updates for client 127.0.0.1
+13/09/2026 11:40:55 Enabling cursor position updates for client 127.0.0.1
+13/09/2026 11:40:55 Enabling KeyboardLedState protocol extension for client 127.0.0.1
+13/09/2026 11:40:55 Enabling NewFBSize protocol extension for client 127.0.0.1
+13/09/2026 11:40:55 Enabling ExtDesktopSize protocol extension for client 127.0.0.1
+13/09/2026 11:40:55 Enabling SupportedMessages protocol extension for client 127.0.0.1
+13/09/2026 11:40:55 Enabling SupportedEncodings protocol extension for client 127.0.0.1
+13/09/2026 11:40:55 Enabling ServerIdentity protocol extension for client 127.0.0.1
+13/09/2026 11:40:55 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 11:40:55 Using ZRLE encoding for client 127.0.0.1
+13/09/2026 11:40:55 Sending rfbEncodingExtDesktopSize for size (800x600) 
+{"event":"viewer-left","viewers":0}
+13/09/2026 11:40:57 Client 127.0.0.1 gone
+13/09/2026 11:40:57 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 11:40:57  FramebufferUpdate   :      1 |         0/        0 (  0.0%)
+13/09/2026 11:40:57  ZRLE                :      1 |      9369/  1920000 ( 99.5%)
+13/09/2026 11:40:57  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 11:40:57  SupportedEncoding   :      1 |        96/       96 (  0.0%)
+13/09/2026 11:40:57  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 11:40:57  PointerPos          :      1 |        12/       12 (  0.0%)
+13/09/2026 11:40:57  RichCursor          :      1 |       255/      255 (  0.0%)
+13/09/2026 11:40:57  ExtendedDesktopSize :      1 |        32/       32 (  0.0%)
+13/09/2026 11:40:57  TOTALS              :      8 |      9882/  1920513 ( 99.5%)
+13/09/2026 11:40:57 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 11:40:57  FramebufferUpdate   :      3 |        30/       30 (  0.0%)
+13/09/2026 11:40:57  SetEncodings        :      1 |        60/       60 (  0.0%)
+13/09/2026 11:40:57  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 11:40:57  TOTALS              :      5 |       110/      110 (  0.0%)
+[60406:7219502:0913/114057.781497:ERROR:services/on_device_model/ml/gpu_blocklist.cc:120] Unable to get gpu adapter
+[60406:7219510:0913/114057.781979:ERROR:services/on_device_model/ml/gpu_blocklist.cc:120] Unable to get gpu adapter
+{"event":"sandbox-canary","role":"renderer","pid":61358,"readAllowed":false,"errno":1}
+[57491:7210538:0913/114226.253846:ERROR:content/browser/network_service_instance_impl.cc:650] Network service crashed or was terminated, restarting service.
+[57491:7210538:0913/114226.257664:ERROR:content/browser/gpu/gpu_process_host.cc:1035] GPU process exited unexpectedly: exit_code=15

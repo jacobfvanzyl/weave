@@ -1,0 +1,31 @@
+13/09/2026 09:05:22 VNC server supports protocol version 3.8 (viewer 3.8)
+13/09/2026 09:05:22 We have 1 security types to read
+13/09/2026 09:05:22 0) Received security type 1
+13/09/2026 09:05:22 Selecting security type 1 (0/1 in the list)
+13/09/2026 09:05:22 Selected Security Scheme 1
+13/09/2026 09:05:22 No authentication needed
+13/09/2026 09:05:22 VNC authentication succeeded
+13/09/2026 09:05:22 Desktop name "WVE-79 RFB display spike"
+13/09/2026 09:05:22 Connected to VNC server, using protocol version 3.8
+13/09/2026 09:05:22 VNC server default format:
+13/09/2026 09:05:22   32 bits per pixel.
+13/09/2026 09:05:22   Least significant byte first in each pixel.
+13/09/2026 09:05:22   TRUE colour: max red 255 green 255 blue 255, shift red 16 green 8 blue 0
+13/09/2026 09:05:22 client2server supported messages (bit flags)
+13/09/2026 09:05:22 00: 00ff 0081 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:05:22 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:05:22 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:05:22 18: 0000 0000 0000 0000 - 0000 0000 0000 0008
+13/09/2026 09:05:22 server2client supported messages (bit flags)
+13/09/2026 09:05:22 00: 001f 0080 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:05:22 08: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:05:22 10: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:05:22 18: 0000 0000 0000 0000 - 0000 0000 0000 0000
+13/09/2026 09:05:22 Connected to Server "unknown (LibVNCServer 0.9.15)"
+{"event":"frame","seconds":0.151,"width":800,"height":1000,"marker":248,"toggle":0,"mismatchedPixels":0}
+13/09/2026 09:05:23 Sending dimensions 960x640
+13/09/2026 09:05:23 Updated desktop size: 960x640
+{"event":"frame","seconds":1.244,"width":960,"height":640,"marker":279,"toggle":0,"mismatchedPixels":0}
+{"event":"frame","seconds":2.323,"width":960,"height":640,"marker":309,"toggle":1,"mismatchedPixels":0}
+{"event":"frame","seconds":3.414,"width":960,"height":640,"marker":339,"toggle":1,"mismatchedPixels":0}
+{"event":"result","updates":111,"checkedFrames":107,"mismatchedPixels":0,"allocations":2,"firstMarker":248,"lastMarker":355,"toggleChanges":1,"width":960,"height":640}

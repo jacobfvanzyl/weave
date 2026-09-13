@@ -1,0 +1,2 @@
+$ bun run --cwd product/portal check
+$ bun --bun run tsc --noEmit

@@ -1,0 +1,14 @@
+13/09/2026 11:46:09 Listening for VNC connections on TCP port 15931
+{"event":"sandbox-canary","role":"browser","pid":68606,"readAllowed":true,"errno":0}
+{"event":"initializing"}
+
+DevTools listening on ws://127.0.0.1:19329/devtools/browser/58e32f4b-81d8-4cff-a439-da1c95f9d519
+{"event":"context-initialized"}
+{"event":"initialized"}
+{"event":"browser-created"}
+{"event":"browser-created"}
+{"event":"sandbox-canary","role":"renderer","pid":68656,"readAllowed":false,"errno":1}
+{"event":"sandbox-canary","role":"renderer","pid":68657,"readAllowed":false,"errno":1}
+{"event":"sandbox-canary","role":"renderer","pid":68655,"readAllowed":false,"errno":1}
+{"event":"paint","count":1,"width":800,"height":600,"dirtyRects":1,"viewers":0}
+[68606:7240793:0913/114830.102761:FATAL:/Users/jaco/Documents/VeeZee/weave/experiments/rfb-spike/.build/cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_macosarm64_minimal/include/base/cef_scoped_refptr.h:329] Check failed: ptr_. 

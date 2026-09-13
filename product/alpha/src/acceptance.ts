@@ -1,6 +1,6 @@
 import { nativeTerminalAcceptance } from '@/terminal/native-terminal';
 // Included only in explicitly built acceptance artifacts.
-export type LiveAcceptanceInput = { hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
+export type LiveAcceptanceInput = { browserUrl?: string; hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
 export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   let stage = 'pairing';
   let outsideBottomRightRadius = 0;
@@ -16,7 +16,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   const windowCornersMatch = () => {
     const radius = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--alpha-window-corner-radius')) || 0;
     outsideBottomRightRadius = Math.max(outsideBottomRightRadius, radius);
-    return [...document.querySelectorAll<HTMLElement>('[data-slot="terminal-focus-border"], [data-slot="thread-pane"]')].filter(el => el.getBoundingClientRect().height > 0).every(el => {
+    return [...document.querySelectorAll<HTMLElement>('[data-slot="pane-focus-border"]')].filter(el => el.getBoundingClientRect().height > 0).every(el => {
       const rect = el.getBoundingClientRect();
       const outside = Math.abs(rect.right - innerWidth) < 1.5 && Math.abs(rect.bottom - innerHeight) < 1.5;
       const style = getComputedStyle(el);
@@ -24,7 +24,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       return parseFloat(style.borderBottomRightRadius) === expected && parseFloat(style.borderBottomLeftRadius) === 0 && (el.dataset.slot !== 'thread-pane' || parseFloat(getComputedStyle(el, '::before').borderBottomRightRadius) === expected);
     });
   };
-  const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button, [role=menuitem]')].find((el) => el.getBoundingClientRect().height > 0 && (el.getAttribute('aria-label') === name || el.textContent?.trim() === name));
+  const button = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('button, [role=menuitem]')].find((el) => el.getBoundingClientRect().height > 0 && !el.matches(':disabled, [aria-disabled="true"], [data-disabled]') && (el.getAttribute('aria-label') === name || el.textContent?.trim() === name));
   const set = (selector: string, value: string) => {
     const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
     const prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -44,13 +44,36 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       // dialog still blocks native input. Require successful dialog dismissal.
       await wait(() => !document.querySelector('#pairing-token'));
     }
+    if (input.browserUrl) {
+      stage = 'Browser Workspace menu';
+      await wait(() => button('Sidebar actions')); button('Sidebar actions')!.click();
+      await wait(() => button('New workspace…')); button('New workspace…')!.click();
+      await wait(() => button('Browser')); button('Browser')!.click();
+      stage = 'Browser Profile picker';
+      await wait(() => document.querySelector('#browser-profile-name'));
+      set('#browser-profile-name', 'Acceptance'); set('#browser-address', input.browserUrl);
+      await wait(() => button('Open') && !button('Open')!.disabled); button('Open')!.click();
+      stage = 'native Browser framebuffer';
+      await wait(() => Number(document.querySelector<HTMLElement>('[data-slot="native-browser-input"]')?.dataset.frameWidth) > 0);
+      const browser = document.querySelector<HTMLTextAreaElement>('[data-slot="native-browser-input"]')!;
+      await new Promise(resolve => setTimeout(resolve,500));
+      const rect = browser.getBoundingClientRect();
+      browser.focus();
+      for (const type of ['pointerdown','pointerup']) browser.dispatchEvent(new PointerEvent(type,{bubbles:true,clientX:rect.x+50,clientY:rect.y+60,button:0,buttons:type==='pointerdown'?1:0,pointerId:1}));
+      await new Promise(resolve => setTimeout(resolve,500));
+      for (const type of ['pointerdown','pointerup']) browser.dispatchEvent(new PointerEvent(type,{bubbles:true,clientX:rect.x+50,clientY:rect.y+145,button:0,buttons:type==='pointerdown'?1:0,pointerId:1}));
+      browser.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:'Weave ✓'}));
+      await new Promise(resolve => setTimeout(resolve,750));
+      return {passed:true,browserTextDispatched:true,browserProfilePicker:true,nativeBrowserFrame:true,width:Number(browser.dataset.frameWidth),height:Number(browser.dataset.frameHeight),browserPointerDispatched:true};
+    }
     const openWorkspace = async () => {
       await wait(() => button('Sidebar actions')); button('Sidebar actions')!.click();
       await wait(() => button('New workspace…')); button('New workspace…')!.click();
       const directory = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"] [title]')].find(el => el.getBoundingClientRect().height > 0 && (input.directory ? el.getAttribute('title') === input.directory : el.getAttribute('title')?.endsWith('/workspace')))?.closest<HTMLElement>('[role="menuitem"]');
-      await wait(directory);
+      await wait(() => directory() && !directory()!.matches(':disabled, [aria-disabled="true"], [data-disabled]'));
       const before = new Set([...document.querySelectorAll('[data-workspace-id]')].map(el => el.getAttribute('data-workspace-id')));
-      directory()!.click();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      directory()!.focus(); directory()!.click();
       let created: Element | undefined;
       await wait(() => { created = [...document.querySelectorAll('[data-workspace-id]')].find(el => !before.has(el.getAttribute('data-workspace-id')) && el.querySelector('[aria-label^="Workspace "][aria-pressed="true"]')); return created; });
       return created!.getAttribute('data-workspace-id')!;
@@ -60,7 +83,9 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     const newThread = async () => {
       const previousThread = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')?.getAttribute('data-thread-id');
       document.querySelector<HTMLButtonElement>(`[data-workspace-id="${CSS.escape(originalWorkspace)}"] [aria-label="Workspace actions for ${CSS.escape(input.workspaceName)}"]`)!.click();
-      await wait(() => button('New agent thread')); button('New agent thread')!.click();
+      await wait(() => button('New agent thread'));
+      await new Promise(resolve => setTimeout(resolve, 250));
+      button('New agent thread')!.focus(); button('New agent thread')!.click();
       await wait(() => document.querySelector('[aria-label="Message agent"]') || document.querySelector('[role="dialog"]'));
       const choice = [...document.querySelectorAll<HTMLElement>('[role="dialog"] button [title]')].find(el => input.directory ? el.getAttribute('title') === input.directory : el.getAttribute('title')?.endsWith('/workspace'))?.closest<HTMLButtonElement>('button');
       choice?.click();
@@ -74,10 +99,12 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     stage = 'create thread';
     await newThread();
     await wait(() => document.querySelector('[aria-label="Message agent"]') && document.body.textContent?.includes('Start a conversation with the agent.'));
-    stage = 'discard draft pane';
+    stage = 'archive empty Agent Pane';
     const discardedDraft = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')!.getAttribute('data-thread-id')!;
-    button('Close agent pane')!.click();
-    await wait(() => !document.querySelector(`[data-thread-id="${CSS.escape(discardedDraft)}"]`) && !document.querySelector('[data-slot="thread-pane"]'));
+    button('Archive agent pane')!.click();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    if (button('Stop and archive')) button('Stop and archive')!.click();
+    await wait(() => !document.querySelector(`[data-thread-id="${CSS.escape(discardedDraft)}"]`) && !document.querySelector('[data-slot="agent-pane-content"]'));
     await newThread();
     stage = 'ACP prompt';
     const prompt = input.permission ? 'UI_PERMISSION' : 'Reply with exactly WEAVE_DESKTOP_REAL_PROVIDER_OK. Do not use any tools.';
@@ -99,7 +126,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       const pendingThread = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')?.getAttribute('data-thread-id');
       if (!pendingThread) throw new Error('No selected pending Thread');
       await newThread();
-      await wait(() => document.body.textContent?.includes('Start a conversation with the agent.') && !button('Allow once'));
+      await wait(() => document.querySelectorAll('[data-slot="agent-pane-content"]').length === 2 && document.body.textContent?.includes('Start a conversation with the agent.') && button('Allow once'));
       const previousThread = document.querySelector<HTMLButtonElement>(`[data-thread-id="${CSS.escape(pendingThread)}"] button[aria-pressed]`);
       if (!previousThread) throw new Error('The pending Thread disappeared while inspecting another conversation');
       previousThread.click();
@@ -122,7 +149,9 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       stage = 'persistent split and maximize';
       const original = nativeSurface()![0];
       const maximize = () => original.closest('section[data-terminal-id]')!.querySelector<HTMLButtonElement>('[aria-label="Maximize terminal"], [aria-label="Restore terminal"]')!;
-      button('Split right')!.click();
+      original.closest('section[data-terminal-id]')!.querySelector<HTMLButtonElement>('[aria-label="Split pane"]')!.click();
+      await wait(() => Boolean(button('Right'))); button('Right')!.click();
+      await wait(() => Boolean(button('Terminal'))); button('Terminal')!.click();
       await wait(() => document.querySelectorAll('section[data-terminal-id]').length === 2);
       stage = 'pane focus and inactive appearance';
       // Let the desktop driver expose its window before testing AppKit focus.
@@ -136,25 +165,31 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       await wait(() => original.closest('section[data-focused="true"]'));
       await wait(async () => { try { await nativeTerminalAcceptance.get(original)!.focus(); return true; } catch { return false; } });
       const activeTerminal = original.closest('section[data-terminal-id]')!;
-      const selectedAgent = document.querySelector<HTMLButtonElement>('[data-thread-id] button[aria-pressed="true"]');
+      const selectedAgent = document.querySelector<HTMLButtonElement>(`[data-workspace-id="${CSS.escape(originalWorkspace)}"] [data-thread-id] button[aria-pressed]`);
       if (!selectedAgent) throw new Error('No agent to exercise focus handoff');
       stage = 'native terminal to composer focus';
       selectedAgent.click();
-      const composer = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Message agent"]');
-      await wait(() => composer() && document.activeElement === composer() && activeTerminal.getAttribute('data-agent-focused') === 'true');
+      const agentId = selectedAgent.closest('[data-thread-id]')!.getAttribute('data-thread-id')!;
+      const composer = () => document.querySelector<HTMLTextAreaElement>(`section[data-thread-id="${CSS.escape(agentId)}"] [aria-label="Message agent"]`);
+      await wait(composer);
+      // On touch clients navigation intentionally does not request a keyboard.
+      const focusComposer = () => {
+        const element = composer()!;
+        element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+        element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0 }));
+        element.focus();
+      };
+      focusComposer();
+      await wait(() => document.activeElement === composer() && activeTerminal.hasAttribute('data-dimmed'));
       await wait(() => !selectedAgent.querySelector('[data-state="completed"]'));
-      if (activeTerminal.hasAttribute('data-dimmed')) throw new Error('The active terminal dimmed while the agent owned focus');
       if (!document.querySelector('section[data-terminal-id][data-dimmed="true"]')) throw new Error('Inactive terminal did not dim');
-      const inactiveRail = document.querySelector<HTMLElement>('section[data-dimmed="true"] [data-slot="terminal-rail-dim"]')!;
-      if (getComputedStyle(inactiveRail).opacity !== '0.4' || getComputedStyle(inactiveRail).pointerEvents !== 'none') throw new Error('Inactive terminal header must dim by 40% and remain clickable');
-      if (getComputedStyle(activeTerminal.querySelector('[data-slot="terminal-rail-dim"]')!).opacity !== '0') throw new Error('Active terminal header dimmed while the agent owned focus');
-      const frame = activeTerminal.querySelector<HTMLElement>('[data-slot="terminal-focus-border"]')!;
+      const frame = activeTerminal.querySelector<HTMLElement>('[data-slot="pane-focus-border"]')!;
       if (getComputedStyle(frame).borderTopLeftRadius !== '0px') throw new Error('Terminal pane frame is not square');
-      const agentFrame = document.querySelector<HTMLElement>('[data-slot="thread-pane"]')!;
-      if (getComputedStyle(agentFrame, '::after').borderTopLeftRadius !== '0px') throw new Error('Agent pane frame is not square');
-      const agentOutline = getComputedStyle(agentFrame, '::before');
-      const headerHeight = agentFrame.querySelector('[data-slot="thread-top-rail"]')!.getBoundingClientRect().height;
-      if (Number.parseFloat(agentOutline.top) !== headerHeight || agentOutline.borderTopWidth !== '1px') throw new Error('Agent top border does not run below its header rail');
+      const agentFrame = composer()!.closest('[data-slot="pane-focus-border"]')!;
+      if (getComputedStyle(agentFrame).borderTopLeftRadius !== '0px') throw new Error('Agent pane frame is not square');
+      const rails = [...document.querySelectorAll<HTMLElement>('[data-slot="pane-top-rail"]')].filter(rail => rail.getBoundingClientRect().height > 0);
+      if (rails.length < 3 || new Set(rails.map(rail => rail.getBoundingClientRect().height)).size !== 1) throw new Error('Pane rails do not share their geometry');
+      if (getComputedStyle(frame).borderColor === getComputedStyle(agentFrame).borderColor) throw new Error('Inactive and focused Panes have identical borders');
       await wait(windowCornersMatch);
       stage = 'menu focus restoration';
       button('Sidebar actions')!.click(); await wait(() => document.querySelector('[role="menu"]'));
@@ -175,11 +210,11 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
         state.alphaAcceptanceStage = undefined;
         stage = 'iPad window corner after keyboard dismissal';
         await wait(() => windowCornersMatch() && outsideBottomRightRadius > 0);
-        selectedAgent.click();
+        selectedAgent.click(); focusComposer();
         await wait(() => document.activeElement === composer());
       }
       await nativeTerminalAcceptance.get(original)!.focus();
-      await wait(() => activeTerminal.getAttribute('data-agent-focused') !== 'true');
+      await wait(() => activeTerminal.getAttribute('data-focused') === 'true');
       stage = 'persistent split and maximize';
       maximize().click(); await wait(() => original.getBoundingClientRect().width >= terminalBounds.width - 10);
       maximize().click(); await wait(() => original.getBoundingClientRect().width < terminalBounds.width - 10);
@@ -240,6 +275,6 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
 
     await wait(windowCornersMatch);
     if (document.querySelector('[data-slot="browser-pane"], [data-slot="editor-pane"], [data-symbol="project-pane"]')) throw new Error('Deferred surface mounted');
-    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, runningTerminalReattached: true, nativePaneLifetime: Boolean(nativeSurface()), paneFocusRestoration: true, ...(state.alphaAcceptanceNativeSmoke ? { softwareKeyboardDismissal: true } : {}), activeTerminalUndimmed: true, squarePaneBorders: true, outsideBottomRightRadius, nativeCompositionCommit: Boolean(nativeSurface()), deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
+    return { passed: true, pairedOrReconnected: true, acpPrompt: true, permission: Boolean(input.permission), permissionSurvivesConversationSwitch: Boolean(input.permission), nativeTerminalPaste: true, neovimInput: true, runningTerminalReattached: true, nativePaneLifetime: Boolean(nativeSurface()), paneFocusRestoration: true, ...(state.alphaAcceptanceNativeSmoke ? { softwareKeyboardDismissal: true } : {}), singleFocusedPane: true, sharedPaneRails: true, squarePaneBorders: true, outsideBottomRightRadius, nativeCompositionCommit: Boolean(nativeSurface()), deferredSurfacesAbsent: true, width: innerWidth, height: innerHeight };
   } catch (error) { return { passed: false, stage, error: String(error), nativeSurfaces: await Promise.all([...nativeTerminalAcceptance.entries()].map(async ([element, surface]) => ({ bounds: element.getBoundingClientRect().toJSON(), text: await surface.read().catch(String) }))), visibleControls: [...document.querySelectorAll<HTMLElement>('button, [role=menuitem]')].filter(el => el.getBoundingClientRect().height > 0).map(el => ({ label: el.getAttribute('aria-label') ?? el.textContent?.trim(), titles: [...el.querySelectorAll('[title]')].map(child => child.getAttribute('title')) })) }; }
 }

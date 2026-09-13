@@ -1,0 +1,26 @@
+{
+  "mac-default": {
+    "server": 0,
+    "viewer-a": 0,
+    "viewer-b": 0,
+    "viewer-b-reconnected": 0
+  },
+  "mac-multi": {
+    "server": 0,
+    "viewer-a": 0,
+    "viewer-b": 1,
+    "viewer-b-reconnected": 1
+  },
+  "linux-default": {
+    "server": 0,
+    "viewer-a": 0,
+    "viewer-b": 0,
+    "viewer-b-reconnected": 0
+  },
+  "linux-multi": {
+    "server": 0,
+    "viewer-a": 0,
+    "viewer-b": 1,
+    "viewer-b-reconnected": 1
+  }
+}

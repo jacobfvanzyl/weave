@@ -1,0 +1,417 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj -scheme BrowserSpike -configuration Debug -destination generic/platform=iOS -derivedDataPath experiments/browser-remoting-comparison/.build/ipad-webrtc -allowProvisioningUpdates build
+
+2026-09-13 10:23:24.241 xcodebuild[82570:6973246] [MT] IDERunDestination: Supported platforms for the buildables in the current scheme is empty.
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (1 target)
+    Target 'BrowserSpike' in project 'WebRTCBench' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+Build description signature: 8dee2d86ca47a298353b63c44f703f9a
+Build description path: /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/XCBuildData/8dee2d86ca47a298353b63c44f703f9a.xcbuilddata
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex
+
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/ExplicitPrecompiledModules
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos
+
+CreateBuildDirectory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    builtin-create-build-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/WebRTCBench-6043dc2ee16aeb5b988814b6ee000504-VFS-iphoneos/all-product-headers.yaml
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/WebRTCBench-6043dc2ee16aeb5b988814b6ee000504-VFS-iphoneos/all-product-headers.yaml
+
+ProcessXCFramework /Users/jaco/Documents/VeeZee/weave/experiments/browser-streaming/.build/LiveKitWebRTC.xcframework /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/LiveKitWebRTC.framework ios
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTCBench.xcodeproj
+    builtin-process-xcframework --xcframework /Users/jaco/Documents/VeeZee/weave/experiments/browser-streaming/.build/LiveKitWebRTC.xcframework --platform ios --target-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-own-target-headers.hmap (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-own-target-headers.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-project-headers.hmap (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-project-headers.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.hmap (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-generated-files.hmap (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-generated-files.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftFileList (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_const_extract_protocols.json (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_const_extract_protocols.json
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-OutputFileMap.json (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-OutputFileMap.json
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftConstValuesFileList (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftConstValuesFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources/Entitlements.plist (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources/Entitlements.plist
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.LinkFileList (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.LinkFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.DependencyStaticMetadataFileList (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.DependencyStaticMetadataFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.DependencyMetadataFileList (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.DependencyMetadataFileList
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-all-target-headers.hmap (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-all-target-headers.hmap
+
+WriteAuxiliaryFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-all-non-framework-target-headers.hmap (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    write-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-all-non-framework-target-headers.hmap
+
+MkDir /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /bin/mkdir -p /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app
+
+MkDir /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /bin/mkdir -p /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks
+
+ProcessProductPackaging "" /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.app.xcent (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+    Entitlements:
+    
+    {
+    "application-identifier" = "942HB89NL5.com.veezee.browser-spike";
+    "com.apple.developer.team-identifier" = 942HB89NL5;
+    "get-task-allow" = 1;
+}
+    
+    builtin-productPackagingUtility -entitlements -format xml -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.app.xcent
+
+ProcessProductPackaging /Users/jaco/Library/Developer/Xcode/UserData/Provisioning\ Profiles/1278477d-abe5-4732-9142-95486c312aa0.mobileprovision /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/embedded.mobileprovision (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-productPackagingUtility /Users/jaco/Library/Developer/Xcode/UserData/Provisioning\ Profiles/1278477d-abe5-4732-9142-95486c312aa0.mobileprovision -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/embedded.mobileprovision
+
+ProcessProductPackagingDER /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.app.xcent /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.app.xcent.der (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /usr/bin/derq query -f xml -i /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.app.xcent -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.app.xcent.der --raw
+
+SwiftDriver BrowserSpike normal arm64 com.apple.xcode.tools.swift.compiler (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name BrowserSpike -O @/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftFileList -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -target arm64-apple-ios16.0 -g -module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -Xfrontend -serialize-debugging-options -swift-version 5 -I /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -F /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache -output-file-map /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -sdk-module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_const_extract_protocols.json -Xcc -iquote -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-generated-files.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-own-target-headers.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-all-target-headers.hmap -Xcc -iquote -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-project-headers.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/include -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources-normal/arm64 -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources/arm64 -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources -emit-objc-header -emit-objc-header-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-Swift.h -working-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build -experimental-emit-module-separately -disable-cmo
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_stdbool-2FLI2YP9G5BOFKRTG3DGW4CPC.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_AvailabilityInternal-30WO3P73SSP3X5QJ2S624EZVN.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/ptrauth-BQJCONGDP7SK9R9VAN6Z1QBE6.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/DeveloperToolsSupport-1IZOUMT0PIE4055YVGB633GCJ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/ptrcheck-ERRG4UM6O7M144S9F2PPV7IHB.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_float-3GOI0VS2OC4LCFK25G4PI07ZF.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_stdarg-BY220ZAGAMIREIXE5IQA85S8J.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/SwiftShims-4IJMNASI9WT7KAQ8PEPOM4HZC.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_SwiftConcurrencyShims-EQ33B1TM9GMDRE7OA44TKXBC.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_stddef-AMYHWLIKSU0FVWL28QS2THSBE.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_DarwinFoundation1-DR1WW56XD78PXL41E63VO382Q.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_limits-3KKZCZSYOEYZ3W4DH7NZHSFK7.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_DarwinFoundation2-7U7EYT7E1J5BQPPGRS4NXOULP.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/sys_types-HPNZW35AZDUEWEAXJMK1NK56.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_tgmath-E0WJGP2MAYIDVDKF1KENKVVJ8.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_stdint-EFY33LHB1GW1UTWE7VRZ8P4FT.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_stdatomic-B3SIVHA3M9T73LABZ3BOIQFHK.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_intrinsics-18FCJL6JGW48WFRGLOG4ZNT3T.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_DarwinFoundation3-4NZG8M9UVSGVVK6YSUXSGB8GN.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/_Builtin_inttypes-54L1OC0K6H4F9S6B0M25ATPPR.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Darwin-542D0HMPNN9IWOFI4X6XSC8YO.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/simd-8G0IGVDCHWDFUB2JSD1RX11OU.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/ObjectiveC-9SN5OCV4NH6LXSB7E3VWF0KSK.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/MachO-EDWD1GUMN501E67ZXD13C2L3P.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/os_object-8DMSZ5MNE0W4AW9URNCXXCC4F.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/os_workgroup-2QMS09P8BMAZKGCXDWKDNPDKH.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Spatial-AAG77KN57LV86BDT0YHNSY3Z.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Dispatch-6OKJUM2F15I9UKNUFKS0NC4L2.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/dnssd-980SL1FTR8LEOX0REYQSJKY4P.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/XPC-DSQHPEVYZYQ10CZ09FP3O1DEO.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreFoundation-AWY50F1YECYMBOL6RYM1O0X49.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/os-CS003U8C9MBYSXGQ18N6W1V5O.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreAudioTypes-29TI1IQ2RV6RVZXUY1IEKM20G.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CFNetwork-4IB0J1AVL9PRUOAFCYOTHP3GM.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Security-4QWLK22NGNEGGCXTUDPQ3VZ90.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreGraphics-DBIQGTE7AI3TUMD9X239P5XM6.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreAudio-4YPAGSSOP5TO7B284OCPXP5TE.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Foundation-6K5ZPLMKUYAM5B4X7DFGBO6GH.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/ImageIO-9HRZNNP1BQ7ZJTZRFN03VJRQE.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreText-4HFMCSXEKZYZG4KKHU3V433H5.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/UIUtilities-BQ6WFQ5M2UJ42EGZEOBKU6VHB.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreData-1G270D4BX21POEEETC1AMNSV1.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/UniformTypeIdentifiers-401IB7Q9NQDF18RH6J9PEW8KV.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/DataDetection-E9AM770V8Z63R10730LK23YE2.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Symbols-1M2QS02V4ZVISXK3YJAZLUUV8.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/OSLog-BKAMJOZVPFNTF1GO18LFZURUE.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Network-ANFQ8JAJZPWEGO8RHTP47HHJF.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreMIDI-4RBUSM1XUQ34X48O6A68KJKZ6.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/FileProvider-3S1KS3TG3DGQP937WZ1BASDY5.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/UserNotifications-E7FJ6ZFDTWHD4NM68WBWRZHZ7.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreTransferable-7R8JAJ9BPAM4A5QEX9RVBS6MB.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/IOSurface-55M0A49EVHOBFLDDXTNXYRIDX.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Accessibility-9O9I42LF5CL4UTG8Z41SWM0PK.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/AVRouting-4E4PLR69S74CBFB8PG9BYFHKA.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/AudioToolbox-8BBHOW2W4NBEVS9PR0YM8W7HP.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Metal-9HW8LD47O79Q47UXGODUBW3YB.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/OpenGLES-2SQKNEI8SXHGXS92J7WCTQOKU.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/AudioUnit-EXHX7D1V1M4JRJC06CYQ6DZ6H.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreVideo-2HCXU2K65VK36JC7V4AP7B3AB.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/QuartzCore-1SAXALVMQT9WD8CSUQB4E1HOC.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreImage-CNZLZGU6D2VBKVTXW9DEMW8U0.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/CoreMedia-CZ2FKAJTL1OJPW8D4WG4FGM8W.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/SwiftUICore-88B1RBXHRR7TCQ3H3EPPH2Y09.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/MediaToolbox-31YOQN77XSOMBSWYM95NGO89Z.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/AVFAudio-7Q21MDQMNAK3CG3FOBB83LG3N.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/UIKit-AQUFP24CWJPWZJAVRWONO7SFZ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/AVFoundation-86X7N8FQ2MN01GOJW4DOK99QJ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/SwiftUI-80GTK5YW40ZEJ1HSV0C614BOT.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/LiveKitWebRTC-7E35UZLVQ9YL5J1HCO4OHTWAY.pcm
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ BrowserSpike (in target 'BrowserSpike' from project 'WebRTCBench')
+
+EmitSwiftModule normal arm64 (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+
+SwiftCompile normal arm64 Compiling\ Bench.swift /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/Bench.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+SwiftCompile normal arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/Bench.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+
+SwiftCompile normal arm64 Compiling\ BrowserMediaReceiver.swift /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/BrowserMediaReceiver.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+SwiftCompile normal arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/BrowserMediaReceiver.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+
+SwiftCompile normal arm64 Compiling\ WebRTCApp.swift /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/WebRTCApp.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+
+SwiftCompile normal arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/WebRTCApp.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+
+SwiftDriverJobDiscovery normal arm64 Emitting module for BrowserSpike (in target 'BrowserSpike' from project 'WebRTCBench')
+
+SwiftDriver\ Compilation\ Requirements BrowserSpike normal arm64 com.apple.xcode.tools.swift.compiler (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name BrowserSpike -O @/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftFileList -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -target arm64-apple-ios16.0 -g -module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -Xfrontend -serialize-debugging-options -swift-version 5 -I /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -F /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache -output-file-map /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -sdk-module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_const_extract_protocols.json -Xcc -iquote -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-generated-files.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-own-target-headers.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-all-target-headers.hmap -Xcc -iquote -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-project-headers.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/include -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources-normal/arm64 -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources/arm64 -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources -emit-objc-header -emit-objc-header-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-Swift.h -working-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build -experimental-emit-module-separately -disable-cmo
+
+SwiftMergeGeneratedHeaders /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources/BrowserSpike-Swift.h /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-Swift.h (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-swiftHeaderTool -arch arm64 /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-Swift.h -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources/BrowserSpike-Swift.h
+
+Copy /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/arm64-apple-ios.swiftmodule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftmodule (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -strip-unsigned-binaries -strip-deterministic -strip-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -resolve-src-symlinks -rename /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftmodule /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/arm64-apple-ios.swiftmodule
+
+Copy /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/arm64-apple-ios.abi.json /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.abi.json (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -strip-unsigned-binaries -strip-deterministic -strip-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -resolve-src-symlinks -rename /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.abi.json /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/arm64-apple-ios.abi.json
+
+Copy /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/arm64-apple-ios.swiftdoc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftdoc (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -strip-unsigned-binaries -strip-deterministic -strip-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -resolve-src-symlinks -rename /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftdoc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/arm64-apple-ios.swiftdoc
+
+Copy /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/Project/arm64-apple-ios.swiftsourceinfo /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftsourceinfo (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -strip-unsigned-binaries -strip-deterministic -strip-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -resolve-src-symlinks -rename /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftsourceinfo /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.swiftmodule/Project/arm64-apple-ios.swiftsourceinfo
+
+SwiftDriverJobDiscovery normal arm64 Compiling Bench.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+
+SwiftDriverJobDiscovery normal arm64 Compiling WebRTCApp.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+
+SwiftDriverJobDiscovery normal arm64 Compiling BrowserMediaReceiver.swift (in target 'BrowserSpike' from project 'WebRTCBench')
+
+SwiftDriver\ Compilation BrowserSpike normal arm64 com.apple.xcode.tools.swift.compiler (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-Swift-Compilation -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name BrowserSpike -O @/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftFileList -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -target arm64-apple-ios16.0 -g -module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -Xfrontend -serialize-debugging-options -swift-version 5 -I /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -F /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/SDKStatCaches.noindex/iphoneos26.5-23F81a-32daed1954a7d5dd0789fcaf2a9bb78b.sdkstatcache -output-file-map /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -sdk-module-cache-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_const_extract_protocols.json -Xcc -iquote -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-generated-files.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-own-target-headers.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-all-target-headers.hmap -Xcc -iquote -Xcc /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike-project-headers.hmap -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/include -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources-normal/arm64 -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources/arm64 -Xcc -I/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/DerivedSources -emit-objc-header -emit-objc-header-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-Swift.h -working-directory /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build -experimental-emit-module-separately -disable-cmo
+
+Ld /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/BrowserSpike normal (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-ios16.0 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk -O2 -L/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos -L/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -F/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphoneos -F/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos -filelist /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.LinkFileList -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @executable_path/Frameworks -Xlinker -dead_strip -Xlinker -object_path_lto -Xlinker /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_lto.o -Xlinker -dependency_info -Xlinker /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_dependency_info.dat -fobjc-link-runtime -L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.swiftmodule @/Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike-linker-args.resp -framework LiveKitWebRTC -Xlinker -no_adhoc_codesign -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/BrowserSpike
+
+Copy /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks/LiveKitWebRTC.framework /Users/jaco/Documents/VeeZee/weave/experiments/browser-streaming/.build/LiveKitWebRTC.xcframework/ios-arm64/LiveKitWebRTC.framework (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -exclude Headers -exclude PrivateHeaders -exclude Modules -exclude \*.tbd -strip-unsigned-binaries -strip-deterministic -bitcode-strip all -bitcode-strip-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip -strip-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -resolve-src-symlinks -remove-static-executable /Users/jaco/Documents/VeeZee/weave/experiments/browser-streaming/.build/LiveKitWebRTC.xcframework/ios-arm64/LiveKitWebRTC.framework /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -D -S -no_atom_info /Users/jaco/Documents/VeeZee/weave/experiments/browser-streaming/.build/LiveKitWebRTC.xcframework/ios-arm64/LiveKitWebRTC.framework/LiveKitWebRTC -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks/LiveKitWebRTC.framework/LiveKitWebRTC/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks/LiveKitWebRTC.framework/LiveKitWebRTC -r -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks/LiveKitWebRTC.framework/LiveKitWebRTC
+ProcessInfoPlistFile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Info.plist /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTC-ios.plist (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-infoPlistUtility /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/WebRTC-ios.plist -producttype com.apple.product-type.application -genpkginfo /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/PkgInfo -expandbuildsettings -format binary -platform iphoneos -scanforprivacyfile /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks/LiveKitWebRTC.framework -requiredArchitecture arm64 -o /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Info.plist
+
+CodeSign /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks/LiveKitWebRTC.framework (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+    Signing Identity:     "Apple Development: jaco@veezee.xyz (HGZD22KNFG)"
+    Provisioning Profile: "iOS Team Provisioning Profile: com.veezee.browser-spike"
+                          (1278477d-abe5-4732-9142-95486c312aa0)
+    
+    /usr/bin/codesign --force --sign 192C23384319388359851AFE24D282185176E910 --timestamp\=none --preserve-metadata\=identifier,entitlements,flags --generate-entitlement-der /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks/LiveKitWebRTC.framework
+
+CpResource /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/connection.json /Users/jaco/Documents/VeeZee/weave/experiments/browser-streaming/.build/receiver/connection.json (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -strip-unsigned-binaries -strip-deterministic -strip-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strip -resolve-src-symlinks /Users/jaco/Documents/VeeZee/weave/experiments/browser-streaming/.build/receiver/connection.json /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app
+
+CopySwiftLibs /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-swiftStdLibTool --copy --verbose --sign 192C23384319388359851AFE24D282185176E910 --scan-executable /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/BrowserSpike --scan-folder /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks --scan-folder /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/PlugIns --scan-folder /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/SystemExtensions --scan-folder /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Extensions --platform iphoneos --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Frameworks --strip-bitcode --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+
+ExtractAppIntentsMetadata (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --module-name BrowserSpike --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk --xcode-version 17F113 --platform-family iOS --deployment-target 16.0 --bundle-identifier com.veezee.browser-spike --output /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app --target-triple arm64-apple-ios16.0 --binary-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/BrowserSpike --dependency-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike_dependency_info.dat --stringsdata-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftFileList --metadata-file-list /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.DependencyMetadataFileList --static-metadata-file-list /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.DependencyStaticMetadataFileList --swift-const-vals-list /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/Objects-normal/arm64/BrowserSpike.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --validate-assistant-intents --no-app-shortcuts-localization
+2026-09-13 10:23:28.189 appintentsmetadataprocessor[82869:6973768] Starting appintentsmetadataprocessor export
+2026-09-13 10:23:28.206 appintentsmetadataprocessor[82869:6973768] warning: Metadata extraction skipped. No AppIntents.framework dependency found.
+
+AppIntentsSSUTraining (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsnltrainingprocessor --infoplist-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Info.plist --temp-dir-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/ssu --bundle-id com.veezee.browser-spike --product-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app --extracted-metadata-path /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Metadata.appintents --metadata-file-list /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.DependencyMetadataFileList --source-file /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app/Info.plist --archive-ssu-assets
+2026-09-13 10:23:28.224 appintentsnltrainingprocessor[82871:6973770] Parsing options for appintentsnltrainingprocessor
+2026-09-13 10:23:28.224 appintentsnltrainingprocessor[82871:6973770] Starting AppIntents SSU YAML Generation
+2026-09-13 10:23:28.226 appintentsnltrainingprocessor[82871:6973770] No AppShortcuts found - Skipping.
+
+CodeSign /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    
+    Signing Identity:     "Apple Development: jaco@veezee.xyz (HGZD22KNFG)"
+    Provisioning Profile: "iOS Team Provisioning Profile: com.veezee.browser-spike"
+                          (1278477d-abe5-4732-9142-95486c312aa0)
+    
+    /usr/bin/codesign --force --sign 192C23384319388359851AFE24D282185176E910 --entitlements /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Intermediates.noindex/WebRTCBench.build/Debug-iphoneos/BrowserSpike.build/BrowserSpike.app.xcent --timestamp\=none --generate-entitlement-der /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app
+
+RegisterExecutionPolicyException /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-RegisterExecutionPolicyException /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app
+
+Validate /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    builtin-validationUtility /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app -shallow-bundle -infoplist-subpath Info.plist
+
+Touch /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app (in target 'BrowserSpike' from project 'WebRTCBench')
+    cd /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build
+    /usr/bin/touch -c /Users/jaco/Documents/VeeZee/weave/experiments/browser-remoting-comparison/.build/ipad-webrtc/Build/Products/Debug-iphoneos/BrowserSpike.app
+
+** BUILD SUCCEEDED **
+

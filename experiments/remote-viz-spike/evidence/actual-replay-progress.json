@@ -1,0 +1,84 @@
+{
+  "transforms-first": {
+    "frames": 30,
+    "materials": {
+      "5": 300,
+      "10": 162,
+      "9": 81
+    },
+    "stateCounts": {
+      "blend:SrcOver": 543,
+      "nonemptyMask": 27
+    },
+    "sameResourceTransformChanges": 23,
+    "resourcePayloadBytes": 3543384.0,
+    "rasterBytesExamined": 40757796.0,
+    "replayExitCode": 1,
+    "replayedFrames": 3,
+    "rejection": "REPLAY_REJECTED: frame 4, pass 0x1, quad 6: unsupported texture flags, background, resource origin or missing metadata",
+    "nativeResourceUploadedBytes": 0,
+    "nativeMaskUploadedBytes": 0,
+    "peakCachedMaskBytes": 0
+  },
+  "transforms-mask-animated": {
+    "frames": 28,
+    "materials": {
+      "5": 278,
+      "10": 150,
+      "9": 75
+    },
+    "stateCounts": {
+      "blend:SrcOver": 503,
+      "nonemptyMask": 25
+    },
+    "sameResourceTransformChanges": 22,
+    "resourcePayloadBytes": 3281240.0,
+    "rasterBytesExamined": 37738700.0,
+    "replayExitCode": 0,
+    "replayedFrames": 28,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 3281240,
+    "nativeMaskUploadedBytes": 1152,
+    "peakCachedMaskBytes": 1152
+  },
+  "transforms-mask-static": {
+    "frames": 7,
+    "materials": {
+      "5": 47,
+      "10": 24,
+      "9": 12
+    },
+    "stateCounts": {
+      "blend:SrcOver": 83,
+      "nonemptyMask": 4
+    },
+    "sameResourceTransformChanges": 1,
+    "resourcePayloadBytes": 3281240.0,
+    "rasterBytesExamined": 6038192.0,
+    "replayExitCode": 0,
+    "replayedFrames": 7,
+    "rejection": null,
+    "nativeResourceUploadedBytes": 3281240,
+    "nativeMaskUploadedBytes": 1152,
+    "peakCachedMaskBytes": 1152,
+    "comparison": {
+      "reference": "transforms-mask-static-reference.png",
+      "replay": "50577-18021685875712-frame-7.png",
+      "width": 800,
+      "height": 600,
+      "tolerancePerChannel": 2,
+      "maxChannelError": 21,
+      "meanAbsoluteRGBAError": 0.000184375,
+      "pixelsOverTolerance": 13,
+      "fractionOverTolerance": 2.7083333333333332e-05,
+      "differenceBoundsInclusive": [
+        618,
+        318,
+        626,
+        349
+      ],
+      "diffGain": 8,
+      "comparison": "decoded RGB/RGBA values; not a perceptual or color-profile comparison"
+    }
+  }
+}

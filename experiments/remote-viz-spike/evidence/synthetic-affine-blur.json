@@ -1,0 +1,1 @@
+{"synthetic": true, "passed": true, "checks": ["90-degree transform coordinates", "2x scaling coordinates", "shear coordinates", "blur expansion/symmetry/premultiplication", "perspective rejection", "singular-transform rejection", "filter-chain rejection", "backdrop rejection", "scaled-filter rejection", "non-decal rejection"]}

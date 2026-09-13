@@ -1,0 +1,25 @@
+{
+  "host": "linux",
+  "transport": "rfb",
+  "dpr": 2,
+  "client": "iPadOS",
+  "rfbNoPresent": "0",
+  "rfbMoreAcks": "0",
+  "extensionVariant": "extension",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "sourceSha256": {
+    "RFBApp.m": "d59502991e213cf16ad8405181af3b14b0adaec67ef89c299778fef961e42cbe",
+    "BenchRFB.h": "b7a72d577c72d14f39031229e5efbe14a2f378ff987de7c728b7a927cc319468",
+    "cef-host.cc": "09c00f8ab8ca9420bf4e6222b466d34b8b65ed354e6f630a19cd45fdd3d8c064",
+    "page.html": "684e834d37202925dabcedcc59097b5b988d6200951c0e199779114695da58cc",
+    "run.py": "88d1d31ea80eaa7c35f97f3139f80ae85502b15e43aec346ab78a8d72828af6d"
+  },
+  "hostPid": 1350576,
+  "clientPid": 33444,
+  "startedAt": 1789290708.607392
+}

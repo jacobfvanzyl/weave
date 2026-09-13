@@ -1,28 +1,29 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Cancel01Icon, SidebarLeftIcon } from '@hugeicons/core-free-icons';
 import type { AlphaController } from '@/app/alpha-controller';
 import { workspaceKey, type WorkspaceReference } from '@/app/workspace-presentation';
-import { useCompactPanes, resolveCompactPane, type CompactPane } from '@/app/compact-pane';
-import { PaneFocusProvider, PaneFocusScope, agentFocusId, terminalFocusId, usePaneFocus } from '@/app/pane-focus';
+import { paneTargets } from '@weave/product-protocol';
+import type { CompactPane } from '@/app/compact-pane';
+import { PaneFocusProvider, agentFocusId, terminalFocusId, usePaneFocus } from '@/app/pane-focus';
 import { TerminalPaneActionsContext, type TerminalPaneAction } from '@/app/terminal-pane-actions';
 import { SidebarProvider, useSidebar } from './ui/sidebar';
 import { Button } from './ui/button';
 import { Alert, AlertDescription } from './ui/alert';
 import { WorkspaceSidebar } from './workspace-sidebar';
 import { WorkspaceCanvas } from './workspace-canvas';
-import { WorkspacePlaceholder } from './workspace-placeholder';
 
 function Content({ controller }: { controller: AlphaController }) {
   const state = controller.model.workspaceCompositions!;
   const sidebar = useSidebar();
   const focus = usePaneFocus()!;
-  const [memory, remember] = useCompactPanes();
   const reference = state.presentation.openWorkspaces.find(ref => workspaceKey(ref) === state.presentation.activeWorkspace);
   const key = reference && workspaceKey(reference);
   const workspace = reference && state.compositions[reference.hostId]?.workspaces.find(item => item.workspaceId === reference.workspaceId);
-  const threads = (controller.model.threads ?? []).filter(thread => thread.hostId === reference?.hostId && thread.workspaceId === reference?.workspaceId);
-  const pane = key && workspace ? resolveCompactPane(memory[key], workspace, threads) : undefined;
+  const panes = workspace ? paneTargets([workspace]) : [];
+  const node = panes.find(pane => pane.paneId === state.presentation.focusedPanes[key!]) ?? panes[0];
+  const thread = node?.kind === 'agent' ? controller.model.threads?.find(thread => thread.hostId === reference?.hostId && thread.threadId === node.threadId) : undefined;
+  const pane: CompactPane | undefined = node ? node.kind === 'agent' && thread ? { kind: 'agent', id: thread.id } : { kind: 'terminal', id: node.paneId } : undefined;
   const [error, setError] = useState<string>();
   const [terminalActions, setTerminalActions] = useState<Record<string, TerminalPaneAction>>({});
   const registerActions = useCallback((id: string, action?: TerminalPaneAction) => setTerminalActions(current => {
@@ -31,7 +32,9 @@ function Content({ controller }: { controller: AlphaController }) {
   const select = (ref: WorkspaceReference, next: CompactPane) => {
     focus.browse();
     controller.workspaceActions?.activate(ref);
-    remember(workspaceKey(ref), next);
+    const workspace = state.compositions[ref.hostId]?.workspaces.find(workspace => workspace.workspaceId === ref.workspaceId);
+    const target = workspace && paneTargets([workspace]).find(pane => next.kind === 'agent' ? pane.kind === 'agent' && controller.model.threads?.some(thread => thread.id === next.id && thread.threadId === pane.threadId && thread.hostId === ref.hostId) : pane.paneId === next.id);
+    if (target) controller.workspaceActions?.focus(ref, target.paneId);
     sidebar.setOpenMobile(false);
   };
   const selectAgent = (id: string) => {
@@ -40,28 +43,12 @@ function Content({ controller }: { controller: AlphaController }) {
     select({ hostId: thread.hostId, workspaceId: thread.workspaceId }, { kind: 'agent', id });
     void controller.actions.selectThread(id, { preserveDraft: true });
   };
-  // Explicit new draft selection also navigates to its workspace.
-  // Do not let the initial restored thread override the phone's saved terminal.
-  const previousRequest = useRef(controller.model.composerFocusRequest);
-  useEffect(() => {
-    const id = controller.model.selectedThreadId;
-    if (controller.model.composerFocusRequest === previousRequest.current) return;
-    previousRequest.current = controller.model.composerFocusRequest;
-    if (id) selectAgentWithoutLoading(id);
-  }, [controller.model.composerFocusRequest]);
-  function selectAgentWithoutLoading(id: string) {
-    const thread = controller.model.threads?.find(item => item.id === id);
-    if (thread?.workspaceId) select({ hostId: thread.hostId, workspaceId: thread.workspaceId }, { kind: 'agent', id });
-  }
   const target = pane && key ? pane.kind === 'agent' ? agentFocusId(pane.id) : terminalFocusId(key, pane.id) : undefined;
   useEffect(() => {
     focus.browse(target);
     if (pane?.kind === 'agent' && controller.model.selectedThreadId !== pane.id) void controller.actions.selectThread(pane.id, { preserveDraft: true });
   }, [target]);
-  const previousWorkspace = useRef(key);
-  useEffect(() => {
-    if (previousWorkspace.current !== key) { previousWorkspace.current = key; sidebar.setOpenMobile(false); }
-  }, [key]);
+  useEffect(() => { sidebar.setOpenMobile(false); }, [key]);
   useEffect(() => { if (sidebar.openMobile) focus.browse(target); }, [sidebar.openMobile]);
   useEffect(() => {
     const update = () => controller.actions.setFocusedAgentThread?.(!document.hidden && !sidebar.openMobile && pane?.kind === 'agent' && controller.model.selectedThreadId === pane.id && !controller.model.loadingThreadId ? pane.id : undefined);
@@ -81,16 +68,7 @@ function Content({ controller }: { controller: AlphaController }) {
     <div className='relative flex min-h-0 min-w-0 flex-1 flex-col' data-slot='compact-content'>
       {topRail()}
       {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
-      <div className='flex min-h-0 min-w-0 flex-1' hidden={pane?.kind === 'agent'} inert={pane?.kind === 'agent' || undefined}>
-        <WorkspaceCanvas controller={controller} inputFocusRequest={null} singlePaneId={pane?.kind === 'terminal' ? pane.id : ''} active={pane?.kind === 'terminal'} />
-      </div>
-      <div className='flex min-h-0 min-w-0 flex-1' hidden={pane?.kind !== 'agent'} inert={pane?.kind !== 'agent' || undefined}>
-        <PaneFocusScope id={controller.model.selectedThreadId ? agentFocusId(controller.model.selectedThreadId) : ''}>
-          <section className='flex min-h-0 min-w-0 flex-1' aria-label='Selected agent conversation' data-pane-focus-id={controller.model.selectedThreadId ? agentFocusId(controller.model.selectedThreadId) : undefined}>
-            <WorkspacePlaceholder controller={controller} inputFocusRequest={null} preserveDraft showFooter={false} />
-          </section>
-        </PaneFocusScope>
-      </div>
+      <WorkspaceCanvas controller={controller} inputFocusRequest={null} singlePaneId={node?.paneId ?? ''} active={Boolean(node)} />
       {!pane && workspace && <p className='p-4 pt-14 text-sm text-muted-foreground'>Choose New terminal or New agent thread from this workspace’s sidebar menu.</p>}
     </div>
   </TerminalPaneActionsContext>;

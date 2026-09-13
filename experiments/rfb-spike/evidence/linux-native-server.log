@@ -1,0 +1,40 @@
+{"event":"ready","audio":false}
+13/09/2026 09:54:38 Unable to establish connection with systemd socket
+13/09/2026 09:54:38 Listening for VNC connections on TCP port 15910
+13/09/2026 09:54:40 Got connection from client 100.97.206.8
+13/09/2026 09:54:40   0 other clients
+{"event":"joined","viewer":1,"viewers":1}
+13/09/2026 09:54:40 Normal socket connection
+13/09/2026 09:54:40 Client Protocol Version 3.8
+13/09/2026 09:54:40 Protocol version sent 3.8, using 3.8
+13/09/2026 09:54:40 Send channel security type 'none'
+13/09/2026 09:54:40 rfbProcessClientSecurityType: executing handler for type 1
+13/09/2026 09:54:40 rfbProcessClientSecurityType: returning securityResult for client rfb version >= 3.8
+13/09/2026 09:54:40 Pixel format for client 100.97.206.8:
+13/09/2026 09:54:40   32 bpp, depth 24, little endian
+13/09/2026 09:54:40   true colour: max r 255 g 255 b 255, shift r 16 g 8 b 0
+13/09/2026 09:54:40 Enabling KeyboardLedState protocol extension for client 100.97.206.8
+13/09/2026 09:54:40 Enabling NewFBSize protocol extension for client 100.97.206.8
+13/09/2026 09:54:40 Enabling ExtDesktopSize protocol extension for client 100.97.206.8
+13/09/2026 09:54:40 Enabling SupportedMessages protocol extension for client 100.97.206.8
+13/09/2026 09:54:40 Enabling SupportedEncodings protocol extension for client 100.97.206.8
+13/09/2026 09:54:40 Enabling ServerIdentity protocol extension for client 100.97.206.8
+13/09/2026 09:54:40 rfbProcessClientNormalMessage: ignoring unsupported encoding type Enc(0xFFFFFEFE)
+13/09/2026 09:54:40 Using ZRLE encoding for client 100.97.206.8
+13/09/2026 09:54:40 Sending rfbEncodingExtDesktopSize for size (800x600) 
+{"event":"left","viewer":1,"viewers":0}
+13/09/2026 09:56:10 Client 100.97.206.8 gone
+13/09/2026 09:56:10 Statistics             events    Transmit/ RawEquiv ( saved)
+13/09/2026 09:56:10  FramebufferUpdate   :   2482 |         0/        0 (  0.0%)
+13/09/2026 09:56:10  ZRLE                :   2482 |    409944/470472704 ( 99.9%)
+13/09/2026 09:56:10  ServerIdentify      :      1 |        42/       42 (  0.0%)
+13/09/2026 09:56:10  SupportedEncoding   :      1 |       104/      104 (  0.0%)
+13/09/2026 09:56:10  SupportedMessage    :      1 |        76/       76 (  0.0%)
+13/09/2026 09:56:10  ExtendedDesktopSize :      1 |        32/       32 (  0.0%)
+13/09/2026 09:56:10  TOTALS              :   4968 |    410198/470472958 ( 99.9%)
+13/09/2026 09:56:10 Statistics             events    Received/ RawEquiv ( saved)
+13/09/2026 09:56:10  FramebufferUpdate   :   2484 |     24840/    24840 (  0.0%)
+13/09/2026 09:56:10  SetEncodings        :      1 |        48/       48 (  0.0%)
+13/09/2026 09:56:10  SetPixelFormat      :      1 |        20/       20 (  0.0%)
+13/09/2026 09:56:10  TOTALS              :   2486 |     24908/    24908 (  0.0%)
+{"event":"stopped","frame":2540}

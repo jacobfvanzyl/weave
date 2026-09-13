@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>Viz real affine sampling</title>
+<style>
+body{margin:0;background:#102032;color:white;font:18px sans-serif}
+.card{position:absolute;width:230px;height:110px;padding:16px;box-sizing:border-box;background:#387ca5;will-change:transform;transform-origin:0 0}
+#scaled{left:70px;top:60px;animation:scale-card 4s linear infinite alternate;animation-delay:-1s;animation-play-state:paused}
+#skewed{left:70px;top:250px;transform:skewX(18deg)}
+#fractional{left:380px;top:420px;transform:translate(.25px,.5px)}
+@keyframes scale-card{from{transform:scale(.75)}to{transform:scale(1.25)}}
+</style>
+<div class="card" id="scaled">Compositor scale animation, paused at 875‰</div>
+<div class="card" id="skewed">Skewed cached text</div>
+<div class="card" id="fractional">Fractional translation</div>

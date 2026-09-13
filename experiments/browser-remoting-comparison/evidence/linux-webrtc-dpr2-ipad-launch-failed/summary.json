@@ -1,0 +1,26 @@
+{
+  "run": "linux-webrtc-dpr2-ipad-launch-failed",
+  "host": "linux",
+  "transport": "webrtc",
+  "dpr": 2,
+  "client": "iPadOS",
+  "extensionVariant": "extension-minfps",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 1299605,
+  "clientPid": 1771,
+  "startedAt": 1789289147.079045,
+  "exit": {
+    "client": 64,
+    "reference": false
+  },
+  "inputLatencyMs": {
+    "n": 0
+  },
+  "phases": [],
+  "failure": "No native measurement samples; see client.jsonl"
+}

@@ -1,0 +1,17 @@
+{
+  "synthetic": true,
+  "checks": [
+    {
+      "case": "mask",
+      "exitCode": 1,
+      "diagnostic": "REPLAY_REJECTED: unsupported mask filter",
+      "outputImageWritten": false
+    },
+    {
+      "case": "scaled-tile",
+      "exitCode": 1,
+      "diagnostic": "REPLAY_REJECTED: unsupported scaled or fractional tile sampling",
+      "outputImageWritten": false
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "state": "/tmp/wve-rfb-portal-hJbZVI",
+  "browserPaneCreated": true,
+  "trustedHumanProfileAccess": true,
+  "focusHandoff": true,
+  "authorizedInput": true,
+  "nativeRfb": {
+    "frames": 4,
+    "width": 1000,
+    "height": 800,
+    "saved": true,
+    "bytes": 4875
+  },
+  "unattendedAfterRpcDisconnect": true,
+  "popupRightSplit": true,
+  "sharedPopupClose": true,
+  "revokedDisplayBrowserAlive": true,
+  "success": true
+}

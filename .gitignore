@@ -27,3 +27,6 @@ product/alpha/.ipad-build/
 
 # Locally prepared pinned native terminal libraries
 product/alpha/native/.build/
+
+# Prepared upstream CEF and LibVNC build cache
+product/portal/native/.build/

@@ -1,0 +1,16 @@
+{
+  "host": "linux",
+  "transport": "webrtc",
+  "dpr": 2,
+  "client": "macOS",
+  "extensionVariant": "extension",
+  "viewportCSS": [
+    960,
+    640
+  ],
+  "audio": false,
+  "softwareRendering": true,
+  "hostPid": 1273089,
+  "clientPid": 90206,
+  "startedAt": 1789288357.725622
+}

@@ -1,0 +1,10 @@
+$ bun --bun run vitest run src/browser/browser-view-connection.test.ts
+
+ RUN  v4.1.11 /Users/jaco/Documents/VeeZee/weave/product/alpha
+
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  19:15:48
+   Duration  222ms (transform 25ms, setup 72ms, import 18ms, tests 38ms, environment 48ms)
+

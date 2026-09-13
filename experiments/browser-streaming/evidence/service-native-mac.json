@@ -1,0 +1,44 @@
+{
+  "at": "2026-09-12T18:08:21.369Z",
+  "host": "Linux Chrome 153.0.8010.36",
+  "client": "native macOS existing libwebrtc build",
+  "browserOwner": "separate Browser Service via Unix IPC",
+  "browserAvailableAfterHarnessShutdown": true,
+  "firstFrame": {
+    "at": "2026-09-12T18:07:01.401Z",
+    "event": "firstFrame",
+    "tab": "A",
+    "generation": 1,
+    "width": 960,
+    "height": 640
+  },
+  "audioPlaying": true,
+  "audioRecording": false,
+  "media": [
+    {
+      "bytesReceived": 140241,
+      "packetsReceived": 4008,
+      "totalAudioEnergy": 7.490153300760476e-08,
+      "kind": "audio"
+    },
+    {
+      "framesDecoded": 2391,
+      "frameHeight": 640,
+      "decoderImplementation": "VideoToolbox",
+      "bytesReceived": 675061,
+      "kind": "video",
+      "packetsReceived": 2870,
+      "framesPerSecond": 29,
+      "frameWidth": 960
+    }
+  ],
+  "transport": {
+    "protocol": "udp",
+    "roundTripSeconds": 0.003
+  },
+  "limits": [
+    "Synthetic fixture",
+    "Audio playback state, not a new audible-tone confirmation",
+    "No iPad rebuild or Portal authorization in this run"
+  ]
+}

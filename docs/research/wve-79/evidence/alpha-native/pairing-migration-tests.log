@@ -1,0 +1,16 @@
+bun test v1.3.14 (0d9b296a)
+
+product/portal/src/security_test.ts:
+(pass) Browser Profile grants are explicit, survive authentication and do not follow Workspace grants [8.83ms]
+(pass) Portal Pairing Tokens are one-time and Host identity survives restart [3.20ms]
+(pass) Portal Pairing Tokens use a strict minimal signed JWT profile [4.22ms]
+(pass) Portal credential rotation is explicit and interruption-safe [4.00ms]
+(pass) Portal authorization applies resource grants without revealing denied resources [1.99ms]
+(pass) Portal does not infer broader directory grants when reopening an older pairing [2.10ms]
+(pass) trusted human Profile access survives restart and rotation while restricted pairings remain scoped [5.56ms]
+(pass) legacy unrestricted human pairings missing browser.profile. gain Profile access without broadening explicit scopes [3.48ms]
+(pass) legacy unrestricted human pairings missing browser. gain Profile access without broadening explicit scopes [3.37ms]
+
+ 9 pass
+ 0 fail
+Ran 9 tests across 1 file. [78.00ms]

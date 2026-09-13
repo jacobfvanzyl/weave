@@ -1,3 +1,4 @@
+import type { DirectHostClient } from '@/portal-client';
 import type { CreateElicitationResponse } from "@agentclientprotocol/sdk";
 import type {
   RepositoryIdentity,
@@ -116,6 +117,7 @@ export type AlphaViewModel = {
   workspaceFiles?: AlphaExecutionContextFiles;
   terminals?: AlphaTerminalsModel;
   workspaceCompositions?: WorkspaceCompositionsModel;
+  browserCreation?: { paneId: string; hostId: string; workspaceId: string; sourcePaneId?: string; axis: 'horizontal' | 'vertical'; profileId?: string; workspaceName?: string };
   busy: boolean;
   error?: string;
 };
@@ -149,11 +151,16 @@ export type AlphaActions = {
     workspaceId?: string,
   ): Promise<void> | void;
   createThreadInDirectory?(hostId: string, path: string, workspaceId: string): Promise<void> | void;
+  splitPane?(workspace: { hostId: string; workspaceId: string }, paneId: string, axis: 'horizontal' | 'vertical', type: 'terminal' | 'agent' | 'browser'): Promise<void>;
+  newBrowserPane?(hostId: string, workspaceId?: string): void;
+  createBrowserPane?(profileId: string, url: string): Promise<void>;
+  cancelBrowserPane?(): void;
   assignThread?(threadId: string, workspaceId: string): Promise<void> | void;
   selectThread(threadId: string, options?: { preserveDraft?: boolean }): Promise<void> | void;
+  setDraftText?(threadId: string, text: string): void;
   discardThreadDraft?(threadId: string): Promise<void> | void;
   setFocusedAgentThread?(threadId?: string): void;
-  archiveThread(threadId: string): Promise<void> | void;
+  archiveThread(threadId: string, stopActive?: boolean): Promise<void> | void;
   restoreThread(threadId: string): Promise<void> | void;
   openWorkspaceDirectory?(path: string): Promise<void> | void;
   openWorkspaceFile?(path: string): Promise<void> | void;
@@ -184,7 +191,10 @@ export type AlphaActions = {
 
 export type AlphaController = {
   model: AlphaViewModel;
+  forThread?(threadId: string): AlphaController;
+  attachThread?(threadId: string): Promise<void>;
   workspaceActions?: WorkspaceCompositionActions;
+  browserClient?(hostId: string): Pick<DirectHostClient, 'browserRequest' | 'browserDisplay'> | undefined;
   terminalClient?(hostId: string): AlphaTerminalClient | undefined;
   actions: AlphaActions;
 };

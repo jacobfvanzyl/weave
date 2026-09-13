@@ -1,0 +1,17 @@
+{
+  "reference": "CEF Page.captureScreenshot PNG decoded to sRGB RGBA",
+  "decoder": "LibVNCClient 0.9.15 and CoreGraphics",
+  "size": [
+    1000,
+    800
+  ],
+  "mac": {
+    "clickDifferentPixels": 0,
+    "resizeDifferentPixels": 0
+  },
+  "linux": {
+    "clickDifferentPixels": 0,
+    "resizeDifferentPixels": 0
+  },
+  "linuxTransport": "temporary SSH Unix-socket forwarding over Tailscale; not the product Portal transport"
+}

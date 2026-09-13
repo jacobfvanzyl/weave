@@ -1,0 +1,23 @@
+{
+  "state": "/tmp/wve79-pages-JFa50b",
+  "profileSingleton": true,
+  "profileIsolation": true,
+  "runtimeReuse": true,
+  "viewport": {
+    "height": 800,
+    "width": 1000
+  },
+  "unattended": true,
+  "rfbSocket": "/tmp/weave-rfb-BGHQG9/6a3560d3-d6af-4850-91a4-ea3a9f7eba04.sock",
+  "nativeRfbCapture": {
+    "width": 1000,
+    "height": 800,
+    "passiveInputRejected": true,
+    "passiveResizeRejected": true
+  },
+  "managedPopup": true,
+  "explicitRestoreRequired": true,
+  "profilePersistence": true,
+  "staleGenerationRejected": true,
+  "success": true
+}

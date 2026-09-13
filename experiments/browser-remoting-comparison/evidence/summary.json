@@ -1,0 +1,3484 @@
+[
+  {
+    "run": "linux-rfb-dpr1",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 1,
+    "client": "macOS",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1257857,
+    "clientPid": 84628,
+    "startedAt": 1789287926.8702888,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.000976000010269,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 2.1753362803674303,
+        "clientRSSMiB": 95.40625,
+        "hostCPUPercentOneCoreApprox": 48.674654906019526,
+        "hostSummedRSSMiBApprox": 1066.5950520833333
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.017940999998245,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0011005674686760266,
+        "clientCPUPercentOneCore": 1.012515423235894,
+        "clientRSSMiB": 95.366875,
+        "hostCPUPercentOneCoreApprox": 0.0,
+        "hostSummedRSSMiBApprox": 1047.5725203804348
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 12.997403999994276,
+        "receivedDistinctFPS": 30.0069810585971,
+        "frameGapP95Ms": 35.85859999875538,
+        "receivedMbps": 3.7171923698649443,
+        "clientCPUPercentOneCore": 21.621581636857616,
+        "clientRSSMiB": 96.27163461538461,
+        "hostCPUPercentOneCoreApprox": 32.52283907599479,
+        "hostSummedRSSMiBApprox": 962.521875
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 13.007164000009652,
+        "receivedDistinctFPS": 29.997815326199945,
+        "frameGapP95Ms": 34.55980001017451,
+        "receivedMbps": 0.015110582975686375,
+        "clientCPUPercentOneCore": 18.85254633768012,
+        "clientRSSMiB": 95.79807692307692,
+        "hostCPUPercentOneCoreApprox": 9.76498700304282,
+        "hostSummedRSSMiBApprox": 970.0646306818181
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.000738999980967,
+        "receivedDistinctFPS": 29.997725108303683,
+        "frameGapP95Ms": 35.61460000346415,
+        "receivedMbps": 1.9282310446370967,
+        "clientCPUPercentOneCore": 18.80488973837513,
+        "clientRSSMiB": 96.88341346153847,
+        "hostCPUPercentOneCoreApprox": 21.687113393537018,
+        "hostSummedRSSMiBApprox": 991.595703125
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 30.6965,
+      "p95": 45.31735,
+      "max": 46.697
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    }
+  },
+  {
+    "run": "linux-rfb-dpr1-repeat",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 1,
+    "client": "macOS",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1283567,
+    "clientPid": 93924,
+    "startedAt": 1789288657.73738,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 4.997942999994848,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.0670212720880807,
+        "clientRSSMiB": 95.540625,
+        "hostCPUPercentOneCoreApprox": 3.802017227974915,
+        "hostSummedRSSMiBApprox": 961.40625
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.012091999989934,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0011053835220093784,
+        "clientCPUPercentOneCore": 0.8736621268528952,
+        "clientRSSMiB": 95.53450520833333,
+        "hostCPUPercentOneCoreApprox": 3.894998496472134,
+        "hostSummedRSSMiBApprox": 964.6967329545455
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.004280000022845,
+        "receivedDistinctFPS": 30.002319973766564,
+        "frameGapP95Ms": 35.261599998921156,
+        "receivedMbps": 3.714706965290405,
+        "clientCPUPercentOneCore": 17.629301319313427,
+        "clientRSSMiB": 96.35096153846153,
+        "hostCPUPercentOneCoreApprox": 29.270441176897492,
+        "hostSummedRSSMiBApprox": 987.2613636363636
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 13.004238999972586,
+        "receivedDistinctFPS": 29.99926814126811,
+        "frameGapP95Ms": 34.4256000011228,
+        "receivedMbps": 0.015103948879565586,
+        "clientCPUPercentOneCore": 19.825270257464286,
+        "clientRSSMiB": 95.8173076923077,
+        "hostCPUPercentOneCoreApprox": 8.033177747095161,
+        "hostSummedRSSMiBApprox": 992.62734375
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.00089300001855,
+        "receivedDistinctFPS": 29.99754930046505,
+        "frameGapP95Ms": 35.57100000907667,
+        "receivedMbps": 1.9282918132772222,
+        "clientCPUPercentOneCore": 21.97964660112997,
+        "clientRSSMiB": 95.83533653846153,
+        "hostCPUPercentOneCoreApprox": 31.37818301409867,
+        "hostSummedRSSMiBApprox": 997.625390625
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 28.086,
+      "p95": 44.566149999999986,
+      "max": 46.507
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-ipad",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "iPadOS",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1296171,
+    "clientPid": 99814,
+    "startedAt": 1789289045.886034,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.019357999997737,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.5277595964562245,
+        "clientRSSMiB": 37.309375,
+        "hostCPUPercentOneCoreApprox": 3.8118788282254297,
+        "hostSummedRSSMiBApprox": 1005.5221354166666
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.052052999999432,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0015426784800797334,
+        "clientCPUPercentOneCore": 0.9032045257994281,
+        "clientRSSMiB": 37.231875,
+        "hostCPUPercentOneCoreApprox": 3.945193633062454,
+        "hostSummedRSSMiBApprox": 1008.9419389204545
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.14447199999995,
+        "receivedDistinctFPS": 20.759797918627804,
+        "frameGapP95Ms": 116.36065000202505,
+        "receivedMbps": 13.427715785868884,
+        "clientCPUPercentOneCore": 24.438705984705713,
+        "clientRSSMiB": 46.67578125,
+        "hostCPUPercentOneCoreApprox": 74.82809379755821,
+        "hostSummedRSSMiBApprox": 1064.66796875
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.930910000002768,
+        "receivedDistinctFPS": 27.36461473141558,
+        "frameGapP95Ms": 97.89019999880111,
+        "receivedMbps": 0.019209643404355832,
+        "clientCPUPercentOneCore": 14.802248153174869,
+        "clientRSSMiB": 43.08533653846154,
+        "hostCPUPercentOneCoreApprox": 10.562846926353277,
+        "hostSummedRSSMiBApprox": 1039.103515625
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 12.936510999999882,
+        "receivedDistinctFPS": 26.281124903885534,
+        "frameGapP95Ms": 107.16760000213979,
+        "receivedMbps": 6.9996781716661385,
+        "clientCPUPercentOneCore": 23.62199240545922,
+        "clientRSSMiB": 43.51923076923077,
+        "hostCPUPercentOneCoreApprox": 77.48398252919732,
+        "hostSummedRSSMiBApprox": 1033.2716619318182
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 38.8995,
+      "p95": 106.21775,
+      "max": 111.856
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-ipad-opt-baseline",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "iPadOS",
+    "rfbNoPresent": "0",
+    "rfbEncodings": "zrle hextile raw",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1339758,
+    "clientPid": 28318,
+    "startedAt": 1789290385.17269,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "rfbDiagnostics": {
+          "rttMs": {
+            "n": 5,
+            "mean": 47,
+            "p50": 47.0,
+            "p95": 47.0
+          },
+          "srttMs": {
+            "n": 5,
+            "mean": 23,
+            "p50": 23.0,
+            "p95": 23.0
+          },
+          "rxWindow": {
+            "n": 5,
+            "mean": 289536,
+            "p50": 289536.0,
+            "p95": 289536.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.0328149999986636,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.5644056200707561,
+        "clientRSSMiB": 38.43125,
+        "hostCPUPercentOneCoreApprox": 2.8555093426149005,
+        "hostSummedRSSMiBApprox": 1005.7864583333334
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 20,
+            "mean": 4.12685,
+            "p50": 4.404999999999999,
+            "p95": 4.793200000000001
+          },
+          "copyMs": {
+            "n": 20,
+            "mean": 3.1934,
+            "p50": 3.3209999999999997,
+            "p95": 4.01065
+          },
+          "queueMs": {
+            "n": 20,
+            "mean": 0.08035,
+            "p50": 0.0935,
+            "p95": 0.11705
+          },
+          "submitMs": {
+            "n": 20,
+            "mean": 0.5816,
+            "p50": 0.6074999999999999,
+            "p95": 0.7099000000000001
+          },
+          "rttMs": {
+            "n": 25,
+            "mean": 37.4,
+            "p50": 47.0,
+            "p95": 47.0
+          },
+          "srttMs": {
+            "n": 25,
+            "mean": 30.68,
+            "p50": 37.0,
+            "p95": 39.39999999999999
+          },
+          "rxWindow": {
+            "n": 25,
+            "mean": 289536,
+            "p50": 289536.0,
+            "p95": 289536.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 20
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.150517000001855,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.001542646445195465,
+        "clientCPUPercentOneCore": 1.0954143688146938,
+        "clientRSSMiB": 38.301875,
+        "hostCPUPercentOneCoreApprox": 3.896303007604595,
+        "hostSummedRSSMiBApprox": 1009.1889204545455
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 145,
+            "mean": 52.05037931034483,
+            "p50": 18.718,
+            "p95": 321.3248
+          },
+          "copyMs": {
+            "n": 145,
+            "mean": 2.1934,
+            "p50": 2.215,
+            "p95": 2.8901999999999988
+          },
+          "queueMs": {
+            "n": 145,
+            "mean": 0.06966206896551724,
+            "p50": 0.077,
+            "p95": 0.11639999999999995
+          },
+          "submitMs": {
+            "n": 145,
+            "mean": 0.47669655172413794,
+            "p50": 0.546,
+            "p95": 0.6257999999999998
+          },
+          "rttMs": {
+            "n": 12,
+            "mean": 12.333333333333334,
+            "p50": 8.0,
+            "p95": 36.0
+          },
+          "srttMs": {
+            "n": 12,
+            "mean": 40.75,
+            "p50": 43.0,
+            "p95": 45.45
+          },
+          "rxWindow": {
+            "n": 12,
+            "mean": 289536,
+            "p50": 289536.0,
+            "p95": 289536.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 145
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.046792000001005,
+        "receivedDistinctFPS": 11.37122256277675,
+        "frameGapP95Ms": 420.94710000565095,
+        "receivedMbps": 7.121961637449315,
+        "clientCPUPercentOneCore": 13.877117033414303,
+        "clientRSSMiB": 46.1484375,
+        "hostCPUPercentOneCoreApprox": 61.149455104721774,
+        "hostSummedRSSMiBApprox": 1065.724609375
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 354,
+            "mean": 4.05759604519774,
+            "p50": 4.1105,
+            "p95": 4.744949999999999
+          },
+          "copyMs": {
+            "n": 354,
+            "mean": 3.326132768361582,
+            "p50": 3.3645,
+            "p95": 3.95415
+          },
+          "queueMs": {
+            "n": 354,
+            "mean": 0.09209322033898305,
+            "p50": 0.092,
+            "p95": 0.123
+          },
+          "submitMs": {
+            "n": 354,
+            "mean": 0.561316384180791,
+            "p50": 0.559,
+            "p95": 0.6316999999999999
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 37.92307692307692,
+            "p50": 33.0,
+            "p95": 61.19999999999991
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 35.30769230769231,
+            "p50": 34.0,
+            "p95": 39.8
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 289536,
+            "p50": 289536.0,
+            "p95": 289536.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 354
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.924467999997432,
+        "receivedDistinctFPS": 27.36445563416019,
+        "frameGapP95Ms": 99.04479999822796,
+        "receivedMbps": 0.019190379478402814,
+        "clientCPUPercentOneCore": 15.836526064597917,
+        "clientRSSMiB": 42.74639423076923,
+        "hostCPUPercentOneCoreApprox": 10.475307267023497,
+        "hostSummedRSSMiBApprox": 1039.83359375
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 322,
+            "mean": 11.760018633540373,
+            "p50": 10.119,
+            "p95": 16.625199999999996
+          },
+          "copyMs": {
+            "n": 321,
+            "mean": 2.2792679127725854,
+            "p50": 2.253,
+            "p95": 2.787
+          },
+          "queueMs": {
+            "n": 321,
+            "mean": 0.07490654205607476,
+            "p50": 0.079,
+            "p95": 0.114
+          },
+          "submitMs": {
+            "n": 321,
+            "mean": 0.51598753894081,
+            "p50": 0.542,
+            "p95": 0.62
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 33.76923076923077,
+            "p50": 28.0,
+            "p95": 67.59999999999988
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 29.846153846153847,
+            "p50": 29.0,
+            "p95": 35.199999999999996
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 289536,
+            "p50": 289536.0,
+            "p95": 289536.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 321
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 12.941993000000366,
+        "receivedDistinctFPS": 24.89834085237226,
+        "frameGapP95Ms": 111.39850000472507,
+        "receivedMbps": 6.604547566256449,
+        "clientCPUPercentOneCore": 24.316878971696415,
+        "clientRSSMiB": 44.71995192307692,
+        "hostCPUPercentOneCoreApprox": 75.83699148104893,
+        "hostSummedRSSMiBApprox": 1034.407421875
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 47.2,
+      "p95": 101.01569999999998,
+      "max": 118.885
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-ipad-opt-control-repeat",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "iPadOS",
+    "rfbNoPresent": "0",
+    "rfbMoreAcks": "0",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "sourceSha256": {
+      "RFBApp.m": "d59502991e213cf16ad8405181af3b14b0adaec67ef89c299778fef961e42cbe",
+      "BenchRFB.h": "b7a72d577c72d14f39031229e5efbe14a2f378ff987de7c728b7a927cc319468",
+      "cef-host.cc": "09c00f8ab8ca9420bf4e6222b466d34b8b65ed354e6f630a19cd45fdd3d8c064",
+      "page.html": "684e834d37202925dabcedcc59097b5b988d6200951c0e199779114695da58cc",
+      "run.py": "88d1d31ea80eaa7c35f97f3139f80ae85502b15e43aec346ab78a8d72828af6d"
+    },
+    "hostPid": 1350576,
+    "clientPid": 33444,
+    "startedAt": 1789290708.607392,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "rfbDiagnostics": {
+          "rttMs": {
+            "n": 5,
+            "mean": 47,
+            "p50": 47.0,
+            "p95": 47.0
+          },
+          "srttMs": {
+            "n": 5,
+            "mean": 37,
+            "p50": 37.0,
+            "p95": 37.0
+          },
+          "rxWindow": {
+            "n": 5,
+            "mean": 250240,
+            "p50": 250240.0,
+            "p95": 250240.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.071344999996654,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.5153186751474066,
+        "clientRSSMiB": 37.2375,
+        "hostCPUPercentOneCoreApprox": 4.291867397072875,
+        "hostSummedRSSMiBApprox": 1004.6119791666666
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 20,
+            "mean": 4.42735,
+            "p50": 4.521,
+            "p95": 4.88345
+          },
+          "handleCpuMs": {
+            "n": 20,
+            "mean": 4.37085,
+            "p50": 4.365,
+            "p95": 4.7802500000000006
+          },
+          "copyMs": {
+            "n": 20,
+            "mean": 3.4408,
+            "p50": 3.5125,
+            "p95": 3.8787
+          },
+          "queueMs": {
+            "n": 20,
+            "mean": 0.09295,
+            "p50": 0.0955,
+            "p95": 0.1207
+          },
+          "submitMs": {
+            "n": 20,
+            "mean": 0.57935,
+            "p50": 0.573,
+            "p95": 0.6187000000000001
+          },
+          "rttMs": {
+            "n": 25,
+            "mean": 17.04,
+            "p50": 4.0,
+            "p95": 46.8
+          },
+          "srttMs": {
+            "n": 25,
+            "mean": 27.6,
+            "p50": 30.0,
+            "p95": 30.0
+          },
+          "rxWindow": {
+            "n": 25,
+            "mean": 250240,
+            "p50": 250240.0,
+            "p95": 250240.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 20
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.62156700000196,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0015428415582631888,
+        "clientCPUPercentOneCore": 0.9156904211818725,
+        "clientRSSMiB": 37.0975,
+        "hostCPUPercentOneCoreApprox": 3.941366716509911,
+        "hostSummedRSSMiBApprox": 1008.0420809659091
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 219,
+            "mean": 21.84170776255708,
+            "p50": 11.955,
+            "p95": 15.306399999999998
+          },
+          "handleCpuMs": {
+            "n": 219,
+            "mean": 9.825803652968036,
+            "p50": 10.236,
+            "p95": 11.6175
+          },
+          "copyMs": {
+            "n": 218,
+            "mean": 2.0222798165137617,
+            "p50": 2.0665,
+            "p95": 2.30315
+          },
+          "queueMs": {
+            "n": 218,
+            "mean": 0.057091743119266056,
+            "p50": 0.067,
+            "p95": 0.08
+          },
+          "submitMs": {
+            "n": 218,
+            "mean": 0.43187155963302754,
+            "p50": 0.508,
+            "p95": 0.5503
+          },
+          "rttMs": {
+            "n": 12,
+            "mean": 96.33333333333333,
+            "p50": 31.0,
+            "p95": 308.09999999999997
+          },
+          "srttMs": {
+            "n": 12,
+            "mean": 36.666666666666664,
+            "p50": 35.5,
+            "p95": 44.699999999999996
+          },
+          "rxWindow": {
+            "n": 12,
+            "mean": 562112,
+            "p50": 562112.0,
+            "p95": 562112.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 218
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 12.38834499999939,
+        "receivedDistinctFPS": 18.195432359526276,
+        "frameGapP95Ms": 122.07399999460904,
+        "receivedMbps": 11.308798997313632,
+        "clientCPUPercentOneCore": 20.29994386007448,
+        "clientRSSMiB": 43.509114583333336,
+        "hostCPUPercentOneCoreApprox": 72.48908513636847,
+        "hostSummedRSSMiBApprox": 1064.270703125
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 357,
+            "mean": 4.061322128851541,
+            "p50": 4.171,
+            "p95": 4.64
+          },
+          "handleCpuMs": {
+            "n": 357,
+            "mean": 3.9889635854341736,
+            "p50": 4.093,
+            "p95": 4.5596000000000005
+          },
+          "copyMs": {
+            "n": 356,
+            "mean": 3.349426966292135,
+            "p50": 3.4195,
+            "p95": 3.8235
+          },
+          "queueMs": {
+            "n": 356,
+            "mean": 0.08719662921348315,
+            "p50": 0.082,
+            "p95": 0.114
+          },
+          "submitMs": {
+            "n": 356,
+            "mean": 0.49995786516853935,
+            "p50": 0.498,
+            "p95": 0.55425
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 30.923076923076923,
+            "p50": 33.0,
+            "p95": 33.4
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 35,
+            "p50": 34.0,
+            "p95": 39.4
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 562112,
+            "p50": 562112.0,
+            "p95": 562112.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 356
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 13.019336999997904,
+        "receivedDistinctFPS": 27.383159864346435,
+        "frameGapP95Ms": 98.84874999806925,
+        "receivedMbps": 0.01910823744432799,
+        "clientCPUPercentOneCore": 15.391391518308433,
+        "clientRSSMiB": 42.22716346153846,
+        "hostCPUPercentOneCoreApprox": 10.473008704092225,
+        "hostSummedRSSMiBApprox": 1038.03828125
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 337,
+            "mean": 8.764050445103857,
+            "p50": 8.59,
+            "p95": 10.082599999999998
+          },
+          "handleCpuMs": {
+            "n": 337,
+            "mean": 7.852008902077151,
+            "p50": 8.094,
+            "p95": 9.1474
+          },
+          "copyMs": {
+            "n": 337,
+            "mean": 2.095854599406528,
+            "p50": 2.123,
+            "p95": 2.327
+          },
+          "queueMs": {
+            "n": 337,
+            "mean": 0.062222551928783384,
+            "p50": 0.067,
+            "p95": 0.086
+          },
+          "submitMs": {
+            "n": 337,
+            "mean": 0.46666765578635017,
+            "p50": 0.493,
+            "p95": 0.541
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 26.46153846153846,
+            "p50": 26.0,
+            "p95": 31.199999999999996
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 30.53846153846154,
+            "p50": 29.0,
+            "p95": 36.4
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 562112,
+            "p50": 562112.0,
+            "p95": 562112.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 337
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 12.974435000003723,
+        "receivedDistinctFPS": 26.15674710956773,
+        "frameGapP95Ms": 108.62350000388687,
+        "receivedMbps": 6.957480554255949,
+        "clientCPUPercentOneCore": 24.304430951261246,
+        "clientRSSMiB": 39.97115384615385,
+        "hostCPUPercentOneCoreApprox": 77.35715278411996,
+        "hostSummedRSSMiBApprox": 1033.4691051136363
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 43.1195,
+      "p95": 120.76349999999998,
+      "max": 129.489
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-ipad-opt-more-acks",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "iPadOS",
+    "rfbNoPresent": "0",
+    "rfbMoreAcks": "1",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1347010,
+    "clientPid": 31793,
+    "startedAt": 1789290602.492629,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "rfbDiagnostics": {
+          "rttMs": {
+            "n": 5,
+            "mean": 45,
+            "p50": 45.0,
+            "p95": 45.0
+          },
+          "srttMs": {
+            "n": 5,
+            "mean": 17,
+            "p50": 17.0,
+            "p95": 17.0
+          },
+          "rxWindow": {
+            "n": 5,
+            "mean": 171648,
+            "p50": 171648.0,
+            "p95": 171648.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.125508999997692,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.4880703874065114,
+        "clientRSSMiB": 38.434375,
+        "hostCPUPercentOneCoreApprox": 3.3349135472017637,
+        "hostSummedRSSMiBApprox": 1003.9791666666666
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 21,
+            "mean": 4.378714285714286,
+            "p50": 4.304,
+            "p95": 4.853
+          },
+          "handleCpuMs": {
+            "n": 21,
+            "mean": 4.3368095238095234,
+            "p50": 4.285,
+            "p95": 4.828
+          },
+          "copyMs": {
+            "n": 21,
+            "mean": 3.389047619047619,
+            "p50": 3.374,
+            "p95": 3.819
+          },
+          "queueMs": {
+            "n": 21,
+            "mean": 0.101,
+            "p50": 0.101,
+            "p95": 0.128
+          },
+          "submitMs": {
+            "n": 21,
+            "mean": 0.5682857142857143,
+            "p50": 0.571,
+            "p95": 0.597
+          },
+          "rttMs": {
+            "n": 25,
+            "mean": 43.44,
+            "p50": 49.0,
+            "p95": 49.8
+          },
+          "srttMs": {
+            "n": 25,
+            "mean": 23.2,
+            "p50": 22.0,
+            "p95": 31.0
+          },
+          "rxWindow": {
+            "n": 25,
+            "mean": 171648,
+            "p50": 171648.0,
+            "p95": 171648.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 21
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.012923000002047,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0021626938712887077,
+        "clientCPUPercentOneCore": 0.9774651966893049,
+        "clientRSSMiB": 38.269375,
+        "hostCPUPercentOneCoreApprox": 3.940866826523346,
+        "hostSummedRSSMiBApprox": 1007.3077059659091
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 230,
+            "mean": 22.32217391304348,
+            "p50": 14.775500000000001,
+            "p95": 28.43739999999997
+          },
+          "handleCpuMs": {
+            "n": 230,
+            "mean": 10.267652173913044,
+            "p50": 10.691500000000001,
+            "p95": 11.84645
+          },
+          "copyMs": {
+            "n": 231,
+            "mean": 2.0098311688311687,
+            "p50": 2.056,
+            "p95": 2.3385
+          },
+          "queueMs": {
+            "n": 231,
+            "mean": 0.05901731601731602,
+            "p50": 0.068,
+            "p95": 0.094
+          },
+          "submitMs": {
+            "n": 231,
+            "mean": 0.4516883116883117,
+            "p50": 0.513,
+            "p95": 0.5545
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 60.46153846153846,
+            "p50": 35.0,
+            "p95": 216.59999999999965
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 38.30769230769231,
+            "p50": 38.0,
+            "p95": 44.4
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 206016,
+            "p50": 206016.0,
+            "p95": 206016.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 231
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.501004999998258,
+        "receivedDistinctFPS": 17.056467512143556,
+        "frameGapP95Ms": 124.41914999981236,
+        "receivedMbps": 10.658823311235503,
+        "clientCPUPercentOneCore": 19.62758175543372,
+        "clientRSSMiB": 43.35576923076923,
+        "hostCPUPercentOneCoreApprox": 67.25947579903851,
+        "hostSummedRSSMiBApprox": 1064.0671164772727
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 341,
+            "mean": 4.065032258064516,
+            "p50": 4.102,
+            "p95": 4.654
+          },
+          "handleCpuMs": {
+            "n": 341,
+            "mean": 3.987258064516129,
+            "p50": 4.019,
+            "p95": 4.583
+          },
+          "copyMs": {
+            "n": 341,
+            "mean": 3.3409384164222873,
+            "p50": 3.342,
+            "p95": 3.871
+          },
+          "queueMs": {
+            "n": 341,
+            "mean": 0.0833841642228739,
+            "p50": 0.079,
+            "p95": 0.112
+          },
+          "submitMs": {
+            "n": 341,
+            "mean": 0.5152609970674487,
+            "p50": 0.511,
+            "p95": 0.595
+          },
+          "rttMs": {
+            "n": 12,
+            "mean": 39.083333333333336,
+            "p50": 34.0,
+            "p95": 69.19999999999995
+          },
+          "srttMs": {
+            "n": 12,
+            "mean": 35.5,
+            "p50": 34.5,
+            "p95": 40.699999999999996
+          },
+          "rxWindow": {
+            "n": 12,
+            "mean": 206016,
+            "p50": 206016.0,
+            "p95": 206016.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 341
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.422774999999092,
+        "receivedDistinctFPS": 27.55927594973345,
+        "frameGapP95Ms": 97.39080000035756,
+        "receivedMbps": 0.0192755044056413,
+        "clientCPUPercentOneCore": 15.635162312700912,
+        "clientRSSMiB": 42.265625,
+        "hostCPUPercentOneCoreApprox": 10.485747019587787,
+        "hostSummedRSSMiBApprox": 1037.091796875
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 336,
+            "mean": 9.456211309523809,
+            "p50": 8.753499999999999,
+            "p95": 12.7065
+          },
+          "handleCpuMs": {
+            "n": 336,
+            "mean": 7.860901785714286,
+            "p50": 8.125,
+            "p95": 9.0235
+          },
+          "copyMs": {
+            "n": 336,
+            "mean": 2.0780357142857144,
+            "p50": 2.1005000000000003,
+            "p95": 2.374
+          },
+          "queueMs": {
+            "n": 336,
+            "mean": 0.06267559523809524,
+            "p50": 0.068,
+            "p95": 0.09175
+          },
+          "submitMs": {
+            "n": 336,
+            "mean": 0.47083928571428574,
+            "p50": 0.501,
+            "p95": 0.548
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 30.46153846153846,
+            "p50": 26.0,
+            "p95": 58.39999999999991
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 31.307692307692307,
+            "p50": 30.0,
+            "p95": 36.0
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 206016,
+            "p50": 206016.0,
+            "p95": 206016.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 336
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.0772799999977,
+        "receivedDistinctFPS": 25.723709696796515,
+        "frameGapP95Ms": 109.12549999993644,
+        "receivedMbps": 6.944321891905318,
+        "clientCPUPercentOneCore": 24.22860467618416,
+        "clientRSSMiB": 44.0625,
+        "hostCPUPercentOneCoreApprox": 77.31785916873326,
+        "hostSummedRSSMiBApprox": 1032.5071022727273
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 35.644000000000005,
+      "p95": 109.73309999999998,
+      "max": 141.238
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-ipad-opt-more-acks-repeat",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "iPadOS",
+    "rfbNoPresent": "0",
+    "rfbMoreAcks": "1",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "sourceSha256": {
+      "RFBApp.m": "d59502991e213cf16ad8405181af3b14b0adaec67ef89c299778fef961e42cbe",
+      "BenchRFB.h": "b7a72d577c72d14f39031229e5efbe14a2f378ff987de7c728b7a927cc319468",
+      "cef-host.cc": "09c00f8ab8ca9420bf4e6222b466d34b8b65ed354e6f630a19cd45fdd3d8c064",
+      "page.html": "684e834d37202925dabcedcc59097b5b988d6200951c0e199779114695da58cc",
+      "run.py": "88d1d31ea80eaa7c35f97f3139f80ae85502b15e43aec346ab78a8d72828af6d"
+    },
+    "hostPid": 1354192,
+    "clientPid": 35088,
+    "startedAt": 1789290816.4123049,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "rfbDiagnostics": {
+          "rttMs": {
+            "n": 5,
+            "mean": 46,
+            "p50": 46.0,
+            "p95": 46.0
+          },
+          "srttMs": {
+            "n": 5,
+            "mean": 18,
+            "p50": 18.0,
+            "p95": 18.0
+          },
+          "rxWindow": {
+            "n": 5,
+            "mean": 196160,
+            "p50": 196160.0,
+            "p95": 196160.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.0439990000013495,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.4037482335859741,
+        "clientRSSMiB": 37.346875,
+        "hostCPUPercentOneCoreApprox": 2.8509775381528075,
+        "hostSummedRSSMiBApprox": 1003.2942708333334
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 22,
+            "mean": 4.399318181818182,
+            "p50": 4.4135,
+            "p95": 4.79155
+          },
+          "handleCpuMs": {
+            "n": 22,
+            "mean": 4.362318181818182,
+            "p50": 4.3925,
+            "p95": 4.7848999999999995
+          },
+          "copyMs": {
+            "n": 22,
+            "mean": 3.451818181818182,
+            "p50": 3.4805,
+            "p95": 3.85055
+          },
+          "queueMs": {
+            "n": 22,
+            "mean": 0.0925,
+            "p50": 0.0915,
+            "p95": 0.11785
+          },
+          "submitMs": {
+            "n": 22,
+            "mean": 0.5647272727272727,
+            "p50": 0.554,
+            "p95": 0.59065
+          },
+          "rttMs": {
+            "n": 25,
+            "mean": 48.6,
+            "p50": 46.0,
+            "p95": 46.0
+          },
+          "srttMs": {
+            "n": 25,
+            "mean": 27.16,
+            "p50": 25.0,
+            "p95": 34.8
+          },
+          "rxWindow": {
+            "n": 25,
+            "mean": 196160,
+            "p50": 196160.0,
+            "p95": 196160.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 22
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.101976999998442,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.002182901707527315,
+        "clientCPUPercentOneCore": 0.9709645097060109,
+        "clientRSSMiB": 37.145625,
+        "hostCPUPercentOneCoreApprox": 3.985134844008737,
+        "hostSummedRSSMiBApprox": 1006.8243963068181
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 212,
+            "mean": 25.127103773584906,
+            "p50": 14.9225,
+            "p95": 58.01619999999975
+          },
+          "handleCpuMs": {
+            "n": 212,
+            "mean": 10.005099056603774,
+            "p50": 10.5785,
+            "p95": 11.88765
+          },
+          "copyMs": {
+            "n": 213,
+            "mean": 1.9627464788732394,
+            "p50": 2.032,
+            "p95": 2.3367999999999998
+          },
+          "queueMs": {
+            "n": 213,
+            "mean": 0.05782629107981221,
+            "p50": 0.067,
+            "p95": 0.09439999999999998
+          },
+          "submitMs": {
+            "n": 213,
+            "mean": 0.42281690140845074,
+            "p50": 0.506,
+            "p95": 0.5524
+          },
+          "rttMs": {
+            "n": 12,
+            "mean": 32.333333333333336,
+            "p50": 35.0,
+            "p95": 72.09999999999994
+          },
+          "srttMs": {
+            "n": 12,
+            "mean": 37.583333333333336,
+            "p50": 38.0,
+            "p95": 45.14999999999999
+          },
+          "rxWindow": {
+            "n": 12,
+            "mean": 218304,
+            "p50": 218304.0,
+            "p95": 218304.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 213
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.016791000001831,
+        "receivedDistinctFPS": 16.30946502108034,
+        "frameGapP95Ms": 132.38599999785947,
+        "receivedMbps": 10.220203391352953,
+        "clientCPUPercentOneCore": 18.344754919088277,
+        "clientRSSMiB": 40.307291666666664,
+        "hostCPUPercentOneCoreApprox": 68.6078400929448,
+        "hostSummedRSSMiBApprox": 1063.00859375
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 355,
+            "mean": 4.013219718309859,
+            "p50": 4.046,
+            "p95": 4.6838999999999995
+          },
+          "handleCpuMs": {
+            "n": 355,
+            "mean": 3.929881690140845,
+            "p50": 3.976,
+            "p95": 4.5673
+          },
+          "copyMs": {
+            "n": 355,
+            "mean": 3.291138028169014,
+            "p50": 3.281,
+            "p95": 3.8595
+          },
+          "queueMs": {
+            "n": 355,
+            "mean": 0.07735211267605634,
+            "p50": 0.075,
+            "p95": 0.107
+          },
+          "submitMs": {
+            "n": 355,
+            "mean": 0.5110901408450704,
+            "p50": 0.507,
+            "p95": 0.5766
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 30.692307692307693,
+            "p50": 32.0,
+            "p95": 34.4
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 34.61538461538461,
+            "p50": 34.0,
+            "p95": 37.0
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 218304,
+            "p50": 218304.0,
+            "p95": 218304.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 355
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.892189999998664,
+        "receivedDistinctFPS": 27.547621978771303,
+        "frameGapP95Ms": 99.10990000498714,
+        "receivedMbps": 0.01922126696463803,
+        "clientCPUPercentOneCore": 15.333240544365873,
+        "clientRSSMiB": 42.63822115384615,
+        "hostCPUPercentOneCoreApprox": 10.880256210427303,
+        "hostSummedRSSMiBApprox": 1035.995703125
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 326,
+            "mean": 11.290349693251533,
+            "p50": 9.809999999999999,
+            "p95": 16.70775
+          },
+          "handleCpuMs": {
+            "n": 326,
+            "mean": 7.6919141104294475,
+            "p50": 8.0195,
+            "p95": 9.434
+          },
+          "copyMs": {
+            "n": 325,
+            "mean": 2.0161015384615384,
+            "p50": 2.067,
+            "p95": 2.3714000000000004
+          },
+          "queueMs": {
+            "n": 325,
+            "mean": 0.05927076923076923,
+            "p50": 0.068,
+            "p95": 0.0858
+          },
+          "submitMs": {
+            "n": 325,
+            "mean": 0.441,
+            "p50": 0.499,
+            "p95": 0.547
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 26.846153846153847,
+            "p50": 25.0,
+            "p95": 64.39999999999989
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 30.076923076923077,
+            "p50": 30.0,
+            "p95": 37.0
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 218304,
+            "p50": 218304.0,
+            "p95": 218304.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 325
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.094492999996874,
+        "receivedDistinctFPS": 24.822870812513578,
+        "frameGapP95Ms": 112.70385000243549,
+        "receivedMbps": 6.635074167251927,
+        "clientCPUPercentOneCore": 22.62665992063026,
+        "clientRSSMiB": 44.765625,
+        "hostCPUPercentOneCoreApprox": 76.2208300423667,
+        "hostSummedRSSMiBApprox": 1031.7947443181818
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 44.03,
+      "p95": 79.86734999999994,
+      "max": 132.293
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-ipad-opt-no-present",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "iPadOS",
+    "rfbNoPresent": "1",
+    "rfbEncodings": "zrle hextile raw",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1343361,
+    "clientPid": 30032,
+    "startedAt": 1789290493.1495411,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "rfbDiagnostics": {
+          "rttMs": {
+            "n": 5,
+            "mean": 46,
+            "p50": 46.0,
+            "p95": 46.0
+          },
+          "srttMs": {
+            "n": 5,
+            "mean": 21,
+            "p50": 21.0,
+            "p95": 21.0
+          },
+          "rxWindow": {
+            "n": 5,
+            "mean": 314048,
+            "p50": 314048.0,
+            "p95": 314048.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.077985000003537,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.5750022155680354,
+        "clientRSSMiB": 36.575,
+        "hostCPUPercentOneCoreApprox": 3.8196216924741533,
+        "hostSummedRSSMiBApprox": 1006.4635416666666
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 21,
+            "mean": 0.9944761904761905,
+            "p50": 1.051,
+            "p95": 1.066
+          },
+          "handleCpuMs": {
+            "n": 21,
+            "mean": 0.9842857142857143,
+            "p50": 1.046,
+            "p95": 1.061
+          },
+          "rttMs": {
+            "n": 25,
+            "mean": 44.72,
+            "p50": 46.0,
+            "p95": 46.8
+          },
+          "srttMs": {
+            "n": 25,
+            "mean": 26.24,
+            "p50": 27.0,
+            "p95": 32.599999999999994
+          },
+          "rxWindow": {
+            "n": 25,
+            "mean": 314048,
+            "p50": 314048.0,
+            "p95": 314048.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.577873000002,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0021622055393682262,
+        "clientCPUPercentOneCore": 0.655668809391754,
+        "clientRSSMiB": 36.439375,
+        "hostCPUPercentOneCoreApprox": 3.9463998926892856,
+        "hostSummedRSSMiBApprox": 1009.9444247159091
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 209,
+            "mean": 22.277779904306218,
+            "p50": 11.65,
+            "p95": 15.018799999999993
+          },
+          "handleCpuMs": {
+            "n": 209,
+            "mean": 8.87611004784689,
+            "p50": 9.032,
+            "p95": 9.8246
+          },
+          "rttMs": {
+            "n": 12,
+            "mean": 86,
+            "p50": 32.0,
+            "p95": 379.99999999999994
+          },
+          "srttMs": {
+            "n": 12,
+            "mean": 37,
+            "p50": 34.5,
+            "p95": 47.0
+          },
+          "rxWindow": {
+            "n": 12,
+            "mean": 576896,
+            "p50": 576896.0,
+            "p95": 576896.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 12.423627999996825,
+        "receivedDistinctFPS": 16.7955801822186,
+        "frameGapP95Ms": 124.70349999930477,
+        "receivedMbps": 10.350602659574813,
+        "clientCPUPercentOneCore": 14.91573749920399,
+        "clientRSSMiB": 36.40625,
+        "hostCPUPercentOneCoreApprox": 65.67901640205596,
+        "hostSummedRSSMiBApprox": 1065.913671875
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 357,
+            "mean": 0.7520448179271708,
+            "p50": 0.749,
+            "p95": 0.953
+          },
+          "handleCpuMs": {
+            "n": 357,
+            "mean": 0.7330252100840337,
+            "p50": 0.736,
+            "p95": 0.9168
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 38.23076923076923,
+            "p50": 33.0,
+            "p95": 61.1999999999999
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 35.46153846153846,
+            "p50": 35.0,
+            "p95": 40.199999999999996
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 576891.0769230769,
+            "p50": 576896.0,
+            "p95": 576896.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 13.002942999999505,
+        "receivedDistinctFPS": 27.45484911247318,
+        "frameGapP95Ms": 96.84774999914225,
+        "receivedMbps": 0.019206334300906576,
+        "clientCPUPercentOneCore": 2.704385163788044,
+        "clientRSSMiB": 36.42427884615385,
+        "hostCPUPercentOneCoreApprox": 10.784518757592712,
+        "hostSummedRSSMiBApprox": 1040.064453125
+      },
+      {
+        "rfbDiagnostics": {
+          "handleMs": {
+            "n": 340,
+            "mean": 7.080064705882353,
+            "p50": 6.918,
+            "p95": 9.051150000000002
+          },
+          "handleCpuMs": {
+            "n": 340,
+            "mean": 6.202514705882353,
+            "p50": 6.257,
+            "p95": 7.1684
+          },
+          "rttMs": {
+            "n": 13,
+            "mean": 32.46153846153846,
+            "p50": 26.0,
+            "p95": 63.999999999999886
+          },
+          "srttMs": {
+            "n": 13,
+            "mean": 30.307692307692307,
+            "p50": 28.0,
+            "p95": 37.199999999999996
+          },
+          "rxWindow": {
+            "n": 13,
+            "mean": 576896,
+            "p50": 576896.0,
+            "p95": 576896.0
+          },
+          "skippedPresentations": 0,
+          "presentationSubmissions": 0
+        },
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 12.993725000000268,
+        "receivedDistinctFPS": 26.304119853665643,
+        "frameGapP95Ms": 106.62379999703258,
+        "receivedMbps": 7.006169406149663,
+        "clientCPUPercentOneCore": 16.743236014336045,
+        "clientRSSMiB": 36.421875,
+        "hostCPUPercentOneCoreApprox": 77.62859116509229,
+        "hostSummedRSSMiBApprox": 1035.1246448863637
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 47.514,
+      "p95": 109.88299999999997,
+      "max": 123.465
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-retry",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "macOS",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1276832,
+    "clientPid": 91398,
+    "startedAt": 1789288464.861024,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 4.9978810000175145,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.19081566214507595,
+        "clientRSSMiB": 126.946875,
+        "hostCPUPercentOneCoreApprox": 3.804795606329523,
+        "hostSummedRSSMiBApprox": 1006.1106770833334
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.049818999978015,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0016246216748259518,
+        "clientCPUPercentOneCore": 1.666898723829783,
+        "clientRSSMiB": 126.6,
+        "hostCPUPercentOneCoreApprox": 3.946480895101275,
+        "hostSummedRSSMiBApprox": 1009.6125710227273
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.015916000003926,
+        "receivedDistinctFPS": 30.004048618271625,
+        "frameGapP95Ms": 38.45459999283775,
+        "receivedMbps": 19.00607857268779,
+        "clientCPUPercentOneCore": 31.292324962645466,
+        "clientRSSMiB": 130.25480769230768,
+        "hostCPUPercentOneCoreApprox": 88.34000335783165,
+        "hostSummedRSSMiBApprox": 1065.972265625
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.983869000017876,
+        "receivedDistinctFPS": 29.999929820224374,
+        "frameGapP95Ms": 34.62560000480153,
+        "receivedMbps": 0.02088497135641572,
+        "clientCPUPercentOneCore": 27.530221967198997,
+        "clientRSSMiB": 128.859375,
+        "hostCPUPercentOneCoreApprox": 10.778213007493127,
+        "hostSummedRSSMiBApprox": 1037.796484375
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.014131999982055,
+        "receivedDistinctFPS": 30.00574494610364,
+        "frameGapP95Ms": 37.25204999645939,
+        "receivedMbps": 8.020834366805579,
+        "clientCPUPercentOneCore": 30.96815375434926,
+        "clientRSSMiB": 130.33293269230768,
+        "hostCPUPercentOneCoreApprox": 81.41119974403215,
+        "hostSummedRSSMiBApprox": 1033.276953125
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 32.7985,
+      "p95": 46.05745,
+      "max": 47.442
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    }
+  },
+  {
+    "run": "linux-rfb-dpr2-timeout-failed",
+    "host": "linux",
+    "transport": "rfb",
+    "dpr": 2,
+    "client": "macOS",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1268710,
+    "clientPid": 88717,
+    "startedAt": 1789288235.09885,
+    "exit": {
+      "client": -15,
+      "reference": false
+    },
+    "phases": [],
+    "inputLatencyMs": {
+      "n": 0,
+      "p50": null,
+      "p95": null,
+      "max": null
+    },
+    "inputTimeouts": 0
+  },
+  {
+    "run": "linux-webrtc-dpr1",
+    "host": "linux",
+    "transport": "webrtc",
+    "dpr": 1,
+    "client": "macOS",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1265234,
+    "clientPid": 87469,
+    "startedAt": 1789288137.806975,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": 3.023999999999999,
+        "meanJitterBufferMs": 0.05499999999997174,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 2.8060782916727476,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.001280660126954251,
+        "clientCPUPercentOneCore": 3.5902118902422044,
+        "clientRSSMiB": 102.6953125,
+        "hostCPUPercentOneCoreApprox": null,
+        "hostSummedRSSMiBApprox": null
+      },
+      {
+        "meanDecodeMs": 1.9579999999999997,
+        "meanJitterBufferMs": 0.04530434782608641,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 24.03400275000604,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0007253543786845494,
+        "clientCPUPercentOneCore": 3.5171441925625926,
+        "clientRSSMiB": 109.681640625,
+        "hostCPUPercentOneCoreApprox": 10.187549251305393,
+        "hostSummedRSSMiBApprox": 1761.1612723214287
+      },
+      {
+        "meanDecodeMs": 1.8784388888888885,
+        "meanJitterBufferMs": 17.163625000000003,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.029982958338223,
+        "receivedDistinctFPS": 29.972014975909914,
+        "frameGapP95Ms": 36.32475832855562,
+        "receivedMbps": 0.1962458482794978,
+        "clientCPUPercentOneCore": 7.515181732720709,
+        "clientRSSMiB": 121.125,
+        "hostCPUPercentOneCoreApprox": 49.987921240862384,
+        "hostSummedRSSMiBApprox": 1535.3508522727273
+      },
+      {
+        "meanDecodeMs": 1.5307416666666664,
+        "meanJitterBufferMs": 18.43073333333333,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.967940999980783,
+        "receivedDistinctFPS": 29.99834864119797,
+        "frameGapP95Ms": 35.21062707877718,
+        "receivedMbps": 0.03435452804548489,
+        "clientCPUPercentOneCore": 6.3118969681670745,
+        "clientRSSMiB": 105.84615384615384,
+        "hostCPUPercentOneCoreApprox": 47.70778003388988,
+        "hostSummedRSSMiBApprox": 1542.03203125
+      },
+      {
+        "meanDecodeMs": 1.958518105849582,
+        "meanJitterBufferMs": 13.679270194986076,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.2954033750284,
+        "receivedDistinctFPS": 29.98690662783968,
+        "frameGapP95Ms": 35.63769791217055,
+        "receivedMbps": 2.3890804071215364,
+        "clientCPUPercentOneCore": 8.831482430889599,
+        "clientRSSMiB": 105.83413461538461,
+        "hostCPUPercentOneCoreApprox": 82.60181704378317,
+        "hostSummedRSSMiBApprox": 1549.68359375
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 1028.0027916596737,
+      "p95": 1033.2580458576558,
+      "max": 1034.713125001872
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 2.2621704545454544,
+      "fractionPixelsOver2": 0.22744128787878787,
+      "maxChannelError": 125,
+      "fineTextRegionMeanAbsoluteChannelError": 2.4263005050505053,
+      "fineTextRegionFractionOver2": 0.25011363636363637
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    },
+    "selectedRoute": {
+      "localCandidateId": {
+        "address": "100.97.206.8",
+        "candidateType": "host",
+        "id": "IZOhFz15v",
+        "ip": "100.97.206.8",
+        "protocol": "udp",
+        "type": "local-candidate"
+      },
+      "remoteCandidateId": {
+        "address": "100.79.27.114",
+        "candidateType": "host",
+        "id": "IOOa5OmiA",
+        "ip": "100.79.27.114",
+        "protocol": "udp",
+        "type": "remote-candidate"
+      }
+    },
+    "audioPlayingObserved": false,
+    "probeConversionP95Ms": 0.16539584030397234
+  },
+  {
+    "run": "linux-webrtc-dpr1-minfps",
+    "host": "linux",
+    "transport": "webrtc",
+    "dpr": 1,
+    "client": "macOS",
+    "extensionVariant": "extension-minfps",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1280145,
+    "clientPid": 92802,
+    "startedAt": 1789288559.910218,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": 1.4041797752808989,
+        "meanJitterBufferMs": 13.496179775280899,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 4.92436025000643,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0021103457820122007,
+        "clientCPUPercentOneCore": 5.99825194127687,
+        "clientRSSMiB": 96.35,
+        "hostCPUPercentOneCoreApprox": 24.56083434530342,
+        "hostSummedRSSMiBApprox": 1846.0611979166667
+      },
+      {
+        "meanDecodeMs": 1.416148448043185,
+        "meanJitterBufferMs": 31.878730094466935,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.052135249978164,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0023606962669464678,
+        "clientCPUPercentOneCore": 5.859408544180508,
+        "clientRSSMiB": 110.89,
+        "hostCPUPercentOneCoreApprox": 27.327502479230407,
+        "hostSummedRSSMiBApprox": 1757.2697088068182
+      },
+      {
+        "meanDecodeMs": 1.8424428969359332,
+        "meanJitterBufferMs": 26.66488055555556,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.036406333354535,
+        "receivedDistinctFPS": 29.968714103299444,
+        "frameGapP95Ms": 36.29398959310492,
+        "receivedMbps": 0.192036335432913,
+        "clientCPUPercentOneCore": 7.370983512151888,
+        "clientRSSMiB": 113.79086538461539,
+        "hostCPUPercentOneCoreApprox": 50.356515028930424,
+        "hostSummedRSSMiBApprox": 1536.7702414772727
+      },
+      {
+        "meanDecodeMs": 1.8061555555555553,
+        "meanJitterBufferMs": 20.80815000000001,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.959018958325032,
+        "receivedDistinctFPS": 30.00043280263219,
+        "frameGapP95Ms": 35.848279180936515,
+        "receivedMbps": 0.02223862772017472,
+        "clientCPUPercentOneCore": 8.08353593365378,
+        "clientRSSMiB": 107.37259615384616,
+        "hostCPUPercentOneCoreApprox": 47.71807998379668,
+        "hostSummedRSSMiBApprox": 1543.80703125
+      },
+      {
+        "meanDecodeMs": 1.8921999999999994,
+        "meanJitterBufferMs": 15.585050000000006,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.245632166654104,
+        "receivedDistinctFPS": 29.981298313459007,
+        "frameGapP95Ms": 35.90268751577241,
+        "receivedMbps": 2.386707482870024,
+        "clientCPUPercentOneCore": 8.226946752671834,
+        "clientRSSMiB": 97.11538461538461,
+        "hostCPUPercentOneCoreApprox": 83.23889384363342,
+        "hostSummedRSSMiBApprox": 1551.140625
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 46.774479167652316,
+      "p95": 78.73471874627285,
+      "max": 91.75033331848681
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 1.890302398989899,
+      "fractionPixelsOver2": 0.20839393939393938,
+      "maxChannelError": 111,
+      "fineTextRegionMeanAbsoluteChannelError": 2.110915404040404,
+      "fineTextRegionFractionOver2": 0.24511363636363637
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    },
+    "selectedRoute": {
+      "localCandidateId": {
+        "address": "100.97.206.8",
+        "candidateType": "host",
+        "id": "IVO06Ormx",
+        "ip": "100.97.206.8",
+        "protocol": "udp",
+        "type": "local-candidate"
+      },
+      "remoteCandidateId": {
+        "address": "100.79.27.114",
+        "candidateType": "host",
+        "id": "INPi1vPXv",
+        "ip": "100.79.27.114",
+        "protocol": "udp",
+        "type": "remote-candidate"
+      }
+    },
+    "audioPlayingObserved": false,
+    "probeConversionP95Ms": 0.19031250849366188
+  },
+  {
+    "run": "linux-webrtc-dpr2",
+    "host": "linux",
+    "transport": "webrtc",
+    "dpr": 2,
+    "client": "macOS",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1273089,
+    "clientPid": 90206,
+    "startedAt": 1789288357.725622,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": 4.3329999999999895,
+        "meanJitterBufferMs": 10.094999999999965,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 2.471151583333267,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 8.414057435820668e-05,
+        "clientCPUPercentOneCore": 3.091163936476011,
+        "clientRSSMiB": 104.0546875,
+        "hostCPUPercentOneCoreApprox": null,
+        "hostSummedRSSMiBApprox": null
+      },
+      {
+        "meanDecodeMs": 3.0791363636363633,
+        "meanJitterBufferMs": 0.03659090909090658,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 24.00263695832109,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.00020693580828946533,
+        "clientCPUPercentOneCore": 2.99101193120648,
+        "clientRSSMiB": 109.80208333333333,
+        "hostCPUPercentOneCoreApprox": 13.108015954686906,
+        "hostSummedRSSMiBApprox": 1849.3363095238096
+      },
+      {
+        "meanDecodeMs": 2.7752247838616717,
+        "meanJitterBufferMs": 29.905884726224787,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.23849354169215,
+        "receivedDistinctFPS": 28.022948510069487,
+        "frameGapP95Ms": 62.267993749992485,
+        "receivedMbps": 0.6271680166404086,
+        "clientCPUPercentOneCore": 5.911837344834066,
+        "clientRSSMiB": 121.3125,
+        "hostCPUPercentOneCoreApprox": 162.63475840798864,
+        "hostSummedRSSMiBApprox": 1677.5287642045455
+      },
+      {
+        "meanDecodeMs": 3.4545248618784545,
+        "meanJitterBufferMs": 28.593430939226522,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.938783166668145,
+        "receivedDistinctFPS": 15.087526659842593,
+        "frameGapP95Ms": 69.08580832969164,
+        "receivedMbps": 0.007506920113888473,
+        "clientCPUPercentOneCore": 6.407680502595668,
+        "clientRSSMiB": 120.19110576923077,
+        "hostCPUPercentOneCoreApprox": 89.85695955694497,
+        "hostSummedRSSMiBApprox": 1648.49765625
+      },
+      {
+        "meanDecodeMs": 3.6881239669421495,
+        "meanJitterBufferMs": 21.911442148760322,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.278961499978323,
+        "receivedDistinctFPS": 20.386788919047657,
+        "frameGapP95Ms": 72.19343957549427,
+        "receivedMbps": 2.451471227207499,
+        "clientCPUPercentOneCore": 7.397862471699507,
+        "clientRSSMiB": 104.86658653846153,
+        "hostCPUPercentOneCoreApprox": 187.82221547032856,
+        "hostSummedRSSMiBApprox": 1656.5994318181818
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 1060.8730833482696,
+      "p95": 1071.4816520659951,
+      "max": 1077.6691249920987
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 1.92305413510101,
+      "fractionPixelsOver2": 0.1806941287878788,
+      "maxChannelError": 134,
+      "fineTextRegionMeanAbsoluteChannelError": 2.030026830808081,
+      "fineTextRegionFractionOver2": 0.18711647727272726
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    },
+    "selectedRoute": {
+      "localCandidateId": {
+        "address": "100.97.206.8",
+        "candidateType": "host",
+        "id": "IlCWyLmJ7",
+        "ip": "100.97.206.8",
+        "protocol": "udp",
+        "type": "local-candidate"
+      },
+      "remoteCandidateId": {
+        "address": "100.79.27.114",
+        "candidateType": "host",
+        "id": "IgHY6v/FT",
+        "ip": "100.79.27.114",
+        "protocol": "udp",
+        "type": "remote-candidate"
+      }
+    },
+    "audioPlayingObserved": false,
+    "probeConversionP95Ms": 0.7242125007905996
+  },
+  {
+    "run": "linux-webrtc-dpr2-ipad-launch-failed",
+    "host": "linux",
+    "transport": "webrtc",
+    "dpr": 2,
+    "client": "iPadOS",
+    "extensionVariant": "extension-minfps",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1299605,
+    "clientPid": 1771,
+    "startedAt": 1789289147.079045,
+    "exit": {
+      "client": 64,
+      "reference": false
+    },
+    "inputLatencyMs": {
+      "n": 0
+    },
+    "phases": [],
+    "failure": "No native measurement samples; see client.jsonl"
+  },
+  {
+    "run": "linux-webrtc-dpr2-ipad-minfps",
+    "host": "linux",
+    "transport": "webrtc",
+    "dpr": 2,
+    "client": "iPadOS",
+    "extensionVariant": "extension-minfps",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1301973,
+    "clientPid": 2684,
+    "startedAt": 1789289208.6272929,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": 4.605627118644067,
+        "meanJitterBufferMs": 26.52089830508474,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 4.935218041668122,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.002124391308450908,
+        "clientCPUPercentOneCore": 11.732242134120112,
+        "clientRSSMiB": 58.7578125,
+        "hostCPUPercentOneCoreApprox": 68.8953261585799,
+        "hostSummedRSSMiBApprox": 1931.2447916666667
+      },
+      {
+        "meanDecodeMs": 4.532235714285715,
+        "meanJitterBufferMs": 68.90088,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.04462212499493,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0026067565861915545,
+        "clientCPUPercentOneCore": 11.721183101536916,
+        "clientRSSMiB": 58.801875,
+        "hostCPUPercentOneCoreApprox": 71.33910721839645,
+        "hostSummedRSSMiBApprox": 1815.0404829545455
+      },
+      {
+        "meanDecodeMs": 4.54207182320442,
+        "meanJitterBufferMs": 153.2205706371191,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.209449208334263,
+        "receivedDistinctFPS": 30.02555176350517,
+        "frameGapP95Ms": 36.57773958730104,
+        "receivedMbps": 0.5853511763049281,
+        "clientCPUPercentOneCore": 12.057101599955615,
+        "clientRSSMiB": 58.98317307692308,
+        "hostCPUPercentOneCoreApprox": 167.39046183963063,
+        "hostSummedRSSMiBApprox": 1664.3167613636363
+      },
+      {
+        "meanDecodeMs": 4.534975000000002,
+        "meanJitterBufferMs": 117.13977499999993,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.968127083338914,
+        "receivedDistinctFPS": 30.001007991340632,
+        "frameGapP95Ms": 36.40573541706544,
+        "receivedMbps": 0.01530933302013164,
+        "clientCPUPercentOneCore": 12.355445712192294,
+        "clientRSSMiB": 59.50600961538461,
+        "hostCPUPercentOneCoreApprox": 147.5138520713899,
+        "hostSummedRSSMiBApprox": 1637.980078125
+      },
+      {
+        "meanDecodeMs": 5.0335303867403285,
+        "meanJitterBufferMs": 79.14380662983424,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.252728999999817,
+        "receivedDistinctFPS": 15.481264707182541,
+        "frameGapP95Ms": 73.597708332818,
+        "receivedMbps": 2.4898945937702353,
+        "clientCPUPercentOneCore": 9.710653313601345,
+        "clientRSSMiB": 60.55048076923077,
+        "hostCPUPercentOneCoreApprox": 190.70039693133614,
+        "hostSummedRSSMiBApprox": 1648.2826704545455
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 118.00814583330066,
+      "p95": 200.9864958319666,
+      "max": 213.28041666129138
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 1.4099499684343435,
+      "fractionPixelsOver2": 0.1772689393939394,
+      "maxChannelError": 105,
+      "fineTextRegionMeanAbsoluteChannelError": 1.5725962752525253,
+      "fineTextRegionFractionOver2": 0.17921401515151514
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    },
+    "selectedRoute": {
+      "localCandidateId": {
+        "address": "100.125.236.27",
+        "candidateType": "host",
+        "id": "IV/+nqfRO",
+        "ip": "100.125.236.27",
+        "protocol": "udp",
+        "type": "local-candidate"
+      },
+      "remoteCandidateId": {
+        "address": "100.79.27.114",
+        "candidateType": "host",
+        "id": "IPKCHnftA",
+        "ip": "100.79.27.114",
+        "protocol": "udp",
+        "type": "remote-candidate"
+      }
+    },
+    "audioPlayingObserved": false,
+    "probeConversionP95Ms": 0.7564166662632488
+  },
+  {
+    "run": "linux-webrtc-dpr2-minfps",
+    "host": "linux",
+    "transport": "webrtc",
+    "dpr": 2,
+    "client": "macOS",
+    "extensionVariant": "extension-minfps",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 1292800,
+    "clientPid": 97410,
+    "startedAt": 1789288945.0967429,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": 3.386144329896907,
+        "meanJitterBufferMs": 88.1930824742268,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 4.5806832916568965,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0017820693707681523,
+        "clientCPUPercentOneCore": 8.105448998073179,
+        "clientRSSMiB": 103.7890625,
+        "hostCPUPercentOneCoreApprox": 68.36055384083929,
+        "hostSummedRSSMiBApprox": 1932.958984375
+      },
+      {
+        "meanDecodeMs": 3.3714842857142857,
+        "meanJitterBufferMs": 135.98145,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.036109041655436,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.002229058505046349,
+        "clientCPUPercentOneCore": 9.462110949292924,
+        "clientRSSMiB": 121.24625,
+        "hostCPUPercentOneCoreApprox": 72.07114148174074,
+        "hostSummedRSSMiBApprox": 1848.2180397727273
+      },
+      {
+        "meanDecodeMs": 3.3531169916434536,
+        "meanJitterBufferMs": 68.85748189415038,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.142751041683368,
+        "receivedDistinctFPS": 29.91098163756607,
+        "frameGapP95Ms": 44.86326875194209,
+        "receivedMbps": 0.5889633750411081,
+        "clientCPUPercentOneCore": 7.943012134956248,
+        "clientRSSMiB": 107.93389423076923,
+        "hostCPUPercentOneCoreApprox": 164.55339749503094,
+        "hostSummedRSSMiBApprox": 1669.715909090909
+      },
+      {
+        "meanDecodeMs": 3.413775075987842,
+        "meanJitterBufferMs": 35.726887537993896,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.935514958342537,
+        "receivedDistinctFPS": 27.415300692249833,
+        "frameGapP95Ms": 60.268150008050725,
+        "receivedMbps": 0.014123302220595723,
+        "clientCPUPercentOneCore": 8.66615535593987,
+        "clientRSSMiB": 108.05889423076923,
+        "hostCPUPercentOneCoreApprox": 139.33776634136316,
+        "hostSummedRSSMiBApprox": 1627.580078125
+      },
+      {
+        "meanDecodeMs": 3.651658536585366,
+        "meanJitterBufferMs": 20.780630081300895,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.220798624999588,
+        "receivedDistinctFPS": 20.451334598452704,
+        "frameGapP95Ms": 74.66081666061655,
+        "receivedMbps": 2.482153936370448,
+        "clientCPUPercentOneCore": 7.071242736057124,
+        "clientRSSMiB": 108.21754807692308,
+        "hostCPUPercentOneCoreApprox": 189.65502980414203,
+        "hostSummedRSSMiBApprox": 1640.3609375
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 165.65091666416265,
+      "p95": 183.83634375204565,
+      "max": 207.68033334752545
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      1920,
+      1280
+    ],
+    "receivedSize": [
+      1920,
+      1280
+    ],
+    "staticRGB": {
+      "pixels": 2112000,
+      "meanAbsoluteChannelError": 1.3771878156565656,
+      "fractionPixelsOver2": 0.16866145833333332,
+      "maxChannelError": 111,
+      "fineTextRegionMeanAbsoluteChannelError": 1.5336600378787877,
+      "fineTextRegionFractionOver2": 0.1791808712121212
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 2
+    },
+    "selectedRoute": {
+      "localCandidateId": {
+        "address": "100.97.206.8",
+        "candidateType": "host",
+        "id": "I1m5fXcCo",
+        "ip": "100.97.206.8",
+        "protocol": "udp",
+        "type": "local-candidate"
+      },
+      "remoteCandidateId": {
+        "address": "100.79.27.114",
+        "candidateType": "host",
+        "id": "ICOEjArJt",
+        "ip": "100.79.27.114",
+        "protocol": "udp",
+        "type": "remote-candidate"
+      }
+    },
+    "audioPlayingObserved": false,
+    "probeConversionP95Ms": 0.7971145896590316
+  },
+  {
+    "run": "mac-rfb-dpr1",
+    "host": "mac",
+    "transport": "rfb",
+    "dpr": 1,
+    "client": "macOS",
+    "extensionVariant": "extension",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 95089,
+    "clientPid": 95132,
+    "startedAt": 1789288753.300216,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 5.016440000006696,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.34723494544758304,
+        "clientRSSMiB": 95.48125,
+        "hostCPUPercentOneCoreApprox": 9.101805127442846,
+        "hostSummedRSSMiBApprox": 610.078125
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.00810300000012,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0005905061401328649,
+        "clientCPUPercentOneCore": 0.9870736628241193,
+        "clientRSSMiB": 95.55859375,
+        "hostCPUPercentOneCoreApprox": 9.189653287065846,
+        "hostSummedRSSMiBApprox": 614.4005681818181
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.000628000008874,
+        "receivedDistinctFPS": 30.000839098015746,
+        "frameGapP95Ms": 34.1373999894131,
+        "receivedMbps": 4.221797650932845,
+        "clientCPUPercentOneCore": 13.043512207567911,
+        "clientRSSMiB": 96.34615384615384,
+        "hostCPUPercentOneCoreApprox": 17.79531976304372,
+        "hostSummedRSSMiBApprox": 638.3465909090909
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.997340000001714,
+        "receivedDistinctFPS": 29.999811826358794,
+        "frameGapP95Ms": 33.493200002703816,
+        "receivedMbps": 0.014774546316676008,
+        "clientCPUPercentOneCore": 12.890989439716357,
+        "clientRSSMiB": 95.7920673076923,
+        "hostCPUPercentOneCoreApprox": 11.592943314992302,
+        "hostSummedRSSMiBApprox": 648.0015625
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.0028389999934,
+        "receivedDistinctFPS": 30.001169968462197,
+        "frameGapP95Ms": 33.68940001237206,
+        "receivedMbps": 1.998429887706276,
+        "clientCPUPercentOneCore": 12.171934940718636,
+        "clientRSSMiB": 95.9483173076923,
+        "hostCPUPercentOneCoreApprox": 17.78389002325659,
+        "hostSummedRSSMiBApprox": 656.7258522727273
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 59.946,
+      "p95": 67.3027,
+      "max": 82.999
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    }
+  },
+  {
+    "run": "mac-rfb-dpr1-pilot",
+    "host": "mac",
+    "transport": "rfb",
+    "dpr": 1,
+    "client": "macOS",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 81730,
+    "clientPid": 81795,
+    "startedAt": 1789287739.158037,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 4.982847000006586,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0,
+        "clientCPUPercentOneCore": 0.3867648022834431,
+        "clientRSSMiB": 85.48125,
+        "hostCPUPercentOneCoreApprox": 9.625717221160178,
+        "hostSummedRSSMiBApprox": 583.3020833333334
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 13.004584000009345,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.001132321452629373,
+        "clientCPUPercentOneCore": 1.8645986562906773,
+        "clientRSSMiB": 92.05649038461539,
+        "hostCPUPercentOneCoreApprox": 7.53031146513975,
+        "hostSummedRSSMiBApprox": 585.0497159090909
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.00167599998531,
+        "receivedDistinctFPS": 30.00279718386711,
+        "frameGapP95Ms": 34.096999996108934,
+        "receivedMbps": 4.301695058182704,
+        "clientCPUPercentOneCore": 11.939725622453421,
+        "clientRSSMiB": 92.30989583333333,
+        "hostCPUPercentOneCoreApprox": 16.991185992414277,
+        "hostSummedRSSMiBApprox": 614.2671875
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.998136000009254,
+        "receivedDistinctFPS": 30.000311571379434,
+        "frameGapP95Ms": 33.52960000629537,
+        "receivedMbps": 0.014796710681776824,
+        "clientCPUPercentOneCore": 16.531005763613933,
+        "clientRSSMiB": 92.24038461538461,
+        "hostCPUPercentOneCoreApprox": 9.852777766081852,
+        "hostSummedRSSMiBApprox": 619.3508522727273
+      },
+      {
+        "meanDecodeMs": null,
+        "meanJitterBufferMs": null,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.001845999999205,
+        "receivedDistinctFPS": 30.003178485854757,
+        "frameGapP95Ms": 33.81580001441762,
+        "receivedMbps": 2.0019611672901862,
+        "clientCPUPercentOneCore": 8.754520683592212,
+        "clientRSSMiB": 90.76322115384616,
+        "hostCPUPercentOneCoreApprox": 15.239254128783994,
+        "hostSummedRSSMiBApprox": 607.55
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 58.638999999999996,
+      "p95": 65.80165,
+      "max": 84.315
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 0.0,
+      "fractionPixelsOver2": 0.0,
+      "maxChannelError": 0,
+      "fineTextRegionMeanAbsoluteChannelError": 0.0,
+      "fineTextRegionFractionOver2": 0.0
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    }
+  },
+  {
+    "run": "mac-webrtc-dpr1",
+    "host": "mac",
+    "transport": "webrtc",
+    "dpr": 1,
+    "client": "macOS",
+    "extensionVariant": "extension-minfps",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 96097,
+    "clientPid": 96127,
+    "startedAt": 1789288846.951506,
+    "exit": {
+      "client": 0,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": 1.1480095238095238,
+        "meanJitterBufferMs": 30.028838095238097,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 4.982419291656697,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0018900080916037492,
+        "clientCPUPercentOneCore": 3.74540071917788,
+        "clientRSSMiB": 94.096875,
+        "hostCPUPercentOneCoreApprox": 24.248821522552934,
+        "hostSummedRSSMiBApprox": 1883.421875
+      },
+      {
+        "meanDecodeMs": 1.0039810725552052,
+        "meanJitterBufferMs": 39.582059936908514,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 25.02323662501294,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0019720089596330466,
+        "clientCPUPercentOneCore": 3.4895448594369953,
+        "clientRSSMiB": 98.915625,
+        "hostCPUPercentOneCoreApprox": 25.53429214920427,
+        "hostSummedRSSMiBApprox": 1654.6569602272727
+      },
+      {
+        "meanDecodeMs": 0.8899667519181585,
+        "meanJitterBufferMs": 40.376958974358956,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.027479416661663,
+        "receivedDistinctFPS": 30.021497316544043,
+        "frameGapP95Ms": 35.390629165340215,
+        "receivedMbps": 0.203579261086037,
+        "clientCPUPercentOneCore": 3.4159009122610655,
+        "clientRSSMiB": 111.65745192307692,
+        "hostCPUPercentOneCoreApprox": 29.251665608177348,
+        "hostSummedRSSMiBApprox": 1405.6988636363637
+      },
+      {
+        "meanDecodeMs": 0.8857090909090909,
+        "meanJitterBufferMs": 19.45902121212122,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.96295716665918,
+        "receivedDistinctFPS": 30.002267181622276,
+        "frameGapP95Ms": 36.18205208767904,
+        "receivedMbps": 0.01802425083747738,
+        "clientCPUPercentOneCore": 3.4213483672590437,
+        "clientRSSMiB": 112.17427884615384,
+        "hostCPUPercentOneCoreApprox": 28.432274449176454,
+        "hostSummedRSSMiBApprox": 1339.950284090909
+      },
+      {
+        "meanDecodeMs": 0.8492076923076923,
+        "meanJitterBufferMs": 12.997910256410268,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.304373041668441,
+        "receivedDistinctFPS": 29.996841098984916,
+        "frameGapP95Ms": 35.87757497734856,
+        "receivedMbps": 2.3826279296555146,
+        "clientCPUPercentOneCore": 3.212939855471052,
+        "clientRSSMiB": 112.25,
+        "hostCPUPercentOneCoreApprox": 52.349139232971055,
+        "hostSummedRSSMiBApprox": 1295.4588068181818
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 24,
+      "p50": 57.84891666553449,
+      "p95": 64.50866039376704,
+      "max": 77.05533332773484
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 2.0301155303030303,
+      "fractionPixelsOver2": 0.2317253787878788,
+      "maxChannelError": 113,
+      "fineTextRegionMeanAbsoluteChannelError": 2.088554292929293,
+      "fineTextRegionFractionOver2": 0.2456628787878788
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 24,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    },
+    "selectedRoute": {
+      "localCandidateId": {
+        "address": "100.97.206.8",
+        "candidateType": "host",
+        "id": "IjLLf8ywh",
+        "ip": "100.97.206.8",
+        "protocol": "udp",
+        "type": "local-candidate"
+      },
+      "remoteCandidateId": {
+        "address": "100.97.206.8",
+        "candidateType": "host",
+        "id": "ITtGRh7E8",
+        "ip": "100.97.206.8",
+        "protocol": "udp",
+        "type": "remote-candidate"
+      }
+    },
+    "audioPlayingObserved": false,
+    "probeConversionP95Ms": 0.11421668314142149
+  },
+  {
+    "run": "mac-webrtc-dpr1-interface-pilot",
+    "host": "mac",
+    "transport": "webrtc",
+    "dpr": 1,
+    "client": "macOS",
+    "viewportCSS": [
+      960,
+      640
+    ],
+    "audio": false,
+    "softwareRendering": true,
+    "hostPid": 83320,
+    "clientPid": 83393,
+    "startedAt": 1789287843.010587,
+    "exit": {
+      "client": 5,
+      "reference": true
+    },
+    "phases": [
+      {
+        "meanDecodeMs": 1.9730000000000025,
+        "meanJitterBufferMs": 0.020999999999993246,
+        "phase": 1,
+        "name": "idle",
+        "windowSeconds": 2.8660884583368897,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0005509702939113402,
+        "clientCPUPercentOneCore": 3.399971525318514,
+        "clientRSSMiB": 89.625,
+        "hostCPUPercentOneCoreApprox": null,
+        "hostSummedRSSMiBApprox": null
+      },
+      {
+        "meanDecodeMs": 1.2988181818181814,
+        "meanJitterBufferMs": 0.033454545454543586,
+        "phase": 2,
+        "name": "input",
+        "windowSeconds": 12.010810749983648,
+        "receivedDistinctFPS": 0,
+        "frameGapP95Ms": null,
+        "receivedMbps": 0.0001469067309415319,
+        "clientCPUPercentOneCore": 2.4988291494206694,
+        "clientRSSMiB": 91.97916666666667,
+        "hostCPUPercentOneCoreApprox": 12.753200198793682,
+        "hostSummedRSSMiBApprox": 1711.9359375
+      },
+      {
+        "meanDecodeMs": 1.7303676880222838,
+        "meanJitterBufferMs": 23.972808333333333,
+        "phase": 3,
+        "name": "scroll",
+        "windowSeconds": 13.04696687500109,
+        "receivedDistinctFPS": 29.96053333511046,
+        "frameGapP95Ms": 35.35809791792417,
+        "receivedMbps": 0.19258150537669924,
+        "clientCPUPercentOneCore": 7.925338228540335,
+        "clientRSSMiB": 93.56129807692308,
+        "hostCPUPercentOneCoreApprox": 28.64196485993168,
+        "hostSummedRSSMiBApprox": 1427.3792613636363
+      },
+      {
+        "meanDecodeMs": 2.047272222222222,
+        "meanJitterBufferMs": 16.26288055555555,
+        "phase": 4,
+        "name": "animation",
+        "windowSeconds": 12.97615004167892,
+        "receivedDistinctFPS": 30.000170780660607,
+        "frameGapP95Ms": 35.0217687577242,
+        "receivedMbps": 0.027900919033145847,
+        "clientCPUPercentOneCore": 8.808026672721835,
+        "clientRSSMiB": 93.73557692307692,
+        "hostCPUPercentOneCoreApprox": 26.96132033159071,
+        "hostSummedRSSMiBApprox": 1400.9765625
+      },
+      {
+        "meanDecodeMs": 2.0518472222222215,
+        "meanJitterBufferMs": 13.501708333333331,
+        "phase": 5,
+        "name": "dense",
+        "windowSeconds": 13.285006666672416,
+        "receivedDistinctFPS": 29.998683694681397,
+        "frameGapP95Ms": 35.19747916725464,
+        "receivedMbps": 2.3782616441545072,
+        "clientCPUPercentOneCore": 8.927020392460312,
+        "clientRSSMiB": 91.89302884615384,
+        "hostCPUPercentOneCoreApprox": 54.04902747066681,
+        "hostSummedRSSMiBApprox": 1430.5426136363637
+      }
+    ],
+    "inputLatencyMs": {
+      "n": 14,
+      "p50": 1026.3151458202628,
+      "p95": 1034.1756562556839,
+      "max": 1035.4384166712407
+    },
+    "inputTimeouts": 0,
+    "imageSize": [
+      960,
+      640
+    ],
+    "receivedSize": [
+      960,
+      640
+    ],
+    "staticRGB": {
+      "pixels": 528000,
+      "meanAbsoluteChannelError": 2.3969286616161614,
+      "fractionPixelsOver2": 0.23627272727272727,
+      "maxChannelError": 115,
+      "fineTextRegionMeanAbsoluteChannelError": 2.3865088383838384,
+      "fineTextRegionFractionOver2": 0.2500189393939394
+    },
+    "referenceState": {
+      "phase": 6,
+      "clicks": 15,
+      "width": 960,
+      "height": 640,
+      "dpr": 1
+    },
+    "selectedRoute": {
+      "localCandidateId": {
+        "address": "192.168.1.144",
+        "candidateType": "host",
+        "id": "Id3SGkaFm",
+        "ip": "192.168.1.144",
+        "protocol": "udp",
+        "type": "local-candidate"
+      },
+      "remoteCandidateId": {
+        "address": "192.168.1.144",
+        "candidateType": "host",
+        "id": "IXMbogM+2",
+        "ip": "192.168.1.144",
+        "protocol": "udp",
+        "type": "remote-candidate"
+      }
+    },
+    "audioPlayingObserved": false,
+    "probeConversionP95Ms": 0.202283333055675
+  }
+]

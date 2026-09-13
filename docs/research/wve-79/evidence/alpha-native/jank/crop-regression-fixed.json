@@ -1,0 +1,25 @@
+{
+  "state": "/tmp/wve-rfb-portal-zSBpgm",
+  "browserPaneCreated": true,
+  "trustedHumanProfileAccess": true,
+  "focusHandoff": true,
+  "authorizedInput": true,
+  "sameViewportFocusClaims": 3,
+  "pixelComparison": {
+    "width": 1000,
+    "height": 800,
+    "differentPixels": 0
+  },
+  "nativeRfb": {
+    "frames": 4,
+    "width": 1000,
+    "height": 800,
+    "saved": true,
+    "bytes": 4846
+  },
+  "unattendedAfterRpcDisconnect": true,
+  "popupRightSplit": true,
+  "sharedPopupClose": true,
+  "revokedDisplayBrowserAlive": true,
+  "success": true
+}

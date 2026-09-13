@@ -1,0 +1,165 @@
+CMake Warning (deprecated) at CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- The C compiler identification is AppleClang 21.0.0.21000101
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Found ZLIB: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk/usr/lib/libz.tbd (found version "1.2.12")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Looking for dirent.h
+-- Looking for dirent.h - found
+-- Looking for endian.h
+-- Looking for endian.h - not found
+-- Looking for fcntl.h
+-- Looking for fcntl.h - found
+-- Looking for netinet/in.h
+-- Looking for netinet/in.h - found
+-- Looking for sys/endian.h
+-- Looking for sys/endian.h - found
+-- Looking for sys/socket.h
+-- Looking for sys/socket.h - found
+-- Looking for sys/stat.h
+-- Looking for sys/stat.h - found
+-- Looking for sys/time.h
+-- Looking for sys/time.h - found
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for sys/wait.h
+-- Looking for sys/wait.h - found
+-- Looking for unistd.h
+-- Looking for unistd.h - found
+-- Looking for sys/resource.h
+-- Looking for sys/resource.h - found
+-- Looking for vfork.h
+-- Looking for vfork.h - not found
+-- Looking for ws2tcpip.h
+-- Looking for ws2tcpip.h - not found
+-- Looking for arpa/inet.h
+-- Looking for arpa/inet.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for gettimeofday
+-- Looking for gettimeofday - found
+-- Looking for vfork
+-- Looking for vfork - found
+-- Looking for vprintf
+-- Looking for vprintf - found
+-- Looking for mmap
+-- Looking for mmap - found
+-- Looking for fork
+-- Looking for fork - found
+-- Looking for ftime
+-- Looking for ftime - found
+-- Looking for gethostbyname
+-- Looking for gethostbyname - found
+-- Looking for gethostname
+-- Looking for gethostname - found
+-- Looking for inet_ntoa
+-- Looking for inet_ntoa - found
+-- Looking for memmove
+-- Looking for memmove - found
+-- Looking for memset
+-- Looking for memset - found
+-- Looking for mkfifo
+-- Looking for mkfifo - found
+-- Looking for select
+-- Looking for select - found
+-- Looking for socket
+-- Looking for socket - found
+-- Looking for strchr
+-- Looking for strchr - found
+-- Looking for strcspn
+-- Looking for strcspn - found
+-- Looking for strdup
+-- Looking for strdup - found
+-- Looking for strerror
+-- Looking for strerror - found
+-- Looking for strstr
+-- Looking for strstr - found
+-- Looking for htobe64
+-- Looking for htobe64 - not found
+-- Looking for OSSwapHostToBigInt64
+-- Looking for OSSwapHostToBigInt64 - found
+-- Building crypto with builtin functions, only including SHA1 and D3DES
+-- Threads support is using pthreads
+-- Check size of pid_t
+-- Check size of pid_t - done
+-- Check size of size_t
+-- Check size of size_t - done
+-- Check size of socklen_t
+-- Check size of socklen_t - done
+-- Check size of in_addr_t
+-- Check size of in_addr_t - done
+-- Building without TLS
+-- Configuring done (5.9s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/jaco/Documents/VeeZee/weave/experiments/rfb-spike/.build/lib-mac
+[  4%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/main.c.o
+[  4%] Building C object CMakeFiles/vncclient.dir/src/libvncclient/listen.c.o
+[  6%] Building C object CMakeFiles/vncclient.dir/src/libvncclient/cursor.c.o
+[  6%] Built target copy-compile-commands
+[  9%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/rfbserver.c.o
+/Users/jaco/Documents/VeeZee/weave/experiments/rfb-spike/.build/libvncserver-LibVNCServer-0.9.15/src/libvncserver/rfbserver.c:1524:15: warning: result of comparison of constant 18446744073709551615 with expression of type 'uint32_t' (aka 'unsigned int') is always false [-Wtautological-constant-out-of-range-compare]
+ 1524 |     if(length == SIZE_MAX || length > INT_MAX) {
+      |        ~~~~~~ ^  ~~~~~~~~
+/Users/jaco/Documents/VeeZee/weave/experiments/rfb-spike/.build/libvncserver-LibVNCServer-0.9.15/src/libvncserver/rfbserver.c:2150:20: warning: assigning to 'Bytef *' (aka 'unsigned char *') from 'const char *' converts between pointers to integer types where one is of the unique plain 'char' type and the other is not [-Wpointer-sign]
+ 2150 |     stream.next_in = data;
+      |                    ^ ~~~~
+[ 11%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/rfbregion.c.o
+[ 13%] Building C object CMakeFiles/vncclient.dir/src/libvncclient/rfbclient.c.o
+[ 16%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/auth.c.o
+[ 18%] Building C object CMakeFiles/vncclient.dir/src/libvncclient/sockets.c.o
+[ 20%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/sockets.c.o
+2 warnings generated.
+[ 23%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/stats.c.o
+[ 25%] Building C object CMakeFiles/vncclient.dir/src/libvncclient/vncviewer.c.o
+[ 27%] Building C object CMakeFiles/vncclient.dir/src/common/sockets.c.o
+[ 30%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/corre.c.o
+[ 32%] Building C object CMakeFiles/vncclient.dir/src/common/crypto_included.c.o
+[ 34%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/hextile.c.o
+[ 37%] Building C object CMakeFiles/vncclient.dir/src/common/sha1.c.o
+[ 39%] Building C object CMakeFiles/vncclient.dir/src/common/d3des.c.o
+[ 41%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/rre.c.o
+[ 44%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/translate.c.o
+[ 46%] Building C object CMakeFiles/vncclient.dir/src/libvncclient/tls_none.c.o
+[ 51%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/cutpaste.c.o
+[ 51%] Building C object CMakeFiles/vncclient.dir/src/common/minilzo.c.o
+[ 53%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/httpd.c.o
+[ 55%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/cursor.c.o
+[ 58%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/font.c.o
+[ 60%] Linking C static library libvncclient.a
+[ 62%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/draw.c.o
+[ 65%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/selbox.c.o
+[ 67%] Building C object CMakeFiles/vncserver.dir/src/common/vncauth.c.o
+[ 69%] Building C object CMakeFiles/vncserver.dir/src/common/sockets.c.o
+[ 72%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/cargs.c.o
+[ 74%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/ultra.c.o
+[ 76%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/scale.c.o
+[ 79%] Building C object CMakeFiles/vncserver.dir/src/common/crypto_included.c.o
+[ 81%] Building C object CMakeFiles/vncserver.dir/src/common/sha1.c.o
+[ 83%] Building C object CMakeFiles/vncserver.dir/src/common/d3des.c.o
+[ 86%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/rfbssl_none.c.o
+[ 88%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/zlib.c.o
+[ 90%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/zrle.c.o
+[ 93%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/zrleoutstream.c.o
+[ 95%] Building C object CMakeFiles/vncserver.dir/src/libvncserver/zrlepalettehelper.c.o
+[ 97%] Building C object CMakeFiles/vncserver.dir/src/common/minilzo.c.o
+[100%] Linking C static library libvncserver.a
+[100%] Built target vncclient
+[100%] Built target vncserver

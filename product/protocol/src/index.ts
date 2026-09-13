@@ -1,4 +1,8 @@
-export const PORTAL_PROTOCOL_VERSION = 6 as const;
+export * from './browser-panes.ts';
+import { BROWSER_PANE_RPC_METHODS, parseBrowserPaneRpcParams, parseBrowserPaneRpcResult, type BrowserPaneRpcContracts, type BrowserPaneRpcMethod } from './browser-panes.ts';
+export * from './browser-pages.ts';
+import { PORTAL_BROWSER_RFB_PATH, BROWSER_PAGE_RPC_METHODS, parseBrowserPageRpcParams, parseBrowserPageRpcResult, type BrowserPageRpcContracts, type BrowserPageRpcMethod } from './browser-pages.ts';
+export const PORTAL_PROTOCOL_VERSION = 8 as const;
 export const PORTAL_RPC_PATH = '/rpc' as const;
 export const PORTAL_ACP_PATH = '/acp' as const;
 export const PORTAL_PAIR_PATH = '/pair' as const;
@@ -19,6 +23,10 @@ export const WEAVE_ACP_THREAD_EVENTS_SYNC_METHOD = '_weave.dev/thread_events/syn
 export const WEAVE_ACP_RUNTIME_STATE_METHOD = '_weave.dev/runtime/state' as const;
 
 export * from './browser-control.ts';
+export * from './browser-stream.ts';
+export * from './browser-profiles.ts';
+import { BROWSER_PROFILE_RPC_METHODS, parseBrowserProfileRpcParams, parseBrowserProfileRpcResult, type BrowserProfileRpcContracts, type BrowserProfileRpcMethod } from './browser-profiles.ts';
+import { BROWSER_RPC_METHODS, parseBrowserRpcParams, parseBrowserRpcResult, type BrowserRpcContracts, type BrowserRpcMethod } from './browser-stream.ts';
 export * from './composition.ts';
 export * from './workspace-lifecycle.ts';
 import { WORKSPACE_LIFECYCLE_RPC_METHODS, parseWorkspaceLifecycleParams, parseWorkspaceLifecycleResult, type WorkspaceLifecycleRpcContracts, type WorkspaceLifecycleRpcMethod } from './workspace-lifecycle.ts';
@@ -124,7 +132,7 @@ export type PortalAuthChallenge = {
   challengeId: string;
   hostId: string;
   nonce: string;
-  audience: typeof PORTAL_RPC_PATH | typeof PORTAL_ACP_PATH;
+  audience: typeof PORTAL_RPC_PATH | typeof PORTAL_ACP_PATH | typeof PORTAL_BROWSER_RFB_PATH;
   origin: string;
   expiresAt: string;
 };
@@ -173,7 +181,7 @@ export const parsePortalAuthChallenge = (
     throw new Error('Portal authentication challenge type is invalid.');
   }
   if (
-    record.audience !== PORTAL_RPC_PATH && record.audience !== PORTAL_ACP_PATH
+    record.audience !== PORTAL_RPC_PATH && record.audience !== PORTAL_ACP_PATH && record.audience !== PORTAL_BROWSER_RFB_PATH
   ) {
     throw new Error('Portal authentication challenge audience is invalid.');
   }
@@ -319,7 +327,7 @@ type BasePortalRpcContracts = {
     };
   };
   'thread.archive': {
-    params: { threadId: string };
+    params: { threadId: string; stopActive?: boolean };
     result: { thread: ThreadSummary };
   };
   'thread.restore': {
@@ -349,6 +357,10 @@ export type PortalRpcContracts =
   & WorkspaceFileRpcContracts
   & WorkspaceLifecycleRpcContracts
   & CompositionRpcContracts
+  & BrowserPaneRpcContracts
+  & BrowserPageRpcContracts
+  & BrowserProfileRpcContracts
+  & BrowserRpcContracts
   & TerminalRpcContracts;
 
 export type PortalRpcMethod = keyof PortalRpcContracts;
@@ -374,6 +386,10 @@ export const PORTAL_RPC_METHODS = [
   ...COMPOSITION_RPC_METHODS,
   ...WORKSPACE_LIFECYCLE_RPC_METHODS,
   ...TERMINAL_RPC_METHODS,
+  ...BROWSER_RPC_METHODS,
+  ...BROWSER_PROFILE_RPC_METHODS,
+  ...BROWSER_PAGE_RPC_METHODS,
+  ...BROWSER_PANE_RPC_METHODS,
 ] as const satisfies readonly PortalRpcMethod[];
 export type PortalRpcParams<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['params'];
 export type PortalRpcResult<Method extends PortalRpcMethod> = PortalRpcContracts[Method]['result'];
@@ -382,6 +398,10 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
   method: Method,
   value: unknown,
 ): PortalRpcParams<Method> => {
+  if (BROWSER_PANE_RPC_METHODS.includes(method as BrowserPaneRpcMethod)) return parseBrowserPaneRpcParams(method as BrowserPaneRpcMethod, value) as PortalRpcParams<Method>;
+  if (BROWSER_PAGE_RPC_METHODS.includes(method as BrowserPageRpcMethod)) return parseBrowserPageRpcParams(method as BrowserPageRpcMethod, value) as PortalRpcParams<Method>;
+  if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) return parseBrowserProfileRpcParams(method as BrowserProfileRpcMethod, value) as PortalRpcParams<Method>;
+  if (BROWSER_RPC_METHODS.includes(method as BrowserRpcMethod)) return parseBrowserRpcParams(method as BrowserRpcMethod, value) as PortalRpcParams<Method>;
   if (WORKSPACE_LIFECYCLE_RPC_METHODS.includes(method as WorkspaceLifecycleRpcMethod)) {
     return parseWorkspaceLifecycleParams(method as WorkspaceLifecycleRpcMethod, value) as PortalRpcParams<Method>;
   }
@@ -440,11 +460,13 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
       } as PortalRpcParams<Method>;
     case 'thread.attach':
     case 'thread.draft.discard':
-    case 'thread.archive':
     case 'thread.restore':
       return {
         threadId: string(params.threadId, 'threadId'),
       } as PortalRpcParams<Method>;
+    case 'thread.archive':
+      if (params.stopActive !== undefined && typeof params.stopActive !== 'boolean') throw new Error('Invalid stopActive confirmation.');
+      return { threadId: string(params.threadId, 'threadId'), ...(params.stopActive === undefined ? {} : { stopActive: params.stopActive }) } as PortalRpcParams<Method>;
     case 'browser.provider.attach':
       return parseBrowserProviderAttachParams(params) as PortalRpcParams<Method>;
     case 'browser.provider.detach':
@@ -600,6 +622,10 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
   method: Method,
   value: unknown,
 ): PortalRpcResult<Method> => {
+  if (BROWSER_PANE_RPC_METHODS.includes(method as BrowserPaneRpcMethod)) return parseBrowserPaneRpcResult(method as BrowserPaneRpcMethod, value) as PortalRpcResult<Method>;
+  if (BROWSER_PAGE_RPC_METHODS.includes(method as BrowserPageRpcMethod)) return parseBrowserPageRpcResult(method as BrowserPageRpcMethod, value) as PortalRpcResult<Method>;
+  if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) return parseBrowserProfileRpcResult(method as BrowserProfileRpcMethod, value) as PortalRpcResult<Method>;
+  if (BROWSER_RPC_METHODS.includes(method as BrowserRpcMethod)) return parseBrowserRpcResult(method as BrowserRpcMethod, value) as PortalRpcResult<Method>;
   if (WORKSPACE_LIFECYCLE_RPC_METHODS.includes(method as WorkspaceLifecycleRpcMethod)) {
     return parseWorkspaceLifecycleResult(method as WorkspaceLifecycleRpcMethod, value) as PortalRpcResult<Method>;
   }

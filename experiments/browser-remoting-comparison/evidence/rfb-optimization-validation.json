@@ -1,0 +1,52 @@
+{
+  "runs": [
+    {
+      "run": "linux-rfb-dpr2-ipad-opt-baseline",
+      "inputResponses": 24,
+      "exactContentPixels": 2112000,
+      "maxRGBError": 0,
+      "skippedPresentations": 0,
+      "presentationEnabled": true
+    },
+    {
+      "run": "linux-rfb-dpr2-ipad-opt-no-present",
+      "inputResponses": 24,
+      "exactContentPixels": 2112000,
+      "maxRGBError": 0,
+      "skippedPresentations": 0,
+      "presentationEnabled": false
+    },
+    {
+      "run": "linux-rfb-dpr2-ipad-opt-more-acks",
+      "inputResponses": 24,
+      "exactContentPixels": 2112000,
+      "maxRGBError": 0,
+      "skippedPresentations": 0,
+      "presentationEnabled": true
+    },
+    {
+      "run": "linux-rfb-dpr2-ipad-opt-control-repeat",
+      "inputResponses": 24,
+      "exactContentPixels": 2112000,
+      "maxRGBError": 0,
+      "skippedPresentations": 0,
+      "presentationEnabled": true
+    },
+    {
+      "run": "linux-rfb-dpr2-ipad-opt-more-acks-repeat",
+      "inputResponses": 24,
+      "exactContentPixels": 2112000,
+      "maxRGBError": 0,
+      "skippedPresentations": 0,
+      "presentationEnabled": true
+    }
+  ],
+  "totalInputResponses": 120,
+  "repeatPairSourceIdentical": true,
+  "audio": false,
+  "remainingNativeMacBenchmarkProcesses": [],
+  "originalIPadAppRestored": true,
+  "macNativeBuild": "passed",
+  "physicalDisplayTimingMeasured": false,
+  "sharedViewportAcceptanceRepeated": false
+}

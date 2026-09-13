@@ -1,11 +1,11 @@
+import { BrowserSidebarTile } from './browser-sidebar-tile';
 import type { CompactPane } from '@/app/compact-pane';
 import type { TerminalPaneAction } from '@/app/terminal-pane-actions';
 import { terminalFocusId } from '@/app/pane-focus';
-import type { AgentDockPosition } from '@/app/agent-dock-position';
 import { useState, type ReactNode } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { MoreVerticalIcon, MoreHorizontalIcon, ArrowDown01Icon, ArrowRight01Icon, FileBoxIcon, ComputerTerminal01Icon } from '@hugeicons/core-free-icons';
-import { terminalPaneTargets, type Workspace, type WorkspaceClosePlan } from '@weave/product-protocol';
+import { paneTargets, terminalPaneTargets, type Workspace, type WorkspaceClosePlan } from '@weave/product-protocol';
 import { ConnectionsButton } from './connections-button';
 import { PathLabel } from './path-label';
 import { sidebarTerminalTitle } from '@/lib/display-path';
@@ -17,14 +17,15 @@ import { alphaSidebarMinimumWidth } from '@/app/alpha-pane-layout';
 import { RenameWorkspaceDialog } from './workspace-arrangement-dialogs';
 import { AddExecutionContextDialog } from './add-execution-context-dialog';
 import { AgentActivityIndicator } from './agent-activity-indicator';
+import { DraftChip } from './draft-chip';
 import { CodexIcon } from './codex-icon';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from './ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from './ui/dropdown-menu';
 import { Sidebar, SidebarHeader, SidebarContent, SidebarGroup, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarMenuAction } from './ui/sidebar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 
-export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThread, onSelectTerminal, headerActions, sidebarToggle, compactHeader, agentPaneVisible = true, onAgentDockChange, compact = false, selectedPane, onSelectWorkspace, onAddTerminal, terminalActions, onActionError }: { agentPaneVisible?: boolean; onAgentDockChange?(position: AgentDockPosition): void; compact?: boolean; selectedPane?: CompactPane; onSelectWorkspace?(ref: WorkspaceReference): void; onAddTerminal?(ref: WorkspaceReference, contextId: string): Promise<void>; terminalActions?: Record<string, TerminalPaneAction>; onActionError?(message: string): void; headerActions?: ReactNode; sidebarToggle?: ReactNode; compactHeader?: ReactNode; controller: AlphaController; agentDock?: AgentDockPosition; onSelectThread?(threadId: string): void; onSelectTerminal?(workspace: WorkspaceReference, paneId: string): void }) {
+export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal, headerActions, sidebarToggle, compactHeader, compact = false, selectedPane, onSelectWorkspace, onAddTerminal, terminalActions, onActionError }: { compact?: boolean; selectedPane?: CompactPane; onSelectWorkspace?(ref: WorkspaceReference): void; onAddTerminal?(ref: WorkspaceReference, contextId: string): Promise<void>; terminalActions?: Record<string, TerminalPaneAction>; onActionError?(message: string): void; headerActions?: ReactNode; sidebarToggle?: ReactNode; compactHeader?: ReactNode; controller: AlphaController; onSelectThread?(threadId: string): void; onSelectTerminal?(workspace: WorkspaceReference, paneId: string): void }) {
   const { model, actions, workspaceActions } = controller;
   const state = model.workspaceCompositions!;
   const [closing, setClosing] = useState<{ reference: WorkspaceReference; plan: WorkspaceClosePlan }>();
@@ -35,7 +36,7 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
     setCloseBusy(true); setCloseError(undefined);
     try {
       const plan = await workspaceActions.previewClose(reference);
-      if ([...plan.terminals, ...plan.threads].some((item) => item.dirty)) setClosing({ reference, plan });
+      if ([...plan.terminals, ...plan.threads, ...(plan.browsers ?? [])].some((item) => item.dirty)) setClosing({ reference, plan });
       else await workspaceActions.close(reference, plan, false);
     } catch (cause) { setCloseError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setCloseBusy(false); }
@@ -70,22 +71,23 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
     setChoosingAgent({ reference, directories });
   };
   const threadRow = (thread: AlphaThread) => {
-    const selected = compact ? selectedPane?.kind === 'agent' && selectedPane.id === thread.id : agentPaneVisible && thread.id === model.selectedThreadId;
-    const lastVisible = !selected && thread.id === model.selectedThreadId;
-    const paneState = selected ? 'visible' : lastVisible ? 'last-visible' : undefined;
+    const ref = { hostId: thread.hostId, workspaceId: thread.workspaceId ?? '' };
+    const workspace = state.compositions[thread.hostId]?.workspaces.find(workspace => workspace.workspaceId === thread.workspaceId);
+    const panes = workspace ? paneTargets([workspace]) : [];
+    const focused = panes.find(pane => pane.paneId === state.presentation.focusedPanes[workspaceKey(ref)]) ?? panes[0];
+    const selected = state.presentation.activeWorkspace === workspaceKey(ref) && focused?.kind === 'agent' && focused.threadId === thread.threadId;
     const available = connected(thread.hostId);
     return <SidebarMenuItem key={thread.id} data-thread-id={thread.id}>
-      <SidebarMenuButton size='default' data-agent-pane-state={paneState} className={cn('data-active:bg-primary data-active:text-primary-foreground data-active:hover:bg-primary data-active:hover:text-primary-foreground', lastVisible && 'ring-1 ring-inset ring-primary')} isActive={selected} aria-label={`Agent ${thread.title}`} aria-describedby={`agent-activity-${thread.id}${lastVisible ? ` agent-last-visible-${thread.id}` : ''}`} aria-pressed={selected} onClick={() => onSelectThread ? onSelectThread(thread.id) : void actions.selectThread(thread.id)} disabled={!available || model.busy}>
-        <CodexIcon /><span className='flex min-w-0 flex-1 items-center gap-2 pr-0.5'><span className='min-w-0 flex-1 truncate'>{thread.title}</span><AgentActivityIndicator id={`agent-activity-${thread.id}`} attention={thread.attention} completionUnread={thread.completionUnread} available={available} selected={selected} /></span>
+      <SidebarMenuButton size='default' data-agent-pane-state={selected ? 'visible' : undefined} className='data-active:bg-terminal-focus data-active:text-terminal-focus-foreground data-active:hover:bg-terminal-focus data-active:hover:text-terminal-focus-foreground' isActive={selected} aria-label={`Agent ${thread.title}`} aria-describedby={`agent-activity-${thread.id}`} aria-pressed={selected} onClick={() => onSelectThread ? onSelectThread(thread.id) : void actions.selectThread(thread.id)} disabled={!available || model.busy}>
+        <CodexIcon /><span className='flex min-w-0 flex-1 items-center gap-2 pr-0.5'><span className='min-w-0 flex-1 truncate'>{thread.draft || !thread.title.trim() ? <DraftChip /> : thread.title}</span><AgentActivityIndicator id={`agent-activity-${thread.id}`} attention={thread.attention} completionUnread={thread.completionUnread} available={available} selected={selected} /></span>
       </SidebarMenuButton>
-      {lastVisible && <span id={`agent-last-visible-${thread.id}`} className='sr-only'>Last visible agent. Activate to reopen.</span>}
       <DropdownMenu><DropdownMenuTrigger render={<SidebarMenuAction className={cn(selected && 'text-primary-foreground peer-hover/menu-button:text-primary-foreground hover:text-primary-foreground')} aria-label={`Actions for ${thread.title}`} />}>⋯</DropdownMenuTrigger>
         <DropdownMenuContent><DropdownMenuGroup>
           {thread.workspaceId && <DropdownMenuItem onClick={() => workspaceActions?.activate({ hostId: thread.hostId, workspaceId: thread.workspaceId! })}>Open workspace</DropdownMenuItem>}
           <DropdownMenuSub><DropdownMenuSubTrigger disabled={!available}>Move to workspace…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>
             {allWorkspaces.filter(({ reference }) => reference.hostId === thread.hostId).map(({ reference, workspace }) => <DropdownMenuItem key={workspace.workspaceId} disabled={thread.workspaceId === workspace.workspaceId} onClick={() => void actions.assignThread?.(thread.id, reference.workspaceId)}>{workspace.name}</DropdownMenuItem>)}
           </DropdownMenuGroup></DropdownMenuSubContent></DropdownMenuSub>
-          {compact && thread.draft && <DropdownMenuItem onClick={() => void actions.discardThreadDraft?.(thread.id)}>Discard draft</DropdownMenuItem>}
+          {thread.draft && <DropdownMenuItem onClick={() => void actions.discardThreadDraft?.(thread.id)}>Discard draft</DropdownMenuItem>}
           {thread.supportsThreadLifecycle && <DropdownMenuItem disabled={!available || model.busy} onClick={() => void actions.archiveThread(thread.id)}>Archive</DropdownMenuItem>}
         </DropdownMenuGroup></DropdownMenuContent>
       </DropdownMenu>
@@ -97,9 +99,9 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
       <SidebarHeader className='h-[var(--rail-height)] shrink-0 justify-center border-b bg-title-bar px-2 py-0'><div className='flex items-center justify-end gap-1'>{sidebarToggle && <span className='mr-auto flex'>{sidebarToggle}</span>}{headerActions}<ConnectionsButton controller={controller} />
         <DropdownMenu><DropdownMenuTrigger render={<Button size='rail' variant='ghost' aria-label='Sidebar actions' title='Sidebar actions' />}><HugeiconsIcon icon={MoreVerticalIcon} strokeWidth={2} /></DropdownMenuTrigger>
           <DropdownMenuContent align='end'>
-            {onAgentDockChange && <DropdownMenuSub><DropdownMenuSubTrigger>Agent pane position</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuRadioGroup value={agentDock} onValueChange={(value) => { if (value === 'left' || value === 'right') onAgentDockChange(value); }}><DropdownMenuRadioItem closeOnClick value='left'>Left Dock</DropdownMenuRadioItem><DropdownMenuRadioItem closeOnClick value='right'>Right Dock</DropdownMenuRadioItem></DropdownMenuRadioGroup></DropdownMenuSubContent></DropdownMenuSub>}
             <DropdownMenuSub><DropdownMenuSubTrigger disabled={state.loading}>New workspace…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>
               {model.executionContexts.map((context) => <DropdownMenuItem key={context.id} disabled={!connected(context.hostId) || context.availability !== 'available'} onClick={() => void workspaceActions?.open(context.id)}>{model.showHostIdentity && <>{context.hostName} · </>}<PathLabel path={context.canonicalPath ?? context.name} /></DropdownMenuItem>)}
+              {model.connections.map(connection => <DropdownMenuItem key={`browser:${connection.hostId}`} disabled={!connected(connection.hostId)} onClick={() => actions.newBrowserPane?.(connection.hostId)}>Browser{model.showHostIdentity ? ` · ${connection.displayName}` : ''}</DropdownMenuItem>)}
               <DropdownMenuItem onClick={() => setAdding(true)}>Add directory…</DropdownMenuItem>
             </DropdownMenuGroup></DropdownMenuSubContent></DropdownMenuSub>
             <DropdownMenuSub><DropdownMenuSubTrigger disabled={!allWorkspaces.length}>New agent…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>{allWorkspaces.map(({ reference, workspace }) => <DropdownMenuItem key={workspaceKey(reference)} disabled={!connected(reference.hostId)} onClick={() => createAgent(reference, workspace)}>{workspace.name}{model.showHostIdentity && <> · {model.connections.find((connection) => connection.hostId === reference.hostId)?.displayName}</>}</DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuSubContent></DropdownMenuSub>
@@ -119,11 +121,11 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
             const title = sidebarTerminalTitle(terminal?.title ?? 'Terminal', terminal?.processName);
             return { path: terminal?.currentDirectory ?? pane.launchDirectory ?? terminal?.initialDirectory ?? contextPath(pane.executionContextId), tile: <SidebarMenuItem key={pane.paneId} data-pane-id={pane.paneId}><SidebarMenuButton className='data-active:bg-terminal-focus data-active:text-terminal-focus-foreground data-active:hover:bg-terminal-focus data-active:hover:text-terminal-focus-foreground' isActive={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} aria-label={`Terminal ${title}`} aria-pressed={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} onClick={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)}><HugeiconsIcon icon={ComputerTerminal01Icon} /><span className='min-w-0 flex-1 truncate'>{title}</span></SidebarMenuButton>{compact && <DropdownMenu><DropdownMenuTrigger render={<SidebarMenuAction aria-label={`Actions for terminal ${title}`} />}>⋯</DropdownMenuTrigger><DropdownMenuContent><DropdownMenuGroup><DropdownMenuItem disabled={!terminalActions?.[terminalFocusId(key, pane.paneId)]?.enabled} onClick={() => void terminalActions?.[terminalFocusId(key, pane.paneId)]?.terminate().catch(error => onActionError?.(error instanceof Error ? error.message : String(error)))}>Terminate terminal</DropdownMenuItem></DropdownMenuGroup></DropdownMenuContent></DropdownMenu>}</SidebarMenuItem> };
           });
-          const agentTiles = threads.filter((thread) => thread.hostId === reference.hostId && thread.workspaceId === workspace.workspaceId && matches(thread)).map((thread) => ({ path: thread.workingDirectory ?? contextPath(thread.executionContextId), tile: threadRow(thread) }));
-          // Full paths define groups; dock preference orders both first-seen
-          // directory groups and terminal/agent children within each group.
+          const browserTiles = paneTargets([workspace]).filter(pane => pane.kind === 'browser').map(pane => <BrowserSidebarTile key={pane.paneId} controller={controller} hostId={reference.hostId} paneId={pane.paneId} profileId={pane.profileId} active={active && state.presentation.focusedPanes[key] === pane.paneId} select={() => onSelectTerminal ? onSelectTerminal(reference,pane.paneId) : workspaceActions?.focus(reference,pane.paneId)} />);
+          const agentTiles = paneTargets([workspace]).filter(pane => pane.kind === 'agent').flatMap(pane => threads.filter(thread => thread.hostId === reference.hostId && thread.threadId === pane.threadId && matches(thread))).map((thread) => ({ path: thread.workingDirectory ?? contextPath(thread.executionContextId), tile: threadRow(thread) }));
+          // Full paths group content; Pane selection comes from the composition.
           const groups = new Map<string | undefined, ReactNode[]>();
-          for (const { path, tile } of agentDock === 'left' ? [...agentTiles, ...terminalTiles] : [...terminalTiles, ...agentTiles]) {
+          for (const { path, tile } of [...terminalTiles, ...agentTiles]) {
             const children = groups.get(path) ?? [];
             children.push(tile); groups.set(path, children);
           }
@@ -137,12 +139,14 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
               <DropdownMenu><DropdownMenuTrigger render={<Button size='icon' variant='ghost' className='col-start-3 row-start-1' aria-label={`Workspace actions for ${workspace.name}`} />}><HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} /></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuGroup>
                 <DropdownMenuItem disabled={!connected(reference.hostId)} onClick={() => createAgent(reference, workspace)}>New agent thread</DropdownMenuItem>
                 <DropdownMenuSub><DropdownMenuSubTrigger disabled={!connected(reference.hostId)}>New terminal…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>{model.executionContexts.filter((context) => context.hostId === reference.hostId).map((context) => <DropdownMenuItem key={context.id} disabled={context.availability !== 'available'} onClick={() => void (onAddTerminal ? onAddTerminal(reference, context.id) : workspaceActions?.addPane(reference, context.id))}><PathLabel path={context.canonicalPath ?? context.name} /></DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuSubContent></DropdownMenuSub>
+                <DropdownMenuItem disabled={!connected(reference.hostId)} onClick={() => actions.newBrowserPane?.(reference.hostId,reference.workspaceId)}>New browser</DropdownMenuItem>
                 <DropdownMenuItem disabled={state.pending || !connected(reference.hostId)} onClick={() => setRenaming({ reference, name: workspace.name })}>Rename workspace…</DropdownMenuItem>
                 <DropdownMenuItem disabled={state.pending || closeBusy || !connected(reference.hostId)} onClick={() => void requestClose(reference)}>Close workspace</DropdownMenuItem>
               </DropdownMenuGroup></DropdownMenuContent></DropdownMenu>
             </div>
           </SidebarMenuItem></SidebarMenu>
           {!collapsed && <div className='flex min-w-0 flex-col gap-1 pb-1'>
+            {browserTiles.length > 0 && <SidebarMenu>{browserTiles}</SidebarMenu>}
             {[...groups].map(([path, children]) => <div key={path ?? 'unknown'} data-slot='workspace-directory-group' data-directory={path} className='min-w-0'>
               <div className='flex min-w-0 py-1 pl-8 pr-2'><Badge variant={active ? 'sidebar-selected' : 'sidebar'} className='max-w-full' title={!connected(reference.hostId) ? 'Last known directory — Host disconnected' : undefined}>{path ? <PathLabel path={path} /> : 'Directory unavailable'}</Badge></div>
               <SidebarMenu>{children}</SidebarMenu>
@@ -154,10 +158,11 @@ export function WorkspaceSidebar({ controller, agentDock = 'right', onSelectThre
       </SidebarContent>
     </Sidebar>
     <Dialog open={Boolean(closing || closeError)} onOpenChange={(open) => { if (!open && !closeBusy) { setClosing(undefined); setCloseError(undefined); } }}><DialogContent>
-      <DialogHeader><DialogTitle>{closing ? `Close ${closing.plan.name}?` : 'Could not close workspace'}</DialogTitle><DialogDescription>Closing stops this workspace’s terminals and agents on every device. Running work, pending input, or unsaved terminal content may be lost. Agent conversations will be archived.</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{closing ? `Close ${closing.plan.name}?` : 'Could not close workspace'}</DialogTitle><DialogDescription>Closing stops this workspace’s terminals, agents and browser pages on every device. Running work, pending input and unsaved content may be lost. Agent conversations will be archived.</DialogDescription></DialogHeader>
       {closing && <ul className='max-h-64 overflow-y-auto text-sm'>
         {closing.plan.terminals.map((terminal) => <li key={terminal.terminalId}>{terminal.title} — terminal activity cannot be verified as idle</li>)}
         {closing.plan.threads.map((thread) => <li key={thread.threadId}>{thread.title}{thread.dirty ? ' — active or uncertain agent state' : ' — idle agent'}</li>)}
+        {closing.plan.browsers?.map(page => <li key={page.pageId}>{page.title}{page.dirty ? ' — unsaved browser work may be lost' : ' — unavailable browser page'}</li>)}
       </ul>}
       {closeError && <p role='alert' className='text-destructive'>{closeError}</p>}
       <div className='flex justify-end gap-2'><Button variant='outline' disabled={closeBusy} onClick={() => { setClosing(undefined); setCloseError(undefined); }}>Cancel</Button>{closing && <Button variant='destructive' disabled={closeBusy} onClick={() => void confirmClose()}>{closeBusy ? 'Closing…' : 'Close workspace'}</Button>}</div>
