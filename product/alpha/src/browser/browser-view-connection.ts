@@ -1,8 +1,21 @@
 import type { BrowserPage, BrowserInputMethod } from '@weave/product-protocol';
 import type { DirectHostClient } from '@/portal-client';
 import { nativeBrowserBridge, type NativeBrowserBridge } from './native-browser';
+import { browserDiagnostics, recordBrowserInput } from './browser-diagnostics';
 type Client = Pick<DirectHostClient, 'browserRequest' | 'browserDisplay'>;
 type Bounds = { x: number; y: number; width: number; height: number; visible: boolean; focused: boolean; dim: number };
+type Wheel = { args: Record<string, unknown>; width: number; height: number; epoch?: number; result: Promise<void> };
+const isWheel = (method: BrowserInputMethod, args: Record<string, unknown>) => method === 'Input.dispatchMouseEvent' && args.type === 'mouseWheel' && typeof args.deltaX === 'number' && Number.isFinite(args.deltaX) && typeof args.deltaY === 'number' && Number.isFinite(args.deltaY);
+function compatibleWheel(wheel: Wheel, args: Record<string, unknown>) {
+  // A reversal, target or modifier change is a gesture boundary. Compare all
+  // non-delta fields so future input metadata cannot accidentally be ignored.
+  const keys = new Set([...Object.keys(wheel.args), ...Object.keys(args)]);
+  for (const key of keys) if (key !== 'deltaX' && key !== 'deltaY' && wheel.args[key] !== args[key]) return false;
+  return ['deltaX', 'deltaY'].every(key => {
+    const before = wheel.args[key] as number, after = args[key] as number;
+    return (before === 0 || after === 0 || Math.sign(before) === Math.sign(after)) && Math.abs(before + after) <= 32768;
+  });
+}
 /** One native display lease. Losing it never closes the Host-owned page. */
 export class BrowserViewConnection {
   private surfaceId?: string;
@@ -15,6 +28,8 @@ export class BrowserViewConnection {
   private bounds?: Bounds;
   private queue = Promise.resolve();
   private pending = 0;
+  private wheel?: Wheel;
+  private inputGeneration = 0;
   constructor(private client: Client, private page: BrowserPage, private changed: (event: { width?: number; height?: number; error?: string }) => void, private native: NativeBrowserBridge = nativeBrowserBridge) {}
   async start() {
     try {
@@ -51,6 +66,7 @@ export class BrowserViewConnection {
   }
   layout(bounds: Bounds) {
     const before = this.bounds; this.bounds = bounds;
+    if (before && (before.focused !== bounds.focused || before.visible !== bounds.visible || before.width !== bounds.width || before.height !== bounds.height)) { this.wheel = undefined; this.inputGeneration++; }
     if (this.disposed) return;
     if (this.surfaceId) void this.native.layout({ surfaceId: this.surfaceId, ...bounds }).catch(cause => this.fail(cause));
     if (!this.viewId || !bounds.visible) return;
@@ -60,6 +76,7 @@ export class BrowserViewConnection {
   private report(cause: unknown) { if (!this.disposed) this.changed({ error: cause instanceof Error ? cause.message : String(cause) }); }
   private fail(cause: unknown) { this.report(cause); void this.close(); }
   private enqueue(action: () => Promise<void>) {
+    this.wheel = undefined;
     if (this.disposed) return Promise.reject(new Error('Browser display is unavailable'));
     if (this.pending >= 64) return Promise.reject(new Error('Browser input fell behind; activate the Pane again'));
     this.pending++;
@@ -82,19 +99,34 @@ export class BrowserViewConnection {
   activate() { if (this.bounds) this.bounds.focused = true; return this.enqueue(() => this.resize(true)).catch(cause => this.report(cause)); }
   input(method: BrowserInputMethod, args: Record<string, unknown>) {
     const sourceSize = { ...this.decoded };
-    return this.enqueue(async () => {
+    const wheel = isWheel(method, args);
+    if (wheel && this.wheel && this.wheel.epoch === this.focusEpoch && this.wheel.width === sourceSize.width && this.wheel.height === sourceSize.height && compatibleWheel(this.wheel, args)) {
+      this.wheel.args.deltaX = (this.wheel.args.deltaX as number) + (args.deltaX as number);
+      this.wheel.args.deltaY = (this.wheel.args.deltaY as number) + (args.deltaY as number);
+      return this.wheel.result;
+    }
+    args = { ...args };
+    const generation = this.inputGeneration;
+    const timing = browserDiagnostics() ? { capturedAt: performance.timeOrigin + performance.now(), start: performance.now(), pending: this.pending } : undefined;
+    const result = this.enqueue(async () => {
+      if (this.wheel?.args === args) this.wheel = undefined;
       const until = Date.now() + 2500;
       while (!this.disposed && this.focusEpoch && (this.decoded.width !== this.expected.width || this.decoded.height !== this.expected.height)) {
         if (Date.now() > until) throw new Error('Waiting for the resized Browser display');
         await new Promise(resolve => setTimeout(resolve, 16));
       }
-      if (this.disposed || !this.viewId || !this.focusEpoch || !this.bounds?.focused || !this.bounds.visible) return;
+      if (this.disposed || generation !== this.inputGeneration || !this.viewId || !this.focusEpoch || !this.bounds?.focused || !this.bounds.visible) return;
       // A focus claim can reflow the page under this pointer. The gesture
       // claims the viewport only; never click a different, newly moved target.
       if (method === 'Input.dispatchMouseEvent' && (sourceSize.width !== this.expected.width || sourceSize.height !== this.expected.height)) return;
-      try { await this.client.browserRequest('browser.page.view.input', { viewId: this.viewId, focusEpoch: this.focusEpoch, method, arguments: args }); }
+      const dispatchAt = timing ? performance.now() : 0;
+      let ok = false;
+      try { await this.client.browserRequest('browser.page.view.input', { viewId: this.viewId, focusEpoch: this.focusEpoch, method, arguments: args }); ok = true; }
       catch (cause) { this.focusEpoch = undefined; throw cause; }
+      finally { if (timing) recordBrowserInput({ capturedAt: timing.capturedAt, queueMs: dispatchAt - timing.start, rpcMs: performance.now() - dispatchAt, pending: timing.pending, wheel: args.type === 'mouseWheel', ok }); }
     }).catch(cause => this.report(cause));
+    if (wheel) this.wheel = { args, width: sourceSize.width, height: sourceSize.height, epoch: this.focusEpoch, result };
+    return result;
   }
   async close() {
     if (this.disposed) return; this.disposed = true;

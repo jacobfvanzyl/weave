@@ -2,6 +2,8 @@
 
 WVE-79 · 2026-09-13 · Research and proposed experiments, not implemented performance claims.
 
+The subsequent [Mac implementation and acceptance report](mac-scrolling-implementation.md) records the completed input work and measured results. This document preserves the original sequence and decision gates.
+
 Baseline implementation: commit `b892f1fc` (native Browser Panes, unified pane types, experiments and acceptance evidence). The full repository check passed before that commit. This plan does not claim that any new scrolling optimization below has been implemented.
 
 Start with the Mac input path and Host scheduling. They contain avoidable serialized work, whereas the existing evidence does not justify replacing native Core Animation presentation with Metal. Keep CEF and LibVNC upstream, the existing lossless pixel format, Profile authorization and focus epochs. **The iPad is currently in use: do not inspect, restart, install or run tests on it.** Initial profiling and candidate changes should use the Mac; physical iPad acceptance resumes only when the user makes it available.

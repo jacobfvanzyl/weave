@@ -1,0 +1,27 @@
+{
+  "host": {
+    "version": "0.1.0",
+    "revision": "89cda97997255e9ef68452b0977b08df7d913add",
+    "sourceHash": "c1cc48c2a5ba86afc0c2d6437ea255d11b93602065b2e922ce687daf82cb3913",
+    "target": "bun",
+    "sha256": "88cffff76379ad594c1c887bda1574355c26561780fe0291c78883da8e0bf307",
+    "protocolVersion": 8,
+    "stateFormat": 3,
+    "bun": "1.3.14",
+    "signingIdentifier": "xyz.veezee.weave.portal"
+  },
+  "cefExecutableSha256": "be1897d0ddc63e6a01e3ef207aa65018f8e705da10c441d8e8bee1b169958a25",
+  "nativeMacBuild": "normal acceptance-disabled build",
+  "terminalOwnerPidPreserved": 13352,
+  "hostMode": "LaunchAgent; Documents access approved locally by user; background startup verified 2026-09-14",
+  "ipadAccessed": false,
+  "backgroundStartupVerification": {
+    "launchAgent": "dev.weave.product-portal",
+    "pid": 78760,
+    "httpsHealth": "ok",
+    "sourceHashMatches": true,
+    "macBrowserPaneVisible": true,
+    "browserServicePidPreserved": 96077,
+    "originalPlistUnchanged": true
+  }
+}

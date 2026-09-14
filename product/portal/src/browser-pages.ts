@@ -5,6 +5,7 @@ import {
 import type { BrowserServiceClient } from './browser-service/client.ts';
 import type { ManagedPageSummary } from './browser-service/managed-pages.ts';
 import type { PortalPrincipal, PortalSecurity } from './security.ts';
+import { browserDiagnostics, recordBrowserTiming } from './browser-diagnostics.ts';
 
 export type ManagedPageBackend = Pick<BrowserServiceClient, 'managedPage'>;
 type View = {
@@ -40,20 +41,27 @@ export class ManagedBrowserAccess {
     };
   }
   async #authorize(principal: PortalPrincipal, profileId: string, control: boolean) {
-    await this.security.assertActive(principal);
+    const start = browserDiagnostics ? performance.now() : 0;
+    // authorize already reloads and validates credentials. Read-only requests
+    // still need a fresh grant snapshot before selecting inspect vs control.
+    if (!control) await this.security.assertActive(principal);
     const action = control || this.security.allows(principal, 'browser.profile.control', { browserProfileId: profileId }) ? 'browser.profile.control' : 'browser.profile.inspect';
     await this.security.authorize(principal, action, { browserProfileId: profileId });
+    if (browserDiagnostics) recordBrowserTiming('authorize', start);
   }
   async #page(profileId: string, pageId: string, generation?: string) {
+    const start = browserDiagnostics ? performance.now() : 0;
     const { pages } = await this.backend.managedPage<{ pages: ManagedPageSummary[] }>('page.list', { profileId });
     const page = pages.find(page => page.pageId === pageId && page.profileId === profileId);
     if (!page || generation !== undefined && (!page.available || page.generation !== generation)) throw new Error('Stale or unavailable browser page');
+    if (browserDiagnostics) recordBrowserTiming('page', start);
     return page;
   }
   #ordered<T>(pageId: string, operation: () => Promise<T>) {
     if (this.#pending >= 64) return Promise.reject(new Error('Browser command queue full'));
     this.#pending++;
-    const next = (this.#queues.get(pageId) ?? Promise.resolve()).catch(() => {}).then(operation);
+    const start = browserDiagnostics ? performance.now() : 0;
+    const next = (this.#queues.get(pageId) ?? Promise.resolve()).catch(() => {}).then(() => { if (browserDiagnostics) recordBrowserTiming('queue', start); return operation(); });
     this.#queues.set(pageId, next);
     void next.finally(() => { this.#pending--; if (this.#queues.get(pageId) === next) this.#queues.delete(pageId); }).catch(() => {});
     return next;
@@ -76,7 +84,9 @@ export class ManagedBrowserAccess {
         const focus = this.#focus.get(view.pageId);
         if (method !== 'browser.page.view.focus' && (!focus || focus.viewId !== view.viewId || focus.epoch !== input.focusEpoch || focus.generation !== view.generation)) throw new Error('Browser view no longer owns the viewport');
         if (method === 'browser.page.view.input') {
-          await this.backend.managedPage('page.cdp', { pageId: view.pageId, generation: view.generation, arguments: { method: input.method, arguments: input.arguments } });
+          const start = browserDiagnostics ? performance.now() : 0;
+          await this.backend.managedPage('page.cdp', { pageId: view.pageId, generation: view.generation, arguments: { method: input.method, arguments: input.arguments, nativeInput: true, inputEpoch: `${view.viewId}:${focus!.epoch}` } });
+          if (browserDiagnostics) recordBrowserTiming('cdp', start);
           return {};
         }
         // A resize failure makes input ownership uncertain; clear it before requesting the transition.

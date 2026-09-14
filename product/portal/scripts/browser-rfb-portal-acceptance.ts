@@ -58,6 +58,23 @@ try {
  let stale=false;try{await a.request('browser.page.view.input',{viewId:av.viewId,focusEpoch:af.focusEpoch,method:'Input.insertText',arguments:{text:'stale'}});}catch{stale=true;}assert(stale,'Stale owner sent input');results.focusHandoff=true;
  for(const type of ['mousePressed','mouseReleased'])await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type,x:50,y:60,button:'left',clickCount:1}});
  assert(await evaluate('clicks')===1,'Authorized CDP input failed');results.authorizedInput=true;
+ // Human wheel input uses upstream CEF while agent evaluation stays full CDP.
+ await evaluate(`window.wheelTrace=[];window.blockWheel=false;document.body.insertAdjacentHTML('beforeend','<div id="wheel-fixture" style="height:5000px"><div id="nested" style="position:absolute;top:200px;left:200px;width:200px;height:120px;overflow:auto"><div style="height:4000px;width:4000px">Nested scroll</div></div></div>');window.addEventListener('wheel',e=>{wheelTrace.push(['wheel',e.deltaX,e.deltaY]);if(blockWheel)e.preventDefault()},{passive:false});window.addEventListener('mousedown',()=>wheelTrace.push(['down']));true`);
+ const wheel=async(deltaY:number,x=600,y=400,deltaX=0)=>b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type:'mouseWheel',x,y,deltaX,deltaY}});
+ for(let i=0;i<10;i++)await wheel(.25);
+ await Bun.sleep(200);
+ assert(await evaluate('scrollY')===3,'Fractional wheel movement was rounded away');
+ await evaluate('scrollTo(0,0);true');await Bun.sleep(100);
+ await wheel(120,250,250,32);await Bun.sleep(200);
+ assert(await evaluate('document.querySelector("#nested").scrollTop')===120&&await evaluate('document.querySelector("#nested").scrollLeft')===32&&await evaluate('scrollY')===0,'Native wheel lost nested scrolling or horizontal units');
+ await evaluate('blockWheel=true;wheelTrace=[];true');await wheel(80);await Bun.sleep(100);
+ assert(await evaluate('scrollY')===0&&await evaluate('wheelTrace.length')===1,'Page wheel cancellation was bypassed');
+ await evaluate('blockWheel=false;wheelTrace=[];true');
+ await wheel(8);
+ for(const type of ['mousePressed','mouseReleased'])await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type,x:600,y:400,button:'left',clickCount:1}});
+ assert(await evaluate('wheelTrace.map(e=>e[0]).join(",")')==='wheel,down','Wheel/button ordering changed');
+ await evaluate('document.querySelector("#wheel-fixture").remove();scrollTo(0,0);true');await Bun.sleep(100);
+ results.nativeWheel={fractionalPixels:3,nestedVertical:120,nestedHorizontal:32,pageCancellation:true,wheelBeforeButton:true};
  // Reclaiming the same viewport must retain pixels outside the next dirty rectangle.
  for(let repeat=0;repeat<3;repeat++) await b.request('browser.page.view.focus',{viewId:bv.viewId,width:1000,height:800});
  await evaluate("document.querySelector('button').style.background='#88ccaa';true");

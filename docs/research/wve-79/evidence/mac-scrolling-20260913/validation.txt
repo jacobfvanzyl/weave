@@ -1,0 +1,8 @@
+bun run check: passed
+Alpha: 293 tests passed
+Portal: 138 tests passed
+Protocol: 39 tests passed
+Native fractional input: passed
+Real CEF/Portal wheel and lifecycle acceptance: passed
+Pixel comparison: zero differing pixels at 1000 x 800
+Mac-only; no iPad or Linux Host access

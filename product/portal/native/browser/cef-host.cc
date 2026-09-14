@@ -11,6 +11,8 @@
 #include "include/cef_render_handler.h"
 #include "include/cef_render_process_handler.h"
 #include "include/cef_version.h"
+#include "diagnostics.h"
+#include "wheel-input.h"
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -99,6 +101,8 @@ public:
   bool closing = false;
   std::map<int, int> cdpRequests;
   int nextCdp = 0;
+  BrowserDiagnostics diagnostics;
+  WheelInput wheel;
   Page(std::string pageId) : id(pageId) {}
   ~Page() override {
     if (listener >= 0)
@@ -277,8 +281,13 @@ public:
                (right - x) * 4);
       rfbMarkRectAsModified(screen, x, y, right, bottom);
     }
+    if (diagnostics.enabled()) {
+      double area = 0; for (auto &r : dirty) area += (double)r.width * r.height;
+      diagnostics.paint(area);
+    }
   }
   void resize(int w, int h) {
+    wheel.reset();
     // Focus claims can repeat the existing size. Clearing that framebuffer
     // loses unchanged pixels because Chromium only repaints its dirty region.
     if (w == width && h == height) return;
@@ -306,7 +315,9 @@ public:
         rfbNewClient(screen, fd);
       }
     }
+    const double start = diagnostics.enabled() ? BrowserDiagnostics::now() : 0;
     rfbProcessEvents(screen, 0);
+    if (diagnostics.enabled()) diagnostics.pump(start);
   }
 
 private:
@@ -445,6 +456,40 @@ static void command(const std::string &line) {
     }
     page->resize(w, h);
   } else if (method == "page.cdp") {
+    // Human display input can use CEF's embedding API without waiting for a
+    // DevTools wheel acknowledgement. Agent CDP calls keep their full response
+    // semantics. The optional private hint is ignored safely by older runtimes.
+    auto input = params->GetDictionary("arguments");
+    if (params->GetBool("nativeInput") &&
+        params->GetString("method") == "Input.dispatchMouseEvent" && input &&
+        input->GetString("type") == "mouseWheel") {
+      bool supported = true;
+      CefDictionaryValue::KeyList keys; input->GetKeys(keys);
+      for (const auto &key : keys)
+        if (key != "type" && key != "x" && key != "y" && key != "deltaX" &&
+            key != "deltaY" && key != "modifiers") supported = false;
+      auto number = [&](const char *key) {
+        auto type = input->GetType(key);
+        double value = type == VTYPE_INT ? input->GetInt(key) : input->GetDouble(key);
+        if ((type != VTYPE_INT && type != VTYPE_DOUBLE) || !std::isfinite(value) || std::abs(value) > 1000000) supported = false;
+        return value;
+      };
+      double x = number("x"), y = number("y"), dx = number("deltaX"), dy = number("deltaY");
+      int modifiers = input->GetInt("modifiers");
+      if (input->HasKey("modifiers") && (input->GetType("modifiers") != VTYPE_INT || modifiers < 0 || modifiers > 15)) supported = false;
+      if (supported) {
+        auto [deltaX, deltaY] = page->wheel.take(dx, dy, x, y, modifiers,
+            params->GetString("inputEpoch"), BrowserDiagnostics::now());
+        CefMouseEvent event; event.x = (int)std::floor(x); event.y = (int)std::floor(y);
+        event.modifiers = ((modifiers & 1) ? EVENTFLAG_ALT_DOWN : 0) |
+            ((modifiers & 2) ? EVENTFLAG_CONTROL_DOWN : 0) |
+            ((modifiers & 4) ? EVENTFLAG_COMMAND_DOWN : 0) |
+            ((modifiers & 8) ? EVENTFLAG_SHIFT_DOWN : 0);
+        if (deltaX || deltaY) host->SendMouseWheelEvent(event, -deltaX, -deltaY);
+        reply(request, object()); return;
+      }
+    }
+    page->wheel.reset();
     int messageId = ++page->nextCdp;
     page->cdpRequests[messageId] = request;
     if (!host->ExecuteDevToolsMethod(messageId, params->GetString("method"),

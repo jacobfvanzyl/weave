@@ -98,6 +98,22 @@ test('revocation while resolving a page prevents stream binding', async () => {
   expect(closed).toBe(true);
 });
 
+test('input validates once per authorization boundary and still rejects revocation during page lookup', async () => {
+  const f = await fixture(), actor = await f.pair(), view = await f.attach(actor.session);
+  const focus = await actor.session.request('browser.page.view.focus', { viewId:view.viewId, width:800, height:600 });
+  const original = f.security.assertActive.bind(f.security);
+  let reads = 0;
+  f.security.assertActive = async principal => { reads++; return original(principal); };
+  const input = { viewId:view.viewId, focusEpoch:focus.focusEpoch, method:'Input.dispatchMouseEvent' as const, arguments:{ type:'mouseWheel', x:100, y:100, deltaX:0, deltaY:8 } };
+  await actor.session.request('browser.page.view.input', input);
+  expect(reads).toBe(2);
+  expect(f.calls.findLast(call => call.method === 'page.cdp')?.args.arguments).toMatchObject({ nativeInput:true, inputEpoch:`${view.viewId}:${focus.focusEpoch}` });
+  f.calls.length = 0;
+  f.intercept(async method => { if (method === 'page.list') { f.intercept(); await f.security.revokeCredential(actor.principal.credentialId); } });
+  await expect(actor.session.request('browser.page.view.input', input)).rejects.toThrow();
+  expect(f.calls.some(call => call.method === 'page.cdp')).toBe(false);
+});
+
 
 test('unredeemed tickets expire and cannot leave stale viewport ownership behind', async () => {
   const f = await fixture(), actor = await f.pair(), view = await f.attach(actor.session);

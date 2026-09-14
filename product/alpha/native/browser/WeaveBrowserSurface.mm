@@ -32,8 +32,9 @@ static double browserThreadCPU(void) { struct timespec t; clock_gettime(CLOCK_TH
 @property(nonatomic) NSData *latestPixels;
 @property(nonatomic) int latestWidth, latestHeight, reportedWidth, reportedHeight;
 @property(nonatomic) BOOL presentationQueued;
-// Opt-in bounded profiling; contains timing/counts only, never page data.
-@property(nonatomic) BOOL diagnostics;
+// Opt-in bounded profiling. Fixture markers require a separate acceptance flag.
+@property(nonatomic) BOOL diagnostics, fixtureMarkers;
+@property(nonatomic) NSString *diagnosticPath;
 @property(nonatomic) NSMutableArray *samples;
 @property(nonatomic) double previousPresentation, lastDiagnosticWrite;
 @property(nonatomic) double latestCopyMs, latestCopiedAt, decodeCPU;
@@ -81,13 +82,16 @@ static void presentPixels(rfbClient *client) {
     }
     CGImageRelease(image); CGColorSpaceRelease(color); CGDataProviderRelease(provider);
     if (surface.diagnostics) {
-      [surface.samples addObject:@{@"time":@(mainAt), @"intervalMs":@(surface.previousPresentation ? (mainAt-surface.previousPresentation)*1000 : 0), @"copyMs":@(copyMs), @"mainQueueMs":@((mainAt-copiedAt)*1000), @"submitMs":@((CACurrentMediaTime()-mainAt)*1000), @"decodeCPUSeconds":@(cpu), @"receivedBytes":@(bytes), @"updates":@(updates), @"width":@(width), @"height":@(height)}];
+      const uint8_t *marker = (const uint8_t *)pixels.bytes;
+      uint32_t scroll = surface.fixtureMarkers && pixels.length >= 8 ? marker[0] | (marker[1]<<8) | (marker[2]<<16) : 0;
+      uint32_t sequence = surface.fixtureMarkers && pixels.length >= 8 ? marker[4] | (marker[5]<<8) | (marker[6]<<16) : 0;
+      [surface.samples addObject:@{@"time":@(mainAt), @"epochMs":@(NSDate.date.timeIntervalSince1970 * 1000), @"scroll":@(scroll), @"sequence":@(sequence), @"intervalMs":@(surface.previousPresentation ? (mainAt-surface.previousPresentation)*1000 : 0), @"copyMs":@(copyMs), @"mainQueueMs":@((mainAt-copiedAt)*1000), @"submitMs":@((CACurrentMediaTime()-mainAt)*1000), @"decodeCPUSeconds":@(cpu), @"receivedBytes":@(bytes), @"updates":@(updates), @"width":@(width), @"height":@(height)}];
       surface.previousPresentation = mainAt;
-      if (surface.samples.count > 300) [surface.samples removeObjectAtIndex:0];
+      if (surface.samples.count > 10000) [surface.samples removeObjectAtIndex:0];
       if (mainAt-surface.lastDiagnosticWrite > 5) {
         surface.lastDiagnosticWrite = mainAt;
         NSData *report = [NSJSONSerialization dataWithJSONObject:surface.samples options:0 error:nil];
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0), ^{ [report writeToFile:[NSTemporaryDirectory() stringByAppendingPathComponent:@"weave-browser-performance.json"] atomically:YES]; });
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0), ^{ [report writeToFile:surface.diagnosticPath atomically:YES]; });
       }
     }
   });
@@ -97,7 +101,11 @@ static void presentPixels(rfbClient *client) {
   if ((self = [super init])) {
     _event = [event copy]; _networkFD = -1; _decoderFD = -1;
     _diagnostics = [NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_DIAGNOSTICS"] isEqual:@"1"];
-    if (_diagnostics) _samples = [NSMutableArray array];
+    if (_diagnostics) {
+      _samples = [NSMutableArray array];
+      _fixtureMarkers = [NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_FIXTURE_MARKERS"] isEqual:@"1"];
+      _diagnosticPath = NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_DIAGNOSTICS_PATH"] ?: [NSTemporaryDirectory() stringByAppendingPathComponent:@"weave-browser-performance.json"];
+    }
     _view = [[BrowserPixelView alloc] initWithFrame:CGRectZero];
 #if TARGET_OS_OSX
     _view.wantsLayer = YES;

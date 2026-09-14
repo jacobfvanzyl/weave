@@ -1,0 +1,172 @@
+{
+  "root": "/tmp/weave-browser-scroll-YSOTK3",
+  "route": "Mac loopback; software event capture to native layer submission, not physical scanout",
+  "seconds": 60.000900146484376,
+  "viewport": {
+    "width": 1147,
+    "height": 849,
+    "shellDpr": 2
+  },
+  "animation": true,
+  "submittedFPS": 59.83243570072254,
+  "distinctContentFPS": 59.83243570072254,
+  "distinctIntervalsMs": {
+    "count": 3589,
+    "mean": 16.71279981656402,
+    "p50": 16.70854166150093,
+    "p95": 18.323833326576278,
+    "p99": 19.018499995581806,
+    "max": 35.78491666121408
+  },
+  "inputToLayerMsFirstForwardSegment": {
+    "count": 0,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null,
+    "max": null
+  },
+  "inputEvents": 0,
+  "inputRPCs": 0,
+  "failedRPCs": 0,
+  "queueMs": {
+    "count": 0,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null,
+    "max": null
+  },
+  "rpcMs": {
+    "count": 0,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null,
+    "max": null
+  },
+  "pending": {
+    "count": 0,
+    "mean": null,
+    "p50": null,
+    "p95": null,
+    "p99": null,
+    "max": null
+  },
+  "portal": {
+    "queue": {
+      "count": 0,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "max": null
+    },
+    "authorize": {
+      "count": 192,
+      "mean": 0.11227085416671419,
+      "p50": 0.09616699999605771,
+      "p95": 0.18975000000500586,
+      "p99": 0.6977080000069691,
+      "max": 0.7747919999965234
+    },
+    "page": {
+      "count": 102,
+      "mean": 0.4448039117647639,
+      "p50": 0.4607079999987036,
+      "p95": 0.7644169999985024,
+      "p99": 1.1575420000008307,
+      "max": 1.638042000005953
+    },
+    "cdp": {
+      "count": 0,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "max": null
+    }
+  },
+  "native": {
+    "copyMs": {
+      "count": 3590,
+      "mean": 0.29868924059460206,
+      "p50": 0.2911249757744372,
+      "p95": 0.366291671525687,
+      "p99": 0.4138750082347542,
+      "max": 0.5957083194516599
+    },
+    "mainQueueMs": {
+      "count": 3590,
+      "mean": 0.010070055462147594,
+      "p50": 0.009374984074383974,
+      "p95": 0.013666664017364383,
+      "p99": 0.016250007320195436,
+      "max": 1.2457499979063869
+    },
+    "submitMs": {
+      "count": 3590,
+      "mean": 2.793721599748532,
+      "p50": 2.686583320610225,
+      "p95": 3.469583345577121,
+      "p99": 3.8107500004116446,
+      "max": 4.255000007105991
+    }
+  },
+  "mbps": 24.419534447365283,
+  "decoderCorePercent": 5.56187997155496,
+  "cef": {
+    "paintFPS": {
+      "count": 60,
+      "mean": 59.98253510863934,
+      "p50": 59.92706875732234,
+      "p95": 60.423738803035455,
+      "p99": 60.524879694398976,
+      "max": 60.524879694398976
+    },
+    "pumpMsPerSecond": {
+      "count": 60,
+      "mean": 231.58641233993396,
+      "p50": 237.79755228196117,
+      "p95": 418.0056495762817,
+      "p99": 421.27722042578006,
+      "max": 421.27722042578006
+    },
+    "worstPumpMs": {
+      "count": 60,
+      "mean": 5.131533333333332,
+      "p50": 5.262,
+      "p95": 8.188,
+      "p99": 8.624,
+      "max": 8.624
+    }
+  },
+  "resourceEstimate": {
+    "cpuPercent": {
+      "count": 60,
+      "mean": 63.65333333333336,
+      "p50": 62.800000000000004,
+      "p95": 86.9,
+      "p99": 88.10000000000001,
+      "max": 88.10000000000001
+    },
+    "rssMiB": {
+      "count": 60,
+      "mean": 1159.5260416666667,
+      "p50": 1113.5,
+      "p95": 1279.59375,
+      "p99": 1283.0625,
+      "max": 1283.0625
+    }
+  },
+  "settled": {
+    "scrollY": 0,
+    "frames": 4129,
+    "width": 1147,
+    "height": 849,
+    "dpr": 1
+  },
+  "expectedScrollY": 0,
+  "displacementPreserved": true,
+  "cadenceGate": true
+}

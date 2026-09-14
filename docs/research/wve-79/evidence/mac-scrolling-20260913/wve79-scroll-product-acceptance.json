@@ -1,0 +1,32 @@
+{
+  "state": "/tmp/wve-rfb-portal-ZBm3c3",
+  "browserPaneCreated": true,
+  "trustedHumanProfileAccess": true,
+  "focusHandoff": true,
+  "authorizedInput": true,
+  "nativeWheel": {
+    "fractionalPixels": 3,
+    "nestedVertical": 120,
+    "nestedHorizontal": 32,
+    "pageCancellation": true,
+    "wheelBeforeButton": true
+  },
+  "sameViewportFocusClaims": 3,
+  "pixelComparison": {
+    "width": 1000,
+    "height": 800,
+    "differentPixels": 0
+  },
+  "nativeRfb": {
+    "frames": 4,
+    "width": 1000,
+    "height": 800,
+    "saved": true,
+    "bytes": 4846
+  },
+  "unattendedAfterRpcDisconnect": true,
+  "popupRightSplit": true,
+  "sharedPopupClose": true,
+  "revokedDisplayBrowserAlive": true,
+  "success": true
+}

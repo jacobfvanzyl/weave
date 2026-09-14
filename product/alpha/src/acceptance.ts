@@ -1,6 +1,7 @@
 import { nativeTerminalAcceptance } from '@/terminal/native-terminal';
+import { runBrowserScrollAcceptance } from '@/browser/scroll-acceptance';
 // Included only in explicitly built acceptance artifacts.
-export type LiveAcceptanceInput = { browserUrl?: string; hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
+export type LiveAcceptanceInput = { browserBenchmark?: { durationMs: number; animation: boolean }; browserUrl?: string; hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
 export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   let stage = 'pairing';
   let outsideBottomRightRadius = 0;
@@ -56,6 +57,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       stage = 'native Browser framebuffer';
       await wait(() => Number(document.querySelector<HTMLElement>('[data-slot="native-browser-input"]')?.dataset.frameWidth) > 0);
       const browser = document.querySelector<HTMLTextAreaElement>('[data-slot="native-browser-input"]')!;
+      if (input.browserBenchmark) return await runBrowserScrollAcceptance(browser, input.browserBenchmark.durationMs, input.browserBenchmark.animation);
       await new Promise(resolve => setTimeout(resolve,500));
       const rect = browser.getBoundingClientRect();
       browser.focus();

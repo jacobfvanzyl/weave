@@ -1,0 +1,22 @@
+--- a/product/portal/native/browser/cef-host.cc
++++ b/product/portal/native/browser/cef-host.cc
+@@ -453,6 +453,19 @@
+     }
+     page->resize(w, h);
+   } else if (method == "page.cdp") {
++    // Bounded experimental probe: only whole-pixel wheel events, opt-in.
++    auto input = params->GetDictionary("arguments");
++    if (std::getenv("WEAVE_BROWSER_EXPERIMENT_NATIVE_WHEEL") &&
++        params->GetString("method") == "Input.dispatchMouseEvent" && input &&
++        input->GetString("type") == "mouseWheel" &&
++        input->GetType("deltaX") == VTYPE_INT && input->GetType("deltaY") == VTYPE_INT) {
++      auto number = [&](const char *key) { return input->GetType(key) == VTYPE_INT ? (double)input->GetInt(key) : input->GetDouble(key); };
++      CefMouseEvent event; event.x = (int)number("x"); event.y = (int)number("y");
++      int m = input->GetInt("modifiers");
++      event.modifiers = ((m & 1) ? EVENTFLAG_ALT_DOWN : 0) | ((m & 2) ? EVENTFLAG_CONTROL_DOWN : 0) | ((m & 4) ? EVENTFLAG_COMMAND_DOWN : 0) | ((m & 8) ? EVENTFLAG_SHIFT_DOWN : 0);
++      host->SendMouseWheelEvent(event, -input->GetInt("deltaX"), -input->GetInt("deltaY"));
++      reply(request, object()); return;
++    }
+     int messageId = ++page->nextCdp;
+     page->cdpRequests[messageId] = request;
+     if (!host->ExecuteDevToolsMethod(messageId, params->GetString("method"),

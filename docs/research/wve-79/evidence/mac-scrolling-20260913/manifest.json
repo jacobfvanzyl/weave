@@ -1,0 +1,32 @@
+[
+  {
+    "variant": "baseline",
+    "repetition": 1,
+    "root": "/tmp/weave-browser-scroll-jl1aHS"
+  },
+  {
+    "variant": "candidate",
+    "repetition": 1,
+    "root": "/tmp/weave-browser-scroll-NQDBfA"
+  },
+  {
+    "variant": "baseline",
+    "repetition": 2,
+    "root": "/tmp/weave-browser-scroll-kPtqAt"
+  },
+  {
+    "variant": "candidate",
+    "repetition": 2,
+    "root": "/tmp/weave-browser-scroll-UNNc6f"
+  },
+  {
+    "variant": "baseline",
+    "repetition": 3,
+    "root": "/tmp/weave-browser-scroll-oTH3wN"
+  },
+  {
+    "variant": "candidate",
+    "repetition": 3,
+    "root": "/tmp/weave-browser-scroll-isCq4I"
+  }
+]

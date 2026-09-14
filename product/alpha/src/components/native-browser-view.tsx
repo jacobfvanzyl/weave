@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { BrowserPage } from '@weave/product-protocol';
 import type { DirectHostClient } from '@/portal-client';
 import { BrowserViewConnection } from '@/browser/browser-view-connection';
+import { wheelPixels } from '@/browser/browser-wheel';
 import { paneOverlayOpen, paneVisible, usePaneFocusAdapter } from '@/app/pane-focus';
 import { nativeTerminalBridge } from '@/terminal/native-terminal';
 import { Alert, AlertDescription } from './ui/alert';
@@ -67,7 +68,7 @@ export function NativeBrowserView({ client, page, focused }: { client: Pick<Dire
       onPointerUp={event => { if (event.pointerType === 'touch') { const value=touch.current; touch.current=undefined; if(value && !value.dragged) { for(const type of ['mousePressed','mouseReleased']) void connection.current?.input('Input.dispatchMouseEvent',{type,...point(event),button:'left',clickCount:1}); } return; } void connection.current?.input('Input.dispatchMouseEvent', { type:'mouseReleased', ...point(event), button:event.button === 2 ? 'right' : 'left', buttons:event.buttons, clickCount:1, modifiers:modifiers(event) }); }}
       onPointerMove={event => { const value=touch.current; if(event.pointerType === 'touch' && value) { event.preventDefault(); if(Math.hypot(event.clientX-value.startX,event.clientY-value.startY)>6) value.dragged=true; if(value.dragged) void connection.current?.input('Input.dispatchMouseEvent',{type:'mouseWheel',...point(event),deltaX:value.x-event.clientX,deltaY:value.y-event.clientY}); value.x=event.clientX;value.y=event.clientY;return; } if (event.buttons) void connection.current?.input('Input.dispatchMouseEvent', { type:'mouseMoved', ...point(event), button:'left', buttons:event.buttons, modifiers:modifiers(event) }); }}
       onContextMenu={event => event.preventDefault()}
-      onWheel={event => { void connection.current?.input('Input.dispatchMouseEvent', { type:'mouseWheel', ...point(event), deltaX:event.deltaX, deltaY:event.deltaY, modifiers:modifiers(event) }); }}
+      onWheel={event => { const element = event.currentTarget; const lineHeight = event.deltaMode === 1 ? parseFloat(getComputedStyle(element).lineHeight) || 16 : 16; void connection.current?.input('Input.dispatchMouseEvent', { type:'mouseWheel', ...point(event), ...wheelPixels(event, lineHeight, element.clientHeight, element.clientWidth), modifiers:modifiers(event) }); }}
       onKeyDown={event => key(event,'rawKeyDown')} onKeyUp={event => key(event,'keyUp')}
       onCompositionStart={() => { composing.current = true; }}
       onCompositionEnd={event => { composing.current = false; if (event.data) void connection.current?.input('Input.insertText', { text:event.data }); event.currentTarget.value = ''; }}
