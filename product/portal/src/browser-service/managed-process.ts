@@ -1,3 +1,6 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import type { Readable, Writable } from 'node:stream';
+import { CdpPipe } from './cdp-pipe.ts';
 import { mkdtemp, rm, realpath } from 'node:fs/promises';
 import { join, isAbsolute, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -5,14 +8,9 @@ import { privateDirectory } from './chromium.ts';
 
 export type ManagedPage = { pageId: string; title: string; url: string; rfbSocket: string; width: number; height: number; canGoBack: boolean; canGoForward: boolean; openerPageId?: string };
 export type ManagedBrowserEvent = { method: string; params: Record<string, unknown> };
-type Child = Bun.Subprocess<'pipe', 'pipe', 'pipe'>;
+type Child = ChildProcess & { stdin: Writable; stdout: Readable; stderr: Readable };
 type Pending = { resolve(value: any): void; reject(cause: Error): void; timer: ReturnType<typeof setTimeout> };
 const MAX_MESSAGE = 1024 * 1024;
-async function* chunks(stream: ReadableStream<Uint8Array>) {
-  const reader = stream.getReader();
-  try { while (true) { const next = await reader.read(); if (next.done) return; yield next.value; } }
-  finally { reader.releaseLock(); }
-}
 
 /** One sandboxed native process per Profile. No network listeners or client-owned lifetime. */
 export class ManagedBrowserProcess {
@@ -23,8 +21,14 @@ export class ManagedBrowserProcess {
   #closing?: Promise<void>;
   #version = '';
   #stderr = '';
-  private constructor(private child: Child, private sockets: string) {}
-  get pid() { return this.child.pid; }
+  readonly cdp: CdpPipe;
+  private exited: Promise<number | null>;
+  private constructor(private child: Child, private sockets: string) {
+    this.exited = new Promise(resolve => child.once('exit', resolve));
+    child.on('error', error => this.#lost(error));
+    this.cdp = new CdpPipe(child.stdio[3] as Writable, child.stdio[4] as Readable);
+  }
+  get pid() { return this.child.pid!; }
   get version() { return this.#version; }
   get available() { return !this.#failure && !this.#closing && this.child.exitCode === null; }
   get failure() { return this.#failure?.message; }
@@ -39,7 +43,7 @@ export class ManagedBrowserProcess {
       // macOS's long per-user TMPDIR does not fit sockaddr_un with page UUIDs.
       const socketRoot = process.platform === 'darwin' ? '/tmp' : tmpdir();
       sockets = await mkdtemp(join(socketRoot, 'weave-rfb-')); await privateDirectory(sockets);
-      const child = Bun.spawn([options.binary, options.directory, sockets, ...(process.platform === 'linux' ? ['--ozone-platform=headless'] : [])], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe', env: { ...process.env, ...(process.platform === 'linux' ? { CEF_RESOURCES: dirname(options.binary) } : {}) } });
+      const child = spawn(options.binary, [options.directory, sockets], { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'], env: { ...process.env, WEAVE_BROWSER_CDP_PIPE: '1', ...(process.platform === 'linux' ? { CEF_RESOURCES: dirname(options.binary) } : {}) } }) as Child;
       runtime = new ManagedBrowserProcess(child, sockets);
       await runtime.#start(options.startupTimeoutMs ?? 15000);
       return runtime;
@@ -51,6 +55,7 @@ export class ManagedBrowserProcess {
   }
   #lost(cause: Error) {
     this.#failure ??= cause;
+    this.cdp.close(cause);
     for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(cause); }
     this.#pending.clear();
   }
@@ -58,12 +63,12 @@ export class ManagedBrowserProcess {
     let ready!: () => void, reject!: (cause: Error) => void;
     const opening = new Promise<void>((resolve, fail) => { ready = resolve; reject = fail; });
     const timer = setTimeout(() => reject(new Error(`CEF startup timed out. ${this.#stderr}`)), timeout);
-    void this.child.exited.then(code => { const error = new Error(`CEF exited (${code}); live page state was lost. ${this.#stderr}`); this.#lost(error); reject(error); });
-    void (async () => { const decoder = new TextDecoder(); for await (const chunk of chunks(this.child.stderr)) this.#stderr = (this.#stderr + decoder.decode(chunk)).slice(-4096); })();
+    void this.exited.then(code => { const error = new Error(`CEF exited (${code}); live page state was lost. ${this.#stderr}`); this.#lost(error); reject(error); });
+    void (async () => { const decoder = new TextDecoder(); for await (const chunk of this.child.stderr) this.#stderr = (this.#stderr + decoder.decode(chunk)).slice(-4096); })();
     void (async () => {
       let input = ''; const decoder = new TextDecoder();
       try {
-        for await (const chunk of chunks(this.child.stdout)) {
+        for await (const chunk of this.child.stdout) {
           input += decoder.decode(chunk, { stream: true });
           let end: number;
           while ((end = input.indexOf('\n')) >= 0) {
@@ -72,7 +77,7 @@ export class ManagedBrowserProcess {
             const message = JSON.parse(line);
             if (message.jsonrpc !== '2.0') throw new Error('Invalid CEF response');
             if (message.method === 'runtime.ready') {
-              if (message.params?.version !== 1 || typeof message.params.cefVersion !== 'string') throw new Error('Incompatible CEF runtime');
+              if (message.params?.version !== 2 || typeof message.params.cefVersion !== 'string') throw new Error('Incompatible CEF runtime');
               this.#version = message.params.cefVersion; ready();
             } else if (typeof message.method === 'string') {
               for (const listener of this.#listeners) listener({ method: message.method, params: message.params });
@@ -96,7 +101,7 @@ export class ManagedBrowserProcess {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error(`CEF ${method} timed out; operation may have executed`)); }, 15000);
       this.#pending.set(id, { resolve, reject, timer });
-      try { this.child.stdin.write(body); void Promise.resolve(this.child.stdin.flush()).catch(cause => { this.#pending.delete(id); clearTimeout(timer); reject(cause); }); }
+      try { this.child.stdin.write(body, cause => { if (cause) { this.#pending.delete(id); clearTimeout(timer); reject(cause); } }); }
       catch (cause) { this.#pending.delete(id); clearTimeout(timer); reject(cause); }
     });
   }
@@ -104,11 +109,11 @@ export class ManagedBrowserProcess {
     return this.#closing ??= (async () => {
       if (this.child.exitCode === null) {
         await this.request('runtime.close').catch(() => {});
-        await Promise.race([this.child.exited, Bun.sleep(6000)]);
-        if (this.child.exitCode === null) { this.child.kill('SIGTERM'); await Promise.race([this.child.exited, Bun.sleep(1500)]); }
+        await Promise.race([this.exited, Bun.sleep(6000)]);
+        if (this.child.exitCode === null) { this.child.kill('SIGTERM'); await Promise.race([this.exited, Bun.sleep(1500)]); }
         if (this.child.exitCode === null) this.child.kill('SIGKILL');
       }
-      await this.child.exited; this.#lost(new Error('CEF runtime closed'));
+      await this.exited; this.#lost(new Error('CEF runtime closed'));
       await rm(this.sockets, { recursive: true, force: true });
     })();
   }

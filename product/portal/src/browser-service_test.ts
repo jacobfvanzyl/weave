@@ -107,7 +107,7 @@ test('service restart requires a fresh handshake and oversized calls cannot muta
   await expect(client.list()).rejects.toThrow('Stale Browser Service');
   const fresh = new BrowserServiceClient(state); cleanup.push(() => fresh.dispose());
   const browser = await fresh.openWorkspace('a');
-  await expect(fresh.send('a', browser.generation, 'Fixture.set', { value: 'x'.repeat(1024 * 1024) })).rejects.toThrow('too large');
+  await expect(fresh.send('a', browser.generation, 'Fixture.set', { value: 'x'.repeat(16 * 1024 * 1024) })).rejects.toThrow('too large');
   expect((await fresh.send('a', browser.generation, 'Fixture.read')).value).toBe('');
 });
 

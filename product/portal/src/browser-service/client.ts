@@ -67,7 +67,8 @@ export class BrowserServiceClient {
         });
       });
       this.#requests.add(rpc);
-      const timeout = setTimeout(() => rpc.destroy(new Error('Browser Service timeout; operation may have executed')), 20000);
+      const debuggerCommand = method === 'page.rpc' && (params as { method?: string }).method?.startsWith('debugger.');
+      const timeout = setTimeout(() => rpc.destroy(new Error('Browser Service timeout; operation may have executed')), debuggerCommand ? 45_000 : 20_000);
       rpc.on('error', reject);
       rpc.on('close', () => { clearTimeout(timeout); this.#requests.delete(rpc); });
       rpc.end(body);

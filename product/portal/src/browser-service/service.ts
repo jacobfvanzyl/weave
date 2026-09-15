@@ -7,8 +7,8 @@ import { recoverStaleSocket, removeOwnedSocket } from '../local-socket.ts';
 import { BROWSER_RPC_METHODS, parseBrowserRpcParams, type BrowserRpcMethod } from '@weave/product-protocol';
 import { BROWSER_PROFILE_RPC_METHODS, browserProfileId, parseBrowserProfileRpcParams, type BrowserProfileRpcMethod } from '@weave/product-protocol';
 
-export const BROWSER_SERVICE_VERSION = 3;
-export const MAX_BROWSER_MESSAGE_BYTES = 1024 * 1024;
+export const BROWSER_SERVICE_VERSION = 5;
+export const MAX_BROWSER_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const browserSocketPath = (stateDirectory: string) => join(resolve(stateDirectory), 'browser-service', 'service.sock');
 
 const object = (value: unknown): Record<string, unknown> => {
@@ -63,7 +63,10 @@ export async function serveBrowserService(options: { stateDirectory: string; bin
             const pages = owner.managedPages;
             if (!pages) throw new Error('Managed CEF runtime is not configured');
             const method = text(params.method), args = object(params.arguments ?? {});
-            if (method === 'page.list') result = { pages: await pages.list(args.profileId === undefined ? undefined : browserProfileId(args.profileId)) };
+            if (method === 'debugger.open') result = await pages.openDebugger(browserProfileId(args.profileId));
+            else if (method === 'debugger.close') { await pages.closeDebugger(browserProfileId(args.debuggerId)); result = {}; }
+            else if (method === 'debugger.events' || method === 'debugger.send' || method === 'debugger.renew') result = await pages.debuggerRequest(browserProfileId(args.debuggerId), text(args.generation), method === 'debugger.send' ? object(args.message) : undefined, method === 'debugger.renew', args.streamed === true);
+            else if (method === 'page.list') result = { pages: await pages.list(args.profileId === undefined ? undefined : browserProfileId(args.profileId)) };
             else if (method === 'page.events') result = { events: pages.events() };
             else if (method === 'page.create') result = await pages.create(browserProfileId(args.profileId), browserProfileId(args.pageId), String(args.url));
             else if (method === 'page.restore') result = await pages.restore(browserProfileId(args.pageId));
@@ -113,12 +116,14 @@ export async function serveBrowserService(options: { stateDirectory: string; bin
     await chmod(path, 0o600);
   } catch (error) { server.close(); throw error; }
   const socketStat = await lstat(path);
+  const expiry = setInterval(() => { void owner.managedPages?.expireDebuggers().catch(() => {}); }, 1000);
+  expiry.unref();
   let closing: Promise<void> | undefined;
   return {
     path,
     close() {
       return closing ??= (async () => {
-        stopping = true;
+        stopping = true; clearInterval(expiry);
         const stopped = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
         server.closeIdleConnections();
         try { await stopped; await owner.close(); }

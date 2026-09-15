@@ -335,6 +335,7 @@ public:
   }
   void OnBeforeCommandLineProcessing(const CefString &,
                                      CefRefPtr<CefCommandLine> cmd) override {
+    if (getenv("WEAVE_BROWSER_CDP_PIPE")) cmd->AppendSwitch("remote-debugging-pipe");
     cmd->AppendSwitch("disable-gpu");
     cmd->AppendSwitch("disable-gpu-compositing");
     cmd->AppendSwitch("mute-audio");
@@ -354,7 +355,7 @@ public:
     auto e = object(), p = object();
     e->SetString("jsonrpc", "2.0");
     e->SetString("method", "runtime.ready");
-    p->SetInt("version", 1);
+    p->SetInt("version", 2);
     p->SetString("cefVersion", CEF_VERSION);
     e->SetDictionary("params", p);
     emit(e);

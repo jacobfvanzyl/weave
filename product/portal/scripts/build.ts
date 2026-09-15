@@ -9,6 +9,8 @@ const terminalBuild = Bun.spawn(['bun', join(root, 'scripts/build-terminal-servi
 if (await terminalBuild.exited !== 0) throw new Error('Terminal Service packaging failed');
 const browserBuild = Bun.spawn(['bun', join(root, 'scripts/build-browser-service.ts'), ...(process.argv.includes('--linux') ? ['--linux'] : [])], { stdout: 'inherit', stderr: 'inherit' });
 if (await browserBuild.exited !== 0) throw new Error('Browser Service packaging failed');
+const browserTools = Bun.spawn(['bun', join(root, 'scripts/prepare-browser-tools.ts'), ...(process.argv.includes('--linux') ? ['--linux'] : [])], { stdout: 'inherit', stderr: 'inherit' });
+if (await browserTools.exited !== 0) throw new Error('Browser tools packaging failed');
 const outfile = join(root, 'dist', ...(target === 'bun' ? [] : ['linux-x64']), 'weave-portal');
 const hash = createHash('sha256');
 async function visit(path: string) {
@@ -24,6 +26,7 @@ await visit(join(root, 'native'));
 await visit(join(root, 'browser-extension'));
 await visit(join(repo, 'product/protocol/src'));
 hash.update(await readFile(join(repo, 'bun.lock')));
+for (const file of ['runner.mjs', 'package.json', 'bun.lock']) { hash.update(file); hash.update(await readFile(join(root, 'browser-tools', file))); }
 const git = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: repo });
 const metadata = { version: (await Bun.file(join(root, 'package.json')).json()).version, revision: git.exitCode === 0 ? git.stdout.toString().trim() : 'source-archive', sourceHash: hash.digest('hex') };
 await mkdir(join(root, 'dist'), { recursive: true });

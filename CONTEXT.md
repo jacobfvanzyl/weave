@@ -133,5 +133,5 @@ A single Host-owned browser page and its navigation history, belonging to one Wo
 _Avoid_: Browser Tab, Browser Session, tab container, client-owned page
 
 **Browser Profile Grant**:
-An explicit authorization for an Agent to use a Browser Profile's shared browser identity and inspect, control and debug its pages across Workspaces on that Host. Workspace membership does not confer or restrict this browser authorization, which does not grant access to other Profiles or change filesystem execution permissions; fully trusted human clients can use all Profiles on their paired Host without individual Profile Grants.
+An explicit, revocable authorization belonging to one Thread for its Agent to use a Browser Profile's shared browser identity and inspect, control and debug its pages across Workspaces on that Host. Workspace membership does not confer or restrict this browser authorization, which does not grant access to other Profiles or change filesystem execution permissions; fully trusted human clients can use all Profiles on their paired Host without individual Profile Grants. A grant remains with its Thread when the Agent Pane moves, and is not inherited by other Threads using the same Agent.
 _Avoid_: Workspace browser permission, Pane-only debugger access, Host-wide browser access

@@ -82,6 +82,8 @@ export async function manageService(action: string | undefined, args: string[]) 
       await copyFile(join(dirname(await realpath(source)), component), join(release, component)); await chmod(join(release, component), 0o700);
     }
     await cp(join(dirname(await realpath(source)), 'browser-extension'), join(release, 'browser-extension'), { recursive: true });
+    const tools = join(dirname(await realpath(source)), 'browser-tools');
+    if (await exists(tools)) await cp(tools, join(release, 'browser-tools'), { recursive: true });
     await atomicJson(join(release, 'version.json'), version);
     const unit = installed?.unit ?? option(args, '--unit') ?? `weave-host-${name}.service`;
     if (!/^weave-[a-z0-9-]+\.service$/.test(unit)) throw new Error('Unit name must be a weave-*.service basename.');

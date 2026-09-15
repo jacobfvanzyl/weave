@@ -1,3 +1,4 @@
+import { CdpPipeSession, type CdpMessage } from './cdp-pipe.ts';
 import { readFile, lstat, rename, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { browserProfileId } from '@weave/product-protocol';
@@ -8,7 +9,7 @@ import { ManagedBrowserProcess, type ManagedPage, type ManagedBrowserEvent } fro
 export type ManagedPageRecord = { pageId: string; profileId: string; title: string; url: string; openerPageId?: string };
 export type ManagedPageSummary = ManagedPageRecord & { available: boolean; generation?: string; rfbSocket?: string; width?: number; height?: number; canGoBack?: boolean; canGoForward?: boolean };
 type Runtime = { generation: string; process: ManagedRuntime; pages: Map<string, ManagedPage>; unsubscribe: () => void };
-export type ManagedRuntime = Pick<ManagedBrowserProcess, 'available' | 'request' | 'subscribe' | 'close'>;
+export type ManagedRuntime = Pick<ManagedBrowserProcess, 'available' | 'request' | 'subscribe' | 'close'> & Partial<Pick<ManagedBrowserProcess, 'cdp'>>;
 export type ManagedRuntimeFactory = (options: { binary: string; directory: string }) => Promise<ManagedRuntime>;
 export const managedPageUrl = (value: unknown): string => {
   if (typeof value !== 'string' || value.length > 8192) throw new Error('Invalid browser URL');
@@ -19,6 +20,8 @@ export const managedPageUrl = (value: unknown): string => {
 
 /** Durable page identities and metadata, with explicit restoration after runtime loss. */
 export class ManagedBrowserPages {
+  #openingDebuggers = 0;
+  #debuggers = new Map<string, { profileId: string; runtime: Runtime; session: CdpPipeSession; expires: number }>();
   #runtimes = new Map<string, Promise<Runtime>>();
   #records?: Map<string, ManagedPageRecord>;
   #writes: Promise<unknown> = Promise.resolve();
@@ -159,8 +162,41 @@ export class ManagedBrowserPages {
     }
     await this.#ordered(async()=>{(await this.#load()).delete(pageId);await this.#save();});
   }
+  async openDebugger(profileId: string) {
+    await this.expireDebuggers();
+    if (this.#closing) throw new Error('Browser Service closing');
+    if (this.#debuggers.size + this.#openingDebuggers >= 32) throw new Error('Browser debugger capacity exceeded');
+    this.#openingDebuggers++;
+    try {
+    const runtime = await this.#runtime(profileId);
+    if (!runtime.process.cdp) throw new Error('Browser runtime lacks private CDP support');
+    const session = await CdpPipeSession.open(runtime.process.cdp);
+    if (this.#closing) { await session.close(); throw new Error('Browser Service closing'); }
+    const debuggerId = crypto.randomUUID();
+    this.#debuggers.set(debuggerId, { profileId, runtime, session, expires: Date.now() + 30_000 });
+    return { debuggerId, generation: runtime.generation };
+    } finally { this.#openingDebuggers--; }
+  }
+  async debuggerRequest(debuggerId: string, generation: string, message?: CdpMessage, renew = false, streamed = false) {
+    const entry = this.#debuggers.get(debuggerId);
+    if (!entry || entry.expires < Date.now() || !entry.runtime.process.available || entry.runtime.generation !== generation) {
+      await this.closeDebugger(debuggerId); throw new Error('Browser debugger unavailable; reconnect required');
+    }
+    entry.expires = Date.now() + 30_000;
+    if (renew) return {};
+    if (message && streamed) { entry.session.dispatch(message); return {}; }
+    return message ? entry.session.send(message) : { events: entry.session.events() };
+  }
+  async closeDebugger(debuggerId: string) {
+    const entry = this.#debuggers.get(debuggerId); this.#debuggers.delete(debuggerId);
+    await entry?.session.close();
+  }
+  async expireDebuggers() {
+    await Promise.all([...this.#debuggers].filter(([, entry]) => entry.expires < Date.now() || !entry.runtime.process.available).map(([id]) => this.closeDebugger(id)));
+  }
   close() {
     return this.#closing??=(async()=>{
+      await Promise.all([...this.#debuggers.keys()].map(id => this.closeDebugger(id)));
       // Service shutdown preserves page records for explicit Restore. Stop accepting lifecycle events before closing runtimes.
       await Promise.allSettled(this.#operations.values());
       const records=await this.#ordered(async()=>new Map(await this.#load()));

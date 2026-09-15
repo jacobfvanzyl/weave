@@ -14,7 +14,7 @@ export type AgentDefinition = {
   env: Record<string, string>;
 };
 export type PortalConfig = {
-  browser?: { executable: string; cefExecutable?: string };
+  browser?: { executable: string; cefExecutable?: string; nodeExecutable?: string; mcpScript?: string };
   listen: { hostname: string; port: number };
   displayName: string;
   tls?: { certificateFile: string; privateKeyFile: string };
@@ -147,7 +147,10 @@ export const parsePortalConfig = (value: unknown): PortalConfig => {
     if (!isAbsolute(executable)) throw new Error('browser.executable must be an absolute path.');
     const cefExecutable = input.cefExecutable === undefined ? undefined : text(input.cefExecutable, 'browser.cefExecutable');
     if (cefExecutable && !isAbsolute(cefExecutable)) throw new Error('browser.cefExecutable must be an absolute path.');
-    browser = { executable, ...(cefExecutable ? { cefExecutable } : {}) };
+    const nodeExecutable = input.nodeExecutable === undefined ? undefined : text(input.nodeExecutable, 'browser.nodeExecutable');
+    const mcpScript = input.mcpScript === undefined ? undefined : text(input.mcpScript, 'browser.mcpScript');
+    if (nodeExecutable && !isAbsolute(nodeExecutable) || mcpScript && !isAbsolute(mcpScript)) throw new Error('Browser tool paths must be absolute');
+    browser = { executable, ...(cefExecutable ? { cefExecutable } : {}), ...(nodeExecutable ? { nodeExecutable } : {}), ...(mcpScript ? { mcpScript } : {}) };
   }
   return {
     listen: { hostname, port: Number(port) },
