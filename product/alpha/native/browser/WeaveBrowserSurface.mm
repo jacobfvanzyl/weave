@@ -42,7 +42,7 @@ static double browserThreadCPU(void) { struct timespec t; clock_gettime(CLOCK_TH
 @end
 static void *clientTag = &clientTag;
 static rfbBool allocatePixels(rfbClient *client) {
-  if (client->width < 1 || client->height < 1 || client->width > 4096 || client->height > 4096 || (uint64_t)client->width * client->height > 8 * 1024 * 1024) return FALSE;
+  if (client->width < 1 || client->height < 1 || client->width > 8192 || client->height > 8192 || (uint64_t)client->width * client->height > 16 * 1024 * 1024) return FALSE;
   void *pixels = calloc((size_t)client->width * client->height, 4);
   if (!pixels) return FALSE;
   free(client->frameBuffer); client->frameBuffer = (uint8_t *)pixels;

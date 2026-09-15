@@ -252,7 +252,6 @@ const applySessionInfoToThread = (
 export function useLiveAlphaController(
   clientFactory: HostClientFactory = createHostClient,
 ): AlphaController {
-  const [browserCreation, setBrowserCreation] = useState<AlphaViewModel['browserCreation']>();
   const [connections, setConnections] = useState<PersistedPortalConnection[]>(
     [],
   );
@@ -1130,8 +1129,19 @@ export function useLiveAlphaController(
   const observedRunning = selected?.attention && Date.now() - Date.parse(selected.attention.observedAt) < 15_000 &&
     (selected.attention.state === "working" || selected.attention.state === "waiting");
 
+  const openBrowserPane = async (request: { paneId: string; hostId: string; workspaceId: string; workspaceName?: string; sourcePaneId?: string; axis: 'horizontal' | 'vertical' }, url = 'about:blank') => {
+        const client = clientsRef.current.get(request.hostId);
+        if (!client) throw new Error('Host is unavailable');
+        const before = (await client.getWorkspaceComposition(request.hostId)).composition;
+        const sourceDraft = localPanesRef.current.find(draft => draft.pane.paneId === request.sourcePaneId);
+        const paneId = request.paneId;
+        await client.browserRequest('browser.pane.create', { ...request, paneId, url, expectedRevision: before.revision, sourcePaneId: sourceDraft ? sourceDraft.sourcePaneId ?? paneTargets(before.workspaces.filter(workspace => workspace.workspaceId === request.workspaceId))[0]?.paneId : request.sourcePaneId });
+        if (sourceDraft) updateLocalPanes(panes => panes.map(draft => draft === sourceDraft ? { ...draft, sourcePaneId: paneId, axis: request.axis, beforeSource: true } : draft));
+        await workspaceController.actions.refresh();
+        workspaceController.actions.focus(request, paneId);
+  };
+
   const model: AlphaViewModel = {
-    browserCreation,
     platform: window.weaveDesktop?.platform ?? Capacitor.getPlatform(),
     connectionsLoaded,
     connectionsOpen,
@@ -1362,27 +1372,12 @@ export function useLiveAlphaController(
         } catch (cause) { updateSnapshot(thread.hostId, await client.snapshot()); reportActionError(cause); }
       },
       createThread,
-      newBrowserPane: (hostId, workspaceId) => {
+      newBrowserPane: (hostId, workspaceId, url) => {
         if (!snapshots[hostId]?.capabilities.includes('browser.panes.v1')) { reportActionError(new Error('This Host does not support Browser Panes yet.')); return; }
         const target = workspaceId ?? crypto.randomUUID();
         const workspace = workspaceController.model.compositions[hostId]?.workspaces.find(workspace => workspace.workspaceId === target);
         const sourcePaneId = workspace && (workspaceController.model.presentation.focusedPanes[workspaceKey({hostId,workspaceId:target})] ?? paneTargets([workspace])[0]?.paneId);
-        setBrowserCreation({paneId:crypto.randomUUID(),hostId,workspaceId:target,...(workspaceId ? {} : {workspaceName:'Browser'}),sourcePaneId,axis:'vertical',profileId:localStorage.getItem(`weave.browser.profile:${hostId}:${target}`) ?? undefined});
-      },
-      cancelBrowserPane: () => setBrowserCreation(undefined),
-      createBrowserPane: async (profileId, url) => {
-        if (!browserCreation) throw new Error('Browser creation is unavailable');
-        const client = clientsRef.current.get(browserCreation.hostId);
-        if (!client) throw new Error('Host is unavailable');
-        const before = (await client.getWorkspaceComposition(browserCreation.hostId)).composition;
-        const sourceDraft = localPanesRef.current.find(draft => draft.pane.paneId === browserCreation.sourcePaneId);
-        const paneId = browserCreation.paneId;
-        await client.browserRequest('browser.pane.create', { ...browserCreation, paneId, profileId, url, expectedRevision: before.revision, sourcePaneId: sourceDraft ? sourceDraft.sourcePaneId ?? paneTargets(before.workspaces.filter(workspace => workspace.workspaceId === browserCreation.workspaceId))[0]?.paneId : browserCreation.sourcePaneId });
-        if (sourceDraft) updateLocalPanes(panes => panes.map(draft => draft === sourceDraft ? { ...draft, sourcePaneId: paneId, axis: browserCreation.axis, beforeSource: true } : draft));
-        localStorage.setItem(`weave.browser.profile:${browserCreation.hostId}:${browserCreation.workspaceId}`, profileId);
-        await workspaceController.actions.refresh();
-        workspaceController.actions.focus(browserCreation, paneId);
-        setBrowserCreation(undefined);
+        void openBrowserPane({paneId:crypto.randomUUID(),hostId,workspaceId:target,...(workspaceId ? {} : {workspaceName:'Browser'}),sourcePaneId,axis:'vertical'}, url).catch(reportActionError);
       },
       splitPane: async (reference, sourcePaneId, axis, type) => {
         const { hostId, workspaceId } = reference;
@@ -1398,8 +1393,7 @@ export function useLiveAlphaController(
           if (!origin) throw new Error('Source Pane is unavailable.');
           if (type === 'browser') {
             if (!snapshots[hostId]?.capabilities.includes('browser.panes.v1')) throw new Error('This Host does not support Browser Panes yet.');
-            const profileId = origin.kind === 'browser' ? origin.profileId : localStorage.getItem(`weave.browser.profile:${hostId}:${workspaceId}`) ?? undefined;
-            setBrowserCreation({ paneId: crypto.randomUUID(), hostId, workspaceId, sourcePaneId, axis, profileId }); return;
+            await openBrowserPane({ paneId: crypto.randomUUID(), hostId, workspaceId, sourcePaneId, axis }); return;
           }
           if (origin.kind === 'terminal' && type === 'terminal') {
             // Keep the established current-directory inheritance for shells.

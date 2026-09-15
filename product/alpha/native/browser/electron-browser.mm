@@ -39,7 +39,13 @@ static napi_value create(napi_env env, napi_callback_info info) {
     void *data = (void *)CFBridgingRetain(json);
     if (napi_call_threadsafe_function(strong.callback, data, napi_tsfn_nonblocking) != napi_ok) { CFBridgingRelease(data); [strong.surface close]; }
   }];
-  [parent addSubview:entry.surface.view positioned:NSWindowAbove relativeTo:nil];
+  // Terminals may already have wrapped the web content in their hit-test
+  // container. Keep pixels beneath that same transparent web layer. If a
+  // terminal is created later, it reparents these siblings in their order.
+  for (NSView *child in parent.subviews) {
+    if ([child.identifier isEqualToString:@"weave-native-surfaces"]) { parent = child; break; }
+  }
+  [parent addSubview:entry.surface.view positioned:NSWindowBelow relativeTo:nil];
   int64_t id = nextId++; entries[@(id)] = entry;
   napi_value result; napi_create_int64(env, id, &result); return result;
 }
@@ -57,6 +63,7 @@ static napi_value operate(napi_env env, napi_callback_info info) {
     if (napi_get_value_double(env,args[1],&x) || napi_get_value_double(env,args[2],&y) || napi_get_value_double(env,args[3],&w) || napi_get_value_double(env,args[4],&h) || napi_get_value_bool(env,args[5],&visible) || napi_get_value_double(env,args[6],&dim) || !std::isfinite(x+y+w+h+dim) || w<0 || h<0) return error(env,"Invalid Browser geometry");
     NSView *parent = entry.surface.view.superview;
     NSRect frame = NSMakeRect(x, parent.isFlipped ? y : parent.bounds.size.height-y-h, w, h);
+    frame = [parent backingAlignedRect:frame options:NSAlignAllEdgesNearest];
     [entry.surface layout:NSIntersectionRect(frame, parent.bounds) visible:visible dim:dim];
   } else {
     NSString *value = count == 2 ? string(env, args[1], !strcmp(operation,"connect") ? 8192 : 65536) : nil;

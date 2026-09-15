@@ -37,7 +37,7 @@ const resourceTimer = setInterval(() => { void (async () => {
 console.log(`Benchmark evidence: ${root}`);
 try {
   await writeFile(join(root, 'input.json'), JSON.stringify({ hostUrl: `ws://127.0.0.1:${server.addr.port}`, pairingToken: await portal.security.createPairingToken(), workspaceName: 'Browser', browserUrl: `http://127.0.0.1:${fixture.port}/`, browserBenchmark: { durationMs, animation: process.env.BROWSER_SCROLL_ANIMATION === '1' } }), { mode: 0o600 });
-  const app = Bun.spawn([alpha, '--host-acceptance'], { env: { ...process.env, WEAVE_ALPHA_ACCEPTANCE_DIR: root, WEAVE_BROWSER_FIXTURE_MARKERS: '1', WEAVE_BROWSER_DIAGNOSTICS_PATH: join(root, 'native-performance.json') }, stdout: Bun.file(join(root, 'electron.log')), stderr: Bun.file(join(root, 'electron-error.log')) });
+  const app = Bun.spawn([alpha, '--host-acceptance', ...(process.env.BROWSER_DEVICE_SCALE ? [`--force-device-scale-factor=${process.env.BROWSER_DEVICE_SCALE}`] : [])], { env: { ...process.env, WEAVE_ALPHA_ACCEPTANCE_DIR: root, WEAVE_BROWSER_FIXTURE_MARKERS: '1', WEAVE_BROWSER_DIAGNOSTICS_PATH: join(root, 'native-performance.json') }, stdout: Bun.file(join(root, 'electron.log')), stderr: Bun.file(join(root, 'electron-error.log')) });
   const timer = setTimeout(() => app.kill('SIGTERM'), durationMs + 90000);
   const code = await app.exited; clearTimeout(timer);
   if (code !== 0) throw new Error(`Alpha scrolling acceptance failed (${code})`);

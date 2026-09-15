@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseBrowserPage, parseBrowserPageRpcParams, parseBrowserPageRpcResult, PORTAL_BROWSER_RFB_PATH } from './browser-pages.ts';
+import { browserFramebufferSize, browserViewportScale, parseBrowserPage, parseBrowserPageRpcParams, parseBrowserPageRpcResult, PORTAL_BROWSER_RFB_PATH } from './browser-pages.ts';
 import { parsePortalAuthChallenge, parsePortalRpcParams, portalAuthChallengePayload } from './index.ts';
 const profileId = crypto.randomUUID(), pageId = crypto.randomUUID(), generation = crypto.randomUUID(), viewId = crypto.randomUUID();
 test('Browser page wire summaries strip native paths and require a live runtime generation', () => {
@@ -22,3 +22,19 @@ test('navigation rejects credentials and privileged schemes; RFB authentication 
   expect(parsePortalAuthChallenge(challenge).audience).toBe(PORTAL_BROWSER_RFB_PATH);
   expect(portalAuthChallengePayload(parsePortalAuthChallenge(challenge))).toContain('/browser/rfb');
 });
+
+test('Retina viewports retain logical geometry and bound physical framebuffer allocations', () => {
+  const input = { viewId, width:2000, height:1200, deviceScaleFactor:2 };
+  expect(parseBrowserPageRpcParams('browser.page.view.focus', input)).toEqual(input);
+  for (const deviceScaleFactor of [0, .5, 2.1, NaN, Infinity, '2']) expect(() => parseBrowserPageRpcParams('browser.page.view.focus', { ...input, deviceScaleFactor })).toThrow();
+  expect(() => parseBrowserPageRpcParams('browser.page.view.focus', { ...input, width:4096, height:2000 })).toThrow('framebuffer');
+  expect(parseBrowserPageRpcResult('browser.page.view.focus', { ...input, generation, focusEpoch:1 })).toEqual({ ...input, generation, focusEpoch:1 });
+});
+
+ test('density selection fits large panes without shrinking their logical viewport', () => {
+  const scale = browserViewportScale(4096, 2000, 2);
+  expect(scale).toBeGreaterThan(1); expect(scale).toBeLessThan(2);
+  const viewport = { width:4096, height:2000, deviceScaleFactor:scale };
+  expect(() => parseBrowserPageRpcParams('browser.page.view.focus', { viewId, ...viewport })).not.toThrow();
+  expect(browserFramebufferSize({ width:801, height:601, deviceScaleFactor:1.5 })).toEqual({ width:1202, height:902 });
+ });

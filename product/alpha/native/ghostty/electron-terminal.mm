@@ -318,6 +318,7 @@ static napi_value create(napi_env env, napi_callback_info info) {
   for (NSView *child in parent.subviews) if ([child isKindOfClass:WeaveSurfaceContainer.class]) container = (WeaveSurfaceContainer *)child;
   if (!container) {
     container = [[WeaveSurfaceContainer alloc] initWithFrame:parent.bounds];
+    container.identifier = @"weave-native-surfaces";
     container.wantsLayer = YES;
     container.layer.backgroundColor = [NSColor colorWithSRGBRed:30/255.0 green:30/255.0 blue:46/255.0 alpha:1].CGColor;
     container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;

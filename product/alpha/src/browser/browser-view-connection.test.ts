@@ -130,3 +130,66 @@ it('normalizes line/page wheel units without changing pixel-precise trackpad del
   expect(wheelPixels({ deltaX:0, deltaY:-1, deltaMode:2 },24,800)).toEqual({ deltaX:0, deltaY:-800 });
   expect(wheelPixels({ deltaX:1, deltaY:-1, deltaMode:2 },24,800,1200)).toEqual({ deltaX:1200, deltaY:-800 });
 });
+
+it('keeps an overlay display attached while dropping queued and new input without reclaiming the viewport', async () => {
+  const f = await scrollingFixture();
+  const queued = f.wheel(5);
+  const focusCalls = () => f.rpc.mock.calls.filter(([method]) => method === 'browser.page.view.focus').length;
+  const claims = focusCalls();
+  f.connection.layout({ x:0, y:0, width:800, height:600, focused:true, visible:true, inputBlocked:true, dim:0 });
+  await f.connection.activate();
+  await f.connection.input('Input.insertText', { text:'dialog typing' });
+  f.release(); await Promise.all([f.inFlight, queued]);
+  expect(f.inputs()).toHaveLength(1);
+  expect(f.native.layout).toHaveBeenLastCalledWith(expect.objectContaining({ visible:true }));
+  expect(f.native.close).not.toHaveBeenCalled();
+  f.connection.layout({ x:0, y:0, width:800, height:600, focused:true, visible:true, inputBlocked:false, dim:0 });
+  await f.connection.input('Input.insertText', { text:'page typing' });
+  expect(f.inputs()).toHaveLength(2);
+  expect(focusCalls()).toBe(claims);
+  await f.connection.close();
+});
+
+it('cancels input waiting for a resized frame when an overlay opens', async () => {
+  const f = fixture(); await f.connection.start();
+  const bounds = { x:0, y:0, width:1000, height:800, focused:true, visible:true, dim:0 };
+  f.connection.layout(bounds); await f.connection.activate(); f.frame(800,600);
+  const input = f.connection.input('Input.insertText', { text:'pending' });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  f.connection.layout({ ...bounds, inputBlocked:true });
+  await input;
+  expect(f.rpc.mock.calls.some(([method]) => method === 'browser.page.view.input')).toBe(false);
+  expect(f.errors).not.toHaveBeenCalledWith(expect.objectContaining({ error:expect.any(String) }));
+  await f.connection.close();
+}, 500);
+
+it('waits for physical Retina pixels while leaving mouse coordinates in logical page units', async () => {
+  const f = fixture(); await f.connection.start();
+  f.connection.layout({ x:0, y:0, width:800, height:600, deviceScaleFactor:2, focused:false, visible:true, dim:0 });
+  f.frame(800,600); await f.connection.activate();
+  const stale = f.connection.input('Input.dispatchMouseEvent', { type:'mousePressed', x:50, y:60, button:'left' });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  expect(f.rpc.mock.calls.some(([method]) => method === 'browser.page.view.input')).toBe(false);
+  f.frame(1600,1200); await stale;
+  expect(f.rpc.mock.calls.some(([method]) => method === 'browser.page.view.input')).toBe(false);
+  await f.connection.input('Input.dispatchMouseEvent', { type:'mousePressed', x:50, y:60, button:'left' });
+  expect(f.rpc).toHaveBeenLastCalledWith('browser.page.view.input', expect.objectContaining({ arguments:expect.objectContaining({ x:50, y:60 }) }));
+  f.connection.layout({ x:0, y:0, width:800, height:600, deviceScaleFactor:1, focused:true, visible:true, dim:0 });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  expect(f.rpc).toHaveBeenCalledWith('browser.page.view.resize', expect.objectContaining({ width:800, height:600, deviceScaleFactor:1 }));
+  f.frame(800,600); await f.connection.close();
+});
+
+it('claims the initial Retina viewport after its creation menu closes, then retains that claim across later overlays', async () => {
+  const f = fixture(); await f.connection.start();
+  const bounds = { x:0, y:0, width:800, height:600, deviceScaleFactor:2, focused:true, visible:true, inputBlocked:true, dim:0 };
+  f.connection.layout(bounds);
+  expect(f.rpc.mock.calls.some(([method]) => method === 'browser.page.view.focus')).toBe(false);
+  f.connection.layout({ ...bounds, inputBlocked:false });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  f.frame(1600,1200);
+  f.connection.layout(bounds); f.connection.layout({ ...bounds, inputBlocked:false });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  expect(f.rpc.mock.calls.filter(([method]) => method === 'browser.page.view.focus')).toHaveLength(1);
+  await f.connection.close();
+});

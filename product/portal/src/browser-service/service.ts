@@ -7,7 +7,7 @@ import { recoverStaleSocket, removeOwnedSocket } from '../local-socket.ts';
 import { BROWSER_RPC_METHODS, parseBrowserRpcParams, type BrowserRpcMethod } from '@weave/product-protocol';
 import { BROWSER_PROFILE_RPC_METHODS, browserProfileId, parseBrowserProfileRpcParams, type BrowserProfileRpcMethod } from '@weave/product-protocol';
 
-export const BROWSER_SERVICE_VERSION = 5;
+export const BROWSER_SERVICE_VERSION = 7;
 export const MAX_BROWSER_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const browserSocketPath = (stateDirectory: string) => join(resolve(stateDirectory), 'browser-service', 'service.sock');
 
@@ -68,7 +68,8 @@ export async function serveBrowserService(options: { stateDirectory: string; bin
             else if (method === 'debugger.events' || method === 'debugger.send' || method === 'debugger.renew') result = await pages.debuggerRequest(browserProfileId(args.debuggerId), text(args.generation), method === 'debugger.send' ? object(args.message) : undefined, method === 'debugger.renew', args.streamed === true);
             else if (method === 'page.list') result = { pages: await pages.list(args.profileId === undefined ? undefined : browserProfileId(args.profileId)) };
             else if (method === 'page.events') result = { events: pages.events() };
-            else if (method === 'page.create') result = await pages.create(browserProfileId(args.profileId), browserProfileId(args.pageId), String(args.url));
+            else if (method === 'page.create') result = await pages.create(args.profileId === undefined ? undefined : browserProfileId(args.profileId), browserProfileId(args.pageId), String(args.url));
+            else if (method === 'page.profile') result = await pages.selectProfile(browserProfileId(args.pageId), browserProfileId(args.profileId), args.selectedProfileId === undefined ? undefined : browserProfileId(args.selectedProfileId));
             else if (method === 'page.restore') result = await pages.restore(browserProfileId(args.pageId));
             else if (method === 'page.close') { await pages.closePage(browserProfileId(args.pageId), args.generation === undefined ? undefined : text(args.generation)); result = {}; }
             else result = await pages.command(browserProfileId(args.pageId), text(args.generation), method, object(args.arguments ?? {}));

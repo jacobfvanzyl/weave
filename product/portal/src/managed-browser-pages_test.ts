@@ -144,3 +144,42 @@ test('live runtime metadata cannot override the validated durable title and URL'
   expect(page.url).toBe('https://example.com/');
   expect(page.available).toBe(true);
 });
+
+test('unprofiled Panes isolate storage and closing removes only their temporary identity', async () => {
+  const { pages, profiles, a, runtimes } = await fixture();
+  const first = await pages.create(undefined, crypto.randomUUID(), 'about:blank');
+  const second = await pages.create(undefined, crypto.randomUUID(), 'about:blank');
+  expect(first.temporary).toBe(true); expect(first.profileLocked).toBe(false);
+  expect(second.profileId).not.toBe(first.profileId);
+  const storage = await profiles.dataDirectory(first.profileId);
+  await mkdir(storage, {recursive:true}); await Bun.write(join(storage,'cookie-fixture'),'signed in');
+  await pages.closePage(first.pageId,first.generation);
+  expect(await Bun.file(join(storage,'cookie-fixture')).exists()).toBe(false);
+  expect((await profiles.list()).map(item=>item.profileId)).not.toContain(first.profileId);
+  expect((await pages.list())[0]?.pageId).toBe(second.pageId);
+  expect(await profiles.require(a.profileId)).toEqual(a);
+  expect(runtimes[0]?.available).toBe(false);
+});
+
+test('a blank Pane can choose or clear a Profile; first named navigation locks selection durably', async () => {
+  const { pages, profiles, directory, factory, a, b } = await fixture();
+  const first = await pages.create(undefined, crypto.randomUUID(), 'about:blank');
+  const selected = await pages.selectProfile(first.pageId,first.profileId,a.profileId);
+  expect(selected.pageId).toBe(first.pageId); expect(selected.profileLocked).toBe(false);
+  const cleared = await pages.selectProfile(selected.pageId,selected.profileId);
+  expect(cleared.temporary).toBe(true);
+  const named = await pages.selectProfile(cleared.pageId,cleared.profileId,b.profileId);
+  await pages.command(named.pageId,named.generation!,'page.navigate',{url:'https://example.com/'});
+  await pages.command(named.pageId,named.generation!,'page.navigate',{url:'about:blank'});
+  await expect(pages.selectProfile(named.pageId,named.profileId,a.profileId)).rejects.toThrow('locked');
+  await pages.close();
+  const restarted = new ManagedBrowserPages(directory,'/fixture',profiles,factory); cleanup.push(()=>restarted.close());
+  await expect(restarted.selectProfile(named.pageId,named.profileId)).rejects.toThrow('locked');
+});
+
+test('selecting a Profile after temporary browsing reopens the URL and locks it', async () => {
+  const { pages, a } = await fixture();
+  const first = await pages.create(undefined,crypto.randomUUID(),'https://example.com/');
+  const selected = await pages.selectProfile(first.pageId,first.profileId,a.profileId);
+  expect(selected).toMatchObject({pageId:first.pageId,url:first.url,temporary:false,profileLocked:true});
+});

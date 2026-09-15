@@ -1,5 +1,3 @@
-export * from './browser-grants.ts';
-import { BROWSER_GRANT_RPC_METHODS, parseBrowserGrantRpcParams, parseBrowserThreadGrants, type BrowserGrantRpcContracts, type BrowserGrantRpcMethod } from './browser-grants.ts';
 export * from './browser-panes.ts';
 import { BROWSER_PANE_RPC_METHODS, parseBrowserPaneRpcParams, parseBrowserPaneRpcResult, type BrowserPaneRpcContracts, type BrowserPaneRpcMethod } from './browser-panes.ts';
 export * from './browser-pages.ts';
@@ -355,7 +353,6 @@ type BasePortalRpcContracts = {
 };
 
 export type PortalRpcContracts =
-  & BrowserGrantRpcContracts
   & BasePortalRpcContracts
   & WorkspaceFileRpcContracts
   & WorkspaceLifecycleRpcContracts
@@ -391,7 +388,6 @@ export const PORTAL_RPC_METHODS = [
   ...TERMINAL_RPC_METHODS,
   ...BROWSER_RPC_METHODS,
   ...BROWSER_PROFILE_RPC_METHODS,
-  ...BROWSER_GRANT_RPC_METHODS,
   ...BROWSER_PAGE_RPC_METHODS,
   ...BROWSER_PANE_RPC_METHODS,
 ] as const satisfies readonly PortalRpcMethod[];
@@ -404,7 +400,6 @@ export const parsePortalRpcParams = <Method extends PortalRpcMethod>(
 ): PortalRpcParams<Method> => {
   if (BROWSER_PANE_RPC_METHODS.includes(method as BrowserPaneRpcMethod)) return parseBrowserPaneRpcParams(method as BrowserPaneRpcMethod, value) as PortalRpcParams<Method>;
   if (BROWSER_PAGE_RPC_METHODS.includes(method as BrowserPageRpcMethod)) return parseBrowserPageRpcParams(method as BrowserPageRpcMethod, value) as PortalRpcParams<Method>;
-  if (BROWSER_GRANT_RPC_METHODS.includes(method as BrowserGrantRpcMethod)) return parseBrowserGrantRpcParams(method as BrowserGrantRpcMethod, value) as PortalRpcParams<Method>;
   if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) return parseBrowserProfileRpcParams(method as BrowserProfileRpcMethod, value) as PortalRpcParams<Method>;
   if (BROWSER_RPC_METHODS.includes(method as BrowserRpcMethod)) return parseBrowserRpcParams(method as BrowserRpcMethod, value) as PortalRpcParams<Method>;
   if (WORKSPACE_LIFECYCLE_RPC_METHODS.includes(method as WorkspaceLifecycleRpcMethod)) {
@@ -629,7 +624,6 @@ export const parsePortalRpcResult = <Method extends PortalRpcMethod>(
 ): PortalRpcResult<Method> => {
   if (BROWSER_PANE_RPC_METHODS.includes(method as BrowserPaneRpcMethod)) return parseBrowserPaneRpcResult(method as BrowserPaneRpcMethod, value) as PortalRpcResult<Method>;
   if (BROWSER_PAGE_RPC_METHODS.includes(method as BrowserPageRpcMethod)) return parseBrowserPageRpcResult(method as BrowserPageRpcMethod, value) as PortalRpcResult<Method>;
-  if (BROWSER_GRANT_RPC_METHODS.includes(method as BrowserGrantRpcMethod)) return parseBrowserThreadGrants(value) as PortalRpcResult<Method>;
   if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) return parseBrowserProfileRpcResult(method as BrowserProfileRpcMethod, value) as PortalRpcResult<Method>;
   if (BROWSER_RPC_METHODS.includes(method as BrowserRpcMethod)) return parseBrowserRpcResult(method as BrowserRpcMethod, value) as PortalRpcResult<Method>;
   if (WORKSPACE_LIFECYCLE_RPC_METHODS.includes(method as WorkspaceLifecycleRpcMethod)) {

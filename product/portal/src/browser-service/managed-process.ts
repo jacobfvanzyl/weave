@@ -1,14 +1,13 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import type { Readable, Writable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { CdpPipe } from './cdp-pipe.ts';
 import { mkdtemp, rm, realpath } from 'node:fs/promises';
 import { join, isAbsolute, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { privateDirectory } from './chromium.ts';
 
-export type ManagedPage = { pageId: string; title: string; url: string; rfbSocket: string; width: number; height: number; canGoBack: boolean; canGoForward: boolean; openerPageId?: string };
+export type ManagedPage = { pageId: string; title: string; url: string; rfbSocket: string; width: number; height: number; deviceScaleFactor: number; canGoBack: boolean; canGoForward: boolean; openerPageId?: string };
 export type ManagedBrowserEvent = { method: string; params: Record<string, unknown> };
-type Child = ChildProcess & { stdin: Writable; stdout: Readable; stderr: Readable };
+type Child = Bun.Subprocess<'pipe', 'pipe', 'pipe'>;
 type Pending = { resolve(value: any): void; reject(cause: Error): void; timer: ReturnType<typeof setTimeout> };
 const MAX_MESSAGE = 1024 * 1024;
 
@@ -24,9 +23,13 @@ export class ManagedBrowserProcess {
   readonly cdp: CdpPipe;
   private exited: Promise<number | null>;
   private constructor(private child: Child, private sockets: string) {
-    this.exited = new Promise(resolve => child.once('exit', resolve));
-    child.on('error', error => this.#lost(error));
-    this.cdp = new CdpPipe(child.stdio[3] as Writable, child.stdio[4] as Readable);
+    this.exited = child.exited;
+    // Bun owns these descriptors. node:child_process wraps them in a second owner
+    // on Bun 1.3.14, which can close a later runtime's reused FD during GC.
+    const writer = Bun.file(child.stdio[3] as number).writer();
+    const input = new Writable({ write(chunk, _encoding, done) { try { writer.write(chunk); Promise.resolve(writer.flush()).then(() => done(), done); } catch (error) { done(error as Error); } } });
+    const output = Readable.fromWeb(Bun.file(child.stdio[4] as number).stream() as unknown as Parameters<typeof Readable.fromWeb>[0]);
+    this.cdp = new CdpPipe(input, output);
   }
   get pid() { return this.child.pid!; }
   get version() { return this.#version; }
@@ -43,7 +46,7 @@ export class ManagedBrowserProcess {
       // macOS's long per-user TMPDIR does not fit sockaddr_un with page UUIDs.
       const socketRoot = process.platform === 'darwin' ? '/tmp' : tmpdir();
       sockets = await mkdtemp(join(socketRoot, 'weave-rfb-')); await privateDirectory(sockets);
-      const child = spawn(options.binary, [options.directory, sockets], { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'], env: { ...process.env, WEAVE_BROWSER_CDP_PIPE: '1', ...(process.platform === 'linux' ? { CEF_RESOURCES: dirname(options.binary) } : {}) } }) as Child;
+      const child = Bun.spawn([options.binary, options.directory, sockets], { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'], env: { ...process.env, WEAVE_BROWSER_CDP_PIPE: '1', ...(process.platform === 'linux' ? { CEF_RESOURCES: dirname(options.binary) } : {}) } }) as Child;
       runtime = new ManagedBrowserProcess(child, sockets);
       await runtime.#start(options.startupTimeoutMs ?? 15000);
       return runtime;
@@ -64,11 +67,11 @@ export class ManagedBrowserProcess {
     const opening = new Promise<void>((resolve, fail) => { ready = resolve; reject = fail; });
     const timer = setTimeout(() => reject(new Error(`CEF startup timed out. ${this.#stderr}`)), timeout);
     void this.exited.then(code => { const error = new Error(`CEF exited (${code}); live page state was lost. ${this.#stderr}`); this.#lost(error); reject(error); });
-    void (async () => { const decoder = new TextDecoder(); for await (const chunk of this.child.stderr) this.#stderr = (this.#stderr + decoder.decode(chunk)).slice(-4096); })();
+    void (async () => { const decoder = new TextDecoder(); for await (const chunk of Readable.fromWeb(this.child.stderr as unknown as Parameters<typeof Readable.fromWeb>[0])) this.#stderr = (this.#stderr + decoder.decode(chunk)).slice(-4096); })();
     void (async () => {
       let input = ''; const decoder = new TextDecoder();
       try {
-        for await (const chunk of this.child.stdout) {
+        for await (const chunk of Readable.fromWeb(this.child.stdout as unknown as Parameters<typeof Readable.fromWeb>[0])) {
           input += decoder.decode(chunk, { stream: true });
           let end: number;
           while ((end = input.indexOf('\n')) >= 0) {
@@ -77,7 +80,7 @@ export class ManagedBrowserProcess {
             const message = JSON.parse(line);
             if (message.jsonrpc !== '2.0') throw new Error('Invalid CEF response');
             if (message.method === 'runtime.ready') {
-              if (message.params?.version !== 2 || typeof message.params.cefVersion !== 'string') throw new Error('Incompatible CEF runtime');
+              if (message.params?.version !== 3 || typeof message.params.cefVersion !== 'string') throw new Error('Incompatible CEF runtime');
               this.#version = message.params.cefVersion; ready();
             } else if (typeof message.method === 'string') {
               for (const listener of this.#listeners) listener({ method: message.method, params: message.params });
@@ -101,7 +104,7 @@ export class ManagedBrowserProcess {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error(`CEF ${method} timed out; operation may have executed`)); }, 15000);
       this.#pending.set(id, { resolve, reject, timer });
-      try { this.child.stdin.write(body, cause => { if (cause) { this.#pending.delete(id); clearTimeout(timer); reject(cause); } }); }
+      try { this.child.stdin.write(body); Promise.resolve(this.child.stdin.flush()).catch(cause => { this.#pending.delete(id); clearTimeout(timer); reject(cause); }); }
       catch (cause) { this.#pending.delete(id); clearTimeout(timer); reject(cause); }
     });
   }

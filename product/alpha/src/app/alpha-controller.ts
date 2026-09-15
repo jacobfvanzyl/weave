@@ -117,7 +117,6 @@ export type AlphaViewModel = {
   workspaceFiles?: AlphaExecutionContextFiles;
   terminals?: AlphaTerminalsModel;
   workspaceCompositions?: WorkspaceCompositionsModel;
-  browserCreation?: { paneId: string; hostId: string; workspaceId: string; sourcePaneId?: string; axis: 'horizontal' | 'vertical'; profileId?: string; workspaceName?: string };
   busy: boolean;
   error?: string;
 };
@@ -152,9 +151,7 @@ export type AlphaActions = {
   ): Promise<void> | void;
   createThreadInDirectory?(hostId: string, path: string, workspaceId: string): Promise<void> | void;
   splitPane?(workspace: { hostId: string; workspaceId: string }, paneId: string, axis: 'horizontal' | 'vertical', type: 'terminal' | 'agent' | 'browser'): Promise<void>;
-  newBrowserPane?(hostId: string, workspaceId?: string): void;
-  createBrowserPane?(profileId: string, url: string): Promise<void>;
-  cancelBrowserPane?(): void;
+  newBrowserPane?(hostId: string, workspaceId?: string, url?: string): void;
   assignThread?(threadId: string, workspaceId: string): Promise<void> | void;
   selectThread(threadId: string, options?: { preserveDraft?: boolean }): Promise<void> | void;
   setDraftText?(threadId: string, text: string): void;

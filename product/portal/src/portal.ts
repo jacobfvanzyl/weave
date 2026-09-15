@@ -1,6 +1,4 @@
-import { BrowserGrantStore } from './browser-grants.ts';
 import { BrowserAgentGateway } from './browser-agent.ts';
-import { BROWSER_GRANT_RPC_METHODS, BROWSER_GRANTS_CAPABILITY, parseBrowserGrantRpcParams, type BrowserGrantRpcMethod, type BrowserGrantRpcContracts } from '@weave/product-protocol';
 import { insertBrowserPane, removeBrowserPane, reconcileBrowserPanes } from './browser-pane-layout.ts';
 import { BROWSER_PANE_RPC_METHODS, BROWSER_PANES_CAPABILITY, parseBrowserPaneRpcParams, parseBrowserPage, type BrowserPaneRpcMethod, type BrowserPaneRpcContracts } from '@weave/product-protocol';
 import type { ManagedPageSummary } from './browser-service/managed-pages.ts';
@@ -152,7 +150,6 @@ export type LocalAcpContext = {
 };
 
 export class Portal {
-  readonly #browserGrants: BrowserGrantStore;
   #browserAgent?: BrowserAgentGateway;
   readonly #catalog: ThreadCatalog;
   readonly #journal: ThreadEventJournal;
@@ -187,11 +184,9 @@ export class Portal {
     terminals: TerminalAccess | undefined,
     security: PortalSecurity,
     compositions: CompositionStore,
-    browserGrants: BrowserGrantStore,
     browserBackend?: BrowserBackend,
   ) {
     this.#catalog = catalog;
-    this.#browserGrants = browserGrants;
     this.#journal = journal;
     this.#runtimeStates = runtimeStates;
     this.#workspaceCatalog = workspaceCatalog;
@@ -264,12 +259,10 @@ export class Portal {
       terminals,
       security,
       compositions,
-      await BrowserGrantStore.open(config.stateDirectory),
       options.browserBackend === false ? undefined : options.browserBackend ?? (config.browser ? new BrowserServiceClient(config.stateDirectory, config.browser.executable, config.browser.cefExecutable) : undefined),
     );
     if (portal.#browserPages && config.browser?.nodeExecutable) {
       portal.#browserAgent = new BrowserAgentGateway({
-        grants: portal.#browserGrants,
         thread: id => portal!.#thread(id),
         backend: { managedPage: portal.#browserBackend!.managedPage!.bind(portal.#browserBackend) },
         profiles: async () => (await portal!.#browserBackend!.profile!('browser.profile.list', {})).profiles,
@@ -295,22 +288,6 @@ export class Portal {
     authorized = false,
   ): Promise<PortalRpcResult<Method>> {
     if (!authorized) await this.authorizeRequest(principal, method, params);
-    if (BROWSER_GRANT_RPC_METHODS.includes(method as BrowserGrantRpcMethod)) {
-      if (!this.#browserAgent) throw new Error('Browser agent tooling is not configured on this Host');
-      const input = parseBrowserGrantRpcParams(method as BrowserGrantRpcMethod, params);
-      await this.#authorizeBrowserGrants(principal, input.threadId);
-      if (method === 'browser.grants.get') return this.#browserGrants.get(input.threadId) as PortalRpcResult<Method>;
-      const change = input as BrowserGrantRpcContracts['browser.grants.set']['params'];
-      return await this.#browserGrants.set(change.threadId, change.profileIds, change.expectedRevision, async () => {
-        await this.#authorizeBrowserGrants(principal, change.threadId);
-        const profiles = (await this.#browserBackend!.profile!('browser.profile.list', {})).profiles;
-        for (const profileId of change.profileIds) {
-          if (!profiles.some(profile => profile.profileId === profileId)) throw new Error('Browser Profile unavailable');
-          await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: profileId });
-        }
-        await this.#authorizeBrowserGrants(principal, change.threadId);
-      }) as PortalRpcResult<Method>;
-    }
     if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) {
       if (!this.#browserProfiles) throw new Error('Browser Profiles are not configured.');
       return await this.#browserProfiles.request(principal, method as BrowserProfileRpcMethod, params as BrowserProfileRpcContracts[BrowserProfileRpcMethod]['params']) as PortalRpcResult<Method>;
@@ -349,7 +326,6 @@ export class Portal {
             ...WORKSPACE_FILE_RPC_METHODS,
             ...(this.#terminals ? TERMINAL_RPC_METHODS : []),
             ...(this.#browsers ? [BROWSER_STREAM_CAPABILITY, ...BROWSER_RPC_METHODS] : []),
-            ...(this.#browserAgent ? [BROWSER_GRANTS_CAPABILITY, ...BROWSER_GRANT_RPC_METHODS] : []),
             ...(this.#browserProfiles ? [BROWSER_PROFILES_CAPABILITY, ...BROWSER_PROFILE_RPC_METHODS] : []),
             ...(this.#browserPages ? [BROWSER_PAGES_CAPABILITY, ...BROWSER_PAGE_RPC_METHODS, BROWSER_PANES_CAPABILITY, ...BROWSER_PANE_RPC_METHODS] : []),
             'acp.v1',
@@ -729,10 +705,11 @@ export class Portal {
       terminalId?: string;
       mode?: 'observe' | 'control' | 'shared';
     };
-    if (BROWSER_GRANT_RPC_METHODS.includes(method as BrowserGrantRpcMethod)) { await this.#authorizeBrowserGrants(principal, String((params as { threadId: string }).threadId)); return; }
     if (BROWSER_PROFILE_RPC_METHODS.includes(method as BrowserProfileRpcMethod)) { await this.security.assertActive(principal); return; }
     if (BROWSER_PANE_RPC_METHODS.includes(method as BrowserPaneRpcMethod)) {
-      await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: (params as { profileId: string }).profileId });
+      const profileId = (params as { profileId?: string }).profileId;
+      if (profileId) await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: profileId });
+      else await this.security.authorize(principal, 'browser.profile.manage');
       await this.security.authorize(principal, 'context.manage'); return;
     }
     if (method.startsWith('browser.')) throw new Error('Browser is unavailable.');
@@ -933,16 +910,9 @@ export class Portal {
     await this.#compositions.get(this.security.hostId);
   }
 
-  async #authorizeBrowserGrants(principal: PortalPrincipal, threadId: string) {
-    await this.security.assertActive(principal);
-    if (!principal.grants.trustedHuman) throw new PortalSecurityError('RESOURCE_UNAVAILABLE', 'Only a trusted human can manage Thread Browser grants');
-    const thread = this.#thread(threadId);
-    await this.security.authorize(principal, 'thread.attach', { threadId, executionContextId: thread.executionContextId, agentId: thread.agentId });
-  }
-
   async #createAgentBrowserPage(threadId: string, profileId: string, url: string) {
     return this.#mutateLifecycle(async () => {
-      const thread = this.#thread(threadId); this.#browserGrants.assert(threadId, profileId);
+      const thread = this.#thread(threadId);
       if (thread.status !== 'active' || this.#closingWorkspaces.has(thread.workspaceId)) throw new Error('Thread Workspace unavailable');
       const current = await this.#compositions.get(this.security.hostId);
       const workspace = current.workspaces.find(item => item.workspaceId === thread.workspaceId);
@@ -952,8 +922,7 @@ export class Portal {
       const next = insertBrowserPane(current.workspaces, workspace.workspaceId, { kind: 'browser', nodeId: crypto.randomUUID(), paneId: pageId, profileId, lastCommittedUrl: url }, source.paneId, 'horizontal');
       const page = await this.#browserBackend!.managedPage!<ManagedPageSummary>('page.create', { pageId, profileId, url });
       try {
-        this.#browserGrants.assert(threadId, profileId);
-        await this.#compositions.replace(this.security.hostId, current.revision, next, async () => { this.#browserGrants.assert(threadId, profileId); });
+        await this.#compositions.replace(this.security.hostId, current.revision, next, async () => { this.#thread(threadId); });
         const target = await this.#browserBackend!.managedPage!<{ targetInfo: { targetId: string } }>('page.cdp', { pageId, generation: page.generation, arguments: { method: 'Target.getTargetInfo', arguments: {} } });
         return { targetId: target.targetInfo.targetId };
       } catch (error) { await this.#closeBrowserPage(pageId, profileId, page.generation); throw error; }
@@ -962,12 +931,12 @@ export class Portal {
 
   async #closeAgentBrowserPage(threadId: string, profileId: string, targetId: string) {
     return this.#mutateLifecycle(async () => {
-      this.#browserGrants.assert(threadId, profileId);
+      this.#thread(threadId);
       const { pages } = await this.#browserBackend!.managedPage!<{ pages: ManagedPageSummary[] }>('page.list', { profileId });
       for (const page of pages.filter(page => page.available)) {
         const target = await this.#browserBackend!.managedPage!<{ targetInfo: { targetId: string } }>('page.cdp', { pageId: page.pageId, generation: page.generation, arguments: { method: 'Target.getTargetInfo', arguments: {} } });
         if (target.targetInfo.targetId !== targetId) continue;
-        this.#browserGrants.assert(threadId, profileId);
+        this.#thread(threadId);
         await this.#closeBrowserPage(page.pageId, profileId, page.generation);
         await this.#reconcileBrowserPanes(); return;
       }
@@ -1014,18 +983,20 @@ export class Portal {
     if (!this.#browserPages || !backend?.managedPage) throw new Error('Managed Browser Service is not configured.');
     return this.#mutateLifecycle(async () => {
       if (input.hostId !== this.security.hostId) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
-      await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+      if (input.profileId) await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+      else await this.security.authorize(principal, 'browser.profile.manage');
       const current = await this.#compositions.get(input.hostId);
       const existingWorkspace = current.workspaces.find(workspace => paneTargets([workspace]).some(pane => pane.paneId === input.paneId));
       const existing = existingWorkspace && paneTargets([existingWorkspace]).find(pane => pane.paneId === input.paneId);
-      if (existing && (existing.kind !== 'browser' || existing.profileId !== input.profileId)) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
+      if (existing && (existing.kind !== 'browser' || (input.profileId !== undefined && existing.profileId !== input.profileId))) throw new CompositionError({ domain: 'composition', code: 'INVALID_TARGET' });
       if (existingWorkspace) await this.#validateAssignment(principal, input.hostId, existingWorkspace.workspaceId);
       if (method === 'browser.pane.create' && existing && 'url' in input) {
         if (existingWorkspace!.workspaceId !== input.workspaceId) throw new Error('Browser Pane is already in another Workspace');
         const { pages } = await backend.managedPage!<{ pages: ManagedPageSummary[] }>('page.list', { profileId: input.profileId });
         const page = pages.find(page => page.pageId === input.paneId);
         if (!page) throw new Error('Browser page metadata is unavailable');
-        await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+        if (input.profileId) await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+      else await this.security.authorize(principal, 'browser.profile.manage');
         await this.#authorizeWorkspaceAssignment(principal, existingWorkspace!);
         return { composition: this.#visibleComposition(principal, current), page: parseBrowserPage(page) };
       }
@@ -1037,22 +1008,36 @@ export class Portal {
         const target: Workspace = workspace ?? { workspaceId: input.workspaceId, name: input.workspaceName!, layout: null };
         if (this.#closingWorkspaces.has(target.workspaceId)) throw new Error('Workspace is closing.');
         await this.#authorizeWorkspaceAssignment(principal, target);
-        const pane = { kind: 'browser' as const, nodeId: crypto.randomUUID(), paneId: input.paneId, profileId: input.profileId, lastCommittedUrl: input.url };
+        const pane = { kind: 'browser' as const, nodeId: crypto.randomUUID(), paneId: input.paneId, profileId: input.profileId ?? input.paneId, lastCommittedUrl: input.url };
         const next = insertBrowserPane(workspace ? current.workspaces : [...current.workspaces, target], input.workspaceId, pane, input.sourcePaneId, input.axis);
         const page = parseBrowserPage(await backend.managedPage!<ManagedPageSummary>('page.create', { profileId: input.profileId, pageId: input.paneId, url: input.url }));
-        for (const item of paneTargets(next)) if (item.kind === 'browser' && item.paneId === pane.paneId) item.lastCommittedUrl = page.url;
-        const composition = await this.#compositions.replace(input.hostId, current.revision, next, async () => {
-          await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
-          await this.#authorizeWorkspaceAssignment(principal, target);
-        });
+        for (const item of paneTargets(next)) if (item.kind === 'browser' && item.paneId === pane.paneId) { item.lastCommittedUrl = page.url; item.profileId = page.profileId; }
+        let composition: WorkspaceComposition;
+        try {
+          composition = await this.#compositions.replace(input.hostId, current.revision, next, async () => {
+            if (input.profileId) await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+            else await this.security.authorize(principal, 'browser.profile.manage');
+            await this.#authorizeWorkspaceAssignment(principal, target);
+          });
+        } catch (error) { await this.#closeBrowserPage(page.pageId,page.profileId,page.generation); throw error; }
         return { composition: this.#visibleComposition(principal, composition), page: parseBrowserPage(page) };
       }
       if (!existing || existing.kind !== 'browser') throw new Error('Browser Pane is unavailable');
+      if (method === 'browser.pane.profile' && 'profileId' in input && !('workspaceId' in input) && !('confirmed' in input)) {
+        if (input.selectedProfileId) await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.selectedProfileId });
+        else await this.security.authorize(principal, 'browser.profile.manage');
+        const page = parseBrowserPage(await backend.managedPage!<ManagedPageSummary>('page.profile', { pageId: input.paneId, profileId: existing.profileId, selectedProfileId: input.selectedProfileId }));
+        const next = structuredClone(current.workspaces);
+        for (const pane of paneTargets(next)) if (pane.kind === 'browser' && pane.paneId === input.paneId) { pane.profileId=page.profileId; pane.lastCommittedUrl=page.url; }
+        const composition = await this.#compositions.replace(input.hostId, current.revision, next, async () => { await this.security.assertActive(principal); });
+        return { composition: this.#visibleComposition(principal, composition), page };
+      }
       if (method === 'browser.pane.close' && 'confirmed' in input) {
         const { pages } = await backend.managedPage!<{ pages: ManagedPageSummary[] }>('page.list', { profileId: input.profileId });
         const page = pages.find(page => page.pageId === input.paneId);
         if (page?.available && !input.confirmed) throw new Error('Confirm closure of the live browser page; unsaved browser work may be lost.');
-        await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+        if (input.profileId) await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+      else await this.security.authorize(principal, 'browser.profile.manage');
         await this.#authorizeWorkspaceAssignment(principal, existingWorkspace!);
         await this.#closeBrowserPage(input.paneId, input.profileId, input.generation);
         const composition = await this.#compositions.replace(input.hostId, current.revision, removeBrowserPane(current.workspaces, input.paneId), async () => undefined);
@@ -1064,7 +1049,8 @@ export class Portal {
       const removed = removeBrowserPane(current.workspaces, input.paneId);
       const next = insertBrowserPane(removed, input.workspaceId, existing, input.sourcePaneId, input.axis);
       const composition = await this.#compositions.replace(input.hostId, current.revision, next, async () => {
-        await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+        if (input.profileId) await this.security.authorize(principal, 'browser.profile.control', { browserProfileId: input.profileId });
+      else await this.security.authorize(principal, 'browser.profile.manage');
         await this.#authorizeWorkspaceAssignment(principal, existingWorkspace!);
         await this.#authorizeWorkspaceAssignment(principal, current.workspaces.find(workspace => workspace.workspaceId === input.workspaceId)!);
       });

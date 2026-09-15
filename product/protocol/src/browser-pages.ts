@@ -11,13 +11,30 @@ export const BROWSER_PAGE_RPC_METHODS = [
 export type BrowserPageRpcMethod = typeof BROWSER_PAGE_RPC_METHODS[number];
 export type BrowserPage = {
   pageId: string; profileId: string; title: string; url: string; available: boolean;
-  generation?: string; openerPageId?: string; width?: number; height?: number;
-  canGoBack?: boolean; canGoForward?: boolean;
+  generation?: string; openerPageId?: string; width?: number; height?: number; deviceScaleFactor?: number;
+  canGoBack?: boolean; canGoForward?: boolean; temporary?: boolean; profileLocked?: boolean;
 };
 type Address = { profileId: string; pageId: string };
 type LiveAddress = Address & { generation: string };
 type ViewAddress = { viewId: string };
-export type BrowserPageViewport = { width: number; height: number };
+// Page geometry is in logical pixels; RFB rectangles are physical pixels.
+export const BROWSER_FRAMEBUFFER_MAX_DIMENSION = 8192;
+export const BROWSER_FRAMEBUFFER_MAX_PIXELS = 16_777_216;
+export type BrowserPageViewport = { width: number; height: number; deviceScaleFactor?: number };
+export function browserFramebufferSize(viewport: BrowserPageViewport) {
+  const scale = Math.fround(viewport.deviceScaleFactor ?? 1);
+  return { width: Math.ceil(viewport.width * scale), height: Math.ceil(viewport.height * scale) };
+}
+export function browserViewportScale(width: number, height: number, requested: number) {
+  // Quantize down so rounding up physical dimensions stays within the budget.
+  let scale = Math.floor(Math.min(Math.max(1, requested), 2) * 64) / 64;
+  while (scale > 1) {
+    const pixels = browserFramebufferSize({ width, height, deviceScaleFactor: scale });
+    if (pixels.width <= BROWSER_FRAMEBUFFER_MAX_DIMENSION && pixels.height <= BROWSER_FRAMEBUFFER_MAX_DIMENSION && pixels.width * pixels.height <= BROWSER_FRAMEBUFFER_MAX_PIXELS) break;
+    scale -= 1 / 64;
+  }
+  return scale;
+}
 export type BrowserFocus = BrowserPageViewport & { viewId: string; generation: string; focusEpoch: number };
 export type BrowserInputMethod = 'Input.dispatchMouseEvent' | 'Input.dispatchKeyEvent' | 'Input.insertText';
 export type BrowserPageRpcContracts = {
@@ -54,14 +71,18 @@ export function browserPageUrl(value: unknown): string {
 function viewport(value: Record<string, unknown>): BrowserPageViewport {
   const width = integer(value.width, 4096), height = integer(value.height, 4096);
   if (width * height > 8388608) throw new Error('Browser viewport too large');
-  return { width, height };
+  const scale = value.deviceScaleFactor ?? 1;
+  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale < 1 || scale > 2) throw new Error('Invalid Browser device scale');
+  const pixels = browserFramebufferSize({ width, height, deviceScaleFactor: scale });
+  if (pixels.width > BROWSER_FRAMEBUFFER_MAX_DIMENSION || pixels.height > BROWSER_FRAMEBUFFER_MAX_DIMENSION || pixels.width * pixels.height > BROWSER_FRAMEBUFFER_MAX_PIXELS) throw new Error('Browser framebuffer too large');
+  return { width, height, ...(value.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: scale }) };
 }
 export function parseBrowserPage(value: unknown): BrowserPage {
   const page = object(value);
   if (typeof page.title !== 'string' || page.title.length > 1024 || typeof page.available !== 'boolean') throw new Error('Invalid Browser page');
   return {
     pageId: browserProfileId(page.pageId), profileId: browserProfileId(page.profileId),
-    title: page.title, url: browserPageUrl(page.url), available: page.available,
+    title: page.title, url: browserPageUrl(page.url), available: page.available, temporary: page.temporary === true, profileLocked: page.profileLocked === true,
     ...(page.openerPageId === undefined ? {} : { openerPageId: browserProfileId(page.openerPageId) }),
     ...(page.available ? { generation: browserProfileId(page.generation), ...viewport(page),
       canGoBack: page.canGoBack === true, canGoForward: page.canGoForward === true } : {}),
@@ -80,7 +101,7 @@ export function parseBrowserPageRpcParams<M extends BrowserPageRpcMethod>(method
       if (JSON.stringify(args).length > 32768) throw new Error('Browser input too large');
       result = { viewId, focusEpoch: integer(input.focusEpoch), method: input.method, arguments: args };
     } else {
-      keys(input, ['viewId', 'width', 'height', ...(method === 'browser.page.view.resize' ? ['focusEpoch'] : [])]);
+      keys(input, ['viewId', 'width', 'height', 'deviceScaleFactor', ...(method === 'browser.page.view.resize' ? ['focusEpoch'] : [])]);
       result = { viewId, ...viewport(input), ...(method === 'browser.page.view.resize' ? { focusEpoch: integer(input.focusEpoch) } : {}) };
     }
   } else {

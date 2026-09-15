@@ -45,7 +45,7 @@ export function WorkspacePaneLayout({ layout, maximized, active, setRatio, rende
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setRatios((current) => { const next = { ...current }; delete next[id]; return next; }); }
   };
-  return <div ref={host} hidden={!active} className='relative min-h-0 min-w-0 flex-1' style={{ display: active ? undefined : 'none' }} aria-hidden={!active}>
+  return <div ref={host} data-single-pane={Boolean(expanded) || panes.length === 1 ? 'true' : undefined} hidden={!active} className='relative min-h-0 min-w-0 flex-1' style={{ display: active ? undefined : 'none' }} aria-hidden={!active}>
     {panes.map(({ node, rect }) => {
       const visible = active && (!expanded || expanded === node.paneId);
       return <div key={node.paneId} hidden={!visible} aria-hidden={!visible} style={{ ...style(expanded === node.paneId ? full : rect), display: visible ? 'flex' : 'none' }} data-pane-id={node.paneId}>

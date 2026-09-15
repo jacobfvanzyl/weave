@@ -16,7 +16,7 @@ final class NativeBrowserPlugin: CAPPlugin, CAPBridgedPlugin {
                 self?.notifyListeners("event", data: payload)
             })
             self.surfaces[id] = surface
-            parent.insertSubview(surface.view, aboveSubview: web)
+            parent.insertSubview(surface.view, belowSubview: web)
             call.resolve(["surfaceId": id])
         }
     }

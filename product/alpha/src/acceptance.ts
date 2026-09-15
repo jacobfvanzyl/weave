@@ -50,10 +50,16 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       await wait(() => button('Sidebar actions')); button('Sidebar actions')!.click();
       await wait(() => button('New workspace…')); button('New workspace…')!.click();
       await wait(() => button('Browser')); button('Browser')!.click();
-      stage = 'Browser Profile picker';
-      await wait(() => document.querySelector('#browser-profile-name'));
-      set('#browser-profile-name', 'Acceptance'); set('#browser-address', input.browserUrl);
-      await wait(() => button('Open') && !button('Open')!.disabled); button('Open')!.click();
+      // Synthetic menu selection does not always dismiss nested Base UI menus.
+      for (let n = 0; n < 3; n++) {
+        document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', code:'Escape', bubbles:true }));
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      stage = 'blank Browser address';
+      await wait(() => document.querySelector<HTMLInputElement>('[aria-label="Browser address"]'));
+      await wait(() => button('Reload'));
+      set('[aria-label="Browser address"]', input.browserUrl);
+      document.querySelector<HTMLInputElement>('[aria-label="Browser address"]')!.form!.requestSubmit();
       stage = 'native Browser framebuffer';
       await wait(() => Number(document.querySelector<HTMLElement>('[data-slot="native-browser-input"]')?.dataset.frameWidth) > 0);
       const browser = document.querySelector<HTMLTextAreaElement>('[data-slot="native-browser-input"]')!;
@@ -66,7 +72,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       for (const type of ['pointerdown','pointerup']) browser.dispatchEvent(new PointerEvent(type,{bubbles:true,clientX:rect.x+50,clientY:rect.y+145,button:0,buttons:type==='pointerdown'?1:0,pointerId:1}));
       browser.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:'Weave ✓'}));
       await new Promise(resolve => setTimeout(resolve,750));
-      return {passed:true,browserTextDispatched:true,browserProfilePicker:true,nativeBrowserFrame:true,width:Number(browser.dataset.frameWidth),height:Number(browser.dataset.frameHeight),browserPointerDispatched:true};
+      return {passed:true,browserTextDispatched:true,browserBlankStart:true,nativeBrowserFrame:true,width:Number(browser.dataset.frameWidth),height:Number(browser.dataset.frameHeight),browserPointerDispatched:true};
     }
     const openWorkspace = async () => {
       await wait(() => button('Sidebar actions')); button('Sidebar actions')!.click();

@@ -1,5 +1,20 @@
 # Thread-scoped ACP access to Host Browser Profiles
 
+## 2026-09-15: optional Profiles supersede the grant design below
+
+New Browser Panes open directly at `about:blank` (or the supplied URL), with an empty, focused address field for blank pages. The Profiles button sits beside the address field. There is no mandatory Profile dialog or automatic Default Profile. Ordinary new Panes receive independent temporary storage. Website-created popups retain their opener's temporary identity for normal sign-in/opener behavior; the last related page closing removes that storage. Named Profiles persist independently of Panes.
+
+Profile selection can change while a named page is still blank. The first navigation using a named Profile locks that Pane's selection durably, including after returning to blank or restoring the browser. Choosing a Profile after unprofiled browsing reopens the current URL in the selected identity; live DOM and unsaved form state cannot transfer. The Host enforces the lock.
+
+ACP agents can discover and control every named Profile and temporary Pane identity on their Host. The per-Thread grant dialog, store, capability and RPCs are retired. Existing grant files remain untouched but unused. Host authentication, current Thread/session checks and the private CDP connection remain. Restricted external credentials retain their explicit scopes.
+
+Internally Chromium still needs a storage context. The existing opaque `profileId` wire address identifies that context; `temporary: true` distinguishes an unprofiled Pane from a named Profile. Temporary entries are excluded from the human Profile chooser but discoverable by agents. The create RPC accepts an omitted `profileId`. Private Browser Service protocol 7 carries selection, lock metadata, and Retina viewport scale; public protocol 8 remains compatible.
+
+The native acceptance sequence exposed a Bun 1.3.14 ownership bug: `node:child_process` wraps extra pipe descriptors in sockets while Bun's subprocess also owns them. Collecting an old child can close a reused descriptor in a later Chromium process. The managed CEF process now uses `Bun.spawn` with Bun file streams, leaving each descriptor with one owner. This avoids a runtime pin change, leaked process objects, or extra proxy logic. [Bun's upstream fix documents the same double-close cause](https://github.com/oven-sh/bun/blob/main/src/js/node/child_process.ts#L1279-L1292).
+
+The earlier sections describe the prior implementation and acceptance history; their per-Thread grant requirements are superseded by this decision.
+
+
 WVE-79, 14 September 2026. Implementation and acceptance on macOS; iPad and Linux validation remain deferred at the user's request.
 
 ## Product contract
@@ -99,3 +114,5 @@ With the corrected stream and metadata, the real configured **codex-acp 1.10.0 /
 The corrected Host, Browser Service and browser-tools package were installed on the Mac. The user's grant file was preserved byte-for-byte, the existing terminal owner survived, and the previous Browser Pane was restored. Rollback components are under `~/.local/share/weave/backups/browser-discovery-20260914-080748/`.
 
 Final installed acceptance used the same existing Agent Pane and Thread that produced the user's screenshot. A normal read-only prompt caused `weave_browser_profiles`, `list_pages` and `take_snapshot` calls, with no Computer Use calls. The reply correctly identified the existing Linear page's title and first H1. The successful reply was visually verified in Alpha; page contents were not changed. This closes the real installed Codex provider browser-access gate for this case.
+
+Retina rendering and the Mac 1×/2× comparison are documented in [retina-rendering.md](retina-rendering.md).

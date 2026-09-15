@@ -1,5 +1,8 @@
 # Browser Service — WVE-79
 
+Current product behavior (2026-09-15): managed RFB Browser Panes open without a required Profile, use temporary identities by default, and offer optional persistent named Profiles with a durable navigation lock. ACP agents can access all Host browser identities without per-Thread grants. The current implementation and acceptance are described in `docs/research/wve-79/agent-browser-integration.md`; earlier streaming/grant notes below describe historical stages. Private Browser Service protocol is 7; native runtime handshake is 3. Viewports carry optional deviceScaleFactor for Retina rendering.
+
+
 The selected product direction is prebuilt CEF with lossless RFB, Host-owned Browser Profiles and one page per Browser Pane. The Profile catalog and managed CEF page layers are implemented below. The existing Workspace/tab/WebRTC backend remains transitional experimental code; it has not become the selected CEF/RFB backend. Alpha Browser UI and the complete agent/debugging interface remain implementation work.
 
 ## Host-owned Profile foundation

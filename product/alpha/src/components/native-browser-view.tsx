@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import type { BrowserPage } from '@weave/product-protocol';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { browserFramebufferSize, browserViewportScale, type BrowserPage } from '@weave/product-protocol';
 import type { DirectHostClient } from '@/portal-client';
 import { BrowserViewConnection } from '@/browser/browser-view-connection';
 import { wheelPixels } from '@/browser/browser-wheel';
-import { paneOverlayOpen, paneVisible, usePaneFocusAdapter } from '@/app/pane-focus';
+import { paneOverlayOpen, paneRendered, paneVisible, usePaneFocusAdapter } from '@/app/pane-focus';
 import { nativeTerminalBridge } from '@/terminal/native-terminal';
 import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
-export function NativeBrowserView({ client, page, focused }: { client: Pick<DirectHostClient, 'browserRequest' | 'browserDisplay'>; page: BrowserPage; focused: boolean }) {
+export function NativeBrowserView({ client, page, focused, addressInput }: { client: Pick<DirectHostClient, 'browserRequest' | 'browserDisplay'>; page: BrowserPage; focused: boolean; addressInput?: RefObject<HTMLInputElement | null> }) {
   const input = useRef<HTMLTextAreaElement>(null), connection = useRef<BrowserViewConnection | undefined>(undefined);
+  const preferredAddress = useRef(addressInput); preferredAddress.current=addressInput;
   const latest = useRef(focused); latest.current = focused;
   const { owner, id } = usePaneFocusAdapter();
   const [error, setError] = useState<string>();
@@ -25,14 +26,20 @@ export function NativeBrowserView({ client, page, focused }: { client: Pick<Dire
       frame = requestAnimationFrame(() => {
         frame = 0; if (stopped) return;
         const rect = element.getBoundingClientRect();
-        current.layout({ x:rect.x, y:rect.y, width:rect.width, height:rect.height, focused:latest.current, visible:!document.hidden && paneVisible(element) && !paneOverlayOpen(), dim:latest.current ? 0 : 0.4 });
+        const deviceScaleFactor = browserViewportScale(Math.floor(rect.width), Math.floor(rect.height), window.devicePixelRatio || 1);
+        const pixels = browserFramebufferSize({ width:Math.floor(rect.width), height:Math.floor(rect.height), deviceScaleFactor });
+        element.dataset.expectedFrameWidth = String(pixels.width); element.dataset.expectedFrameHeight = String(pixels.height);
+        current.layout({ deviceScaleFactor, x:rect.x, y:rect.y, width:Math.floor(rect.width), height:Math.floor(rect.height), focused:latest.current, visible:!document.hidden && paneRendered(element), inputBlocked:paneOverlayOpen() || !paneVisible(element), dim:latest.current ? 0 : 0.4 });
       });
     };
+    let density = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    const densityChanged = () => { density.removeEventListener('change', densityChanged); density = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`); density.addEventListener('change', densityChanged); update(); };
+    density.addEventListener('change', densityChanged);
     measure.current = update;
     const resize = new ResizeObserver(update); resize.observe(element);
     const mutations = new MutationObserver(update); mutations.observe(document.body, { subtree:true, attributes:true, childList:true, attributeFilter:['style','class','hidden','inert','aria-hidden','data-focused'] });
     document.addEventListener('visibilitychange', update); window.addEventListener('resize', update);
-    const unregister = id && owner?.register(id, { element, available:() => page.available && paneVisible(element), focus:async isCurrent => { await nativeTerminalBridge.focusWeb(); if (!isCurrent()) return false; element.focus({ preventScroll:true }); return document.activeElement === element; } });
+    const unregister = id && owner?.register(id, { element, available:() => page.available && paneVisible(element), focus:async isCurrent => { await nativeTerminalBridge.focusWeb(); if (!isCurrent()) return false; const target=preferredAddress.current?.current ?? element; target.focus({ preventScroll:true }); return document.activeElement === target; } });
     const beforeInput = (event: InputEvent) => {
       if (composing.current || event.isComposing || event.inputType === 'insertFromComposition') return;
       event.preventDefault();
@@ -49,7 +56,7 @@ export function NativeBrowserView({ client, page, focused }: { client: Pick<Dire
     };
     element.addEventListener('beforeinput',beforeInput);
     void current.start(); update();
-    return () => { stopped = true; element.removeEventListener('beforeinput',beforeInput); cancelAnimationFrame(frame); resize.disconnect(); mutations.disconnect(); unregister && unregister(); window.removeEventListener('resize',update); document.removeEventListener('visibilitychange',update); void current.close(); };
+    return () => { stopped = true; density.removeEventListener('change', densityChanged); element.removeEventListener('beforeinput',beforeInput); cancelAnimationFrame(frame); resize.disconnect(); mutations.disconnect(); unregister && unregister(); window.removeEventListener('resize',update); document.removeEventListener('visibilitychange',update); void current.close(); };
   }, [client, page.pageId, page.generation, owner, id, attempt]);
   const point = (event: { clientX: number; clientY: number }) => { const rect = input.current!.getBoundingClientRect(); return { x:event.clientX-rect.x, y:event.clientY-rect.y }; };
   const key = (event: React.KeyboardEvent<HTMLTextAreaElement>, type: string) => {
@@ -61,7 +68,7 @@ export function NativeBrowserView({ client, page, focused }: { client: Pick<Dire
   };
   return <div className='relative flex min-h-0 min-w-0 flex-1 flex-col'>
     {error && <Alert variant='destructive'><AlertDescription>{error}<Button variant="outline" size="sm" onClick={() => setAttempt(value => value + 1)}>Reconnect display</Button></AlertDescription></Alert>}
-    <textarea ref={input} aria-label='Browser page input' data-slot='native-browser-input' onPointerCancel={() => { touch.current=undefined; }} style={{touchAction:'none'}} className='min-h-0 min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-transparent caret-transparent outline-none' autoCapitalize='none' autoCorrect='off' spellCheck={false}
+    <textarea ref={input} aria-label='Browser page input' data-slot='native-browser-input' data-native-layered={error ? undefined : 'true'} onPointerCancel={() => { touch.current=undefined; }} style={{touchAction:'none'}} className='min-h-0 min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-transparent caret-transparent outline-none' autoCapitalize='none' autoCorrect='off' spellCheck={false}
       onFocus={() => { if (id) owner?.didFocus(id); void connection.current?.activate(); }}
       onBlur={() => { if (id) owner?.didBlur(id); }}
       onPointerDown={event => { if (event.pointerType === 'touch') { touch.current = {x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,dragged:false}; void connection.current?.activate(); return; } if (event.isTrusted) input.current?.setPointerCapture(event.pointerId); void connection.current?.activate(); void connection.current?.input('Input.dispatchMouseEvent', { type:'mousePressed', ...point(event), button:event.button === 2 ? 'right' : 'left', buttons:event.buttons, clickCount:1, modifiers:modifiers(event) }); }}

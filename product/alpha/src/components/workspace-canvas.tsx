@@ -1,5 +1,4 @@
 import { BrowserSurface } from './browser-surface';
-import { BrowserProfileDialog } from './browser-profile-dialog';
 import { useTerminalPaneActions } from '@/app/terminal-pane-actions';
 import { PaneFocusScope, usePaneFocus, terminalFocusId, agentFocusId } from '@/app/pane-focus';
 import { useState, useEffect, useRef } from 'react';
@@ -73,7 +72,6 @@ export function WorkspaceCanvas({ controller, inputFocusRequest, singlePaneId, a
   const composition = ref ? state.compositions[hostCompositionKey(ref.hostId)] : undefined;
   const tab = composition?.workspaces.find((tab) => tab.workspaceId === ref?.workspaceId);
   return <main className='flex min-h-0 min-w-0 flex-1 flex-col' aria-label='Workspace panes'>
-    <BrowserProfileDialog controller={controller} />
     {state.error && <Alert variant='destructive'><AlertDescription>{state.error}</AlertDescription></Alert>}
     {state.presentation.openWorkspaces.map((reference) => {
       const key = workspaceKey(reference);

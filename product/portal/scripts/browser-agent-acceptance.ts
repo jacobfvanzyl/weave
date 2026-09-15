@@ -21,13 +21,28 @@ const evidence: Record<string, unknown> = {};
 const assert = (value: unknown, reason: string) => { if (!value) throw new Error(reason); };
 const timeout = setTimeout(() => { console.error('Acceptance timeout'); process.exit(1); }, 120_000);
 try {
-  const { profile } = await backend.profile('browser.profile.create', { name: 'Granted identity' });
-  const { profile: denied } = await backend.profile('browser.profile.create', { name: 'Ungrantable identity' });
+  const { profile } = await backend.profile('browser.profile.create', { name: 'Work identity' });
+  const { profile: denied } = await backend.profile('browser.profile.create', { name: 'Personal identity' });
   const key = await generatePortalKey();
   const paired = await portal.security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token: await portal.security.createPairingToken(60_000), label: 'Acceptance human', publicKey: key.publicKey });
   const credential = { ...key, credentialId: paired.principal.credentialId };
   const base = `ws://127.0.0.1:${server.addr.port}`;
   const rpc = await RpcSocket.open(base + '/rpc', credential); sockets.push(rpc);
+  // Exercise optional storage through the same authenticated RPCs used by Alpha.
+  let optionalComposition = (await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }) as any).composition;
+  const created: any = await rpc.request('browser.pane.create', { hostId:portal.security.hostId,workspaceId:crypto.randomUUID(),workspaceName:'Temporary acceptance',expectedRevision:optionalComposition.revision,paneId:crypto.randomUUID(),url:'about:blank',axis:'vertical' });
+  assert(created.page.temporary && !created.page.profileLocked, 'Blank Pane required a named Profile');
+  const selected: any = await rpc.request('browser.pane.profile',{hostId:portal.security.hostId,expectedRevision:created.composition.revision,paneId:created.page.pageId,profileId:created.page.profileId,selectedProfileId:profile.profileId});
+  assert(!selected.page.temporary && !selected.page.profileLocked,'Blank Profile selection was locked');
+  await rpc.request('browser.page.navigate',{profileId:profile.profileId,pageId:selected.page.pageId,generation:selected.page.generation!,url:`http://127.0.0.1:${fixture.port}/`});
+  let locked=false;
+  try { await rpc.request('browser.pane.profile',{hostId:portal.security.hostId,expectedRevision:selected.composition.revision,paneId:selected.page.pageId,profileId:profile.profileId,selectedProfileId:denied.profileId}); } catch (error) { locked=String(error).includes('locked'); }
+  assert(locked,'Named navigation did not lock Profile selection');
+  optionalComposition=(await rpc.request('workspace.composition.get',{hostId:portal.security.hostId}) as any).composition;
+  await rpc.request('browser.pane.close',{hostId:portal.security.hostId,expectedRevision:optionalComposition.revision,paneId:selected.page.pageId,profileId:profile.profileId,generation:selected.page.generation,confirmed:true});
+  assert(!(await backend.profile('browser.profile.list',{})).profiles.some(item=>item.profileId===created.page.profileId),'Temporary identity survived its Pane');
+  evidence.optionalProfileAndLock=true;
+  Bun.gc(true); // Reclaimed process handles must not close a later runtime’s CDP pipes.
   const createThread = async () => {
     const { thread } = await rpc.request('thread.create', { executionContextId: 'context', agentId: 'fixture' }) as any;
     const { composition } = await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }) as any;
@@ -43,6 +58,7 @@ try {
     return { thread, acp, pane };
   };
   await backend.managedPage('page.create', { profileId: profile.profileId, pageId: crypto.randomUUID(), url: `http://127.0.0.1:${fixture.port}/?human=1` });
+  Bun.gc(true);
   const a = await createThread();
   const tool = async (agent: typeof a, name: string, args: object = {}, allowError = false) => {
     let text = '';
@@ -54,9 +70,9 @@ try {
   const tools = await tool(a, 'tools/list'); assert(tools.tools.some((tool: any) => tool.name === 'take_snapshot'), 'Maintained MCP tools missing'); evidence.toolCount = tools.tools.length;
   assert(tools.instructions?.includes('Weave Agent Pane'), 'MCP initialization lacks Weave browser context');
   assert(tools.tools.find((tool: any) => tool.name === 'list_pages').description.startsWith('Weave Browser Panes:'), 'Tool discovery lacks Weave browser context');
-  let profiles = await tool(a, 'weave_browser_profiles'); assert(JSON.parse(profiles.content[0].text).profiles.length === 0, 'Grant inherited without authorization');
-  await rpc.request('browser.grants.set', { threadId: a.thread.threadId, profileIds: [profile.profileId], expectedRevision: 0 });
-  const blocked = await tool(a, 'weave_browser_connect', { profileId: denied.profileId }, true); assert(blocked.isError, 'Cross-Profile selection permitted');
+  let profiles = await tool(a, 'weave_browser_profiles'); assert(JSON.parse(profiles.content[0].text).profiles.length === 2, 'Agent cannot discover all Host Profiles');
+  await tool(a, 'weave_browser_connect', { profileId: denied.profileId });
+  const blocked = await tool(a, 'weave_browser_connect', { profileId: crypto.randomUUID() }, true); assert(blocked.isError, 'Unknown Profile selection permitted');
   await tool(a, 'weave_browser_connect', { profileId: profile.profileId });
   const existing = await tool(a, 'list_pages');
   assert(JSON.stringify(existing).includes('?human=1'), 'MCP omitted the pre-existing human page on first connection');
@@ -96,14 +112,13 @@ try {
   await paused(await cdp('Debugger.stepOver', {}, sessionId));
   await cdp('Debugger.resume', {}, sessionId); evidence.debuggerStepping = true;
   const b = await createThread();
-  profiles = await tool(b, 'weave_browser_profiles'); assert(JSON.parse(profiles.content[0].text).profiles.length === 0, 'Thread inherited another Thread grant'); evidence.threadIsolation = true;
+  profiles = await tool(b, 'weave_browser_profiles'); assert(JSON.parse(profiles.content[0].text).profiles.length === 2, 'Second Thread cannot access all Host Profiles'); evidence.allProfilesWithoutGrants = true;
   const before = await backend.managedPage('page.cdp', { pageId: page.pageId, generation: page.generation, arguments: { method: 'Runtime.evaluate', arguments: { expression: 'ticks', returnByValue: true } } });
   await Bun.sleep(200);
   const after = await backend.managedPage('page.cdp', { pageId: page.pageId, generation: page.generation, arguments: { method: 'Runtime.evaluate', arguments: { expression: 'ticks', returnByValue: true } } });
   assert(after.result.value > before.result.value, 'Unattended page stopped'); evidence.unattended = true;
-  await rpc.request('browser.grants.set', { threadId: a.thread.threadId, profileIds: [], expectedRevision: 1 });
-  const revoked = await tool(a, 'evaluate_script', { function: '() => document.title' }, true); assert(revoked.isError, 'Revoked MCP could still control browser');
-  const surviving = await backend.managedPage('page.list', { profileId: profile.profileId }); assert(surviving.pages.some((item: any) => item.pageId === page.pageId && item.available), 'Revoking grant closed shared page'); evidence.revocationPreservesPage = true;
+  await tool(a, 'evaluate_script', { function: '() => document.title' });
+  const surviving = await backend.managedPage('page.list', { profileId: profile.profileId }); assert(surviving.pages.some((item: any) => item.pageId === page.pageId && item.available), 'Shared page stopped'); evidence.sharedPageSurvives = true;
   await writeFile(process.env.BROWSER_AGENT_EVIDENCE ?? '/tmp/wve79-agent-acceptance.json', JSON.stringify(evidence, null, 2) + '\n');
   console.log('Browser ACP/MCP acceptance passed');
 } finally {

@@ -99,14 +99,14 @@ test('Workspace close includes browser consequences and invalidates confirmation
   } finally { await f.cleanup(); }
 });
 
-test('revocation during page creation cannot publish a Pane and retry recovers the same page', async () => {
+test('revocation during page creation cleans up the unplaced page and retry can create the Pane', async () => {
   const f = await fixture();
   try {
     let revoked = false;
     f.intercept(async method => { if (method === 'page.create' && !revoked) { revoked = true; await f.portal.security.revokeCredential(f.credentialId); } });
     const id = crypto.randomUUID();
     await expect(f.create(id)).rejects.toThrow();
-    expect(f.pages.has(id)).toBe(true);
+    expect(f.pages.has(id)).toBe(false);
     const next = await f.connect();
     const { composition } = await next.rpc.request('workspace.composition.get', { hostId: f.hostId }) as { composition: WorkspaceComposition };
     expect(paneTargets(composition.workspaces).some(pane => pane.paneId === id)).toBe(false);

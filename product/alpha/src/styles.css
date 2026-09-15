@@ -375,7 +375,11 @@
 :is([data-slot="terminal-focus-border"], [data-slot="pane-focus-border"])[data-window-bottom-right] { border-bottom-right-radius: var(--alpha-window-corner-radius, 0px); }
 [data-slot="thread-pane"][data-window-bottom-right] { --agent-bottom-right-radius: var(--alpha-window-corner-radius, 0px); }
 
-/* Native terminal underlays show through only their own DOM ancestor chain.
+/* A lone visible pane needs no focus outline, including maximized layouts.
+   Native terminal strokes read this same computed border width. */
+[data-single-pane="true"] [data-slot="pane-focus-border"] { border-width: 0; }
+
+/* Native pane underlays show through only their own DOM ancestor chain.
    Sibling panes, rails and portalled overlays retain their normal backgrounds. */
 html:has([data-native-layered]),
 body:has([data-native-layered]),
@@ -400,7 +404,7 @@ html[data-device-idiom="phone"] [data-sidebar="menu-action"] { min-width: 44px; 
 html[data-device-idiom="phone"] [data-sidebar="menu-button"] { padding-right: 44px; }
 [data-compact] [hidden] { display: none !important; }
 /* Web backdrop blur cannot sample a sibling native layer. Use the existing
-   translucent scrim so it composites over live terminal pixels as well. */
+   translucent scrim so it composites over live native pixels as well. */
 body:has([data-native-layered]) [data-slot$='-overlay'] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;

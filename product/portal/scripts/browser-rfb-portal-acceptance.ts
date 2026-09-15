@@ -8,6 +8,7 @@ import { BrowserServiceClient } from '../src/browser-service/client.ts';
 import { authentication, generatePortalKey, RpcSocket, type PortalCredentialSigner } from './rpc-client.ts';
 import { PORTAL_PAIR_REQUEST_TYPE, PORTAL_WEBSOCKET_PROTOCOL } from '@weave/product-protocol';
 
+const scale = Number(process.env.BROWSER_DEVICE_SCALE ?? 1);
 const binary = process.env.CEF_BINARY, decoder = process.env.BROWSER_RFB_SNAPSHOT_BINARY;
 if (!binary || (!decoder && !process.env.BROWSER_CAPTURE_READY)) throw new Error('CEF_BINARY plus a native decoder or external capture marker is required');
 const root = await mkdtemp('/tmp/wve-rfb-portal-');
@@ -54,10 +55,11 @@ try {
  const attach=async(rpc:RpcSocket)=>rpc.request('browser.page.view.attach',{profileId:profile.profileId,pageId:created.pageId,generation:created.generation,mode:'control'}) as Promise<{viewId:string;ticket:string}>;
  const av=await attach(a),bv=await attach(b);
  const af=await a.request('browser.page.view.focus',{viewId:av.viewId,width:800,height:600}) as {focusEpoch:number};
- const bf=await b.request('browser.page.view.focus',{viewId:bv.viewId,width:1000,height:800}) as {focusEpoch:number};
+ const bf=await b.request('browser.page.view.focus',{viewId:bv.viewId,width:1000,height:800,deviceScaleFactor:scale}) as {focusEpoch:number};
  let stale=false;try{await a.request('browser.page.view.input',{viewId:av.viewId,focusEpoch:af.focusEpoch,method:'Input.insertText',arguments:{text:'stale'}});}catch{stale=true;}assert(stale,'Stale owner sent input');results.focusHandoff=true;
  for(const type of ['mousePressed','mouseReleased'])await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type,x:50,y:60,button:'left',clickCount:1}});
- assert(await evaluate('clicks')===1,'Authorized CDP input failed');results.authorizedInput=true;
+ assert(await evaluate('clicks')===1,'Authorized CDP input failed');
+ assert(await evaluate('devicePixelRatio')===scale && await evaluate('innerWidth')===1000 && await evaluate('innerHeight')===800,'Retina rendering changed logical page geometry'); results.deviceScaleFactor=scale;results.authorizedInput=true;
  // Human wheel input uses upstream CEF while agent evaluation stays full CDP.
  await evaluate(`window.wheelTrace=[];window.blockWheel=false;document.body.insertAdjacentHTML('beforeend','<div id="wheel-fixture" style="height:5000px"><div id="nested" style="position:absolute;top:200px;left:200px;width:200px;height:120px;overflow:auto"><div style="height:4000px;width:4000px">Nested scroll</div></div></div>');window.addEventListener('wheel',e=>{wheelTrace.push(['wheel',e.deltaX,e.deltaY]);if(blockWheel)e.preventDefault()},{passive:false});window.addEventListener('mousedown',()=>wheelTrace.push(['down']));true`);
  const wheel=async(deltaY:number,x=600,y=400,deltaX=0)=>b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type:'mouseWheel',x,y,deltaX,deltaY}});
@@ -75,8 +77,16 @@ try {
  assert(await evaluate('wheelTrace.map(e=>e[0]).join(",")')==='wheel,down','Wheel/button ordering changed');
  await evaluate('document.querySelector("#wheel-fixture").remove();scrollTo(0,0);true');await Bun.sleep(100);
  results.nativeWheel={fractionalPixels:3,nestedVertical:120,nestedHorizontal:32,pageCancellation:true,wheelBeforeButton:true};
+ if (scale !== 1) {
+  for (const density of [1, scale]) {
+   await b.request('browser.page.view.focus',{viewId:bv.viewId,width:1000,height:800,deviceScaleFactor:density});
+   await wait(async()=>await evaluate('devicePixelRatio')===density);
+   assert(await evaluate('innerWidth')===1000&&await evaluate('clicks')===1,'Scale-only change altered page state or geometry');
+  }
+  results.scaleOnlyHandoff=true;
+ }
  // Reclaiming the same viewport must retain pixels outside the next dirty rectangle.
- for(let repeat=0;repeat<3;repeat++) await b.request('browser.page.view.focus',{viewId:bv.viewId,width:1000,height:800});
+ for(let repeat=0;repeat<3;repeat++) await b.request('browser.page.view.focus',{viewId:bv.viewId,width:1000,height:800,deviceScaleFactor:scale});
  await evaluate("document.querySelector('button').style.background='#88ccaa';true");
  await Bun.sleep(100);
  results.sameViewportFocusClaims=3;
@@ -87,12 +97,12 @@ try {
   const child=Bun.spawn([resolve(decoder),path,'5900','1',evidence.replace(/\.json$/,'.png'),'resize'],{stdout:'pipe',stderr:'pipe'});
   const [code,output,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
   assert(code===0,`Native decoder failed: ${output} ${error}`);capture=JSON.parse(output.trim());
-  assert(capture.width===1000&&capture.height===800&&Number(capture.frames)>0&&capture.saved,'Native Portal framebuffer mismatch');
+  assert(capture.width===1000*scale&&capture.height===800*scale&&Number(capture.frames)>0&&capture.saved,'Native Portal framebuffer mismatch');
  } else {
   const marker=process.env.BROWSER_CAPTURE_READY!;
-  await writeFile(marker,JSON.stringify({rfbProxy:path,width:1000,height:800})+'\n',{mode:0o600});
+  await writeFile(marker,JSON.stringify({rfbProxy:path,width:1000,height:800,deviceScaleFactor:scale})+'\n',{mode:0o600});
   await wait(()=>Bun.file(marker+'.done').exists());
-  capture={external:true,width:1000,height:800};
+  capture={external:true,width:1000,height:800,deviceScaleFactor:scale};
  }
  const image=await backend.managedPage('page.cdp',{pageId:created.pageId,generation:created.generation,arguments:{method:'Page.captureScreenshot',arguments:{format:'png'}}});
  await writeFile(evidence.replace(/\.json$/, '-reference.png'),Buffer.from(image.data,'base64'));

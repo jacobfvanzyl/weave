@@ -1,7 +1,7 @@
 export const BROWSER_PROFILES_CAPABILITY = 'browser.profiles.v1';
 export const BROWSER_PROFILE_RPC_METHODS = ['browser.profile.list', 'browser.profile.create', 'browser.profile.rename'] as const;
 export type BrowserProfileRpcMethod = typeof BROWSER_PROFILE_RPC_METHODS[number];
-export type BrowserProfile = { profileId: string; name: string; revision: number };
+export type BrowserProfile = { profileId: string; name: string; revision: number; temporary?: true };
 export type BrowserProfileRpcContracts = {
   'browser.profile.list': { params: Record<string, never>; result: { profiles: BrowserProfile[] } };
   'browser.profile.create': { params: { name: string }; result: { profile: BrowserProfile } };
@@ -26,7 +26,7 @@ function revision(value: unknown): number {
 }
 export function parseBrowserProfile(value: unknown): BrowserProfile {
   const input = object(value);
-  return { profileId: browserProfileId(input.profileId), name: browserProfileName(input.name), revision: revision(input.revision) };
+  return { profileId: browserProfileId(input.profileId), name: browserProfileName(input.name), revision: revision(input.revision), ...(input.temporary === true ? { temporary: true as const } : {}) };
 }
 export function parseBrowserProfileRpcParams<M extends BrowserProfileRpcMethod>(method: M, value: unknown): BrowserProfileRpcContracts[M]['params'] {
   const input = object(value);
@@ -43,7 +43,7 @@ export function parseBrowserProfileRpcParams<M extends BrowserProfileRpcMethod>(
 export function parseBrowserProfileRpcResult<M extends BrowserProfileRpcMethod>(method: M, value: unknown): BrowserProfileRpcContracts[M]['result'] {
   const input = object(value);
   if (method === 'browser.profile.list') {
-    if (!Array.isArray(input.profiles) || input.profiles.length > 64) throw new Error('Invalid Browser Profile list');
+    if (!Array.isArray(input.profiles) || input.profiles.length > 320) throw new Error('Invalid Browser Profile list');
     const profiles = input.profiles.map(parseBrowserProfile);
     if (new Set(profiles.map(profile => profile.profileId)).size !== profiles.length) throw new Error('Duplicate Browser Profile identity');
     return { profiles } as BrowserProfileRpcContracts[M]['result'];

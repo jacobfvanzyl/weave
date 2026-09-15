@@ -125,13 +125,9 @@ A local, unsent conversation shown in an Agent Pane before it becomes a Host-own
 _Avoid_: Archived Thread, provider session, Recovery Draft
 
 **Browser Profile**:
-A named, persistent browser identity on one Host, containing cookies, site storage and browser settings shared by every Browser Pane using it across that Host's Workspaces. Its lifetime is independent of Panes and Workspaces, and it survives client disconnection and browser process restarts.
+A named, persistent browser identity on one Host, containing cookies, site storage and browser settings shared by every Browser Pane using it across that Host's Workspaces. Its lifetime is independent of Panes and Workspaces, and it survives client disconnection and browser process restarts. Profile selection is optional. A Pane opened without one uses its own temporary browser identity, whose cookies and sign-ins are removed when it closes. Website-created popups share that temporary identity until the last related Pane closes. Named Profiles can be selected next to the address field; selection locks once the Pane loads a page using that Profile. Agents on a Host can use all its Browser Profiles without individual grants.
 _Avoid_: Browser Session, Workspace-owned profile, client profile
 
 **Browser Pane**:
-A single Host-owned browser page and its navigation history, belonging to one Workspace and using one Browser Profile on the same Host; moving it between that Host's Workspaces preserves its Profile and live page. Its lifetime is independent of client viewing or focus, including during authorized agent work, and explicit closure ends the page and removes the Pane for every client through a Close Transaction.
+A single Host-owned browser page and its navigation history, belonging to one Workspace and optionally using a named Browser Profile on the same Host. Without a Profile it uses temporary storage. Moving it between that Host's Workspaces preserves its browser identity and live page. Its lifetime is independent of client viewing or focus, including during authorized agent work, and explicit closure ends the page and removes the Pane for every client through a Close Transaction.
 _Avoid_: Browser Tab, Browser Session, tab container, client-owned page
-
-**Browser Profile Grant**:
-An explicit, revocable authorization belonging to one Thread for its Agent to use a Browser Profile's shared browser identity and inspect, control and debug its pages across Workspaces on that Host. Workspace membership does not confer or restrict this browser authorization, which does not grant access to other Profiles or change filesystem execution permissions; fully trusted human clients can use all Profiles on their paired Host without individual Profile Grants. A grant remains with its Thread when the Agent Pane moves, and is not inherited by other Threads using the same Agent.
-_Avoid_: Workspace browser permission, Pane-only debugger access, Host-wide browser access

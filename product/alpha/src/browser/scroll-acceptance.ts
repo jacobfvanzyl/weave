@@ -7,7 +7,7 @@ export async function runBrowserScrollAcceptance(browser: HTMLTextAreaElement, d
   const deadline = performance.now() + 15000;
   while (true) {
     const bounds = browser.getBoundingClientRect();
-    if (Number(browser.dataset.frameWidth) === Math.floor(bounds.width) && Number(browser.dataset.frameHeight) === Math.floor(bounds.height)) break;
+    if (Number(browser.dataset.frameWidth) === Number(browser.dataset.expectedFrameWidth) && Number(browser.dataset.frameHeight) === Number(browser.dataset.expectedFrameHeight)) break;
     if (performance.now() > deadline) throw new Error('Browser viewport did not settle before scrolling');
     await sleep(25);
   }

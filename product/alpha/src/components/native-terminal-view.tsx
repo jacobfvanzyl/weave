@@ -95,7 +95,7 @@ export function NativeTerminalView({ output, readOnly, onInput, onResize, focusR
     const resize = new ResizeObserver(measure);
     resize.observe(element);
     const mutations = new MutationObserver(measure);
-    mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'hidden', 'inert', 'aria-hidden', 'data-open', 'data-closed', 'data-focused', 'data-agent-focused', 'data-window-bottom-right', 'class'] });
+    mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'hidden', 'inert', 'aria-hidden', 'data-open', 'data-closed', 'data-focused', 'data-agent-focused', 'data-window-bottom-right', 'data-single-pane', 'class'] });
     window.addEventListener('resize', measure);
     window.addEventListener('alpha-window-corner-change', measure);
     document.addEventListener('visibilitychange', measure);

@@ -98,6 +98,7 @@ public:
   rfbScreenInfoPtr screen = nullptr;
   int listener = -1, width = 800, height = 600, createRequest = 0,
       closeRequest = 0;
+  double deviceScaleFactor = 1;
   bool closing = false;
   std::map<int, int> cdpRequests;
   int nextCdp = 0;
@@ -166,6 +167,7 @@ public:
     d->SetString("rfbSocket", socketPath);
     d->SetInt("width", width);
     d->SetInt("height", height);
+    d->SetDouble("deviceScaleFactor", deviceScaleFactor);
     d->SetBool("canGoBack", browser && browser->CanGoBack());
     d->SetBool("canGoForward", browser && browser->CanGoForward());
     if (!opener.empty())
@@ -184,6 +186,12 @@ public:
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   void GetViewRect(CefRefPtr<CefBrowser>, CefRect &r) override {
     r = CefRect(0, 0, width, height);
+  }
+  bool GetScreenInfo(CefRefPtr<CefBrowser>, CefScreenInfo &info) override {
+    info.device_scale_factor = static_cast<float>(deviceScaleFactor);
+    info.depth = 24; info.depth_per_component = 8;
+    info.rect = info.available_rect = CefRect(0, 0, width, height);
+    return true;
   }
   void OnAfterCreated(CefRefPtr<CefBrowser> b) override {
     browser = b;
@@ -267,7 +275,7 @@ public:
   void OnPaint(CefRefPtr<CefBrowser>, PaintElementType type,
                const RectList &dirty, const void *pixels, int w,
                int h) override {
-    if (type != PET_VIEW || !screen || w != width || h != height)
+    if (type != PET_VIEW || !screen || w != screen->width || h != screen->height)
       return;
     for (auto &r : dirty) {
       int x = std::max(0, r.x), y = std::max(0, r.y),
@@ -286,15 +294,17 @@ public:
       diagnostics.paint(area);
     }
   }
-  void resize(int w, int h) {
+  void resize(int w, int h, double scale) {
     wheel.reset();
     // Focus claims can repeat the existing size. Clearing that framebuffer
     // loses unchanged pixels because Chromium only repaints its dirty region.
-    if (w == width && h == height) return;
+    if (w == width && h == height && scale == deviceScaleFactor) return;
     width = w;
     height = h;
+    deviceScaleFactor = scale;
+    int pixelWidth = (int)std::ceil(w * scale), pixelHeight = (int)std::ceil(h * scale);
     char *old = screen->frameBuffer;
-    rfbNewFramebuffer(screen, (char *)calloc((size_t)w * h, 4), w, h, 8, 3, 4);
+    rfbNewFramebuffer(screen, (char *)calloc((size_t)pixelWidth * pixelHeight, 4), pixelWidth, pixelHeight, 8, 3, 4);
     free(old);
     screen->serverFormat.redShift = 16;
     screen->serverFormat.greenShift = 8;
@@ -303,6 +313,7 @@ public:
     while (auto c = rfbClientIteratorNext(it))
       rfbSetTranslateFunction(c);
     rfbReleaseClientIterator(it);
+    browser->GetHost()->NotifyScreenInfoChanged();
     browser->GetHost()->WasResized();
     browser->GetHost()->Invalidate(PET_VIEW);
     event("page.changed");
@@ -355,7 +366,7 @@ public:
     auto e = object(), p = object();
     e->SetString("jsonrpc", "2.0");
     e->SetString("method", "runtime.ready");
-    p->SetInt("version", 2);
+    p->SetInt("version", 3);
     p->SetString("cefVersion", CEF_VERSION);
     e->SetDictionary("params", p);
     emit(e);
@@ -451,11 +462,14 @@ static void command(const std::string &line) {
     page->browser->Reload();
   else if (method == "page.resize") {
     int w = params->GetInt("width"), h = params->GetInt("height");
-    if (w < 1 || h < 1 || w > 4096 || h > 4096 || (int64_t)w * h > 8388608) {
+    double scale = !params->HasKey("deviceScaleFactor") ? 1 : params->GetType("deviceScaleFactor") == VTYPE_INT ? params->GetInt("deviceScaleFactor") : params->GetDouble("deviceScaleFactor");
+    // CEF stores scale as a float; use that exact value for framebuffer sizing.
+    scale = static_cast<float>(scale);
+    if (w < 1 || h < 1 || w > 4096 || h > 4096 || (int64_t)w * h > 8388608 || !std::isfinite(scale) || scale < 1 || scale > 2 || std::ceil(w * scale) > 8192 || std::ceil(h * scale) > 8192 || std::ceil(w * scale) * std::ceil(h * scale) > 16777216) {
       fail(request, "Invalid viewport");
       return;
     }
-    page->resize(w, h);
+    page->resize(w, h, scale);
   } else if (method == "page.cdp") {
     // Human display input can use CEF's embedding API without waiting for a
     // DevTools wheel acknowledgement. Agent CDP calls keep their full response

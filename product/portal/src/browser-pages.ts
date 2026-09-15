@@ -13,7 +13,7 @@ type View = {
   profileId: string; pageId: string; generation: string; mode: 'observe' | 'control';
   closeStream?: () => void; bound: boolean;
 };
-type Focus = { viewId: string; generation: string; epoch: number; width: number; height: number };
+type Focus = { viewId: string; generation: string; epoch: number; width: number; height: number; deviceScaleFactor: number };
 
 /** Connection-scoped viewing and Profile-scoped authority, independent of RFB messages. */
 export class ManagedBrowserAccess {
@@ -91,12 +91,12 @@ export class ManagedBrowserAccess {
         }
         // A resize failure makes input ownership uncertain; clear it before requesting the transition.
         this.#focus.delete(view.pageId);
-        await this.backend.managedPage('page.resize', { pageId: view.pageId, generation: view.generation, arguments: { width: input.width, height: input.height } });
+        await this.backend.managedPage('page.resize', { pageId: view.pageId, generation: view.generation, arguments: { width: input.width, height: input.height, deviceScaleFactor: input.deviceScaleFactor ?? 1 } });
         await this.#authorize(principal, view.profileId, true);
         if (!active() || this.#views.get(view.viewId) !== view) throw new Error('Browser view closed during focus');
-        const next = { viewId: view.viewId, generation: view.generation, epoch: ++this.#epoch, width: input.width, height: input.height };
+        const next = { viewId: view.viewId, generation: view.generation, epoch: ++this.#epoch, width: input.width, height: input.height, deviceScaleFactor: input.deviceScaleFactor ?? 1 };
         this.#focus.set(view.pageId, next);
-        return { viewId: next.viewId, generation: next.generation, focusEpoch: next.epoch, width: next.width, height: next.height };
+        return { viewId: next.viewId, generation: next.generation, focusEpoch: next.epoch, width: next.width, height: next.height, deviceScaleFactor: next.deviceScaleFactor };
       });
     } else {
       const control = !['browser.page.list', 'browser.page.get'].includes(method) && !(method === 'browser.page.view.attach' && input.mode === 'observe');

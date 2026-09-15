@@ -1,6 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
 import { browserProfileId, type BrowserProfile, type ThreadSummary } from '@weave/product-protocol';
-import type { BrowserGrantStore } from './browser-grants.ts';
 import type { BrowserServiceClient } from './browser-service/client.ts';
 import { MAX_CDP_BYTES, type CdpMessage } from './browser-service/cdp-pipe.ts';
 
@@ -8,7 +7,6 @@ type Debugger = { debuggerId: string; generation: string };
 type Channel = { controlPending?: boolean; epoch: number; threadId: string; token: string; profileId?: string; raw?: Debugger; sockets: Set<Bun.ServerWebSocket<Peer>> };
 type Peer = { channel: Channel; debugger?: Debugger; closed: boolean; pending: number };
 export type BrowserAgentHost = {
-  grants: BrowserGrantStore;
   thread(threadId: string): ThreadSummary;
   backend: Pick<BrowserServiceClient, 'managedPage'>;
   profiles(): Promise<BrowserProfile[]>;
@@ -20,7 +18,6 @@ export type BrowserAgentHost = {
 export class BrowserAgentGateway {
   #channels = new Map<string, Channel>();
   #server: Bun.Server<Peer>;
-  #unsubscribe: () => void;
   #heartbeat: ReturnType<typeof setInterval>;
   #renewing = false;
   constructor(private host: BrowserAgentHost, private launcher: { node: string; script: string }) {
@@ -36,6 +33,7 @@ export class BrowserAgentGateway {
           const path = new URL(request.url).pathname;
           if (path === '/cdp' && request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
             if (channel.sockets.size >= 4) throw new Error('Browser debugger connection capacity exceeded');
+            await this.#chooseProfile(channel);
             this.#authorize(channel);
             if (server.upgrade(request, { data: { channel, closed: false, pending: 0 } })) return;
             return new Response('WebSocket required', { status: 426 });
@@ -43,21 +41,21 @@ export class BrowserAgentGateway {
           if (path !== '/control' || request.method !== 'POST') return new Response('Not found', { status: 404 });
           const input = await request.json() as Record<string, any>;
           if (input.action === 'profiles') {
-            const ids = this.host.grants.get(channel.threadId).profileIds;
             const profiles = await this.host.profiles(); this.#thread(channel);
-            const current = this.host.grants.get(channel.threadId).profileIds;
-            return Response.json({ profiles: profiles.filter(profile => ids.includes(profile.profileId) && current.includes(profile.profileId)), selectedProfileId: channel.profileId });
+            return Response.json({ profiles, selectedProfileId: channel.profileId });
           }
           if (channel.controlPending) throw new Error('A Browser control command is already running; retry');
           channel.controlPending = true;
           try {
           if (input.action === 'select') {
-            const profileId = browserProfileId(input.profileId); this.host.grants.assert(channel.threadId, profileId);
-            await this.#disconnect(channel); this.#thread(channel); this.host.grants.assert(channel.threadId, profileId);
+            const profileId = browserProfileId(input.profileId);
+            if (!(await this.host.profiles()).some(profile => profile.profileId === profileId)) throw new Error('Browser Profile unavailable');
+            await this.#disconnect(channel); this.#thread(channel);
             channel.profileId = profileId;
             return Response.json({ profileId });
           }
           if (input.action === 'cdp') {
+            await this.#chooseProfile(channel);
             const profileId = this.#authorize(channel), epoch = channel.epoch;
             if (!channel.raw) {
               const opened = await this.host.backend.managedPage<Debugger>('debugger.open', { profileId });
@@ -95,7 +93,6 @@ export class BrowserAgentGateway {
       })).finally(() => { this.#renewing = false; });
     }, 1000);
     this.#heartbeat.unref();
-    this.#unsubscribe = host.grants.subscribe(threadId => { const channel = this.#channels.get(threadId); if (channel) void this.#disconnect(channel); });
   }
   #thread(channel: Channel) {
     if (this.#channels.get(channel.threadId) !== channel) throw new Error('Browser tool session expired');
@@ -103,13 +100,16 @@ export class BrowserAgentGateway {
     if (thread.status !== 'active') throw new Error('Browser tools require an active Thread');
     return thread;
   }
+  async #chooseProfile(channel: Channel) {
+    this.#thread(channel);
+    if (channel.profileId) return;
+    const profiles = await this.host.profiles(); this.#thread(channel);
+    if (profiles.length === 1) channel.profileId ??= profiles[0]!.profileId;
+  }
   #authorize(channel: Channel, expectedProfile?: string) {
     this.#thread(channel);
-    const grants = this.host.grants.get(channel.threadId);
-    channel.profileId ??= grants.profileIds.length === 1 ? grants.profileIds[0] : undefined;
-    if (!channel.profileId) throw new Error('Select a granted Profile with weave_browser_connect; grant access from the Agent Pane first');
+    if (!channel.profileId) throw new Error('Select a Host Profile with weave_browser_connect');
     if (expectedProfile && channel.profileId !== expectedProfile) throw new Error('Browser Profile selection changed; retry');
-    this.host.grants.assert(channel.threadId, channel.profileId);
     return channel.profileId;
   }
   #message(input: any): CdpMessage {
@@ -155,7 +155,7 @@ export class BrowserAgentGateway {
         for (const event of events) this.#send(socket, event);
         await Bun.sleep(20);
       }
-    } catch { socket.close(1008, 'Browser grant or debugger unavailable'); }
+    } catch (error) { console.error('Browser agent debugger disconnected:', error instanceof Error ? error.message : String(error)); socket.close(1008, 'Browser session or debugger unavailable'); }
     finally { if (peer.debugger) await this.host.backend.managedPage('debugger.close', peer.debugger).catch(() => {}); }
   }
   async #messageReceived(socket: Bun.ServerWebSocket<Peer>, data: string) {
@@ -169,7 +169,7 @@ export class BrowserAgentGateway {
       if (reply) this.#send(socket, reply);
     } catch (error) {
       try { this.#send(socket, { id: message?.id, ...(message?.sessionId ? { sessionId: message.sessionId } : {}), error: { code: -32000, message: error instanceof Error ? error.message : 'Browser command failed' } }); }
-      catch { socket.close(1008, 'Browser grant unavailable'); }
+      catch { socket.close(1008, 'Browser session unavailable'); }
     } finally { peer.pending--; }
   }
   servers(threadId: string) {
@@ -187,5 +187,5 @@ export class BrowserAgentGateway {
     const raw = channel.raw; channel.raw = undefined;
     if (raw) await this.host.backend.managedPage('debugger.close', raw).catch(() => {});
   }
-  async close() { clearInterval(this.#heartbeat); this.#unsubscribe(); await Promise.all([...this.#channels.values()].map(channel => this.#disconnect(channel))); this.#channels.clear(); void this.#server.stop(true); this.#server.unref(); }
+  async close() { clearInterval(this.#heartbeat); await Promise.all([...this.#channels.values()].map(channel => this.#disconnect(channel))); this.#channels.clear(); void this.#server.stop(true); this.#server.unref(); }
 }
