@@ -1,5 +1,4 @@
-import { isFsError } from './host-files.ts';
-import { spawnProcess } from './host-process.ts';
+import { spawnProcess, signalProcess } from './host-process.ts';
 import type { HostProcess } from './host-process.ts';
 import type { AgentDefinition } from './config.ts';
 import { idKey, type JsonRpcMessage, parseJsonRpcMessage, request } from './json-rpc.ts';
@@ -93,19 +92,23 @@ export class AgentProcess {
     if (this.#closed) return;
     this.#intentionalClose = true;
     this.#closed = true;
+    await signalProcess(this.#child, 'SIGTERM');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const escalation = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => { void signalProcess(this.#child, 'SIGKILL').catch(reject); }, 2000);
+    });
     try {
-      this.#child.kill('SIGTERM');
-    } catch (cause) {
-      if (!(isFsError(cause, 'ENOENT'))) throw cause;
-    }
-    const timer = setTimeout(() => this.#child.kill('SIGKILL'), 2000);
-    try {
-      await this.#writer.close().catch(() => undefined);
-      await this.#child.status.catch(() => undefined);
+      await Promise.race([
+        (async () => {
+          await this.#writer.close().catch(() => undefined);
+          await this.#child.status;
+        })(),
+        escalation,
+      ]);
     } finally {
       clearTimeout(timer);
       // A launcher may exit before its descendants. Reap only its private group.
-      this.#child.kill('SIGKILL');
+      await signalProcess(this.#child, 'SIGKILL');
     }
   }
 

@@ -60,7 +60,7 @@ try {
   const code = await app.exited; clearTimeout(timer); clearTimeout(profiling); await Promise.allSettled(profiles);
   if (code !== 0) throw new Error(`Alpha scrolling acceptance failed (${code})`);
   }
-  await writeFile(join(root,'route.json'),JSON.stringify({ route: ipad ? 'iPad to Mac Host over LAN/VPN; software event capture to native layer submission, not physical scanout' : 'Mac loopback; software event capture to native layer submission, not physical scanout', encoding:process.env.WEAVE_BROWSER_RFB_ENCODING ?? 'zrle', gpu:process.env.WEAVE_BROWSER_GPU === '1' }));
+  await writeFile(join(root,'route.json'),JSON.stringify({ route: ipad ? 'iPad to Mac Host over LAN/VPN; software event capture to native layer submission, not physical scanout' : 'Mac loopback; software event capture to native layer submission, not physical scanout', address, scheme:tls?'wss':'ws', responsiveData:process.env.WEAVE_BROWSER_RESPONSIVE_DATA==='1', encoding:process.env.WEAVE_BROWSER_RFB_ENCODING ?? 'zrle', gpu:process.env.WEAVE_BROWSER_GPU === '1' }));
   const { pages } = await backend.managedPage('page.list', {}), page = pages[0];
   if (!page) throw new Error('No Browser page was created');
   const command = (method: string, args: Record<string, unknown>) => backend.managedPage('page.cdp', { pageId: page.pageId, generation: page.generation, arguments: { method, arguments: args } });

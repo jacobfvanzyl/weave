@@ -7,6 +7,8 @@ export class HostWebSocket {
   onopen?: () => void;
   onmessage?: (event: { data: string | Buffer }) => void | Promise<void>;
   onclose?: () => void;
+  ondrain?: () => void;
+  drained() { this.ondrain?.(); }
   get bufferedAmount() { return this.socket?.getBufferedAmount() ?? 0; }
   open(socket: ServerWebSocket<HostWebSocket>) { this.socket = socket; this.readyState = 1; this.onopen?.(); }
   receive(data: string | Buffer) { void this.onmessage?.({ data }); }

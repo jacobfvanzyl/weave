@@ -40,3 +40,18 @@ export async function runProcess(command: string, options: ProcessOptions = {}) 
   ]);
   return { ...status, stdout: new Uint8Array(stdout), stderr: new Uint8Array(stderr) };
 }
+
+/** Darwin can briefly report EPERM while an exiting private group is reaped.
+ * Retry the same owned group only; persistent permission failures still reject.
+ */
+export async function signalProcess(child: Pick<HostProcess, 'kill'>, signal: NodeJS.Signals) {
+  for (let attempt = 0; ; attempt++) {
+    try { child.kill(signal); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH' || code === 'ENOENT') return;
+      if (process.platform !== 'darwin' || code !== 'EPERM' || attempt >= 10) throw error;
+      await Bun.sleep(20);
+    }
+  }
+}

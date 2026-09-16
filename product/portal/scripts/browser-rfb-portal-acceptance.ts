@@ -167,6 +167,18 @@ try {
  await c.request('browser.pane.close',{hostId,expectedRevision:composition.revision,paneId:popup.paneId,profileId:profile.profileId,generation:popupPage.generation,confirmed:true});
  assert((await backend.managedPage('page.list',{profileId:profile.profileId})).pages.length===1,'Shared close left a popup alive');results.sharedPopupClose=true;
  assert(await evaluate('clicks')===1,'Popup lifecycle reset its opener');
+ // A partial RFB reply stalls stock LibVNC inside this Profile worker.
+ // Prove the limitation and recovery through the authenticated Portal relay.
+ const slowView=await attach(c),slow=await openDisplay(signer,slowView.ticket);
+ await wait(()=>slow.bytes>=12);slow.ws.send(new Uint8Array([82]));await Bun.sleep(50);
+ const ticksBeforeStall=await evaluate('ticks');
+ const otherView=await attach(c),following=await openDisplay(signer,otherView.ticket);
+ await Bun.sleep(150);
+ const blockedGreeting=following.bytes===0;
+ assert(await evaluate('ticks')>ticksBeforeStall,'Slow RFB viewer blocked Chromium work');
+ const detachedAt=performance.now();slow.ws.close();await wait(()=>following.bytes>=12);
+ results.slowViewer={profileDisplayCouplingObserved:blockedGreeting,chromiumContinued:true,recoveryAfterPeerCloseMs:performance.now()-detachedAt};
+ following.ws.close();
  const cv=await attach(c),live=await openDisplay(signer,cv.ticket);
  await portal.security.revokeCredential(signer.credentialId);await wait(()=>live.ws.readyState===WebSocket.CLOSED);
  assert(await evaluate('document.title')==='Portal RFB acceptance','Revocation closed the page');results.revokedDisplayBrowserAlive=true;

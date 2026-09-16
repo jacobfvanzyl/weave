@@ -24,6 +24,7 @@ import {
   WORKSPACE_FILE_WATCH_EVENT_METHOD,
 } from '@weave/product-protocol';
 import { error, type JsonRpcMessage, parseJsonRpcMessage, result } from './json-rpc.ts';
+import { browserDiagnostics, recordBrowserRelay } from './browser-diagnostics.ts';
 import { Portal, PortalThreadLifecycleError } from './portal.ts';
 import { CompositionError } from './composition-store.ts';
 import { type PortalPrincipal, PortalSecurityError } from './security.ts';
@@ -276,6 +277,8 @@ const browserRfbWebSocket = (request: Request, portal: Portal, upgrade: HostUpgr
   let lease: Awaited<ReturnType<Portal['bindBrowserStream']>> | undefined;
   let stream: Socket | undefined;
   let closed = false, bound = false;
+  let lastRelay=0, bufferedSince=0;
+  socket.ondrain=()=>{if(browserDiagnostics && bufferedSince){recordBrowserRelay('relay.drain',performance.now()-bufferedSince,0,socket.bufferedAmount);bufferedSince=0;}};
   const stop = (code = 1000, reason = 'Browser display detached.') => {
     if (closed) return;
     closed = true; clearTimeout(timeout); stream?.destroy(); lease?.close();
@@ -317,7 +320,12 @@ const browserRfbWebSocket = (request: Request, portal: Portal, upgrade: HostUpgr
             if (closed || !lease?.active()) { stop(); return; }
             // Disconnect a slow viewer rather than accumulating stale framebuffer data.
             if (socket.bufferedAmount + bytes.byteLength > 4 * 1024 * 1024) { stop(1013, 'Browser display fell behind; reconnect.'); return; }
-            if (socket.send(bytes) === 0) stop(1013, 'Browser display could not be queued.');
+            const sent=socket.send(bytes);
+            if(browserDiagnostics){
+              const now=performance.now();recordBrowserRelay('relay.send',lastRelay?now-lastRelay:0,bytes.byteLength,socket.bufferedAmount);lastRelay=now;
+              if(socket.bufferedAmount && !bufferedSince)bufferedSince=now;
+            }
+            if (sent === 0) stop(1013, 'Browser display could not be queued.');
           });
         } else {
           if (typeof event.data === 'string' || !lease?.active() || !stream) throw new Error('Expected binary RFB data');
@@ -422,6 +430,7 @@ export const startPortalServer = (
       maxPayloadLength: 16 * 1024 * 1024,
       open(socket) { sockets.add(socket.data); socket.data.open(socket); },
       message(socket, data) { socket.data.receive(data); },
+      drain(socket) { socket.data.drained(); },
       close(socket) { sockets.delete(socket.data); socket.data.closed(); },
     },
     fetch(request, server) {

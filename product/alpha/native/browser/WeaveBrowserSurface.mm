@@ -42,6 +42,8 @@ static double browserThreadCPU(void) { struct timespec t; clock_gettime(CLOCK_TH
 @property(nonatomic) double latestCopyMs, latestCopiedAt, decodeCPU;
 @property(nonatomic) double messageStartedAt, messageStartedCPU, messageEndedAt, latestTransferMs, latestDecodeMs, latestReceiveGapMs;
 @property(nonatomic) uint64_t receivedBytes, updates;
+@property(nonatomic) double previousSocketReceive;
+@property(nonatomic) NSString *serviceClass;
 @end
 static void *clientTag = &clientTag;
 static rfbBool allocatePixels(rfbClient *client) {
@@ -102,7 +104,7 @@ static void presentPixels(rfbClient *client) {
       uint32_t sequence = surface.fixtureMarkers && pixels.length >= 8 ? marker[4] | (marker[5]<<8) | (marker[6]<<16) : 0;
       [surface.samples addObject:@{@"diagnosticId":surface.diagnosticId, @"time":@(submittedAt), @"epochMs":@(submittedEpoch), @"scroll":@(scroll), @"sequence":@(sequence), @"intervalMs":@(surface.previousPresentation ? (submittedAt-surface.previousPresentation)*1000 : 0), @"copyMs":@(copyMs), @"mainQueueMs":@((mainAt-copiedAt)*1000), @"submitMs":@((submittedAt-mainAt)*1000), @"renderCPUms":surface.metal?(metrics[@"renderCPUms"] ?: @0):@(renderCPUms), @"gpuMs":metrics[@"gpuMs"] ?: @0, @"verifiedPixels":metrics[@"verifiedPixels"] ?: @0, @"differentPixels":metrics[@"differentPixels"] ?: @0, @"presenterError":metrics[@"error"] ?: @"", @"transferWallMs":@(transferMs), @"decodeMs":@(decodeMs), @"receiveGapMs":@(receiveGapMs), @"decodeCPUSeconds":@(cpu), @"receivedBytes":@(bytes), @"updates":@(updates), @"width":@(width), @"height":@(height), @"presenter":surface.metal?@"metal":@"cgimage", @"contentsFormat":surface.view.layer.contentsFormat ?: @"unknown"}];
       surface.previousPresentation = submittedAt;
-      if (surface.samples.count > 10000) [surface.samples removeObjectAtIndex:0];
+      if (surface.samples.count > 100000) [surface.samples removeObjectAtIndex:0];
       if (mainAt-surface.lastDiagnosticWrite > 5) {
         surface.lastDiagnosticWrite = mainAt;
         NSData *report = [NSJSONSerialization dataWithJSONObject:surface.samples options:0 error:nil];
@@ -175,12 +177,34 @@ static void presentPixels(rfbClient *client) {
   int enabled = 1;
   setsockopt(pair[0], SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled));
   setsockopt(pair[1], SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled));
-  self.session = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.ephemeralSessionConfiguration];
+  NSURLSessionConfiguration *configuration=NSURLSessionConfiguration.ephemeralSessionConfiguration;
+  self.serviceClass=@"default";
+  if(self.diagnostics && [NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_RESPONSIVE_DATA"] isEqual:@"1"]){configuration.networkServiceType=NSURLNetworkServiceTypeResponsiveData;self.serviceClass=@"responsiveData";}
+  self.session = [NSURLSession sessionWithConfiguration:configuration];
   self.socket = [self.session webSocketTaskWithURL:url protocols:@[WEAVE_BROWSER_WEBSOCKET_PROTOCOL]];
   self.socket.maximumMessageSize = 4 * 1024 * 1024;
   [self.socket resume]; [self receive];
   __weak WeaveBrowserSurface *weak = self;
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 12 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ WeaveBrowserSurface *strong = weak; if (strong && !strong.ready && !strong.stopped) [strong fail:@"Browser display attachment timed out"]; });
+}
+- (void)transport:(NSString *)phase started:(double)started bytes:(NSUInteger)bytes {
+  if(!self.diagnostics)return;
+  double elapsed=(CACurrentMediaTime()-started)*1000,epoch=NSDate.date.timeIntervalSince1970*1000;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if(self.stopped)return;
+    [self.samples addObject:@{@"kind":@"transport",@"phase":phase,@"ms":@(elapsed),@"bytes":@(bytes),@"epochMs":@(epoch),@"diagnosticId":self.diagnosticId,@"serviceClass":self.serviceClass ?: @"default"}];
+    if(self.samples.count>100000)[self.samples removeObjectAtIndex:0];
+  });
+}
+- (void)ping {
+  if(self.stopped || !self.diagnostics)return;
+  double start=CACurrentMediaTime();
+  __weak WeaveBrowserSurface *weak=self;
+  [self.socket sendPingWithPongReceiveHandler:^(NSError *error){
+    WeaveBrowserSurface *strong=weak;if(!strong || strong.stopped)return;
+    [strong transport:error?@"ping.error":@"ping" started:start bytes:0];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(), ^{[weak ping];});
+  }];
 }
 - (void)receive {
   if (self.stopped) return;
@@ -191,16 +215,20 @@ static void presentPixels(rfbClient *client) {
       NSData *data = [message.string dataUsingEncoding:NSUTF8StringEncoding];
       NSDictionary *value = data.length < 65536 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
       if (![value isKindOfClass:NSDictionary.class] || self.ready) { [self fail:@"Invalid Browser display control message"]; return; }
-      if ([value[@"type"] isEqual:@"browser.rfb.ready"]) { self.ready = YES; [self startDecoder]; }
+      if ([value[@"type"] isEqual:@"browser.rfb.ready"]) { self.ready = YES; [self startDecoder]; [self ping]; }
       else [self report:@{@"kind":@"control", @"message":value}];
       [self receive]; return;
     }
     if (!self.ready) { [self fail:@"Browser pixels arrived before authorization"]; return; }
     if (self.diagnostics) { @synchronized(self) { self.receivedBytes += message.data.length; } }
+    double receivedAt=CACurrentMediaTime();
+    if(self.diagnostics){if(self.previousSocketReceive)[self transport:@"receive.gap" started:self.previousSocketReceive bytes:message.data.length];self.previousSocketReceive=receivedAt;}
     // Receive the next WebSocket message only after this one enters the bounded socket buffer.
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      double writeAt=CACurrentMediaTime();[self transport:@"bridge.schedule" started:receivedAt bytes:message.data.length];
       const uint8_t *bytes = (const uint8_t *)message.data.bytes; NSUInteger left = message.data.length;
       while (left && !self.stopped) { ssize_t count = write(self.networkFD, bytes, left); if (count <= 0) { [self fail:@"Native decoder transport ended"]; return; } bytes += count; left -= count; }
+      [self transport:@"bridge.write" started:writeAt bytes:message.data.length];
       [self receive];
     });
   }];
@@ -249,7 +277,8 @@ static void presentPixels(rfbClient *client) {
       while (!self.stopped) {
         ssize_t length = read(self.networkFD, bytes, sizeof(bytes)); if (length <= 0) break;
         dispatch_semaphore_t sent = dispatch_semaphore_create(0);
-        [self.socket sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithData:[NSData dataWithBytes:bytes length:length]] completionHandler:^(NSError *error) { if (error) [self fail:@"Browser display request failed"]; dispatch_semaphore_signal(sent); }];
+        double sendAt=CACurrentMediaTime();
+        [self.socket sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithData:[NSData dataWithBytes:bytes length:length]] completionHandler:^(NSError *error) { [self transport:@"request.send" started:sendAt bytes:(NSUInteger)length];if (error) [self fail:@"Browser display request failed"]; dispatch_semaphore_signal(sent); }];
         if (dispatch_semaphore_wait(sent, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC))) { [self fail:@"Browser display request timed out"]; break; }
       }
     }

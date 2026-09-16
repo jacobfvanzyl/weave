@@ -5,7 +5,10 @@ const read = (name: string) => Bun.file(join(root, name)).json();
 const result = await read('result.json');
 const run = result.hosts[0].benchmark;
 const inside = (at: number) => at >= run.startEpochMs && at <= run.endEpochMs;
-const native = (await read('native-performance.json')).filter((row: any) => inside(row.epochMs) && (!run.diagnosticId || row.diagnosticId === run.diagnosticId));
+const records = (await read('native-performance.json')).filter((row: any) => inside(row.epochMs) && (!run.diagnosticId || row.diagnosticId === run.diagnosticId));
+const native=records.filter((row:any)=>row.kind!=='transport');
+const transport=records.filter((row:any)=>row.kind==='transport');
+if (!native.length || native[0].epochMs > run.startEpochMs + 1000 || native.at(-1).epochMs < run.endEpochMs - 1000) throw new Error('Incomplete native frame coverage; do not report partial samples as a full run');
 const stats = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b);
   const q = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? null;
@@ -36,6 +39,9 @@ const summary = {
   inputEvents: run.events.length, inputRPCs: inputs.length, failedRPCs: inputs.filter((i: any) => !i.ok).length,
   queueMs: stats(inputs.map((i: any) => i.queueMs)), rpcMs: stats(inputs.map((i: any) => i.rpcMs)), pending: stats(inputs.map((i: any) => i.pending)),
   portal: Object.fromEntries(['queue', 'authorize', 'page', 'cdp'].map(phase => [phase, stats(phases.filter((r: any) => r.phase === phase).map((r: any) => r.ms))])),
+  transport:Object.fromEntries([...new Set(transport.map((r:any)=>r.phase))].map(phase=>[phase,stats(transport.filter((r:any)=>r.phase===phase).map((r:any)=>r.ms))])),
+  serviceClasses:[...new Set(transport.map((r:any)=>r.serviceClass))],
+  relay:{gapMs:stats(phases.filter((r:any)=>r.phase==='relay.send').map((r:any)=>r.ms)),bufferedBytes:stats(phases.filter((r:any)=>r.phase==='relay.send').map((r:any)=>r.bufferedBytes)),drainMs:stats(phases.filter((r:any)=>r.phase==='relay.drain').map((r:any)=>r.ms))},
   presenters: [...new Set(native.map((row:any)=>row.presenter ?? 'cgimage'))],
   metalVerification: { frames:native.filter((r:any)=>r.verifiedPixels>0).length, differentPixels:native.reduce((sum:number,r:any)=>sum+(r.differentPixels ?? 0),0), errors:[...new Set(native.map((r:any)=>r.presenterError).filter(Boolean))] },
   contentsFormats: [...new Set(native.map((row:any)=>row.contentsFormat ?? 'unrecorded'))],
