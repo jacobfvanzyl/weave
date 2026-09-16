@@ -1,11 +1,11 @@
 export const BROWSER_PROFILES_CAPABILITY = 'browser.profiles.v1';
 export const BROWSER_PROFILE_RPC_METHODS = ['browser.profile.list', 'browser.profile.create', 'browser.profile.rename'] as const;
 export type BrowserProfileRpcMethod = typeof BROWSER_PROFILE_RPC_METHODS[number];
-export type BrowserProfile = { profileId: string; name: string; revision: number; temporary?: true };
+export type HostBrowserProfile = { profileId: string; name: string; revision: number; temporary?: true };
 export type BrowserProfileRpcContracts = {
-  'browser.profile.list': { params: Record<string, never>; result: { profiles: BrowserProfile[] } };
-  'browser.profile.create': { params: { name: string }; result: { profile: BrowserProfile } };
-  'browser.profile.rename': { params: { profileId: string; name: string; expectedRevision: number }; result: { profile: BrowserProfile } };
+  'browser.profile.list': { params: Record<string, never>; result: { profiles: HostBrowserProfile[] } };
+  'browser.profile.create': { params: { name: string }; result: { profile: HostBrowserProfile } };
+  'browser.profile.rename': { params: { profileId: string; name: string; expectedRevision: number }; result: { profile: HostBrowserProfile } };
 };
 
 const object = (value: unknown): Record<string, unknown> => {
@@ -24,7 +24,7 @@ function revision(value: unknown): number {
   if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) >= Number.MAX_SAFE_INTEGER) throw new Error('Invalid Browser Profile revision');
   return Number(value);
 }
-export function parseBrowserProfile(value: unknown): BrowserProfile {
+export function parseBrowserProfile(value: unknown): HostBrowserProfile {
   const input = object(value);
   return { profileId: browserProfileId(input.profileId), name: browserProfileName(input.name), revision: revision(input.revision), ...(input.temporary === true ? { temporary: true as const } : {}) };
 }

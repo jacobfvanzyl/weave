@@ -20,7 +20,7 @@ it('replaces all disconnected panes with skeletons, badges any failed Host, and 
       connections: [{ hostId: 'host', status: 'disconnected' }, { hostId: 'other', status: 'connected' }],
       executionContexts: [],
       workspaceCompositions: { presentation, terminals: {}, pending: false, loading: false, compositions: {
-        [hostCompositionKey('host')]: { schemaVersion: 3, hostId: 'host', revision: 1, workspaces: [{
+        [hostCompositionKey('host')]: { schemaVersion: 4, hostId: 'host', revision: 1, workspaces: [{
           workspaceId: 'tab', name: 'Workspace 1', layout: { kind: 'split', nodeId: 'split', axis: 'horizontal', ratio: 0.5, children: [
             { kind: 'terminal', executionContextId: 'workspace', nodeId: 'one', paneId: 'one', terminalId: 'terminal' },
             { kind: 'terminal', executionContextId: 'workspace', nodeId: 'two', paneId: 'two', terminalId: 'second-terminal' },

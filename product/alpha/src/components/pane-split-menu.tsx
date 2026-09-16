@@ -1,10 +1,11 @@
+import { clientBrowserAvailable } from '@/client-browser/native-client-browser';
 import { useEffect, useRef, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { LayoutTwoColumnIcon, LayoutTwoRowIcon } from '@hugeicons/core-free-icons';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from './ui/dropdown-menu';
 
-type PaneType = 'terminal' | 'agent' | 'browser';
+type PaneType = 'terminal' | 'agent' | 'host-browser' | 'client-browser';
 export function PaneSplitMenu({ sourceType, disabled, onSplit }: { sourceType: PaneType; disabled?: boolean; onSplit(axis: 'horizontal' | 'vertical', type: PaneType): void }) {
   const [open, setOpen] = useState(false);
   const [axis, setAxis] = useState<'horizontal' | 'vertical'>();
@@ -22,7 +23,7 @@ export function PaneSplitMenu({ sourceType, disabled, onSplit }: { sourceType: P
         {!axis ? <>
           <DropdownMenuItem ref={preferred} closeOnClick={false} onClick={() => setAxis('vertical')}><HugeiconsIcon icon={LayoutTwoRowIcon} />Down</DropdownMenuItem>
           <DropdownMenuItem closeOnClick={false} onClick={() => setAxis('horizontal')}><HugeiconsIcon icon={LayoutTwoColumnIcon} />Right</DropdownMenuItem>
-        </> : (['terminal', 'agent', 'browser'] as const).map(type => <DropdownMenuItem key={type} ref={type === sourceType ? preferred : undefined} onClick={() => onSplit(axis, type)}>{type === 'terminal' ? 'Terminal' : type === 'agent' ? 'Agent' : 'Browser'}</DropdownMenuItem>)}
+        </> : (['terminal', 'agent', 'host-browser', ...(clientBrowserAvailable ? ['client-browser' as const] : [])] as const).map(type => <DropdownMenuItem key={type} ref={type === sourceType ? preferred : undefined} onClick={() => onSplit(axis, type)}>{type === 'terminal' ? 'Terminal' : type === 'agent' ? 'Agent' : type === 'host-browser' ? 'Host Browser' : 'Client Browser'}</DropdownMenuItem>)}
       </DropdownMenuGroup>
     </DropdownMenuContent>
   </DropdownMenu>;

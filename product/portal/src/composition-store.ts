@@ -52,7 +52,7 @@ export class CompositionStore {
       try { await this.#save(await this.#load(hostId)); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        await this.#save(parseWorkspaceComposition({ schemaVersion: 3, hostId, revision: 0, workspaces }));
+        await this.#save(parseWorkspaceComposition({ schemaVersion: 4, hostId, revision: 0, workspaces }));
       }
       return assignments;
     });

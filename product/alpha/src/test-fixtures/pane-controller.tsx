@@ -37,7 +37,7 @@ export function usePaneFixture(platform = 'electron') {
     platform, connections: [{ hostId: 'host', displayName: 'Host', status: 'connected' }], connection: {},
     executionContexts: [{ id: 'context', executionContextId: 'context', hostId: 'host', canonicalPath: '/project', availability: 'available' }],
     threads, archivedThreads: [], busy: false, connectionsLoaded: true,
-    workspaceCompositions: { presentation, compositions: { host: { schemaVersion: 3, hostId: 'host', revision: 1, workspaces } }, terminals: { host: [{ terminalId: 'shell', title: 'Shell', executionContextId: 'context', currentDirectory: '/project' }] } },
+    workspaceCompositions: { presentation, compositions: { host: { schemaVersion: 4, hostId: 'host', revision: 1, workspaces } }, terminals: { host: [{ terminalId: 'shell', title: 'Shell', executionContextId: 'context', currentDirectory: '/project' }] } },
   }, attachThread: attach, actions, workspaceActions: {
     activate: (ref: { hostId: string; workspaceId: string }) => setPresentation(value => activateWorkspace(value, ref)), focus,
     maximize: (ref: { hostId: string; workspaceId: string }, paneId: string) => setPresentation(value => ({ ...value, maximizedPanes: value.maximizedPanes[workspaceKey(ref)] ? {} : { [workspaceKey(ref)]: paneId } })),

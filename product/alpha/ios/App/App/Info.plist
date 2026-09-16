@@ -29,6 +29,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Websites you open in Weave can request permission to use your camera.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Websites you open in Weave can request permission to use your microphone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Weave connects directly to Portal hosts on your local network.</string>
 	<key>UIApplicationSceneManifest</key>

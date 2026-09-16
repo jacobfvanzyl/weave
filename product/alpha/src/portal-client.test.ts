@@ -112,7 +112,7 @@ describe('DirectHostClient', () => {
       jsonrpc: '2.0',
       id: capabilitiesRequest.id,
       result: {
-        protocolVersion: 8,
+        protocolVersion: 9,
         hostId: 'host-1',
         displayName: 'Old Portal',
         principal: { principalId: 'principal-1', credentialId: 'credential-1', label: 'Test' },

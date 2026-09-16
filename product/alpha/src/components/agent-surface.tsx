@@ -23,7 +23,7 @@ export function AgentSurface({ controller, threadId, reference, paneId, focused,
   const [confirming, setConfirming] = useState(false), [closing, setClosing] = useState(false);
   const [retry, setRetry] = useState(0);
   const [splitting, setSplitting] = useState(false);
-  const split = async (axis: 'horizontal' | 'vertical', type: 'terminal' | 'agent' | 'browser') => {
+  const split = async (axis: 'horizontal' | 'vertical', type: 'terminal' | 'agent' | 'host-browser' | 'client-browser') => {
     if (!threadId || !controller.actions.splitPane) return;
     setSplitting(true); setError(undefined);
     try { await controller.actions.splitPane(reference, paneId, axis, type); }

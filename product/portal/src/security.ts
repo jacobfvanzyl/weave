@@ -884,14 +884,17 @@ export class PortalSecurity {
   async #mutate(operation: (state: SecurityState) => Promise<void>) {
     const result = this.#mutationQueue.then(async () => {
       await this.#reload();
-      await operation(this.#state);
-      await this.#persist();
+      // Reads can reload #state while the operation awaits audit I/O. Persist
+      // the exact snapshot this serialized mutation owns, not a later read.
+      const state = this.#state;
+      await operation(state);
+      await this.#persist(state);
     });
     this.#mutationQueue = result.then(() => undefined, () => undefined);
     return await result;
   }
 
-  async #persist() {
+  async #persist(state: SecurityState = this.#state) {
     await mkdir(dirname(this.#statePath), {
       recursive: true,
       mode: 0o700,
@@ -900,7 +903,7 @@ export class PortalSecurity {
     try {
       await writeText(
         temporary,
-        `${JSON.stringify(this.#state, null, 2)}\n`,
+        `${JSON.stringify(state, null, 2)}\n`,
         { mode: 0o600 },
       );
       await rename(temporary, this.#statePath);

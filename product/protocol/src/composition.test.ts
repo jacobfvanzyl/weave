@@ -8,7 +8,7 @@ test('composition RPC round trips stable identities and ordered split layouts', 
   first.layout = { kind: 'split', nodeId: 'split', axis: 'horizontal', ratio: 0.6, children: [first.layout!, { kind: 'terminal', executionContextId: 'workspace', nodeId: 'node2', paneId: 'pane2', terminalId: null }] };
   const params = { hostId: 'host', expectedRevision: 4, workspaces: [first] };
   expect(parsePortalRpcParams('workspace.composition.replace', params)).toEqual(params);
-  const result = { composition: { schemaVersion: 3, hostId: 'host', revision: 5, workspaces: [first] } };
+  const result = { composition: { schemaVersion: 4, hostId: 'host', revision: 5, workspaces: [first] } };
   expect(parsePortalRpcResult('workspace.composition.get', result)).toEqual(result);
   expect(() => parsePortalRpcResult('workspace.composition.get', { composition: { ...result.composition, schemaVersion: 99 } })).toThrow('Unsupported');
 });
@@ -34,7 +34,7 @@ test('a terminal can occur only once across all panes and tabs of a workspace', 
 
 test('mixed Pane layouts preserve content identities and reject duplicate Thread ownership', () => {
   const agent = { kind: 'agent', nodeId: 'agent-node', paneId: 'agent-pane', threadId: 'thread' };
-  const browser = { kind: 'browser', nodeId: 'browser-node', paneId: 'browser-pane', profileId: 'profile', lastCommittedUrl: 'https://example.com/' };
+  const browser = { kind: 'host-browser', nodeId: 'browser-node', paneId: 'browser-pane', profileId: 'profile', lastCommittedUrl: 'https://example.com/' };
   const parse = (layout: unknown) => parsePortalRpcParams('workspace.composition.replace', { hostId: 'host', expectedRevision: 0, workspaces: [{ workspaceId: 'workspace', name: 'Mixed', layout }] });
   const mixed = { kind: 'split', nodeId: 'split', axis: 'horizontal', ratio: .5, children: [agent, browser] };
   expect(parse(mixed).workspaces[0]!.layout).toEqual(mixed);

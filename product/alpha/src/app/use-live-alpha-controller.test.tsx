@@ -931,7 +931,7 @@ describe("useLiveAlphaController", () => {
       attach: vi.fn(async (id: string) => current.threads.find((thread) => thread.threadId === id)),
       archiveThread: vi.fn(async (id: string) => archive(id)),
       getWorkspaceComposition: vi.fn(async () => ({ composition: {
-        schemaVersion: 3, hostId: 'host-1', revision: 0,
+        schemaVersion: 4, hostId: 'host-1', revision: 0,
         workspaces: ['workspace', 'other-workspace'].map((workspaceId) => ({ workspaceId, name: workspaceId, layout: null })),
       } })),
       listTerminals: vi.fn(async () => ({ terminals: [] })), close: vi.fn(),
@@ -1255,7 +1255,7 @@ it('binds Agent Pane commands to their own Thread even after another Pane is sel
 it.each([['agent', 'agent'], ['agent', 'terminal'], ['terminal', 'agent']] as const)('splits %s into %s beside its source using Host-owned identities', async (sourceType, type) => {
   const record = { ...snapshot.threads[0]!, workspaceId: 'work', agentId: 'source-agent' };
   let current = { ...snapshot, capabilities: [...snapshot.capabilities, 'workspace.composition.get', 'workspace.composition.replace'], threads: [record] };
-  let composition: WorkspaceComposition = { schemaVersion: 3, hostId: 'host-1', revision: 1, workspaces: [{ workspaceId: 'work', name: 'Work', layout: sourceType === 'agent'
+  let composition: WorkspaceComposition = { schemaVersion: 4, hostId: 'host-1', revision: 1, workspaces: [{ workspaceId: 'work', name: 'Work', layout: sourceType === 'agent'
     ? { kind: 'agent', nodeId: 'source-node', paneId: 'source', threadId: record.threadId }
     : { kind: 'terminal', nodeId: 'source-node', paneId: 'source', terminalId: 'terminal', executionContextId: record.executionContextId } }] };
   const client = {
@@ -1288,7 +1288,7 @@ it.each([['agent', 'agent'], ['agent', 'terminal'], ['terminal', 'agent']] as co
 
 function localPaneHarness() {
   let current = { ...snapshot, capabilities: ['workspace.composition.get', 'workspace.composition.replace'], threads: [{ ...snapshot.threads[0]!, workspaceId: 'work' }] };
-  let composition: WorkspaceComposition = { schemaVersion: 3, hostId: 'host-1', revision: 1, workspaces: [{ workspaceId: 'work', name: 'Work', layout: { kind: 'agent', nodeId: 'source-node', paneId: 'source', threadId: 'thread-1' } }] };
+  let composition: WorkspaceComposition = { schemaVersion: 4, hostId: 'host-1', revision: 1, workspaces: [{ workspaceId: 'work', name: 'Work', layout: { kind: 'agent', nodeId: 'source-node', paneId: 'source', threadId: 'thread-1' } }] };
   const client = {
     snapshot: vi.fn(async () => current), close: vi.fn(), listTerminals: vi.fn(async () => ({ terminals: [] })),
     getWorkspaceComposition: vi.fn(async () => ({ composition })),

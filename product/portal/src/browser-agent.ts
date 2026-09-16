@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { browserProfileId, type BrowserProfile, type ThreadSummary } from '@weave/product-protocol';
+import { browserProfileId, type HostBrowserProfile, type ThreadSummary } from '@weave/product-protocol';
 import type { BrowserServiceClient } from './browser-service/client.ts';
 import { MAX_CDP_BYTES, type CdpMessage } from './browser-service/cdp-pipe.ts';
 
@@ -9,7 +9,7 @@ type Peer = { channel: Channel; debugger?: Debugger; closed: boolean; pending: n
 export type BrowserAgentHost = {
   thread(threadId: string): ThreadSummary;
   backend: Pick<BrowserServiceClient, 'managedPage'>;
-  profiles(): Promise<BrowserProfile[]>;
+  profiles(): Promise<HostBrowserProfile[]>;
   create(threadId: string, profileId: string, url: string): Promise<{ targetId: string }>;
   close(threadId: string, profileId: string, targetId: string): Promise<void>;
 };

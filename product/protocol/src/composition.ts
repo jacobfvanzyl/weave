@@ -6,13 +6,16 @@ export type CompositionRpcMethod = typeof COMPOSITION_RPC_METHODS[number];
 export type PaneLayoutNode =
   | { kind: 'terminal'; nodeId: string; paneId: string; terminalId: string | null; executionContextId: string; launchDirectory?: string }
   | { kind: 'agent'; nodeId: string; paneId: string; threadId: string }
-  | { kind: 'browser'; nodeId: string; paneId: string; profileId: string; lastCommittedUrl: string }
+  | { kind: 'host-browser'; nodeId: string; paneId: string; profileId: string; lastCommittedUrl: string }
+  | { kind: 'client-browser'; nodeId: string; paneId: string; initialUrl: string }
   | { kind: 'split'; nodeId: string; axis: 'horizontal' | 'vertical'; ratio: number; children: [PaneLayoutNode, PaneLayoutNode] };
 // Compatibility name for callers that operate on the split tree.
 export type TerminalLayoutNode = PaneLayoutNode;
 export type PaneNode = Exclude<PaneLayoutNode, { kind: 'split' }>;
+export type HostBrowserPane = Extract<PaneNode, { kind: 'host-browser' }>;
+export type ClientBrowserPane = Extract<PaneNode, { kind: 'client-browser' }>;
 export type Workspace = { workspaceId: string; name: string; layout: TerminalLayoutNode | null };
-export type WorkspaceComposition = { schemaVersion: 3; hostId: string; revision: number; workspaces: Workspace[] };
+export type WorkspaceComposition = { schemaVersion: 4; hostId: string; revision: number; workspaces: Workspace[] };
 export type CompositionRpcContracts = {
   'workspace.composition.get': { params: { hostId: string }; result: { composition: WorkspaceComposition } };
   'workspace.composition.replace': {
@@ -38,6 +41,13 @@ const revision = (value: unknown): number => {
   if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) >= Number.MAX_SAFE_INTEGER) throw new Error('Invalid composition revision.');
   return value as number;
 };
+export function clientBrowserInitialUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 16384 || value.includes('\0')) throw new Error('Invalid Client Browser address.');
+  const url = new URL(value);
+  if (value !== 'about:blank' && !['https:', 'http:'].includes(url.protocol)) throw new Error('Unsupported Client Browser address.');
+  if (url.username || url.password) throw new Error('Do not share credentials in a Client Browser address.');
+  return value;
+}
 export function parseWorkspaces(value: unknown, options: { allowDuplicateTerminals?: boolean } = {}): Workspace[] {
   if (!Array.isArray(value) || value.length > 64) throw new Error('Composition supports at most 64 Workspaces.');
   const ids = new Set<string>();
@@ -61,7 +71,12 @@ export function parseWorkspaces(value: unknown, options: { allowDuplicateTermina
       if (terminalId) terminals.add(terminalId);
       return { kind: 'terminal', nodeId, paneId: unique(node.paneId), terminalId, executionContextId: id(node.executionContextId), ...(node.launchDirectory === undefined ? {} : { launchDirectory: path(node.launchDirectory) }) };
     }
-    if (node.kind === 'agent' || node.kind === 'browser') {
+    if (node.kind === 'client-browser') {
+      if (++panes > 128) throw new Error('Composition supports at most 128 panes.');
+      if (Object.keys(node).some(key => !['kind', 'nodeId', 'paneId', 'initialUrl'].includes(key))) throw new Error('Client Browser state belongs to the client.');
+      return { kind: 'client-browser', nodeId, paneId: unique(node.paneId), initialUrl: clientBrowserInitialUrl(node.initialUrl) };
+    }
+    if (node.kind === 'agent' || node.kind === 'host-browser') {
       if (++panes > 128) throw new Error('Composition supports at most 128 panes.');
       const paneId = unique(node.paneId);
       if (node.kind === 'agent') {
@@ -73,7 +88,7 @@ export function parseWorkspaces(value: unknown, options: { allowDuplicateTermina
       if (typeof node.lastCommittedUrl !== 'string' || node.lastCommittedUrl.length > 16384) throw new Error('Invalid browser URL.');
       const url = new URL(node.lastCommittedUrl);
       if (!['https:', 'http:', 'about:'].includes(url.protocol)) throw new Error('Unsupported browser URL.');
-      return { kind: 'browser', nodeId, paneId, profileId: id(node.profileId), lastCommittedUrl: node.lastCommittedUrl };
+      return { kind: 'host-browser', nodeId, paneId, profileId: id(node.profileId), lastCommittedUrl: node.lastCommittedUrl };
     }
     if (node.kind !== 'split' || !['horizontal', 'vertical'].includes(String(node.axis)) ||
         typeof node.ratio !== 'number' || !Number.isFinite(node.ratio) || node.ratio < 0.1 || node.ratio > 0.9 ||
@@ -90,8 +105,18 @@ export function parseWorkspaces(value: unknown, options: { allowDuplicateTermina
 }
 export function parseWorkspaceComposition(value: unknown, options: { allowDuplicateTerminals?: boolean } = {}): WorkspaceComposition {
   const input = record(value);
-  if (input.schemaVersion !== 2 && input.schemaVersion !== 3) throw new Error('Unsupported composition schema version.');
-  return { schemaVersion: 3, hostId: id(input.hostId), revision: revision(input.revision), workspaces: parseWorkspaces(input.workspaces, options) };
+  if (![2, 3, 4].includes(Number(input.schemaVersion)) || typeof input.schemaVersion !== 'number') throw new Error('Unsupported composition schema version.');
+  const workspaces = structuredClone(input.workspaces);
+  if (input.schemaVersion < 4 && Array.isArray(workspaces)) {
+    const migrate = (value: unknown, depth = 0) => {
+      if (depth > 8) throw new Error('Composition layout is too deep.');
+      const node = record(value);
+      if (node.kind === 'browser') node.kind = 'host-browser';
+      if (node.kind === 'split' && Array.isArray(node.children)) node.children.forEach(child => migrate(child, depth + 1));
+    };
+    for (const workspace of workspaces) if (record(workspace).layout) migrate(workspace.layout);
+  }
+  return { schemaVersion: 4, hostId: id(input.hostId), revision: revision(input.revision), workspaces: parseWorkspaces(workspaces, options) };
 }
 export function parseCompositionRpcParams<M extends CompositionRpcMethod>(method: M, value: unknown): CompositionRpcContracts[M]['params'] {
   const input = record(value);

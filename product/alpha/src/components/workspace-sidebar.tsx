@@ -1,4 +1,5 @@
-import { BrowserSidebarTile } from './browser-sidebar-tile';
+import { clientBrowserAvailable } from '@/client-browser/native-client-browser';
+import { HostBrowserSidebarTile } from './host-browser-sidebar-tile';
 import type { CompactPane } from '@/app/compact-pane';
 import type { TerminalPaneAction } from '@/app/terminal-pane-actions';
 import { terminalFocusId } from '@/app/pane-focus';
@@ -36,7 +37,7 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
     setCloseBusy(true); setCloseError(undefined);
     try {
       const plan = await workspaceActions.previewClose(reference);
-      if ([...plan.terminals, ...plan.threads, ...(plan.browsers ?? [])].some((item) => item.dirty)) setClosing({ reference, plan });
+      if ([...plan.terminals, ...plan.threads, ...(plan.browsers ?? []), ...(plan.clientBrowsers ?? [])].some((item) => item.dirty)) setClosing({ reference, plan });
       else await workspaceActions.close(reference, plan, false);
     } catch (cause) { setCloseError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setCloseBusy(false); }
@@ -101,7 +102,7 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
           <DropdownMenuContent align='end'>
             <DropdownMenuSub><DropdownMenuSubTrigger disabled={state.loading}>New workspace…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>
               {model.executionContexts.map((context) => <DropdownMenuItem key={context.id} disabled={!connected(context.hostId) || context.availability !== 'available'} onClick={() => void workspaceActions?.open(context.id)}>{model.showHostIdentity && <>{context.hostName} · </>}<PathLabel path={context.canonicalPath ?? context.name} /></DropdownMenuItem>)}
-              {model.connections.map(connection => <DropdownMenuItem key={`browser:${connection.hostId}`} data-browser-host={connection.hostId} disabled={!connected(connection.hostId)} onClick={() => actions.newBrowserPane?.(connection.hostId)}>Browser{model.showHostIdentity ? ` · ${connection.displayName}` : ''}</DropdownMenuItem>)}
+              {model.connections.map(connection => <DropdownMenuItem key={`browser:${connection.hostId}`} data-browser-host={connection.hostId} disabled={!connected(connection.hostId)} onClick={() => actions.newHostBrowserPane?.(connection.hostId)}>Host Browser{model.showHostIdentity ? ` · ${connection.displayName}` : ''}</DropdownMenuItem>)}
               <DropdownMenuItem onClick={() => setAdding(true)}>Add directory…</DropdownMenuItem>
             </DropdownMenuGroup></DropdownMenuSubContent></DropdownMenuSub>
             <DropdownMenuSub><DropdownMenuSubTrigger disabled={!allWorkspaces.length}>New agent…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>{allWorkspaces.map(({ reference, workspace }) => <DropdownMenuItem key={workspaceKey(reference)} disabled={!connected(reference.hostId)} onClick={() => createAgent(reference, workspace)}>{workspace.name}{model.showHostIdentity && <> · {model.connections.find((connection) => connection.hostId === reference.hostId)?.displayName}</>}</DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuSubContent></DropdownMenuSub>
@@ -121,7 +122,8 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
             const title = sidebarTerminalTitle(terminal?.title ?? 'Terminal', terminal?.processName);
             return { path: terminal?.currentDirectory ?? pane.launchDirectory ?? terminal?.initialDirectory ?? contextPath(pane.executionContextId), tile: <SidebarMenuItem key={pane.paneId} data-pane-id={pane.paneId}><SidebarMenuButton className='data-active:bg-terminal-focus data-active:text-terminal-focus-foreground data-active:hover:bg-terminal-focus data-active:hover:text-terminal-focus-foreground' isActive={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} aria-label={`Terminal ${title}`} aria-pressed={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} onClick={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)}><HugeiconsIcon icon={ComputerTerminal01Icon} /><span className='min-w-0 flex-1 truncate'>{title}</span></SidebarMenuButton>{compact && <DropdownMenu><DropdownMenuTrigger render={<SidebarMenuAction aria-label={`Actions for terminal ${title}`} />}>⋯</DropdownMenuTrigger><DropdownMenuContent><DropdownMenuGroup><DropdownMenuItem disabled={!terminalActions?.[terminalFocusId(key, pane.paneId)]?.enabled} onClick={() => void terminalActions?.[terminalFocusId(key, pane.paneId)]?.terminate().catch(error => onActionError?.(error instanceof Error ? error.message : String(error)))}>Terminate terminal</DropdownMenuItem></DropdownMenuGroup></DropdownMenuContent></DropdownMenu>}</SidebarMenuItem> };
           });
-          const browserTiles = paneTargets([workspace]).filter(pane => pane.kind === 'browser').map(pane => <BrowserSidebarTile key={pane.paneId} controller={controller} hostId={reference.hostId} paneId={pane.paneId} profileId={pane.profileId} active={active && state.presentation.focusedPanes[key] === pane.paneId} select={() => onSelectTerminal ? onSelectTerminal(reference,pane.paneId) : workspaceActions?.focus(reference,pane.paneId)} />);
+          const browserTiles = paneTargets([workspace]).filter(pane => pane.kind === 'host-browser').map(pane => <HostBrowserSidebarTile key={pane.paneId} controller={controller} hostId={reference.hostId} paneId={pane.paneId} profileId={pane.profileId} active={active && state.presentation.focusedPanes[key] === pane.paneId} select={() => onSelectTerminal ? onSelectTerminal(reference,pane.paneId) : workspaceActions?.focus(reference,pane.paneId)} />);
+          const clientBrowserTiles = paneTargets([workspace]).filter(pane => pane.kind === 'client-browser').map(pane => <SidebarMenuItem key={pane.paneId} data-pane-id={pane.paneId}><SidebarMenuButton isActive={active && state.presentation.focusedPanes[key] === pane.paneId} aria-label={`Client Browser ${pane.initialUrl}`} onClick={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)}><span className='truncate'>Client Browser · {pane.initialUrl === 'about:blank' ? 'New page' : new URL(pane.initialUrl).hostname}</span></SidebarMenuButton></SidebarMenuItem>);
           const agentTiles = paneTargets([workspace]).filter(pane => pane.kind === 'agent').flatMap(pane => threads.filter(thread => thread.hostId === reference.hostId && thread.threadId === pane.threadId && matches(thread))).map((thread) => ({ path: thread.workingDirectory ?? contextPath(thread.executionContextId), tile: threadRow(thread) }));
           // Full paths group content; Pane selection comes from the composition.
           const groups = new Map<string | undefined, ReactNode[]>();
@@ -139,14 +141,15 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
               <DropdownMenu><DropdownMenuTrigger render={<Button size='icon' variant='ghost' className='col-start-3 row-start-1' aria-label={`Workspace actions for ${workspace.name}`} />}><HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} /></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuGroup>
                 <DropdownMenuItem disabled={!connected(reference.hostId)} onClick={() => createAgent(reference, workspace)}>New agent thread</DropdownMenuItem>
                 <DropdownMenuSub><DropdownMenuSubTrigger disabled={!connected(reference.hostId)}>New terminal…</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuGroup>{model.executionContexts.filter((context) => context.hostId === reference.hostId).map((context) => <DropdownMenuItem key={context.id} disabled={context.availability !== 'available'} onClick={() => void (onAddTerminal ? onAddTerminal(reference, context.id) : workspaceActions?.addPane(reference, context.id))}><PathLabel path={context.canonicalPath ?? context.name} /></DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuSubContent></DropdownMenuSub>
-                <DropdownMenuItem disabled={!connected(reference.hostId)} onClick={() => actions.newBrowserPane?.(reference.hostId,reference.workspaceId)}>New browser</DropdownMenuItem>
+                <DropdownMenuItem disabled={!connected(reference.hostId)} onClick={() => actions.newHostBrowserPane?.(reference.hostId,reference.workspaceId)}>New Host Browser</DropdownMenuItem>
+                {clientBrowserAvailable && <DropdownMenuItem disabled={!connected(reference.hostId)} onClick={() => void actions.newClientBrowserPane?.(reference).catch(error => onActionError?.(error instanceof Error ? error.message : String(error)))}>New Client Browser</DropdownMenuItem>}
                 <DropdownMenuItem disabled={state.pending || !connected(reference.hostId)} onClick={() => setRenaming({ reference, name: workspace.name })}>Rename workspace…</DropdownMenuItem>
                 <DropdownMenuItem disabled={state.pending || closeBusy || !connected(reference.hostId)} onClick={() => void requestClose(reference)}>Close workspace</DropdownMenuItem>
               </DropdownMenuGroup></DropdownMenuContent></DropdownMenu>
             </div>
           </SidebarMenuItem></SidebarMenu>
           {!collapsed && <div className='flex min-w-0 flex-col gap-1 pb-1'>
-            {browserTiles.length > 0 && <SidebarMenu>{browserTiles}</SidebarMenu>}
+            {(browserTiles.length > 0 || clientBrowserTiles.length > 0) && <SidebarMenu>{browserTiles}{clientBrowserTiles}</SidebarMenu>}
             {[...groups].map(([path, children]) => <div key={path ?? 'unknown'} data-slot='workspace-directory-group' data-directory={path} className='min-w-0'>
               <div className='flex min-w-0 py-1 pl-8 pr-2'><Badge variant={active ? 'sidebar-selected' : 'sidebar'} className='max-w-full' title={!connected(reference.hostId) ? 'Last known directory — Host disconnected' : undefined}>{path ? <PathLabel path={path} /> : 'Directory unavailable'}</Badge></div>
               <SidebarMenu>{children}</SidebarMenu>
@@ -162,6 +165,7 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
       {closing && <ul className='max-h-64 overflow-y-auto text-sm'>
         {closing.plan.terminals.map((terminal) => <li key={terminal.terminalId}>{terminal.title} — terminal activity cannot be verified as idle</li>)}
         {closing.plan.threads.map((thread) => <li key={thread.threadId}>{thread.title}{thread.dirty ? ' — active or uncertain agent state' : ' — idle agent'}</li>)}
+        {closing.plan.clientBrowsers?.map(pane => <li key={pane.paneId}>Client Browser — closes on every device; unsent forms will be lost</li>)}
         {closing.plan.browsers?.map(page => <li key={page.pageId}>{page.title}{page.dirty ? ' — unsaved browser work may be lost' : ' — unavailable browser page'}</li>)}
       </ul>}
       {closeError && <p role='alert' className='text-destructive'>{closeError}</p>}

@@ -192,6 +192,15 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
         bridge?.registerPluginInstance(nativeTerminal)
         bridge?.registerPluginInstance(NativeBrowserPlugin())
+#if WEAVE_CLIENT_BROWSER_PROTOTYPE
+        if #available(iOS 26.0, *) { bridge?.registerPluginInstance(ClientBrowserPrototypePlugin()) }
+        if #available(iOS 26.0, *), ProcessInfo.processInfo.arguments.contains("--client-browser-prototype") {
+            var url = URLComponents(string: "capacitor://localhost/")!
+            url.queryItems = [URLQueryItem(name:"clientBrowserPrototype",value:"1"), URLQueryItem(name:"fixture",value:ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"] ?? "http://localhost:43187")]
+            let quoted = String(data:try! JSONSerialization.data(withJSONObject:url.string!,options:.fragmentsAllowed),encoding:.utf8)!
+            bridge?.webView?.configuration.userContentController.addUserScript(WKUserScript(source:"history.replaceState(null, '', \(quoted));",injectionTime:.atDocumentStart,forMainFrameOnly:true))
+        }
+#endif
         guard let webView else { return }
         let container = WeaveSurfaceContainer(frame: webView.frame)
         container.backgroundColor = UIColor(red: 30 / 255, green: 30 / 255, blue: 46 / 255, alpha: 1)
@@ -226,6 +235,26 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
     private var acceptanceStarted = false
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+#if WEAVE_CLIENT_BROWSER_PROTOTYPE
+        if #available(iOS 26.0, *), ProcessInfo.processInfo.arguments.contains("--client-browser-prototype"), !acceptanceStarted {
+            acceptanceStarted = true
+            Task { @MainActor in
+                let directory = FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
+                for attempt in 0..<1800 {
+                    try? await Task.sleep(for:.seconds(1))
+                    guard let webView else { return }
+                    if let value = try? await webView.evaluateJavaScript("JSON.stringify(window.clientBrowserPrototypeEvidence || null)"), let json = value as? String {
+                        try? Data(json.utf8).write(to:directory.appendingPathComponent("client-browser-prototype.json"),options:.atomic)
+                    }
+                    if attempt % 15 == 0 {
+                        let image = UIGraphicsImageRenderer(bounds:view.bounds).image { _ in view.drawHierarchy(in:view.bounds,afterScreenUpdates:true) }
+                        try? image.pngData()?.write(to:directory.appendingPathComponent("client-browser-prototype.png"),options:.atomic)
+                    }
+                }
+            }
+            return
+        }
+#endif
         let live = ProcessInfo.processInfo.arguments.contains("--host-acceptance")
         guard !acceptanceStarted, live else { return }
         acceptanceStarted = true
@@ -300,7 +329,12 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                               return JSON.stringify({ removed: true });
                             """, arguments: [:], in: nil, contentWorld: .page)
                             if let cleanup = cleanup as? String { try? Data(cleanup.utf8).write(to: documents.appendingPathComponent("native-smoke-cleanup.json")) }
-                        } catch { try? Data("{\"removed\":false}".utf8).write(to: documents.appendingPathComponent("native-smoke-cleanup.json")) }
+                        } catch {
+                            let failure: [String: Any] = ["removed": false, "error": String(describing: error)]
+                            if let data = try? JSONSerialization.data(withJSONObject: failure) {
+                                try? data.write(to: documents.appendingPathComponent("native-smoke-cleanup.json"))
+                            }
+                        }
                     }
                     status.text = json.contains("\"passed\":true") ? "passed" : "failed"
                     print("ALPHA_ACCEPTANCE " + json)

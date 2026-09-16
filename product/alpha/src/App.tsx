@@ -1,3 +1,4 @@
+import { ClientBrowserPrototype } from './client-browser/Prototype';
 import { mockScenarioFromLocation, useMockAlphaController, type MockScenario } from '@/app/use-mock-alpha-controller';
 import { useLiveAlphaController } from '@/app/use-live-alpha-controller';
 import { useNativeKeyboard } from '@/app/use-native-keyboard';
@@ -17,6 +18,7 @@ export function App() {
   useNativeFullscreen();
   useNativeKeyboard();
   const mockScenario = mockScenarioFromLocation();
+  if (import.meta.env.VITE_CLIENT_BROWSER_PROTOTYPE === '1' && new URLSearchParams(location.search).has('clientBrowserPrototype')) return <ClientBrowserPrototype />;
 
   return (
     <TooltipProvider>

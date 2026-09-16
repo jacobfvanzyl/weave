@@ -1,4 +1,6 @@
-import { BrowserSurface } from './browser-surface';
+import { useClientBrowserLifecycle } from '@/client-browser/use-client-browser-lifecycle';
+import { ClientBrowserSurface } from './client-browser-surface';
+import { HostBrowserSurface } from './host-browser-surface';
 import { useTerminalPaneActions } from '@/app/terminal-pane-actions';
 import { PaneFocusScope, usePaneFocus, terminalFocusId, agentFocusId } from '@/app/pane-focus';
 import { useState, useEffect, useRef } from 'react';
@@ -66,12 +68,15 @@ function TerminalSurface({ controller, reference, node, focusRequest, maximized,
 }
 export type TerminalInputFocusRequest = { workspaceKey: string; paneId: string; token: number };
 export function WorkspaceCanvas({ controller, inputFocusRequest, singlePaneId, active = true }: { singlePaneId?: string; active?: boolean; controller: AlphaController; inputFocusRequest?: TerminalInputFocusRequest | null }) {
+  const [clientBrowserError, setClientBrowserError] = useState<string>();
+  useClientBrowserLifecycle(controller, setClientBrowserError);
   const focusOwner = usePaneFocus();
   const state = controller.model.workspaceCompositions!;
   const ref = state.presentation.openWorkspaces.find((tab) => workspaceKey(tab) === state.presentation.activeWorkspace);
   const composition = ref ? state.compositions[hostCompositionKey(ref.hostId)] : undefined;
   const tab = composition?.workspaces.find((tab) => tab.workspaceId === ref?.workspaceId);
   return <main className='flex min-h-0 min-w-0 flex-1 flex-col' aria-label='Workspace panes'>
+    {clientBrowserError && <Alert variant='destructive'><AlertDescription>{clientBrowserError}</AlertDescription></Alert>}
     {state.error && <Alert variant='destructive'><AlertDescription>{state.error}</AlertDescription></Alert>}
     {state.presentation.openWorkspaces.map((reference) => {
       const key = workspaceKey(reference);
@@ -93,7 +98,8 @@ export function WorkspaceCanvas({ controller, inputFocusRequest, singlePaneId, a
           }}>
             {node.kind === 'terminal' ? <TerminalSurface controller={controller} reference={reference} node={node} compact={singlePaneId !== undefined} focused={isFocused} maximized={maximized === node.paneId} focusRequest={isFocused && inputFocusRequest !== null ? `${key}:${node.paneId}:${inputFocusRequest?.token ?? maximized ?? ''}` : undefined} />
               : node.kind === 'agent' ? <AgentSurface controller={controller} threadId={thread?.id} reference={reference} paneId={node.paneId} focused={isFocused} visible={visible} maximized={maximized === node.paneId} compact={singlePaneId !== undefined} />
-              : <BrowserSurface controller={controller} reference={reference} node={node} focused={isFocused} maximized={maximized === node.paneId} />}
+              : node.kind === 'client-browser' ? <ClientBrowserSurface controller={controller} reference={reference} node={node} focused={isFocused} maximized={maximized === node.paneId} />
+              : <HostBrowserSurface controller={controller} reference={reference} node={node} focused={isFocused} maximized={maximized === node.paneId} />}
           </div></PaneFocusScope>;
         }} />;
     })}

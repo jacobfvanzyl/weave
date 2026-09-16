@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { NativeBrowserView } from './native-browser-view';
+import { NativeHostBrowserView } from './native-browser-view';
 const connection = vi.hoisted(() => ({ layout:vi.fn(), start:vi.fn(), close:vi.fn(), activate:vi.fn(), input:vi.fn(), interaction:vi.fn(), context:vi.fn(), clipboard:vi.fn() }));
 vi.mock('@/browser/browser-view-connection', () => ({ BrowserViewConnection:class {
   layout = connection.layout; start = connection.start; close = connection.close;
@@ -19,7 +19,7 @@ it('keeps live pixels under menus and modal isolation, but hides a workspace tha
   const client = {} as any;
   const content = (overlay = false, hidden = false) => <>
     <section hidden={hidden} aria-hidden={overlay || undefined} inert={overlay || undefined}>
-      <NativeBrowserView client={client} page={page} focused />
+      <NativeHostBrowserView client={client} page={page} focused />
     </section>
     {overlay && <div role='dialog'><input aria-label='Dialog input' /></div>}
   </>;
@@ -40,7 +40,7 @@ it('keeps live pixels under menus and modal isolation, but hides a workspace tha
 });
 
 it('sends hover, middle buttons and repeated click counts; keeps clipboard shortcuts local', async()=>{
-  const {getByRole}=render(<NativeBrowserView client={{} as any} page={page} focused />);
+  const {getByRole}=render(<NativeHostBrowserView client={{} as any} page={page} focused />);
   const input=getByRole('textbox',{name:'Browser page input'});
   const pointer=(type:string,buttons:number,button=0)=>{
     const event=new MouseEvent(type,{bubbles:true,clientX:30,clientY:40,buttons,button});
@@ -58,7 +58,7 @@ it('sends hover, middle buttons and repeated click counts; keeps clipboard short
 it('copies only after an explicit action and does not cut a selection that changed during clipboard write', async()=>{
   connection.interaction.mockResolvedValueOnce({cursor:3,text:'alpha'}).mockResolvedValueOnce({cursor:3,text:'changed'});
   connection.clipboard.mockResolvedValue({});
-  const {getByRole}=render(<NativeBrowserView client={{} as any} page={page} focused />);
+  const {getByRole}=render(<NativeHostBrowserView client={{} as any} page={page} focused />);
   expect(connection.clipboard).not.toHaveBeenCalled();
   fireEvent.cut(getByRole('textbox',{name:'Browser page input'}));
   await waitFor(()=>expect(connection.clipboard).toHaveBeenCalledWith('alpha'));
@@ -68,7 +68,7 @@ it('copies only after an explicit action and does not cut a selection that chang
 
 it('offers only the CEF context actions, not a universal edit menu', async()=>{
   connection.context.mockResolvedValue({text:'read only selection',canCopy:true,canCut:false,canPaste:false,canSelectAll:true});
-  const {getByRole,queryByRole}=render(<NativeBrowserView client={{} as any} page={page} focused />);
+  const {getByRole,queryByRole}=render(<NativeHostBrowserView client={{} as any} page={page} focused />);
   fireEvent.contextMenu(getByRole('textbox',{name:'Browser page input'}),{clientX:30,clientY:40});
   await waitFor(()=>expect(getByRole('menuitem',{name:'Copy'})).toBeVisible());
   expect(queryByRole('menuitem',{name:'Cut'})).not.toBeInTheDocument();

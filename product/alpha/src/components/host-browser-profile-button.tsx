@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { UserCircleIcon } from '@hugeicons/core-free-icons';
-import type { BrowserPage, BrowserProfile } from '@weave/product-protocol';
+import type { HostBrowserPage, HostBrowserProfile } from '@weave/product-protocol';
 import type { DirectHostClient } from '@/portal-client';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -10,8 +10,8 @@ import { Field, FieldGroup, FieldLabel } from './ui/field';
 import { Input } from './ui/input';
 import { Alert, AlertDescription } from './ui/alert';
 
-export function BrowserProfileButton({ client, page, select }: { client?: Pick<DirectHostClient, 'browserRequest'>; page?: BrowserPage; select(profileId?: string): Promise<void> }) {
-  const [profiles, setProfiles] = useState<BrowserProfile[]>([]), [open, setOpen] = useState(false), [creating, setCreating] = useState(false);
+export function HostBrowserProfileButton({ client, page, select }: { client?: Pick<DirectHostClient, 'browserRequest'>; page?: HostBrowserPage; select(profileId?: string): Promise<void> }) {
+  const [profiles, setProfiles] = useState<HostBrowserProfile[]>([]), [open, setOpen] = useState(false), [creating, setCreating] = useState(false);
   const [name, setName] = useState(''), [pending, setPending] = useState(false), [error, setError] = useState<string>();
   useEffect(() => {
     if (!client) return;
@@ -53,7 +53,7 @@ export function BrowserProfileButton({ client, page, select }: { client?: Pick<D
         {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
       </DropdownMenuContent>
     </DropdownMenu>
-    <Dialog open={creating} onOpenChange={value => { if (!pending) setCreating(value); }}><DialogContent><DialogHeader><DialogTitle>New Browser Profile</DialogTitle><DialogDescription>Keep cookies and sign-ins across Panes on this Host.</DialogDescription></DialogHeader>
+    <Dialog open={creating} onOpenChange={value => { if (!pending) setCreating(value); }}><DialogContent><DialogHeader><DialogTitle>New Host Browser Profile</DialogTitle><DialogDescription>Keep cookies and sign-ins across Panes on this Host.</DialogDescription></DialogHeader>
       <form onSubmit={event => { event.preventDefault(); void create(); }}><FieldGroup><Field><FieldLabel htmlFor='new-browser-profile-name'>Name</FieldLabel><Input id='new-browser-profile-name' autoFocus value={name} onChange={event => setName(event.target.value)} maxLength={120} required disabled={pending} placeholder='Work' /></Field>
         {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
         <DialogFooter><Button type='button' variant='outline' disabled={pending} onClick={() => setCreating(false)}>Cancel</Button><Button type='submit' disabled={pending || !name.trim()}>{pending ? 'Creating…' : 'Create Profile'}</Button></DialogFooter>

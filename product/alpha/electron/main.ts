@@ -1,3 +1,4 @@
+import { installClientBrowserPrototype } from './client-browser-prototype';
 import { installNativeBrowsers } from './native-browser';
 import { app, BrowserWindow, ipcMain, Menu, ClipboardItem, clipboard, net, protocol, screen, session, shell } from 'electron';
 import { join, relative, resolve } from 'node:path';
@@ -6,6 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { installNativeTerminals } from './native-terminal';
 declare const ALPHA_ACCEPTANCE: boolean;
+declare const ALPHA_CLIENT_BROWSER_PROTOTYPE: boolean;
+const clientPrototype = ALPHA_CLIENT_BROWSER_PROTOTYPE && process.argv.includes('--client-browser-prototype');
 
 const appOrigin = 'weave://app';
 protocol.registerSchemesAsPrivileged([{ scheme: 'weave', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -13,7 +16,7 @@ app.setName('Weave Alpha');
 const liveAcceptance = ALPHA_ACCEPTANCE && process.argv.includes('--host-acceptance');
 const acceptance = liveAcceptance;
 const evidence = process.env.WEAVE_ALPHA_ACCEPTANCE_DIR || '/tmp/weave-electron-acceptance';
-app.setPath('userData', acceptance ? join(evidence, 'profile') : join(app.getPath('appData'), 'Weave Alpha'));
+app.setPath('userData', clientPrototype ? join(evidence, 'client-browser-profile') : acceptance ? join(evidence, 'profile') : join(app.getPath('appData'), 'Weave Alpha'));
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   let window: BrowserWindow | undefined;
@@ -28,11 +31,13 @@ else {
       title: 'Weave Alpha', width: 1400, height: 920, minWidth: 680, minHeight: 480,
       backgroundColor: '#00000000', show: false,
       ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, titleBarOverlay: true, trafficLightPosition: { x: 12, y: 9 } } : {}),
-      webPreferences: { preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
+      webPreferences: { additionalArguments: ALPHA_CLIENT_BROWSER_PROTOTYPE && Number.parseInt(release(), 10) >= 25 ? ['--weave-client-browser-supported'] : [], preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
     });
     const native = installNativeTerminals(window);
     const browsers = installNativeBrowsers(window);
+    if (ALPHA_CLIENT_BROWSER_PROTOTYPE && Number.parseInt(release(), 10) >= 25) installClientBrowserPrototype(window);
     const contents = window.webContents;
+    if (acceptance) contents.on('console-message', (details) => { if (details.level === 'error') console.error('Acceptance renderer:', details.message); });
     const hostWindow = window;
     let topRailHeight = 32;
     // AppKit owns pointer events over draggable chrome, so CSS :hover cannot
@@ -90,12 +95,22 @@ else {
     hostWindow.on('leave-full-screen', positionWindowButtons);
     hostWindow.once('closed', () => ipcMain.removeHandler('weave:top-rail-height'));
     contents.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
-    contents.on('will-navigate', (event, url) => { event.preventDefault(); external(url); });
+    contents.on('will-navigate', (event, url) => {
+      // Reloading the trusted shell document must reach its new renderer.
+      // Other top-level navigations continue through the external URL policy.
+      if (url === contents.getURL() && url.startsWith(`${appOrigin}/`)) return;
+      event.preventDefault(); external(url);
+    });
     contents.on('will-redirect', (event) => event.preventDefault());
     contents.on('will-attach-webview', (event) => event.preventDefault());
     window.once('ready-to-show', () => window?.show());
     window.on('closed', () => { window = undefined; });
-    await window.loadURL(`${appOrigin}/index.html${liveAcceptance ? '?acceptance=live' : ''}`);
+    await window.loadURL(`${appOrigin}/index.html${clientPrototype ? `?clientBrowserPrototype=1&fixture=${encodeURIComponent(process.env.WEAVE_CLIENT_BROWSER_FIXTURE || 'http://localhost:43187')}` : liveAcceptance ? '?acceptance=live' : ''}`);
+    if (clientPrototype) {
+      await mkdir(evidence, { recursive: true });
+      const timer = setInterval(() => { void contents.executeJavaScript('JSON.stringify(window.clientBrowserPrototypeEvidence || null)').then(json => writeFile(join(evidence, 'client-browser.json'), json)).catch(() => {}); }, 1000);
+      window.once('closed', () => clearInterval(timer));
+    }
     if (acceptance) {
       if (liveAcceptance) {
         const input = JSON.parse(await readFile(join(evidence, 'input.json'), 'utf8'));
@@ -113,6 +128,7 @@ else {
         result = await contents.executeJavaScript('window.alphaAcceptance');
         const stage = await contents.executeJavaScript('window.alphaAcceptanceStage');
         const stageKey = `${await contents.executeJavaScript('window.alphaAcceptanceIndex')}:${stage}`;
+        if (stage?.startsWith('client-browser-') && !handled.has(stageKey)) await writeFile(join(evidence, 'client-browser-stage.json'), JSON.stringify({ stage }));
         if (liveAcceptance && stage && !handled.has(stageKey)) {
           window?.show(); app.focus({ steal: true }); window?.focus();
           // Native input needs an exposed AppKit surface. macOS can occlude the

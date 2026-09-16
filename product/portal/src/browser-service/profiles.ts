@@ -1,6 +1,6 @@
 import { lstat, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { browserProfileId, browserProfileName, parseBrowserProfile, type BrowserProfile } from '@weave/product-protocol';
+import { browserProfileId, browserProfileName, parseBrowserProfile, type HostBrowserProfile } from '@weave/product-protocol';
 import { privateDirectory } from './chromium.ts';
 
 /** Single writer: the independent Browser Service. Profiles outlive Workspace composition. */
@@ -13,7 +13,7 @@ export class BrowserProfiles {
     this.#pending = pending;
     return pending;
   }
-  async #read(): Promise<BrowserProfile[]> {
+  async #read(): Promise<HostBrowserProfile[]> {
     await privateDirectory(this.#directory);
     const path = join(this.#directory, 'profiles.json');
     try {
@@ -21,7 +21,7 @@ export class BrowserProfiles {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || stat.mode & 0o077 || stat.size > 128 * 1024) throw new Error('Unsafe Browser Profile catalog');
       const value = JSON.parse(await readFile(path, 'utf8'));
       if (value.version !== 1 || !Array.isArray(value.profiles) || value.profiles.length > 320) throw new Error('Invalid Browser Profile catalog');
-      const profiles: BrowserProfile[] = value.profiles.map(parseBrowserProfile);
+      const profiles: HostBrowserProfile[] = value.profiles.map(parseBrowserProfile);
       if (new Set(profiles.map(profile => profile.profileId)).size !== profiles.length || new Set(profiles.map(profile => profile.name.toLowerCase())).size !== profiles.length) throw new Error('Duplicate Browser Profile');
       return profiles;
     } catch (error) {
@@ -29,7 +29,7 @@ export class BrowserProfiles {
       throw error;
     }
   }
-  async #save(profiles: BrowserProfile[]) {
+  async #save(profiles: HostBrowserProfile[]) {
     const path = join(this.#directory, 'profiles.json');
     const temporary = `${path}.${crypto.randomUUID()}.tmp`;
     try {
@@ -77,7 +77,7 @@ export class BrowserProfiles {
       const profiles = await this.#read(), existing = profiles.find(profile => profile.profileId === profileId);
       if (existing) { if (!existing.temporary) throw new Error('Temporary identity collision'); return existing; }
       if (profiles.length >= 320) throw new Error('Browser identity capacity exceeded');
-      const profile: BrowserProfile = { profileId, name: `Temporary ${profileId}`, revision: 0, temporary: true };
+      const profile: HostBrowserProfile = { profileId, name: `Temporary ${profileId}`, revision: 0, temporary: true };
       await this.#save([...profiles, profile]); return profile;
     });
   }

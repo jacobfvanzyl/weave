@@ -1,6 +1,118 @@
 import XCTest
 
 final class AlphaUITests: XCTestCase {
+#if WEAVE_CLIENT_BROWSER_PROTOTYPE
+    func testClientBrowserWorkspacePopupAndShellReload() throws {
+        continueAfterFailure = false
+        let fixture = try XCTUnwrap(ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"])
+        let app = XCUIApplication()
+        app.launchArguments = ["--host-acceptance", "--browser-acceptance"]
+        XCUIDevice.shared.orientation = .landscapeRight
+        if ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_ATTACH"] == "1" { app.activate() } else { app.launch() }
+        defer {
+            let tree = XCTAttachment(string: app.debugDescription); tree.name = "Workspace Client Browser accessibility"; tree.lifetime = .keepAlways; add(tree)
+            let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); capture.name = "Workspace Client Browser recovery"; capture.lifetime = .keepAlways; add(capture)
+        }
+        let stage = app.staticTexts["AcceptanceStage"]
+        func expectStage(_ value: String) {
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@ OR label == 'failed'", value), object: stage)], timeout: 90), .completed)
+            XCTAssertEqual(stage.label, value)
+        }
+        expectStage("client-browser-address")
+        let address = app.textFields["ClientBrowserAddress"].firstMatch
+        XCTAssertTrue(address.waitForExistence(timeout: 10)); address.tap()
+        address.press(forDuration: 1)
+        if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
+        // The new pane starts at about:blank; selecting its complete value
+        // keeps the test independent of SwiftUI's initial focus selection.
+        if let value = address.value as? String, value != "" { address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count)) }
+        address.typeText(fixture + "\n")
+        expectStage("client-browser-input")
+        let field = app.textFields["Fixture text"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10)); field.tap(); field.typeText("WVE-80 retained form")
+        if app.keyboards.buttons["Hide keyboard"].exists { app.keyboards.buttons["Hide keyboard"].tap() }
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        expectStage("client-browser-post-popup")
+        app.buttons["POST popup"].firstMatch.tap()
+        expectStage("client-browser-close-popup")
+        let close = app.buttons["Close popup"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        continueAfterFailure = true
+        XCTExpectFailure("WVE-80 popup has no accessibility hit point", options: .nonStrict()) {
+            XCTAssertTrue(close.isHittable)
+        }
+        continueAfterFailure = false
+        close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        expectStage("client-browser-check-form")
+        XCTAssertEqual(field.value as? String, "WVE-80 retained form", "Shell reload discarded the native unsent field")
+        app.buttons["Check retained state"].firstMatch.tap()
+        expectStage("passed")
+    }
+
+    func testClientBrowserPopupDownloadsAndRetention() throws {
+        continueAfterFailure = false
+        let fixture = try XCTUnwrap(ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"])
+        let app = XCUIApplication()
+        app.launchArguments = ["--client-browser-prototype"]
+        app.launchEnvironment["WEAVE_CLIENT_BROWSER_FIXTURE"] = fixture
+        XCUIDevice.shared.orientation = .landscapeRight
+        if ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_ATTACH"] == "1" { app.activate() } else { app.launch() }
+        defer {
+            let tree = XCTAttachment(string: app.debugDescription); tree.name = "Client Browser accessibility"; tree.lifetime = .keepAlways; add(tree)
+            let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); capture.name = "Client Browser WKWebView"; capture.lifetime = .keepAlways; add(capture)
+        }
+        let open = app.buttons["Open popup"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 30), "Native webpage must appear in accessibility")
+        let input = app.textFields["Fixture text"].firstMatch
+        XCTAssertTrue(input.exists)
+        input.tap(); input.typeText("WVE-80 iPad input")
+        if app.keyboards.buttons["Hide keyboard"].exists { app.keyboards.buttons["Hide keyboard"].tap() }
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Wait for keyboard dismissal before tapping the resized shell")
+        let beforeOverlay = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        beforeOverlay.name = "Before shell overlay after keyboard dismissal"; beforeOverlay.lifetime = .keepAlways; add(beforeOverlay)
+        app.buttons["Open shell overlay"].tap()
+        XCTAssertTrue(app.buttons["Close shell overlay"].waitForExistence(timeout: 5))
+        app.buttons["Close shell overlay"].tap()
+        XCTAssertEqual(input.value as? String, "WVE-80 iPad input")
+        func expectText(_ text: String) {
+            let item = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 10), "Missing text: \(text)")
+        }
+        func closePopup() {
+            let button = app.buttons["Close popup"].firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 5))
+            // WVE-80: keep the accessibility defect visible independently of
+            // the functional touch/popup gate. Remove when native AX is fixed.
+            continueAfterFailure = true
+            XCTExpectFailure("WVE-80 popup exposes its frame but no accessibility hit point", options: .nonStrict()) {
+                XCTAssertTrue(button.isHittable, "Popup close must expose a native accessibility hit point")
+            }
+            continueAfterFailure = false
+            if button.isHittable { button.tap() }
+            else { button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+            XCTAssertTrue(button.waitForNonExistence(timeout: 5))
+        }
+        for button in ["Open popup", "POST popup", "Delayed popup"] {
+            app.buttons[button].firstMatch.tap()
+            expectText("Opener preserved")
+            if button == "POST popup" { expectText("proof=wve80-post-body") }
+            closePopup()
+        }
+        app.links["Target blank"].firstMatch.tap()
+        expectText("No opener")
+        closePopup()
+        // Scroll only the native left webpage until the download controls show.
+        let attachment = app.links["Attachment download"].firstMatch
+        if !attachment.isHittable { app.webViews.containing(.button, identifier: "Open popup").firstMatch.swipeUp() }
+        attachment.tap(); expectText("weave-fixture.txt: complete")
+        app.links["Authenticated download"].firstMatch.tap()
+        app.buttons["Blob download"].firstMatch.tap(); expectText("weave-blob.txt: complete")
+        app.links["Slow download"].firstMatch.tap()
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap(); expectText("weave-slow.bin: cancelled")
+    }
+#endif
+
     func testBrowserKeyboardFollowsEditableTargets() throws {
         continueAfterFailure = false
         let app=XCUIApplication()

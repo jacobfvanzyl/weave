@@ -9,7 +9,7 @@ export const BROWSER_PAGE_RPC_METHODS = [
   'browser.page.view.input', 'browser.page.view.interaction', 'browser.page.view.context', 'browser.page.view.detach',
 ] as const;
 export type BrowserPageRpcMethod = typeof BROWSER_PAGE_RPC_METHODS[number];
-export type BrowserPage = {
+export type HostBrowserPage = {
   pageId: string; profileId: string; title: string; url: string; available: boolean;
   generation?: string; openerPageId?: string; width?: number; height?: number; deviceScaleFactor?: number;
   canGoBack?: boolean; canGoForward?: boolean; temporary?: boolean; profileLocked?: boolean;
@@ -39,13 +39,13 @@ export type BrowserFocus = BrowserPageViewport & { viewId: string; generation: s
 export type BrowserInputMethod = 'Input.dispatchMouseEvent' | 'Input.dispatchKeyEvent' | 'Input.insertText';
 export type BrowserContext = { text:string; canCopy:boolean; canCut:boolean; canPaste:boolean; canSelectAll:boolean };
 export type BrowserPageRpcContracts = {
-  'browser.page.list': { params: { profileId: string }; result: { pages: BrowserPage[] } };
-  'browser.page.get': { params: Address; result: { page: BrowserPage } };
-  'browser.page.restore': { params: Address; result: { page: BrowserPage } };
-  'browser.page.navigate': { params: LiveAddress & { url: string }; result: { page: BrowserPage } };
-  'browser.page.back': { params: LiveAddress; result: { page: BrowserPage } };
-  'browser.page.forward': { params: LiveAddress; result: { page: BrowserPage } };
-  'browser.page.reload': { params: LiveAddress; result: { page: BrowserPage } };
+  'browser.page.list': { params: { profileId: string }; result: { pages: HostBrowserPage[] } };
+  'browser.page.get': { params: Address; result: { page: HostBrowserPage } };
+  'browser.page.restore': { params: Address; result: { page: HostBrowserPage } };
+  'browser.page.navigate': { params: LiveAddress & { url: string }; result: { page: HostBrowserPage } };
+  'browser.page.back': { params: LiveAddress; result: { page: HostBrowserPage } };
+  'browser.page.forward': { params: LiveAddress; result: { page: HostBrowserPage } };
+  'browser.page.reload': { params: LiveAddress; result: { page: HostBrowserPage } };
   'browser.page.view.attach': { params: LiveAddress & { mode: 'observe' | 'control' }; result: { viewId: string; ticket: string; expiresAt: number; path: typeof PORTAL_BROWSER_RFB_PATH } };
   'browser.page.view.focus': { params: ViewAddress & BrowserPageViewport; result: BrowserFocus };
   'browser.page.view.resize': { params: ViewAddress & BrowserPageViewport & { focusEpoch: number }; result: BrowserFocus };
@@ -80,7 +80,7 @@ function viewport(value: Record<string, unknown>): BrowserPageViewport {
   if (pixels.width > BROWSER_FRAMEBUFFER_MAX_DIMENSION || pixels.height > BROWSER_FRAMEBUFFER_MAX_DIMENSION || pixels.width * pixels.height > BROWSER_FRAMEBUFFER_MAX_PIXELS) throw new Error('Browser framebuffer too large');
   return { width, height, ...(value.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: scale }) };
 }
-export function parseBrowserPage(value: unknown): BrowserPage {
+export function parseBrowserPage(value: unknown): HostBrowserPage {
   const page = object(value);
   if (typeof page.title !== 'string' || page.title.length > 1024 || typeof page.available !== 'boolean') throw new Error('Invalid Browser page');
   return {

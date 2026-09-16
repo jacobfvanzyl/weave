@@ -7,5 +7,6 @@ const sync = Bun.spawn(['bun', 'run', 'cap:sync'], { cwd: root, stdout: 'inherit
 if (await sync.exited !== 0) throw new Error('Capacitor sync failed.');
 const device = process.env.WEAVE_IPAD_UDID;
 const args = ['xcodebuild', '-project', resolve(root, 'ios/App/App.xcodeproj'), '-scheme', 'App', '-configuration', 'Debug', '-destination', device ? `id=${device}` : 'generic/platform=iOS', '-derivedDataPath', resolve(root, '.ipad-build'), '-allowProvisioningUpdates', 'build'];
+if (process.env.VITE_CLIENT_BROWSER_PROTOTYPE === '1') args.push('SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DEBUG WEAVE_CLIENT_BROWSER_PROTOTYPE');
 const child = Bun.spawn(args, { stdout: 'inherit', stderr: 'inherit' });
 process.exitCode = await child.exited;

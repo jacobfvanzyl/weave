@@ -49,7 +49,7 @@ test('Browser Pane creation is idempotent, move preserves its page, and shared c
   const f = await fixture();
   try {
     const { input, result } = await f.create();
-    expect(paneTargets(result.composition.workspaces).find(pane => pane.paneId === input.paneId)?.kind).toBe('browser');
+    expect(paneTargets(result.composition.workspaces).find(pane => pane.paneId === input.paneId)?.kind).toBe('host-browser');
     expect(result.page).not.toHaveProperty('rfbSocket');
     const again = await f.rpc.request('browser.pane.create', input) as typeof result;
     expect(again.composition.revision).toBe(result.composition.revision);
@@ -134,7 +134,7 @@ test('unattended popups inherit their Profile and appear to the right; native cl
     if (right.kind !== 'split') throw new Error('Missing popup split');
     expect(right.axis).toBe('horizontal');
     expect(right.children[0]).toMatchObject({ paneId: input.paneId, lastCommittedUrl: 'https://example.com/navigated' });
-    expect(right.children[1]).toMatchObject({ kind: 'browser', paneId: popupId, profileId: input.profileId });
+    expect(right.children[1]).toMatchObject({ kind: 'host-browser', paneId: popupId, profileId: input.profileId });
     f.pages.delete(popupId);
     while (paneTargets((await f.composition()).workspaces).some(pane => pane.paneId === popupId)) {
       if (Date.now() > deadline) throw new Error('Closed popup removal timed out'); await Bun.sleep(50);
@@ -158,7 +158,7 @@ test('a Browser Pane can create a Workspace without a Terminal or execution dire
   try {
     const before = await f.composition();
     const { composition } = await f.rpc.request('browser.pane.create', { hostId: f.hostId, workspaceId: 'browser-only', workspaceName: 'Research', expectedRevision: before.revision, paneId: crypto.randomUUID(), profileId: f.fake.page.profileId, url: 'about:blank', axis: 'vertical' }) as { composition: WorkspaceComposition };
-    expect(composition.workspaces.find(workspace => workspace.workspaceId === 'browser-only')).toMatchObject({ name: 'Research', layout: { kind: 'browser' } });
+    expect(composition.workspaces.find(workspace => workspace.workspaceId === 'browser-only')).toMatchObject({ name: 'Research', layout: { kind: 'host-browser' } });
     expect((await f.composition()).workspaces.some(workspace => workspace.workspaceId === 'browser-only')).toBe(true);
   } finally { await f.cleanup(); }
 });

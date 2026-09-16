@@ -1,3 +1,5 @@
+import { clientBrowserAvailable } from '@/client-browser/native-client-browser';
+import { workspaceClientBrowser } from '@/client-browser/workspace-client-browser';
 import { composerDrafts, moveComposerDraft, writeComposerDraft } from '@/chat/composer-drafts';
 import { showWorkspaceHostIdentity, workspaceKey } from './workspace-presentation';
 import { projectLocalAgentPanes, validateLocalAgentPane, materializeAgentPane, type LocalAgentPane } from './local-agent-panes';
@@ -1129,7 +1131,41 @@ export function useLiveAlphaController(
   const observedRunning = selected?.attention && Date.now() - Date.parse(selected.attention.observedAt) < 15_000 &&
     (selected.attention.state === "working" || selected.attention.state === "waiting");
 
-  const openBrowserPane = async (request: { paneId: string; hostId: string; workspaceId: string; workspaceName?: string; sourcePaneId?: string; axis: 'horizontal' | 'vertical' }, url = 'about:blank') => {
+  const openClientBrowserPane = async (reference: { hostId: string; workspaceId: string }, initialUrl = 'about:blank', popup?: { paneId: string; token: string; sourcePaneId: string }, placement?: { sourcePaneId: string; axis: 'horizontal' | 'vertical' }) => {
+    if (!clientBrowserAvailable) throw new Error('Client Browser requires an enabled Apple client on OS 26 or later.');
+    const client = clientsRef.current.get(reference.hostId);
+    if (!client || statuses[reference.hostId] !== 'connected') throw new Error('Connect to this Host to create a Client Browser Pane.');
+    if (!snapshots[reference.hostId]?.capabilities.includes('client-browser.panes.v1')) throw new Error('Update this Host to use Client Browser Panes.');
+    const before = (await client.getWorkspaceComposition(reference.hostId)).composition;
+    const workspace = before.workspaces.find(item => item.workspaceId === reference.workspaceId);
+    if (!workspace) throw new Error('An existing Workspace is required.');
+    const paneId = popup?.paneId ?? crypto.randomUUID();
+    const requestedSource = popup?.sourcePaneId ?? placement?.sourcePaneId;
+    const sourceDraft = localPanesRef.current.find(draft => draft.pane.paneId === requestedSource);
+    const sourcePaneId = sourceDraft?.sourcePaneId ?? requestedSource ?? paneTargets([workspace])[0]?.paneId;
+    let adopted: { surfaceId: string } | undefined;
+    try {
+      if (popup) adopted = await workspaceClientBrowser.adopt(reference.hostId, paneId, popup.token);
+      await client.browserRequest('client-browser.pane.create', { ...reference, expectedRevision: before.revision, paneId, initialUrl, sourcePaneId, axis: placement?.axis ?? 'horizontal' });
+      if (sourceDraft) updateLocalPanes(panes => panes.map(draft => draft === sourceDraft ? { ...draft, sourcePaneId: paneId, axis: placement?.axis ?? 'horizontal', beforeSource: true } : draft));
+      await workspaceController.actions.refresh(); workspaceController.actions.focus(reference, paneId);
+    } finally {
+      workspaceClientBrowser.placementFinished(reference.hostId, paneId);
+      // A lost reply can still mean the Host committed the Pane. Let an
+      // authoritative membership check release only an actually unplaced popup.
+      if (adopted) void workspaceClientBrowser.reconcile(reference.hostId, async paneIds => (await client.browserRequest('client-browser.pane.reconcile', { hostId: reference.hostId, paneIds })).closedPaneIds).catch(() => {});
+    }
+  };
+  const closeClientBrowserPane = async (reference: { hostId: string; workspaceId: string }, paneId: string) => {
+    const client = clientsRef.current.get(reference.hostId);
+    if (!client || statuses[reference.hostId] !== 'connected') throw new Error('Connect to this Host to close a shared Client Browser Pane.');
+    const before = (await client.getWorkspaceComposition(reference.hostId)).composition;
+    await client.browserRequest('client-browser.pane.close', { hostId: reference.hostId, paneId, expectedRevision: before.revision, confirmed: true });
+    await workspaceClientBrowser.reconcile(reference.hostId, async paneIds => (await client.browserRequest('client-browser.pane.reconcile', { hostId: reference.hostId, paneIds })).closedPaneIds);
+    await workspaceController.actions.refresh();
+  };
+
+  const openHostBrowserPane = async (request: { paneId: string; hostId: string; workspaceId: string; workspaceName?: string; sourcePaneId?: string; axis: 'horizontal' | 'vertical' }, url = 'about:blank') => {
         const client = clientsRef.current.get(request.hostId);
         if (!client) throw new Error('Host is unavailable');
         const before = (await client.getWorkspaceComposition(request.hostId)).composition;
@@ -1372,12 +1408,23 @@ export function useLiveAlphaController(
         } catch (cause) { updateSnapshot(thread.hostId, await client.snapshot()); reportActionError(cause); }
       },
       createThread,
-      newBrowserPane: (hostId, workspaceId, url) => {
+      newClientBrowserPane: openClientBrowserPane,
+      closeClientBrowserPane,
+      moveClientBrowserPane: async (reference, paneId, destinationId) => {
+        const client = clientsRef.current.get(reference.hostId);
+        if (!client || statuses[reference.hostId] !== 'connected') throw new Error('Connect to this Host to move a Client Browser Pane.');
+        const before = (await client.getWorkspaceComposition(reference.hostId)).composition;
+        const target = before.workspaces.find(workspace => workspace.workspaceId === destinationId);
+        if (!target) throw new Error('Destination Workspace is unavailable.');
+        await client.browserRequest('client-browser.pane.move', { hostId: reference.hostId, paneId, workspaceId: destinationId, sourcePaneId: paneTargets([target])[0]?.paneId, axis: 'horizontal', expectedRevision: before.revision });
+        await workspaceController.actions.refresh(); workspaceController.actions.focus({ hostId: reference.hostId, workspaceId: destinationId }, paneId);
+      },
+      newHostBrowserPane: (hostId, workspaceId, url) => {
         if (!snapshots[hostId]?.capabilities.includes('browser.panes.v1')) { reportActionError(new Error('This Host does not support Browser Panes yet.')); return; }
         const target = workspaceId ?? crypto.randomUUID();
         const workspace = workspaceController.model.compositions[hostId]?.workspaces.find(workspace => workspace.workspaceId === target);
         const sourcePaneId = workspace && (workspaceController.model.presentation.focusedPanes[workspaceKey({hostId,workspaceId:target})] ?? paneTargets([workspace])[0]?.paneId);
-        void openBrowserPane({paneId:crypto.randomUUID(),hostId,workspaceId:target,...(workspaceId ? {} : {workspaceName:'Browser'}),sourcePaneId,axis:'vertical'}, url).catch(reportActionError);
+        void openHostBrowserPane({paneId:crypto.randomUUID(),hostId,workspaceId:target,...(workspaceId ? {} : {workspaceName:'Browser'}),sourcePaneId,axis:'vertical'}, url).catch(reportActionError);
       },
       splitPane: async (reference, sourcePaneId, axis, type) => {
         const { hostId, workspaceId } = reference;
@@ -1391,9 +1438,10 @@ export function useLiveAlphaController(
           const display = projectLocalAgentPanes(before, localPanesRef.current);
           const origin = paneTargets(display.workspaces.filter(workspace => workspace.workspaceId === workspaceId)).find(pane => pane.paneId === sourcePaneId);
           if (!origin) throw new Error('Source Pane is unavailable.');
-          if (type === 'browser') {
+          if (type === 'client-browser') { await openClientBrowserPane(reference, 'about:blank', undefined, { sourcePaneId, axis }); return; }
+          if (type === 'host-browser') {
             if (!snapshots[hostId]?.capabilities.includes('browser.panes.v1')) throw new Error('This Host does not support Browser Panes yet.');
-            await openBrowserPane({ paneId: crypto.randomUUID(), hostId, workspaceId, sourcePaneId, axis }); return;
+            await openHostBrowserPane({ paneId: crypto.randomUUID(), hostId, workspaceId, sourcePaneId, axis }); return;
           }
           if (origin.kind === 'terminal' && type === 'terminal') {
             // Keep the established current-directory inheritance for shells.

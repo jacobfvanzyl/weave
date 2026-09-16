@@ -1,4 +1,4 @@
-import { browserFramebufferSize, browserViewportScale, type BrowserContext, type BrowserPage, type BrowserInputMethod } from '@weave/product-protocol';
+import { browserFramebufferSize, browserViewportScale, type BrowserContext, type HostBrowserPage, type BrowserInputMethod } from '@weave/product-protocol';
 import type { DirectHostClient } from '@/portal-client';
 import { nativeBrowserBridge, type NativeBrowserBridge } from './native-browser';
 import { browserDiagnostics, recordBrowserInput } from './browser-diagnostics';
@@ -31,7 +31,7 @@ export class BrowserViewConnection {
   private wheel?: Wheel;
   private hover?: { args: Record<string, unknown>; result: Promise<void> };
   private inputGeneration = 0;
-  constructor(private client: Client, private page: BrowserPage, private changed: (event: { width?: number; height?: number; diagnosticId?: string; error?: string }) => void, private native: NativeBrowserBridge = nativeBrowserBridge) {}
+  constructor(private client: Client, private page: HostBrowserPage, private changed: (event: { width?: number; height?: number; diagnosticId?: string; error?: string }) => void, private native: NativeBrowserBridge = nativeBrowserBridge) {}
   async start() {
     try {
       const { surfaceId } = await this.native.create(); this.surfaceId = surfaceId;

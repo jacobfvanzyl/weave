@@ -8,7 +8,7 @@ vi.mock('@/browser/native-browser',()=>({nativeBrowserBridge:{keyboard:mocks.key
 vi.mock('@/browser/browser-view-connection',()=>({BrowserViewConnection:class{
  layout=vi.fn();start=vi.fn();close=vi.fn();activate=vi.fn();ensureActive=vi.fn();input=mocks.input;interaction=mocks.interaction;
 }}));
-import {NativeBrowserView} from './native-browser-view';
+import {NativeHostBrowserView} from './native-browser-view';
 import {PaneFocusProvider,PaneFocusScope} from '@/app/pane-focus';
 const page={pageId:crypto.randomUUID(),profileId:crypto.randomUUID(),generation:crypto.randomUUID(),url:'https://example.test',title:'Fixture',available:true};
 beforeEach(()=>{
@@ -18,7 +18,7 @@ beforeEach(()=>{
 });
 function tap(input:HTMLElement,pointerType='touch'){for(const type of ['pointerdown','pointerup']){const event=new MouseEvent(type,{bubbles:true,clientX:30,clientY:40});Object.defineProperty(event,'pointerType',{value:pointerType});fireEvent(input,event);}}
 it.each(['touch','pen','mouse'])('requires an editable target and deliberate %s input; dismissal and pane refocus keep the keyboard closed',async(pointerType)=>{
- const {getByRole}=render(<PaneFocusProvider><PaneFocusScope id='browser'><NativeBrowserView client={{} as any} page={page} focused /></PaneFocusScope></PaneFocusProvider>);
+ const {getByRole}=render(<PaneFocusProvider><PaneFocusScope id='browser'><NativeHostBrowserView client={{} as any} page={page} focused /></PaneFocusScope></PaneFocusProvider>);
  const input=getByRole('textbox') as HTMLTextAreaElement;
  const blur=vi.fn();document.addEventListener('focusout',blur);
  act(()=>input.focus());expect(input.readOnly).toBe(true);expect(mocks.keyboard).not.toHaveBeenCalled();

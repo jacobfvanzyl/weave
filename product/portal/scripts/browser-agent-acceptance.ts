@@ -93,7 +93,7 @@ try {
   const { pages } = await backend.managedPage('page.list', { profileId: profile.profileId });
   const page = pages.find((item: any) => item.url === `http://127.0.0.1:${fixture.port}/`); assert(page, 'Agent page is not Host-owned');
   const { composition } = await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }) as any;
-  assert(paneTargets(composition.workspaces).some(pane => pane.kind === 'browser' && pane.paneId === page.pageId), 'Agent page missing from composition');
+  assert(paneTargets(composition.workspaces).some(pane => pane.kind === 'host-browser' && pane.paneId === page.pageId), 'Agent page missing from composition');
   evidence.rightSplit = composition.workspaces.find((item: any) => item.workspaceId === a.thread.workspaceId).layout;
   const cdp = async (method: string, params = {}, sessionId?: string) => JSON.parse((await tool(a, 'weave_browser_cdp', { method, params, sessionId })).content[0].text);
   const target = await backend.managedPage('page.cdp', { pageId: page.pageId, generation: page.generation, arguments: { method: 'Target.getTargetInfo', arguments: {} } });
@@ -125,7 +125,7 @@ try {
   await tool(a, 'close_page', { pageId: Number(selectedLine![1]) });
   assert(!(await backend.managedPage('page.list', {})).pages.some((item: any) => item.pageId === page.pageId), 'Agent close left the Host page alive');
   const closedComposition = (await rpc.request('workspace.composition.get', { hostId: portal.security.hostId }) as any).composition;
-  assert(!paneTargets(closedComposition.workspaces).some(pane => pane.kind === 'browser' && pane.paneId === page.pageId), 'Agent close left its Pane in composition');
+  assert(!paneTargets(closedComposition.workspaces).some(pane => pane.kind === 'host-browser' && pane.paneId === page.pageId), 'Agent close left its Pane in composition');
   evidence.agentCloseRemovesPageAndPane = true;
   await writeFile(process.env.BROWSER_AGENT_EVIDENCE ?? '/tmp/wve79-agent-acceptance.json', JSON.stringify(evidence, null, 2) + '\n');
   console.log('Browser ACP/MCP acceptance passed');

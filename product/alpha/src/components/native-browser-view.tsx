@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { Keyboard } from '@capacitor/keyboard';
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { browserFramebufferSize, browserViewportScale, type BrowserPage, type BrowserContext } from '@weave/product-protocol';
+import { browserFramebufferSize, browserViewportScale, type HostBrowserPage, type BrowserContext } from '@weave/product-protocol';
 import type { DirectHostClient } from '@/portal-client';
 import { BrowserViewConnection } from '@/browser/browser-view-connection';
 import { nativeBrowserBridge } from '@/browser/native-browser';
@@ -15,7 +15,7 @@ const iosKeyboard = Capacitor.getPlatform()==='ios';
 const inputModes = ['text','none','text','tel','url','email','numeric','decimal','search'] as const;
 const cursors = ['default','crosshair','pointer','text','wait','help','e-resize','n-resize','ne-resize','nw-resize','s-resize','se-resize','sw-resize','w-resize','ns-resize','ew-resize','nesw-resize','nwse-resize','col-resize','row-resize','all-scroll','e-resize','n-resize','ne-resize','nw-resize','s-resize','se-resize','sw-resize','w-resize','move','vertical-text','cell','context-menu','alias','progress','no-drop','copy','none','not-allowed','zoom-in','zoom-out','grab','grabbing','ns-resize','ew-resize','default','no-drop','move','copy','alias'];
 const modifiers = (event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
-export function NativeBrowserView({ client, page, focused, addressInput }: { client: Pick<DirectHostClient, 'browserRequest' | 'browserDisplay'>; page: BrowserPage; focused: boolean; addressInput?: RefObject<HTMLInputElement | null> }) {
+export function NativeHostBrowserView({ client, page, focused, addressInput }: { client: Pick<DirectHostClient, 'browserRequest' | 'browserDisplay'>; page: HostBrowserPage; focused: boolean; addressInput?: RefObject<HTMLInputElement | null> }) {
   const clicks = useRef({ x:0, y:0, at:0, button:-1, count:0 });
   const hovering = useRef(false);
   const [cursor, setCursor] = useState('default');

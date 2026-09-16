@@ -1,4 +1,4 @@
-import { type BrowserPageRpcMethod, type BrowserPaneRpcMethod, type BrowserProfileRpcMethod, parsePortalAuthChallenge, parsePortalAuthenticated, portalAuthChallengePayload, PORTAL_BROWSER_RFB_PATH, PORTAL_AUTH_RESPONSE_TYPE } from '@weave/product-protocol';
+import { type ClientBrowserPaneRpcMethod, type BrowserPageRpcMethod, type HostBrowserPaneRpcMethod, type BrowserProfileRpcMethod, parsePortalAuthChallenge, parsePortalAuthenticated, portalAuthChallengePayload, PORTAL_BROWSER_RFB_PATH, PORTAL_AUTH_RESPONSE_TYPE } from '@weave/product-protocol';
 import { encodeHostMessage, decodeHostMessage } from '@weave/product-protocol';
 import {
   type AgentSummary,
@@ -723,7 +723,7 @@ export class DirectHostClient {
     listener.onEvent(notification);
   }
 
-  browserRequest<M extends BrowserPageRpcMethod | BrowserPaneRpcMethod | BrowserProfileRpcMethod>(method: M, params: PortalRpcParams<M>): Promise<PortalRpcResult<M>> {
+  browserRequest<M extends ClientBrowserPaneRpcMethod | BrowserPageRpcMethod | HostBrowserPaneRpcMethod | BrowserProfileRpcMethod>(method: M, params: PortalRpcParams<M>): Promise<PortalRpcResult<M>> {
     return this.request(method, params);
   }
 

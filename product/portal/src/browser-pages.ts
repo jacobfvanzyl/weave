@@ -1,6 +1,6 @@
 import {
   PORTAL_BROWSER_RFB_PATH, parseBrowserPage, parseBrowserPageRpcParams,
-  type BrowserPage, type BrowserPageRpcContracts, type BrowserPageRpcMethod,
+  type HostBrowserPage, type BrowserPageRpcContracts, type BrowserPageRpcMethod,
 } from '@weave/product-protocol';
 import type { BrowserServiceClient } from './browser-service/client.ts';
 import type { ManagedPageSummary } from './browser-service/managed-pages.ts';

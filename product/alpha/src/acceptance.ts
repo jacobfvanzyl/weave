@@ -1,8 +1,9 @@
+import { beginClientBrowserWorkspaceRecovery, pendingClientBrowserRecovery, resumeClientBrowserWorkspaceRecovery } from './client-browser/workspace-acceptance';
 import { Keyboard } from '@capacitor/keyboard';
 import { nativeTerminalAcceptance } from '@/terminal/native-terminal';
 import { runBrowserScrollAcceptance } from '@/browser/scroll-acceptance';
 // Included only in explicitly built acceptance artifacts.
-export type LiveAcceptanceInput = { browserKeyboard?: boolean | 'smoke'; browserBenchmark?: { durationMs: number; animation: boolean }; browserUrl?: string; browserHostId?: string; hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
+export type LiveAcceptanceInput = { cleanupOnly?: boolean; clientBrowserRecovery?: string; clientBrowserWorkspace?: boolean; browserKeyboard?: boolean | 'smoke'; browserBenchmark?: { durationMs: number; animation: boolean }; browserUrl?: string; browserHostId?: string; hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
 export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   let stage = 'pairing';
   let outsideBottomRightRadius = 0;
@@ -34,6 +35,9 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
   };
   try {
+    const recovery = pendingClientBrowserRecovery();
+    if (recovery) return await resumeClientBrowserWorkspaceRecovery(recovery);
+    if (input.cleanupOnly) return { passed: true, cleanupOnly: true };
     if (input.pairingToken) {
       await wait(() => button('Connections') || button('Settings') || document.querySelector('#pairing-token'));
       (button('Connections') ?? button('Settings'))?.click();
@@ -51,7 +55,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       stage = 'Browser Workspace menu';
       await wait(() => button('Sidebar actions')); button('Sidebar actions')!.click();
       await wait(() => button('New workspace…')); button('New workspace…')!.click();
-      const browserItem=()=>input.browserHostId ? document.querySelector<HTMLElement>(`[data-browser-host="${input.browserHostId}"]`) : button('Browser');
+      const browserItem=()=>input.browserHostId ? document.querySelector<HTMLElement>(`[data-browser-host="${input.browserHostId}"]`) : button('Host Browser');
       await wait(()=>browserItem() && !browserItem()!.matches(':disabled, [aria-disabled="true"], [data-disabled]')); browserItem()!.click();
       // Synthetic menu selection does not always dismiss nested Base UI menus.
       for (let n = 0; n < 3; n++) {
@@ -63,7 +67,7 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       const createdPane=()=>[...document.querySelectorAll<HTMLElement>('[data-browser-page]')].find(el=>el.dataset.browserHost===input.browserHostId && !previousPages.has(el.dataset.browserPage) && el.checkVisibility());
       await wait(createdPane);
       const pane=createdPane()!;
-      const address=pane.querySelector<HTMLInputElement>('[aria-label="Browser address"]');
+      const address=pane.querySelector<HTMLInputElement>('[aria-label="Host Browser address"]');
       if(!address || address.value) throw new Error('New test Pane must have a blank address');
       await wait(()=>!pane.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.disabled);
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(address,input.browserUrl);
@@ -129,6 +133,41 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
     };
     stage = 'create workspace';
     const originalWorkspace = await openWorkspace();
+    if (input.clientBrowserWorkspace) {
+      const { clientBrowserPrototype } = await import('./client-browser/native-client-browser');
+      const visiblePane = () => document.querySelector<HTMLElement>('[data-slot="client-browser"][data-client-browser-surface]');
+      const dismissMenu = async () => { for (let n = 0; n < 3; n++) { document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await new Promise(resolve => setTimeout(resolve, 100)); } };
+      stage = 'Client Browser create in Workspace';
+      document.querySelector<HTMLButtonElement>(`[data-workspace-id="${originalWorkspace}"] [aria-label^="Workspace actions"]`)!.click();
+      await wait(() => button('New Client Browser')); button('New Client Browser')!.click(); await dismissMenu();
+      await wait(() => visiblePane()?.dataset.clientBrowserSurface);
+      const surfaceId = visiblePane()!.dataset.clientBrowserSurface!;
+      await wait(async () => !(await clientBrowserPrototype.snapshot({ surfaceId })).hidden);
+      const before = await clientBrowserPrototype.snapshot({ surfaceId });
+      if (input.clientBrowserRecovery) return await beginClientBrowserWorkspaceRecovery(input, surfaceId, originalWorkspace);
+      stage = 'Client Browser hide across Workspace selection';
+      const destination = await openWorkspace(); await dismissMenu();
+      await wait(async () => (await clientBrowserPrototype.snapshot({ surfaceId })).hidden);
+      document.querySelector<HTMLButtonElement>(`[data-workspace-id="${originalWorkspace}"] [aria-label^="Workspace "][aria-pressed]`)!.click();
+      await wait(() => visiblePane()?.dataset.clientBrowserSurface === surfaceId);
+      await wait(async () => !(await clientBrowserPrototype.snapshot({ surfaceId })).hidden);
+      if ((await clientBrowserPrototype.snapshot({ surfaceId })).pageIdentity !== before.pageIdentity) throw new Error('Workspace selection recreated the native page');
+      stage = 'Client Browser move to another Workspace';
+      button('Move Client Browser')!.click();
+      await wait(() => document.querySelector('[role="dialog"]'));
+      const destinationButton = document.querySelector<HTMLButtonElement>(`[role="dialog"] [data-client-browser-destination="${destination}"]`);
+      if (!destinationButton) throw new Error('Destination Workspace is missing'); destinationButton.click();
+      await wait(() => document.querySelector(`[data-workspace-id="${destination}"] [aria-pressed="true"]`) && visiblePane()?.dataset.clientBrowserSurface === surfaceId);
+      await wait(async () => !(await clientBrowserPrototype.snapshot({ surfaceId })).hidden);
+      if ((await clientBrowserPrototype.snapshot({ surfaceId })).pageIdentity !== before.pageIdentity) throw new Error('Move recreated the native page');
+      stage = 'Client Browser close dialog overlay';
+      button('Close Client Browser')!.click(); await wait(async () => (await clientBrowserPrototype.snapshot({ surfaceId })).hidden);
+      button('Cancel')!.click(); await wait(async () => !(await clientBrowserPrototype.snapshot({ surfaceId })).hidden);
+      stage = 'Client Browser confirmed shared close';
+      button('Close Client Browser')!.click(); await wait(() => button('Close page')); button('Close page')!.click();
+      await wait(async () => !(await clientBrowserPrototype.list()).panes.some(pane => pane.surfaceId === surfaceId));
+      return { passed: true, clientBrowserWorkspace: true, nativePageIdentity: before.pageIdentity, originalWorkspace, destination, retainedAcrossSelection: true, retainedAcrossMove: true, overlayRetention: true, confirmedClose: true, driver: 'Real shell composition RPCs and native WebKit identity; shell controls driven in-process' };
+    }
     const newThread = async () => {
       const previousThread = document.querySelector('[data-thread-id]:has([aria-pressed="true"])')?.getAttribute('data-thread-id');
       document.querySelector<HTMLButtonElement>(`[data-workspace-id="${CSS.escape(originalWorkspace)}"] [aria-label="Workspace actions for ${CSS.escape(input.workspaceName)}"]`)!.click();

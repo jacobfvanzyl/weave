@@ -150,8 +150,11 @@ export type AlphaActions = {
     workspaceId?: string,
   ): Promise<void> | void;
   createThreadInDirectory?(hostId: string, path: string, workspaceId: string): Promise<void> | void;
-  splitPane?(workspace: { hostId: string; workspaceId: string }, paneId: string, axis: 'horizontal' | 'vertical', type: 'terminal' | 'agent' | 'browser'): Promise<void>;
-  newBrowserPane?(hostId: string, workspaceId?: string, url?: string): void;
+  splitPane?(workspace: { hostId: string; workspaceId: string }, paneId: string, axis: 'horizontal' | 'vertical', type: 'terminal' | 'agent' | 'host-browser' | 'client-browser'): Promise<void>;
+  newClientBrowserPane?(workspace: { hostId: string; workspaceId: string }, initialUrl?: string, popup?: { paneId: string; token: string; sourcePaneId: string }): Promise<void>;
+  closeClientBrowserPane?(workspace: { hostId: string; workspaceId: string }, paneId: string): Promise<void>;
+  moveClientBrowserPane?(workspace: { hostId: string; workspaceId: string }, paneId: string, destinationId: string): Promise<void>;
+  newHostBrowserPane?(hostId: string, workspaceId?: string, url?: string): void;
   assignThread?(threadId: string, workspaceId: string): Promise<void> | void;
   selectThread(threadId: string, options?: { preserveDraft?: boolean }): Promise<void> | void;
   setDraftText?(threadId: string, text: string): void;

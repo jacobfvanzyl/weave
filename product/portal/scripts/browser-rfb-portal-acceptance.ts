@@ -169,7 +169,7 @@ try {
  let composition:any;
  await wait(async()=>{composition=(await c.request('workspace.composition.get',{hostId}) as any).composition;return composition.workspaces[0]?.layout?.kind==='split';});
  const popup=composition.workspaces[0].layout.children[1];
- assert(composition.workspaces[0].layout.axis==='horizontal'&&popup.kind==='browser'&&popup.profileId===profile.profileId,'Popup did not inherit a Right split');results.popupRightSplit=true;
+ assert(composition.workspaces[0].layout.axis==='horizontal'&&popup.kind==='host-browser'&&popup.profileId===profile.profileId,'Popup did not inherit a Right split');results.popupRightSplit=true;
  const popupPage=(await backend.managedPage('page.list',{profileId:profile.profileId})).pages.find((page:any)=>page.pageId===popup.paneId);
  await c.request('browser.pane.close',{hostId,expectedRevision:composition.revision,paneId:popup.paneId,profileId:profile.profileId,generation:popupPage.generation,confirmed:true});
  assert((await backend.managedPage('page.list',{profileId:profile.profileId})).pages.length===1,'Shared close left a popup alive');results.sharedPopupClose=true;

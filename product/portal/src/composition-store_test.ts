@@ -117,7 +117,7 @@ test('mixed Pane migration, Thread moves and archive reconciliation preserve oth
     const terminal = { ...pane('shell'), kind: 'terminal' as const, executionContextId: 'context' };
     await writeFile(file, JSON.stringify({ schemaVersion: 2, hostId: 'host', revision: 7, workspaces: [{ workspaceId: 'source', name: 'Source', layout: terminal }, { workspaceId: 'destination', name: 'Destination', layout: null }] }));
     const store = new CompositionStore(root); await store.migrate('host', []);
-    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ schemaVersion: 3, revision: 7 });
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ schemaVersion: 4, revision: 7 });
     const members = Array.from({ length: 20 }, (_, index) => ({ threadId: `thread-${index}`, workspaceId: 'source' }));
     const migrated = await store.reconcileThreads('host', members);
     expect(paneTargets(migrated.workspaces)).toHaveLength(21);

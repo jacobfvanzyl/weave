@@ -5,7 +5,7 @@ Weave is a working environment that organizes human and agent activity around se
 ## Language
 
 **Workspace**:
-A named arrangement of Terminal Panes, Browser Panes and Agent Panes on exactly one Host, existing only while it contains at least one of them. Its identity is independent of directories, which are described by its terminals' current locations.
+A named arrangement of Terminal Panes, Host Browser Panes, Client Browser Panes and Agent Panes on exactly one Host, existing only while it contains at least one of them. Its identity is independent of directories, which are described by its terminals' current locations.
 _Avoid_: Project, repository, directory parent, Workspace Tab
 
 **Execution Context**:
@@ -69,7 +69,7 @@ The durable identity of one Pane, preserved while the Pane moves or swaps. A Ter
 _Avoid_: Pane position, content identity, layout identity
 
 **Unavailable Pane State**:
-The recoverable presentation of an existing Pane while its Host is disconnected, its live Terminal is reconnecting, or its browser page awaits explicit restoration after runtime loss. A confirmed Terminal exit removes its Pane, while browser runtime loss preserves the Browser Pane's identity, placement, Profile and last committed URL without promising recovery of live page state.
+The recoverable presentation of an existing Pane while its Host is disconnected, its live Terminal is reconnecting, or its browser page awaits explicit restoration after runtime loss. A confirmed Terminal exit removes its Pane, while browser runtime loss preserves the Host Browser Pane's identity, placement, Profile and last committed URL without promising recovery of live page state.
 _Avoid_: Broken Pane, placeholder Pane, missing Pane type
 
 **Dirty Pane**:
@@ -89,7 +89,7 @@ A Workspace containing a Dirty Pane or an active or uncertain Agent Turn, so clo
 _Avoid_: Modified tab, unsaved layout
 
 **Close Transaction**:
-The coordinated stopping of live work, with confirmation of active-work consequences, before a Pane or Workspace is removed from every device. Closing a Browser Pane ends its page; closing a Workspace preserves its conversations as archived Threads.
+The coordinated stopping of live work, with confirmation of active-work consequences, before a Pane or Workspace is removed from every device. Closing a Host Browser Pane ends its page; closing a Workspace preserves its conversations as archived Threads.
 _Avoid_: Layout deletion, dismiss, hide
 
 **Idle Terminal**:
@@ -124,10 +124,26 @@ _Avoid_: Thread switcher, global agent dock, cross-Workspace selection
 A local, unsent conversation shown in an Agent Pane before it becomes a Host-owned Thread. An empty draft disappears when another Pane is activated; a draft containing text remains until sent or explicitly discarded.
 _Avoid_: Archived Thread, provider session, Recovery Draft
 
-**Browser Profile**:
-A named, persistent browser identity on one Host, containing cookies, site storage and browser settings shared by every Browser Pane using it across that Host's Workspaces. Its lifetime is independent of Panes and Workspaces, and it survives client disconnection and browser process restarts. Profile selection is optional. A Pane opened without one uses its own temporary browser identity, whose cookies and sign-ins are removed when it closes. Website-created popups share that temporary identity until the last related Pane closes. Named Profiles can be selected next to the address field; selection locks once the Pane loads a page using that Profile. Agents on a Host can use all its Browser Profiles without individual grants.
+**Host Browser**:
+The browser whose pages execute on a Host and can be viewed from connected clients or used by authorized agents. Its pages and profiles belong to that Host.
+_Avoid_: Agent Browser, Human Browser
+
+**Client Browser**:
+The browser whose pages execute independently on each Apple client within existing Workspaces. Workspace placement is shared, while navigation, profiles, sign-ins and live page state belong to each client.
+_Avoid_: Human Browser, Agent Browser, local-only Workspace
+
+**Host Browser Profile**:
+A named, persistent browser identity on one Host, containing cookies, site storage and browser settings shared by every Host Browser Pane using it across that Host's Workspaces. Its lifetime is independent of Panes and Workspaces, and it survives client disconnection and browser process restarts. Profile selection is optional. A Pane opened without one uses its own temporary browser identity, whose cookies and sign-ins are removed when it closes. Website-created popups share that temporary identity until the last related Pane closes. Named Profiles can be selected next to the address field; selection locks once the Pane loads a page using that Profile. Agents on a Host can use all its Host Browser Profiles without individual grants.
 _Avoid_: Browser Session, Workspace-owned profile, client profile
 
-**Browser Pane**:
-A single Host-owned browser page and its navigation history, belonging to one Workspace and optionally using a named Browser Profile on the same Host. Without a Profile it uses temporary storage. Moving it between that Host's Workspaces preserves its browser identity and live page. Its lifetime is independent of client viewing or focus, including during authorized agent work, and explicit closure ends the page and removes the Pane for every client through a Close Transaction.
+**Host Browser Pane**:
+A single Host-owned browser page and its navigation history, belonging to one Workspace and optionally using a named Host Browser Profile on the same Host. Without a Profile it uses temporary storage. Moving it between that Host's Workspaces preserves its browser identity and live page. Its lifetime is independent of client viewing or focus, including during authorized agent work, and explicit closure ends the page and removes the Pane for every client through a Close Transaction.
 _Avoid_: Browser Tab, Browser Session, tab container, client-owned page
+
+**Client Browser Pane**:
+A webpage on each client, belonging to one existing Workspace whose Pane identity, placement and initial address are shared. Each client keeps its own navigation, live page and Client Browser Profile; shared closure ends those pages when each client reconciles.
+_Avoid_: Human Browser, Agent Browser, standalone browser window
+
+**Client Browser Profile**:
+A named, persistent browser identity on one client containing its cookies, sign-ins and website data. Its lifetime is independent of Panes and Workspaces, and it does not synchronize with another client or a Host Browser Profile.
+_Avoid_: Host Browser Profile, shared profile, Workspace profile

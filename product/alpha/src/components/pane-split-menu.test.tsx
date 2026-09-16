@@ -3,16 +3,16 @@ import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import { PaneSplitMenu } from './pane-split-menu';
 
-it.each(['terminal', 'agent', 'browser'] as const)('defaults to Down then the source %s type for Enter confirmation', async sourceType => {
+it.each(['terminal', 'agent', 'host-browser'] as const)('defaults to Down then the source %s type for Enter confirmation', async sourceType => {
   const user = userEvent.setup(), split = vi.fn();
   render(<PaneSplitMenu sourceType={sourceType} onSplit={split} />);
   await user.click(screen.getByRole('button', { name: 'Split pane' }));
   await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Down' })).toHaveFocus());
   expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['Down', 'Right']);
   await user.keyboard('{Enter}');
-  await waitFor(() => expect(screen.getByRole('menuitem', { name: sourceType === 'agent' ? 'Agent' : sourceType === 'browser' ? 'Browser' : 'Terminal' })).toHaveFocus());
-  expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['Terminal', 'Agent', 'Browser']);
-  expect(screen.getByRole('menuitem', { name: 'Browser' })).not.toHaveAttribute('aria-disabled', 'true');
+  await waitFor(() => expect(screen.getByRole('menuitem', { name: sourceType === 'agent' ? 'Agent' : sourceType === 'host-browser' ? 'Host Browser' : 'Terminal' })).toHaveFocus());
+  expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['Terminal', 'Agent', 'Host Browser']);
+  expect(screen.getByRole('menuitem', { name: 'Host Browser' })).not.toHaveAttribute('aria-disabled', 'true');
   await user.keyboard('{Enter}');
   expect(split).toHaveBeenCalledExactlyOnceWith('vertical', sourceType);
 });

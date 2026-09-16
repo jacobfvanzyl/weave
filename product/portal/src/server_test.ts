@@ -2222,7 +2222,7 @@ test('Authenticated compositions enforce ownership and revisions, survive restar
     const second = await connect();
     const capabilities = await first.request('portal.capabilities') as { capabilities: string[] };
     assertEquals(capabilities.capabilities.includes('workspace.composition.replace'), true);
-    const initial = { composition: { schemaVersion: 3, hostId: portal.security.hostId, revision: 0, workspaces: [] } };
+    const initial = { composition: { schemaVersion: 4, hostId: portal.security.hostId, revision: 0, workspaces: [] } };
     assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), initial);
     const { terminal } = await first.request('terminal.create', { executionContextId: 'allowed', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
     const { terminal: privateTerminal } = await first.request('terminal.create', { executionContextId: 'private', cols: 80, rows: 24 }) as { terminal: { terminalId: string } };
@@ -2493,7 +2493,7 @@ test('composition writes create distinct pane terminals once across retries, con
 
     await assertRejects(() => replace(first));
     assertEquals((await backend.list()).length, 1);
-    assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), { composition: { schemaVersion: 3, hostId: portal.security.hostId, revision: 0, workspaces: [] } });
+    assertEquals(await first.request('workspace.composition.get', { hostId: portal.security.hostId }), { composition: { schemaVersion: 4, hostId: portal.security.hostId, revision: 0, workspaces: [] } });
     const concurrent = await Promise.allSettled([replace(first), replace(second)]);
     assertEquals(concurrent.filter((result) => result.status === 'fulfilled').length, 1);
     assertEquals(creates, 3); // first shell reused; only the failed second shell retried

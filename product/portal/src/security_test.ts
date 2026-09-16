@@ -372,3 +372,23 @@ for (const browserPrefix of ['browser.profile.', 'browser.']) test(`legacy unres
     await assertRejects(() => reopened.authorize(agent, 'browser.profile.control', { browserProfileId: crypto.randomUUID() }), PortalSecurityError);
   } finally { await removePath(root, { recursive: true }); }
 });
+
+test('concurrent security reads cannot replace the snapshot being persisted by a pairing mutation', async () => {
+  const root = await temporaryDirectory();
+  try {
+    const security = await PortalSecurity.open(config(root));
+    const key = await generatePortalKey();
+    let reading = true;
+    const readers = Promise.all(Array.from({ length: 4 }, async () => { while (reading) await security.listCredentials(); }));
+    const credentials: string[] = [];
+    try {
+      for (let index = 0; index < 8; index++) {
+        const token = await security.createPairingToken(60_000);
+        const paired = await security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token, label: `Concurrent client ${index}`, publicKey: key.publicKey });
+        credentials.push(paired.principal.credentialId);
+      }
+    } finally { reading = false; await readers; }
+    const reopened = await PortalSecurity.open(config(root));
+    assertEquals((await reopened.listCredentials()).map(credential => credential.credentialId).sort(), credentials.sort());
+  } finally { await removePath(root, { recursive: true }); }
+});

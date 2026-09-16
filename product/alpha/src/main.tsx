@@ -13,7 +13,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
 if (import.meta.env.VITE_ALPHA_ACCEPTANCE === '1' && new URLSearchParams(location.search).get('acceptance') === 'live') {
   import('./acceptance').then(async ({ runLiveShellAcceptance }) => {
-    Object.assign(window, { alphaAcceptanceReady: true });
+    const { pendingClientBrowserRecovery } = await import('./client-browser/workspace-acceptance');
+    const recovery = pendingClientBrowserRecovery();
+    Object.assign(window, { alphaAcceptanceReady: true, ...(recovery ? { alphaAcceptanceInput: recovery.input } : {}) });
     const state = window as unknown as { alphaAcceptance: unknown; alphaAcceptanceIndex?: number; alphaAcceptanceStage?: string; alphaAcceptanceInput?: import('./acceptance').LiveAcceptanceInput | import('./acceptance').LiveAcceptanceInput[] };
     while (!state.alphaAcceptanceInput) await new Promise((resolve) => setTimeout(resolve, 50));
     const inputs = Array.isArray(state.alphaAcceptanceInput) ? state.alphaAcceptanceInput : [state.alphaAcceptanceInput];
