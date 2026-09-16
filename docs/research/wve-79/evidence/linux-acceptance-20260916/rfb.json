@@ -1,0 +1,89 @@
+{
+  "state": "/tmp/wve-rfb-portal-imw248",
+  "browserPaneCreated": true,
+  "trustedHumanProfileAccess": true,
+  "focusHandoff": true,
+  "selectionOwnership": true,
+  "contextOwnership": true,
+  "deviceScaleFactor": 2,
+  "authorizedInput": true,
+  "contextActions": {
+    "editable": {
+      "canCopy": true,
+      "canCut": true,
+      "canPaste": true,
+      "canSelectAll": true,
+      "text": "Weave ✓ beta gamma"
+    },
+    "readOnly": {
+      "canCopy": true,
+      "canCut": false,
+      "canPaste": false,
+      "canSelectAll": true,
+      "text": "Weave ✓ beta gamma"
+    },
+    "plain": {
+      "canCopy": false,
+      "canCut": false,
+      "canPaste": false,
+      "canSelectAll": true,
+      "text": ""
+    },
+    "password": {
+      "canCopy": false,
+      "canCut": false,
+      "canPaste": true,
+      "canSelectAll": true,
+      "text": "••••••••••••••••••"
+    },
+    "disabled": {
+      "canCopy": false,
+      "canCut": false,
+      "canPaste": false,
+      "canSelectAll": true,
+      "text": ""
+    },
+    "cancelled": true
+  },
+  "keyboardModes": {
+    "editable": 0,
+    "contenteditable": 0,
+    "ordinaryPage": 1
+  },
+  "interactions": {
+    "hover": true,
+    "cursor": "pointer",
+    "doubleClickSelection": "alpha",
+    "tripleClickSelection": true,
+    "cut": true,
+    "afterCut": " beta gamma",
+    "unicodePaste": true,
+    "formPopupSelection": "deferred: upstream CEF Mac popup regression"
+  },
+  "nativeWheel": {
+    "fractionalPixels": 3,
+    "nestedVertical": 120,
+    "nestedHorizontal": 32,
+    "pageCancellation": true,
+    "wheelBeforeButton": true
+  },
+  "scaleOnlyHandoff": true,
+  "sameViewportFocusClaims": 3,
+  "nativeRfb": {
+    "external": true,
+    "width": 1000,
+    "height": 800,
+    "deviceScaleFactor": 2,
+    "bytes": 9007
+  },
+  "unattendedAfterRpcDisconnect": true,
+  "popupRightSplit": true,
+  "sharedPopupClose": true,
+  "slowViewer": {
+    "profileDisplayCouplingObserved": true,
+    "chromiumContinued": true,
+    "recoveryAfterPeerCloseMs": 25.91819399999804
+  },
+  "revokedDisplayBrowserAlive": true,
+  "success": true
+}

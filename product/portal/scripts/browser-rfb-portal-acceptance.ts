@@ -14,7 +14,7 @@ if (!binary || (!decoder && !process.env.BROWSER_CAPTURE_READY)) throw new Error
 const root = await mkdtemp('/tmp/wve-rfb-portal-');
 const evidence = process.env.BROWSER_EVIDENCE ?? '/tmp/wve79-rfb-portal-acceptance.json';
 const assert = (value: unknown, reason: string) => { if (!value) throw new Error(reason); };
-const wait = async (check: () => Promise<boolean> | boolean) => { const until = Date.now() + Number(process.env.BROWSER_ACCEPTANCE_TIMEOUT_MS ?? 15000); while (!await check()) { if (Date.now() > until) throw new Error('Portal browser acceptance timed out'); await Bun.sleep(25); } };
+const wait = async (check: () => Promise<boolean> | boolean, timeoutMs = 15000) => { const until = Date.now() + timeoutMs; while (!await check()) { if (Date.now() > until) throw new Error('Portal browser acceptance timed out'); await Bun.sleep(25); } };
 const fixture = Bun.serve({ hostname:'127.0.0.1', port:0, fetch:()=>new Response('<!doctype html><title>Portal RFB acceptance</title><style>body{margin:0;background:#fab387;font:24px sans-serif}button{width:150px;height:100px}</style><button onclick="clicks++">Click</button><div>Authenticated Portal pixels</div><script>window.clicks=0;window.ticks=0;setInterval(()=>ticks++,50)</script>', { headers:{'content-type':'text/html'} }) });
 const owner = await serveBrowserService({stateDirectory:root,binary:'/unused-legacy-chrome',cefBinary:resolve(binary)});
 const backend = new BrowserServiceClient(root,'/unused-legacy-chrome',resolve(binary));
@@ -49,7 +49,7 @@ try {
  const initial=(await a.request('workspace.composition.get',{hostId}) as any).composition;
  const {page:created}=await a.request('browser.pane.create',{hostId,workspaceId:'browser-acceptance',workspaceName:'Browser acceptance',expectedRevision:initial.revision,paneId:crypto.randomUUID(),profileId:profile.profileId,url:`http://127.0.0.1:${fixture.port}/`,axis:'vertical'}) as any;
  results.browserPaneCreated=true;results.trustedHumanProfileAccess=true;
- const evaluate=async(expression:string)=>(await backend.managedPage('page.cdp',{pageId:created.pageId,generation:created.generation,arguments:{method:'Runtime.evaluate',arguments:{expression,returnByValue:true}}}).catch(cause=>{throw new Error(`Fixture evaluation failed: ${expression.slice(0,100)}`,{cause});})).result?.value;
+ const evaluate=async(expression:string)=>(await backend.managedPage('page.cdp',{pageId:created.pageId,generation:created.generation,arguments:{method:'Runtime.evaluate',arguments:{expression,returnByValue:true,awaitPromise:true}}}).catch(cause=>{throw new Error(`Fixture evaluation failed: ${expression.slice(0,100)}`,{cause});})).result?.value;
  await wait(async()=>await evaluate('document.title')==='Portal RFB acceptance');
 
  const attach=async(rpc:RpcSocket)=>rpc.request('browser.page.view.attach',{profileId:profile.profileId,pageId:created.pageId,generation:created.generation,mode:'control'}) as Promise<{viewId:string;ticket:string}>;
@@ -73,11 +73,15 @@ try {
  await wait(async()=>(await interaction()).text==='alpha');
  const selected=await interaction();
  await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchKeyEvent',arguments:{type:'rawKeyDown',key:'Backspace',windowsVirtualKeyCode:8,commands:['DeleteBackward']}});
- await wait(async()=>await evaluate('document.querySelector("#edit").value')==='beta gamma');
+ // Stock Chromium retains the separator on Linux and removes it on Mac in
+ // this fixture. Require the selected word to disappear without other edits.
+ await wait(async()=>['beta gamma',' beta gamma'].includes(await evaluate('document.querySelector("#edit").value')));
+ const afterCut=await evaluate('document.querySelector("#edit").value');
+ const afterPaste=`Weave ✓${afterCut}`;
  await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.insertText',arguments:{text:'Weave ✓'}});
- await wait(async()=>await evaluate('document.querySelector("#edit").value')==='Weave ✓beta gamma');
+ await wait(async()=>await evaluate('document.querySelector("#edit").value')===afterPaste);
  for(const type of ['mousePressed','mouseReleased']) await pointer(type,220,85,type==='mousePressed'?1:0,3);
- await wait(async()=>(await interaction()).text==='Weave ✓beta gamma');
+ await wait(async()=>(await interaction()).text===afterPaste);
  const context=(x:number,y:number)=>b.request('browser.page.view.context',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,x,y}) as Promise<{text:string;canCopy:boolean;canCut:boolean;canPaste:boolean;canSelectAll:boolean}>;
  const mode=async()=>((await interaction()) as unknown as {inputMode:number}).inputMode;
  await wait(async()=>await mode()===0);
@@ -98,17 +102,20 @@ try {
  const prevented=await context(700,100);assert(!prevented.canCopy&&!prevented.canCut&&!prevented.canPaste&&!prevented.canSelectAll,'Cancelled webpage context menu was replaced');
  await evaluate('document.removeEventListener("contextmenu",preventContext);true');
  results.contextActions={editable,readOnly,plain,password,disabled,cancelled:true};results.keyboardModes={editable:0,contenteditable:0,ordinaryPage:1};
- results.interactions={hover:true,cursor:'pointer',doubleClickSelection:selected.text,tripleClickSelection:true,cut:true,unicodePaste:true,formPopupSelection:"deferred: upstream CEF Mac popup regression"};
+ results.interactions={hover:true,cursor:'pointer',doubleClickSelection:selected.text,tripleClickSelection:true,cut:true,afterCut,unicodePaste:true,formPopupSelection:"deferred: upstream CEF Mac popup regression"};
  await evaluate('["hover","edit","choice"].forEach(id=>document.getElementById(id).remove());true');
  // Human wheel input uses upstream CEF while agent evaluation stays full CDP.
  await evaluate(`window.wheelTrace=[];window.blockWheel=false;document.body.insertAdjacentHTML('beforeend','<div id="wheel-fixture" style="height:5000px"><div id="nested" style="position:absolute;top:200px;left:200px;width:200px;height:120px;overflow:auto"><div style="height:4000px;width:4000px">Nested scroll</div></div></div>');window.addEventListener('wheel',e=>{wheelTrace.push(['wheel',e.deltaX,e.deltaY]);if(blockWheel)e.preventDefault()},{passive:false});window.addEventListener('mousedown',()=>wheelTrace.push(['down']));true`);
+ // Layout insertion must reach Chromium's compositor before hit-tested input.
+ await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
  const wheel=async(deltaY:number,x=600,y=400,deltaX=0)=>b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type:'mouseWheel',x,y,deltaX,deltaY}});
  for(let i=0;i<10;i++)await wheel(.25);
  await Bun.sleep(200);
- assert(await evaluate('scrollY')===3,'Fractional wheel movement was rounded away');
+ assert(await evaluate('scrollY')===3,`Fractional wheel movement was rounded away: ${JSON.stringify(await evaluate('({scrollY,events:wheelTrace})'))}`);
  await evaluate('scrollTo(0,0);true');await Bun.sleep(100);
  await wheel(120,250,250,32);await Bun.sleep(200);
- assert(await evaluate('document.querySelector("#nested").scrollTop')===120&&await evaluate('document.querySelector("#nested").scrollLeft')===32&&await evaluate('scrollY')===0,'Native wheel lost nested scrolling or horizontal units');
+ const nestedScroll=await evaluate('({top:document.querySelector("#nested").scrollTop,left:document.querySelector("#nested").scrollLeft,page:scrollY,events:wheelTrace})');
+ assert(nestedScroll.top===120&&nestedScroll.left===32&&nestedScroll.page===0,`Native wheel lost nested scrolling or horizontal units: ${JSON.stringify(nestedScroll)}`);
  await evaluate('blockWheel=true;wheelTrace=[];true');await wheel(80);await Bun.sleep(100);
  assert(await evaluate('scrollY')===0&&await evaluate('wheelTrace.length')===1,'Page wheel cancellation was bypassed');
  await evaluate('blockWheel=false;wheelTrace=[];true');
@@ -141,7 +148,7 @@ try {
  } else {
   const marker=process.env.BROWSER_CAPTURE_READY!;
   await writeFile(marker,JSON.stringify({rfbProxy:path,width:1000,height:800,deviceScaleFactor:scale})+'\n',{mode:0o600});
-  await wait(()=>Bun.file(marker+'.done').exists());
+  await wait(()=>Bun.file(marker+'.done').exists(),Number(process.env.BROWSER_ACCEPTANCE_TIMEOUT_MS ?? 15000));
   capture={external:true,width:1000,height:800,deviceScaleFactor:scale};
  }
  const image=await backend.managedPage('page.cdp',{pageId:created.pageId,generation:created.generation,arguments:{method:'Page.captureScreenshot',arguments:{format:'png'}}});

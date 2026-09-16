@@ -485,7 +485,10 @@ static void command(const std::string &line) {
         event.modifiers = ((modifiers & 1) ? EVENTFLAG_ALT_DOWN : 0) |
             ((modifiers & 2) ? EVENTFLAG_CONTROL_DOWN : 0) |
             ((modifiers & 4) ? EVENTFLAG_COMMAND_DOWN : 0) |
-            ((modifiers & 8) ? EVENTFLAG_SHIFT_DOWN : 0);
+            ((modifiers & 8) ? EVENTFLAG_SHIFT_DOWN : 0) |
+            // Client wheel deltas are CSS pixels. Preserve precise scrolling
+            // instead of Linux treating them as discrete mouse-wheel steps.
+            EVENTFLAG_PRECISION_SCROLLING_DELTA;
         if (deltaX || deltaY) host->SendMouseWheelEvent(event, -deltaX, -deltaY);
         reply(request, object()); return;
       }

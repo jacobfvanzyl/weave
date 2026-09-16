@@ -1,0 +1,9 @@
+{
+  "platform": "linux",
+  "temporaryIsolationAndPopupLifetime": true,
+  "portalRestartRetainsLivePageAndPairing": true,
+  "runtimeCrashRequiresExplicitRestore": true,
+  "recentStorageWriteSurvivedForcedCrash": false,
+  "serviceRestartStorageAndLastCloseCleanup": true,
+  "success": true
+}

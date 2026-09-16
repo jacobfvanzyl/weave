@@ -1,0 +1,49 @@
+{
+  "optionalProfileAndLock": true,
+  "toolCount": 30,
+  "existingHumanPage": true,
+  "snapshot": [
+    {
+      "type": "text",
+      "text": "## Latest page snapshot\nuid=2_0 RootWebArea \"Agent browser acceptance\" url=\"http://127.0.0.1:33465/\"\n  uid=2_1 heading \"Shared page\" level=\"1\"\n  uid=2_2 button \"Click me\"\n"
+    }
+  ],
+  "console": [
+    {
+      "type": "text",
+      "text": "## Console messages\nShowing 1-1 of 1 (Page 1 of 1).\nmsgid=1 [log] agent-console-evidence (1 args)"
+    }
+  ],
+  "network": [
+    {
+      "type": "text",
+      "text": "## Network requests\nShowing 1-4 of 4 (Page 1 of 1).\nreqid=1 GET http://127.0.0.1:33465/ [200]\nreqid=2 GET chrome-extension://cimiefiiaegbelhefglklhhakcgmhkai/page-script.js [200]\nreqid=3 GET http://127.0.0.1:33465/api [200]\nreqid=4 GET http://127.0.0.1:33465/favicon.ico [200]"
+    }
+  ],
+  "rightSplit": {
+    "kind": "split",
+    "nodeId": "34b3a25b-55d8-4ef6-8f18-5044ddde47b8",
+    "axis": "horizontal",
+    "ratio": 0.5,
+    "children": [
+      {
+        "kind": "agent",
+        "nodeId": "a6a1fc14-565c-4c2c-a969-4ff2ea3d8495",
+        "paneId": "c251eb60-2c2b-44ec-a17e-529d069a095c",
+        "threadId": "1ae52d2c-4ce3-403c-8a11-b03ff6f7b6db"
+      },
+      {
+        "kind": "browser",
+        "nodeId": "61b2c896-4df5-410c-8de9-25a039ea5fa3",
+        "paneId": "de1fca72-a3b6-43af-b455-3f01655f7e7d",
+        "profileId": "504cef40-eaff-4185-bdd6-221d284becb6",
+        "lastCommittedUrl": "http://127.0.0.1:33465/"
+      }
+    ]
+  },
+  "debuggerStepping": true,
+  "allProfilesWithoutGrants": true,
+  "unattended": true,
+  "sharedPageSurvives": true,
+  "agentCloseRemovesPageAndPane": true
+}
