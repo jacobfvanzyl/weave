@@ -1,4 +1,5 @@
 #import "WeaveBrowserSurface.h"
+#import "WeaveBrowserMetalPresenter.h"
 #import <QuartzCore/QuartzCore.h>
 #import <rfb/rfbclient.h>
 #import "WeaveBrowserProtocol.h"
@@ -24,6 +25,7 @@ static double browserThreadCPU(void) { struct timespec t; clock_gettime(CLOCK_TH
 @property(nonatomic, readwrite) WeaveBrowserView *view;
 @property(nonatomic, copy) void (^event)(NSDictionary *);
 @property(nonatomic) NSURLSession *session;
+@property(nonatomic) WeaveBrowserMetalPresenter *metal;
 @property(nonatomic) NSURLSessionWebSocketTask *socket;
 @property(atomic) BOOL stopped;
 @property(nonatomic) BOOL ready;
@@ -34,10 +36,11 @@ static double browserThreadCPU(void) { struct timespec t; clock_gettime(CLOCK_TH
 @property(nonatomic) BOOL presentationQueued;
 // Opt-in bounded profiling. Fixture markers require a separate acceptance flag.
 @property(nonatomic) BOOL diagnostics, fixtureMarkers;
-@property(nonatomic) NSString *diagnosticPath;
+@property(nonatomic) NSString *diagnosticPath, *diagnosticId;
 @property(nonatomic) NSMutableArray *samples;
 @property(nonatomic) double previousPresentation, lastDiagnosticWrite;
 @property(nonatomic) double latestCopyMs, latestCopiedAt, decodeCPU;
+@property(nonatomic) double messageStartedAt, messageStartedCPU, messageEndedAt, latestTransferMs, latestDecodeMs, latestReceiveGapMs;
 @property(nonatomic) uint64_t receivedBytes, updates;
 @end
 static void *clientTag = &clientTag;
@@ -48,6 +51,17 @@ static rfbBool allocatePixels(rfbClient *client) {
   free(client->frameBuffer); client->frameBuffer = (uint8_t *)pixels;
   return TRUE;
 }
+static double presentCGImage(WeaveBrowserSurface *surface, NSData *pixels, int width, int height) {
+  double started=surface.diagnostics?browserThreadCPU():0;
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixels);
+    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGImageRef image = CGImageCreate(width, height, 8, 32, width * 4, color, kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, provider, NULL, NO, kCGRenderingIntentDefault);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    surface.view.layer.contents = (__bridge id)image;
+    [CATransaction commit];
+    CGImageRelease(image); CGColorSpaceRelease(color); CGDataProviderRelease(provider);
+  return surface.diagnostics?(browserThreadCPU()-started)*1000:0;
+}
 static void presentPixels(rfbClient *client) {
   WeaveBrowserSurface *surface = (__bridge WeaveBrowserSurface *)rfbClientGetClientData(client, clientTag);
   if (surface.stopped) return;
@@ -56,44 +70,50 @@ static void presentPixels(rfbClient *client) {
     surface.latestPixels = [NSData dataWithBytes:client->frameBuffer length:(NSUInteger)client->width * client->height * 4];
     surface.latestWidth = client->width; surface.latestHeight = client->height;
     surface.updates++;
-    if (surface.diagnostics) { surface.latestCopiedAt = CACurrentMediaTime(); surface.latestCopyMs = (surface.latestCopiedAt - copyAt) * 1000; }
+    if (surface.diagnostics) { surface.latestTransferMs=(copyAt-surface.messageStartedAt)*1000; surface.latestDecodeMs=(browserThreadCPU()-surface.messageStartedCPU)*1000; surface.latestReceiveGapMs=surface.messageEndedAt?(surface.messageStartedAt-surface.messageEndedAt)*1000:0; surface.latestCopiedAt = CACurrentMediaTime(); surface.latestCopyMs = (surface.latestCopiedAt - copyAt) * 1000; }
     if (surface.presentationQueued) return;
     surface.presentationQueued = YES;
   }
   dispatch_async(dispatch_get_main_queue(), ^{
-    NSData *pixels; int width, height; double copyMs, copiedAt, cpu; uint64_t bytes, updates;
+    NSData *pixels; int width, height; double copyMs, copiedAt, cpu, transferMs, decodeMs, receiveGapMs; uint64_t bytes, updates;
     @synchronized(surface) {
       pixels = surface.latestPixels; width = surface.latestWidth; height = surface.latestHeight;
       surface.latestPixels = nil; surface.presentationQueued = NO;
+      transferMs=surface.latestTransferMs;decodeMs=surface.latestDecodeMs;receiveGapMs=surface.latestReceiveGapMs;
       copyMs = surface.latestCopyMs; copiedAt = surface.latestCopiedAt; cpu = surface.decodeCPU; bytes = surface.receivedBytes; updates = surface.updates;
     }
     if (surface.stopped || !pixels) return;
     double mainAt = surface.diagnostics ? CACurrentMediaTime() : 0;
-    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixels);
-    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGImageRef image = CGImageCreate(width, height, 8, 32, width * 4, color, kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, provider, NULL, NO, kCGRenderingIntentDefault);
-    [CATransaction begin]; [CATransaction setDisableActions:YES];
-    surface.view.layer.contents = (__bridge id)image;
-    [CATransaction commit];
+    __block double renderCPUms=0;
+    void (^submitted)(void)=^{
+    if(surface.stopped)return;
+    NSDictionary *metrics=surface.metal.lastMetrics;
+    if(metrics[@"error"]){[surface.metal close];surface.metal=nil;renderCPUms=presentCGImage(surface,pixels,width,height);}
+    double submittedAt=surface.metal?[metrics[@"submittedAt"] doubleValue]:CACurrentMediaTime();
+    double submittedEpoch=surface.metal?[metrics[@"epochMs"] doubleValue]:NSDate.date.timeIntervalSince1970*1000;
     // The shell needs readiness/resize acknowledgements, not a callback per frame.
     if (width != surface.reportedWidth || height != surface.reportedHeight) {
       surface.reportedWidth = width; surface.reportedHeight = height;
-      if (surface.event) surface.event(@{@"kind":@"frame", @"width":@(width), @"height":@(height)});
+      if (surface.event) surface.event(@{@"kind":@"frame", @"width":@(width), @"height":@(height), @"diagnosticId":surface.diagnosticId ?: @""});
     }
-    CGImageRelease(image); CGColorSpaceRelease(color); CGDataProviderRelease(provider);
     if (surface.diagnostics) {
       const uint8_t *marker = (const uint8_t *)pixels.bytes;
       uint32_t scroll = surface.fixtureMarkers && pixels.length >= 8 ? marker[0] | (marker[1]<<8) | (marker[2]<<16) : 0;
       uint32_t sequence = surface.fixtureMarkers && pixels.length >= 8 ? marker[4] | (marker[5]<<8) | (marker[6]<<16) : 0;
-      [surface.samples addObject:@{@"time":@(mainAt), @"epochMs":@(NSDate.date.timeIntervalSince1970 * 1000), @"scroll":@(scroll), @"sequence":@(sequence), @"intervalMs":@(surface.previousPresentation ? (mainAt-surface.previousPresentation)*1000 : 0), @"copyMs":@(copyMs), @"mainQueueMs":@((mainAt-copiedAt)*1000), @"submitMs":@((CACurrentMediaTime()-mainAt)*1000), @"decodeCPUSeconds":@(cpu), @"receivedBytes":@(bytes), @"updates":@(updates), @"width":@(width), @"height":@(height)}];
-      surface.previousPresentation = mainAt;
+      [surface.samples addObject:@{@"diagnosticId":surface.diagnosticId, @"time":@(submittedAt), @"epochMs":@(submittedEpoch), @"scroll":@(scroll), @"sequence":@(sequence), @"intervalMs":@(surface.previousPresentation ? (submittedAt-surface.previousPresentation)*1000 : 0), @"copyMs":@(copyMs), @"mainQueueMs":@((mainAt-copiedAt)*1000), @"submitMs":@((submittedAt-mainAt)*1000), @"renderCPUms":surface.metal?(metrics[@"renderCPUms"] ?: @0):@(renderCPUms), @"gpuMs":metrics[@"gpuMs"] ?: @0, @"verifiedPixels":metrics[@"verifiedPixels"] ?: @0, @"differentPixels":metrics[@"differentPixels"] ?: @0, @"presenterError":metrics[@"error"] ?: @"", @"transferWallMs":@(transferMs), @"decodeMs":@(decodeMs), @"receiveGapMs":@(receiveGapMs), @"decodeCPUSeconds":@(cpu), @"receivedBytes":@(bytes), @"updates":@(updates), @"width":@(width), @"height":@(height), @"presenter":surface.metal?@"metal":@"cgimage", @"contentsFormat":surface.view.layer.contentsFormat ?: @"unknown"}];
+      surface.previousPresentation = submittedAt;
       if (surface.samples.count > 10000) [surface.samples removeObjectAtIndex:0];
       if (mainAt-surface.lastDiagnosticWrite > 5) {
         surface.lastDiagnosticWrite = mainAt;
         NSData *report = [NSJSONSerialization dataWithJSONObject:surface.samples options:0 error:nil];
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0), ^{ [report writeToFile:surface.diagnosticPath atomically:YES]; });
+        static dispatch_queue_t writer; static dispatch_once_t once; dispatch_once(&once, ^{ writer=dispatch_queue_create("weave.browser.diagnostics", DISPATCH_QUEUE_SERIAL); });
+        dispatch_async(writer, ^{ [report writeToFile:surface.diagnosticPath atomically:YES]; });
       }
     }
+    };
+    if(surface.metal){[surface.metal present:pixels width:width height:height submitted:submitted];return;}
+    renderCPUms=presentCGImage(surface,pixels,width,height);
+    submitted();
   });
 }
 @implementation WeaveBrowserSurface
@@ -102,9 +122,15 @@ static void presentPixels(rfbClient *client) {
     _event = [event copy]; _networkFD = -1; _decoderFD = -1;
     _diagnostics = [NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_DIAGNOSTICS"] isEqual:@"1"];
     if (_diagnostics) {
-      _samples = [NSMutableArray array];
       _fixtureMarkers = [NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_FIXTURE_MARKERS"] isEqual:@"1"];
       _diagnosticPath = NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_DIAGNOSTICS_PATH"] ?: [NSTemporaryDirectory() stringByAppendingPathComponent:@"weave-browser-performance.json"];
+      _diagnosticId = NSUUID.UUID.UUIDString;
+      // A real client may retain several Browser Panes. Preserve all their
+      // samples in one report and identify the measured surface explicitly.
+      static NSMutableDictionary<NSString*, NSMutableArray*> *reports;
+      if (!reports) reports = [NSMutableDictionary dictionary];
+      _samples = reports[_diagnosticPath];
+      if (!_samples) reports[_diagnosticPath] = _samples = [NSMutableArray array];
     }
     _view = [[BrowserPixelView alloc] initWithFrame:CGRectZero];
 #if TARGET_OS_OSX
@@ -112,6 +138,16 @@ static void presentPixels(rfbClient *client) {
 #else
     _view.userInteractionEnabled = NO;
 #endif
+    // Mac CGImage uploads dominate presentation CPU. iPad's existing path is
+    // already inexpensive; keep Metal opt-in there until energy evidence wins.
+#if TARGET_OS_OSX
+    BOOL useMetal=YES;
+#else
+    BOOL useMetal=NO;
+#endif
+    NSString *metalOverride=NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_METAL"];
+    if(_diagnostics && metalOverride) useMetal=[metalOverride isEqual:@"1"];
+    if(useMetal) _metal=[[WeaveBrowserMetalPresenter alloc] initWithLayer:_view.layer];
     _view.hidden = YES;
     _view.layer.masksToBounds = YES;
     _view.layer.contentsGravity = kCAGravityResizeAspect;
@@ -150,7 +186,7 @@ static void presentPixels(rfbClient *client) {
   if (self.stopped) return;
   [self.socket receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *message, NSError *error) {
     if (self.stopped) return;
-    if (error) { [self fail:@"Browser display disconnected"]; return; }
+    if (error) { [self fail:[NSString stringWithFormat:@"Browser display disconnected: %@", error.localizedDescription]]; return; }
     if (message.type == NSURLSessionWebSocketMessageTypeString) {
       NSData *data = [message.string dataUsingEncoding:NSUTF8StringEncoding];
       NSDictionary *value = data.length < 65536 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
@@ -182,6 +218,10 @@ static void presentPixels(rfbClient *client) {
       client->sock = dup(self.decoderFD); client->listenSpecified = TRUE;
       client->appData.shareDesktop = TRUE; client->appData.useRemoteCursor = TRUE;
       client->appData.encodingsString = "zrle hextile raw";
+      NSString *encoding = NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_RFB_ENCODING"];
+      if (self.diagnostics && [encoding isEqual:@"hextile"]) client->appData.encodingsString = "hextile raw";
+      else if (self.diagnostics && [encoding isEqual:@"zlib"]) { client->appData.encodingsString = "zlib raw"; client->appData.compressLevel = 1; client->appData.enableJPEG = FALSE; }
+      else if (self.diagnostics && [encoding isEqual:@"raw"]) client->appData.encodingsString = "raw";
       client->canHandleNewFBSize = TRUE;
       client->format.redShift = 16; client->format.greenShift = 8; client->format.blueShift = 0; client->format.bigEndian = FALSE;
       client->MallocFrameBuffer = allocatePixels; client->FinishedFrameBufferUpdate = presentPixels;
@@ -193,8 +233,9 @@ static void presentPixels(rfbClient *client) {
         int ready = WaitForMessage(client, 20000); if (ready < 0) break;
         if (ready > 0) {
           double cpu = self.diagnostics ? browserThreadCPU() : 0;
+          if(self.diagnostics){self.messageStartedAt=CACurrentMediaTime();self.messageStartedCPU=cpu;}
           BOOL handled = HandleRFBServerMessage(client);
-          if (self.diagnostics) { @synchronized(self) { self.decodeCPU += browserThreadCPU() - cpu; } }
+          if (self.diagnostics) { @synchronized(self) { self.decodeCPU += browserThreadCPU() - cpu; self.messageEndedAt=CACurrentMediaTime(); } }
           if (!handled) break;
         }
       } }
@@ -217,6 +258,7 @@ static void presentPixels(rfbClient *client) {
 - (void)layout:(CGRect)frame visible:(BOOL)visible dim:(double)dim {
   self.view.frame = frame; self.view.hidden = !visible || self.stopped;
   self.view.layer.opacity = 1 - fmax(0, fmin(0.8, dim));
+  [self.metal layout];
 }
 - (void)close {
   if (self.stopped) return;
@@ -225,6 +267,7 @@ static void presentPixels(rfbClient *client) {
   if (self.decoderFD >= 0) shutdown(self.decoderFD, SHUT_RDWR);
   [self.socket cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
   [self.session invalidateAndCancel]; self.socket = nil; self.session = nil;
+  [self.metal close];self.metal=nil;
   self.view.layer.contents = nil; [self.view removeFromSuperview]; self.event = nil;
   @synchronized(self) { self.latestPixels = nil; }
 }

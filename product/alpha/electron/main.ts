@@ -157,7 +157,7 @@ else {
       if (result?.passed && !await contents.executeJavaScript('isSecureContext && typeof require === "undefined" && typeof window.ipcRenderer === "undefined"')) throw new Error('Renderer isolation check failed');
       await mkdir(evidence, { recursive: true });
       if (result?.passed) {
-        const png = await contents.executeJavaScript(`Boolean(document.querySelector('[data-slot="native-browser-input"]'))`) ? browsers.capture() : native.acceptance('capture');
+        const png = await contents.executeJavaScript(`Boolean(document.querySelector('[data-slot="native-browser-input"]'))`) ? (process.env.WEAVE_BROWSER_METAL === '0' && process.env.WEAVE_BROWSER_DIAGNOSTICS === '1' ? browsers.capture() : undefined) : native.acceptance('capture');
         if (png) await writeFile(join(evidence, 'native-reattached.png'), png);
       }
       await writeFile(join(evidence, 'result.json'), JSON.stringify(result ?? { passed: false, error: 'Timed out' }));

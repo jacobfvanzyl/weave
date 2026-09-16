@@ -1,0 +1,5 @@
+/tmp/weave-compression-pairs-ipad-1789497217
+{"n": 0, "backend": "system", "root": "/tmp/weave-browser-scroll-zSjVit", "fps": 11.847630473905218, "latency": 275.947021484375, "p95": 782.213134765625, "mbps": 20.34561527694461, "cpuMs": 2.3130000000000095, "pumpMs": 367.7623269273814, "decodeCore": 12.728193581283747}
+{"n": 1, "backend": "zlib-ng", "root": "/tmp/weave-browser-scroll-1GrCGo", "fps": 13.898610138986102, "latency": 209.742919921875, "p95": 763.43505859375, "mbps": 25.86471792820718, "cpuMs": 2.1850000000001035, "pumpMs": 275.93912344479236, "decodeCore": 13.662837461253861}
+{"n": 2, "backend": "zlib-ng", "root": "/tmp/weave-browser-scroll-cA6qHv", "fps": 13.547967804829275, "latency": 203.844970703125, "p95": 764.364990234375, "mbps": 25.556831275308703, "cpuMs": 2.2140829999999223, "pumpMs": 277.93634423044637, "decodeCore": 13.543371209318611}
+{"n": 3, "backend": "system", "root": "/tmp/weave-browser-scroll-BG6NnI", "fps": 11.950597529876495, "latency": 256.546875, "p95": 837.696044921875, "mbps": 19.738169708485426, "cpuMs": 2.5748750000000875, "pumpMs": 361.37761893911227, "decodeCore": 12.8314816240812}

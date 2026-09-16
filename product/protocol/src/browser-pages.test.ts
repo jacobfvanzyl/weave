@@ -38,3 +38,15 @@ test('Retina viewports retain logical geometry and bound physical framebuffer al
   expect(() => parseBrowserPageRpcParams('browser.page.view.focus', { viewId, ...viewport })).not.toThrow();
   expect(browserFramebufferSize({ width:801, height:601, deviceScaleFactor:1.5 })).toEqual({ width:1202, height:902 });
  });
+
+test('context points require the current owner epoch and bounded integer coordinates',()=>{
+  const point={viewId,focusEpoch:1,x:0,y:600};
+  expect(parseBrowserPageRpcParams('browser.page.view.context',point)).toEqual(point);
+  for(const x of [-1,4097,.5,'3',NaN,Infinity])expect(()=>parseBrowserPageRpcParams('browser.page.view.context',{...point,x})).toThrow();
+  expect(()=>parseBrowserPageRpcParams('browser.page.view.context',{...point,focusEpoch:0})).toThrow();
+  expect(parseBrowserPageRpcResult('browser.page.view.context',{})).toEqual({text:'',canCopy:false,canCut:false,canPaste:false,canSelectAll:false});
+});
+test('legacy interaction responses never request a keyboard and unknown modes fail closed',()=>{
+  expect(parseBrowserPageRpcResult('browser.page.view.interaction',{cursor:0,text:''}).inputMode).toBe(1);
+  for(const inputMode of [-1,9,'0',.5])expect(()=>parseBrowserPageRpcResult('browser.page.view.interaction',{cursor:0,text:'',inputMode})).toThrow();
+});

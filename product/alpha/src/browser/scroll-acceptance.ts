@@ -1,9 +1,13 @@
+import { Capacitor } from '@capacitor/core';
 import { browserDiagnostics, startBrowserDiagnostics } from './browser-diagnostics';
 
 /** Runs only in acceptance builds, through the mounted product input surface. */
 export async function runBrowserScrollAcceptance(browser: HTMLTextAreaElement, durationMs: number, animation: boolean) {
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
   browser.focus();
+  // Match scrolling with the iPad software keyboard dismissed. The Pane keeps
+  // viewport ownership while its text-input responder is blurred.
+  if (Capacitor.getPlatform() === 'ios') { await sleep(100); browser.blur(); await sleep(500); }
   const deadline = performance.now() + 15000;
   while (true) {
     const bounds = browser.getBoundingClientRect();
@@ -33,5 +37,5 @@ export async function runBrowserScrollAcceptance(browser: HTMLTextAreaElement, d
   const endEpochMs = performance.timeOrigin + performance.now();
   // Drain input and let the native diagnostic writer include the complete run.
   await sleep(6500);
-  return { passed: true, benchmark: { startEpochMs, endEpochMs, animation, events, input: browserDiagnostics(), width: Number(browser.dataset.frameWidth), height: Number(browser.dataset.frameHeight), devicePixelRatio } };
+  return { passed: true, benchmark: { startEpochMs, endEpochMs, diagnosticId:browser.dataset.diagnosticId, animation, events, input: browserDiagnostics(), width: Number(browser.dataset.frameWidth), height: Number(browser.dataset.frameHeight), devicePixelRatio } };
 }

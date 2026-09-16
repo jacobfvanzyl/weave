@@ -163,7 +163,7 @@ export class ManagedBrowserPages {
       args={url:managedPageUrl(args.url)};
       if (!record.temporary && args.url !== 'about:blank') await this.#ordered(async () => { const current=(await this.#load()).get(pageId)!; current.profileLocked=true; await this.#save(); });
     }
-    if(!['page.navigate','page.back','page.forward','page.reload','page.resize','page.cdp','page.close'].includes(method))throw new Error('Unknown managed page operation');
+    if(!['page.navigate','page.back','page.forward','page.reload','page.resize','page.interaction','page.context','page.cdp','page.close'].includes(method))throw new Error('Unknown managed page operation');
     return runtime.process.request(method,{...args,pageId});
   }
   closePage(pageId:string,generation?:string) {

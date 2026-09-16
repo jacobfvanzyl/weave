@@ -1,0 +1,52 @@
+{
+  "runs": [
+    {
+      "passed": true,
+      "browserKeyboard": true,
+      "driver": "in-process WebKit and real viewport resize; not XCTest touch",
+      "keyboardHeight": 422,
+      "keyboardEvents": [
+        {
+          "event": "show",
+          "height": 0
+        },
+        {
+          "event": "hide"
+        },
+        {
+          "event": "show",
+          "height": 422
+        },
+        {
+          "event": "hide"
+        }
+      ],
+      "chromiumTextVerified": "Weave keyboard"
+    },
+    {
+      "passed": true,
+      "browserKeyboard": true,
+      "driver": "in-process WebKit and real viewport resize; not XCTest touch",
+      "keyboardHeight": 422,
+      "keyboardEvents": [
+        {
+          "event": "show",
+          "height": 0
+        },
+        {
+          "event": "hide"
+        },
+        {
+          "event": "show",
+          "height": 422
+        },
+        {
+          "event": "hide"
+        }
+      ],
+      "chromiumTextVerified": "Weave keyboard"
+    }
+  ],
+  "physicalDevice": "iPad Air 11-inch M3, iPadOS 27",
+  "driver": "In-process WebKit and UIKit events; not XCTest touch automation"
+}

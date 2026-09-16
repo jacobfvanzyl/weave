@@ -1,0 +1,5 @@
+/tmp/weave-metal-pairs-ipad-1789496784
+{"n": 0, "metal": 0, "root": "/tmp/weave-browser-scroll-ArAnQt", "fps": 13.845154196031388, "latency": 360.26416015625, "p95": 788.423828125, "mbps": 23.365213775178685, "cpuMs": 2.2072920000000273, "gpuMs": 0, "presenters": ["cgimage"]}
+{"n": 1, "metal": 1, "root": "/tmp/weave-browser-scroll-iEFsMw", "fps": 11.85, "latency": 179.197998046875, "p95": 747.291015625, "mbps": 20.3832444, "cpuMs": 2.497458000000008, "gpuMs": 0.524791656062007, "presenters": ["metal"]}
+{"n": 2, "metal": 1, "root": "/tmp/weave-browser-scroll-2E0jCP", "fps": 12.247550489902018, "latency": 198.188232421875, "p95": 292.19482421875, "mbps": 20.633564887022597, "cpuMs": 2.532084000000018, "gpuMs": 0.5338750197552145, "presenters": ["metal"]}
+{"n": 3, "metal": 0, "root": "/tmp/weave-browser-scroll-HtB2tK", "fps": 11.2, "latency": 318.1640625, "p95": 797.02294921875, "mbps": 18.904204, "cpuMs": 2.45866699999997, "gpuMs": 0, "presenters": ["cgimage"]}

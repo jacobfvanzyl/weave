@@ -25,6 +25,7 @@ A71000000000000000000001 = {isa = PBXBuildFile; fileRef = A710000000000000000000
 A79000000000000000000001 = {isa = PBXBuildFile; fileRef = A79000000000000000000002; };
 A79000000000000000000003 = {isa = PBXBuildFile; fileRef = A79000000000000000000004; };
 A79000000000000000000005 = {isa = PBXBuildFile; fileRef = A79000000000000000000006; };
+A79000000000000000000007 = {isa = PBXBuildFile; fileRef = A79000000000000000000008; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -49,6 +50,7 @@ A71000000000000000000003 = {isa = PBXFileReference; explicitFileType = wrapper.c
 A79000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBrowserPlugin.swift; sourceTree = "<group>"; };
 A79000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = WeaveBrowserSurface.mm; path = ../../native/browser/WeaveBrowserSurface.mm; sourceTree = SOURCE_ROOT; };
 A79000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = text; name = LIBVNC-LICENSE; path = ../../native/.build/browser/ios/LIBVNC-LICENSE; sourceTree = SOURCE_ROOT; };
+A79000000000000000000008 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = WeaveBrowserMetalPresenter.mm; path = ../../native/browser/WeaveBrowserMetalPresenter.mm; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -90,6 +92,7 @@ A71000000000000000000005 = {isa = PBXFrameworksBuildPhase; buildActionMask = 214
 				A65000000000000000000002,
  A79000000000000000000002,
  A79000000000000000000004,
+ A79000000000000000000008,
  A79000000000000000000006,
 				A65000000000000000000004,
 				A65000000000000000000006,
@@ -199,6 +202,7 @@ A71000000000000000000006 = {isa = PBXNativeTarget; buildConfigurationList = A710
 				A65000000000000000000001,
  A79000000000000000000001,
  A79000000000000000000003,
+ A79000000000000000000007,
 				A65000000000000000000003,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

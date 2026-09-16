@@ -5,7 +5,7 @@ const read = (name: string) => Bun.file(join(root, name)).json();
 const result = await read('result.json');
 const run = result.hosts[0].benchmark;
 const inside = (at: number) => at >= run.startEpochMs && at <= run.endEpochMs;
-const native = (await read('native-performance.json')).filter((row: any) => inside(row.epochMs));
+const native = (await read('native-performance.json')).filter((row: any) => inside(row.epochMs) && (!run.diagnosticId || row.diagnosticId === run.diagnosticId));
 const stats = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b);
   const q = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? null;
@@ -29,14 +29,17 @@ const settled = await read('page-result.json');
 const expectedScrollY = run.events.reduce((y: number, event: { deltaY: number }) => Math.max(0, y + event.deltaY), 0);
 const intervalStats = stats(intervals);
 const summary = {
-  root, route: 'Mac loopback; software event capture to native layer submission, not physical scanout', seconds,
+  root, route: await Bun.file(join(root,'route.json')).exists() ? await read('route.json') : 'Mac loopback; software event capture to native layer submission, not physical scanout', seconds,
   viewport: { width: run.width, height: run.height, shellDpr: run.devicePixelRatio },
   animation: run.animation, submittedFPS: native.length / seconds, distinctContentFPS: distinct.length / seconds,
   distinctIntervalsMs: intervalStats, inputToLayerMsFirstForwardSegment: stats(latency),
   inputEvents: run.events.length, inputRPCs: inputs.length, failedRPCs: inputs.filter((i: any) => !i.ok).length,
   queueMs: stats(inputs.map((i: any) => i.queueMs)), rpcMs: stats(inputs.map((i: any) => i.rpcMs)), pending: stats(inputs.map((i: any) => i.pending)),
   portal: Object.fromEntries(['queue', 'authorize', 'page', 'cdp'].map(phase => [phase, stats(phases.filter((r: any) => r.phase === phase).map((r: any) => r.ms))])),
-  native: Object.fromEntries(['copyMs', 'mainQueueMs', 'submitMs'].map(key => [key, stats(native.map((r: any) => r[key]))])),
+  presenters: [...new Set(native.map((row:any)=>row.presenter ?? 'cgimage'))],
+  metalVerification: { frames:native.filter((r:any)=>r.verifiedPixels>0).length, differentPixels:native.reduce((sum:number,r:any)=>sum+(r.differentPixels ?? 0),0), errors:[...new Set(native.map((r:any)=>r.presenterError).filter(Boolean))] },
+  contentsFormats: [...new Set(native.map((row:any)=>row.contentsFormat ?? 'unrecorded'))],
+  native: Object.fromEntries(['copyMs', 'mainQueueMs', 'submitMs', 'renderCPUms', 'gpuMs', 'transferWallMs', 'decodeMs', 'receiveGapMs'].map(key => [key, stats(native.map((r: any) => r[key]).filter(Number.isFinite))])),
   mbps: native.length > 1 ? (native.at(-1).receivedBytes - native[0].receivedBytes) * 8 / seconds / 1e6 : null,
   decoderCorePercent: native.length > 1 ? (native.at(-1).decodeCPUSeconds - native[0].decodeCPUSeconds) * 100 / seconds : null,
   cef: { paintFPS: stats(cef.map(r => r.paints / r.seconds)), pumpMsPerSecond: stats(cef.map(r => r.pumpTotalMs / r.seconds)), worstPumpMs: stats(cef.map(r => r.pumpMaxMs)) },

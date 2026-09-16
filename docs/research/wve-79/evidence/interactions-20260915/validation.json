@@ -1,0 +1,37 @@
+{
+  "date": "2026-09-15",
+  "baseRevision": "4707e615fca352fdb4b363e4edadf8b871a8c96a",
+  "workInProgress": true,
+  "hostSourceHash": "4447f1bfd96eb5055e4400d759e3dbffb457a6f70068deb38357854a0e294ddf",
+  "checks": {
+    "alphaTests": 306,
+    "protocolTests": 40,
+    "portalTests": 145,
+    "boundaryTests": 2,
+    "rootCheck": true,
+    "diffCheck": true
+  },
+  "installed": {
+    "mac": true,
+    "macDeepSignatureVerified": true,
+    "ipad": true,
+    "hostHealth": true,
+    "browserServiceVersion": 8,
+    "retainedPageRestored": true,
+    "restoredPageDeviceScaleFactor": 2,
+    "terminalServiceOriginalProcessRetained": true,
+    "ipadFixtureCleanupConfirmed": true,
+    "diagnosticsEnabled": false
+  },
+  "limits": [
+    "Individual iPad clipboard transfers have not received separate human confirmation",
+    "Latency ends at native layer submission, not scanout",
+    "Short sequential performance runs, not repeated paired trials",
+    "HTML select menus deferred pending upstream CEF fix"
+  ],
+  "manualAcceptance": {
+    "ipadLongPressEditingMenu": true,
+    "ipadPageVisibleUnderEditingMenu": true,
+    "source": "User confirmation on installed build"
+  }
+}

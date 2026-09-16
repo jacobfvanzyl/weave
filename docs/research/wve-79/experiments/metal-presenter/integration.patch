@@ -1,0 +1,112 @@
+--- a/product/alpha/native/browser/WeaveBrowserSurface.mm
++++ b/product/alpha/native/browser/WeaveBrowserSurface.mm
+@@ -1,4 +1,5 @@
+ #import "WeaveBrowserSurface.h"
++#import "WeaveBrowserMetalPresenter.h"
+ #import <QuartzCore/QuartzCore.h>
+ #import <rfb/rfbclient.h>
+ #import "WeaveBrowserProtocol.h"
+@@ -24,6 +25,7 @@
+ @property(nonatomic, readwrite) WeaveBrowserView *view;
+ @property(nonatomic, copy) void (^event)(NSDictionary *);
+ @property(nonatomic) NSURLSession *session;
++@property(nonatomic) WeaveBrowserMetalPresenter *metal;
+ @property(nonatomic) NSURLSessionWebSocketTask *socket;
+ @property(atomic) BOOL stopped;
+ @property(nonatomic) BOOL ready;
+@@ -71,13 +73,8 @@
+     }
+     if (surface.stopped || !pixels) return;
+     double mainAt = surface.diagnostics ? CACurrentMediaTime() : 0;
+-    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixels);
+-    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+-    CGImageRef image = CGImageCreate(width, height, 8, 32, width * 4, color, kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, provider, NULL, NO, kCGRenderingIntentDefault);
+-    [CATransaction begin]; [CATransaction setDisableActions:YES];
+-    surface.view.layer.contents = (__bridge id)image;
+-    [CATransaction commit];
+-    CGImageRelease(image); CGColorSpaceRelease(color); CGDataProviderRelease(provider);
++    void (^submitted)(void)=^{
++    if(surface.stopped)return;
+     // The shell needs readiness/resize acknowledgements, not a callback per frame.
+     if (width != surface.reportedWidth || height != surface.reportedHeight) {
+       surface.reportedWidth = width; surface.reportedHeight = height;
+@@ -87,7 +84,7 @@
+       const uint8_t *marker = (const uint8_t *)pixels.bytes;
+       uint32_t scroll = surface.fixtureMarkers && pixels.length >= 8 ? marker[0] | (marker[1]<<8) | (marker[2]<<16) : 0;
+       uint32_t sequence = surface.fixtureMarkers && pixels.length >= 8 ? marker[4] | (marker[5]<<8) | (marker[6]<<16) : 0;
+-      [surface.samples addObject:@{@"diagnosticId":surface.diagnosticId, @"time":@(mainAt), @"epochMs":@(NSDate.date.timeIntervalSince1970 * 1000), @"scroll":@(scroll), @"sequence":@(sequence), @"intervalMs":@(surface.previousPresentation ? (mainAt-surface.previousPresentation)*1000 : 0), @"copyMs":@(copyMs), @"mainQueueMs":@((mainAt-copiedAt)*1000), @"submitMs":@((CACurrentMediaTime()-mainAt)*1000), @"transferWallMs":@(transferMs), @"decodeMs":@(decodeMs), @"receiveGapMs":@(receiveGapMs), @"decodeCPUSeconds":@(cpu), @"receivedBytes":@(bytes), @"updates":@(updates), @"width":@(width), @"height":@(height), @"presenter":@"cgimage", @"contentsFormat":surface.view.layer.contentsFormat ?: @"unknown"}];
++      [surface.samples addObject:@{@"diagnosticId":surface.diagnosticId, @"time":@(mainAt), @"epochMs":@(NSDate.date.timeIntervalSince1970 * 1000), @"scroll":@(scroll), @"sequence":@(sequence), @"intervalMs":@(surface.previousPresentation ? (mainAt-surface.previousPresentation)*1000 : 0), @"copyMs":@(copyMs), @"mainQueueMs":@((mainAt-copiedAt)*1000), @"submitMs":@((CACurrentMediaTime()-mainAt)*1000), @"transferWallMs":@(transferMs), @"decodeMs":@(decodeMs), @"receiveGapMs":@(receiveGapMs), @"decodeCPUSeconds":@(cpu), @"receivedBytes":@(bytes), @"updates":@(updates), @"width":@(width), @"height":@(height), @"presenter":surface.metal?@"metal":@"cgimage", @"contentsFormat":surface.view.layer.contentsFormat ?: @"unknown"}];
+       surface.previousPresentation = mainAt;
+       if (surface.samples.count > 10000) [surface.samples removeObjectAtIndex:0];
+       if (mainAt-surface.lastDiagnosticWrite > 5) {
+@@ -97,6 +94,16 @@
+         dispatch_async(writer, ^{ [report writeToFile:surface.diagnosticPath atomically:YES]; });
+       }
+     }
++    };
++    if(surface.metal){[surface.metal present:pixels width:width height:height submitted:submitted];return;}
++    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixels);
++    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
++    CGImageRef image = CGImageCreate(width, height, 8, 32, width * 4, color, kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, provider, NULL, NO, kCGRenderingIntentDefault);
++    [CATransaction begin]; [CATransaction setDisableActions:YES];
++    surface.view.layer.contents = (__bridge id)image;
++    [CATransaction commit];
++    CGImageRelease(image); CGColorSpaceRelease(color); CGDataProviderRelease(provider);
++    submitted();
+   });
+ }
+ @implementation WeaveBrowserSurface
+@@ -121,6 +128,7 @@
+ #else
+     _view.userInteractionEnabled = NO;
+ #endif
++    if(_diagnostics && [NSProcessInfo.processInfo.environment[@"WEAVE_BROWSER_METAL"] isEqual:@"1"]) _metal=[[WeaveBrowserMetalPresenter alloc] initWithLayer:_view.layer];
+     _view.hidden = YES;
+     _view.layer.masksToBounds = YES;
+     _view.layer.contentsGravity = kCAGravityResizeAspect;
+@@ -231,6 +239,7 @@
+ - (void)layout:(CGRect)frame visible:(BOOL)visible dim:(double)dim {
+   self.view.frame = frame; self.view.hidden = !visible || self.stopped;
+   self.view.layer.opacity = 1 - fmax(0, fmin(0.8, dim));
++  [self.metal layout];
+ }
+ - (void)close {
+   if (self.stopped) return;
+@@ -239,6 +248,7 @@
+   if (self.decoderFD >= 0) shutdown(self.decoderFD, SHUT_RDWR);
+   [self.socket cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+   [self.session invalidateAndCancel]; self.socket = nil; self.session = nil;
++  [self.metal close];self.metal=nil;
+   self.view.layer.contents = nil; [self.view removeFromSuperview]; self.event = nil;
+   @synchronized(self) { self.latestPixels = nil; }
+ }
+--- a/product/alpha/electron/main.ts
++++ b/product/alpha/electron/main.ts
+@@ -157,7 +157,7 @@
+       if (result?.passed && !await contents.executeJavaScript('isSecureContext && typeof require === "undefined" && typeof window.ipcRenderer === "undefined"')) throw new Error('Renderer isolation check failed');
+       await mkdir(evidence, { recursive: true });
+       if (result?.passed) {
+-        const png = await contents.executeJavaScript(`Boolean(document.querySelector('[data-slot="native-browser-input"]'))`) ? browsers.capture() : native.acceptance('capture');
++        const png = await contents.executeJavaScript(`Boolean(document.querySelector('[data-slot="native-browser-input"]'))`) ? (process.env.WEAVE_BROWSER_METAL === '1' ? undefined : browsers.capture()) : native.acceptance('capture');
+         if (png) await writeFile(join(evidence, 'native-reattached.png'), png);
+       }
+       await writeFile(join(evidence, 'result.json'), JSON.stringify(result ?? { passed: false, error: 'Timed out' }));
+--- a/product/alpha/scripts/build-native-desktop.ts
++++ b/product/alpha/scripts/build-native-desktop.ts
+@@ -16,4 +16,4 @@
+   join(native, 'lib/libghostty-vt.a'), '-framework', 'AppKit', '-framework', 'CoreText', '-o', join(native, 'weave-terminal.node')]);
+ 
+ const browser = join(root, 'native/.build/browser/macos');
+-await run(['xcrun', 'clang++', '-std=c++17', '-O2', '-fobjc-arc', '-fmodules', '-shared', '-undefined', 'dynamic_lookup', '-I', headers, '-I', join(browser, 'include'), join(root, 'native/browser/WeaveBrowserSurface.mm'), join(root, 'native/browser/electron-browser.mm'), join(browser, 'libvncclient.a'), '-lz', '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', join(browser, 'weave-browser.node')]);
++await run(['xcrun', 'clang++', '-std=c++17', '-O2', '-fobjc-arc', '-fmodules', '-shared', '-undefined', 'dynamic_lookup', '-I', headers, '-I', join(browser, 'include'), join(root, 'native/browser/WeaveBrowserSurface.mm'), join(root, 'native/browser/electron-browser.mm'), join(browser, 'libvncclient.a'), '-lz', '-framework', 'AppKit', '-framework', 'QuartzCore', '-framework', 'Metal', '-o', join(browser, 'weave-browser.node')]);
+--- a/product/alpha/scripts/browser-ipad-acceptance.ts
++++ b/product/alpha/scripts/browser-ipad-acceptance.ts
+@@ -11,7 +11,7 @@
+   };
+   const copy = (direction: 'to'|'from', source: string, destination: string, optional = false) => command(['device','copy',direction,'--device',device,'--domain-type','appDataContainer','--domain-identifier',bundle,'--source',source,'--destination',destination], optional);
+   await copy('to',join(root,'input.json'),'Documents/host-acceptance-input.json');
+-  const env = { WEAVE_BROWSER_DIAGNOSTICS:'1', WEAVE_BROWSER_FIXTURE_MARKERS:'1', ...(process.env.WEAVE_BROWSER_RFB_ENCODING ? {WEAVE_BROWSER_RFB_ENCODING:process.env.WEAVE_BROWSER_RFB_ENCODING} : {}) };
++  const env = { ...(process.env.WEAVE_BROWSER_METAL ? {WEAVE_BROWSER_METAL:process.env.WEAVE_BROWSER_METAL} : {}), WEAVE_BROWSER_DIAGNOSTICS:'1', WEAVE_BROWSER_FIXTURE_MARKERS:'1', ...(process.env.WEAVE_BROWSER_RFB_ENCODING ? {WEAVE_BROWSER_RFB_ENCODING:process.env.WEAVE_BROWSER_RFB_ENCODING} : {}) };
+   await command(['device','process','launch','--device',device,'--terminate-existing','--environment-variables',JSON.stringify(env),bundle,'--host-acceptance','--browser-acceptance']);
+   // The launch clears the previous result before entering its asynchronous driver.
+   await Bun.sleep(3000);

@@ -1,0 +1,4 @@
+100% tests passed out of 69
+Total Test time (real) =   3.09 sec
+RFB worker cancellation, resize handoff and lifecycle passed
+Stock zlib 1.3.1.zlib-ng: 80 continuing updates, 5431340 exact bytes, 1851392 encoded bytes

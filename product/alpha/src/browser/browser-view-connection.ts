@@ -1,4 +1,4 @@
-import { browserFramebufferSize, browserViewportScale, type BrowserPage, type BrowserInputMethod } from '@weave/product-protocol';
+import { browserFramebufferSize, browserViewportScale, type BrowserContext, type BrowserPage, type BrowserInputMethod } from '@weave/product-protocol';
 import type { DirectHostClient } from '@/portal-client';
 import { nativeBrowserBridge, type NativeBrowserBridge } from './native-browser';
 import { browserDiagnostics, recordBrowserInput } from './browser-diagnostics';
@@ -29,8 +29,9 @@ export class BrowserViewConnection {
   private queue = Promise.resolve();
   private pending = 0;
   private wheel?: Wheel;
+  private hover?: { args: Record<string, unknown>; result: Promise<void> };
   private inputGeneration = 0;
-  constructor(private client: Client, private page: BrowserPage, private changed: (event: { width?: number; height?: number; error?: string }) => void, private native: NativeBrowserBridge = nativeBrowserBridge) {}
+  constructor(private client: Client, private page: BrowserPage, private changed: (event: { width?: number; height?: number; diagnosticId?: string; error?: string }) => void, private native: NativeBrowserBridge = nativeBrowserBridge) {}
   async start() {
     try {
       const { surfaceId } = await this.native.create(); this.surfaceId = surfaceId;
@@ -41,7 +42,7 @@ export class BrowserViewConnection {
         if (this.disposed || event.surfaceId !== surfaceId) return;
         if (event.kind === 'frame') {
           this.decoded = { width: event.width ?? 0, height: event.height ?? 0 };
-          this.changed(this.decoded); return;
+          this.changed({ ...this.decoded, diagnosticId:event.diagnosticId }); return;
         }
         if (event.kind === 'error') { this.fail(event.message); return; }
         if (event.kind === 'control') void (async () => {
@@ -66,17 +67,19 @@ export class BrowserViewConnection {
   }
   layout(bounds: Bounds) {
     const before = this.bounds; this.bounds = bounds;
-    if (before && (before.deviceScaleFactor !== bounds.deviceScaleFactor || before.inputBlocked !== bounds.inputBlocked || before.focused !== bounds.focused || before.visible !== bounds.visible || before.width !== bounds.width || before.height !== bounds.height)) { this.wheel = undefined; this.inputGeneration++; }
+    if (before && (before.deviceScaleFactor !== bounds.deviceScaleFactor || before.inputBlocked !== bounds.inputBlocked || before.focused !== bounds.focused || before.visible !== bounds.visible || before.width !== bounds.width || before.height !== bounds.height)) { this.wheel = undefined; this.hover = undefined; this.inputGeneration++; }
     if (this.disposed) return;
     if (this.surfaceId) void this.native.layout({ surfaceId: this.surfaceId, ...bounds }).catch(cause => this.fail(cause));
     if (!this.viewId || !bounds.visible) return;
     if (bounds.focused && (!before?.focused || (before.inputBlocked && !bounds.inputBlocked && !this.focusEpoch))) { void this.activate(); return; }
-    if (bounds.focused && this.focusEpoch && (bounds.width !== before?.width || bounds.height !== before?.height || bounds.deviceScaleFactor !== before?.deviceScaleFactor)) void this.enqueue(() => this.resize(false)).catch(cause => this.report(cause));
+    // Queue layout changes even while a claim/resize temporarily clears its epoch.
+    // The queued resize uses the acknowledged epoch after that request completes.
+    if (bounds.focused && (bounds.width !== before?.width || bounds.height !== before?.height || bounds.deviceScaleFactor !== before?.deviceScaleFactor)) void this.enqueue(() => this.resize(false)).catch(cause => this.report(cause));
   }
   private report(cause: unknown) { if (!this.disposed) this.changed({ error: cause instanceof Error ? cause.message : String(cause) }); }
   private fail(cause: unknown) { this.report(cause); void this.close(); }
   private enqueue(action: () => Promise<void>) {
-    this.wheel = undefined;
+    this.wheel = undefined; this.hover = undefined;
     if (this.disposed) return Promise.reject(new Error('Browser display is unavailable'));
     if (this.pending >= 64) return Promise.reject(new Error('Browser input fell behind; activate the Pane again'));
     this.pending++;
@@ -97,9 +100,12 @@ export class BrowserViewConnection {
       this.expected = browserFramebufferSize(result); this.focusEpoch = result.focusEpoch;
     } catch (cause) { this.focusEpoch = undefined; throw cause; }
   }
+  ensureActive() { return this.bounds?.focused && this.focusEpoch ? Promise.resolve() : this.activate(); }
   activate() { if (this.bounds?.inputBlocked) return Promise.resolve(); if (this.bounds) this.bounds.focused = true; return this.enqueue(() => this.resize(true)).catch(cause => this.report(cause)); }
   input(method: BrowserInputMethod, args: Record<string, unknown>) {
     if (this.bounds?.inputBlocked) return Promise.resolve();
+    const hover = method === 'Input.dispatchMouseEvent' && args.type === 'mouseMoved' && !args.buttons && !args.mouseLeave;
+    if (hover && this.hover) { Object.assign(this.hover.args, args); return this.hover.result; }
     const sourceSize = { ...this.decoded };
     const wheel = isWheel(method, args);
     if (wheel && this.wheel && this.wheel.epoch === this.focusEpoch && this.wheel.width === sourceSize.width && this.wheel.height === sourceSize.height && compatibleWheel(this.wheel, args)) {
@@ -112,6 +118,7 @@ export class BrowserViewConnection {
     const timing = browserDiagnostics() ? { capturedAt: performance.timeOrigin + performance.now(), start: performance.now(), pending: this.pending } : undefined;
     const result = this.enqueue(async () => {
       if (this.wheel?.args === args) this.wheel = undefined;
+      if (this.hover?.args === args) this.hover = undefined;
       const until = Date.now() + 2500;
       while (!this.disposed && generation === this.inputGeneration && this.focusEpoch && (this.decoded.width !== this.expected.width || this.decoded.height !== this.expected.height)) {
         if (Date.now() > until) throw new Error('Waiting for the resized Browser display');
@@ -127,8 +134,37 @@ export class BrowserViewConnection {
       catch (cause) { this.focusEpoch = undefined; throw cause; }
       finally { if (timing) recordBrowserInput({ capturedAt: timing.capturedAt, queueMs: dispatchAt - timing.start, rpcMs: performance.now() - dispatchAt, pending: timing.pending, wheel: args.type === 'mouseWheel', ok }); }
     }).catch(cause => this.report(cause));
+    if (hover) this.hover = { args, result };
     if (wheel) this.wheel = { args, width: sourceSize.width, height: sourceSize.height, epoch: this.focusEpoch, result };
     return result;
+  }
+  async context(x:number,y:number):Promise<BrowserContext|undefined> {
+    const sourceSize={...this.decoded}, generation=this.inputGeneration;
+    await this.ensureActive();
+    if(sourceSize.width!==this.expected.width || sourceSize.height!==this.expected.height)return;
+    let result:BrowserContext|undefined;
+    await this.enqueue(async()=>{
+      if(generation!==this.inputGeneration || !this.viewId || !this.focusEpoch || !this.bounds?.focused || !this.bounds.visible || this.bounds.inputBlocked || this.disposed)return;
+      const epoch=this.focusEpoch;
+      const context=await this.client.browserRequest('browser.page.view.context',{viewId:this.viewId,focusEpoch:this.focusEpoch,x:Math.floor(x),y:Math.floor(y)});
+      if(!this.disposed && generation===this.inputGeneration && epoch===this.focusEpoch)result=context;
+    });
+    return result;
+  }
+  async clipboard(text?: string) {
+    if (!this.surfaceId || this.disposed) throw new Error('Browser display is unavailable');
+    return this.native.clipboard({ surfaceId:this.surfaceId, ...(text === undefined ? {} : {text}) });
+  }
+  async interaction(waitForInput = false) {
+    const inputGeneration = this.inputGeneration;
+    // Explicit clipboard actions wait for an already queued focus/input claim.
+    // Cursor polling stays independent so it cannot stall human input.
+    if (waitForInput) await this.queue;
+    if (inputGeneration !== this.inputGeneration) return;
+    if (!this.viewId || !this.focusEpoch || !this.bounds?.focused || !this.bounds.visible || this.bounds.inputBlocked || this.disposed) return;
+    const generation = this.inputGeneration, epoch = this.focusEpoch;
+    const result = await this.client.browserRequest('browser.page.view.interaction', { viewId:this.viewId, focusEpoch:epoch });
+    if (!this.disposed && generation === this.inputGeneration && epoch === this.focusEpoch) return result;
   }
   async close() {
     if (this.disposed) return; this.disposed = true;

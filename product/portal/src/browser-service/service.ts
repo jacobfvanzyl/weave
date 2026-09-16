@@ -7,7 +7,7 @@ import { recoverStaleSocket, removeOwnedSocket } from '../local-socket.ts';
 import { BROWSER_RPC_METHODS, parseBrowserRpcParams, type BrowserRpcMethod } from '@weave/product-protocol';
 import { BROWSER_PROFILE_RPC_METHODS, browserProfileId, parseBrowserProfileRpcParams, type BrowserProfileRpcMethod } from '@weave/product-protocol';
 
-export const BROWSER_SERVICE_VERSION = 7;
+export const BROWSER_SERVICE_VERSION = 8;
 export const MAX_BROWSER_MESSAGE_BYTES = 16 * 1024 * 1024;
 export const browserSocketPath = (stateDirectory: string) => join(resolve(stateDirectory), 'browser-service', 'service.sock');
 

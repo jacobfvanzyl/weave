@@ -49,7 +49,7 @@ try {
  const initial=(await a.request('workspace.composition.get',{hostId}) as any).composition;
  const {page:created}=await a.request('browser.pane.create',{hostId,workspaceId:'browser-acceptance',workspaceName:'Browser acceptance',expectedRevision:initial.revision,paneId:crypto.randomUUID(),profileId:profile.profileId,url:`http://127.0.0.1:${fixture.port}/`,axis:'vertical'}) as any;
  results.browserPaneCreated=true;results.trustedHumanProfileAccess=true;
- const evaluate=async(expression:string)=>(await backend.managedPage('page.cdp',{pageId:created.pageId,generation:created.generation,arguments:{method:'Runtime.evaluate',arguments:{expression,returnByValue:true}}})).result?.value;
+ const evaluate=async(expression:string)=>(await backend.managedPage('page.cdp',{pageId:created.pageId,generation:created.generation,arguments:{method:'Runtime.evaluate',arguments:{expression,returnByValue:true}}}).catch(cause=>{throw new Error(`Fixture evaluation failed: ${expression.slice(0,100)}`,{cause});})).result?.value;
  await wait(async()=>await evaluate('document.title')==='Portal RFB acceptance');
 
  const attach=async(rpc:RpcSocket)=>rpc.request('browser.page.view.attach',{profileId:profile.profileId,pageId:created.pageId,generation:created.generation,mode:'control'}) as Promise<{viewId:string;ticket:string}>;
@@ -57,9 +57,49 @@ try {
  const af=await a.request('browser.page.view.focus',{viewId:av.viewId,width:800,height:600}) as {focusEpoch:number};
  const bf=await b.request('browser.page.view.focus',{viewId:bv.viewId,width:1000,height:800,deviceScaleFactor:scale}) as {focusEpoch:number};
  let stale=false;try{await a.request('browser.page.view.input',{viewId:av.viewId,focusEpoch:af.focusEpoch,method:'Input.insertText',arguments:{text:'stale'}});}catch{stale=true;}assert(stale,'Stale owner sent input');results.focusHandoff=true;
+ let staleSelection=false;try{await a.request('browser.page.view.interaction',{viewId:av.viewId,focusEpoch:af.focusEpoch});}catch{staleSelection=true;}assert(staleSelection,'Stale owner read selection');results.selectionOwnership=true;
+ let staleContext=false;try{await a.request('browser.page.view.context',{viewId:av.viewId,focusEpoch:af.focusEpoch,x:20,y:20});}catch{staleContext=true;}assert(staleContext,'Stale viewer requested context');results.contextOwnership=true;
  for(const type of ['mousePressed','mouseReleased'])await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type,x:50,y:60,button:'left',clickCount:1}});
  assert(await evaluate('clicks')===1,'Authorized CDP input failed');
  assert(await evaluate('devicePixelRatio')===scale && await evaluate('innerWidth')===1000 && await evaluate('innerHeight')===800,'Retina rendering changed logical page geometry'); results.deviceScaleFactor=scale;results.authorizedInput=true;
+ // Exercise the same native pointer path used by clients. Mac form popups are deferred.
+ await evaluate(`document.body.insertAdjacentHTML('beforeend','<a id="hover" style="position:absolute;left:200px;top:20px" href="#hover">Hover target</a><input id="edit" value="alpha beta gamma" style="position:absolute;left:200px;top:70px;width:300px;font:24px sans-serif"><select id="choice" style="position:absolute;left:200px;top:140px;width:250px;font:24px sans-serif"><option>First</option><option>Second</option><option>Third</option></select>');true`);
+ const pointer=async(type:string,x:number,y:number,buttons=0,clickCount=1)=>b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type,x,y,buttons,button:'left',clickCount}});
+ const interaction=()=>b.request('browser.page.view.interaction',{viewId:bv.viewId,focusEpoch:bf.focusEpoch}) as Promise<{cursor:number;text:string}>;
+ await pointer('mouseMoved',230,30);
+ await wait(async()=>(await interaction()).cursor===2);
+ assert(await evaluate('document.querySelector("#hover").matches(":hover")'),'Hover did not reach Chromium');
+ for(const type of ['mousePressed','mouseReleased']) await pointer(type,220,85,type==='mousePressed'?1:0,2);
+ await wait(async()=>(await interaction()).text==='alpha');
+ const selected=await interaction();
+ await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchKeyEvent',arguments:{type:'rawKeyDown',key:'Backspace',windowsVirtualKeyCode:8,commands:['DeleteBackward']}});
+ await wait(async()=>await evaluate('document.querySelector("#edit").value')==='beta gamma');
+ await b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.insertText',arguments:{text:'Weave ✓'}});
+ await wait(async()=>await evaluate('document.querySelector("#edit").value')==='Weave ✓beta gamma');
+ for(const type of ['mousePressed','mouseReleased']) await pointer(type,220,85,type==='mousePressed'?1:0,3);
+ await wait(async()=>(await interaction()).text==='Weave ✓beta gamma');
+ const context=(x:number,y:number)=>b.request('browser.page.view.context',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,x,y}) as Promise<{text:string;canCopy:boolean;canCut:boolean;canPaste:boolean;canSelectAll:boolean}>;
+ const mode=async()=>((await interaction()) as unknown as {inputMode:number}).inputMode;
+ await wait(async()=>await mode()===0);
+ const editable=await context(220,85);assert(editable.canCopy&&editable.canCut&&editable.canPaste,'Editable selection lost context actions');
+ await evaluate('edit.readOnly=true;edit.blur();edit.focus();edit.select();true');await Bun.sleep(150);
+ const readOnly=await context(220,85);assert(readOnly.canCopy&&!readOnly.canCut&&!readOnly.canPaste,'Readonly context exposed mutations');
+ for(const type of ['mousePressed','mouseReleased'])await pointer(type,700,100,type==='mousePressed'?1:0);
+ await wait(async()=>await mode()===1);
+ const plain=await context(700,100);assert(!plain.canCopy&&!plain.canCut&&!plain.canPaste,'Plain page exposed clipboard edits');
+ await evaluate('edit.readOnly=false;edit.type="password";edit.focus();edit.select();true');await Bun.sleep(150);
+ const password=await context(220,85);assert(!password.canCopy&&!password.canCut&&password.canPaste,'Password context exposed copy or lost paste');
+ await evaluate('edit.type="text";edit.disabled=true;edit.blur();true');await Bun.sleep(150);
+ const disabled=await context(220,85);assert(!disabled.canCut&&!disabled.canPaste,'Disabled input exposed edits');
+ await evaluate(`edit.disabled=false;document.body.insertAdjacentHTML('beforeend','<div id="rich" contenteditable style="position:absolute;left:200px;top:240px;width:300px;height:60px">Rich text</div>');true`);
+ for(const type of ['mousePressed','mouseReleased'])await pointer(type,230,260,type==='mousePressed'?1:0);
+ await wait(async()=>await mode()===0);assert((await context(230,260)).canPaste,'Contenteditable lost paste');
+ await evaluate('rich.remove();window.preventContext=e=>e.preventDefault();document.addEventListener("contextmenu",preventContext);true');
+ const prevented=await context(700,100);assert(!prevented.canCopy&&!prevented.canCut&&!prevented.canPaste&&!prevented.canSelectAll,'Cancelled webpage context menu was replaced');
+ await evaluate('document.removeEventListener("contextmenu",preventContext);true');
+ results.contextActions={editable,readOnly,plain,password,disabled,cancelled:true};results.keyboardModes={editable:0,contenteditable:0,ordinaryPage:1};
+ results.interactions={hover:true,cursor:'pointer',doubleClickSelection:selected.text,tripleClickSelection:true,cut:true,unicodePaste:true,formPopupSelection:"deferred: upstream CEF Mac popup regression"};
+ await evaluate('["hover","edit","choice"].forEach(id=>document.getElementById(id).remove());true');
  // Human wheel input uses upstream CEF while agent evaluation stays full CDP.
  await evaluate(`window.wheelTrace=[];window.blockWheel=false;document.body.insertAdjacentHTML('beforeend','<div id="wheel-fixture" style="height:5000px"><div id="nested" style="position:absolute;top:200px;left:200px;width:200px;height:120px;overflow:auto"><div style="height:4000px;width:4000px">Nested scroll</div></div></div>');window.addEventListener('wheel',e=>{wheelTrace.push(['wheel',e.deltaX,e.deltaY]);if(blockWheel)e.preventDefault()},{passive:false});window.addEventListener('mousedown',()=>wheelTrace.push(['down']));true`);
  const wheel=async(deltaY:number,x=600,y=400,deltaX=0)=>b.request('browser.page.view.input',{viewId:bv.viewId,focusEpoch:bf.focusEpoch,method:'Input.dispatchMouseEvent',arguments:{type:'mouseWheel',x,y,deltaX,deltaY}});

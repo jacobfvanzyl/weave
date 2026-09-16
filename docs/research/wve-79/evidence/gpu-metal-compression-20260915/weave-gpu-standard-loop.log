@@ -1,0 +1,13 @@
+{"round":0,"ms":56.557457999999315,"bytes":19483,"fresh":true}
+{"round":1,"pendingMs":2005.5930829999998,"state":{"result":{"type":"string","value":"{\"state\":\"complete\",\"visibility\":\"visible\",\"width\":1000,\"height\":800,\"dpr\":2}"}},"pages":{"pages":[{"canGoBack":false,"canGoForward":false,"deviceScaleFactor":2,"height":800,"pageId":"fcbcc597-428c-491c-a0d8-935580bf116e","rfbSocket":"/tmp/weave-rfb-HV9YOd/fcbcc597-428c-491c-a0d8-935580bf116e.sock","title":"GPU capture","url":"data:text/html,<!doctype html><title>GPU capture</title><body style=\"margin:0;background:%23fab387\">GPU screenshot fixture","width":1000}]}}
+100 |     if (this.#failure || this.child.exitCode !== null) return Promise.reject(this.#failure ?? new Error('CEF runtime unavailable'));
+101 |     if (this.#pending.size >= 64) return Promise.reject(new Error('CEF command capacity exceeded'));
+102 |     const id = ++this.#nextId, body = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
+103 |     if (Buffer.byteLength(body) > MAX_MESSAGE) return Promise.reject(new Error('CEF request too large'));
+104 |     return new Promise((resolve, reject) => {
+105 |       const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error(`CEF ${method} timed out; operation may have executed`)); }, 15000);
+                                                                                  ^
+error: CEF page.cdp timed out; operation may have executed
+      at <anonymous> (/Users/jaco/Documents/VeeZee/weave/product/portal/src/browser-service/managed-process.ts:105:77)
+
+Bun v1.3.14 (macOS arm64)

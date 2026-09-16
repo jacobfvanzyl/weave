@@ -16,4 +16,4 @@ await run(['xcrun', 'clang++', '-std=c++17', `-DWEAVE_ACCEPTANCE=${process.env.V
   join(native, 'lib/libghostty-vt.a'), '-framework', 'AppKit', '-framework', 'CoreText', '-o', join(native, 'weave-terminal.node')]);
 
 const browser = join(root, 'native/.build/browser/macos');
-await run(['xcrun', 'clang++', '-std=c++17', '-O2', '-fobjc-arc', '-fmodules', '-shared', '-undefined', 'dynamic_lookup', '-I', headers, '-I', join(browser, 'include'), join(root, 'native/browser/WeaveBrowserSurface.mm'), join(root, 'native/browser/electron-browser.mm'), join(browser, 'libvncclient.a'), '-lz', '-framework', 'AppKit', '-framework', 'QuartzCore', '-o', join(browser, 'weave-browser.node')]);
+await run(['xcrun', 'clang++', '-std=c++17', '-O2', '-fobjc-arc', '-fmodules', '-shared', '-undefined', 'dynamic_lookup', '-I', headers, '-I', join(browser, 'include'), join(root, 'native/browser/WeaveBrowserSurface.mm'), join(root, 'native/browser/WeaveBrowserMetalPresenter.mm'), join(root, 'native/browser/electron-browser.mm'), join(browser, 'libvncclient.a'), '-lz', '-framework', 'AppKit', '-framework', 'QuartzCore', '-framework', 'Metal', '-o', join(browser, 'weave-browser.node')]);

@@ -5,7 +5,7 @@ import UIKit
 final class NativeBrowserPlugin: CAPPlugin, CAPBridgedPlugin {
     let identifier = "NativeBrowserPlugin"
     let jsName = "NativeBrowser"
-    let pluginMethods = ["create", "connect", "control", "layout", "close"].compactMap { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
+    let pluginMethods = ["create", "connect", "control", "layout", "clipboard", "keyboard", "close"].compactMap { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
     private var surfaces: [String: WeaveBrowserSurface] = [:]
     @objc func create(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
@@ -46,6 +46,34 @@ final class NativeBrowserPlugin: CAPPlugin, CAPBridgedPlugin {
             let frame = CGRect(x:x, y:y, width:width, height:height).intersection(web.bounds)
             surface.layout(web.convert(frame.isNull ? .zero : frame, to:parent), visible:call.getBool("visible") ?? false, dim:dim)
             call.resolve()
+        }
+    }
+    @objc func clipboard(_ call: CAPPluginCall) {
+        withSurface(call) { _ in
+            if let text = call.getString("text") {
+                guard text.utf8.count <= 32768 else { call.reject("Browser clipboard text is too large"); return }
+                UIPasteboard.general.string = text
+                call.resolve()
+            } else { call.resolve(["text": UIPasteboard.general.string ?? ""]) }
+        }
+    }
+    @objc func keyboard(_ call: CAPPluginCall) {
+        guard let request = call.getString("requestId"), UUID(uuidString: request) != nil else { call.reject("Invalid keyboard request"); return }
+        DispatchQueue.main.async {
+            guard let web = self.bridge?.webView else { call.reject("Browser input is unavailable"); return }
+            // Public WebKit embedding API permits keyboard focus after the
+            // asynchronous Chromium edit-state reply. Never steal newer focus.
+            web.evaluateJavaScript("""
+                (() => {
+                  const input = document.querySelector('[data-keyboard-request="\(request)"]');
+                  if (input?.dataset.slot === 'native-browser-input' && !input.readOnly && document.activeElement === document.body) {
+                    input.focus({preventScroll:true});
+                  }
+                  if (input) delete input.dataset.keyboardRefocusing;
+                })()
+                """) { _, error in
+                    if let error { call.reject(error.localizedDescription) } else { call.resolve() }
+                }
         }
     }
     @objc func close(_ call: CAPPluginCall) {

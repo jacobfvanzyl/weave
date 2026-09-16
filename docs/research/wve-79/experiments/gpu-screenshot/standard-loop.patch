@@ -1,0 +1,194 @@
+diff --git a/product/portal/native/browser/cef-host.cc b/product/portal/native/browser/cef-host.cc
+index 9b840e68..d6aec5f2 100644
+--- a/product/portal/native/browser/cef-host.cc
++++ b/product/portal/native/browser/cef-host.cc
+@@ -12,6 +12,10 @@
+ #include "include/cef_render_handler.h"
+ #include "include/cef_render_process_handler.h"
+ #include "include/cef_version.h"
++#include "include/cef_task.h"
++#include <atomic>
++#include <functional>
++#include <poll.h>
+ #include "rfb-display.h"
+ #include "wheel-input.h"
+ #include <cerrno>
+@@ -47,9 +51,20 @@
+ #endif
+ using Dict = CefRefPtr<CefDictionaryValue>;
+ static std::string socketsDirectory;
+-static volatile sig_atomic_t running = 1;
+-static bool initialized = false;
+-static void stop(int) { running = 0; }
++// CEF and Page state belong to the main UI thread. Only the pipe reader runs
++// elsewhere; it posts bounded, owned command strings to the standard CEF loop.
++static bool running = true;
++static int wakePipe[2] = {-1, -1};
++static std::thread inputThread;
++static std::atomic<size_t> queuedBytes{0}, queuedCommands{0};
++static void stop(int) {
++  int saved = errno;
++  char byte = 1;
++  if (wakePipe[1] >= 0) (void)!write(wakePipe[1], &byte, 1);
++  errno = saved;
++}
++static void closeRuntime();
++static void startInput();
+ static Dict object() { return CefDictionaryValue::Create(); }
+ static void emit(Dict dict) {
+   auto value = CefValue::Create();
+@@ -164,6 +179,7 @@ public:
+     event("page.created");
+     if (createRequest)
+       reply(createRequest, state());
++    if (!running) b->GetHost()->CloseBrowser(true);
+   }
+   void OnBeforeClose(CefRefPtr<CefBrowser>) override {
+     observer = nullptr;
+@@ -175,6 +191,7 @@ public:
+       fail(request, "Page closed");
+     cdpRequests.clear();
+     pages.erase(id);
++    if (!running && pages.empty()) CefQuitMessageLoop();
+   }
+   void OnAddressChange(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
+                        const CefString &address) override {
+@@ -305,7 +322,6 @@ public:
+     return true;
+   }
+   void OnContextInitialized() override {
+-    initialized = true;
+     auto e = object(), p = object();
+     e->SetString("jsonrpc", "2.0");
+     e->SetString("method", "runtime.ready");
+@@ -313,6 +329,7 @@ public:
+     p->SetString("cefVersion", CEF_VERSION);
+     e->SetDictionary("params", p);
+     emit(e);
++    startInput();
+   }
+ 
+ private:
+@@ -332,7 +349,7 @@ static void command(const std::string &line) {
+   }
+   if (method == "runtime.close") {
+     reply(request, object());
+-    running = 0;
++    closeRuntime();
+     return;
+   }
+   if (method == "page.list") {
+@@ -485,6 +502,55 @@ static void command(const std::string &line) {
+   }
+   reply(request, page->state());
+ }
++class InputTask final : public CefTask {
++public:
++  explicit InputTask(std::function<void()> fn) : fn_(std::move(fn)) {}
++  void Execute() override { fn_(); }
++private:
++  std::function<void()> fn_;
++  IMPLEMENT_REFCOUNTING(InputTask);
++};
++static void closeRuntime() {
++  if (!running) return;
++  running = false;
++  stop(0); // Wake the reader; never wait for stdin during shutdown.
++  auto current = pages;
++  for (auto &[_, page] : current)
++    if (page->browser) page->browser->GetHost()->CloseBrowser(true);
++  // Pending CreateBrowser calls close themselves in OnAfterCreated.
++  if (pages.empty()) CefQuitMessageLoop();
++}
++static void startInput() {
++  inputThread = std::thread([] {
++    std::string input;
++    bool done = false;
++    while (!done) {
++      pollfd descriptors[] = {{STDIN_FILENO, POLLIN, 0}, {wakePipe[0], POLLIN, 0}};
++      int status = poll(descriptors, 2, -1);
++      if (status < 0) { if (errno == EINTR) continue; break; }
++      if (descriptors[1].revents) break;
++      if (!descriptors[0].revents) continue;
++      char buffer[8192];
++      ssize_t n = read(STDIN_FILENO, buffer, sizeof(buffer));
++      if (n <= 0) { if (n < 0 && errno == EINTR) continue; break; }
++      input.append(buffer, n);
++      if (input.size() > 1048576) break;
++      size_t end;
++      while ((end = input.find('\n')) != std::string::npos) {
++        auto line = input.substr(0, end);
++        input.erase(0, end + 1);
++        size_t bytes = line.size();
++        if (queuedBytes.load() + bytes > 1048576 || queuedCommands.load() >= 1024) { done = true; break; }
++        queuedBytes.fetch_add(bytes); queuedCommands.fetch_add(1);
++        if (!CefPostTask(TID_UI, new InputTask([line = std::move(line), bytes] {
++              queuedBytes.fetch_sub(bytes); queuedCommands.fetch_sub(1);
++              if (running) command(line);
++            }))) { done = true; break; }
++      }
++    }
++    CefPostTask(TID_UI, new InputTask([] { closeRuntime(); }));
++  });
++}
+ int main(int argc, char **argv) {
+ #ifdef __APPLE__
+   @autoreleasepool {
+@@ -526,46 +592,21 @@ int main(int argc, char **argv) {
+           std::string(resources) + "/locales";
+     }
+ #endif
+-    if (!CefInitialize(args, settings, app, nullptr))
+-      return 4;
++    if (pipe(wakePipe) != 0) return 5;
++    for (int fd : wakePipe) {
++      fcntl(fd, F_SETFD, FD_CLOEXEC);
++      fcntl(fd, F_SETFL, O_NONBLOCK);
++    }
+     signal(SIGTERM, stop);
+     signal(SIGINT, stop);
+     signal(SIGPIPE, SIG_IGN);
+-    fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+-    std::string input;
+-    while (running) {
+-      CefDoMessageLoopWork();
+-      if (initialized) {
+-        char buffer[8192];
+-        ssize_t n = read(STDIN_FILENO, buffer, sizeof(buffer));
+-        if (n > 0)
+-          input.append(buffer, n);
+-        else if (n == 0)
+-          running = 0;
+-        if (input.size() > 1048576)
+-          running = 0;
+-        size_t end;
+-        while ((end = input.find('\n')) != std::string::npos) {
+-          auto line = input.substr(0, end);
+-          input.erase(0, end + 1);
+-          command(line);
+-        }
+-      }
+-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+-    }
+-    {
+-      auto current = pages;
+-      for (auto &[_, page] : current)
+-        if (page->browser)
+-          page->browser->GetHost()->CloseBrowser(true);
+-    }
+-    for (int i = 0; i < 500 && !pages.empty(); i++) {
+-      CefDoMessageLoopWork();
+-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+-    }
+-    if (!pages.empty())
+-      return 8;
++    if (!CefInitialize(args, settings, app, nullptr)) return 4;
++    CefRunMessageLoop();
++    stop(0);
++    if (inputThread.joinable()) inputThread.join();
+     CefShutdown();
++    close(wakePipe[0]); close(wakePipe[1]);
++    wakePipe[0] = wakePipe[1] = -1;
+ #ifdef __APPLE__
+   }
+ #endif

@@ -13,7 +13,7 @@ const portal = await Portal.open({stateDirectory:root,displayName:'Browser accep
 const server = startPortalServer(portal);
 let success=false;
 try {
-  await writeFile(join(root,'input.json'),JSON.stringify({hostUrl:`ws://127.0.0.1:${server.addr.port}`,pairingToken:await portal.security.createPairingToken(),workspaceName:'Browser',browserUrl:`http://127.0.0.1:${fixture.port}/`}),{mode:0o600});
+  await writeFile(join(root,'input.json'),JSON.stringify({hostUrl:`ws://127.0.0.1:${server.addr.port}`,pairingToken:await portal.security.createPairingToken(),workspaceName:'Browser',browserHostId:portal.security.hostId,browserUrl:`http://127.0.0.1:${fixture.port}/`}),{mode:0o600});
   const app = Bun.spawn([resolve(import.meta.dir,'../release/Weave Alpha-darwin-arm64/Weave Alpha.app/Contents/MacOS/Weave Alpha'),'--host-acceptance'],{env:{...process.env,WEAVE_ALPHA_ACCEPTANCE_DIR:root},stdout:Bun.file(join(root,'electron.log')),stderr:Bun.file(join(root,'electron-error.log'))});
   const timer=setTimeout(() => app.kill('SIGTERM'),120000);
   const code=await app.exited;clearTimeout(timer);

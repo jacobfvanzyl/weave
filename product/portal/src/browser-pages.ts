@@ -83,6 +83,8 @@ export class ManagedBrowserAccess {
         if (!active() || this.#views.get(view.viewId) !== view) throw new Error('Browser view closed');
         const focus = this.#focus.get(view.pageId);
         if (method !== 'browser.page.view.focus' && (!focus || focus.viewId !== view.viewId || focus.epoch !== input.focusEpoch || focus.generation !== view.generation)) throw new Error('Browser view no longer owns the viewport');
+        if(method==='browser.page.view.context')return this.backend.managedPage('page.context',{pageId:view.pageId,generation:view.generation,arguments:{x:input.x,y:input.y}});
+        if (method === 'browser.page.view.interaction') return this.backend.managedPage('page.interaction', { pageId: view.pageId, generation: view.generation });
         if (method === 'browser.page.view.input') {
           const start = browserDiagnostics ? performance.now() : 0;
           await this.backend.managedPage('page.cdp', { pageId: view.pageId, generation: view.generation, arguments: { method: input.method, arguments: input.arguments, nativeInput: true, inputEpoch: `${view.viewId}:${focus!.epoch}` } });

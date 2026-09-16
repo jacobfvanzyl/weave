@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('weaveDesktop', Object.freeze({
   },
   nativeBrowser: Object.freeze({
     create: () => ipcRenderer.invoke('weave:browser', 'create'),
+    clipboard: (input: unknown) => ipcRenderer.invoke('weave:browser', 'clipboard', input),
     connect: (input: unknown) => ipcRenderer.invoke('weave:browser', 'connect', input),
     control: (input: unknown) => ipcRenderer.invoke('weave:browser', 'control', input),
     layout: (input: unknown) => ipcRenderer.invoke('weave:browser', 'layout', input),

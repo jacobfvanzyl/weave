@@ -1,0 +1,86 @@
+--- a/product/portal/native/browser/cef-host.cc
++++ b/product/portal/native/browser/cef-host.cc
+@@ -106,6 +106,7 @@
+   int nextCdp = 0;
+   std::string selection;
+   int cursorType = 0;
++  int diagnosticPaintCount = 0;
+   WheelInput wheel;
+   Page(std::string pageId) : id(pageId) {}
+   ~Page() override { if(display)display->close(); }
+@@ -123,6 +124,7 @@
+     d->SetInt("width", width);
+     d->SetInt("height", height);
+     d->SetDouble("deviceScaleFactor", deviceScaleFactor);
++    if(getenv("WEAVE_BROWSER_DIAGNOSTICS")) d->SetInt("diagnosticPaintCount", diagnosticPaintCount);
+     d->SetBool("canGoBack", browser && browser->CanGoBack());
+     d->SetBool("canGoForward", browser && browser->CanGoForward());
+     if (!opener.empty())
+@@ -160,6 +162,7 @@
+   }
+   void OnAfterCreated(CefRefPtr<CefBrowser> b) override {
+     browser = b;
++    if(getenv("WEAVE_BROWSER_INITIAL_SHOW"))b->GetHost()->WasHidden(false);
+     observer = b->GetHost()->AddDevToolsMessageObserver(this);
+     event("page.created");
+     if (createRequest)
+@@ -201,6 +204,7 @@
+       return true;
+     pages[page->id] = page;
+     info.SetAsWindowless(0);
++    info.external_begin_frame_enabled=getenv("WEAVE_BROWSER_EXTERNAL_FRAMES")!=nullptr;
+     settings.windowless_frame_rate = 60;
+     client = page;
+     return false;
+@@ -253,7 +257,7 @@
+   void OnPaint(CefRefPtr<CefBrowser>, PaintElementType type,
+                const RectList &dirty, const void *pixels, int w,
+                int h) override {
+-    if(type==PET_VIEW && display)display->paint(pixels,w,h,dirty);
++    if(type==PET_VIEW && display){diagnosticPaintCount++;display->paint(pixels,w,h,dirty);}
+   }
+   void resize(int w, int h, double scale) {
+     wheel.reset();
+@@ -287,6 +291,8 @@
+   void OnBeforeCommandLineProcessing(const CefString &,
+                                      CefRefPtr<CefCommandLine> cmd) override {
+     if (getenv("WEAVE_BROWSER_CDP_PIPE")) cmd->AppendSwitch("remote-debugging-pipe");
++    if (getenv("WEAVE_BROWSER_SCREENSHOT_NEW_SURFACE") && std::string(getenv("WEAVE_BROWSER_SCREENSHOT_NEW_SURFACE")) == "1")
++      cmd->AppendSwitchWithValue("enable-features", "CDPScreenshotNewSurface");
+     // Opt-in diagnostic comparison; installed defaults remain unchanged.
+     if (!(getenv("WEAVE_BROWSER_DIAGNOSTICS") && std::string(getenv("WEAVE_BROWSER_DIAGNOSTICS")) == "1" && getenv("WEAVE_BROWSER_GPU") && std::string(getenv("WEAVE_BROWSER_GPU")) == "1")) {
+       cmd->AppendSwitch("disable-gpu");
+@@ -370,6 +376,7 @@
+     pages[id] = page;
+     CefWindowInfo info;
+     info.SetAsWindowless(0);
++    info.external_begin_frame_enabled=getenv("WEAVE_BROWSER_EXTERNAL_FRAMES")!=nullptr;
+     CefBrowserSettings settings;
+     settings.windowless_frame_rate = 60;
+     settings.background_color = CefColorSetARGB(255, 255, 255, 255);
+@@ -416,6 +423,11 @@
+     host->SetFocus(true);
+     page->resize(w, h, scale);
+   } else if (method == "page.cdp") {
++    if(params->GetString("method")=="Page.captureScreenshot" && getenv("WEAVE_BROWSER_SCREENSHOT_NUDGE")){
++      std::string nudge=getenv("WEAVE_BROWSER_SCREENSHOT_NUDGE");
++      if(nudge!="invalidate")host->WasHidden(false);
++      if(nudge!="show")host->Invalidate(PET_VIEW);
++    }
+     // Human display input can use CEF's embedding API without waiting for a
+     // DevTools wheel acknowledgement. Agent CDP calls keep their full response
+     // semantics. The optional private hint is ignored safely by older runtimes.
+@@ -533,8 +545,13 @@
+     signal(SIGPIPE, SIG_IGN);
+     fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+     std::string input;
++    double nextFrame=0;
+     while (running) {
+       CefDoMessageLoopWork();
++      if(getenv("WEAVE_BROWSER_EXTERNAL_FRAMES")){
++        double now=BrowserDiagnostics::now();
++        if(now>=nextFrame){nextFrame=now+1000.0/60;for(auto &[_,page]:pages)if(page->browser && !page->closing)page->browser->GetHost()->SendExternalBeginFrame();}
++      }
+       if (initialized) {
+         char buffer[8192];
+         ssize_t n = read(STDIN_FILENO, buffer, sizeof(buffer));

@@ -1,7 +1,8 @@
+import { Keyboard } from '@capacitor/keyboard';
 import { nativeTerminalAcceptance } from '@/terminal/native-terminal';
 import { runBrowserScrollAcceptance } from '@/browser/scroll-acceptance';
 // Included only in explicitly built acceptance artifacts.
-export type LiveAcceptanceInput = { browserBenchmark?: { durationMs: number; animation: boolean }; browserUrl?: string; hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
+export type LiveAcceptanceInput = { browserKeyboard?: boolean | 'smoke'; browserBenchmark?: { durationMs: number; animation: boolean }; browserUrl?: string; browserHostId?: string; hostUrl: string; pairingToken?: string; workspaceName: string; directory?: string; permission?: boolean };
 export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
   let stage = 'pairing';
   let outsideBottomRightRadius = 0;
@@ -46,23 +47,63 @@ export async function runLiveShellAcceptance(input: LiveAcceptanceInput) {
       await wait(() => !document.querySelector('#pairing-token'));
     }
     if (input.browserUrl) {
+      const previousPages=new Set([...document.querySelectorAll<HTMLElement>('[data-browser-page]')].map(el=>el.dataset.browserPage));
       stage = 'Browser Workspace menu';
       await wait(() => button('Sidebar actions')); button('Sidebar actions')!.click();
       await wait(() => button('New workspace…')); button('New workspace…')!.click();
-      await wait(() => button('Browser')); button('Browser')!.click();
+      const browserItem=()=>input.browserHostId ? document.querySelector<HTMLElement>(`[data-browser-host="${input.browserHostId}"]`) : button('Browser');
+      await wait(()=>browserItem() && !browserItem()!.matches(':disabled, [aria-disabled="true"], [data-disabled]')); browserItem()!.click();
       // Synthetic menu selection does not always dismiss nested Base UI menus.
       for (let n = 0; n < 3; n++) {
         document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', code:'Escape', bubbles:true }));
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       stage = 'blank Browser address';
-      await wait(() => document.querySelector<HTMLInputElement>('[aria-label="Browser address"]'));
-      await wait(() => button('Reload'));
-      set('[aria-label="Browser address"]', input.browserUrl);
-      document.querySelector<HTMLInputElement>('[aria-label="Browser address"]')!.form!.requestSubmit();
+      if(!input.browserHostId)throw new Error('Fixture Host identity is required');
+      const createdPane=()=>[...document.querySelectorAll<HTMLElement>('[data-browser-page]')].find(el=>el.dataset.browserHost===input.browserHostId && !previousPages.has(el.dataset.browserPage) && el.checkVisibility());
+      await wait(createdPane);
+      const pane=createdPane()!;
+      const address=pane.querySelector<HTMLInputElement>('[aria-label="Browser address"]');
+      if(!address || address.value) throw new Error('New test Pane must have a blank address');
+      await wait(()=>!pane.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.disabled);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(address,input.browserUrl);
+      address.dispatchEvent(new Event('input',{bubbles:true}));
+      address.form!.requestSubmit();
       stage = 'native Browser framebuffer';
-      await wait(() => Number(document.querySelector<HTMLElement>('[data-slot="native-browser-input"]')?.dataset.frameWidth) > 0);
-      const browser = document.querySelector<HTMLTextAreaElement>('[data-slot="native-browser-input"]')!;
+      await wait(() => Number(pane.querySelector<HTMLElement>('[data-slot="native-browser-input"]')?.dataset.frameWidth) > 0);
+      const browser=pane.querySelector<HTMLTextAreaElement>('[data-slot="native-browser-input"]')!;
+      if(input.browserKeyboard){
+        browser.focus();state.alphaAcceptanceStage='browser-keyboard';
+        if(input.browserKeyboard==='smoke'){
+          const keyboardEvents:{event:string;height?:number}[]=[];
+          const show=await Keyboard.addListener('keyboardDidShow',info=>keyboardEvents.push({event:'show',height:info.keyboardHeight}));
+          const hide=await Keyboard.addListener('keyboardDidHide',()=>keyboardEvents.push({event:'hide'}));
+          const pause=()=>new Promise(resolve=>setTimeout(resolve,700));
+          try {
+          await pause();const baseline=innerHeight;
+          const tap=async(x:number,y:number)=>{
+            await wait(()=>browser.dataset.frameWidth===browser.dataset.expectedFrameWidth && browser.dataset.frameHeight===browser.dataset.expectedFrameHeight);
+            browser.focus();const r=browser.getBoundingClientRect();
+            for(const type of ['pointerdown','pointerup'])browser.dispatchEvent(new PointerEvent(type,{bubbles:true,clientX:r.x+x,clientY:r.y+y,pointerType:'touch',pointerId:1,button:0,buttons:type==='pointerdown'?1:0}));
+          };
+          if(!browser.readOnly)throw new Error('Pane focus enabled software input');
+          await tap(400,250);await pause();if(!browser.readOnly || innerHeight<baseline-100)throw new Error('Ordinary tap opened keyboard');
+          await tap(80,60);stage='editable keyboard';await wait(()=>!browser.readOnly);stage='keyboard viewport resize';await wait(()=>innerHeight<baseline-100);
+          const keyboardHeight=baseline-innerHeight;
+          await wait(()=>browser.dataset.frameWidth===browser.dataset.expectedFrameWidth && browser.dataset.frameHeight===browser.dataset.expectedFrameHeight);
+          browser.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:'Weave keyboard'}));await pause();
+          await Keyboard.hide();await wait(()=>browser.readOnly && innerHeight>baseline-50);await pause();if(!browser.readOnly)throw new Error('Dismissed keyboard reopened');
+          await tap(80,60);stage='reopen keyboard';await wait(()=>!browser.readOnly && innerHeight<baseline-100);
+          await tap(400,250);stage='hide on body';await wait(()=>browser.readOnly && innerHeight>baseline-50);
+          await tap(80,140);await pause();if(!browser.readOnly || innerHeight<baseline-100)throw new Error('Readonly field opened keyboard');
+          return {passed:true,browserKeyboard:true,driver:'in-process WebKit and real viewport resize; not XCTest touch',keyboardHeight,keyboardEvents};
+          } catch(error) {throw new Error(`${error}; readonly=${browser.readOnly}; focused=${document.activeElement===browser}; height=${innerHeight}; keyboard=${JSON.stringify(keyboardEvents)}; input=${JSON.stringify(browser.dataset)}`);} finally {await show.remove();await hide.remove();}
+        }
+        const done=document.createElement('button');done.textContent='Finish browser keyboard test';done.setAttribute('aria-label','Finish browser keyboard test');done.style.cssText='position:fixed;top:25px;right:20px;z-index:99999;background:white;color:black';document.body.append(done);
+        try {await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Keyboard test timed out')),120000);done.onclick=()=>{clearTimeout(timer);resolve();};});}
+        finally{done.remove();}
+        return {passed:true,browserKeyboard:true};
+      }
       if (input.browserBenchmark) return await runBrowserScrollAcceptance(browser, input.browserBenchmark.durationMs, input.browserBenchmark.animation);
       await new Promise(resolve => setTimeout(resolve,500));
       const rect = browser.getBoundingClientRect();

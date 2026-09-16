@@ -10,7 +10,7 @@ function fixture() {
     if(method==='browser.page.view.focus'||method==='browser.page.view.resize')return {...args,focusEpoch:++epoch,generation:page.generation};
     return {};
   });
-  const native:NativeBrowserBridge={create:vi.fn(async()=>({surfaceId:'native'})),connect:vi.fn(async()=>{}),control:vi.fn(async()=>{}),layout:vi.fn(async()=>{}),close:vi.fn(async()=>{}),addListener:vi.fn(async(_name,listener)=>{event=listener;return{remove:vi.fn(async()=>{})};})};
+  const native:NativeBrowserBridge={clipboard:vi.fn(async()=>({})),create:vi.fn(async()=>({surfaceId:'native'})),connect:vi.fn(async()=>{}),control:vi.fn(async()=>{}),layout:vi.fn(async()=>{}),close:vi.fn(async()=>{}),addListener:vi.fn(async(_name,listener)=>{event=listener;return{remove:vi.fn(async()=>{})};})};
   const client={browserRequest:rpc,browserDisplay:()=>({url:'ws://host/browser/rfb',authorize:async()=>({}),authenticated:()=>{}})};
   const errors=vi.fn(),connection=new BrowserViewConnection(client as any,page,errors,native);
   const frame=(width:number,height:number)=>event({surfaceId:'native',kind:'frame',width,height});
@@ -192,4 +192,74 @@ it('claims the initial Retina viewport after its creation menu closes, then reta
   await new Promise(resolve => setTimeout(resolve, 25));
   expect(f.rpc.mock.calls.filter(([method]) => method === 'browser.page.view.focus')).toHaveLength(1);
   await f.connection.close();
+});
+
+it('coalesces pending hover positions while preserving click boundaries', async()=>{
+  const f=fixture(); await f.connection.start();
+  f.connection.layout({x:0,y:0,width:800,height:600,focused:false,visible:true,dim:0});f.frame(800,600);await f.connection.activate();
+  const calls: any[]=[];let finish!:()=>void;
+  f.rpc.mockImplementation(async(method,args)=>{if(method==='browser.page.view.input'){calls.push(args);if(calls.length===1)await new Promise<void>(resolve=>{finish=resolve;});}return {};});
+  const first=f.connection.input('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1,buttons:0});
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const moves=Array.from({length:100},(_,x)=>f.connection.input('Input.dispatchMouseEvent',{type:'mouseMoved',x:x+2,y:1,buttons:0}));
+  const click=f.connection.input('Input.dispatchMouseEvent',{type:'mousePressed',x:101,y:1,buttons:1,button:'left'});
+  finish();await Promise.all([first,...moves,click]);
+  expect(calls.map(call=>[call.arguments.type,call.arguments.x])).toEqual([['mouseMoved',1],['mouseMoved',101],['mousePressed',101]]);
+  await f.connection.close();
+});
+
+it('applies keyboard dismissal resizing after an in-flight viewport claim completes', async()=>{
+  const f=fixture(); await f.connection.start();
+  const bounds={x:0,y:0,width:929,height:329,deviceScaleFactor:2,focused:false,visible:true,dim:0};
+  f.connection.layout(bounds);
+  const original=f.rpc.getMockImplementation()!;
+  let finish!:()=>void;
+  f.rpc.mockImplementation(async(method,args)=>{
+    if(method==='browser.page.view.focus') await new Promise<void>(resolve=>{finish=resolve;});
+    return original(method,args);
+  });
+  const claim=f.connection.activate();
+  while(!finish) await Promise.resolve();
+  f.connection.layout({...bounds,focused:true,height:751});
+  finish(); await claim;
+  await new Promise(resolve=>setTimeout(resolve,0));
+  expect(f.rpc).toHaveBeenCalledWith('browser.page.view.resize',expect.objectContaining({height:751,focusEpoch:1}));
+  await f.connection.close();
+});
+
+it('discards a context response after the pane loses focus',async()=>{
+  const f=fixture();await f.connection.start();
+  const bounds={x:0,y:0,width:800,height:600,focused:true,visible:true,dim:0};
+  f.connection.layout(bounds);f.frame(800,600);await f.connection.activate();
+  const original=f.rpc.getMockImplementation()!;
+  let finish!:(value:any)=>void;
+  f.rpc.mockImplementation(async(method,args)=>method==='browser.page.view.context'?await new Promise(resolve=>{finish=resolve;}):original(method,args));
+  const result=f.connection.context(12.9,25.3);
+  while(!finish)await Promise.resolve();
+  expect(f.rpc).toHaveBeenLastCalledWith('browser.page.view.context',expect.objectContaining({x:12,y:25}));
+  f.connection.layout({...bounds,focused:false});
+  finish({text:'selection',canCopy:true,canCut:false,canPaste:false,canSelectAll:true});
+  expect(await result).toBeUndefined();await f.connection.close();
+});
+
+it('clipboard state waits for a delayed focus claim and cancels on actual focus loss',async()=>{
+  const f=fixture();await f.connection.start();
+  const bounds={x:0,y:0,width:800,height:600,focused:true,visible:true,dim:0};
+  f.connection.layout(bounds);f.frame(800,600);await f.connection.activate();
+  const original=f.rpc.getMockImplementation()!;
+  let release!:()=>void;
+  f.rpc.mockImplementation(async(method,args)=>{
+    if(method==='browser.page.view.focus')await new Promise<void>(resolve=>{release=resolve;});
+    if(method==='browser.page.view.interaction')return {cursor:0,text:'copied',inputMode:1};
+    return original(method,args);
+  });
+  const focus=f.connection.activate();while(!release)await Promise.resolve();
+  expect(await f.connection.interaction()).toBeUndefined();
+  const state=f.connection.interaction(true);
+  await new Promise(resolve=>setTimeout(resolve,50));
+  expect(f.rpc.mock.calls.some(([method])=>method==='browser.page.view.interaction')).toBe(false);
+  release();await focus;expect(await state).toEqual({cursor:0,text:'copied',inputMode:1});
+  release=undefined!;const next=f.connection.activate();while(!release)await Promise.resolve();
+  const cancelled=f.connection.interaction(true);f.connection.layout({...bounds,focused:false});
+  release();await next;expect(await cancelled).toBeUndefined();await f.connection.close();
 });

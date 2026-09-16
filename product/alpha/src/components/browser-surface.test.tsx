@@ -19,3 +19,19 @@ it('opens blank with the URL field focused and preserves typing when Host state 
   await user.keyboard('{Enter}');
   await waitFor(()=>expect(request).toHaveBeenCalledWith('browser.page.navigate',expect.objectContaining({url:'https://localhost:4199'})));
 });
+
+it('routes address and navigation shortcuts at the Browser Pane boundary', async()=>{
+  const {fireEvent}=await import('@testing-library/react');
+  const page={pageId,profileId,title:'Page',url:'https://example.test/',available:true,generation:pageId};
+  const request=vi.fn(async()=>({page}));
+  const controller={browserClient:()=>({browserRequest:request}),model:{},actions:{},workspaceActions:{focus:vi.fn()}} as any;
+  render(<BrowserSurface controller={controller} reference={{hostId:'host',workspaceId:'workspace'}} node={{kind:'browser',nodeId:pageId,paneId:pageId,profileId,lastCommittedUrl:page.url}} focused maximized={false} />);
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Reload'})).toBeEnabled());
+  const pane=screen.getByRole('region',{name:'Browser pane'});
+  fireEvent.keyDown(pane,{key:'l',metaKey:true});
+  expect(screen.getByRole('textbox',{name:'Browser address'})).toHaveFocus();
+  fireEvent.keyDown(pane,{key:'r',metaKey:true});
+  await waitFor(()=>expect(request).toHaveBeenCalledWith('browser.page.reload',expect.objectContaining({pageId})));
+  fireEvent.keyDown(pane,{key:'ArrowLeft',altKey:true});
+  await waitFor(()=>expect(request).toHaveBeenCalledWith('browser.page.back',expect.objectContaining({pageId})));
+});

@@ -1,3 +1,5 @@
+import { usePaneFocusAdapter } from '@/app/pane-focus';
+import { nativeSoftwareKeyboard } from '@/terminal/native-terminal';
 import { BrowserProfileButton } from './browser-profile-button';
 import { useEffect, useRef, useState } from 'react';
 import type { BrowserPage, PaneLayoutNode } from '@weave/product-protocol';
@@ -14,6 +16,7 @@ import { Input } from './ui/input';
 import { Alert, AlertDescription } from './ui/alert';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 export function BrowserSurface({ controller, reference, node, focused, maximized }: { controller: AlphaController; reference: WorkspaceReference; node: Extract<PaneLayoutNode,{kind:'browser'}>; focused:boolean; maximized:boolean }) {
+  const {owner,id}=usePaneFocusAdapter();
   const client = controller.browserClient?.(reference.hostId);
   const [page, setPage] = useState<BrowserPage>(), [address,setAddress] = useState(node.lastCommittedUrl === 'about:blank' ? '' : node.lastCommittedUrl), [error,setError] = useState<string>(), [closing,setClosing] = useState(false), [pending,setPending] = useState(false);
   const addressInput = useRef<HTMLInputElement>(null), addressDirty = useRef(false);
@@ -44,13 +47,21 @@ export function BrowserSurface({ controller, reference, node, focused, maximized
     await client.browserRequest('browser.pane.close',{hostId:reference.hostId,expectedRevision:composition.revision,paneId:node.paneId,profileId:node.profileId,generation:page?.generation,confirmed:true});
     setClosing(false); await controller.workspaceActions?.refresh();
   }); setPending(false); };
-  return <section className='flex min-h-0 min-w-0 flex-1 flex-col' data-focused={focused || undefined} aria-label='Browser pane'>
+  return <section className='flex min-h-0 min-w-0 flex-1 flex-col' data-focused={focused || undefined} aria-label='Browser pane' data-browser-page={node.paneId} data-browser-host={reference.hostId} onKeyDownCapture={event => {
+    if (!focused || event.altKey && !(event.key === 'ArrowLeft' || event.key === 'ArrowRight')) return;
+    const command=event.metaKey || event.ctrlKey;
+    if (command && event.key.toLowerCase() === 'l') { event.preventDefault(); event.stopPropagation(); addressInput.current?.focus(); addressInput.current?.select(); }
+    else {
+      const method = command && event.key.toLowerCase() === 'r' || event.key === 'F5' ? 'browser.page.reload' : command && event.key === '[' || event.altKey && event.key === 'ArrowLeft' ? 'browser.page.back' : command && event.key === ']' || event.altKey && event.key === 'ArrowRight' ? 'browser.page.forward' : undefined;
+      if (method) { event.preventDefault(); event.stopPropagation(); void perform(() => navigate(method)); }
+    }
+  }}>
     <PaneFrame focused={focused} title={page?.title || 'Browser'} actions={<>
       <PaneSplitMenu sourceType='browser' disabled={!client || pending} onSplit={(axis,type) => void perform(async () => controller.actions.splitPane?.(reference,node.paneId,axis,type))} />
       <Button size='rail' variant='ghost' aria-label={maximized ? 'Restore browser' : 'Maximize browser'} onClick={() => controller.workspaceActions?.maximize(reference,node.paneId)}><HugeiconsIcon icon={maximized ? ArrowShrink01Icon : ArrowExpand01Icon} /></Button>
       <Button size='rail' variant='ghost' aria-label='Close browser' onClick={() => setClosing(true)}><HugeiconsIcon icon={Cancel01Icon} /></Button>
     </>}>
-      <form className='flex shrink-0 items-center gap-1 border-b p-1' onSubmit={event => { event.preventDefault(); void perform(() => navigate('browser.page.navigate')); }}>
+      <form className='flex shrink-0 items-center gap-1 border-b p-1' onSubmit={event => { event.preventDefault(); if (nativeSoftwareKeyboard && id) owner?.browse(id); else addressInput.current?.blur(); void perform(() => navigate('browser.page.navigate')); }}>
         <Button type='button' size='icon-sm' variant='ghost' aria-label='Back' disabled={!page?.canGoBack} onClick={() => void perform(() => navigate('browser.page.back'))}><HugeiconsIcon icon={ArrowLeft01Icon} /></Button>
         <Button type='button' size='icon-sm' variant='ghost' aria-label='Forward' disabled={!page?.canGoForward} onClick={() => void perform(() => navigate('browser.page.forward'))}><HugeiconsIcon icon={ArrowRight01Icon} /></Button>
         <Button type='button' size='icon-sm' variant='ghost' aria-label='Reload' disabled={!page?.available} onClick={() => void perform(() => navigate('browser.page.reload'))}><HugeiconsIcon icon={RefreshIcon} /></Button>

@@ -1,6 +1,31 @@
 import XCTest
 
 final class AlphaUITests: XCTestCase {
+    func testBrowserKeyboardFollowsEditableTargets() throws {
+        continueAfterFailure = false
+        let app=XCUIApplication()
+        app.launchArguments=["--host-acceptance","--browser-acceptance"]
+        app.launch()
+        let stage=app.staticTexts["AcceptanceStage"]
+        XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:NSPredicate(format:"label == 'browser-keyboard' OR label == 'failed'"),object:stage)],timeout:60),.completed)
+        XCTAssertEqual(stage.label,"browser-keyboard")
+        let browser=app.textViews["Browser page input"].firstMatch
+        XCTAssertTrue(browser.waitForExistence(timeout:10))
+        let keyboard=app.keyboards.firstMatch
+        func tap(_ x:Double,_ y:Double){browser.coordinate(withNormalizedOffset:CGVector(dx:0,dy:0)).withOffset(CGVector(dx:x,dy:y)).tap()}
+        defer {if app.buttons["Finish browser keyboard test"].exists {app.buttons["Finish browser keyboard test"].tap()}}
+        sleep(1);XCTAssertFalse(keyboard.exists,"Focusing the Browser opened the keyboard")
+        tap(400,250);sleep(1);XCTAssertFalse(keyboard.exists,"Ordinary page tap opened the keyboard")
+        tap(80,60);XCTAssertTrue(keyboard.waitForExistence(timeout:5),"Editable field did not open keyboard")
+        app.typeText("Weave")
+        keyboard.buttons["Hide keyboard"].tap();sleep(2)
+        XCTAssertFalse(keyboard.exists,"Dismissed keyboard reopened")
+        tap(80,60);XCTAssertTrue(keyboard.waitForExistence(timeout:5),"Another input tap did not reopen keyboard")
+        tap(400,250);XCTAssertTrue(keyboard.waitForNonExistence(timeout:5),"Ordinary page tap did not hide keyboard")
+        tap(80,140);sleep(1);XCTAssertFalse(keyboard.exists,"Readonly field opened keyboard")
+        let capture=XCTAttachment(screenshot:XCUIScreen.main.screenshot());capture.name="Browser keyboard contextual focus";capture.lifetime = .keepAlways;add(capture)
+    }
+
     // Exercise the installed profile without creating or terminating Host work.
     func testOverlayLayeringAndPhoneNavigation() throws {
         continueAfterFailure = false

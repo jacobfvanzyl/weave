@@ -242,6 +242,7 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             let url = "capacitor://localhost/?acceptance=live"
             webView.load(URLRequest(url: URL(string: url)!))
             let nativeSmoke = ProcessInfo.processInfo.arguments.contains("--native-terminal-smoke")
+            let browserAcceptance = ProcessInfo.processInfo.arguments.contains("--browser-acceptance")
             var drivenStages = Set<String>()
             var configured = false
             for attempt in 0..<900 {
@@ -279,21 +280,23 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
                     let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
                     let image = renderer.image { _ in view.drawHierarchy(in: view.bounds, afterScreenUpdates: true) }
                     try? image.pngData()?.write(to: documents.appendingPathComponent("shell-acceptance.png"), options: .atomic)
-                    if nativeSmoke {
+                    if nativeSmoke || browserAcceptance {
                         do {
                             let cleanup = try await webView.callAsyncJavaScript("""
-                              const url = window.alphaAcceptanceInput?.hostUrl;
-                              if (!url) throw new Error('Fixture URL missing');
+                              const urls = [...(window.alphaAcceptanceInput?.cleanupHostUrls ?? []), window.alphaAcceptanceInput?.hostUrl];
+                              if (urls.some(url => typeof url !== 'string')) throw new Error('Fixture URL missing');
+                              for (const url of urls) {
                               const wait = async (get) => { for (let n = 0; n < 50; n++) { const value = get(); if (value) return value; await new Promise(r => setTimeout(r, 100)); } throw new Error('Fixture cleanup timed out'); };
                               const button = (name) => [...document.querySelectorAll('button')].find(el => el.getAttribute('aria-label') === name || el.textContent.trim() === name);
                               const card = () => [...document.querySelectorAll('[data-slot="card"]')].find(el => [...el.querySelectorAll('span')].some(span => span.textContent === url));
                               if (!document.querySelector('[aria-label="Configured Hosts"]')) (await wait(() => button('Connections') || button('Settings'))).click();
                               await wait(() => document.querySelector('[role="dialog"]'));
                               const fixture = card();
-                              if (!fixture) return JSON.stringify({ removed: true, alreadyAbsent: true });
+                              if (!fixture) continue;
                               fixture.querySelector('button[aria-label^="Forget "]').click();
                               (await wait(() => button('Forget Host'))).click();
                               await wait(() => !card());
+                              }
                               return JSON.stringify({ removed: true });
                             """, arguments: [:], in: nil, contentWorld: .page)
                             if let cleanup = cleanup as? String { try? Data(cleanup.utf8).write(to: documents.appendingPathComponent("native-smoke-cleanup.json")) }

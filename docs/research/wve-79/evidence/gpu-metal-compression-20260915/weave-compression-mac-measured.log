@@ -1,0 +1,5 @@
+/tmp/weave-compression-pairs-mac-1789497055
+{"n": 0, "backend": "system", "root": "/tmp/weave-browser-scroll-GGbrid", "fps": 16.349591260218496, "latency": 156.3447265625, "p95": 213.512939453125, "mbps": 31.5718359041024, "cpuMs": 1.8116249999999834, "pumpMs": 822.3163175034495, "decodeCore": 15.745044343891395}
+{"n": 1, "backend": "zlib-ng", "root": "/tmp/weave-browser-scroll-DZUiuS", "fps": 20.898746126254757, "latency": 157.43212890625, "p95": 189.856689453125, "mbps": 44.37302172702895, "cpuMs": 1.8927910000000048, "pumpMs": 764.5565242078094, "decodeCore": 20.604208252808057}
+{"n": 2, "backend": "zlib-ng", "root": "/tmp/weave-browser-scroll-VidYPb", "fps": 21.049158239228618, "latency": 142.56201171875, "p95": 167.26708984375, "mbps": 44.69023202714696, "cpuMs": 1.8563749999999102, "pumpMs": 770.2429139719098, "decodeCore": 20.626141575764127}
+{"n": 3, "backend": "system", "root": "/tmp/weave-browser-scroll-7cvkG3", "fps": 16.349100919193834, "latency": 179.35400390625, "p95": 211.06884765625, "mbps": 31.51115911704318, "cpuMs": 1.8936249999999961, "pumpMs": 821.6560448207545, "decodeCore": 15.779864268040434}

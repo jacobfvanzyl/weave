@@ -6,12 +6,15 @@
 #include "include/cef_command_line.h"
 #include "include/cef_devtools_message_observer.h"
 #include "include/cef_display_handler.h"
+#include "include/cef_context_menu_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_parser.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_render_process_handler.h"
 #include "include/cef_version.h"
-#include "diagnostics.h"
+#include "include/cef_task.h"
+#include <functional>
+#include "rfb-display.h"
 #include "wheel-input.h"
 #include <cerrno>
 #include <chrono>
@@ -84,80 +87,42 @@ static std::string uuid() {
   }
   return id;
 }
+class BrowserTask final : public CefTask {
+ public:
+  explicit BrowserTask(std::function<void()> fn):fn_(std::move(fn)) {}
+  void Execute() override { fn_(); }
+ private:
+  std::function<void()> fn_;
+  IMPLEMENT_REFCOUNTING(BrowserTask);
+};
 class Page;
 static std::map<std::string, CefRefPtr<Page>> pages;
 class Page final : public CefClient,
                    public CefRenderHandler,
                    public CefLifeSpanHandler,
                    public CefDisplayHandler,
+                   public CefContextMenuHandler,
                    public CefDevToolsMessageObserver {
 public:
   std::string id, opener, socketPath, title, url;
   CefRefPtr<CefBrowser> browser;
   CefRefPtr<CefRegistration> observer;
-  rfbScreenInfoPtr screen = nullptr;
-  int listener = -1, width = 800, height = 600, createRequest = 0,
+  std::shared_ptr<RfbDisplay> display;
+  int width = 800, height = 600, createRequest = 0,
       closeRequest = 0;
   double deviceScaleFactor = 1;
   bool closing = false;
   std::map<int, int> cdpRequests;
   int nextCdp = 0;
-  BrowserDiagnostics diagnostics;
+  std::string selection;
+  int cursorType = 0, inputMode = CEF_TEXT_INPUT_MODE_NONE, contextRequest = 0;
   WheelInput wheel;
   Page(std::string pageId) : id(pageId) {}
-  ~Page() override {
-    if (listener >= 0)
-      close(listener);
-    if (!socketPath.empty())
-      unlink(socketPath.c_str());
-    if (screen) {
-      rfbShutdownServer(screen, TRUE);
-      free(screen->frameBuffer);
-      screen->frameBuffer = nullptr;
-      rfbScreenCleanup(screen);
-    }
-  }
+  ~Page() override { if(display)display->close(); }
   bool initialize() {
-    socketPath = socketsDirectory + "/" + id + ".sock";
-    if (socketPath.size() >= sizeof(sockaddr_un::sun_path))
-      return false;
-    listener = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (listener < 0)
-      return false;
-    sockaddr_un address{};
-    address.sun_family = AF_UNIX;
-    memcpy(address.sun_path, socketPath.c_str(), socketPath.size() + 1);
-    if (bind(listener, (sockaddr *)&address, sizeof(address)) ||
-        chmod(socketPath.c_str(), 0600) || listen(listener, 8))
-      return false;
-    fcntl(listener, F_SETFL, O_NONBLOCK);
-    fcntl(listener, F_SETFD, FD_CLOEXEC);
-    int argc = 1;
-    char name[] = "weave-browser";
-    char *argv[] = {name, nullptr};
-    screen = rfbGetScreen(&argc, argv, width, height, 8, 3, 4);
-    screen->screenData = this;
-    screen->frameBuffer = (char *)calloc((size_t)width * height, 4);
-    screen->desktopName = "Weave Browser";
-    screen->serverFormat.redShift = 16;
-    screen->serverFormat.greenShift = 8;
-    screen->serverFormat.blueShift = 0;
-    screen->port = -1;
-    screen->ipv6port = -1;
-    screen->alwaysShared = TRUE;
-    screen->dontDisconnect = TRUE;
-    // CEF already batches paints; do not add another frame-delaying timer.
-    screen->deferUpdateTime = 0;
-    // Viewing sockets never grant input or viewport ownership. Portal's
-    // authenticated control channel owns those actions.
-    screen->ptrAddEvent = [](int, int, int, rfbClientPtr) {};
-    screen->kbdAddEvent = [](rfbBool, rfbKeySym, rfbClientPtr) {};
-    screen->setDesktopSizeHook = [](int, int, int, rfbExtDesktopScreen *,
-                                    rfbClientPtr) {
-      return rfbExtDesktopSize_ResizeProhibited;
-    };
-    rfbInitServer(screen);
-    return true;
+    socketPath=socketsDirectory+"/"+id+".sock";
+    display=rfbExecutor().create(socketPath,width,height);
+    return display!=nullptr;
   }
   Dict state() {
     auto d = object();
@@ -184,8 +149,43 @@ public:
   CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+  CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
+  void OnBeforeContextMenu(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model) override {
+    if(contextRequest){
+      auto result=object();int flags=params->GetEditStateFlags();
+      auto text=params->GetSelectionText().ToString();if(text.size()>32768)text.clear();
+      result->SetString("text",text);
+      result->SetBool("canCopy",(flags & CM_EDITFLAG_CAN_COPY) && !text.empty());
+      result->SetBool("canCut",(flags & CM_EDITFLAG_CAN_CUT) && !text.empty());
+      // Server clipboard contents do not describe the client's clipboard.
+      result->SetBool("canPaste",params->IsEditable() && (flags & CM_EDITFLAG_CAN_PASTE));
+      result->SetBool("canSelectAll",flags & CM_EDITFLAG_CAN_SELECT_ALL);
+      reply(contextRequest,result);contextRequest=0;
+    }
+    model->Clear();
+  }
+  void OnVirtualKeyboardRequested(CefRefPtr<CefBrowser>, TextInputMode mode) override { inputMode=mode; }
+  void requestContext(int request,int x,int y) {
+    if(contextRequest){fail(request,"Browser context menu is busy");return;}
+    contextRequest=request;
+    CefMouseEvent event;event.x=x;event.y=y;
+    browser->GetHost()->SendMouseClickEvent(event,MBT_RIGHT,false,1);
+    browser->GetHost()->SendMouseClickEvent(event,MBT_RIGHT,true,1);
+    CefRefPtr<Page> self=this;
+    CefPostDelayedTask(TID_UI,new BrowserTask([self,request]{
+      if(self->contextRequest==request){self->contextRequest=0;reply(request,object());}
+    }),750); // A webpage may cancel its contextmenu event.
+  }
   void GetViewRect(CefRefPtr<CefBrowser>, CefRect &r) override {
     r = CefRect(0, 0, width, height);
+  }
+  bool GetScreenPoint(CefRefPtr<CefBrowser>, int x, int y, int& screenX, int& screenY) override {
+#ifdef __APPLE__
+    screenX = x; screenY = y;
+#else
+    screenX = (int)std::round(x * deviceScaleFactor); screenY = (int)std::round(y * deviceScaleFactor);
+#endif
+    return true;
   }
   bool GetScreenInfo(CefRefPtr<CefBrowser>, CefScreenInfo &info) override {
     info.device_scale_factor = static_cast<float>(deviceScaleFactor);
@@ -201,6 +201,7 @@ public:
       reply(createRequest, state());
   }
   void OnBeforeClose(CefRefPtr<CefBrowser>) override {
+    if(contextRequest){fail(contextRequest,"Page closed");contextRequest=0;}
     observer = nullptr;
     browser = nullptr;
     event("page.closed");
@@ -272,27 +273,23 @@ public:
     e->SetDictionary("params", p);
     emit(e);
   }
+  bool OnCursorChange(CefRefPtr<CefBrowser>, CefCursorHandle,
+                      cef_cursor_type_t type, const CefCursorInfo&) override {
+    cursorType = static_cast<int>(type); return true;
+  }
+  void OnTextSelectionChanged(CefRefPtr<CefBrowser>, const CefString& text,
+                              const CefRange&) override {
+    selection = text.ToString();
+    if (selection.size() > 32768) selection.clear();
+  }
+  Dict interaction() {
+    auto result = object(); result->SetInt("cursor", cursorType);
+    result->SetString("text", selection); result->SetInt("inputMode",inputMode); return result;
+  }
   void OnPaint(CefRefPtr<CefBrowser>, PaintElementType type,
                const RectList &dirty, const void *pixels, int w,
                int h) override {
-    if (type != PET_VIEW || !screen || w != screen->width || h != screen->height)
-      return;
-    for (auto &r : dirty) {
-      int x = std::max(0, r.x), y = std::max(0, r.y),
-          right = std::min(w, r.x + r.width),
-          bottom = std::min(h, r.y + r.height);
-      if (right <= x || bottom <= y)
-        continue;
-      for (int row = y; row < bottom; row++)
-        memcpy(screen->frameBuffer + ((size_t)row * w + x) * 4,
-               (const char *)pixels + ((size_t)row * w + x) * 4,
-               (right - x) * 4);
-      rfbMarkRectAsModified(screen, x, y, right, bottom);
-    }
-    if (diagnostics.enabled()) {
-      double area = 0; for (auto &r : dirty) area += (double)r.width * r.height;
-      diagnostics.paint(area);
-    }
+    if(type==PET_VIEW && display)display->paint(pixels,w,h,dirty);
   }
   void resize(int w, int h, double scale) {
     wheel.reset();
@@ -303,32 +300,11 @@ public:
     height = h;
     deviceScaleFactor = scale;
     int pixelWidth = (int)std::ceil(w * scale), pixelHeight = (int)std::ceil(h * scale);
-    char *old = screen->frameBuffer;
-    rfbNewFramebuffer(screen, (char *)calloc((size_t)pixelWidth * pixelHeight, 4), pixelWidth, pixelHeight, 8, 3, 4);
-    free(old);
-    screen->serverFormat.redShift = 16;
-    screen->serverFormat.greenShift = 8;
-    screen->serverFormat.blueShift = 0;
-    auto it = rfbGetClientIterator(screen);
-    while (auto c = rfbClientIteratorNext(it))
-      rfbSetTranslateFunction(c);
-    rfbReleaseClientIterator(it);
+    display->resize(pixelWidth,pixelHeight);
     browser->GetHost()->NotifyScreenInfoChanged();
     browser->GetHost()->WasResized();
     browser->GetHost()->Invalidate(PET_VIEW);
     event("page.changed");
-  }
-  void pump() {
-    if (listener >= 0) {
-      int fd = accept(listener, nullptr, nullptr);
-      if (fd >= 0) {
-        fcntl(fd, F_SETFD, FD_CLOEXEC);
-        rfbNewClient(screen, fd);
-      }
-    }
-    const double start = diagnostics.enabled() ? BrowserDiagnostics::now() : 0;
-    rfbProcessEvents(screen, 0);
-    if (diagnostics.enabled()) diagnostics.pump(start);
   }
 
 private:
@@ -347,8 +323,11 @@ public:
   void OnBeforeCommandLineProcessing(const CefString &,
                                      CefRefPtr<CefCommandLine> cmd) override {
     if (getenv("WEAVE_BROWSER_CDP_PIPE")) cmd->AppendSwitch("remote-debugging-pipe");
-    cmd->AppendSwitch("disable-gpu");
-    cmd->AppendSwitch("disable-gpu-compositing");
+    // Opt-in diagnostic comparison; installed defaults remain unchanged.
+    if (!(getenv("WEAVE_BROWSER_DIAGNOSTICS") && std::string(getenv("WEAVE_BROWSER_DIAGNOSTICS")) == "1" && getenv("WEAVE_BROWSER_GPU") && std::string(getenv("WEAVE_BROWSER_GPU")) == "1")) {
+      cmd->AppendSwitch("disable-gpu");
+      cmd->AppendSwitch("disable-gpu-compositing");
+    }
     cmd->AppendSwitch("mute-audio");
     cmd->AppendSwitch("disable-background-timer-throttling");
     cmd->AppendSwitch("no-first-run");
@@ -366,7 +345,7 @@ public:
     auto e = object(), p = object();
     e->SetString("jsonrpc", "2.0");
     e->SetString("method", "runtime.ready");
-    p->SetInt("version", 3);
+    p->SetInt("version", 4);
     p->SetString("cefVersion", CEF_VERSION);
     e->SetDictionary("params", p);
     emit(e);
@@ -452,6 +431,12 @@ static void command(const std::string &line) {
     host->CloseBrowser(true);
     return;
   }
+  if(method=="page.context"){
+    int x=params->GetInt("x"),y=params->GetInt("y");
+    if(x<0 || y<0 || x>=page->width || y>=page->height){fail(request,"Invalid context menu point");return;}
+    page->requestContext(request,x,y);return;
+  }
+  if (method == "page.interaction") { reply(request, page->interaction()); return; }
   if (method == "page.navigate")
     page->browser->GetMainFrame()->LoadURL(params->GetString("url"));
   else if (method == "page.back")
@@ -469,6 +454,7 @@ static void command(const std::string &line) {
       fail(request, "Invalid viewport");
       return;
     }
+    host->SetFocus(true);
     page->resize(w, h, scale);
   } else if (method == "page.cdp") {
     // Human display input can use CEF's embedding API without waiting for a
@@ -501,6 +487,27 @@ static void command(const std::string &line) {
             ((modifiers & 4) ? EVENTFLAG_COMMAND_DOWN : 0) |
             ((modifiers & 8) ? EVENTFLAG_SHIFT_DOWN : 0);
         if (deltaX || deltaY) host->SendMouseWheelEvent(event, -deltaX, -deltaY);
+        reply(request, object()); return;
+      }
+    }
+    if (params->GetBool("nativeInput") && params->GetString("method") == "Input.dispatchMouseEvent" && input) {
+      auto type = input->GetString("type").ToString();
+      if (type == "mouseMoved" || type == "mousePressed" || type == "mouseReleased") {
+        page->wheel.reset();
+        auto number = [&](const char* key) { return input->GetType(key) == VTYPE_INT ? (double)input->GetInt(key) : input->GetDouble(key); };
+        double x = number("x"), y = number("y");
+        if (!std::isfinite(x) || !std::isfinite(y) || std::abs(x) > 1000000 || std::abs(y) > 1000000) { fail(request, "Invalid pointer position"); return; }
+        CefMouseEvent event; event.x = (int)std::floor(x); event.y = (int)std::floor(y);
+        int mods = input->GetInt("modifiers"), buttons = input->GetInt("buttons");
+        event.modifiers = ((mods & 1) ? EVENTFLAG_ALT_DOWN : 0) | ((mods & 2) ? EVENTFLAG_CONTROL_DOWN : 0) |
+          ((mods & 4) ? EVENTFLAG_COMMAND_DOWN : 0) | ((mods & 8) ? EVENTFLAG_SHIFT_DOWN : 0) |
+          ((buttons & 1) ? EVENTFLAG_LEFT_MOUSE_BUTTON : 0) | ((buttons & 2) ? EVENTFLAG_RIGHT_MOUSE_BUTTON : 0) | ((buttons & 4) ? EVENTFLAG_MIDDLE_MOUSE_BUTTON : 0);
+        if (type == "mouseMoved") host->SendMouseMoveEvent(event, input->GetBool("mouseLeave"));
+        else {
+          auto button = input->GetString("button").ToString();
+          host->SendMouseClickEvent(event, button == "right" ? MBT_RIGHT : button == "middle" ? MBT_MIDDLE : MBT_LEFT,
+                                   type == "mouseReleased", std::max(1, std::min(3, input->GetInt("clickCount"))));
+        }
         reply(request, object()); return;
       }
     }
@@ -585,11 +592,6 @@ int main(int argc, char **argv) {
           command(line);
         }
       }
-      std::vector<CefRefPtr<Page>> current;
-      for (auto &[_, page] : pages)
-        current.push_back(page);
-      for (auto &page : current)
-        page->pump();
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     {

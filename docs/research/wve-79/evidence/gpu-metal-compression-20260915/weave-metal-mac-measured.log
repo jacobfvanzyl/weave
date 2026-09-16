@@ -1,0 +1,5 @@
+/tmp/weave-metal-pairs-mac-1789496039
+{"n": 0, "metal": 0, "root": "/tmp/weave-browser-scroll-BP9Ymg", "fps": 15.598674150779884, "latency": 182.505126953125, "p95": 212.507080078125, "mbps": 30.03336563724448, "cpuMs": 19.72054099999987, "gpuMs": 0, "presenters": ["cgimage"]}
+{"n": 1, "metal": 1, "root": "/tmp/weave-browser-scroll-KcaLjA", "fps": 15.599064094237999, "latency": 165.2490234375, "p95": 196.9609375, "mbps": 30.135759927977958, "cpuMs": 1.9087500000000146, "gpuMs": 0.38379168836399913, "presenters": ["metal"]}
+{"n": 2, "metal": 1, "root": "/tmp/weave-browser-scroll-xQzyVj", "fps": 18.54953626159346, "latency": 155.901123046875, "p95": 195.22802734375, "mbps": 35.69550321241969, "cpuMs": 1.7721250000000133, "gpuMs": 0.3986249794252217, "presenters": ["metal"]}
+{"n": 3, "metal": 0, "root": "/tmp/weave-browser-scroll-3q6UmE", "fps": 17.949461647616356, "latency": 166.501953125, "p95": 204.698974609375, "mbps": 34.52482050825209, "cpuMs": 17.273166999999923, "gpuMs": 0, "presenters": ["cgimage"]}

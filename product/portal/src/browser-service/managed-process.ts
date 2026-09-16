@@ -80,7 +80,7 @@ export class ManagedBrowserProcess {
             const message = JSON.parse(line);
             if (message.jsonrpc !== '2.0') throw new Error('Invalid CEF response');
             if (message.method === 'runtime.ready') {
-              if (message.params?.version !== 3 || typeof message.params.cefVersion !== 'string') throw new Error('Incompatible CEF runtime');
+              if (message.params?.version !== 4 || typeof message.params.cefVersion !== 'string') throw new Error('Incompatible CEF runtime');
               this.#version = message.params.cefVersion; ready();
             } else if (typeof message.method === 'string') {
               for (const listener of this.#listeners) listener({ method: message.method, params: message.params });

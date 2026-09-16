@@ -21,7 +21,7 @@ public:
   ~BrowserDiagnostics() { if (file) fclose(file); }
   bool enabled() const { return file != nullptr && reports < 300; }
   static double now() { return std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count(); }
-  void paint(double area) { if (enabled()) { paints++; dirtyPixels += area; } }
+  void paint(double area, unsigned count = 1) { if (enabled()) { paints+=count; dirtyPixels += area; } }
   void pump(double start) {
     if (!enabled()) return;
     if (pumps.size() < 10000) pumps.push_back(now() - start);

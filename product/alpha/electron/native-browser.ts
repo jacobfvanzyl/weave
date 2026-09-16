@@ -1,4 +1,4 @@
-import { app, ipcMain, type BrowserWindow } from 'electron';
+import { app, clipboard, ipcMain, type BrowserWindow } from 'electron';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -17,6 +17,11 @@ export function installNativeBrowsers(window: BrowserWindow) {
     }
     const id = typeof input?.surfaceId === 'string' ? surfaces.get(input.surfaceId) : undefined;
     if (id === undefined) { if (method === 'close') return; throw new Error('Browser surface is unavailable'); }
+    if (method === 'clipboard') {
+      if (input?.text === undefined) return clipboard.readText().then(text => ({text}));
+      if (typeof input.text !== 'string' || input.text.length > 32768) throw new Error('Invalid Browser clipboard text');
+      return clipboard.writeText(input.text).then(() => ({}));
+    }
     if (method === 'close') { addon.close(id); surfaces.delete(input!.surfaceId as string); return; }
     if (method === 'connect' || method === 'control') {
       const value = input?.[method === 'connect' ? 'url' : 'json'];
