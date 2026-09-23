@@ -1,0 +1,20 @@
+# SwiftPM and local native builds
+.build/
+.swiftpm/
+build/
+DerivedData/
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+
+# Local signing and device configuration
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.p8
+*.key
+*.local.xcconfig
+
+# Local measurements and paired-device state
+.local/
