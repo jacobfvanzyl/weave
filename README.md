@@ -26,4 +26,8 @@ See [Host operations](product/portal/OPERATIONS.md), [product notes](product/REA
 
 The repository-pinned Linear CLI is intentionally a separate tooling install: `bun install --cwd .agents/tools/linear --frozen-lockfile`. Its credential isolation and usage are documented in [the tracker guide](docs/agents/issue-tracker.md).
 
+The independent [mobile trackpad and Pencil tablet project](trackpad/README.md)
+lives in `trackpad/` and is tracked by WVE-81. Its native targets and build
+commands are separate from the Alpha/Host Bun workspaces.
+
 Old application source is recoverable in Git. Local ignored artifacts and state retained during WVE-69 were moved intact to the private `~/.local/share/weave/legacy-wve66-20260909/` backup. No remote services or durable Host state were deleted.

@@ -9,8 +9,13 @@ The supported application is the newer Alpha, Host Daemon, and shared product pr
 | `product/protocol/` | Validated shared Host contracts |
 | `product/deferred/` | Inactive filetree, Editor, and Browser reference snapshots; never a build input |
 | `.agents/tools/linear/` | Deliberately isolated, pinned tracker CLI |
+| `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81 |
 
 Run `bun install --frozen-lockfile`, `bun run dev:alpha`, and `bun run check` at the root. Focused checks/builds are root scripts or package-local Bun scripts. The Host uses Bun and the macOS desktop uses Electron. Capacitor is for iPad. Native libghostty is the only terminal renderer; Electron and iPad builds prepare it automatically. Follow-up acceptance and restoration work is tracked in WVE-72.
+
+The separate `trackpad/` project uses native Swift/UIKit/AppKit and owns its own
+build and acceptance workflow. It is not a Bun workspace or an Alpha/Host runtime
+dependency. Read `trackpad/AGENTS.md` before working in it.
 
 Preserve credentials, Host state, unrelated dirty work, and remote deployments. Do not commit secrets or edit installed dependencies directly. Repository cleanup is not remote deployment teardown. Before Docker work, check memory and verify the preferred explicit context; do not assume local Docker.
 
