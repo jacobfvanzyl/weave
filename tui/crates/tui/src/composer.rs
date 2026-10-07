@@ -323,13 +323,7 @@ impl Composer {
 
     /// Draw the composer as Codex does, in a box shaded from the terminal's background with
     /// a row of padding above and below. Returns where the terminal cursor belongs.
-    pub fn render_box(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        placeholder: &str,
-        hint: Option<&str>,
-    ) -> Position {
+    pub fn render_box(&self, area: Rect, buf: &mut Buffer, hint: Option<&str>) -> Position {
         buf.set_style(area, style::composer());
         // Space for the text comes first when the screen is too short for the padding.
         let padding = if area.height > 2 * BOX_PADDING {
@@ -343,18 +337,13 @@ impl Composer {
             area.width.saturating_sub(RIGHT_MARGIN),
             area.height - 2 * padding,
         );
-        self.render(inner, buf, placeholder, hint)
+        self.render(inner, buf, hint)
     }
 
     /// Draw into `area` and return where the terminal cursor belongs. `hint` is shown dimmed
-    /// after single-line text, such as the input a slash command expects.
-    pub fn render(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        placeholder: &str,
-        hint: Option<&str>,
-    ) -> Position {
+    /// after single-line text, such as the input a slash command expects. An empty composer
+    /// shows only the prompt, except in shell mode, which says what it runs.
+    pub fn render(&self, area: Rect, buf: &mut Buffer, hint: Option<&str>) -> Position {
         let prompt = if self.shell {
             Span::styled(
                 "! ",
@@ -365,13 +354,13 @@ impl Composer {
         } else {
             Span::styled(PROMPT, Style::default().add_modifier(Modifier::BOLD))
         };
-        let placeholder = if self.shell {
-            "Run a shell command"
-        } else {
-            placeholder
-        };
         if self.text.is_empty() {
-            let line = Line::from(vec![prompt, Span::styled(placeholder.to_owned(), dim())]);
+            let placeholder = if self.shell {
+                "Run a shell command"
+            } else {
+                ""
+            };
+            let line = Line::from(vec![prompt, Span::styled(placeholder, dim())]);
             buf.set_line(area.x, area.y, &line, area.width);
             return Position::new(area.x + PROMPT_WIDTH, area.y);
         }

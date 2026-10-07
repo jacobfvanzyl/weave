@@ -2111,10 +2111,9 @@ impl ChatWidget {
                 composer_area.y += height;
                 composer_area.height -= height;
             }
-            let placeholder = format!("Ask {} to do anything", self.agent_name);
             Some(
                 self.composer
-                    .render_box(composer_area, buf, &placeholder, self.command_hint()),
+                    .render_box(composer_area, buf, self.command_hint()),
             )
         };
         let matches = self.popup_matches();
@@ -2679,7 +2678,7 @@ mod tests {
             rows[3].starts_with("• Working (0s • esc to interrupt)"),
             "{rows:?}"
         );
-        assert_eq!(rows[5], "› Ask Agent to do anything");
+        assert_eq!(rows[5], "›");
     }
 
     fn fullscreen_chat() -> ChatWidget {
