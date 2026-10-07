@@ -58,6 +58,10 @@ pub struct UiOptions {
     pub screen: ScreenMode,
     /// What the footer's status line shows; empty shows `? for shortcuts` instead.
     pub status_line: Vec<StatusItem>,
+    /// Desktop notifications when a turn ends or the agent needs you, while unfocused.
+    pub notifications: bool,
+    /// Keep the window title on the session and what the agent is doing.
+    pub terminal_title: bool,
 }
 
 /// How the client ended.
@@ -85,6 +89,8 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     let UiOptions {
         screen,
         status_line,
+        notifications,
+        terminal_title,
     } = ui;
     let Session {
         connection,
@@ -113,6 +119,9 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         handle: connection.handle(),
         setup,
         results: None,
+        notifications,
+        terminal_title,
+        focused: true,
     };
     let startup = match opened {
         Some(opened) => {
@@ -135,6 +144,10 @@ struct App {
     handle: AgentHandle,
     setup: SessionSetup,
     results: Option<mpsc::UnboundedSender<AppEvent>>,
+    notifications: bool,
+    terminal_title: bool,
+    /// Whether the terminal has focus, from its focus reports.
+    focused: bool,
 }
 
 impl App {
@@ -154,9 +167,20 @@ impl App {
             return Ok(());
         }
         loop {
+            if self.terminal_title {
+                tui.set_title(&chat.terminal_title(Instant::now()));
+            }
             draw(tui, chat)?;
             let commands = tokio::select! {
                 event = input.next() => match event {
+                    Some(Ok(Event::FocusGained)) => {
+                        self.focused = true;
+                        Vec::new()
+                    }
+                    Some(Ok(Event::FocusLost)) => {
+                        self.focused = false;
+                        Vec::new()
+                    }
                     Some(event) => handle_terminal_event(chat, event?),
                     None => vec![AppCommand::Quit],
                 },
@@ -289,6 +313,12 @@ impl App {
                 }
                 AppCommand::OpenUrl(url) => open_in_browser(&url),
                 AppCommand::Copy(text) => tui.copy(&text),
+                // As Codex, only while the terminal isn't in front of the user.
+                AppCommand::Notify(message) => {
+                    if self.notifications && !self.focused {
+                        tui.notify(&message);
+                    }
+                }
                 AppCommand::Quit => return true,
             }
         }

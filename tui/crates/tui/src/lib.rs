@@ -16,6 +16,7 @@ mod highlight;
 mod history_cell;
 mod insert_history;
 mod markdown;
+mod notify;
 mod palette;
 mod permission;
 #[cfg(test)]

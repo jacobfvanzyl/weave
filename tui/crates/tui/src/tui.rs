@@ -16,7 +16,9 @@ use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
 use crossterm::event;
 use crossterm::event::DisableBracketedPaste;
+use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
+use crossterm::event::EnableFocusChange;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
@@ -42,6 +44,8 @@ use crate::custom_terminal::Terminal;
 use crate::highlight;
 use crate::insert_history::insert_history_lines;
 use crate::insert_history::make_room_above;
+use crate::notify;
+use crate::notify::NotifyMethod;
 use crate::palette;
 use crate::palette::Palette;
 use crate::wrapping::wrap_line;
@@ -70,6 +74,9 @@ pub struct Tui {
     /// Inline mode with a full-screen overlay (the Ctrl+T transcript) open: the inline
     /// viewport to go back to.
     overlay_from: Option<Rect>,
+    notify: NotifyMethod,
+    /// The title last set, once weave has taken the title over.
+    title: Option<String>,
 }
 
 impl Tui {
@@ -86,7 +93,8 @@ impl Tui {
             // flag stack per screen.
             execute!(stdout(), EnterAlternateScreen, EnableMouseReporting)?;
         }
-        execute!(stdout(), EnableBracketedPaste)?;
+        // Focus reports tell weave when to send notifications.
+        execute!(stdout(), EnableBracketedPaste, EnableFocusChange)?;
         // Disambiguated keys let Shift+Enter insert a newline instead of submitting. Release
         // events stay off: one arriving after exit would land in the shell as stray input.
         let keyboard_enhanced = supports_keyboard_enhancement().unwrap_or(false);
@@ -111,6 +119,8 @@ impl Tui {
             last_screen,
             keyboard_enhanced,
             overlay_from: None,
+            notify: NotifyMethod::detect(),
+            title: None,
         })
     }
 
@@ -134,6 +144,36 @@ impl Tui {
         // again in full, leaving history above them as it was.
         self.terminal.set_viewport_area(area);
         self.terminal.replace_viewport_area(area)
+    }
+
+    /// Raise a desktop notification (or ring the bell) saying `message`.
+    pub fn notify(&mut self, message: &str) {
+        let sequence = self.notify.sequence(message);
+        self.write_raw(&sequence);
+    }
+
+    /// Set the window title, saving the shell's own the first time.
+    pub fn set_title(&mut self, title: &str) {
+        if self.title.as_deref() == Some(title) {
+            return;
+        }
+        let mut sequence = String::new();
+        if self.title.is_none() {
+            sequence.push_str(notify::PUSH_TITLE);
+        }
+        sequence.push_str(&notify::title_sequence(title));
+        self.write_raw(&sequence);
+        self.title = Some(title.to_owned());
+    }
+
+    fn write_raw(&mut self, sequence: &str) {
+        let backend = self.terminal.backend_mut();
+        if let Err(error) = backend
+            .write_all(sequence.as_bytes())
+            .and_then(|()| backend.flush())
+        {
+            tracing::warn!(%error, "failed to write to the terminal");
+        }
     }
 
     pub fn overlay_open(&self) -> bool {
@@ -256,6 +296,11 @@ impl Tui {
     /// Restore the terminal. Inline mode clears the viewport so the shell resumes right after
     /// history; fullscreen returns to the screen as it was before weave started.
     pub fn exit(mut self) {
+        // Clear weave's title, then restore the shell's where the terminal saved it.
+        if self.title.take().is_some() {
+            let sequence = format!("{}{}", notify::title_sequence(""), notify::POP_TITLE);
+            self.write_raw(&sequence);
+        }
         if self.overlay_from.take().is_some() {
             let _ = execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen);
         }
@@ -326,7 +371,7 @@ fn restore(keyboard_enhanced: bool, mode: ScreenMode) {
     if mode == ScreenMode::Fullscreen {
         let _ = execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen);
     }
-    let _ = execute!(stdout(), DisableBracketedPaste, Show);
+    let _ = execute!(stdout(), DisableBracketedPaste, DisableFocusChange, Show);
     // Consume input already in flight (such as the tail of the quitting keystroke) while still
     // in raw mode, so the shell never receives it.
     while event::poll(INPUT_DRAIN_WINDOW).unwrap_or(false) {

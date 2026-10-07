@@ -113,6 +113,9 @@ pub enum AppCommand {
     OpenUrl(String),
     /// Put text the user selected on the clipboard.
     Copy(String),
+    /// Something needs the user, such as a finished turn or an approval; the app raises a
+    /// desktop notification when the terminal isn't focused.
+    Notify(String),
     Quit,
 }
 
@@ -202,6 +205,8 @@ pub struct ChatWidget {
     resumable: bool,
     /// Confirmation that a selection was copied, until it expires.
     copied: Option<(String, Instant)>,
+    /// The agent's latest reply this turn, for the notification when it ends.
+    last_reply: Option<String>,
     /// The `?` shortcuts panel is open.
     shortcuts_open: bool,
     /// What the footer's status line shows.
@@ -247,6 +252,7 @@ impl ChatWidget {
             quit_armed_until: None,
             resumable: false,
             copied: None,
+            last_reply: None,
             shortcuts_open: false,
             status_items: StatusItem::DEFAULT.to_vec(),
         }
@@ -430,6 +436,39 @@ impl ChatWidget {
         self.turn.is_some() || self.copied.is_some()
     }
 
+    /// The window title, as Codex sets it: activity, the session's title, and the project.
+    /// A spinner while the agent works; a blinking dot while it waits for the user.
+    pub fn terminal_title(&self, now: Instant) -> String {
+        const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let waiting = !self.permissions.is_empty() || !self.elicitations.is_empty();
+        let elapsed =
+            now.saturating_duration_since(self.turn.as_ref().map_or(now, |turn| turn.started));
+        let indicator = if waiting {
+            let on = (elapsed.as_millis() / 1000).is_multiple_of(2);
+            Some(if on { "●" } else { "○" })
+        } else if self.turn.is_some() {
+            usize::try_from(elapsed.as_millis() / 100 % 10)
+                .ok()
+                .map(|frame| SPINNER[frame])
+        } else {
+            None
+        };
+        let project = self
+            .cwd
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        let names: Vec<String> = self.title.iter().cloned().chain(project).collect();
+        let names = if names.is_empty() {
+            "weave".to_owned()
+        } else {
+            names.join(" · ")
+        };
+        match indicator {
+            Some(indicator) => format!("{indicator} {names}"),
+            None => names,
+        }
+    }
+
     /// Advance time-based state between frames.
     pub fn tick(&mut self, now: Instant) {
         if self.copied.as_ref().is_some_and(|(_, until)| now >= *until) {
@@ -447,16 +486,20 @@ impl ChatWidget {
             }
             AgentEvent::PermissionRequested(request) => {
                 if self.is_active(&request.request.session_id) {
-                    self.handle_permission(request);
+                    self.handle_permission(request)
+                        .map(AppCommand::Notify)
+                        .into_iter()
+                        .collect()
                 } else {
                     let _ = request.cancel();
+                    Vec::new()
                 }
-                Vec::new()
             }
-            AgentEvent::ElicitationRequested(request) => {
-                self.handle_elicitation(request);
-                Vec::new()
-            }
+            AgentEvent::ElicitationRequested(request) => self
+                .handle_elicitation(request)
+                .map(AppCommand::Notify)
+                .into_iter()
+                .collect(),
             AgentEvent::RequestWithdrawn(key) => {
                 let withdrawn = if let Some(index) = self
                     .permissions
@@ -666,13 +709,14 @@ impl ChatWidget {
         }
     }
 
-    fn handle_permission(&mut self, request: PermissionRequest) {
+    /// Show a permission prompt; returns what a notification about it should say.
+    fn handle_permission(&mut self, request: PermissionRequest) -> Option<String> {
         let call = &request.request.tool_call;
         self.apply_tool_call_update(call.tool_call_id.clone(), &call.fields);
         if self.turn.as_ref().is_some_and(|turn| turn.cancelling) {
             // The protocol requires every pending request to resolve as cancelled.
             let _ = request.cancel();
-            return;
+            return None;
         }
         let subject = self
             .tool_calls
@@ -682,12 +726,18 @@ impl ChatWidget {
                 || Subject::about("this tool call"),
                 |live| live.permission_subject(&self.cwd),
             );
+        let notice = match subject.detail.first() {
+            Some(detail) => format!("Approval requested: {detail}"),
+            None => subject.question.clone(),
+        };
         let view = PermissionView::new(subject, request.request.options.clone());
         self.permissions
             .push_back(PendingPermission { request, view });
+        Some(notice)
     }
 
-    fn handle_elicitation(&mut self, request: ElicitationRequest) {
+    /// Show an elicitation; returns what a notification about it should say.
+    fn handle_elicitation(&mut self, request: ElicitationRequest) -> Option<String> {
         // A session-scoped request for a session not shown here cannot be answered by the user.
         let scope = match &request.request.mode {
             ElicitationMode::Form(form) => Some(&form.scope),
@@ -698,14 +748,18 @@ impl ChatWidget {
             && !self.is_active(&scope.session_id)
         {
             let _ = request.cancel();
-            return;
+            return None;
         }
         match ElicitationView::new(&request.request, &self.agent_name) {
-            Some(view) => self
-                .elicitations
-                .push_back(PendingElicitation { request, view }),
+            Some(view) => {
+                let notice = format!("{} asks: {}", self.agent_name, request.request.message);
+                self.elicitations
+                    .push_back(PendingElicitation { request, view });
+                Some(notice)
+            }
             None => {
                 let _ = request.cancel();
+                None
             }
         }
     }
@@ -717,6 +771,16 @@ impl ChatWidget {
         self.answer_pending_requests_cancelled();
         let turn = self.turn.take();
         let was_cancelling = turn.as_ref().is_some_and(|turn| turn.cancelling);
+        let notice = match &result {
+            Ok(response) if response.stop_reason == StopReason::Cancelled => None,
+            Ok(response) if response.stop_reason == StopReason::EndTurn => Some(
+                self.last_reply
+                    .as_deref()
+                    .map_or_else(|| "Turn complete".to_owned(), str::to_owned),
+            ),
+            Ok(_) => Some("The turn stopped early".to_owned()),
+            Err(error) => Some(format!("Turn failed: {error}")),
+        };
         match result {
             Ok(response) => {
                 if response.stop_reason == StopReason::EndTurn
@@ -746,9 +810,10 @@ impl ChatWidget {
         if was_cancelling {
             return Vec::new();
         }
+        // A queued message goes straight on, so nothing needs the user yet.
         match self.queued.pop_front() {
             Some(text) => self.start_prompt(text),
-            None => Vec::new(),
+            None => notice.map(AppCommand::Notify).into_iter().collect(),
         }
     }
 
@@ -1098,6 +1163,7 @@ impl ChatWidget {
         self.finish_live_cells();
         self.push_cell(TranscriptCell::user(&text));
         self.resumable = true;
+        self.last_reply = None;
         // Sending a message returns to the newest output, where its reply will appear.
         if let Some(view) = &mut self.transcript {
             view.follow();
@@ -1182,6 +1248,9 @@ impl ChatWidget {
         let Some(stream) = self.stream.take() else {
             return;
         };
+        if stream.kind() == StreamKind::Agent && !stream.source().trim().is_empty() {
+            self.last_reply = Some(stream.source().to_owned());
+        }
         if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
             let kind = stream.kind();
             let source = stream.into_source();
@@ -1799,9 +1868,9 @@ mod tests {
             ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
         ))));
         chat.handle_agent_event(text_chunk("Done."));
-        assert!(
-            chat.handle_agent_event(turn_ended(StopReason::EndTurn))
-                .is_empty()
+        assert_eq!(
+            chat.handle_agent_event(turn_ended(StopReason::EndTurn)),
+            [AppCommand::Notify("Done.".into())]
         );
 
         assert_eq!(
@@ -2475,5 +2544,37 @@ mod tests {
             "{history:?}"
         );
         assert!(history.contains(&"• New answer.".to_owned()), "{history:?}");
+    }
+
+    #[test]
+    fn finished_turns_and_requests_ask_for_a_notification() {
+        let mut chat = chat();
+        submit(&mut chat, "go");
+        chat.handle_agent_event(text_chunk("All   done,\nboss."));
+        assert_eq!(
+            chat.handle_agent_event(turn_ended(StopReason::EndTurn)),
+            [AppCommand::Notify("All   done,\nboss.".into())]
+        );
+        // A cancelled turn was the user's doing.
+        submit(&mut chat, "again");
+        assert!(
+            chat.handle_agent_event(turn_ended(StopReason::Cancelled))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_title_shows_activity_session_and_project() {
+        let mut chat = chat();
+        chat.title = Some("Fix the build".into());
+        let now = Instant::now();
+        assert_eq!(chat.terminal_title(now), "Fix the build · repo");
+        submit(&mut chat, "go");
+        let started = chat.turn.as_ref().map(|turn| turn.started).unwrap_or(now);
+        assert_eq!(chat.terminal_title(started), "⠋ Fix the build · repo");
+        assert_eq!(
+            chat.terminal_title(started + Duration::from_millis(250)),
+            "⠹ Fix the build · repo"
+        );
     }
 }

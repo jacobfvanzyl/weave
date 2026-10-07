@@ -168,6 +168,8 @@ async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> 
         weave_tui::UiOptions {
             screen,
             status_line,
+            notifications: launch.config.tui.notifications.unwrap_or(true),
+            terminal_title: launch.config.tui.terminal_title.unwrap_or(true),
         },
     )
     .await?;
