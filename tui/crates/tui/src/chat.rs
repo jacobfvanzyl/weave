@@ -1851,10 +1851,10 @@ impl ChatWidget {
             mode: current(SessionConfigOptionCategory::Mode),
             directory: home_relative(&self.cwd),
             session: self.title.clone(),
-            context_left: self
+            context_used: self
                 .context
                 .filter(|(_, size)| *size > 0)
-                .map(|(used, size)| 100u64.saturating_sub(used.saturating_mul(100) / size)),
+                .map(|(used, size)| (used.saturating_mul(100) / size).min(100)),
             cost: self.cost.clone(),
         }
     }
@@ -2469,12 +2469,11 @@ mod tests {
         let mut chat = chat_with(options);
         chat.context = Some((25, 100));
         let footer = chat.footer(60, Instant::now()).to_string();
-        assert!(footer.starts_with("  Agent  "), "{footer}");
-        assert!(footer.trim_end().ends_with("75% context left"), "{footer}");
+        assert_eq!(footer.trim_end(), "  Agent · 25%");
 
         chat.status_items.clear();
         let footer = chat.footer(60, Instant::now()).to_string();
-        assert!(footer.starts_with("  ? for shortcuts  "), "{footer}");
+        assert_eq!(footer.trim_end(), "  ? for shortcuts");
     }
 
     #[test]

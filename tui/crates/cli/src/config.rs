@@ -5,7 +5,7 @@
 //!
 //! [tui]
 //! alternate_screen = "never" # inline mode: history in the terminal's own scrollback
-//! status_line = ["model", "session"] # the default; [] shows "? for shortcuts" instead
+//! status_line = ["model", "context", "session"] # the default; [] shows "? for shortcuts"
 //! notifications = false        # no desktop notifications when a turn ends or needs you
 //! terminal_title = false       # leave the window title alone
 //!
@@ -68,7 +68,8 @@ pub struct TuiConfig {
     #[serde(default)]
     pub alternate_screen: AlternateScreen,
     /// Footer status line items, as Codex's `tui.status_line`: model, agent, mode,
-    /// directory, session, context. Defaults to model and session.
+    /// directory, session, context (the percentage used). Defaults to model, context and
+    /// session.
     pub status_line: Option<Vec<String>>,
     /// Desktop notifications when a turn ends or the agent needs you (default true).
     pub notifications: Option<bool>,

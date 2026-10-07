@@ -32,13 +32,14 @@ pub enum StatusItem {
     Directory,
     /// The session's title.
     Session,
+    /// How much of the context window is used, as a percentage.
     Context,
 }
 
 impl StatusItem {
-    /// The model and the session's title. Codex also shows the directory; weave leaves it
-    /// to `directory`.
-    pub const DEFAULT: [Self; 2] = [Self::Model, Self::Session];
+    /// The model, the context used, and the session's title. Codex also shows the directory;
+    /// weave leaves it to `directory`.
+    pub const DEFAULT: [Self; 3] = [Self::Model, Self::Context, Self::Session];
 
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -77,7 +78,8 @@ pub struct StatusValues {
     pub mode: Option<String>,
     pub directory: String,
     pub session: Option<String>,
-    pub context_left: Option<u64>,
+    /// The percentage of the context window used.
+    pub context_used: Option<u64>,
     /// What the session has cost so far, and in which ISO 4217 currency.
     pub cost: Option<(f64, String)>,
 }
@@ -95,9 +97,7 @@ impl StatusValues {
             StatusItem::Mode => self.mode.clone(),
             StatusItem::Directory => Some(self.directory.clone()),
             StatusItem::Session => self.session.clone(),
-            StatusItem::Context => self
-                .context_left
-                .map(|left| format!("Context {left}% left")),
+            StatusItem::Context => self.context_used.map(|used| format!("{used}%")),
         }
     }
 }
@@ -113,7 +113,7 @@ pub enum FooterMode {
     ShortcutsOpen,
     /// The composer is in shell mode.
     Shell,
-    /// The usual footer: the status line (or `? for shortcuts`), and the context left.
+    /// The usual footer: the status line (or `? for shortcuts`), and the session's cost.
     Contextual {
         composer_empty: bool,
         working: bool,
@@ -126,7 +126,7 @@ pub struct FooterProps<'a> {
     pub values: &'a StatusValues,
 }
 
-/// The footer row for `width` columns: left content, then the context left, right-aligned.
+/// The footer row for `width` columns: left content, then the cost, right-aligned.
 pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
     let left = match props.mode {
         FooterMode::QuitReminder => key_hint("⌃c", " again to quit"),
@@ -152,9 +152,9 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
             }
         }
     };
-    // The context gives way first when space is short.
+    // The cost gives way first when space is short.
     let right = if matches!(props.mode, FooterMode::Contextual { .. }) {
-        context(props.values)
+        cost(props.values)
     } else {
         Vec::new()
     };
@@ -178,23 +178,14 @@ fn assemble(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -
     Line::from(spans)
 }
 
-/// What the session has cost and the context left, as the agent reports them.
-fn context(values: &StatusValues) -> Vec<Span<'static>> {
-    let parts: Vec<String> = values
+/// What the session has cost, as the agent reports it.
+fn cost(values: &StatusValues) -> Vec<Span<'static>> {
+    values
         .cost
         .as_ref()
-        .map(|(amount, currency)| format_cost(*amount, currency))
+        .map(|(amount, currency)| Span::styled(format_cost(*amount, currency), secondary()))
         .into_iter()
-        .chain(
-            values
-                .context_left
-                .map(|left| format!("{left}% context left")),
-        )
-        .collect();
-    if parts.is_empty() {
-        return Vec::new();
-    }
-    vec![Span::styled(parts.join(SEPARATOR), secondary())]
+        .collect()
 }
 
 /// `$1.23`, `€0.40`, or `12.00 CHF` for currencies without a symbol here.
@@ -435,8 +426,8 @@ mod tests {
             mode: Some("Plan".into()),
             directory: "~/repo".into(),
             session: Some("Fix the build".into()),
-            context_left: Some(75),
-            cost: None,
+            context_used: Some(25),
+            cost: Some((1.5, "USD".into())),
         }
     }
 
@@ -456,19 +447,23 @@ mod tests {
     };
 
     #[test]
-    fn the_status_line_leads_and_context_sits_right() {
+    fn the_status_line_leads_and_the_cost_sits_right() {
         // Right-aligned with two columns of margin, so the trimmed line is width - 2 wide.
         let wide = render(IDLE, &StatusItem::DEFAULT, 100);
         assert!(
-            wide.starts_with("  Opus 5.5 high · Fix the build  "),
+            wide.starts_with("  Opus 5.5 high · 25% · Fix the build  "),
             "{wide}"
         );
-        assert!(wide.ends_with("  75% context left"), "{wide}");
+        assert!(wide.ends_with("  $1.50"), "{wide}");
         assert_eq!(wide.width(), 98);
-        // Without room, the context goes first.
+        // Without room, the cost goes first, then trailing items.
         assert_eq!(
-            render(IDLE, &StatusItem::DEFAULT, 40),
-            "  Opus 5.5 high · Fix the build"
+            render(IDLE, &StatusItem::DEFAULT, 44),
+            "  Opus 5.5 high · 25% · Fix the build"
+        );
+        assert_eq!(
+            render(IDLE, &StatusItem::DEFAULT, 26),
+            "  Opus 5.5 high · 25%"
         );
         // The mode and directory show when configured.
         let configured = [StatusItem::Model, StatusItem::Mode, StatusItem::Directory];
@@ -490,13 +485,12 @@ mod tests {
     }
 
     #[test]
-    fn cost_sits_with_the_context() {
+    fn costs_show_in_their_currency() {
         let values = StatusValues {
             cost: Some((1.2345, "USD".into())),
-            context_left: Some(80),
             ..StatusValues::default()
         };
-        assert_eq!(context(&values)[0].content, "$1.23 · 80% context left");
+        assert_eq!(cost(&values)[0].content, "$1.23");
         assert_eq!(format_cost(0.042, "EUR"), "€0.042");
         assert_eq!(format_cost(12.0, "CHF"), "12.00 CHF");
     }
