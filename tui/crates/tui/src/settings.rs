@@ -86,6 +86,11 @@ fn is_supported(option: &SessionConfigOption) -> bool {
     )
 }
 
+/// Whether the picker (Ctrl+O) has anything to show: options this client can set, or modes.
+pub fn any(options: &[SessionConfigOption], modes: Option<&SessionModeState>) -> bool {
+    options.iter().any(is_supported) || modes.is_some_and(|modes| !modes.available_modes.is_empty())
+}
+
 /// The change that moves the session to its next mode, as Shift+Tab does.
 pub fn next_mode(
     options: &[SessionConfigOption],

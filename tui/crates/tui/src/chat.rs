@@ -1854,6 +1854,7 @@ impl ChatWidget {
                 .filter(|(_, size)| *size > 0)
                 .map(|(used, size)| (used.saturating_mul(100) / size).min(100)),
             cost: self.cost.clone(),
+            settings: settings::any(&self.config_options, self.modes.as_ref()),
         }
     }
 
@@ -2439,7 +2440,10 @@ mod tests {
         chat.setting_changed(change, Ok(Some(updated)));
         // The transcript announces it; the footer stays as it was.
         assert_eq!(history(&mut chat), ["• Mode set to Code"]);
-        assert_eq!(rows(&chat, 80).last().map(String::as_str), Some("  Agent"));
+        assert_eq!(
+            rows(&chat, 80).last().map(String::as_str),
+            Some("  Agent · ⌃o Settings")
+        );
     }
 
     #[test]
@@ -2471,7 +2475,7 @@ mod tests {
         let mut chat = chat_with(options);
         chat.context = Some((25, 100));
         let footer = chat.footer(60, Instant::now()).to_string();
-        assert_eq!(footer.trim_end(), "  Agent · 25%");
+        assert_eq!(footer.trim_end(), "  Agent · 25% · ⌃o Settings");
 
         chat.status_items.clear();
         let footer = chat.footer(60, Instant::now()).to_string();

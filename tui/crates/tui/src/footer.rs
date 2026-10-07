@@ -84,6 +84,8 @@ pub struct StatusValues {
     pub context_used: Option<u64>,
     /// What the session has cost so far, and in which ISO 4217 currency.
     pub cost: Option<(f64, String)>,
+    /// Whether the agent has settings to change, so the status line ends with Ctrl+O's hint.
+    pub settings: bool,
 }
 
 impl StatusValues {
@@ -216,7 +218,7 @@ fn format_cost(amount: f64, currency: &str) -> String {
 }
 
 /// The configured items with known values, colored by theme scope and separated by dots,
-/// dropping trailing items that don't fit.
+/// dropping trailing items that don't fit, then the hint for the settings when it fits.
 fn status_line(items: &[StatusItem], values: &StatusValues, width: usize) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for item in items {
@@ -237,6 +239,14 @@ fn status_line(items: &[StatusItem], values: &StatusValues, width: usize) -> Vec
             }
             spans.push(Span::styled(part, style));
         }
+    }
+    let hint = key_hint("⌃o", " Settings");
+    if values.settings
+        && !spans.is_empty()
+        && spans_width(&spans) + SEPARATOR.width() + spans_width(&hint) <= width
+    {
+        spans.push(Span::styled(SEPARATOR, secondary()));
+        spans.extend(hint);
     }
     spans
 }
@@ -437,6 +447,7 @@ mod tests {
             session: Some("Fix the build".into()),
             context_used: Some(25),
             cost: Some((1.5, "USD".into())),
+            settings: true,
         }
     }
 
@@ -460,12 +471,16 @@ mod tests {
         // Right-aligned with two columns of margin, so the trimmed line is width - 2 wide.
         let wide = render(IDLE, &StatusItem::DEFAULT, 100);
         assert!(
-            wide.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build  "),
+            wide.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build · ⌃o Settings  "),
             "{wide}"
         );
         assert!(wide.ends_with("  $1.50"), "{wide}");
         assert_eq!(wide.width(), 98);
-        // Without room, the cost goes first, then trailing parts.
+        // Without room, the cost goes first, then the settings hint, then trailing parts.
+        assert_eq!(
+            render(IDLE, &StatusItem::DEFAULT, 68),
+            "  Claude · Opus 5.5 · high · 25% · Fix the build · ⌃o Settings"
+        );
         assert_eq!(
             render(IDLE, &StatusItem::DEFAULT, 53),
             "  Claude · Opus 5.5 · high · 25% · Fix the build"
@@ -476,7 +491,21 @@ mod tests {
         );
         // The mode and directory show when configured.
         let configured = [StatusItem::Model, StatusItem::Mode, StatusItem::Directory];
-        assert!(render(IDLE, &configured, 100).starts_with("  Opus 5.5 · high · Plan · ~/repo  "));
+        assert!(
+            render(IDLE, &configured, 100)
+                .starts_with("  Opus 5.5 · high · Plan · ~/repo · ⌃o Settings  ")
+        );
+        // Without settings to change, there's no hint.
+        let values = StatusValues {
+            settings: false,
+            ..values()
+        };
+        let props = FooterProps {
+            mode: IDLE,
+            items: &configured,
+            values: &values,
+        };
+        assert!(!footer_line(&props, 100).to_string().contains("⌃o"));
     }
 
     #[test]
