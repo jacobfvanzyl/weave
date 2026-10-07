@@ -71,6 +71,8 @@ pub struct RenderContext<'a> {
 pub struct ToolCallCell {
     pub id: ToolCallId,
     title: String,
+    /// The tool's programmatic name, when the agent gives it.
+    name: Option<String>,
     kind: ToolKind,
     pub status: ToolCallStatus,
     content: Vec<ToolCallContent>,
@@ -85,6 +87,7 @@ impl ToolCallCell {
         Self {
             id: call.tool_call_id,
             title: call.title,
+            name: call.name,
             kind: call.kind,
             status: call.status,
             content: call.content,
@@ -107,6 +110,9 @@ impl ToolCallCell {
     pub fn apply(&mut self, fields: &ToolCallUpdateFields) {
         if let Some(title) = &fields.title {
             self.title.clone_from(title);
+        }
+        if let Some(name) = &fields.name {
+            self.name = Some(name.clone());
         }
         if let Some(kind) = fields.kind {
             self.kind = kind;
@@ -287,8 +293,19 @@ impl ToolCallCell {
             None => (running, done, target.to_owned()),
         };
         let header = self.header(running, done, cx.now);
+        let mut target = Line::from(target);
+        // A called tool's programmatic name, when the title doesn't already say it, as
+        // Codex shows `server.tool` for MCP calls.
+        if running == "Calling"
+            && let Some(name) = &self.name
+            && !self.title().to_lowercase().contains(&name.to_lowercase())
+        {
+            target
+                .spans
+                .push(Span::styled(format!(" · {name}"), Style::default().dim()));
+        }
         let mut rows = wrap_sourced(
-            &Line::from(target),
+            &target,
             width,
             &header,
             &Line::from(" ".repeat(line_width(&header))),
@@ -1147,6 +1164,30 @@ mod tests {
                 &TerminalTranscripts::new()
             ),
             ["• Searched the web for ratatui styling"]
+        );
+    }
+
+    #[test]
+    fn called_tools_add_their_name_when_the_title_lacks_it() {
+        let mut call = ToolCall::new("m1", "Get issue")
+            .kind(ToolKind::Other)
+            .status(ToolCallStatus::Completed);
+        call.name = Some("github.get_issue".to_owned());
+        assert_eq!(
+            render(&ToolCallCell::new(call), false, &TerminalTranscripts::new()),
+            ["• Called Get issue · github.get_issue"]
+        );
+        let mut named = ToolCall::new("m2", "github.get_issue")
+            .kind(ToolKind::Other)
+            .status(ToolCallStatus::Completed);
+        named.name = Some("github.get_issue".to_owned());
+        assert_eq!(
+            render(
+                &ToolCallCell::new(named),
+                false,
+                &TerminalTranscripts::new()
+            ),
+            ["• Called github.get_issue"]
         );
     }
 }

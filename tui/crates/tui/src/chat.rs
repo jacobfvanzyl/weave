@@ -192,6 +192,8 @@ pub struct ChatWidget {
     popup: CommandPopup,
     terminals: TerminalTranscripts,
     context: Option<(u64, u64)>,
+    /// The session's cumulative cost and its currency, when the agent reports one.
+    cost: Option<(f64, String)>,
     /// The session's title, as the agent last reported it.
     title: Option<String>,
     disconnected: bool,
@@ -239,6 +241,7 @@ impl ChatWidget {
             popup: CommandPopup::default(),
             terminals: TerminalTranscripts::new(),
             context: None,
+            cost: None,
             title: None,
             disconnected: false,
             quit_armed_until: None,
@@ -309,6 +312,7 @@ impl ChatWidget {
         self.modes = None;
         self.config_options.clear();
         self.context = None;
+        self.cost = None;
         self.title = title.map(str::to_owned);
         self.session_picker = None;
         self.settings = None;
@@ -625,7 +629,13 @@ impl ChatWidget {
                     self.push_cell(TranscriptCell::info(&format!("Mode changed to {name}")));
                 }
             }
-            SessionUpdate::UsageUpdate(usage) => self.context = Some((usage.used, usage.size)),
+            SessionUpdate::UsageUpdate(usage) => {
+                self.context = Some((usage.used, usage.size));
+                // Cumulative, so a report without a cost leaves the last one standing.
+                if let Some(cost) = usage.cost {
+                    self.cost = Some((cost.amount, cost.currency));
+                }
+            }
             SessionUpdate::ConfigOptionUpdate(update) => {
                 self.replace_config_options(update.config_options)
             }
@@ -1432,6 +1442,7 @@ impl ChatWidget {
                 .context
                 .filter(|(_, size)| *size > 0)
                 .map(|(used, size)| 100u64.saturating_sub(used.saturating_mul(100) / size)),
+            cost: self.cost.clone(),
         }
     }
 

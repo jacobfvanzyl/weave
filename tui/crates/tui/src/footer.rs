@@ -77,6 +77,8 @@ pub struct StatusValues {
     pub directory: String,
     pub session: Option<String>,
     pub context_left: Option<u64>,
+    /// What the session has cost so far, and in which ISO 4217 currency.
+    pub cost: Option<(f64, String)>,
 }
 
 impl StatusValues {
@@ -172,12 +174,40 @@ fn assemble(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -
     Line::from(spans)
 }
 
+/// What the session has cost and the context left, as the agent reports them.
 fn context(values: &StatusValues) -> Vec<Span<'static>> {
-    values
-        .context_left
-        .map(|left| Span::styled(format!("{left}% context left"), secondary()))
+    let parts: Vec<String> = values
+        .cost
+        .as_ref()
+        .map(|(amount, currency)| format_cost(*amount, currency))
         .into_iter()
-        .collect()
+        .chain(
+            values
+                .context_left
+                .map(|left| format!("{left}% context left")),
+        )
+        .collect();
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    vec![Span::styled(parts.join(SEPARATOR), secondary())]
+}
+
+/// `$1.23`, `€0.40`, or `12.00 CHF` for currencies without a symbol here.
+fn format_cost(amount: f64, currency: &str) -> String {
+    let symbol = match currency.to_ascii_uppercase().as_str() {
+        "USD" => Some("$"),
+        "EUR" => Some("€"),
+        "GBP" => Some("£"),
+        "JPY" => Some("¥"),
+        _ => None,
+    };
+    // Cents, or a tenth of a cent while the cost is still small.
+    let decimals = if amount.abs() < 1.0 { 3 } else { 2 };
+    match symbol {
+        Some(symbol) => format!("{symbol}{amount:.decimals$}"),
+        None => format!("{amount:.decimals$} {currency}"),
+    }
 }
 
 /// The configured items with known values, colored by theme scope and separated by dots,
@@ -341,6 +371,7 @@ mod tests {
             directory: "~/repo".into(),
             session: Some("Fix the build".into()),
             context_left: Some(75),
+            cost: None,
         }
     }
 
@@ -391,6 +422,18 @@ mod tests {
             render(FooterMode::QuitReminder, &[], 80),
             "  ⌃c again to quit"
         );
+    }
+
+    #[test]
+    fn cost_sits_with_the_context() {
+        let values = StatusValues {
+            cost: Some((1.2345, "USD".into())),
+            context_left: Some(80),
+            ..StatusValues::default()
+        };
+        assert_eq!(context(&values)[0].content, "$1.23 · 80% context left");
+        assert_eq!(format_cost(0.042, "EUR"), "€0.042");
+        assert_eq!(format_cost(12.0, "CHF"), "12.00 CHF");
     }
 
     #[test]
