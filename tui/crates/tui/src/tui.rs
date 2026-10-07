@@ -52,6 +52,12 @@ use crate::wrapping::wrap_line;
 
 /// Rows always left above the viewport so history can scroll through a valid region.
 const HISTORY_ROWS_RESERVED: u16 = 2;
+/// Disambiguated keys let Shift+Enter insert a newline instead of submitting. Release
+/// events stay off: one arriving after exit would land in the shell as stray input.
+const KEYBOARD_FLAGS: KeyboardEnhancementFlags =
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
+
 /// How long to wait for in-flight input when leaving raw mode.
 const INPUT_DRAIN_WINDOW: Duration = Duration::from_millis(30);
 /// Larger copies are refused rather than sent through OSC 52, as in Codex.
@@ -95,17 +101,9 @@ impl Tui {
         }
         // Focus reports tell weave when to send notifications.
         execute!(stdout(), EnableBracketedPaste, EnableFocusChange)?;
-        // Disambiguated keys let Shift+Enter insert a newline instead of submitting. Release
-        // events stay off: one arriving after exit would land in the shell as stray input.
         let keyboard_enhanced = supports_keyboard_enhancement().unwrap_or(false);
         if keyboard_enhanced {
-            execute!(
-                stdout(),
-                PushKeyboardEnhancementFlags(
-                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-                )
-            )?;
+            execute!(stdout(), PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
         }
         let backend = CrosstermBackend::new(stdout());
         let terminal = match mode {
@@ -143,6 +141,33 @@ impl Tui {
         // The terminal restores the main screen; the viewport's rows are cleared and drawn
         // again in full, leaving history above them as it was.
         self.terminal.set_viewport_area(area);
+        self.terminal.replace_viewport_area(area)
+    }
+
+    /// Hand the terminal to another program, such as the user's editor: its modes as they
+    /// were before weave, and the shell's screen. Pause input first.
+    pub fn suspend(&mut self) -> io::Result<()> {
+        if self.keyboard_enhanced {
+            execute!(stdout(), PopKeyboardEnhancementFlags)?;
+        }
+        if self.mode == ScreenMode::Fullscreen || self.overlay_from.is_some() {
+            execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen)?;
+        }
+        execute!(stdout(), DisableBracketedPaste, DisableFocusChange, Show)?;
+        disable_raw_mode()
+    }
+
+    /// Take the terminal back after [`Self::suspend`] and repaint in full.
+    pub fn resume(&mut self) -> io::Result<()> {
+        enable_raw_mode()?;
+        if self.mode == ScreenMode::Fullscreen || self.overlay_from.is_some() {
+            execute!(stdout(), EnterAlternateScreen, EnableMouseReporting)?;
+        }
+        execute!(stdout(), EnableBracketedPaste, EnableFocusChange)?;
+        if self.keyboard_enhanced {
+            execute!(stdout(), PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
+        }
+        let area = self.terminal.viewport_area;
         self.terminal.replace_viewport_area(area)
     }
 

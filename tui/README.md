@@ -37,6 +37,7 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Drag | Select transcript text; it is copied when you release |
 | Ctrl+T | Full transcript: whole command output, diffs and thoughts (a pager inline) |
 | `?` | Keyboard shortcuts (on an empty composer) |
+| Ctrl+G | Edit the prompt in `$VISUAL` / `$EDITOR` |
 
 Permission requests, agent questions (forms and links) and pickers take over the input
 area with their own keys: approvals take `y` (allow), `a` (always), `esc` (reject) or a

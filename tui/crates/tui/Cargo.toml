@@ -24,7 +24,7 @@ ratatui = { workspace = true, features = ["unstable-backend-writer"] }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 syntect = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "process", "rt", "sync", "time"] }
 tracing = { workspace = true }
 two-face = { workspace = true }
 unicode-segmentation = { workspace = true }

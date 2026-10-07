@@ -14,6 +14,7 @@ mod elicitation;
 mod footer;
 mod highlight;
 mod history_cell;
+mod input;
 mod insert_history;
 mod markdown;
 mod notify;

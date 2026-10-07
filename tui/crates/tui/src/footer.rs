@@ -275,6 +275,7 @@ pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
                 ("@", "Attach a file"),
                 ("⇧enter", "New line"),
                 ("enter", "Send or queue"),
+                ("⌃g", "External editor"),
             ],
         ),
         (

@@ -113,6 +113,9 @@ pub enum AppCommand {
     OpenUrl(String),
     /// Put text the user selected on the clipboard.
     Copy(String),
+    /// Ctrl+G: edit this draft in the user's editor; the result comes back through
+    /// [`ChatWidget::set_draft`].
+    EditPrompt(String),
     /// Something needs the user, such as a finished turn or an approval; the app raises a
     /// desktop notification when the terminal isn't focused.
     Notify(String),
@@ -467,6 +470,18 @@ impl ChatWidget {
             Some(indicator) => format!("{indicator} {names}"),
             None => names,
         }
+    }
+
+    /// Replace the draft, as with text the user wrote in their editor.
+    pub fn set_draft(&mut self, text: &str) {
+        self.composer.clear();
+        self.composer.insert_str(text);
+        self.sync_popup();
+    }
+
+    /// Show an error from outside the conversation, such as the editor failing.
+    pub fn report_error(&mut self, message: &str) {
+        self.push_error(message);
     }
 
     /// Advance time-based state between frames.
@@ -985,6 +1000,9 @@ impl ChatWidget {
         {
             self.shortcuts_open = true;
             return Vec::new();
+        }
+        if ctrl && key.code == KeyCode::Char('g') {
+            return vec![AppCommand::EditPrompt(self.composer.text().to_owned())];
         }
         if let Some(commands) = self.handle_popup_key(key) {
             return commands;
