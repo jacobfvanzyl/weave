@@ -148,6 +148,29 @@ pub fn summary(options: &[SessionConfigOption], modes: Option<&SessionModeState>
     .collect()
 }
 
+/// The name of the current value in `category`; for modes, from the legacy mode state when
+/// the agent has no config options.
+pub fn current(
+    options: &[SessionConfigOption],
+    modes: Option<&SessionModeState>,
+    category: &SessionConfigOptionCategory,
+) -> Option<String> {
+    let option = options
+        .iter()
+        .find(|option| option.category.as_ref() == Some(category));
+    match option {
+        Some(option) => current_value_name(option),
+        None if *category == SessionConfigOptionCategory::Mode => modes.and_then(|modes| {
+            modes
+                .available_modes
+                .iter()
+                .find(|mode| mode.id == modes.current_mode_id)
+                .map(|mode| mode.name.clone())
+        }),
+        None => None,
+    }
+}
+
 /// Describe what differs between two option lists, for the transcript.
 pub fn describe_changes(
     before: &[SessionConfigOption],

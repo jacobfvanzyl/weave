@@ -26,6 +26,7 @@ use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
 use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
+use crate::footer::StatusItem;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
 use crate::session::open_session;
@@ -52,6 +53,13 @@ pub struct Session {
     pub notices: Vec<String>,
 }
 
+/// How the client looks.
+pub struct UiOptions {
+    pub screen: ScreenMode,
+    /// What the footer's status line shows; empty shows `? for shortcuts` instead.
+    pub status_line: Vec<StatusItem>,
+}
+
 /// How the client ended.
 pub struct Exit {
     /// The session to offer reopening: the active one, if it had a conversation.
@@ -73,7 +81,11 @@ enum AppEvent {
 }
 
 /// Run the interactive client until the user quits, then close the connection.
-pub async fn run(session: Session, screen: ScreenMode) -> anyhow::Result<Exit> {
+pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
+    let UiOptions {
+        screen,
+        status_line,
+    } = ui;
     let Session {
         connection,
         mut events,
@@ -92,7 +104,8 @@ pub async fn run(session: Session, screen: ScreenMode) -> anyhow::Result<Exit> {
         delete: capabilities.session_capabilities.delete.is_some(),
     };
     let mut tui = Tui::init(screen)?;
-    let mut chat = ChatWidget::new(agent_name, setup.cwd.clone(), abilities, tui.size()?.width);
+    let mut chat = ChatWidget::new(agent_name, setup.cwd.clone(), abilities, tui.size()?.width)
+        .with_status_line(status_line);
     if screen == ScreenMode::Fullscreen {
         chat = chat.fullscreen();
     }

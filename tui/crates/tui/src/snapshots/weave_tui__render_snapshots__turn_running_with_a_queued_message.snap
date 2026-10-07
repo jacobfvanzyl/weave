@@ -6,7 +6,9 @@ expression: screen(&mut chat)
 › first
 ── viewport ──
 
-◦ Working (0s • esc to interrupt)
-  ↳ queued: follow-up
-› Ask Agent anything
-  ⏎ queue · esc interrupt                                          Agent
+• Working (0s • esc to interrupt)
+ ↳ follow-up
+
+› Ask Agent to do anything
+
+  Agent · /repo

@@ -146,6 +146,15 @@ async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> 
         Some(info) => (info.title.unwrap_or(info.name), Some(info.version)),
         None => (launch.spec.command.clone(), None),
     };
+    let (status_line, unknown) = status_line_items(&launch.config);
+    let mut notices = started.notices;
+    if !unknown.is_empty() {
+        notices.push(format!(
+            "Unknown status line items {}; expected some of {}",
+            unknown.join(", "),
+            weave_tui::StatusItem::names().join(", ")
+        ));
+    }
     let exit = weave_tui::run(
         weave_tui::Session {
             connection: started.connection,
@@ -154,9 +163,12 @@ async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> 
             agent_version,
             setup: started.setup,
             opened: started.opened,
-            notices: started.notices,
+            notices,
         },
-        screen,
+        weave_tui::UiOptions {
+            screen,
+            status_line,
+        },
     )
     .await?;
     // Fullscreen leaves nothing behind in the terminal, so say how to get back, as Codex does.
@@ -165,6 +177,22 @@ async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> 
         println!("To continue this session, run: {command}");
     }
     Ok(())
+}
+
+/// The configured status line items, and any names that aren't items.
+fn status_line_items(config: &config::Config) -> (Vec<weave_tui::StatusItem>, Vec<String>) {
+    let Some(names) = &config.tui.status_line else {
+        return (weave_tui::StatusItem::DEFAULT.to_vec(), Vec::new());
+    };
+    let mut items = Vec::new();
+    let mut unknown = Vec::new();
+    for name in names {
+        match weave_tui::StatusItem::parse(name) {
+            Some(item) => items.push(item),
+            None => unknown.push(name.clone()),
+        }
+    }
+    (items, unknown)
 }
 
 /// This invocation's command line, reopening `session_id` in place of any session choice.

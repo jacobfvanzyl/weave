@@ -35,6 +35,7 @@ use weave_acp_core::schema::Error;
 use weave_acp_core::schema::ListSessionsResponse;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionConfigOption;
+use weave_acp_core::schema::SessionConfigOptionCategory;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionUpdate;
@@ -49,6 +50,11 @@ use crate::composer::Composer;
 use crate::composer::ComposerAction;
 use crate::elicitation::ElicitationOutcome;
 use crate::elicitation::ElicitationView;
+use crate::footer;
+use crate::footer::FooterMode;
+use crate::footer::FooterProps;
+use crate::footer::StatusItem;
+use crate::footer::StatusValues;
 use crate::history_cell::ToolCallCell;
 use crate::history_cell::dim;
 use crate::permission::Decision;
@@ -62,6 +68,7 @@ use crate::settings;
 use crate::settings::PickerOutcome;
 use crate::settings::SettingChange;
 use crate::settings::SettingsPicker;
+use crate::status::Status;
 use crate::status::status_line;
 use crate::streaming::MessageStream;
 use crate::streaming::StreamKind;
@@ -71,9 +78,6 @@ use crate::transcript::TranscriptCell;
 use crate::transcript::TranscriptView;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::plain_lines;
-
-/// Footer width given to the session title before it is shortened.
-const TITLE_WIDTH: usize = 32;
 
 /// How long a first Ctrl-C keeps the second one armed to quit.
 const QUIT_WINDOW: Duration = Duration::from_secs(2);
@@ -115,6 +119,10 @@ pub struct SessionAbilities {
 struct Turn {
     started: Instant,
     cancelling: bool,
+    /// What the status line calls the work: "Working", or the heading of the agent's latest
+    /// thought, as Codex shows reasoning headers. And when it last changed.
+    label: String,
+    label_since: Instant,
 }
 
 struct Stashed {
@@ -178,6 +186,10 @@ pub struct ChatWidget {
     resumable: bool,
     /// Confirmation that a selection was copied, until it expires.
     copied: Option<(String, Instant)>,
+    /// The `?` shortcuts panel is open.
+    shortcuts_open: bool,
+    /// What the footer's status line shows.
+    status_items: Vec<StatusItem>,
 }
 
 impl ChatWidget {
@@ -215,7 +227,15 @@ impl ChatWidget {
             quit_armed_until: None,
             resumable: false,
             copied: None,
+            shortcuts_open: false,
+            status_items: StatusItem::DEFAULT.to_vec(),
         }
+    }
+
+    /// Show `items` in the footer's status line; none shows `? for shortcuts` instead.
+    pub fn with_status_line(mut self, items: Vec<StatusItem>) -> Self {
+        self.status_items = items;
+        self
     }
 
     /// Draw the transcript in the widget (fullscreen) instead of handing it to scrollback.
@@ -822,6 +842,18 @@ impl ChatWidget {
                 .into_iter()
                 .collect();
         }
+        if self.shortcuts_open {
+            self.shortcuts_open = false;
+            if matches!(key.code, KeyCode::Char('?') | KeyCode::Esc) {
+                return Vec::new();
+            }
+        } else if key.code == KeyCode::Char('?')
+            && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+            && self.composer.is_empty()
+        {
+            self.shortcuts_open = true;
+            return Vec::new();
+        }
         if let Some(commands) = self.handle_popup_key(key) {
             return commands;
         }
@@ -978,9 +1010,12 @@ impl ChatWidget {
         if let Some(view) = &mut self.transcript {
             view.follow();
         }
+        let now = Instant::now();
         self.turn = Some(Turn {
-            started: Instant::now(),
+            started: now,
             cancelling: false,
+            label: "Working".to_owned(),
+            label_since: now,
         });
         vec![AppCommand::Prompt(text)]
     }
@@ -1030,6 +1065,14 @@ impl ChatWidget {
             .get_or_insert_with(|| MessageStream::new(kind, width, message_id));
         let first = !stream.has_committed();
         stream.push(&content_text(&chunk.content));
+        if kind == StreamKind::Thought
+            && let Some(heading) = thought_heading(stream.source())
+            && let Some(turn) = &mut self.turn
+            && turn.label != heading
+        {
+            turn.label = heading;
+            turn.label_since = Instant::now();
+        }
         // Fullscreen keeps the whole message live, reflowing with the screen, until it ends.
         if let Some(view) = &mut self.transcript {
             view.note_activity();
@@ -1170,98 +1213,67 @@ impl ChatWidget {
     fn status_lines(&self, now: Instant) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         if let Some(turn) = &self.turn {
-            let (label, hint) = if turn.cancelling {
-                ("Cancelling", "waiting for the agent")
+            let (label, since, hint) = if turn.cancelling {
+                ("Cancelling", turn.started, "waiting for the agent")
             } else {
-                ("Working", "esc to interrupt")
+                (turn.label.as_str(), turn.label_since, "esc to interrupt")
             };
-            lines.push(status_line(label, turn.started, now, hint));
+            let status = Status {
+                label,
+                label_since: since,
+                started: turn.started,
+                hint,
+            };
+            lines.push(status_line(&status, now));
         }
         for text in &self.queued {
             let first_line = text.lines().next().unwrap_or_default();
-            lines.push(Line::from(Span::styled(
-                format!("  ↳ queued: {first_line}"),
-                dim(),
-            )));
+            lines.push(Line::from(Span::styled(format!(" ↳ {first_line}"), dim())));
         }
         lines
     }
 
     fn footer(&self, width: u16, now: Instant) -> Line<'static> {
-        // Hints in display order, each with how early it gives way when space is short.
-        let (mut hints, hint_style): (Vec<(&str, u8)>, Style) = if self.disconnected {
-            (
-                vec![("agent disconnected · ctrl+c to quit", 0)],
-                Style::default().fg(Color::Red),
-            )
+        let mode = if self.disconnected {
+            FooterMode::Disconnected
         } else if self.quit_armed_until.is_some_and(|until| now < until) {
-            (vec![("ctrl+c again to quit", 0)], Style::default())
+            FooterMode::QuitReminder
         } else if self.has_overlay() {
-            // Prompts and pickers show their own keys.
-            (Vec::new(), dim())
-        } else if self.turn.is_some() {
-            (vec![("⏎ queue", 1), ("esc interrupt", 0)], dim())
+            FooterMode::Overlay
+        } else if self.shortcuts_open {
+            FooterMode::ShortcutsOpen
         } else {
-            let mut hints = vec![("⏎ send", 0), ("⇧⏎ newline", 3)];
-            if settings::next_mode(&self.config_options, self.modes.as_ref()).is_some() {
-                hints.push(("⇧⇥ mode", 2));
+            FooterMode::Contextual {
+                composer_empty: self.composer.is_empty(),
+                working: self.turn.is_some(),
             }
-            if !self.config_options.is_empty() || self.modes.is_some() {
-                hints.push(("⌃O settings", 1));
-            }
-            hints.push(("⌃C quit", 0));
-            (hints, dim())
         };
-        let mut details = Vec::new();
-        if let Some(title) = &self.title {
-            details.push(truncate(title, TITLE_WIDTH));
-        }
-        details.push(self.agent_name.clone());
-        details.extend(settings::summary(&self.config_options, self.modes.as_ref()));
-        if let Some((used, size)) = self.context
-            && size > 0
-        {
-            let left = 100u64.saturating_sub(used.saturating_mul(100) / size);
-            details.push(format!("{left}% context left"));
-        }
+        let values = self.status_values();
+        let props = FooterProps {
+            mode,
+            items: &self.status_items,
+            values: &values,
+            can_cycle_mode: settings::next_mode(&self.config_options, self.modes.as_ref())
+                .is_some(),
+        };
+        footer::footer_line(&props, usize::from(width))
+    }
 
-        let width = usize::from(width);
-        let joined = |hints: &[(&str, u8)]| {
-            hints
-                .iter()
-                .map(|(hint, _)| *hint)
-                .collect::<Vec<_>>()
-                .join(" · ")
-        };
-        let fits = |hints: &str, details: &[String]| {
-            let details = details.join(" · ");
-            2 + hints.chars().count() + 2 + details.chars().count() <= width
-        };
-        // Shed the most optional hints first, then the leading details (the agent name).
-        while !fits(&joined(&hints), &details) {
-            if let Some(index) = hints
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, priority))| *priority > 0)
-                .max_by_key(|(index, (_, priority))| (*priority, *index))
-                .map(|(index, _)| index)
-            {
-                hints.remove(index);
-            } else if details.len() > 1 {
-                details.remove(0);
-            } else {
-                break;
-            }
+    fn status_values(&self) -> StatusValues {
+        let current =
+            |category| settings::current(&self.config_options, self.modes.as_ref(), &category);
+        StatusValues {
+            agent: self.agent_name.clone(),
+            model: current(SessionConfigOptionCategory::Model),
+            reasoning: current(SessionConfigOptionCategory::ThoughtLevel),
+            mode: current(SessionConfigOptionCategory::Mode),
+            directory: home_relative(&self.cwd),
+            session: self.title.clone(),
+            context_left: self
+                .context
+                .filter(|(_, size)| *size > 0)
+                .map(|(used, size)| 100u64.saturating_sub(used.saturating_mul(100) / size)),
         }
-        let hints = joined(&hints);
-        let details = details.join(" · ");
-        let mut spans = vec![Span::raw("  "), Span::styled(hints.clone(), hint_style)];
-        let gap = width.saturating_sub(2 + hints.chars().count() + details.chars().count());
-        if gap >= 2 {
-            spans.push(Span::raw(" ".repeat(gap)));
-            spans.push(Span::styled(details, dim()));
-        }
-        Line::from(spans)
     }
 
     /// Whether a prompt or picker has replaced the composer.
@@ -1289,7 +1301,21 @@ impl ChatWidget {
         if let Some(picker) = &self.settings {
             return picker.desired_height(&self.config_options, self.modes.as_ref());
         }
-        CommandPopup::height(self.popup_matches().len()) + self.composer.desired_height(width)
+        let shortcuts = if self.shortcuts_open {
+            u16::try_from(footer::shortcut_lines(usize::from(width)).len()).unwrap_or(u16::MAX)
+        } else {
+            0
+        };
+        shortcuts + self.composer.box_height(width)
+    }
+
+    /// Rows under the input: the slash command popup, which replaces the footer as in Codex,
+    /// or the footer.
+    fn footer_height(&self) -> u16 {
+        if self.has_overlay() {
+            return 1;
+        }
+        CommandPopup::height(self.popup_matches().len()).max(1)
     }
 
     /// The hint for the input of the command being typed, as in `/run ` → "shell command".
@@ -1338,7 +1364,7 @@ impl ChatWidget {
 
     pub fn desired_height(&self, width: u16) -> u16 {
         let above = self.lines_above_input(width, Instant::now()).len();
-        let total = above + usize::from(self.input_height(width)) + 1;
+        let total = above + usize::from(self.input_height(width) + self.footer_height());
         u16::try_from(total).unwrap_or(u16::MAX)
     }
 
@@ -1360,7 +1386,8 @@ impl ChatWidget {
         above.extend(self.status_block(now));
         // As in Codex, the input takes at most two thirds of the screen, but at least 8 rows.
         let cap = (area.height.saturating_mul(2) / 3).max(8).min(area.height);
-        let wanted = above.len() + usize::from(self.input_height(area.width)) + 1;
+        let wanted =
+            above.len() + usize::from(self.input_height(area.width) + self.footer_height());
         let bottom_height = u16::try_from(wanted).unwrap_or(u16::MAX).min(cap);
         let transcript_area = Rect::new(area.x, area.y, area.width, area.height - bottom_height);
         let width = usize::from(area.width.max(10));
@@ -1378,11 +1405,12 @@ impl ChatWidget {
         above: &[Line<'static>],
         now: Instant,
     ) -> Option<Position> {
+        let footer_height = self.footer_height().min(area.height);
         let input_height = self
             .input_height(area.width)
-            .min(area.height.saturating_sub(1));
+            .min(area.height.saturating_sub(footer_height));
 
-        let room = usize::from(area.height.saturating_sub(input_height + 1));
+        let room = usize::from(area.height.saturating_sub(input_height + footer_height));
         let skip = above.len().saturating_sub(room);
         let mut y = area.y;
         for line in above.iter().skip(skip) {
@@ -1391,6 +1419,12 @@ impl ChatWidget {
         }
 
         let input_area = Rect::new(area.x, y, area.width, input_height);
+        let footer_area = Rect::new(
+            area.x,
+            (y + input_height).min(area.bottom().saturating_sub(footer_height)),
+            area.width,
+            footer_height,
+        );
         let cursor = if let Some(pending) = self.permissions.front() {
             pending.view.render(input_area, buf);
             None
@@ -1403,34 +1437,61 @@ impl ChatWidget {
             picker.render(input_area, buf, &self.config_options, self.modes.as_ref());
             None
         } else {
-            let matches = self.popup_matches();
-            let popup_height = CommandPopup::height(matches.len()).min(input_area.height);
-            let popup_area = Rect::new(input_area.x, input_area.y, input_area.width, popup_height);
-            self.popup.render(&matches, popup_area, buf);
-            let composer_area = Rect::new(
-                input_area.x,
-                input_area.y + popup_height,
-                input_area.width,
-                input_area.height - popup_height,
-            );
-            let placeholder = format!("Ask {} anything", self.agent_name);
+            let mut composer_area = input_area;
+            if self.shortcuts_open {
+                let lines = footer::shortcut_lines(usize::from(area.width));
+                let height = u16::try_from(lines.len())
+                    .unwrap_or(u16::MAX)
+                    .min(input_area.height.saturating_sub(1));
+                for (offset, line) in (0..height).zip(&lines) {
+                    buf.set_line(area.x, input_area.y + offset, line, area.width);
+                }
+                composer_area.y += height;
+                composer_area.height -= height;
+            }
+            let placeholder = format!("Ask {} to do anything", self.agent_name);
             Some(
                 self.composer
-                    .render(composer_area, buf, &placeholder, self.command_hint()),
+                    .render_box(composer_area, buf, &placeholder, self.command_hint()),
             )
         };
-        let footer_y = (y + input_height).min(area.bottom().saturating_sub(1));
-        buf.set_line(area.x, footer_y, &self.footer(area.width, now), area.width);
+        let matches = self.popup_matches();
+        if !self.has_overlay() && !matches.is_empty() {
+            self.popup.render(&matches, footer_area, buf);
+        } else {
+            buf.set_line(
+                area.x,
+                footer_area.y,
+                &self.footer(area.width, now),
+                area.width,
+            );
+        }
         cursor
     }
 }
 
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
+/// A path with the home directory shortened to `~`, as Codex shows directories.
+fn home_relative(path: &std::path::Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
     }
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{kept}…")
+}
+
+/// The heading of the latest `**Heading**` line in a thought, as Codex takes status headers
+/// from reasoning summaries.
+fn thought_heading(thought: &str) -> Option<String> {
+    thought.lines().rev().find_map(|line| {
+        let inner = line.trim().strip_prefix("**")?;
+        let end = inner.find("**")?;
+        let heading = inner[..end].trim();
+        (!heading.is_empty()).then(|| heading.to_owned())
+    })
 }
 
 fn content_text(content: &ContentBlock) -> String {
@@ -1710,7 +1771,7 @@ mod tests {
         assert!(
             rows(&chat, 80)
                 .last()
-                .is_some_and(|footer| footer.ends_with("Agent · Code"))
+                .is_some_and(|footer| footer.ends_with("Code (⇧tab to cycle)"))
         );
     }
 
@@ -1734,21 +1795,51 @@ mod tests {
     }
 
     #[test]
-    fn narrow_footers_shed_optional_hints_before_details() {
+    fn the_footer_carries_the_status_line_and_context() {
         let options = vec![SessionConfigOption::boolean("verbose", "Verbose", false)];
         let mut chat = chat_with(options);
         chat.context = Some((25, 100));
         let footer = chat.footer(60, Instant::now()).to_string();
-        assert!(
-            footer.starts_with("  ⏎ send · ⌃O settings · ⌃C quit"),
-            "{footer}"
-        );
-        assert!(footer.ends_with("Agent · 75% context left"), "{footer}");
+        assert!(footer.starts_with("  Agent · /repo  "), "{footer}");
+        assert!(footer.trim_end().ends_with("75% context left"), "{footer}");
 
-        let footer = chat.footer(40, Instant::now()).to_string();
-        assert_eq!(
-            footer.trim_end(),
-            "  ⏎ send · ⌃C quit      75% context left"
+        chat.status_items.clear();
+        let footer = chat.footer(60, Instant::now()).to_string();
+        assert!(footer.starts_with("  ? for shortcuts  "), "{footer}");
+    }
+
+    #[test]
+    fn question_mark_opens_the_shortcuts_and_any_key_closes_them() {
+        let mut chat = chat();
+        assert!(chat.handle_key(key(KeyCode::Char('?'))).is_empty());
+        let shown = rows(&chat, 80);
+        assert!(shown.iter().any(|row| row.trim() == "Keyboard shortcuts"));
+        assert_eq!(shown.last().map(|row| row.trim()), Some("? / esc close"));
+        chat.handle_key(key(KeyCode::Esc));
+        assert!(
+            !rows(&chat, 80)
+                .iter()
+                .any(|row| row.trim() == "Keyboard shortcuts")
+        );
+        assert!(chat.composer.is_empty());
+
+        // With a draft, `?` is just text.
+        chat.handle_paste("why");
+        chat.handle_key(key(KeyCode::Char('?')));
+        assert_eq!(chat.composer.text(), "why?");
+    }
+
+    #[test]
+    fn thought_headings_name_the_work_in_progress() {
+        let mut chat = chat();
+        submit(&mut chat, "go");
+        chat.handle_agent_event(update(SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+            "**Inspecting the parser**\n\nLooking at tokens.".into(),
+        ))));
+        assert!(
+            rows(&chat, 60)
+                .iter()
+                .any(|row| row.starts_with("• Inspecting the parser (0s • esc to interrupt)"))
         );
     }
 
@@ -1897,10 +1988,10 @@ mod tests {
             .collect();
         assert_eq!(rows[1], "◐ Run tests  execute");
         assert!(
-            rows[3].starts_with("◦ Working (0s • esc to interrupt)"),
+            rows[3].starts_with("• Working (0s • esc to interrupt)"),
             "{rows:?}"
         );
-        assert_eq!(rows[4], "› Ask Agent anything");
+        assert_eq!(rows[5], "› Ask Agent to do anything");
     }
 
     fn fullscreen_chat() -> ChatWidget {

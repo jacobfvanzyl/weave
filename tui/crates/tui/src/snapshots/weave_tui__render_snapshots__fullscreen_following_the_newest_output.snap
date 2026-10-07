@@ -3,8 +3,6 @@ source: crates/tui/src/render_snapshots.rs
 expression: "full_screen(&chat, 16)"
 ---
 
-› question 2
-
 • Answer 2, first line.
   And a second line.
 
@@ -15,6 +13,8 @@ expression: "full_screen(&chat, 16)"
 
 ◐ Run tests  execute
 
-◦ Working (0s • esc to interrupt)
-› Ask Agent anything
-  ⏎ queue · esc interrupt                                          Agent
+• Working (0s • esc to interrupt)
+
+› Ask Agent to do anything
+
+  Agent · /repo

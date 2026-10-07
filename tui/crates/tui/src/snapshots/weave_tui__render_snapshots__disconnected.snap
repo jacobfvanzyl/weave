@@ -6,5 +6,7 @@ expression: screen(&mut chat)
 ■ Disconnected: the agent exited
 ── viewport ──
 
-› Ask Agent anything
-  agent disconnected · ctrl+c to quit                              Agent
+
+› Ask Agent to do anything
+
+  agent disconnected · ⌃c to quit

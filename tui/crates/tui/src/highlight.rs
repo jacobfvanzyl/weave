@@ -54,6 +54,31 @@ pub fn warm_up() {
     });
 }
 
+/// The theme's foreground for the first of `scopes` it styles specifically, as Codex colors
+/// status line items by theme scope.
+pub fn scope_color(scopes: &[&str]) -> Option<ratatui::style::Color> {
+    scope_color_with(scopes, theme(), &palette::current())
+}
+
+fn scope_color_with(
+    scopes: &[&str],
+    theme: &Theme,
+    palette: &Palette,
+) -> Option<ratatui::style::Color> {
+    use syntect::highlighting::Highlighter;
+    use syntect::parsing::Scope;
+
+    let highlighter = Highlighter::new(theme);
+    let default = theme.settings.foreground?;
+    scopes.iter().find_map(|scope| {
+        let scope = Scope::new(scope).ok()?;
+        let color = highlighter.style_for_stack(&[scope]).foreground;
+        (color != default)
+            .then(|| palette.color((color.r, color.g, color.b)))
+            .flatten()
+    })
+}
+
 /// `code` as highlighted lines, or plain ones when `lang` is unknown or the code too large.
 pub fn code_lines(code: &str, lang: &str) -> Vec<Line<'static>> {
     highlight(code, lang, theme(), &palette::current()).unwrap_or_else(|| {
@@ -179,6 +204,16 @@ mod tests {
         let long = "x".repeat(MAX_LINE_BYTES + 1);
         assert!(highlight(&long, "rust", &theme, &palette).is_none());
         assert_eq!(code_lines("a\nb", "no-such-language").len(), 2);
+    }
+
+    #[test]
+    fn scopes_take_the_themes_colors() {
+        let palette = truecolor();
+        let theme = theme_for(&palette);
+        let string = scope_color_with(&["string"], &theme, &palette);
+        assert!(string.is_some());
+        assert_ne!(string, scope_color_with(&["keyword"], &theme, &palette));
+        assert_eq!(scope_color_with(&["no.such.scope"], &theme, &palette), None);
     }
 
     #[test]

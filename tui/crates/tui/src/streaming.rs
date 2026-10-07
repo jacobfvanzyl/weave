@@ -99,6 +99,10 @@ impl MessageStream {
     }
 
     /// The whole message as it stands, at `width`; fullscreen redraws it live until it ends.
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
     pub fn render_all(&self, width: usize) -> Vec<DisplayLine> {
         render_message(self.kind, &self.source, width)
     }

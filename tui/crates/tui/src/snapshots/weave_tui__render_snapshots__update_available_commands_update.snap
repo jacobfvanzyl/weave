@@ -6,7 +6,8 @@ expression: screen(&mut chat)
 
 ── viewport ──
 
+
+› /
+
 › /review  Review the current changes
   /test    Run the test suite
-› /
-  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent

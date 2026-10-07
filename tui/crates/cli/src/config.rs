@@ -5,6 +5,7 @@
 //!
 //! [tui]
 //! alternate_screen = "never" # inline mode: history in the terminal's own scrollback
+//! status_line = ["model", "directory", "session"] # [] shows "? for shortcuts" instead
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
@@ -60,6 +61,9 @@ pub struct Config {
 pub struct TuiConfig {
     #[serde(default)]
     pub alternate_screen: AlternateScreen,
+    /// Footer status line items, as Codex's `tui.status_line`: model, agent, mode,
+    /// directory, session, context. Defaults to model, directory and session.
+    pub status_line: Option<Vec<String>>,
 }
 
 /// Whether to run fullscreen on the alternate screen, as Codex's `tui.alternate_screen`.

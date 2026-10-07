@@ -8,5 +8,7 @@ expression: screen(&mut chat)
 • Found it.
 ── viewport ──
 
-› Ask Agent anything
-  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent
+
+› Ask Agent to do anything
+
+  Agent · /repo

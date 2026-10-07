@@ -11,5 +11,7 @@ expression: screen(&mut chat)
 
 ○ Edit main.rs  edit
 
-› Ask Agent anything
-  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent
+
+› Ask Agent to do anything
+
+  Agent · /repo

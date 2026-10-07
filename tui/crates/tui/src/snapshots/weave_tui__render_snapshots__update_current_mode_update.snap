@@ -6,5 +6,7 @@ expression: screen(&mut chat)
 • Mode changed to Code
 ── viewport ──
 
-› Ask Agent anything
-  ⏎ send · ⇧⏎ newline · ⇧⇥ mode · ⌃O settings · ⌃C quit     Agent · Code
+
+› Ask Agent to do anything
+
+  Agent · /repo                                   Code (⇧tab to cycle)

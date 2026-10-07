@@ -18,5 +18,7 @@ expression: screen(&mut chat)
     exit 101
 ── viewport ──
 
-› Ask Agent anything
-  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent
+
+› Ask Agent to do anything
+
+  Agent · /repo

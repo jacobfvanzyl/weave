@@ -10,6 +10,7 @@ mod command_popup;
 mod composer;
 mod custom_terminal;
 mod elicitation;
+mod footer;
 mod highlight;
 mod history_cell;
 mod insert_history;
@@ -33,7 +34,9 @@ mod wrapping;
 
 pub use app::Exit;
 pub use app::Session;
+pub use app::UiOptions;
 pub use app::run;
+pub use footer::StatusItem;
 pub use session::OpenedSession;
 pub use session::Reopened;
 pub use session::SessionTarget;

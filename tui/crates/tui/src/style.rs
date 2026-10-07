@@ -33,6 +33,21 @@ fn accent_for(palette: &Palette) -> Color {
     palette.color(preferred).unwrap_or(Color::Cyan)
 }
 
+/// Secondary text, such as hint wording around key names: the foreground 60% of the way
+/// from the background, or dim where the colors are unknown.
+pub fn secondary() -> Style {
+    secondary_for(&palette::current())
+}
+
+fn secondary_for(palette: &Palette) -> Style {
+    match (palette.fg, palette.bg) {
+        (Some(fg), Some(bg)) => palette
+            .color(palette::blend(fg, bg, 0.6))
+            .map_or_else(dim, |color| Style::default().fg(color)),
+        _ => dim(),
+    }
+}
+
 /// The composer's fill: 12% white over a dark background, 4% black over a light one.
 pub fn composer() -> Style {
     composer_for(&palette::current())
@@ -88,5 +103,8 @@ mod tests {
         assert_eq!(accent_for(&dark), rgb((99, 168, 248)));
         assert_eq!(accent_for(&light), rgb((28, 100, 200)));
         assert_eq!(accent_for(&Palette::UNKNOWN), Color::Cyan);
+
+        assert_eq!(secondary_for(&dark).fg, Some(rgb((135, 140, 164))));
+        assert_eq!(secondary_for(&Palette::UNKNOWN), dim());
     }
 }

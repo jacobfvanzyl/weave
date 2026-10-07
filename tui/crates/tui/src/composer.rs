@@ -6,7 +6,6 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -14,10 +13,15 @@ use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::history_cell::dim;
+use crate::style;
+use crate::style::dim;
 
 const PROMPT: &str = "› ";
 const PROMPT_WIDTH: u16 = 2;
+/// A shaded row above and below the text, as in Codex's composer.
+const BOX_PADDING: u16 = 1;
+/// A column kept clear at the box's right edge.
+const RIGHT_MARGIN: u16 = 1;
 /// Rows the composer may grow to before it scrolls.
 const MAX_ROWS: usize = 8;
 
@@ -259,6 +263,36 @@ impl Composer {
         u16::try_from(rows.len().min(MAX_ROWS)).unwrap_or(1)
     }
 
+    /// Height of the shaded box at `width`: the text rows plus padding.
+    pub fn box_height(&self, width: u16) -> u16 {
+        self.desired_height(width.saturating_sub(RIGHT_MARGIN)) + 2 * BOX_PADDING
+    }
+
+    /// Draw the composer as Codex does, in a box shaded from the terminal's background with
+    /// a row of padding above and below. Returns where the terminal cursor belongs.
+    pub fn render_box(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        placeholder: &str,
+        hint: Option<&str>,
+    ) -> Position {
+        buf.set_style(area, style::composer());
+        // Space for the text comes first when the screen is too short for the padding.
+        let padding = if area.height > 2 * BOX_PADDING {
+            BOX_PADDING
+        } else {
+            0
+        };
+        let inner = Rect::new(
+            area.x,
+            area.y + padding,
+            area.width.saturating_sub(RIGHT_MARGIN),
+            area.height - 2 * padding,
+        );
+        self.render(inner, buf, placeholder, hint)
+    }
+
     /// Draw into `area` and return where the terminal cursor belongs. `hint` is shown dimmed
     /// after single-line text, such as the input a slash command expects.
     pub fn render(
@@ -268,12 +302,7 @@ impl Composer {
         placeholder: &str,
         hint: Option<&str>,
     ) -> Position {
-        let prompt = Span::styled(
-            PROMPT,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        let prompt = Span::styled(PROMPT, Style::default().add_modifier(Modifier::BOLD));
         if self.text.is_empty() {
             let line = Line::from(vec![prompt, Span::styled(placeholder.to_owned(), dim())]);
             buf.set_line(area.x, area.y, &line, area.width);
