@@ -10,9 +10,11 @@ mod command_popup;
 mod composer;
 mod custom_terminal;
 mod elicitation;
+mod highlight;
 mod history_cell;
 mod insert_history;
 mod markdown;
+mod palette;
 mod permission;
 #[cfg(test)]
 mod render_snapshots;
@@ -21,6 +23,7 @@ mod session_picker;
 mod settings;
 mod status;
 mod streaming;
+mod style;
 #[cfg(test)]
 mod test_backend;
 mod tool_output;

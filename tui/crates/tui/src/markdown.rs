@@ -20,6 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 use std::sync::Arc;
 
+use crate::highlight;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::wrap_sourced;
 
@@ -66,6 +67,9 @@ struct Renderer {
     quote_depth: usize,
     in_code_block: bool,
     fenced_code: bool,
+    /// The open code block's language, and its text so far, highlighted when it ends.
+    code_lang: String,
+    code: String,
     link: Option<(String, usize)>,
     blank_before_next_block: bool,
 }
@@ -83,6 +87,8 @@ impl Renderer {
             quote_depth: 0,
             in_code_block: false,
             fenced_code: false,
+            code_lang: String::new(),
+            code: String::new(),
             link: None,
             blank_before_next_block: false,
         }
@@ -137,7 +143,10 @@ impl Renderer {
                 self.start_block();
                 self.in_code_block = true;
                 self.fenced_code = matches!(kind, CodeBlockKind::Fenced(_));
+                self.code.clear();
+                self.code_lang.clear();
                 if let CodeBlockKind::Fenced(language) = kind {
+                    self.code_lang = language.to_string();
                     self.spans
                         .push(Span::styled(format!("```{language}"), dim()));
                     self.flush();
@@ -247,9 +256,29 @@ impl Renderer {
         }
     }
 
+    /// Emit the code block, highlighted for its language. An unterminated block (while
+    /// streaming) is highlighted as far as it goes; complete lines render as they will at the
+    /// end, since highlighting only carries state forward.
     fn end_code_block(&mut self, closed: bool) {
         if !self.spans.is_empty() {
             self.flush();
+        }
+        let code = std::mem::take(&mut self.code);
+        if !code.is_empty() {
+            let lines = if self.fenced_code {
+                highlight::code_lines(&code, &self.code_lang)
+            } else {
+                code.lines()
+                    .map(|line| Line::from(format!("    {line}")))
+                    .collect()
+            };
+            for line in lines {
+                for span in line.spans {
+                    let text = span.content.replace('\t', "    ");
+                    self.spans.push(Span::styled(text, span.style));
+                }
+                self.flush();
+            }
         }
         self.in_code_block = false;
         if self.fenced_code && closed {
@@ -289,16 +318,7 @@ impl Renderer {
     }
 
     fn code_text(&mut self, text: &str) {
-        let mut segments = text.split('\n').peekable();
-        while let Some(segment) = segments.next() {
-            if !segment.is_empty() {
-                let indent = if self.fenced_code { "" } else { "    " };
-                self.push(&format!("{indent}{segment}"), Style::default());
-            }
-            if segments.peek().is_some() {
-                self.flush();
-            }
-        }
+        self.code.push_str(text);
     }
 
     fn push(&mut self, text: &str, style: Style) {

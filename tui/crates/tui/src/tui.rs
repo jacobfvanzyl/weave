@@ -39,8 +39,11 @@ use ratatui::text::Line;
 
 use crate::custom_terminal::Frame;
 use crate::custom_terminal::Terminal;
+use crate::highlight;
 use crate::insert_history::insert_history_lines;
 use crate::insert_history::make_room_above;
+use crate::palette;
+use crate::palette::Palette;
 use crate::wrapping::wrap_line;
 
 /// Rows always left above the viewport so history can scroll through a valid region.
@@ -70,6 +73,11 @@ impl Tui {
     pub fn init(mode: ScreenMode) -> io::Result<Self> {
         enable_raw_mode()?;
         install_panic_hook(mode);
+        // Ask for the terminal's colors before anything else reads input.
+        let palette = Palette::detect();
+        tracing::info!(?palette, "terminal palette");
+        palette::set(palette);
+        highlight::warm_up();
         if mode == ScreenMode::Fullscreen {
             // Entered before the keyboard flags are pushed: some terminals keep a separate
             // flag stack per screen.
