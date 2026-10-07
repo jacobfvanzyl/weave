@@ -22,6 +22,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::ElicitationRequest;
+use weave_acp_core::MaybeUndefined;
 use weave_acp_core::PermissionRequest;
 use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::ContentBlock;
@@ -39,6 +40,7 @@ use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::ToolCallId;
 
+use crate::attachments::Attachment;
 use crate::command_popup;
 use crate::command_popup::CommandPopup;
 use crate::command_popup::PopupAction;
@@ -65,6 +67,9 @@ use crate::status::status_line;
 use crate::streaming::MessageStream;
 use crate::streaming::StreamKind;
 use crate::tool_output::TerminalTranscripts;
+
+/// Footer width given to the session title before it is shortened.
+const TITLE_WIDTH: usize = 32;
 
 /// How long a first Ctrl-C keeps the second one armed to quit.
 const QUIT_WINDOW: Duration = Duration::from_secs(2);
@@ -144,6 +149,8 @@ pub struct ChatWidget {
     popup: CommandPopup,
     terminals: TerminalTranscripts,
     context: Option<(u64, u64)>,
+    /// The session's title, as the agent last reported it.
+    title: Option<String>,
     disconnected: bool,
     quit_armed_until: Option<Instant>,
 }
@@ -176,6 +183,7 @@ impl ChatWidget {
             popup: CommandPopup::default(),
             terminals: TerminalTranscripts::new(),
             context: None,
+            title: None,
             disconnected: false,
             quit_armed_until: None,
         }
@@ -210,6 +218,7 @@ impl ChatWidget {
         self.modes = None;
         self.config_options.clear();
         self.context = None;
+        self.title = title.map(str::to_owned);
         self.session_picker = None;
         self.settings = None;
         self.active_session = Some(session_id);
@@ -326,6 +335,33 @@ impl ChatWidget {
                 self.handle_elicitation(request);
                 Vec::new()
             }
+            AgentEvent::RequestWithdrawn(key) => {
+                let withdrawn = if let Some(index) = self
+                    .permissions
+                    .iter()
+                    .position(|pending| pending.request.key == key)
+                {
+                    self.permissions
+                        .remove(index)
+                        .map(|pending| pending.request.withdrawn())
+                } else if let Some(index) = self
+                    .elicitations
+                    .iter()
+                    .position(|pending| pending.request.key == key)
+                {
+                    self.elicitations
+                        .remove(index)
+                        .map(|pending| pending.request.withdrawn())
+                } else {
+                    None
+                };
+                if withdrawn.is_some() {
+                    let lines =
+                        history_cell::info("The agent withdrew its request", self.content_width());
+                    self.push_cell(lines);
+                }
+                Vec::new()
+            }
             AgentEvent::ElicitationCompleted(id) => {
                 // Unknown or already-completed ids are ignored, as the spec requires.
                 if self.accepted_urls.remove(&id) {
@@ -408,6 +444,20 @@ impl ChatWidget {
         }
     }
 
+    /// Record which `@` mentions went to the agent as attachments.
+    pub fn note_attachments(&mut self, attachments: &[Attachment]) {
+        if attachments.is_empty() {
+            return;
+        }
+        let list = attachments
+            .iter()
+            .map(|attachment| format!("{} ({})", attachment.name, attachment.kind))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let lines = history_cell::info(&format!("Attached {list}"), self.content_width());
+        self.push_cell(lines);
+    }
+
     /// The agent rejected the prompt request before the turn could start.
     pub fn prompt_failed(&mut self, error: &Error) {
         self.turn = None;
@@ -471,7 +521,11 @@ impl ChatWidget {
                 self.commands = update.available_commands;
                 self.sync_popup();
             }
-            // Session titles have no place in a single-session transcript.
+            SessionUpdate::SessionInfoUpdate(info) => match info.title {
+                MaybeUndefined::Value(title) => self.title = Some(title),
+                MaybeUndefined::Null => self.title = None,
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -985,6 +1039,9 @@ impl ChatWidget {
             )
         } else if self.quit_armed_until.is_some_and(|until| now < until) {
             (vec![("ctrl+c again to quit", 0)], Style::default())
+        } else if self.has_overlay() {
+            // Prompts and pickers show their own keys.
+            (Vec::new(), dim())
         } else if self.turn.is_some() {
             (vec![("⏎ queue", 1), ("esc interrupt", 0)], dim())
         } else {
@@ -998,7 +1055,11 @@ impl ChatWidget {
             hints.push(("⌃C quit", 0));
             (hints, dim())
         };
-        let mut details = vec![self.agent_name.clone()];
+        let mut details = Vec::new();
+        if let Some(title) = &self.title {
+            details.push(truncate(title, TITLE_WIDTH));
+        }
+        details.push(self.agent_name.clone());
         details.extend(settings::summary(&self.config_options, self.modes.as_ref()));
         if let Some((used, size)) = self.context
             && size > 0
@@ -1044,6 +1105,14 @@ impl ChatWidget {
             spans.push(Span::styled(details, dim()));
         }
         Line::from(spans)
+    }
+
+    /// Whether a prompt or picker has replaced the composer.
+    fn has_overlay(&self) -> bool {
+        !self.permissions.is_empty()
+            || !self.elicitations.is_empty()
+            || self.session_picker.is_some()
+            || self.settings.is_some()
     }
 
     fn popup_matches(&self) -> Vec<&AvailableCommand> {
@@ -1142,6 +1211,14 @@ impl ChatWidget {
         buf.set_line(area.x, footer_y, &self.footer(area.width, now), area.width);
         cursor
     }
+}
+
+fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
 }
 
 fn content_text(content: &ContentBlock) -> String {

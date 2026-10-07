@@ -1,0 +1,10 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: "render_view(view.desired_height(WIDTH), |area, buf|\n{ view.render(area, buf); })"
+---
+  Agent asks: Connect your GitHub account.
+  It wants to open this page in your browser:
+    https://github.com/login/oauth/authorize?client_id=abc
+    host github.com
+    Open in browser    Decline  › Cancel
+  ←→ choose · enter confirm · esc cancel

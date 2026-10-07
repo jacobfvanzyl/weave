@@ -81,6 +81,22 @@ diagnostics and agent stderr in the TUI. For live TUI checks inside cmux, split 
 `RUST_LOG=agent_stderr=debug` shows agent stderr. Traces contain prompts and
 agent output, so keep them out of the repository.
 
+## Conformance
+
+- `crates/acp-core/tests/conformance.rs` taps the wire between the client and the fake
+  agent and must see every method in the schema crate's `AGENT_METHOD_NAMES`,
+  `CLIENT_METHOD_NAMES` and `PROTOCOL_LEVEL_METHOD_NAMES`, all 11 `session/update` kinds
+  and all 5 content block types; a second test checks gated methods never reach an agent
+  that didn't advertise them. When the pinned schema adds a stable method, extend the fake
+  agent until this passes again.
+- `crates/tui/src/render_snapshots.rs` holds an insta snapshot per update kind and per
+  prompt. Review changes with `cargo insta review` (or `INSTA_UPDATE=always cargo test` and
+  read the diff) and commit the `.snap` files.
+- Live acceptance against real adapters is opt-in and uses their logins:
+  `WEAVE_LIVE_AGENTS=claude,codex cargo test -p weave-acp-core --test live_agents -- --ignored --nocapture`.
+- `--trace` writes the ACP SDK trace-viewer format; view it with
+  `agent-client-protocol-trace-viewer trace.jsons` from the SDK repository.
+
 ## Conventions
 
 - Clippy denies `unwrap`/`expect` outside tests. Use one `use` line per item.

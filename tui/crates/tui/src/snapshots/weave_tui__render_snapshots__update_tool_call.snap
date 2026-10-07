@@ -1,0 +1,15 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+
+── viewport ──
+
+◐ Search for TODOs  search
+  └ src
+
+○ Edit main.rs  edit
+
+› Ask Agent anything
+  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent

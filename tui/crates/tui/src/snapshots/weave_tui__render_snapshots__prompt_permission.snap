@@ -1,0 +1,9 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: "render_view(view.desired_height(WIDTH), |area, buf| view.render(area, buf))"
+---
+  Allow Run cargo test?
+› 1. Allow once
+  2. Always allow cargo
+  3. Reject
+  ↑↓ choose · enter confirm · esc reject

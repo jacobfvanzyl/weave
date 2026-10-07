@@ -1,0 +1,22 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+✓ Read Cargo.toml  read
+  └ [package]
+    name = "demo"
+
+✓ Edit lib.rs  edit
+  └ src/lib.rs (+1 -0)
+       1   fn a() {}
+       2 + fn b() {}
+
+✗ Run tests  execute
+  └ running 3 tests
+    FAILED parser::empty
+    exit 101
+── viewport ──
+
+› Ask Agent anything
+  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent

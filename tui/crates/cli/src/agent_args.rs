@@ -28,7 +28,7 @@ pub struct AgentArgs {
     #[arg(long = "add-dir", value_name = "DIR")]
     add_dirs: Vec<PathBuf>,
 
-    /// Append every line exchanged with the agent to this JSONL file.
+    /// Append a protocol trace to this file, viewable with agent-client-protocol-trace-viewer.
     #[arg(long)]
     trace: Option<PathBuf>,
 

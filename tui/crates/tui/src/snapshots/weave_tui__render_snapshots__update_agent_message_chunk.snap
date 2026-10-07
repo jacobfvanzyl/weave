@@ -1,0 +1,19 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• ## Result
+
+  The build failed in parser.rs:
+
+  - missing ; on line 12
+  - see the docs (https://doc.rust-lang.org)
+
+  ```rust
+  let x = 1;
+  ```
+── viewport ──
+
+› Ask Agent anything
+  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent

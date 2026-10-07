@@ -1,0 +1,10 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+■ Disconnected: the agent exited
+── viewport ──
+
+› Ask Agent anything
+  agent disconnected · ctrl+c to quit                              Agent

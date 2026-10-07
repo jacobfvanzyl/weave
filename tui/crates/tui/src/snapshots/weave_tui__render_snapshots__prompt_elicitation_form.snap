@@ -1,0 +1,12 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: "render_view(view.desired_height(WIDTH), |area, buf|\n{ view.render(area, buf); })"
+---
+  Agent asks: Where should this deploy?
+  Deployment
+› Environment *  ◂ (none) ▸
+  Notify team    [x] yes
+  Regions        [ ] eu  [ ] us
+  Replicas       2
+    Submit    Decline    Cancel
+  tab next · ←→ change · space toggle · enter on a button · esc cancel

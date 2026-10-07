@@ -1,0 +1,10 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• Mode changed to Code
+── viewport ──
+
+› Ask Agent anything
+  ⏎ send · ⇧⏎ newline · ⇧⇥ mode · ⌃O settings · ⌃C quit     Agent · Code

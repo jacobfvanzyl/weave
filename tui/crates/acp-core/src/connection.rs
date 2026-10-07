@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use agent_client_protocol::AcpAgent;
 use agent_client_protocol::Agent;
@@ -9,6 +11,7 @@ use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::LineDirection;
+use agent_client_protocol::RequestCancellation;
 use agent_client_protocol::schema::v1::AuthCapabilities;
 use agent_client_protocol::schema::v1::BooleanConfigOptionCapabilities;
 use agent_client_protocol::schema::v1::ClientCapabilities;
@@ -44,6 +47,7 @@ use crate::AgentSpec;
 use crate::ElicitationRequest;
 use crate::PermissionRequest;
 use crate::ProtocolTrace;
+use crate::RequestKey;
 use crate::fs;
 use crate::terminals::Terminals;
 
@@ -57,6 +61,9 @@ pub enum AgentEvent {
     ElicitationRequested(ElicitationRequest),
     /// `elicitation/complete`: an accepted URL elicitation's external step finished.
     ElicitationCompleted(ElicitationId),
+    /// The agent withdrew a pending permission or elicitation request with
+    /// `$/cancel_request`; answer it with `withdrawn()` and stop showing it.
+    RequestWithdrawn(RequestKey),
     /// The response to a prompt sent with [`AgentHandle::prompt`]. Updates
     /// the agent sent before responding are always delivered first.
     TurnEnded {
@@ -142,6 +149,22 @@ pub struct AgentConnection {
     driver: JoinHandle<()>,
 }
 
+/// Report a user-facing request as withdrawn if the agent cancels it before it is answered.
+async fn watch_withdrawal(
+    cancellation: RequestCancellation,
+    answered: oneshot::Receiver<()>,
+    key: RequestKey,
+    events: mpsc::UnboundedSender<AgentEvent>,
+) -> Result<(), Error> {
+    tokio::select! {
+        () = cancellation.cancelled() => {
+            let _ = events.send(AgentEvent::RequestWithdrawn(key));
+        }
+        _ = answered => {}
+    }
+    Ok(())
+}
+
 impl std::ops::Deref for AgentConnection {
     type Target = AgentHandle;
 
@@ -186,6 +209,9 @@ impl AgentConnection {
         let notifications = events.clone();
         let permissions = events.clone();
         let elicitations = events.clone();
+        let keys = Arc::new(AtomicU64::new(1));
+        let permission_keys = Arc::clone(&keys);
+        let elicitation_keys = keys;
         let completions = events.clone();
         let create = Arc::clone(&terminals);
         let output = Arc::clone(&terminals);
@@ -203,20 +229,33 @@ impl AgentConnection {
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_request(
-                async move |request: RequestPermissionRequest, responder, _cx| {
-                    let pending = PermissionRequest { request, responder };
+                async move |request: RequestPermissionRequest, responder, cx| {
+                    let key = RequestKey(permission_keys.fetch_add(1, Ordering::Relaxed));
+                    let (answered, done) = oneshot::channel();
+                    let cancellation = responder.cancellation();
+                    let pending = PermissionRequest {
+                        key,
+                        request,
+                        responder,
+                        _answered: answered,
+                    };
                     if let Err(mpsc::error::SendError(AgentEvent::PermissionRequested(pending))) =
                         permissions.send(AgentEvent::PermissionRequested(pending))
                     {
                         // Nobody is listening any more, so nobody can answer.
                         return pending.cancel();
                     }
-                    Ok(())
+                    cx.spawn(watch_withdrawal(
+                        cancellation,
+                        done,
+                        key,
+                        permissions.clone(),
+                    ))
                 },
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |request: CreateElicitationRequest, responder, _cx| {
+                async move |request: CreateElicitationRequest, responder, cx| {
                     if !options.elicitation {
                         return responder.respond_with_error(Error::method_not_found());
                     }
@@ -229,13 +268,26 @@ impl AgentConnection {
                             Error::invalid_params().data("unsupported elicitation mode"),
                         );
                     }
-                    let pending = ElicitationRequest { request, responder };
+                    let key = RequestKey(elicitation_keys.fetch_add(1, Ordering::Relaxed));
+                    let (answered, done) = oneshot::channel();
+                    let cancellation = responder.cancellation();
+                    let pending = ElicitationRequest {
+                        key,
+                        request,
+                        responder,
+                        _answered: answered,
+                    };
                     if let Err(mpsc::error::SendError(AgentEvent::ElicitationRequested(pending))) =
                         elicitations.send(AgentEvent::ElicitationRequested(pending))
                     {
                         return pending.cancel();
                     }
-                    Ok(())
+                    cx.spawn(watch_withdrawal(
+                        cancellation,
+                        done,
+                        key,
+                        elicitations.clone(),
+                    ))
                 },
                 agent_client_protocol::on_receive_request!(),
             )
@@ -254,8 +306,10 @@ impl AgentConnection {
                     if !options.read_files {
                         return responder.respond_with_error(Error::method_not_found());
                     }
+                    let cancellation = responder.cancellation();
                     cx.spawn(async move {
-                        responder.respond_with_result(fs::read_text_file(request).await)
+                        let read = cancellation.run_until_cancelled(fs::read_text_file(request));
+                        responder.respond_with_result(read.await)
                     })
                 },
                 agent_client_protocol::on_receive_request!(),
@@ -265,8 +319,10 @@ impl AgentConnection {
                     if !options.write_files {
                         return responder.respond_with_error(Error::method_not_found());
                     }
+                    let cancellation = responder.cancellation();
                     cx.spawn(async move {
-                        responder.respond_with_result(fs::write_text_file(request).await)
+                        let write = cancellation.run_until_cancelled(fs::write_text_file(request));
+                        responder.respond_with_result(write.await)
                     })
                 },
                 agent_client_protocol::on_receive_request!(),
@@ -291,7 +347,11 @@ impl AgentConnection {
                     .wait_for_exit(&request)
                 {
                     Ok(exited) => {
-                        cx.spawn(async move { responder.respond_with_result(exited.await) })
+                        let cancellation = responder.cancellation();
+                        cx.spawn(async move {
+                            let exited = cancellation.run_until_cancelled(exited);
+                            responder.respond_with_result(exited.await)
+                        })
                     }
                     Err(error) => responder.respond_with_error(error),
                 },

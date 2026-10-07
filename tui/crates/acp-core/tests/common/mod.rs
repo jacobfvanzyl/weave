@@ -48,6 +48,7 @@ pub struct TurnLog {
     pub exits: Vec<TerminalExitStatus>,
     pub elicitations: Vec<CreateElicitationRequest>,
     pub completions: Vec<ElicitationId>,
+    pub withdrawals: usize,
     pub stop_reason: Option<StopReason>,
 }
 
@@ -107,6 +108,7 @@ impl Harness {
             )
             .expect("prompt");
         let mut log = TurnLog::default();
+        let mut held = Vec::new();
         loop {
             let event = tokio::time::timeout(Duration::from_secs(10), self.events.recv())
                 .await
@@ -121,6 +123,8 @@ impl Harness {
                     }
                     log.updates.push(notification.update);
                 }
+                // "hold" leaves the request open until the agent withdraws it.
+                AgentEvent::PermissionRequested(request) if answer == "hold" => held.push(request),
                 AgentEvent::PermissionRequested(request) => {
                     let option = request
                         .request
@@ -141,6 +145,14 @@ impl Harness {
                     .expect("answer elicitation");
                 }
                 AgentEvent::ElicitationCompleted(id) => log.completions.push(id),
+                AgentEvent::RequestWithdrawn(key) => {
+                    log.withdrawals += 1;
+                    if let Some(index) = held.iter().position(|request| request.key == key) {
+                        held.remove(index)
+                            .withdrawn()
+                            .expect("answer withdrawn request");
+                    }
+                }
                 AgentEvent::TerminalOutput { text, .. } => log.terminal_output.push_str(&text),
                 AgentEvent::TerminalExited { status, .. } => log.exits.push(status),
                 AgentEvent::TurnEnded { result, .. } => {

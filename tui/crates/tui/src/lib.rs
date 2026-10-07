@@ -3,6 +3,7 @@
 //! terminal's native scrollback.
 
 mod app;
+mod attachments;
 mod chat;
 mod command_popup;
 mod composer;
@@ -12,6 +13,8 @@ mod history_cell;
 mod insert_history;
 mod markdown;
 mod permission;
+#[cfg(test)]
+mod render_snapshots;
 mod session;
 mod session_picker;
 mod settings;

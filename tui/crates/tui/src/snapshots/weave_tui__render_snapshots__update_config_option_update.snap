@@ -1,0 +1,10 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• Model set to Large
+── viewport ──
+
+› Ask Agent anything
+  ⏎ send · ⇧⇥ mode · ⌃O settings · ⌃C quit           Agent · Ask · Large

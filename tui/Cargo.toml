@@ -15,6 +15,7 @@ weave-tui = { path = "crates/tui" }
 
 agent-client-protocol = { version = "=3.0.0", features = ["process"] }
 anyhow = "1"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29.0"

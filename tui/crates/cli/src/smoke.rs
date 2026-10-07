@@ -184,6 +184,9 @@ async fn run_turn(
             Some(AgentEvent::ElicitationCompleted(id)) => {
                 out.event(format_args!("elicitation {id} completed"))
             }
+            Some(AgentEvent::RequestWithdrawn(_)) => {
+                out.event(format_args!("the agent withdrew a request"))
+            }
             Some(AgentEvent::TerminalOutput { terminal_id, text }) => {
                 for line in text.lines() {
                     out.event(format_args!("{terminal_id} │ {line}"));

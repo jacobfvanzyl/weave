@@ -16,13 +16,12 @@ use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::AgentHandle;
 use weave_acp_core::SessionSetup;
-use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::Error;
 use weave_acp_core::schema::ListSessionsResponse;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
-use weave_acp_core::schema::TextContent;
 
+use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
 use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
@@ -203,7 +202,14 @@ impl App {
                     let Some(session_id) = chat.active_session().cloned() else {
                         continue;
                     };
-                    let prompt = vec![ContentBlock::Text(TextContent::new(text))];
+                    let capabilities = self
+                        .handle
+                        .agent()
+                        .map(|agent| agent.agent_capabilities.prompt_capabilities.clone())
+                        .unwrap_or_default();
+                    let (prompt, attachments) =
+                        prompt_blocks(&text, &self.setup.cwd, &capabilities);
+                    chat.note_attachments(&attachments);
                     if let Err(error) = self.handle.prompt(session_id, prompt) {
                         chat.prompt_failed(&error);
                     }

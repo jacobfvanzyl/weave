@@ -1,0 +1,13 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+
+── viewport ──
+
+  Resume a session  (this directory)
+› Fix the flaky parser test
+  Untitled (b)
+  ⏎ open · n new · a all dirs · d delete · esc close
+                                                                   Agent

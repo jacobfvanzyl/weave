@@ -1,0 +1,12 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+› first
+── viewport ──
+
+◦ Working (0s • esc to interrupt)
+  ↳ queued: follow-up
+› Ask Agent anything
+  ⏎ queue · esc interrupt                                          Agent

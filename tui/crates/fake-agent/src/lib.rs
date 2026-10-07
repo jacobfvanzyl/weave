@@ -14,6 +14,12 @@
 //! | `ask` | a form elicitation using every field type |
 //! | `connect` | a URL elicitation, completed shortly after consent |
 //! | `mcp` | lists the MCP servers the session was given |
+//! | `think` | thought chunks, then a message |
+//! | `switch-mode` | an agent-initiated mode change (`current_mode_update`, `config_option_update`) |
+//! | `withdraw` | a permission request withdrawn with `$/cancel_request` |
+//! | `extension` | a `_`-prefixed request (expects "method not found") and notification |
+//!
+//! Echoed prompts also list any non-text content blocks they carried.
 //! | anything else | echoes the prompt |
 //!
 //! It supports the whole v1 session lifecycle (new, load with replay, resume, list with
@@ -60,6 +66,7 @@ use agent_client_protocol::schema::v1::LogoutResponse;
 use agent_client_protocol::schema::v1::McpCapabilities;
 use agent_client_protocol::schema::v1::NewSessionRequest;
 use agent_client_protocol::schema::v1::NewSessionResponse;
+use agent_client_protocol::schema::v1::PromptCapabilities;
 use agent_client_protocol::schema::v1::PromptRequest;
 use agent_client_protocol::schema::v1::ResumeSessionRequest;
 use agent_client_protocol::schema::v1::ResumeSessionResponse;
@@ -96,6 +103,8 @@ pub struct FakeAgentConfig {
     pub require_auth: bool,
     /// Sessions per `session/list` page.
     pub page_size: usize,
+    /// Advertise only what every agent must support, to check a client gates the rest.
+    pub minimal: bool,
 }
 
 impl Default for FakeAgentConfig {
@@ -104,6 +113,7 @@ impl Default for FakeAgentConfig {
             state_path: None,
             require_auth: false,
             page_size: 20,
+            minimal: false,
         }
     }
 }
@@ -120,6 +130,7 @@ impl FakeAgentConfig {
                 .ok()
                 .and_then(|size| size.parse().ok())
                 .unwrap_or(defaults.page_size),
+            minimal: std::env::var("WEAVE_FAKE_AGENT_MINIMAL").is_ok_and(|value| value == "1"),
         }
     }
 }
@@ -168,9 +179,17 @@ pub async fn serve_with(
                             )])),
                     ));
                 }
-                let capabilities =
+                let capabilities = if state.config.minimal {
+                    AgentCapabilities::new()
+                } else {
                     AgentCapabilities::new()
                         .load_session(true)
+                        .prompt_capabilities(
+                            PromptCapabilities::new()
+                                .image(true)
+                                .audio(true)
+                                .embedded_context(true),
+                        )
                         .mcp_capabilities(McpCapabilities::new().http(true))
                         .auth(AgentAuthCapabilities::new().logout(LogoutCapabilities::new()))
                         .session_capabilities(
@@ -182,7 +201,8 @@ pub async fn serve_with(
                                 .additional_directories(
                                     SessionAdditionalDirectoriesCapabilities::new(),
                                 ),
-                        );
+                        )
+                };
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(capabilities)
@@ -467,6 +487,22 @@ fn advertise_commands(cx: &ConnectionTo<Client>, session_id: &SessionId) -> Resu
         command("ask", "Ask a few questions with a form", None),
         command("connect", "Connect an account through a URL", None),
         command("mcp", "List the MCP servers this session has", None),
+        command("think", "Reason out loud, then answer", None),
+        command(
+            "switch-mode",
+            "Switch modes on the agent's own initiative",
+            None,
+        ),
+        command(
+            "withdraw",
+            "Ask permission, then withdraw the request",
+            None,
+        ),
+        command(
+            "extension",
+            "Send the client an extension request and notification",
+            None,
+        ),
     ];
     notify(
         cx,

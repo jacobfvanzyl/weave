@@ -1,0 +1,14 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+
+── viewport ──
+
+  Session settings
+› Mode  Ask
+  Model  Small
+  Verbose  off
+  ↑↓ choose · enter change · esc close
+                                                     Agent · Ask · Small

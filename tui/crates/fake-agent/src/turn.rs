@@ -10,13 +10,16 @@ use std::time::Duration;
 use agent_client_protocol::Client;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
+use agent_client_protocol::UntypedMessage;
 use agent_client_protocol::schema::v1::BooleanPropertySchema;
 use agent_client_protocol::schema::v1::ClientCapabilities;
 use agent_client_protocol::schema::v1::CompleteElicitationNotification;
+use agent_client_protocol::schema::v1::ConfigOptionUpdate;
 use agent_client_protocol::schema::v1::ContentBlock;
 use agent_client_protocol::schema::v1::ContentChunk;
 use agent_client_protocol::schema::v1::CreateElicitationRequest;
 use agent_client_protocol::schema::v1::CreateTerminalRequest;
+use agent_client_protocol::schema::v1::CurrentModeUpdate;
 use agent_client_protocol::schema::v1::Diff;
 use agent_client_protocol::schema::v1::ElicitationAction;
 use agent_client_protocol::schema::v1::ElicitationContentValue;
@@ -25,6 +28,7 @@ use agent_client_protocol::schema::v1::ElicitationSchema;
 use agent_client_protocol::schema::v1::ElicitationSessionScope;
 use agent_client_protocol::schema::v1::ElicitationUrlMode;
 use agent_client_protocol::schema::v1::EnumOption;
+use agent_client_protocol::schema::v1::ErrorCode;
 use agent_client_protocol::schema::v1::IntegerPropertySchema;
 use agent_client_protocol::schema::v1::KillTerminalRequest;
 use agent_client_protocol::schema::v1::McpServer;
@@ -56,6 +60,7 @@ use agent_client_protocol::schema::v1::ToolCallStatus;
 use agent_client_protocol::schema::v1::ToolCallUpdate;
 use agent_client_protocol::schema::v1::ToolCallUpdateFields;
 use agent_client_protocol::schema::v1::ToolKind;
+use agent_client_protocol::schema::v1::UsageUpdate;
 use agent_client_protocol::schema::v1::WaitForTerminalExitRequest;
 use agent_client_protocol::schema::v1::WriteTextFileRequest;
 
@@ -122,9 +127,18 @@ impl Turn {
             "ask" => self.ask(cx).await?,
             "connect" => self.connect(cx).await?,
             "mcp" => self.list_mcp_servers(cx).await?,
-            _ => self.say(cx, &format!("You said: {text}")).await?,
+            "think" => self.think(cx).await?,
+            "switch-mode" => self.switch_mode(cx).await?,
+            "withdraw" => self.withdraw(cx).await?,
+            "extension" => self.extension(cx).await?,
+            _ => {
+                let attachments = describe_attachments(&request.prompt);
+                self.say(cx, &format!("You said: {text}{attachments}"))
+                    .await?;
+            }
         }
 
+        self.report_usage(cx)?;
         let state = lock(&self.state);
         state.persist();
         let stop_reason = if self.cancel.is_cancelled() {
@@ -558,6 +572,134 @@ impl Turn {
         }
     }
 
+    /// Context usage, as agents report after each turn: one token per four characters of history.
+    fn report_usage(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        let used = {
+            let state = lock(&self.state);
+            state
+                .stored(&self.session_id)
+                .and_then(|session| serde_json::to_string(&session.history).ok())
+                .map_or(0, |history| history.len() as u64 / 4)
+        };
+        notify(
+            cx,
+            &self.session_id,
+            SessionUpdate::UsageUpdate(UsageUpdate::new(used, 200_000)),
+        )
+    }
+
+    /// Reasoning first, then the answer.
+    async fn think(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        for thought in [
+            "The user wants to see reasoning. ",
+            "I'll think briefly, then answer.\n",
+        ] {
+            let chunk = ContentChunk::new(ContentBlock::from(thought));
+            self.update(cx, SessionUpdate::AgentThoughtChunk(chunk))?;
+        }
+        self.say(cx, "Done thinking.").await
+    }
+
+    /// Switch modes on the agent's own initiative, as a "leave plan mode" tool would.
+    async fn switch_mode(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        let (target, options) = {
+            let mut state = lock(&self.state);
+            let booleans = state.client_supports_booleans();
+            let Some(session) = state.live.get_mut(&self.session_id) else {
+                return Ok(());
+            };
+            let target = if session.settings.mode == "ask" {
+                "code"
+            } else {
+                "ask"
+            };
+            session.settings.mode = target.to_owned();
+            (target, session.settings.config_options(booleans))
+        };
+        self.update(
+            cx,
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(target)),
+        )?;
+        self.update(
+            cx,
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options)),
+        )?;
+        self.say(cx, &format!("I switched to {target} mode.")).await
+    }
+
+    /// Ask permission, then withdraw the request with `$/cancel_request` before it's answered.
+    async fn withdraw(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        let id = next_tool_call_id();
+        let title = "Delete everything".to_owned();
+        self.update(
+            cx,
+            SessionUpdate::ToolCall(
+                ToolCall::new(id.clone(), title.clone()).kind(ToolKind::Delete),
+            ),
+        )?;
+        let permission = RequestPermissionRequest::new(
+            self.session_id.clone(),
+            ToolCallUpdate::new(id.clone(), ToolCallUpdateFields::new().title(title)),
+            vec![
+                PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
+                PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
+            ],
+        );
+        let pending = cx.send_request(permission);
+        if !self.cancel.sleep(Duration::from_millis(1500)).await {
+            pending.cancel()?;
+        }
+        let outcome = pending.block_task().await;
+        self.finish_tool(
+            cx,
+            &id,
+            ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+        )?;
+        match outcome {
+            Err(error) if error.code == ErrorCode::RequestCancelled => {
+                self.say(cx, "I withdrew that permission request.").await
+            }
+            Err(error) => {
+                self.say(cx, &format!("The permission request failed: {error}"))
+                    .await
+            }
+            Ok(_) => {
+                self.say(cx, "You answered before I withdrew the request.")
+                    .await
+            }
+        }
+    }
+
+    /// Extension methods: the client must answer an unknown `_` request with "method not
+    /// found" and ignore an unknown `_` notification.
+    async fn extension(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        cx.send_notification(UntypedMessage::new(
+            "_weave_fake/hello",
+            serde_json::json!({}),
+        )?)?;
+        let request = UntypedMessage::new("_weave_fake/ping", serde_json::json!({"echo": 1}))?;
+        match cx.send_request(request).block_task().await {
+            Err(error) if error.code == ErrorCode::MethodNotFound => {
+                self.say(
+                    cx,
+                    "The client answered _weave_fake/ping with method not found.",
+                )
+                .await
+            }
+            Err(error) => {
+                self.say(
+                    cx,
+                    &format!("_weave_fake/ping failed unexpectedly: {error}"),
+                )
+                .await
+            }
+            Ok(_) => {
+                self.say(cx, "The client unexpectedly handled _weave_fake/ping.")
+                    .await
+            }
+        }
+    }
+
     async fn list_mcp_servers(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
         if self.mcp_servers.is_empty() {
             return self.say(cx, "The client sent no MCP servers.").await;
@@ -576,6 +718,25 @@ impl Turn {
             .collect::<Vec<_>>()
             .join("; ");
         self.say(cx, &format!("MCP servers: {servers}.")).await
+    }
+}
+
+/// " Attachments: …" for a prompt's non-text blocks, or nothing.
+fn describe_attachments(prompt: &[ContentBlock]) -> String {
+    let attachments: Vec<String> = prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Image(image) => Some(format!("image {}", image.mime_type)),
+            ContentBlock::Audio(audio) => Some(format!("audio {}", audio.mime_type)),
+            ContentBlock::Resource(_) => Some("embedded resource".to_owned()),
+            ContentBlock::ResourceLink(link) => Some(format!("link {}", link.name)),
+            _ => None,
+        })
+        .collect();
+    if attachments.is_empty() {
+        String::new()
+    } else {
+        format!(" Attachments: {}.", attachments.join(", "))
     }
 }
 

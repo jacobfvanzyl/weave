@@ -1,0 +1,12 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+
+── viewport ──
+
+› /review  Review the current changes
+  /test    Run the test suite
+› /
+  ⏎ send · ⇧⏎ newline · ⌃C quit                                    Agent

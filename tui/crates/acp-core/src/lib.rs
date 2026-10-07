@@ -23,8 +23,11 @@ pub use handle::SessionSetup;
 pub use handle::is_auth_required;
 pub use requests::ElicitationRequest;
 pub use requests::PermissionRequest;
+pub use requests::RequestKey;
 pub use trace::ProtocolTrace;
+pub use trace::trace_events;
 
+pub use agent_client_protocol::schema::MaybeUndefined;
 pub use agent_client_protocol::schema::ProtocolVersion;
 /// The ACP v1 schema types this crate speaks, re-exported so callers share one version.
 pub use agent_client_protocol::schema::v1 as schema;

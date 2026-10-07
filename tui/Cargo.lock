@@ -2870,8 +2870,10 @@ name = "weave-acp-core"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "futures",
  "libc",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -2913,6 +2915,7 @@ name = "weave-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "crossterm",
  "diffy",
@@ -2923,6 +2926,7 @@ dependencies = [
  "ratatui",
  "regex-lite",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "unicode-segmentation",
