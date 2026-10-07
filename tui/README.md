@@ -79,7 +79,7 @@ default_agent = "claude"
 alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen
 # Footer status line: model, agent, mode, directory, session, context (% used).
 # [] shows "? for shortcuts". The session's cost, when reported, sits at the right.
-status_line = ["model", "context", "session"]  # the default; "mode" and "directory" are off
+status_line = ["agent", "model", "context", "session"]  # the default; "mode" and "directory" are off
 notifications = true   # desktop notification when a turn ends or needs you, while unfocused
 terminal_title = true  # window title: activity spinner, session title, project
 

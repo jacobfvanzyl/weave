@@ -25,8 +25,10 @@ const ITEM_WIDTH: usize = 40;
 /// What a status line item shows; configured as `[tui] status_line`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusItem {
-    /// The model and its reasoning level, or the agent's name when it offers no model choice.
+    /// The model and its reasoning level, or the agent's name in its place when the agent
+    /// offers no model choice and `Agent` isn't shown.
     Model,
+    /// The agent's name: the title it reports, such as "Codex".
     Agent,
     Mode,
     Directory,
@@ -37,9 +39,9 @@ pub enum StatusItem {
 }
 
 impl StatusItem {
-    /// The model, the context used, and the session's title. Codex also shows the directory;
-    /// weave leaves it to `directory`.
-    pub const DEFAULT: [Self; 3] = [Self::Model, Self::Context, Self::Session];
+    /// The agent, the model, the context used, and the session's title. Codex also shows the
+    /// directory; weave leaves it to `directory`.
+    pub const DEFAULT: [Self; 4] = [Self::Agent, Self::Model, Self::Context, Self::Session];
 
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -85,20 +87,28 @@ pub struct StatusValues {
 }
 
 impl StatusValues {
-    fn value(&self, item: StatusItem) -> Option<String> {
-        match item {
-            StatusItem::Model => Some(match (&self.model, &self.reasoning) {
-                // Lowercase like Codex's "gpt-5.5 high".
-                (Some(model), Some(reasoning)) => format!("{model} {}", reasoning.to_lowercase()),
-                (Some(model), None) => model.clone(),
-                (None, _) => self.agent.clone(),
-            }),
+    /// What `item` shows, as parts the status line sets apart: the model and its reasoning
+    /// level are two. `items` are all the items shown, so the agent's name isn't repeated.
+    fn parts(&self, item: StatusItem, items: &[StatusItem]) -> Vec<String> {
+        let value = match item {
+            StatusItem::Model => {
+                let model = self
+                    .model
+                    .clone()
+                    .or_else(|| (!items.contains(&StatusItem::Agent)).then(|| self.agent.clone()));
+                // The level lowercase, as Codex shows "gpt-5.5 high".
+                return model
+                    .into_iter()
+                    .chain(self.reasoning.as_ref().map(|level| level.to_lowercase()))
+                    .collect();
+            }
             StatusItem::Agent => Some(self.agent.clone()),
             StatusItem::Mode => self.mode.clone(),
             StatusItem::Directory => Some(self.directory.clone()),
             StatusItem::Session => self.session.clone(),
             StatusItem::Context => self.context_used.map(|used| format!("{used}%")),
-        }
+        };
+        value.into_iter().collect()
     }
 }
 
@@ -210,24 +220,23 @@ fn format_cost(amount: f64, currency: &str) -> String {
 fn status_line(items: &[StatusItem], values: &StatusValues, width: usize) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for item in items {
-        let Some(value) = values.value(*item) else {
-            continue;
-        };
-        let value = truncate(&value, ITEM_WIDTH);
-        let separator = if spans.is_empty() {
-            0
-        } else {
-            SEPARATOR.width()
-        };
-        if spans_width(&spans) + separator + value.width() > width {
-            break;
-        }
-        if separator > 0 {
-            spans.push(Span::styled(SEPARATOR, secondary()));
-        }
         let style = highlight::scope_color(item.scopes())
             .map_or_else(secondary, |color| Style::default().fg(color));
-        spans.push(Span::styled(value, style));
+        for part in values.parts(*item, items) {
+            let part = truncate(&part, ITEM_WIDTH);
+            let separator = if spans.is_empty() {
+                0
+            } else {
+                SEPARATOR.width()
+            };
+            if spans_width(&spans) + separator + part.width() > width {
+                return spans;
+            }
+            if separator > 0 {
+                spans.push(Span::styled(SEPARATOR, secondary()));
+            }
+            spans.push(Span::styled(part, style));
+        }
     }
     spans
 }
@@ -451,23 +460,23 @@ mod tests {
         // Right-aligned with two columns of margin, so the trimmed line is width - 2 wide.
         let wide = render(IDLE, &StatusItem::DEFAULT, 100);
         assert!(
-            wide.starts_with("  Opus 5.5 high · 25% · Fix the build  "),
+            wide.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build  "),
             "{wide}"
         );
         assert!(wide.ends_with("  $1.50"), "{wide}");
         assert_eq!(wide.width(), 98);
-        // Without room, the cost goes first, then trailing items.
+        // Without room, the cost goes first, then trailing parts.
         assert_eq!(
-            render(IDLE, &StatusItem::DEFAULT, 44),
-            "  Opus 5.5 high · 25% · Fix the build"
+            render(IDLE, &StatusItem::DEFAULT, 53),
+            "  Claude · Opus 5.5 · high · 25% · Fix the build"
         );
         assert_eq!(
-            render(IDLE, &StatusItem::DEFAULT, 26),
-            "  Opus 5.5 high · 25%"
+            render(IDLE, &StatusItem::DEFAULT, 30),
+            "  Claude · Opus 5.5 · high"
         );
         // The mode and directory show when configured.
         let configured = [StatusItem::Model, StatusItem::Mode, StatusItem::Directory];
-        assert!(render(IDLE, &configured, 100).starts_with("  Opus 5.5 high · Plan · ~/repo  "));
+        assert!(render(IDLE, &configured, 100).starts_with("  Opus 5.5 · high · Plan · ~/repo  "));
     }
 
     #[test]
@@ -496,12 +505,20 @@ mod tests {
     }
 
     #[test]
-    fn the_model_falls_back_to_the_agent() {
+    fn the_model_stands_in_for_the_agent_only_when_the_agent_is_hidden() {
         let values = StatusValues {
             agent: "Gemini".into(),
+            reasoning: Some("High".into()),
             ..StatusValues::default()
         };
-        assert_eq!(values.value(StatusItem::Model).as_deref(), Some("Gemini"));
+        assert_eq!(
+            values.parts(StatusItem::Model, &[StatusItem::Model]),
+            ["Gemini", "high"]
+        );
+        assert_eq!(
+            values.parts(StatusItem::Model, &StatusItem::DEFAULT),
+            ["high"]
+        );
         assert_eq!(StatusItem::parse("directory"), Some(StatusItem::Directory));
         assert_eq!(StatusItem::parse("branch"), None);
     }
