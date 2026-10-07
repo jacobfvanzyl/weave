@@ -64,7 +64,7 @@ default_agent = "claude"
 [tui]
 alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen
 # Footer status line: model, agent, mode, directory, session, context. [] shows "? for shortcuts".
-status_line = ["model", "directory", "session"]
+status_line = ["model", "session"]  # the default; "mode" and "directory" are off
 
 [agents.claude]
 terminal = false          # don't let it run commands through weave

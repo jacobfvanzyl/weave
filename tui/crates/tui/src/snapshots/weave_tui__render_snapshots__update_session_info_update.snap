@@ -9,4 +9,4 @@ expression: screen(&mut chat)
 
 › Ask Agent to do anything
 
-  Agent · /repo · Fix the flaky parser test
+  Agent · Fix the flaky parser test

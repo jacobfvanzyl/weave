@@ -35,8 +35,9 @@ pub enum StatusItem {
 }
 
 impl StatusItem {
-    /// Codex's default, in weave's terms.
-    pub const DEFAULT: [Self; 3] = [Self::Model, Self::Directory, Self::Session];
+    /// The model and the session's title. Codex also shows the directory; weave leaves it
+    /// to `directory`.
+    pub const DEFAULT: [Self; 2] = [Self::Model, Self::Session];
 
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -107,7 +108,7 @@ pub enum FooterMode {
     /// A prompt or picker shows its own keys.
     Overlay,
     ShortcutsOpen,
-    /// The usual footer: the status line (or `? for shortcuts`), and mode and context.
+    /// The usual footer: the status line (or `? for shortcuts`), and the context left.
     Contextual {
         composer_empty: bool,
         working: bool,
@@ -118,11 +119,9 @@ pub struct FooterProps<'a> {
     pub mode: FooterMode,
     pub items: &'a [StatusItem],
     pub values: &'a StatusValues,
-    /// Whether Shift+Tab cycles modes.
-    pub can_cycle_mode: bool,
 }
 
-/// The footer row for `width` columns: left content, then right-aligned mode and context.
+/// The footer row for `width` columns: left content, then the context left, right-aligned.
 pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
     let left = match props.mode {
         FooterMode::QuitReminder => key_hint("⌃c", " again to quit"),
@@ -147,23 +146,17 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
             }
         }
     };
-    let contextual = matches!(props.mode, FooterMode::Contextual { .. });
-    let mut rights: Vec<Vec<Span<'static>>> = Vec::new();
-    if contextual {
-        rights.push(right_side(props, true));
-        rights.push(right_side(props, false));
-        rights.push(context(props.values));
+    // The context gives way first when space is short.
+    let right = if matches!(props.mode, FooterMode::Contextual { .. }) {
+        context(props.values)
+    } else {
+        Vec::new()
+    };
+    let needed = INDENT + spans_width(&left) + spans_width(&right) + INDENT + 2;
+    if right.is_empty() || needed > width {
+        return assemble(left, Vec::new(), width);
     }
-    rights.push(Vec::new());
-    let left_width = spans_width(&left);
-    for right in rights {
-        let right_width = spans_width(&right);
-        let needed = INDENT + left_width + right_width + INDENT + usize::from(right_width > 0) * 2;
-        if needed <= width || right.is_empty() {
-            return assemble(left, right, width);
-        }
-    }
-    assemble(left, Vec::new(), width)
+    assemble(left, right, width)
 }
 
 fn assemble(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
@@ -177,30 +170,6 @@ fn assemble(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -
         spans.extend(right);
     }
     Line::from(spans)
-}
-
-/// The mode (with its Shift+Tab hint when `cycle_hint`) and the context left.
-fn right_side(props: &FooterProps<'_>, cycle_hint: bool) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    if props.can_cycle_mode
-        && let Some(mode) = &props.values.mode
-    {
-        spans.push(Span::styled(
-            mode.clone(),
-            Style::default().fg(Color::Magenta),
-        ));
-        if cycle_hint {
-            spans.push(Span::styled(" (", secondary()));
-            spans.push(Span::raw("⇧tab"));
-            spans.push(Span::styled(" to cycle)", secondary()));
-        }
-    }
-    let context = context(props.values);
-    if !spans.is_empty() && !context.is_empty() {
-        spans.push(Span::styled(SEPARATOR, secondary()));
-    }
-    spans.extend(context);
-    spans
 }
 
 fn context(values: &StatusValues) -> Vec<Span<'static>> {
@@ -381,7 +350,6 @@ mod tests {
             mode,
             items,
             values: &values,
-            can_cycle_mode: true,
         };
         footer_line(&props, width).to_string().trim_end().to_owned()
     }
@@ -392,29 +360,23 @@ mod tests {
     };
 
     #[test]
-    fn the_status_line_leads_and_mode_and_context_sit_right() {
+    fn the_status_line_leads_and_context_sits_right() {
         // Right-aligned with two columns of margin, so the trimmed line is width - 2 wide.
         let wide = render(IDLE, &StatusItem::DEFAULT, 100);
         assert!(
-            wide.starts_with("  Opus 5.5 high · ~/repo · Fix the build  "),
+            wide.starts_with("  Opus 5.5 high · Fix the build  "),
             "{wide}"
         );
-        assert!(
-            wide.ends_with("  Plan (⇧tab to cycle) · 75% context left"),
-            "{wide}"
-        );
+        assert!(wide.ends_with("  75% context left"), "{wide}");
         assert_eq!(wide.width(), 98);
-        // Narrower: the cycle hint goes first, then the mode, then the trailing items.
-        let narrower = render(IDLE, &StatusItem::DEFAULT, 72);
-        assert!(
-            narrower.ends_with("  Plan · 75% context left"),
-            "{narrower}"
-        );
-        assert_eq!(narrower.width(), 70);
+        // Without room, the context goes first.
         assert_eq!(
             render(IDLE, &StatusItem::DEFAULT, 40),
-            "  Opus 5.5 high · ~/repo"
+            "  Opus 5.5 high · Fix the build"
         );
+        // The mode and directory show when configured.
+        let configured = [StatusItem::Model, StatusItem::Mode, StatusItem::Directory];
+        assert!(render(IDLE, &configured, 100).starts_with("  Opus 5.5 high · Plan · ~/repo  "));
     }
 
     #[test]

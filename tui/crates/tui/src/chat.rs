@@ -1414,8 +1414,6 @@ impl ChatWidget {
             mode,
             items: &self.status_items,
             values: &values,
-            can_cycle_mode: settings::next_mode(&self.config_options, self.modes.as_ref())
-                .is_some(),
         };
         footer::footer_line(&props, usize::from(width))
     }
@@ -1971,12 +1969,9 @@ mod tests {
             .category(SessionConfigOptionCategory::Mode),
         ];
         chat.setting_changed(change, Ok(Some(updated)));
+        // The transcript announces it; the footer stays as it was.
         assert_eq!(history(&mut chat), ["• Mode set to Code"]);
-        assert!(
-            rows(&chat, 80)
-                .last()
-                .is_some_and(|footer| footer.ends_with("Code (⇧tab to cycle)"))
-        );
+        assert_eq!(rows(&chat, 80).last().map(String::as_str), Some("  Agent"));
     }
 
     #[test]
@@ -2004,7 +1999,7 @@ mod tests {
         let mut chat = chat_with(options);
         chat.context = Some((25, 100));
         let footer = chat.footer(60, Instant::now()).to_string();
-        assert!(footer.starts_with("  Agent · /repo  "), "{footer}");
+        assert!(footer.starts_with("  Agent  "), "{footer}");
         assert!(footer.trim_end().ends_with("75% context left"), "{footer}");
 
         chat.status_items.clear();
