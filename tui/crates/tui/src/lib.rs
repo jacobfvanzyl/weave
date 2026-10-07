@@ -8,6 +8,7 @@ mod attachments;
 mod chat;
 mod clipboard;
 mod command_popup;
+mod compaction;
 mod composer;
 mod conventions;
 mod custom_terminal;

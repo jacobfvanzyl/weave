@@ -15,6 +15,7 @@
 //! | `connect` | a URL elicitation, completed shortly after consent |
 //! | `mcp` | lists the MCP servers the session was given |
 //! | `think` | thought chunks, then a message |
+//! | `compact` | a context compaction with a streamed summary (Preview), when the client asks for them |
 //! | `switch-mode` | an agent-initiated mode change (`current_mode_update`, `config_option_update`) |
 //! | `withdraw` | a permission request withdrawn with `$/cancel_request` |
 //! | `extension` | a `_`-prefixed request (expects "method not found") and notification |
@@ -51,6 +52,8 @@ use agent_client_protocol::schema::v1::AvailableCommandsUpdate;
 use agent_client_protocol::schema::v1::CancelNotification;
 use agent_client_protocol::schema::v1::CloseSessionRequest;
 use agent_client_protocol::schema::v1::CloseSessionResponse;
+use agent_client_protocol::schema::v1::ContentBlock;
+use agent_client_protocol::schema::v1::ContentChunk;
 use agent_client_protocol::schema::v1::DeleteSessionRequest;
 use agent_client_protocol::schema::v1::DeleteSessionResponse;
 use agent_client_protocol::schema::v1::Implementation;
@@ -280,8 +283,18 @@ pub async fn serve_with(
                         request.session_id.to_string(),
                     )));
                 };
-                // Replay everything before responding, as the protocol requires.
+                // Replay everything before responding, as the protocol requires. Compactions
+                // go only to a client that asked for them.
+                let compaction = state.client_supports_compaction();
                 for update in history {
+                    let update = match update {
+                        SessionUpdate::CompactionUpdate(_) if !compaction => {
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from(
+                                "Context compacted.",
+                            )))
+                        }
+                        update => update,
+                    };
                     notify(&cx, &request.session_id, update)?;
                 }
                 let (modes, options) = state.open(&request.session_id, request.mcp_servers);
@@ -488,6 +501,7 @@ fn advertise_commands(cx: &ConnectionTo<Client>, session_id: &SessionId) -> Resu
         command("connect", "Connect an account through a URL", None),
         command("mcp", "List the MCP servers this session has", None),
         command("think", "Reason out loud, then answer", None),
+        command("compact", "Compact the context, keeping a summary", None),
         command(
             "switch-mode",
             "Switch modes on the agent's own initiative",

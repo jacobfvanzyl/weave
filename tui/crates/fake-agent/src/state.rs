@@ -111,6 +111,11 @@ impl State {
         }
     }
 
+    /// Whether the client asked for compaction updates (an ACP Preview feature).
+    pub fn client_supports_compaction(&self) -> bool {
+        supports_compaction(&self.client)
+    }
+
     pub fn client_supports_booleans(&self) -> bool {
         self.client
             .session
@@ -315,4 +320,12 @@ pub fn interactive_login(state_path: Option<&Path>) -> std::io::Result<bool> {
     }
     writeln!(stdout, "Signed in.")?;
     Ok(true)
+}
+
+/// Whether `client` advertised `session.compaction`; agents send compaction updates only then.
+pub fn supports_compaction(client: &ClientCapabilities) -> bool {
+    client
+        .session
+        .as_ref()
+        .is_some_and(|session| session.compaction.is_some())
 }

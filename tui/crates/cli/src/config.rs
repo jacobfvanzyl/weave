@@ -11,6 +11,7 @@
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
+//! compaction = false         # no compaction updates (ACP Preview; on by default)
 //!
 //! [agents.opencode]         # …or a registry agent (`weave agents` lists them)…
 //! terminal = false
@@ -101,6 +102,8 @@ pub struct AgentConfig {
     pub fs: Option<bool>,
     /// Offer client terminals (default true).
     pub terminal: Option<bool>,
+    /// Ask for context compaction updates, an ACP Preview feature (default true).
+    pub compaction: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +177,7 @@ impl Config {
             options.read_files = agent.fs.unwrap_or(true);
             options.write_files = agent.fs.unwrap_or(true);
             options.terminals = agent.terminal.unwrap_or(true);
+            options.compaction = agent.compaction.unwrap_or(true);
         }
         (spec, options)
     }

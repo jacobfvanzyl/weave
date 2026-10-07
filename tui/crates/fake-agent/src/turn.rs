@@ -13,6 +13,9 @@ use agent_client_protocol::Error;
 use agent_client_protocol::UntypedMessage;
 use agent_client_protocol::schema::v1::BooleanPropertySchema;
 use agent_client_protocol::schema::v1::ClientCapabilities;
+use agent_client_protocol::schema::v1::CompactionStatus;
+use agent_client_protocol::schema::v1::CompactionSummaryChunk;
+use agent_client_protocol::schema::v1::CompactionUpdate;
 use agent_client_protocol::schema::v1::CompleteElicitationNotification;
 use agent_client_protocol::schema::v1::ConfigOptionUpdate;
 use agent_client_protocol::schema::v1::ContentBlock;
@@ -68,6 +71,7 @@ use crate::lock;
 use crate::state::Cancellation;
 use crate::state::State;
 use crate::state::now;
+use crate::state::supports_compaction;
 
 static TOOL_CALLS: AtomicU64 = AtomicU64::new(1);
 
@@ -128,6 +132,7 @@ impl Turn {
             "connect" => self.connect(cx).await?,
             "mcp" => self.list_mcp_servers(cx).await?,
             "think" => self.think(cx).await?,
+            "compact" => self.compact(cx).await?,
             "switch-mode" => self.switch_mode(cx).await?,
             "withdraw" => self.withdraw(cx).await?,
             "extension" => self.extension(cx).await?,
@@ -598,6 +603,50 @@ impl Turn {
             self.update(cx, SessionUpdate::AgentThoughtChunk(chunk))?;
         }
         self.say(cx, "Done thinking.").await
+    }
+
+    /// Compact the context: the compaction's start, its summary streamed, then its end, for
+    /// a client that asked for compaction updates; others get a message saying so, as agents
+    /// fall back. History keeps the finished compaction whole, as replay sends it.
+    async fn compact(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        if !supports_compaction(&self.client) {
+            return self.say(cx, "Context compacted.").await;
+        }
+        let id = format!("compaction-{}", TOOL_CALLS.fetch_add(1, Ordering::Relaxed));
+        let summary = ["## Kept\n\n", "The user is trying out compaction."];
+        let started = CompactionUpdate::new(id.clone(), CompactionStatus::InProgress);
+        notify(
+            cx,
+            &self.session_id,
+            SessionUpdate::CompactionUpdate(started),
+        )?;
+        for part in summary {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let chunk = CompactionSummaryChunk::new(id.clone(), ContentBlock::from(part));
+            notify(
+                cx,
+                &self.session_id,
+                SessionUpdate::CompactionSummaryChunk(chunk),
+            )?;
+        }
+        let status = if self.cancel.is_cancelled() {
+            CompactionStatus::Cancelled
+        } else {
+            CompactionStatus::Completed
+        };
+        // Completing without a summary keeps the streamed one.
+        let finished = CompactionUpdate::new(id.clone(), status.clone());
+        notify(
+            cx,
+            &self.session_id,
+            SessionUpdate::CompactionUpdate(finished),
+        )?;
+        let mut whole = CompactionUpdate::new(id, status.clone());
+        if status == CompactionStatus::Completed {
+            whole = whole.summary(vec![ContentBlock::from(summary.concat())]);
+        }
+        self.record(SessionUpdate::CompactionUpdate(whole));
+        self.say(cx, "Compacted.").await
     }
 
     /// Switch modes on the agent's own initiative, as a "leave plan mode" tool would.

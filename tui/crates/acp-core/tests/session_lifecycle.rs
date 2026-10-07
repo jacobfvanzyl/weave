@@ -15,6 +15,7 @@ use common::transcript;
 use pretty_assertions::assert_eq;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::ClientOptions;
+use weave_acp_core::MaybeUndefined;
 use weave_acp_core::SessionSetup;
 use weave_acp_core::is_auth_required;
 use weave_acp_core::schema::ElicitationContentValue;
@@ -145,6 +146,83 @@ async fn closed_sessions_stop_taking_prompts_and_deleted_ones_leave_the_list() {
         .await
         .expect("list");
     assert!(listed.sessions.is_empty());
+}
+
+/// The compaction updates among `updates`, as (kind, id-free detail) for comparing.
+fn compactions(updates: &[SessionUpdate]) -> Vec<String> {
+    updates
+        .iter()
+        .filter_map(|update| match update {
+            SessionUpdate::CompactionUpdate(update) => Some(format!(
+                "update {:?} summary {:?}",
+                update.status,
+                match &update.summary {
+                    MaybeUndefined::Value(summary) => Some(summary.len()),
+                    _ => None,
+                }
+            )),
+            SessionUpdate::CompactionSummaryChunk(_) => Some("chunk".to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn compaction_updates_reach_only_clients_that_ask_and_replay_whole() {
+    let state = tempfile::NamedTempFile::new().expect("state file");
+    let config = FakeAgentConfig {
+        state_path: Some(state.path().to_owned()),
+        ..FakeAgentConfig::default()
+    };
+    let mut asking = Harness::start_with(ClientOptions::default(), config.clone()).await;
+    let log = asking.turn("compact", "allow").await;
+    assert_eq!(
+        compactions(&log.updates),
+        [
+            "update InProgress summary None",
+            "chunk",
+            "chunk",
+            "update Completed summary None",
+        ]
+    );
+    assert_eq!(log.message, "Compacted.");
+    let session = asking.session_id.clone();
+    let setup = asking.setup();
+    asking.drain();
+    asking
+        .connection
+        .load_session(session.clone(), &setup)
+        .await
+        .expect("load");
+    let replay: Vec<SessionUpdate> = asking
+        .drain()
+        .into_iter()
+        .filter_map(|event| match event {
+            AgentEvent::SessionUpdate(notification) => Some(notification.update),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(compactions(&replay), ["update Completed summary Some(1)"]);
+    asking.connection.shutdown().await;
+
+    // A client that didn't ask gets ordinary output, live and replayed.
+    let declined = ClientOptions {
+        compaction: false,
+        ..ClientOptions::default()
+    };
+    let (connection, mut events) = Harness::connect(declined, config.clone()).await;
+    connection
+        .load_session(session, &setup)
+        .await
+        .expect("load");
+    let replay: Vec<AgentEvent> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert!(transcript(&replay).contains(&"agent: Context compacted.".to_owned()));
+    connection.shutdown().await;
+
+    let mut plain = Harness::start_with(declined, config).await;
+    let log = plain.turn("compact", "allow").await;
+    assert!(compactions(&log.updates).is_empty());
+    assert_eq!(log.message, "Context compacted.");
 }
 
 #[tokio::test]

@@ -7,8 +7,10 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
 
 ## Boundaries
 
-- It speaks ACP v1 stable and implements it completely. The v2 draft and unstable
-  RFDs stay out of scope unless the issue changes.
+- It speaks ACP v1 stable and implements it completely. One Preview RFD is in scope too:
+  session compaction, through the SDK's `unstable_session_compaction` feature, advertised
+  by default and withheld with `compaction = false` for an agent. The v2 draft and other
+  unstable RFDs stay out of scope unless the issue changes.
 - It launches agents locally. It has no dependency on `product/`, the Host Daemon
   or its protocol, and it is not a root Bun workspace.
 - One session per process. Like Codex, it runs fullscreen by default: on the alternate
@@ -36,7 +38,7 @@ Keep protocol behavior in `acp-core`. Client services (`fs/*`, `terminal/*`) liv
 and are advertised per `ClientOptions`; never advertise one that isn't answered. Real
 adapters may not call them (Claude's runs its own tools), so the fake agent is what
 exercises them: integration tests connect it in-process over `Channel::duplex`, and its
-prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`) drive the
+prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`, `/compact`) drive the
 real TUI. In `tui`, rendering follows Codex's look: `tool_call` maps ACP tool kinds onto
 Codex's cells (exec, explored, patch, MCP), `history_cell`, `markdown` and `streaming` the
 rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the terminal's

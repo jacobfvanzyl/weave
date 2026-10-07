@@ -45,7 +45,7 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Ctrl+Home / Ctrl+End (or Alt+< / Alt+>) | Jump to the start / back to the newest output |
 | Esc while scrolled back | Return to the newest output (before it stops the turn) |
 | Drag | Select transcript text; it is copied when you release |
-| Ctrl+T | Full transcript: whole command output, diffs and thoughts (a pager inline) |
+| Ctrl+T | Full transcript: whole command output, diffs, thoughts and compaction summaries (a pager inline) |
 | F3 | Find text in the full transcript: newest match first, ↑/↓ (or Ctrl+P/Ctrl+N) between matches, Enter to keep reading, Esc to close. In the inline pager, `/` then `n`/`N` |
 | `?` | Keyboard shortcuts (on an empty composer) |
 | Ctrl+G | Edit the prompt in `$VISUAL` / `$EDITOR` |
@@ -84,6 +84,7 @@ terminal_title = true  # window title: activity spinner, session title, project
 
 [agents.claude]
 terminal = false          # don't let it run commands through weave
+compaction = false        # no compaction updates (an ACP Preview feature; on by default)
 
 [agents.opencode]         # a registry agent, with settings of its own
 terminal = false

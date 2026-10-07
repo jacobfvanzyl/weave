@@ -16,6 +16,7 @@ use agent_client_protocol::schema::v1::AuthCapabilities;
 use agent_client_protocol::schema::v1::BooleanConfigOptionCapabilities;
 use agent_client_protocol::schema::v1::ClientCapabilities;
 use agent_client_protocol::schema::v1::ClientSessionCapabilities;
+use agent_client_protocol::schema::v1::CompactionCapabilities;
 use agent_client_protocol::schema::v1::CompleteElicitationNotification;
 use agent_client_protocol::schema::v1::CreateElicitationRequest;
 use agent_client_protocol::schema::v1::CreateTerminalRequest;
@@ -100,6 +101,9 @@ pub struct ClientOptions {
     pub elicitation: bool,
     /// Whether the client can rerun the agent's command interactively for `terminal` sign-in.
     pub terminal_auth: bool,
+    /// Context compaction updates (`compaction_update`, `compaction_summary_chunk`), an ACP
+    /// Preview feature; without them agents describe compaction in ordinary output.
+    pub compaction: bool,
 }
 
 impl Default for ClientOptions {
@@ -110,6 +114,7 @@ impl Default for ClientOptions {
             terminals: true,
             elicitation: true,
             terminal_auth: false,
+            compaction: true,
         }
     }
 }
@@ -129,10 +134,12 @@ impl ClientOptions {
             .auth(AuthCapabilities::new().terminal(self.terminal_auth))
             .elicitation(elicitation)
             .session(
-                ClientSessionCapabilities::new().config_options(
-                    SessionConfigOptionsCapabilities::new()
-                        .boolean(BooleanConfigOptionCapabilities::new()),
-                ),
+                ClientSessionCapabilities::new()
+                    .config_options(
+                        SessionConfigOptionsCapabilities::new()
+                            .boolean(BooleanConfigOptionCapabilities::new()),
+                    )
+                    .compaction(self.compaction.then(CompactionCapabilities::new)),
             )
             .meta(terminal_output_meta())
     }

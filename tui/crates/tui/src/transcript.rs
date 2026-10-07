@@ -25,6 +25,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use weave_acp_core::schema::Plan;
 
+use crate::compaction::Compaction;
 use crate::find;
 use crate::history_cell;
 use crate::streaming::StreamKind;
@@ -139,6 +140,11 @@ impl TranscriptCell {
             };
             group.lines(width, &cx, false)
         })
+    }
+
+    /// A finished context compaction; the detailed view adds the summary it kept.
+    pub fn compaction(compaction: Compaction) -> Self {
+        Self::with_detail(move |width, detail| compaction.lines(width, detail))
     }
 
     /// `Worked for …` after a turn.

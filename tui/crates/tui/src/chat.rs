@@ -26,6 +26,8 @@ use weave_acp_core::ElicitationRequest;
 use weave_acp_core::MaybeUndefined;
 use weave_acp_core::PermissionRequest;
 use weave_acp_core::schema::AvailableCommand;
+use weave_acp_core::schema::CompactionId;
+use weave_acp_core::schema::CompactionUpdate;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::ContentChunk;
 use weave_acp_core::schema::ElicitationId;
@@ -49,6 +51,8 @@ use crate::clipboard;
 use crate::command_popup;
 use crate::command_popup::CommandPopup;
 use crate::command_popup::PopupAction;
+use crate::compaction;
+use crate::compaction::Compaction;
 use crate::composer::Composer;
 use crate::composer::ComposerAction;
 use crate::conventions::thought_heading;
@@ -206,6 +210,10 @@ pub struct ChatWidget {
     exploring: ExploreGroup,
     /// Tool calls already committed; later updates to them are ignored.
     committed_tool_calls: HashSet<ToolCallId>,
+    /// Context compactions not yet finished, in the order they started.
+    compactions: Vec<Compaction>,
+    /// Compactions already committed; later updates to them are ignored.
+    committed_compactions: HashSet<CompactionId>,
     turn: Option<Turn>,
     permissions: VecDeque<PendingPermission>,
     composer: Composer,
@@ -265,6 +273,8 @@ impl ChatWidget {
             tool_calls: Vec::new(),
             exploring: ExploreGroup::default(),
             committed_tool_calls: HashSet::new(),
+            compactions: Vec::new(),
+            committed_compactions: HashSet::new(),
             turn: None,
             permissions: VecDeque::new(),
             composer: Composer::default(),
@@ -346,6 +356,8 @@ impl ChatWidget {
         self.resumable = false;
         // Tool call ids are only unique within a session, and a reload replays its own.
         self.committed_tool_calls.clear();
+        self.compactions.clear();
+        self.committed_compactions.clear();
         self.turn = None;
         self.queued.clear();
         self.commands.clear();
@@ -778,8 +790,53 @@ impl ChatWidget {
                 MaybeUndefined::Null => self.title = None,
                 _ => {}
             },
+            SessionUpdate::CompactionUpdate(update) => self.apply_compaction_update(update),
+            // A chunk for an id the agent hasn't started is out of order; it's dropped.
+            SessionUpdate::CompactionSummaryChunk(chunk) => {
+                if let Some(live) = self
+                    .compactions
+                    .iter_mut()
+                    .find(|live| live.id == chunk.compaction_id)
+                {
+                    live.append(chunk.content);
+                }
+            }
             _ => {}
         }
+    }
+
+    /// The first update for an id places the compaction in the timeline; later ones patch
+    /// it, and once finished it is committed there.
+    fn apply_compaction_update(&mut self, update: CompactionUpdate) {
+        if self.committed_compactions.contains(&update.compaction_id) {
+            return;
+        }
+        self.note_activity();
+        let now = Instant::now();
+        match self
+            .compactions
+            .iter_mut()
+            .find(|live| live.id == update.compaction_id)
+        {
+            Some(live) => live.apply(update, now),
+            None => {
+                // Only a new entity ends the message before it; patches don't split one.
+                self.end_stream();
+                self.compactions.push(Compaction::new(update, now));
+            }
+        }
+        let (finished, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.compactions)
+            .into_iter()
+            .partition(Compaction::is_finished);
+        self.compactions = running;
+        for compaction in finished {
+            self.commit_compaction(compaction);
+        }
+    }
+
+    fn commit_compaction(&mut self, compaction: Compaction) {
+        self.committed_compactions.insert(compaction.id.clone());
+        self.push_cell(TranscriptCell::compaction(compaction));
     }
 
     fn apply_tool_call_update(
@@ -1595,6 +1652,9 @@ impl ChatWidget {
             self.commit_tool_call(cell);
         }
         self.flush_exploring();
+        for compaction in std::mem::take(&mut self.compactions) {
+            self.commit_compaction(compaction);
+        }
     }
 
     /// Commit `cell` after anything finished that came before it.
@@ -1710,7 +1770,31 @@ impl ChatWidget {
 
     fn status_lines(&self, now: Instant) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        if let Some(turn) = &self.turn {
+        // A running compaction takes the status line, on its own clock, as in Codex.
+        let compacting = self
+            .compactions
+            .iter()
+            .filter(|compaction| compaction.is_running())
+            .find_map(Compaction::started);
+        if let Some(started) = compacting
+            && !self.turn.as_ref().is_some_and(|turn| turn.cancelling)
+        {
+            let status = Status {
+                label: compaction::RUNNING_LABEL,
+                label_since: started,
+                started,
+                hint: if self.turn.is_some() {
+                    "esc to interrupt"
+                } else {
+                    "agent working"
+                },
+            };
+            lines.push(status_line(&status, now));
+            lines.push(Line::from(Span::styled(
+                format!("  └ {}", compaction::RUNNING_DETAIL),
+                dim(),
+            )));
+        } else if let Some(turn) = &self.turn {
             let (label, since, hint) = if turn.cancelling {
                 ("Cancelling", turn.started, "waiting for the agent")
             } else {
@@ -2793,6 +2877,63 @@ mod tests {
         assert!(chat.composer.is_empty());
         chat.handle_key(key(KeyCode::Esc));
         assert!(!chat.pager_open());
+    }
+
+    #[test]
+    fn a_compaction_shows_in_the_status_then_in_the_transcript() {
+        use weave_acp_core::schema::CompactionStatus;
+        use weave_acp_core::schema::CompactionSummaryChunk;
+
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "go");
+        reply(&mut chat, "m1", "Before.");
+        chat.handle_agent_event(update(SessionUpdate::CompactionUpdate(
+            CompactionUpdate::new("c1", CompactionStatus::InProgress),
+        )));
+        chat.handle_agent_event(update(SessionUpdate::CompactionSummaryChunk(
+            CompactionSummaryChunk::new("c1", "Kept: the parser work.".into()),
+        )));
+        // A chunk for a compaction never started is dropped.
+        chat.handle_agent_event(update(SessionUpdate::CompactionSummaryChunk(
+            CompactionSummaryChunk::new("c9", "stray".into()),
+        )));
+        let rows = screen_rows(&chat, 60, 14);
+        assert!(
+            rows.iter()
+                .any(|row| row.starts_with("• Compacting context (0s • esc to interrupt)")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.contains(&"  └ Making room to continue.".to_owned()),
+            "{rows:?}"
+        );
+
+        chat.handle_agent_event(update(SessionUpdate::CompactionUpdate(
+            CompactionUpdate::new("c1", CompactionStatus::Completed),
+        )));
+        // Updates to a committed compaction are ignored.
+        chat.handle_agent_event(update(SessionUpdate::CompactionUpdate(
+            CompactionUpdate::new("c1", CompactionStatus::Failed),
+        )));
+        reply(&mut chat, "m2", "After.");
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        let rows = screen_rows(&chat, 60, 14);
+        let at = |text: &str| rows.iter().position(|row| row.starts_with(text));
+        assert!(at("• Before.") < at("• Context compacted · 0s"), "{rows:?}");
+        assert!(at("• Context compacted · 0s") < at("• After."), "{rows:?}");
+        assert!(
+            rows.contains(&"  └ Kept a summary: 1 line (⌃t to view transcript)".to_owned()),
+            "{rows:?}"
+        );
+        assert!(!rows.iter().any(|row| row.contains("stray")), "{rows:?}");
+        assert!(!rows.iter().any(|row| row.contains("failed")), "{rows:?}");
+
+        chat.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        let rows = screen_rows(&chat, 60, 14);
+        assert!(
+            rows.contains(&"  Kept: the parser work.".to_owned()),
+            "{rows:?}"
+        );
     }
 
     #[test]
