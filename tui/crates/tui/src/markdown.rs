@@ -1,4 +1,7 @@
-//! Renders agent markdown into styled, wrapped terminal lines.
+//! Renders agent markdown into styled, wrapped terminal lines, in Codex's styles
+//! (`codex-rs/tui/src/markdown_render.rs`, Apache-2.0): bold and underlined top headings, inline
+//! code and links in the theme's colors, light blue list numbers, green quotes, highlighted code
+//! blocks without their fences, and tables laid out in columns.
 //!
 //! Source line breaks are kept (soft breaks render as breaks), so rendering a prefix of a
 //! message yields a prefix of the full rendering. Streaming relies on that to commit finished
@@ -20,36 +23,40 @@ use unicode_width::UnicodeWidthStr;
 
 use std::sync::Arc;
 
+use pulldown_cmark::Alignment;
+
 use crate::highlight;
+use crate::style;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::wrap_sourced;
 
 pub fn render_markdown(source: &str, width: usize) -> Vec<DisplayLine> {
-    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let options =
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
     let mut renderer = Renderer::new(width);
-    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
-        if let Event::End(TagEnd::CodeBlock) = event {
-            renderer.end_code_block(has_closing_fence(&source[range]));
-        } else {
-            renderer.event(event);
-        }
+    for event in Parser::new_ext(source, options) {
+        renderer.event(event);
     }
     renderer.finish()
 }
 
-/// Whether a fenced code block's source includes its closing fence. An unterminated block,
-/// as while it is still streaming, runs to the end of the document without one.
-fn has_closing_fence(block: &str) -> bool {
-    let mut lines = block.trim_end_matches('\n').lines();
-    let opening = lines.next().map(str::trim_start).unwrap_or_default();
-    let fence = if opening.starts_with("~~~") {
-        "~~~"
+/// Where a streaming message's committed prefix may end: after its last complete line,
+/// unless that line is in a table still arriving, whose column widths aren't known yet. Then
+/// the table's block is held back until it ends.
+pub fn commit_boundary(source: &str) -> Option<usize> {
+    let end = source.rfind('\n')? + 1;
+    let block_start = source[..end]
+        .trim_end_matches('\n')
+        .rfind("\n\n")
+        .map_or(0, |index| index + 2);
+    let in_table = source[block_start..end]
+        .lines()
+        .any(|line| line.trim_start().starts_with('|'));
+    if in_table {
+        (block_start > 0).then_some(block_start)
     } else {
-        "```"
-    };
-    lines
-        .next_back()
-        .is_some_and(|last| last.trim().starts_with(fence))
+        Some(end)
+    }
 }
 
 struct Renderer {
@@ -72,6 +79,14 @@ struct Renderer {
     code: String,
     link: Option<(String, usize)>,
     blank_before_next_block: bool,
+    table: Option<Table>,
+}
+
+/// A table being read: its column alignments, finished rows, and the row being read.
+struct Table {
+    alignments: Vec<Alignment>,
+    rows: Vec<Vec<Line<'static>>>,
+    row: Vec<Line<'static>>,
 }
 
 impl Renderer {
@@ -91,6 +106,7 @@ impl Renderer {
             code: String::new(),
             link: None,
             blank_before_next_block: false,
+            table: None,
         }
     }
 
@@ -101,17 +117,13 @@ impl Renderer {
             Event::Text(text) if self.in_code_block => self.code_text(&text),
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => self.text(&text),
             Event::Code(code) => {
-                let style = self.style().fg(Color::Cyan);
+                let style = self.style().patch(inline_code_style());
                 self.push(&code, style);
             }
             Event::SoftBreak | Event::HardBreak => self.flush(),
             Event::Rule => {
                 self.start_block();
-                let rule = "─".repeat(self.width.clamp(1, 40));
-                self.spans.push(Span::styled(
-                    rule,
-                    Style::default().add_modifier(Modifier::DIM),
-                ));
+                self.spans.push(Span::styled("———", dim()));
                 self.flush();
                 self.blank_before_next_block = true;
             }
@@ -127,10 +139,7 @@ impl Renderer {
             Tag::Paragraph => self.start_block(),
             Tag::Heading { level, .. } => {
                 self.start_block();
-                let mut style = Style::default().add_modifier(Modifier::BOLD);
-                if level == HeadingLevel::H1 {
-                    style = style.add_modifier(Modifier::UNDERLINED);
-                }
+                let style = heading_style(level);
                 let hashes = "#".repeat(heading_depth(level));
                 self.spans.push(Span::styled(format!("{hashes} "), style));
                 self.styles.push(style);
@@ -138,6 +147,7 @@ impl Renderer {
             Tag::BlockQuote => {
                 self.start_block();
                 self.quote_depth += 1;
+                self.push_style(Style::default().fg(Color::Green));
             }
             Tag::CodeBlock(kind) => {
                 self.start_block();
@@ -147,9 +157,6 @@ impl Renderer {
                 self.code_lang.clear();
                 if let CodeBlockKind::Fenced(language) = kind {
                     self.code_lang = language.to_string();
-                    self.spans
-                        .push(Span::styled(format!("```{language}"), dim()));
-                    self.flush();
                 }
             }
             Tag::List(start) => {
@@ -186,7 +193,7 @@ impl Renderer {
             Tag::Link { dest_url, .. } => {
                 self.push_style(
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(style::accent())
                         .add_modifier(Modifier::UNDERLINED),
                 );
                 self.link = Some((dest_url.into_string(), self.spans.len()));
@@ -199,12 +206,16 @@ impl Renderer {
                 self.start_block();
                 self.text(&format!("[^{name}]: "));
             }
-            Tag::HtmlBlock
-            | Tag::MetadataBlock(_)
-            | Tag::Table(_)
-            | Tag::TableHead
-            | Tag::TableRow
-            | Tag::TableCell => {}
+            Tag::Table(alignments) => {
+                self.start_block();
+                self.table = Some(Table {
+                    alignments,
+                    rows: Vec::new(),
+                    row: Vec::new(),
+                });
+            }
+            Tag::TableHead => self.push_style(Style::default().add_modifier(Modifier::BOLD)),
+            Tag::HtmlBlock | Tag::MetadataBlock(_) | Tag::TableRow | Tag::TableCell => {}
         }
     }
 
@@ -223,10 +234,11 @@ impl Renderer {
                 if !self.spans.is_empty() {
                     self.flush();
                 }
+                self.styles.pop();
                 self.quote_depth = self.quote_depth.saturating_sub(1);
                 self.blank_before_next_block = true;
             }
-            TagEnd::CodeBlock => self.end_code_block(true),
+            TagEnd::CodeBlock => self.end_code_block(),
             TagEnd::List(_) => {
                 self.lists.pop();
                 if self.lists.is_empty() {
@@ -247,19 +259,36 @@ impl Renderer {
                 self.end_link(false);
             }
             TagEnd::Image => self.end_link(true),
-            TagEnd::HtmlBlock
-            | TagEnd::MetadataBlock(_)
-            | TagEnd::Table
-            | TagEnd::TableHead
-            | TagEnd::TableRow
-            | TagEnd::TableCell => {}
+            TagEnd::TableCell => {
+                let cell = Line::from(std::mem::take(&mut self.spans));
+                if let Some(table) = &mut self.table {
+                    table.row.push(cell);
+                }
+            }
+            TagEnd::TableHead | TagEnd::TableRow => {
+                if tag == TagEnd::TableHead {
+                    self.styles.pop();
+                }
+                if let Some(table) = &mut self.table {
+                    let row = std::mem::take(&mut table.row);
+                    table.rows.push(row);
+                }
+            }
+            TagEnd::Table => {
+                if let Some(table) = self.table.take() {
+                    self.end_table(table);
+                }
+                self.blank_before_next_block = true;
+            }
+            TagEnd::HtmlBlock | TagEnd::MetadataBlock(_) => {}
         }
     }
 
-    /// Emit the code block, highlighted for its language. An unterminated block (while
-    /// streaming) is highlighted as far as it goes; complete lines render as they will at the
-    /// end, since highlighting only carries state forward.
-    fn end_code_block(&mut self, closed: bool) {
+    /// Emit the code block, highlighted for its language and without its fences, as Codex
+    /// shows code. An unterminated block (while streaming) is highlighted as far as it goes;
+    /// complete lines render as they will at the end, since highlighting only carries state
+    /// forward.
+    fn end_code_block(&mut self) {
         if !self.spans.is_empty() {
             self.flush();
         }
@@ -281,11 +310,73 @@ impl Renderer {
             }
         }
         self.in_code_block = false;
-        if self.fenced_code && closed {
-            self.spans.push(Span::styled("```", dim()));
-            self.flush();
-        }
         self.blank_before_next_block = true;
+    }
+
+    /// Lay a table out in columns, as Codex does: a header, a heavy rule, and the rows, each
+    /// cell padded by a space. A table too wide for the screen lists its rows instead.
+    fn end_table(&mut self, table: Table) {
+        let columns = table.rows.iter().map(Vec::len).max().unwrap_or_default();
+        let widths: Vec<usize> = (0..columns)
+            .map(|column| {
+                table
+                    .rows
+                    .iter()
+                    .filter_map(|row| row.get(column))
+                    .map(Line::width)
+                    .max()
+                    .unwrap_or_default()
+                    + 2
+            })
+            .collect();
+        let quote = self.quote_prefix();
+        let quote_width: usize = quote.iter().map(|span| span.content.width()).sum();
+        let total = quote_width + widths.iter().sum::<usize>() + 2 * columns.saturating_sub(1);
+        if total > self.width {
+            for row in table.rows {
+                let mut spans = Vec::new();
+                for (index, cell) in row.into_iter().enumerate() {
+                    if index > 0 {
+                        spans.push(Span::styled(" | ", dim()));
+                    }
+                    spans.extend(cell.spans);
+                }
+                self.spans = spans;
+                self.flush();
+            }
+            return;
+        }
+        for (index, row) in table.rows.into_iter().enumerate() {
+            let mut spans = quote.clone();
+            for (column, width) in widths.iter().enumerate() {
+                if column > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                let cell = row.get(column).cloned().unwrap_or_default();
+                let free = width - 2 - cell.width();
+                let (before, after) = match table.alignments.get(column) {
+                    Some(Alignment::Right) => (free, 0),
+                    Some(Alignment::Center) => (free / 2, free - free / 2),
+                    _ => (0, free),
+                };
+                spans.push(Span::raw(" ".repeat(before + 1)));
+                spans.extend(cell.spans);
+                if column + 1 < widths.len() {
+                    spans.push(Span::raw(" ".repeat(after + 1)));
+                }
+            }
+            self.lines.push(DisplayLine::whole(Line::from(spans)));
+            if index == 0 {
+                let mut rule = quote.clone();
+                for (column, width) in widths.iter().enumerate() {
+                    if column > 0 {
+                        rule.push(Span::raw("  "));
+                    }
+                    rule.push(Span::styled("━".repeat(*width), dim()));
+                }
+                self.lines.push(DisplayLine::plain(Line::from(rule)));
+            }
+        }
     }
 
     fn end_link(&mut self, image: bool) {
@@ -354,14 +445,21 @@ impl Renderer {
         let content = Line::from(std::mem::take(&mut self.spans));
         let hang = self.items.last().copied().unwrap_or(0);
         let marker = self.pending_marker.take();
-        let (first_indent, rest_indent) = match &marker {
-            Some((indent, marker)) => {
-                (format!("{}{marker}", " ".repeat(*indent)), " ".repeat(hang))
-            }
-            None => (" ".repeat(hang), " ".repeat(hang)),
-        };
         let mut first = self.quote_prefix();
-        first.push(Span::raw(first_indent));
+        match &marker {
+            Some((indent, marker)) => {
+                first.push(Span::raw(" ".repeat(*indent)));
+                // Codex colors list numbers light blue; bullets stay plain.
+                let style = if marker.starts_with('-') {
+                    Style::default()
+                } else {
+                    Style::default().fg(Color::LightBlue)
+                };
+                first.push(Span::styled(marker.clone(), style));
+            }
+            None => first.push(Span::raw(" ".repeat(hang))),
+        }
+        let rest_indent = " ".repeat(hang);
         let mut rest = self.quote_prefix();
         rest.push(Span::raw(rest_indent));
         let mut rows = wrap_sourced(&content, self.width, &Line::from(first), &Line::from(rest));
@@ -397,6 +495,27 @@ fn copy_with_marker(rows: &mut [DisplayLine], marker: &str) {
             };
         }
     }
+}
+
+/// Codex's heading styles: underlined bold, bold, bold italic, then italic.
+fn heading_style(level: HeadingLevel) -> Style {
+    let style = Style::default();
+    match level {
+        HeadingLevel::H1 => style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        HeadingLevel::H2 => style.add_modifier(Modifier::BOLD),
+        HeadingLevel::H3 => style.add_modifier(Modifier::BOLD | Modifier::ITALIC),
+        _ => style.add_modifier(Modifier::ITALIC),
+    }
+}
+
+/// Inline code in the theme's color for it, or the accent.
+fn inline_code_style() -> Style {
+    let color = highlight::scope_color(&[
+        "markup.inline.raw.string.markdown",
+        "markup.raw.inline.markdown",
+    ])
+    .unwrap_or_else(style::accent);
+    Style::default().fg(color)
 }
 
 fn heading_depth(level: HeadingLevel) -> usize {
@@ -450,12 +569,40 @@ mod tests {
     }
 
     #[test]
-    fn code_blocks_keep_indentation_and_fences() {
-        let source = "```rust\nfn main() {\n    run();\n}\n```";
+    fn code_blocks_keep_indentation_and_drop_their_fences() {
+        let source = "```rust\nfn main() {\n    run();\n}\n```\nafter";
         assert_eq!(
             render(source, 40),
-            ["```rust", "fn main() {", "    run();", "}", "```"]
+            ["fn main() {", "    run();", "}", "", "after"]
         );
+    }
+
+    #[test]
+    fn tables_line_up_in_columns_or_list_rows_when_too_wide() {
+        let source = "| Name | Size |\n|:--|--:|\n| a.rs | 12 |\n| lib.rs | 3400 |\n";
+        assert_eq!(
+            render(source, 40),
+            [
+                " Name      Size",
+                "━━━━━━━━  ━━━━━━",
+                " a.rs        12",
+                " lib.rs    3400"
+            ]
+        );
+        assert_eq!(
+            render(source, 10),
+            ["Name |", "Size", "a.rs | 12", "lib.rs |", "3400"]
+        );
+    }
+
+    #[test]
+    fn streaming_holds_back_a_table_until_its_block_ends() {
+        let intro = "Sizes:\n\n";
+        let partial = format!("{intro}| a | b |\n|---|---|\n| 1 | 2 |\n");
+        assert_eq!(commit_boundary(&partial), Some(intro.len()));
+        let done = format!("{partial}\nafter\n");
+        assert_eq!(commit_boundary(&done), Some(done.len()));
+        assert_eq!(commit_boundary("no newline yet"), None);
     }
 
     #[test]

@@ -55,8 +55,8 @@ use crate::footer::FooterMode;
 use crate::footer::FooterProps;
 use crate::footer::StatusItem;
 use crate::footer::StatusValues;
-use crate::history_cell::ToolCallCell;
 use crate::history_cell::dim;
+use crate::history_cell::home_relative;
 use crate::permission::Decision;
 use crate::permission::PermissionView;
 use crate::session::OpenedSession;
@@ -72,6 +72,10 @@ use crate::status::Status;
 use crate::status::status_line;
 use crate::streaming::MessageStream;
 use crate::streaming::StreamKind;
+use crate::streaming::render_compact;
+use crate::tool_call::ExploreGroup;
+use crate::tool_call::RenderContext;
+use crate::tool_call::ToolCallCell;
 use crate::tool_output::TerminalTranscripts;
 use crate::transcript::Reading;
 use crate::transcript::TranscriptCell;
@@ -165,6 +169,9 @@ pub struct ChatWidget {
     stream: Option<MessageStream>,
     /// Tool calls still running, in the order they started.
     tool_calls: Vec<ToolCallCell>,
+    /// Finished reads and searches since anything else, shown as one `Exploring` entry until
+    /// something else arrives, as Codex groups its exploring commands.
+    exploring: ExploreGroup,
     /// Tool calls already committed; later updates to them are ignored.
     committed_tool_calls: HashSet<ToolCallId>,
     turn: Option<Turn>,
@@ -210,6 +217,7 @@ impl ChatWidget {
             has_history: false,
             stream: None,
             tool_calls: Vec::new(),
+            exploring: ExploreGroup::default(),
             committed_tool_calls: HashSet::new(),
             turn: None,
             permissions: VecDeque::new(),
@@ -250,7 +258,7 @@ impl ChatWidget {
         self.push_cell(TranscriptCell::header(
             self.agent_name.clone(),
             agent_version.map(str::to_owned),
-            self.cwd.clone(),
+            home_relative(&self.cwd),
             (!settings.is_empty()).then_some(settings),
         ));
         for notice in notices {
@@ -676,9 +684,18 @@ impl ChatWidget {
         // An agent must resolve its permission requests before ending the turn; any left over
         // can no longer be answered meaningfully.
         self.answer_pending_requests_cancelled();
-        let was_cancelling = self.turn.take().is_some_and(|turn| turn.cancelling);
+        let turn = self.turn.take();
+        let was_cancelling = turn.as_ref().is_some_and(|turn| turn.cancelling);
         match result {
             Ok(response) => {
+                if response.stop_reason == StopReason::EndTurn
+                    && let Some(turn) = &turn
+                {
+                    self.push_cell(TranscriptCell::turn_summary(
+                        turn.started.elapsed(),
+                        clock_label(),
+                    ));
+                }
                 let note = match response.stop_reason {
                     StopReason::EndTurn => None,
                     StopReason::Cancelled => Some("Turn cancelled"),
@@ -1073,9 +1090,13 @@ impl ChatWidget {
             turn.label = heading;
             turn.label_since = Instant::now();
         }
-        // Fullscreen keeps the whole message live, reflowing with the screen, until it ends.
+        // Fullscreen keeps the whole message live, reflowing with the screen, until it ends;
+        // thoughts stay live in both modes and end as a preview.
         if let Some(view) = &mut self.transcript {
             view.note_activity();
+            return;
+        }
+        if kind == StreamKind::Thought {
             return;
         }
         let lines = stream.take_complete();
@@ -1086,7 +1107,7 @@ impl ChatWidget {
         let Some(stream) = self.stream.take() else {
             return;
         };
-        if self.transcript.is_some() {
+        if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
             let kind = stream.kind();
             let source = stream.into_source();
             if !source.trim().is_empty() {
@@ -1104,6 +1125,7 @@ impl ChatWidget {
             return;
         }
         if first {
+            self.flush_exploring();
             self.push_lines(lines);
         } else {
             self.pending_history.extend(lines);
@@ -1122,11 +1144,35 @@ impl ChatWidget {
 
     fn commit_tool_call(&mut self, cell: ToolCallCell) {
         self.committed_tool_calls.insert(cell.id.clone());
-        let terminals = cell
-            .terminal_ids()
-            .filter_map(|id| Some((id.clone(), self.terminals.get(id)?.clone())))
-            .collect();
+        if cell.is_exploration() {
+            self.exploring.push(cell);
+            return;
+        }
+        let terminals = self.terminals_of(std::slice::from_ref(&cell));
         self.push_cell(TranscriptCell::tool_call(cell, self.cwd.clone(), terminals));
+    }
+
+    /// Copies of the terminals `calls` embed, as they stand.
+    fn terminals_of(&self, calls: &[ToolCallCell]) -> TerminalTranscripts {
+        calls
+            .iter()
+            .flat_map(ToolCallCell::terminal_ids)
+            .filter_map(|id| Some((id.clone(), self.terminals.get(id)?.clone())))
+            .collect()
+    }
+
+    /// End the exploring group: it becomes one `Explored` entry.
+    fn flush_exploring(&mut self) {
+        if self.exploring.is_empty() {
+            return;
+        }
+        let group = std::mem::take(&mut self.exploring);
+        let terminals = self.terminals_of(group.calls());
+        self.push_cell_after_exploring(TranscriptCell::explored(
+            group,
+            self.cwd.clone(),
+            terminals,
+        ));
     }
 
     /// Commit everything still live, as it stands, when the turn ends.
@@ -1135,16 +1181,22 @@ impl ChatWidget {
         for cell in std::mem::take(&mut self.tool_calls) {
             self.commit_tool_call(cell);
         }
+        self.flush_exploring();
     }
 
     fn push_cell(&mut self, cell: TranscriptCell) {
+        self.flush_exploring();
+        self.push_cell_after_exploring(cell);
+    }
+
+    fn push_cell_after_exploring(&mut self, cell: TranscriptCell) {
         match &mut self.transcript {
             Some(view) => {
                 view.push(cell);
                 self.has_history = true;
             }
             None => {
-                let lines = plain_lines(cell.lines(self.content_width()).iter().cloned());
+                let lines = plain_lines(cell.lines(self.content_width(), false).iter().cloned());
                 self.push_lines(lines);
             }
         }
@@ -1185,26 +1237,53 @@ impl ChatWidget {
 
     /// Live lines above the composer: running tool calls and the streaming message's tail.
     fn live_lines(&self, width: usize) -> Vec<DisplayLine> {
+        let detail = self
+            .transcript
+            .as_ref()
+            .is_some_and(TranscriptView::is_detailed);
+        let cx = RenderContext {
+            cwd: &self.cwd,
+            terminals: &self.terminals,
+            detail,
+            now: Some(Instant::now()),
+        };
         let mut lines = Vec::new();
-        for cell in &self.tool_calls {
-            lines.push(DisplayLine::default());
-            lines.extend(cell.lines(width, &self.cwd, &self.terminals));
-        }
-        if let Some(stream) = &self.stream
-            && self.transcript.is_some()
-        {
-            let message = stream.render_all(width);
-            if !message.is_empty() {
-                lines.push(DisplayLine::default());
-                lines.extend(message);
+        // Reads and searches, finished and running, show as the one group they'll join.
+        let (exploring, others): (Vec<&ToolCallCell>, Vec<&ToolCallCell>) = self
+            .tool_calls
+            .iter()
+            .partition(|cell| cell.is_exploration());
+        if !self.exploring.is_empty() || !exploring.is_empty() {
+            let mut group = self.exploring.clone();
+            for cell in exploring {
+                group.push(cell.clone());
             }
-        } else if let Some(stream) = &self.stream {
-            let tail = stream.tail();
-            if !tail.is_empty() {
-                if !stream.has_committed() || !self.tool_calls.is_empty() {
+            lines.push(DisplayLine::default());
+            lines.extend(group.lines(width, &cx, true));
+        }
+        for cell in others {
+            lines.push(DisplayLine::default());
+            lines.extend(cell.lines(width, &cx));
+        }
+        if let Some(stream) = &self.stream {
+            if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
+                let message = if detail {
+                    stream.render_all(width)
+                } else {
+                    render_compact(stream.kind(), stream.source(), width)
+                };
+                if !message.is_empty() {
                     lines.push(DisplayLine::default());
+                    lines.extend(message);
                 }
-                lines.extend(tail.into_iter().map(DisplayLine::plain));
+            } else {
+                let tail = stream.tail();
+                if !tail.is_empty() {
+                    if !stream.has_committed() || !self.tool_calls.is_empty() {
+                        lines.push(DisplayLine::default());
+                    }
+                    lines.extend(tail.into_iter().map(DisplayLine::plain));
+                }
             }
         }
         lines
@@ -1470,16 +1549,12 @@ impl ChatWidget {
     }
 }
 
-/// A path with the home directory shortened to `~`, as Codex shows directories.
-fn home_relative(path: &std::path::Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match home
-        .as_deref()
-        .and_then(|home| path.strip_prefix(home).ok())
-    {
-        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
+/// The time of day for turn summaries; fixed in tests so snapshots stay stable.
+fn clock_label() -> String {
+    if cfg!(test) {
+        "12:00".to_owned()
+    } else {
+        chrono::Local::now().format("%H:%M").to_string()
     }
 }
 
@@ -1592,7 +1667,7 @@ mod tests {
         )));
         assert_eq!(
             history(&mut chat),
-            ["› do it", "", "• Reading the file.", "  Then"]
+            ["", "› do it", "", "", "• Reading the file.", "  Then"]
         );
 
         chat.handle_agent_event(update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
@@ -1605,7 +1680,18 @@ mod tests {
                 .is_empty()
         );
 
-        assert_eq!(history(&mut chat), ["", "✓ Read a.rs  read", "", "• Done."]);
+        assert_eq!(
+            history(&mut chat),
+            [
+                "",
+                "• Explored",
+                "  └ Read a.rs",
+                "",
+                "• Done.",
+                "",
+                "  Worked for less than a second • 12:00"
+            ]
+        );
         assert!(!chat.is_animating());
     }
 
@@ -1692,10 +1778,7 @@ mod tests {
             "t1",
             ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
         ))));
-        assert_eq!(
-            history(&mut chat),
-            ["", "✗ Run tests  execute", "  └ ok 1", "    exit 1"]
-        );
+        assert_eq!(history(&mut chat), ["", "• Run tests", "  └ ok 1"]);
     }
 
     #[test]
@@ -1874,7 +1957,15 @@ mod tests {
         });
         assert_eq!(
             history(&mut chat),
-            ["• Session: Fix the build", "", "› fix it", "", "• Done."]
+            [
+                "• Session: Fix the build",
+                "",
+                "",
+                "› fix it",
+                "",
+                "",
+                "• Done."
+            ]
         );
         assert_eq!(
             submit(&mut chat, "next"),
@@ -1900,7 +1991,7 @@ mod tests {
             "s2",
             finished(),
         )));
-        assert_eq!(history(&mut chat), ["", "✓ Run it  execute"]);
+        assert_eq!(history(&mut chat), ["", "• Run it"]);
     }
 
     #[test]
@@ -1913,7 +2004,10 @@ mod tests {
         }
         chat.handle_agent_event(text_chunk("reply"));
         // The reply is still streaming, so it stays live; the user messages were committed apart.
-        assert_eq!(history(&mut chat), ["› first", "", "› second"]);
+        assert_eq!(
+            history(&mut chat),
+            ["", "› first", "", "", "", "› second", ""]
+        );
     }
 
     #[test]
@@ -1986,7 +2080,8 @@ mod tests {
                     .to_owned()
             })
             .collect();
-        assert_eq!(rows[1], "◐ Run tests  execute");
+        // The bullet animates while the call runs.
+        assert!(rows[1].ends_with(" Run tests"), "{rows:?}");
         assert!(
             rows[3].starts_with("• Working (0s • esc to interrupt)"),
             "{rows:?}"
@@ -2096,16 +2191,16 @@ mod tests {
         chat.handle_agent_event(turn_ended(StopReason::EndTurn));
 
         chat.begin_session("s2".into(), Some("Other"));
-        let rows = screen_rows(&chat, 40, 12);
+        let rows = screen_rows(&chat, 40, 24);
         assert!(
-            rows.iter().any(|row| row.starts_with("• weave")),
+            rows.iter().any(|row| row.starts_with("  >_ weave")),
             "{rows:?}"
         );
         assert!(rows.contains(&"• Session: Other".to_owned()));
         assert!(!rows.contains(&"› first session".to_owned()));
 
         chat.session_failed(&Error::internal_error(), Some("s1".into()));
-        let rows = screen_rows(&chat, 40, 12);
+        let rows = screen_rows(&chat, 40, 24);
         assert!(rows.contains(&"› first session".to_owned()), "{rows:?}");
         assert!(!rows.contains(&"• Session: Other".to_owned()));
         assert_eq!(chat.resumable_session(), Some(&SessionId::from("s1")));

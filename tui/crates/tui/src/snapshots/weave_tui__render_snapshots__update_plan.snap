@@ -3,10 +3,10 @@ source: crates/tui/src/render_snapshots.rs
 expression: screen(&mut chat)
 ---
 ── transcript ──
-• Plan
-  ✔ Reproduce the failure
-  ◐ Fix the parser
-  □ Add a regression test
+• Updated Plan
+  └ ✔ Reproduce the failure
+    □ Fix the parser
+    □ Add a regression test
 ── viewport ──
 
 

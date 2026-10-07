@@ -3,19 +3,15 @@ source: crates/tui/src/render_snapshots.rs
 expression: screen(&mut chat)
 ---
 ── transcript ──
-✓ Read Cargo.toml  read
-  └ [package]
-    name = "demo"
+• Explored
+  └ Read Cargo.toml
 
-✓ Edit lib.rs  edit
-  └ src/lib.rs (+1 -0)
-       1   fn a() {}
-       2 + fn b() {}
+• Edited src/lib.rs (+1 -0)
+    2 +fn b() {}
 
-✗ Run tests  execute
+• Run tests
   └ running 3 tests
     FAILED parser::empty
-    exit 101
 ── viewport ──
 
 

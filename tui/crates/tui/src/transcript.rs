@@ -23,9 +23,12 @@ use unicode_width::UnicodeWidthStr;
 use weave_acp_core::schema::Plan;
 
 use crate::history_cell;
-use crate::history_cell::ToolCallCell;
 use crate::streaming::StreamKind;
+use crate::streaming::render_compact;
 use crate::streaming::render_message;
+use crate::tool_call::ExploreGroup;
+use crate::tool_call::RenderContext;
+use crate::tool_call::ToolCallCell;
 use crate::tool_output::TerminalTranscripts;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::LineSource;
@@ -33,35 +36,48 @@ use crate::wrapping::LineSource;
 /// Rows one wheel notch scrolls.
 const WHEEL_ROWS: isize = 3;
 
-type Render = dyn Fn(usize) -> Vec<DisplayLine> + Send + Sync;
+type Render = dyn Fn(usize, bool) -> Vec<DisplayLine> + Send + Sync;
 
-/// One committed transcript entry, renderable at any width.
+/// A cell's rows at one width.
+type CachedLayout = (usize, Arc<Vec<DisplayLine>>);
+
+/// One committed transcript entry, renderable at any width, compactly or in full detail.
 pub struct TranscriptCell {
     render: Box<Render>,
-    cache: Mutex<Option<(usize, Arc<Vec<DisplayLine>>)>>,
+    /// The latest layout for each of the compact and detailed views, with its width.
+    cache: Mutex<[Option<CachedLayout>; 2]>,
 }
 
 impl TranscriptCell {
+    /// A cell that looks the same in the compact and detailed views.
     pub fn new(render: impl Fn(usize) -> Vec<DisplayLine> + Send + Sync + 'static) -> Self {
+        Self::with_detail(move |width, _| render(width))
+    }
+
+    /// A cell with a compact form and a detailed one (`true`), as Ctrl+T shows.
+    pub fn with_detail(
+        render: impl Fn(usize, bool) -> Vec<DisplayLine> + Send + Sync + 'static,
+    ) -> Self {
         Self {
             render: Box::new(render),
-            cache: Mutex::new(None),
+            cache: Mutex::new([None, None]),
         }
     }
 
-    /// The cell's lines at `width`, rendered once per width.
-    pub fn lines(&self, width: usize) -> Arc<Vec<DisplayLine>> {
+    /// The cell's lines at `width`, rendered once per width and view.
+    pub fn lines(&self, width: usize, detail: bool) -> Arc<Vec<DisplayLine>> {
         let mut cache = self
             .cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((cached_width, lines)) = cache.as_ref()
+        let slot = &mut cache[usize::from(detail)];
+        if let Some((cached_width, lines)) = slot.as_ref()
             && *cached_width == width
         {
             return Arc::clone(lines);
         }
-        let lines = Arc::new((self.render)(width));
-        *cache = Some((width, Arc::clone(&lines)));
+        let lines = Arc::new((self.render)(width, detail));
+        *slot = Some((width, Arc::clone(&lines)));
         lines
     }
 
@@ -84,26 +100,59 @@ impl TranscriptCell {
         Self::new(move |width| history_cell::plan(&plan, width))
     }
 
+    /// An agent message or thought; thoughts are cut to a preview in the compact view.
     pub fn message(kind: StreamKind, source: String) -> Self {
-        Self::new(move |width| render_message(kind, &source, width))
+        Self::with_detail(move |width, detail| {
+            if detail {
+                render_message(kind, &source, width)
+            } else {
+                render_compact(kind, &source, width)
+            }
+        })
     }
 
     /// A finished tool call, with the output of the terminals it embeds as it stood.
     pub fn tool_call(cell: ToolCallCell, cwd: PathBuf, terminals: TerminalTranscripts) -> Self {
-        Self::new(move |width| cell.lines(width, &cwd, &terminals))
+        Self::with_detail(move |width, detail| {
+            let cx = RenderContext {
+                cwd: &cwd,
+                terminals: &terminals,
+                detail,
+                now: None,
+            };
+            cell.lines(width, &cx)
+        })
+    }
+
+    /// Reads and searches that ran together, as one `Explored` entry.
+    pub fn explored(group: ExploreGroup, cwd: PathBuf, terminals: TerminalTranscripts) -> Self {
+        Self::with_detail(move |width, detail| {
+            let cx = RenderContext {
+                cwd: &cwd,
+                terminals: &terminals,
+                detail,
+                now: None,
+            };
+            group.lines(width, &cx, false)
+        })
+    }
+
+    /// `Worked for …` after a turn.
+    pub fn turn_summary(elapsed: std::time::Duration, finished_at: String) -> Self {
+        Self::new(move |width| history_cell::turn_summary(elapsed, &finished_at, width))
     }
 
     pub fn header(
         agent: String,
         agent_version: Option<String>,
-        cwd: PathBuf,
+        directory: String,
         settings: Option<String>,
     ) -> Self {
         Self::new(move |width| {
             let header = history_cell::SessionHeader {
                 agent: &agent,
                 agent_version: agent_version.as_deref(),
-                cwd: &cwd,
+                directory: &directory,
                 settings: settings.as_deref(),
             };
             history_cell::session_header(&header, width)
@@ -286,6 +335,10 @@ impl Layout {
 
 pub struct TranscriptView {
     cells: Vec<TranscriptCell>,
+    /// Showing every cell in full (Ctrl+T) rather than compactly.
+    detailed: bool,
+    /// Where the other view was, to return to when switching back.
+    other_position: Option<ViewPosition>,
     /// Cells kept when the transcript is cleared for another session: the startup header.
     pinned: usize,
     position: ViewPosition,
@@ -300,6 +353,8 @@ impl TranscriptView {
     pub fn new() -> Self {
         Self {
             cells: Vec::new(),
+            detailed: false,
+            other_position: None,
             pinned: 0,
             position: ViewPosition::Latest,
             unseen: false,
@@ -312,6 +367,27 @@ impl TranscriptView {
     pub fn push(&mut self, cell: TranscriptCell) {
         self.cells.push(cell);
         self.note_activity();
+    }
+
+    pub fn is_detailed(&self) -> bool {
+        self.detailed
+    }
+
+    /// Switch between the compact and detailed views, each keeping its own place, as Codex's
+    /// transcript presentation does.
+    pub fn set_detailed(&mut self, detailed: bool) {
+        if self.detailed == detailed {
+            return;
+        }
+        self.detailed = detailed;
+        self.selection = None;
+        self.drag_from = None;
+        let previous = self.position;
+        self.position = self.other_position.take().unwrap_or(ViewPosition::Latest);
+        self.other_position = Some(previous);
+        if self.position == ViewPosition::Latest {
+            self.unseen = false;
+        }
     }
 
     /// Keep the cells so far, such as the header, when the transcript is cleared.
@@ -484,7 +560,7 @@ impl TranscriptView {
         let mut row = 0;
         for (index, cell) in self.cells.iter().enumerate() {
             starts.push(row);
-            row += usize::from(index > 0) + cell.lines(width).len();
+            row += usize::from(index > 0) + cell.lines(width, self.detailed).len();
         }
         Layout {
             starts,
@@ -523,7 +599,7 @@ impl TranscriptView {
             };
             let start = layout.starts[index];
             let separator = usize::from(index > 0);
-            let lines = cell.lines(width);
+            let lines = cell.lines(width, self.detailed);
             while row < end && row < start + separator + lines.len() {
                 let offset = row - start;
                 rows.push(if offset < separator {
@@ -560,6 +636,10 @@ impl TranscriptView {
         }));
         let rows = self.rows(&layout, width, live, top, height);
         for (y, row) in (area.y..).zip(&rows) {
+            // A row with a background, such as a sent prompt's, fills the whole width.
+            if let Some(bg) = row.line.style.bg {
+                buf.set_style(Rect::new(area.x, y, area.width, 1), Style::default().bg(bg));
+            }
             buf.set_line(area.x, y, &row.line, area.width);
         }
         let Some(selection) = self.selection.filter(|selection| selection.width == width) else {
@@ -631,9 +711,9 @@ mod tests {
                 width,
             )
         });
-        let wide = cell.lines(80).len();
-        cell.lines(80);
-        let narrow = cell.lines(20).len();
+        let wide = cell.lines(80, false).len();
+        cell.lines(80, false);
+        let narrow = cell.lines(20, false).len();
         assert_eq!(renders.load(Ordering::SeqCst), 2);
         assert!(narrow > wide);
     }
@@ -743,12 +823,12 @@ mod tests {
             PathBuf::from("/repo"),
             TerminalTranscripts::new(),
         ));
-        assert_eq!(draw(&view, 4)[2], "       1 + hello");
+        assert_eq!(draw(&view, 4)[1], "    1 +hello");
 
         let left = MouseButton::Left;
-        view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 2), &[]);
-        view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 3), &[]);
-        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 3), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 1), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 2), &[]);
+        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 2), &[]);
         assert_eq!(copied.as_deref(), Some("hello\nworld"));
     }
 }

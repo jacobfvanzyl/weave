@@ -27,6 +27,7 @@ mod streaming;
 mod style;
 #[cfg(test)]
 mod test_backend;
+mod tool_call;
 mod tool_output;
 mod transcript;
 mod tui;

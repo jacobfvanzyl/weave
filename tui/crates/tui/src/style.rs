@@ -48,6 +48,69 @@ fn secondary_for(palette: &Palette) -> Style {
     }
 }
 
+/// A diff row's kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffKind {
+    Insert,
+    Delete,
+    Context,
+}
+
+/// Codex's diff tints: muted on dark backgrounds, GitHub's pastels on light ones.
+const DIFF_INSERT_DARK: Rgb = (33, 58, 43);
+const DIFF_DELETE_DARK: Rgb = (74, 34, 29);
+const DIFF_INSERT_LIGHT: Rgb = (218, 251, 225);
+const DIFF_DELETE_LIGHT: Rgb = (255, 235, 233);
+
+/// The fill behind a whole diff row; none for context, or where only 16 colors show.
+pub fn diff_line_background(kind: DiffKind) -> Style {
+    diff_background_for(kind, &palette::current())
+        .map_or_else(Style::default, |bg| Style::default().bg(bg))
+}
+
+fn diff_background_for(kind: DiffKind, palette: &Palette) -> Option<Color> {
+    let light = palette.is_light();
+    match (kind, palette.level, light) {
+        (DiffKind::Context, ..) => None,
+        (_, palette::ColorLevel::Ansi256, false) => Some(palette::indexed(match kind {
+            DiffKind::Insert => 22,
+            _ => 52,
+        })),
+        (_, palette::ColorLevel::Ansi256, true) => Some(palette::indexed(match kind {
+            DiffKind::Insert => 194,
+            _ => 224,
+        })),
+        (DiffKind::Insert, _, false) => palette.color(DIFF_INSERT_DARK),
+        (DiffKind::Delete, _, false) => palette.color(DIFF_DELETE_DARK),
+        (DiffKind::Insert, _, true) => palette.color(DIFF_INSERT_LIGHT),
+        (DiffKind::Delete, _, true) => palette.color(DIFF_DELETE_LIGHT),
+    }
+}
+
+/// Uncolored diff text: green or red, except on a light tint, where the default reads better.
+pub fn diff_text(kind: DiffKind) -> Style {
+    let palette = palette::current();
+    let tinted_light = palette.is_light() && diff_background_for(kind, &palette).is_some();
+    match kind {
+        DiffKind::Context => Style::default(),
+        _ if tinted_light => Style::default(),
+        DiffKind::Insert => Style::default().fg(Color::Green),
+        DiffKind::Delete => Style::default().fg(Color::Red),
+    }
+}
+
+pub fn diff_sign(kind: DiffKind) -> Style {
+    match kind {
+        DiffKind::Insert => Style::default().fg(Color::Green),
+        DiffKind::Delete => Style::default().fg(Color::Red),
+        DiffKind::Context => Style::default(),
+    }
+}
+
+pub fn diff_gutter(_kind: DiffKind) -> Style {
+    dim()
+}
+
 /// The composer's fill: 12% white over a dark background, 4% black over a light one.
 pub fn composer() -> Style {
     composer_for(&palette::current())

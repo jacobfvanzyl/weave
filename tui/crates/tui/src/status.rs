@@ -62,6 +62,11 @@ fn colors(palette: &Palette) -> Option<(palette::Rgb, palette::Rgb)> {
     }
 }
 
+/// The bullet of something still running: pulsing, or blinking without known colors.
+pub fn activity_bullet(elapsed: Duration) -> Span<'static> {
+    bullet(elapsed, &palette::current())
+}
+
 fn bullet(elapsed: Duration, palette: &Palette) -> Span<'static> {
     match colors(palette) {
         Some((fg, bg)) => {

@@ -14,7 +14,9 @@ use weave_acp_core::schema::MessageId;
 
 use crate::history_cell;
 use crate::history_cell::dim;
+use crate::markdown::commit_boundary;
 use crate::markdown::render_markdown;
+use crate::tool_call::TRANSCRIPT_HINT;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::plain_lines;
 
@@ -60,11 +62,12 @@ impl MessageStream {
         self.source.push_str(text);
     }
 
-    /// Lines for every complete source line that has not been committed yet.
+    /// Lines for every complete source line that has not been committed yet (holding back a
+    /// table still arriving; see [`commit_boundary`]).
     pub fn take_complete(&mut self) -> Vec<Line<'static>> {
-        match self.source.rfind('\n') {
+        match commit_boundary(&self.source) {
             Some(end) => {
-                let lines = self.render(&self.source[..=end]);
+                let lines = self.render(&self.source[..end]);
                 self.take_from(lines)
             }
             None => Vec::new(),
@@ -119,7 +122,7 @@ pub fn render_message(kind: StreamKind, source: &str, width: usize) -> Vec<Displ
     }
     let body = render_markdown(source, width.saturating_sub(2));
     let (marker, body_style) = match kind {
-        StreamKind::Agent => (Style::default(), Style::default()),
+        StreamKind::Agent => (dim(), Style::default()),
         StreamKind::Thought | StreamKind::User => (dim(), dim().add_modifier(Modifier::ITALIC)),
     };
     body.into_iter()
@@ -135,6 +138,25 @@ pub fn render_message(kind: StreamKind, source: &str, width: usize) -> Vec<Displ
             row.prefixed(&[Span::styled(prefix, marker)])
         })
         .collect()
+}
+
+/// Rows of a thought the compact transcript shows. Codex shows short reasoning summaries in
+/// full; ACP agents stream whole thoughts, so they are cut to a preview there.
+pub const THOUGHT_PREVIEW_ROWS: usize = 3;
+
+/// A message as the compact transcript shows it: thoughts cut to their first rows.
+pub fn render_compact(kind: StreamKind, source: &str, width: usize) -> Vec<DisplayLine> {
+    let mut lines = render_message(kind, source, width);
+    if kind == StreamKind::Thought && lines.len() > THOUGHT_PREVIEW_ROWS {
+        let hidden = lines.len() - THOUGHT_PREVIEW_ROWS;
+        lines.truncate(THOUGHT_PREVIEW_ROWS);
+        let noun = if hidden == 1 { "line" } else { "lines" };
+        lines.push(DisplayLine::plain(Line::from(Span::styled(
+            format!("  +{hidden} {noun} ({TRANSCRIPT_HINT})"),
+            dim(),
+        ))));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -166,7 +188,11 @@ mod tests {
     fn replayed_user_messages_render_as_prompts() {
         let mut stream = MessageStream::new(StreamKind::User, 40, None);
         stream.push("fix the build\nplease");
-        assert_eq!(text(&stream.finish()), ["› fix the build", "  please"]);
+        // A padded block, as sent prompts are.
+        assert_eq!(
+            text(&stream.finish()),
+            ["", "› fix the build", "  please", ""]
+        );
     }
 
     #[test]

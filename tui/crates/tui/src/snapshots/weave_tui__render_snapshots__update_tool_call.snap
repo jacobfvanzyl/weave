@@ -6,10 +6,10 @@ expression: screen(&mut chat)
 
 ── viewport ──
 
-◐ Search for TODOs  search
-  └ src
+• Exploring
+  └ Search for TODOs
 
-○ Edit main.rs  edit
+• Editing main.rs
 
 
 › Ask Agent to do anything

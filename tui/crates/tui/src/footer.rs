@@ -263,9 +263,12 @@ pub fn truncate(text: &str, width: usize) -> String {
     format!("{kept}…")
 }
 
+/// A titled column of keys and what they do.
+type ShortcutColumn = (&'static str, &'static [(&'static str, &'static str)]);
+
 /// The `?` panel: weave's keys in three columns, as Codex lays out its shortcuts.
 pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
-    let columns: [(&str, &[(&str, &str)]); 3] = [
+    let columns: [ShortcutColumn; 3] = [
         (
             "Compose",
             &[
@@ -302,7 +305,7 @@ pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
             .max()
             .unwrap_or_default()
     };
-    let column_width = |(title, entries): &(&str, &[(&str, &str)])| {
+    let column_width = |(title, entries): &ShortcutColumn| {
         let entries_width = entries
             .iter()
             .map(|(_, label)| key_width(entries) + 2 + label.width())
@@ -312,7 +315,7 @@ pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
     };
     // Narrow screens stack the columns.
     let side_by_side = INDENT + columns.iter().map(column_width).sum::<usize>() <= width;
-    let groups: Vec<Vec<&(&str, &[(&str, &str)])>> = if side_by_side {
+    let groups: Vec<Vec<&ShortcutColumn>> = if side_by_side {
         vec![columns.iter().collect()]
     } else {
         columns.iter().map(|column| vec![column]).collect()
@@ -332,7 +335,7 @@ pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
             let mut spans = vec![Span::raw(" ".repeat(INDENT))];
             for column in &group {
                 let (title, entries) = **column;
-                let width = column_width(*column);
+                let width = column_width(column);
                 let cell: Vec<Span<'static>> = if row == 0 {
                     vec![Span::styled(title.to_owned(), secondary())]
                 } else if let Some((key, label)) = entries.get(row - 1) {

@@ -10,9 +10,7 @@ expression: screen(&mut chat)
   - missing ; on line 12
   - see the docs (https://doc.rust-lang.org)
 
-  ```rust
   let x = 1;
-  ```
 ── viewport ──
 
 
