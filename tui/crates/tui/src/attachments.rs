@@ -79,13 +79,29 @@ pub fn prompt_blocks(
     (blocks, attachments)
 }
 
-/// `@token`s at word starts, without trailing punctuation.
+/// `@token`s at word starts, without trailing punctuation; `@"quoted paths"` may have spaces.
 fn mentions(text: &str) -> Vec<&str> {
-    text.split_whitespace()
-        .filter_map(|word| word.strip_prefix('@'))
-        .map(|mention| mention.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '"', '\'']))
-        .filter(|mention| !mention.is_empty())
-        .collect()
+    let mut found = Vec::new();
+    let mut previous = None;
+    for (index, ch) in text.char_indices() {
+        let at_word_start = previous.is_none_or(char::is_whitespace);
+        previous = Some(ch);
+        if ch != '@' || !at_word_start {
+            continue;
+        }
+        let rest = &text[index + 1..];
+        let mention = match rest.strip_prefix('"') {
+            Some(quoted) => quoted.find('"').map(|end| &quoted[..end]),
+            None => {
+                let word = rest.split(char::is_whitespace).next().unwrap_or_default();
+                Some(word.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '"', '\'']))
+            }
+        };
+        if let Some(mention) = mention.filter(|mention| !mention.is_empty()) {
+            found.push(mention);
+        }
+    }
+    found
 }
 
 fn attach(path: &Path, capabilities: &PromptCapabilities) -> Option<(ContentBlock, &'static str)> {
@@ -214,6 +230,14 @@ mod tests {
         assert_eq!(
             kinds(&blocks),
             ["text", "resource_link", "resource_link", "resource_link"]
+        );
+    }
+
+    #[test]
+    fn quoted_mentions_may_have_spaces() {
+        assert_eq!(
+            mentions("see @\"my notes.md\" and @a.rs, not email@x.dev"),
+            ["my notes.md", "a.rs"]
         );
     }
 

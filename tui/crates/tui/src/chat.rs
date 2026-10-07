@@ -54,6 +54,9 @@ use crate::composer::ComposerAction;
 use crate::conventions::thought_heading;
 use crate::elicitation::ElicitationOutcome;
 use crate::elicitation::ElicitationView;
+use crate::file_popup;
+use crate::file_popup::FileIndex;
+use crate::file_popup::FilePopup;
 use crate::footer;
 use crate::footer::FooterMode;
 use crate::footer::FooterProps;
@@ -228,6 +231,9 @@ pub struct ChatWidget {
     shell_runs: usize,
     /// Images pasted into prompts, `[image 1]` first.
     images: Vec<PathBuf>,
+    /// The session directory's files, for the `@` picker.
+    files: FileIndex,
+    file_popup: FilePopup,
     /// The `?` shortcuts panel is open.
     shortcuts_open: bool,
     /// What the footer's status line shows.
@@ -236,6 +242,7 @@ pub struct ChatWidget {
 
 impl ChatWidget {
     pub fn new(agent_name: String, cwd: PathBuf, abilities: SessionAbilities, width: u16) -> Self {
+        let files = FileIndex::new(cwd.clone());
         Self {
             agent_name,
             cwd,
@@ -276,6 +283,8 @@ impl ChatWidget {
             last_reply: None,
             shell_runs: 0,
             images: Vec::new(),
+            files,
+            file_popup: FilePopup::default(),
             shortcuts_open: false,
             status_items: StatusItem::DEFAULT.to_vec(),
         }
@@ -456,7 +465,9 @@ impl ChatWidget {
 
     /// Whether the viewport changes over time on its own (the status timer and shimmer).
     pub fn is_animating(&self) -> bool {
-        self.turn.is_some() || self.copied.is_some()
+        // While the picker waits for the index, frames keep coming to show it when ready.
+        let indexing = self.files.is_indexing() && self.mention_query().is_some();
+        self.turn.is_some() || self.copied.is_some() || indexing
     }
 
     /// The window title, as Codex sets it: activity, the session's title, and the project.
@@ -1102,6 +1113,9 @@ impl ChatWidget {
         if ctrl && key.code == KeyCode::Char('g') {
             return vec![AppCommand::EditPrompt(self.composer.text().to_owned())];
         }
+        if self.handle_file_popup_key(key) {
+            return Vec::new();
+        }
         if let Some(commands) = self.handle_popup_key(key) {
             return commands;
         }
@@ -1188,6 +1202,51 @@ impl ChatWidget {
         }
     }
 
+    /// The `@` mention being typed: where it starts in the draft and what follows the `@`.
+    fn mention_query(&self) -> Option<(usize, String)> {
+        if self.composer.is_shell() || self.has_overlay() {
+            return None;
+        }
+        let (start, word) = self.composer.word_before_cursor();
+        let query = word.strip_prefix('@')?;
+        let query = query.strip_prefix('"').unwrap_or(query);
+        (!self.file_popup.is_dismissed(start, query)).then(|| (start, query.to_owned()))
+    }
+
+    /// The file picker's matches while an `@` mention is being typed: `Some(None)` while the
+    /// files are still being indexed.
+    fn file_matches(&self) -> Option<Option<Vec<String>>> {
+        let (_, query) = self.mention_query()?;
+        self.files.ensure();
+        Some(self.files.search(&query, file_popup::VISIBLE_ROWS))
+    }
+
+    /// Keys the file picker claims while open: selection, completion, and dismissal.
+    fn handle_file_popup_key(&mut self, key: KeyEvent) -> bool {
+        let Some((start, query)) = self.mention_query() else {
+            return false;
+        };
+        let matches = self.files.search(&query, file_popup::VISIBLE_ROWS);
+        let count = matches.as_ref().map_or(0, Vec::len);
+        let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        match key.code {
+            KeyCode::Up => self.file_popup.move_selection(-1, count),
+            KeyCode::Down => self.file_popup.move_selection(1, count),
+            KeyCode::Esc => self.file_popup.dismiss(start, &query),
+            KeyCode::Tab | KeyCode::Enter if plain && count > 0 => {
+                let chosen = matches
+                    .as_ref()
+                    .and_then(|matches| matches.get(self.file_popup.selected()));
+                if let Some(path) = chosen {
+                    self.composer
+                        .replace_before_cursor(start, &file_popup::mention_for(path));
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Keys the command popup claims while open: selection, completion, and dismissal.
     fn handle_popup_key(&mut self, key: KeyEvent) -> Option<Vec<AppCommand>> {
         let text = self.composer.text().to_owned();
@@ -1240,6 +1299,9 @@ impl ChatWidget {
     }
 
     fn sync_popup(&mut self) {
+        if let Some((_, query)) = self.mention_query() {
+            self.file_popup.sync(&query);
+        }
         let text = self.composer.text().to_owned();
         let count = self.popup.matches(&text, &self.commands).len();
         self.popup.sync(&text, count);
@@ -1689,6 +1751,9 @@ impl ChatWidget {
         if self.has_overlay() {
             return 1;
         }
+        if let Some(matches) = self.file_matches() {
+            return FilePopup::height(matches.as_deref());
+        }
         CommandPopup::height(self.popup_matches().len()).max(1)
     }
 
@@ -1874,7 +1939,9 @@ impl ChatWidget {
             )
         };
         let matches = self.popup_matches();
-        if !self.has_overlay() && !matches.is_empty() {
+        if let Some(files) = self.file_matches() {
+            self.file_popup.render(files.as_deref(), footer_area, buf);
+        } else if !self.has_overlay() && !matches.is_empty() {
             self.popup.render(&matches, footer_area, buf);
         } else {
             buf.set_line(
@@ -2757,5 +2824,37 @@ mod tests {
             chat.prompt_images("what is [image 2]"),
             [("image 2".to_owned(), PathBuf::from("/tmp/b.png"))]
         );
+    }
+
+    #[test]
+    fn at_opens_a_file_picker_that_completes_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("src")).expect("src");
+        std::fs::write(dir.path().join("src/parser.rs"), "x").expect("file");
+        std::fs::write(dir.path().join("README.md"), "x").expect("file");
+        let abilities = SessionAbilities {
+            list: true,
+            delete: true,
+        };
+        let mut chat = ChatWidget::new("Agent".into(), dir.path().to_path_buf(), abilities, 60);
+        chat.handle_paste("look at @pars");
+        // The index builds in the background.
+        let shown = loop {
+            let rows = rows(&chat, 60);
+            if !rows.iter().any(|row| row.contains("Searching files")) {
+                break rows;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(
+            shown.iter().any(|row| row == "› src/parser.rs"),
+            "{shown:?}"
+        );
+        chat.handle_key(key(KeyCode::Tab));
+        assert_eq!(chat.composer.text(), "look at @src/parser.rs ");
+        // Esc leaves the mention as typed.
+        chat.handle_paste("@READ");
+        chat.handle_key(key(KeyCode::Esc));
+        assert!(!rows(&chat, 60).iter().any(|row| row.contains("README.md")));
     }
 }

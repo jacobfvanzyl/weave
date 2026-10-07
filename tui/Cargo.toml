@@ -21,7 +21,10 @@ clap = { version = "4", features = ["derive"] }
 crossterm = "0.29.0"
 diffy = "0.4.2"
 futures = "0.3"
+# Codex's file search: ripgrep's walker and nucleo's fuzzy matcher.
+ignore = "0.4.23"
 insta = "1.46.3"
+nucleo-matcher = "0.3"
 libc = "0.2"
 pretty_assertions = "1"
 pulldown-cmark = { version = "0.10", default-features = false }

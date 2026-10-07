@@ -12,6 +12,7 @@ mod composer;
 mod conventions;
 mod custom_terminal;
 mod elicitation;
+mod file_popup;
 mod footer;
 mod highlight;
 mod history_cell;

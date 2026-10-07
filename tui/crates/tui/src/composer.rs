@@ -63,6 +63,21 @@ impl Composer {
         self.shell = false;
     }
 
+    /// The whitespace-delimited word ending at the cursor, and where it starts.
+    pub fn word_before_cursor(&self) -> (usize, &str) {
+        let before = &self.text[..self.cursor];
+        let start = before.rfind(char::is_whitespace).map_or(0, |index| {
+            index + before[index..].chars().next().map_or(1, char::len_utf8)
+        });
+        (start, &before[start..])
+    }
+
+    /// Replace the text from `start` to the cursor with `text`.
+    pub fn replace_before_cursor(&mut self, start: usize, text: &str) {
+        self.text.replace_range(start..self.cursor, text);
+        self.cursor = start + text.len();
+    }
+
     /// The character just before the cursor.
     pub fn char_before_cursor(&self) -> Option<char> {
         self.text[..self.cursor].chars().next_back()

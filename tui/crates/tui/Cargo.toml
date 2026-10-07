@@ -18,7 +18,9 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 futures = { workspace = true }
+ignore = { workspace = true }
 diffy = { workspace = true }
+nucleo-matcher = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true, features = ["unstable-backend-writer"] }
 regex-lite = { workspace = true }
