@@ -273,7 +273,10 @@ mod tests {
             Some(Decision::Select("always".into()))
         );
         let (lines, selected) = view.lines(60);
-        let text: Vec<String> = lines.iter().map(|line| line.to_string().trim_end().to_owned()).collect();
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_owned())
+            .collect();
         assert_eq!(
             text,
             [

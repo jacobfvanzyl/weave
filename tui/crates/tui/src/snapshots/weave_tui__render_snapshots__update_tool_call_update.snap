@@ -8,11 +8,11 @@ expression: screen(&mut chat)
 
 • Edited src/lib.rs (+1 -0)
     2 +fn b() {}
+── viewport ──
 
 • Run tests
   └ running 3 tests
     FAILED parser::empty
-── viewport ──
 
 
 › Ask Agent to do anything

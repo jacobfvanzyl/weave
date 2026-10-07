@@ -69,7 +69,11 @@ fn selection_for(palette: &Palette) -> Style {
     } else {
         SELECTION_DARK
     };
-    match (palette.bg, palette.color(fill), palette.color(SELECTION_TEXT)) {
+    match (
+        palette.bg,
+        palette.color(fill),
+        palette.color(SELECTION_TEXT),
+    ) {
         (Some(_), Some(fill), Some(text)) => Style::default()
             .bg(fill)
             .fg(text)

@@ -324,7 +324,10 @@ impl ChatWidget {
             let title = self.has_history.then_some("new session");
             self.begin_session(opened.session_id.clone(), title);
         }
+        // A loaded session's replay is over: what it finished settles into the transcript.
         self.end_stream();
+        self.commit_finished_tool_calls();
+        self.flush_exploring();
         self.opening = false;
         self.stashed = None;
         self.resumable |= opened.reopened.is_some();
@@ -590,15 +593,19 @@ impl ChatWidget {
                 let cell = ToolCallCell::new(call);
                 match self.tool_calls.iter_mut().find(|live| live.id == cell.id) {
                     Some(live) => *live = cell,
-                    None => self.tool_calls.push(cell),
+                    None => {
+                        // A finished call stays live until the next entry, as Codex keeps its
+                        // active cell, so updates trailing its completion still reach it: a
+                        // replay sends the completed call before its output.
+                        self.commit_finished_tool_calls();
+                        self.tool_calls.push(cell);
+                    }
                 }
-                self.commit_finished_tool_calls();
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 self.end_stream();
                 self.note_activity();
                 self.apply_tool_call_update(update.tool_call_id, &update.fields);
-                self.commit_finished_tool_calls();
             }
             SessionUpdate::Plan(plan) => {
                 self.end_stream();
@@ -1075,6 +1082,9 @@ impl ChatWidget {
     }
 
     fn start_prompt(&mut self, text: String) -> Vec<AppCommand> {
+        // Anything still live belongs to what came before, such as a replay the agent sent
+        // after answering `session/load`; the new turn's output must not join it.
+        self.finish_live_cells();
         self.push_cell(TranscriptCell::user(&text));
         self.resumable = true;
         // Sending a message returns to the newest output, where its reply will appear.
@@ -1186,6 +1196,7 @@ impl ChatWidget {
             return;
         }
         if first {
+            self.commit_finished_tool_calls();
             self.flush_exploring();
             self.push_lines(lines);
         } else {
@@ -1218,7 +1229,10 @@ impl ChatWidget {
         calls
             .iter()
             .flat_map(ToolCallCell::terminal_ids)
-            .filter_map(|id| Some((id.clone(), self.terminals.get(id)?.clone())))
+            .filter_map(|id| {
+                let transcript = self.terminals.get(&id)?.clone();
+                Some((id, transcript))
+            })
             .collect()
     }
 
@@ -1245,7 +1259,9 @@ impl ChatWidget {
         self.flush_exploring();
     }
 
+    /// Commit `cell` after anything finished that came before it.
     fn push_cell(&mut self, cell: TranscriptCell) {
+        self.commit_finished_tool_calls();
         self.flush_exploring();
         self.push_cell_after_exploring(cell);
     }
@@ -1323,7 +1339,8 @@ impl ChatWidget {
                 group.push(cell.clone());
             }
             lines.push(DisplayLine::default());
-            lines.extend(group.lines(width, &cx, true));
+            // Outside a turn (a replay the agent sent late) nothing more is coming.
+            lines.extend(group.lines(width, &cx, self.turn.is_some()));
         }
         for cell in others {
             lines.push(DisplayLine::default());
@@ -1886,7 +1903,13 @@ mod tests {
             "t1",
             ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
         ))));
-        assert_eq!(history(&mut chat), ["", "• Run tests", "  └ ok 1"]);
+        // Finished, it stays live until the next entry, then commits with its output.
+        assert!(history(&mut chat).is_empty());
+        chat.handle_agent_event(text_chunk("It failed.\n"));
+        assert_eq!(
+            history(&mut chat),
+            ["", "• Run tests", "  └ ok 1", "", "• It failed."]
+        );
     }
 
     #[test]
@@ -2092,13 +2115,19 @@ mod tests {
             )
         };
         chat.handle_agent_event(update(finished()));
-        chat.take_history();
-
         chat.begin_session("s2".into(), None);
+        assert_eq!(history(&mut chat), ["• Run it"]);
+
         chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
             "s2",
             finished(),
         )));
+        chat.session_ready(OpenedSession {
+            session_id: "s2".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Loaded),
+        });
         assert_eq!(history(&mut chat), ["", "• Run it"]);
     }
 
@@ -2391,5 +2420,63 @@ mod tests {
         assert!(chat.composer.is_empty());
         chat.handle_key(key(KeyCode::Esc));
         assert!(!chat.pager_open());
+    }
+
+    #[test]
+    fn output_reported_under_the_calls_own_id_shows_when_replayed() {
+        // As codex-acp replays a command: the completed call with terminal content keyed by
+        // its own id, then its output and exit through the terminal extension, which the
+        // connection turns into terminal events.
+        let mut chat = chat();
+        chat.handle_agent_event(update(SessionUpdate::ToolCall(
+            ToolCall::new("exec-1", "Run tests")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::Completed)
+                .raw_input(serde_json::json!({"command": ["/bin/zsh", "-lc", "cargo test"]}))
+                .content(vec![ToolCallContent::Terminal(Terminal::new("exec-1"))]),
+        )));
+        chat.handle_agent_event(AgentEvent::TerminalOutput {
+            terminal_id: "exec-1".into(),
+            text: "test result: ok\n".into(),
+        });
+        chat.handle_agent_event(AgentEvent::TerminalExited {
+            terminal_id: "exec-1".into(),
+            status: TerminalExitStatus::new().exit_code(0),
+        });
+        chat.handle_agent_event(update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "exec-1",
+            ToolCallUpdateFields::new(),
+        ))));
+        // The next entry commits it, output included.
+        chat.handle_agent_event(text_chunk("Tests pass."));
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        let history = history(&mut chat);
+        assert_eq!(
+            history[..4],
+            [
+                "• Ran cargo test",
+                "  └ test result: ok",
+                "",
+                "• Tests pass."
+            ],
+            "{history:?}"
+        );
+    }
+
+    #[test]
+    fn a_late_replay_ends_before_the_next_prompt() {
+        let mut chat = chat();
+        chat.take_history();
+        // Replayed after the session opened, with no turn running.
+        chat.handle_agent_event(text_chunk("Earlier answer."));
+        submit(&mut chat, "next");
+        chat.handle_agent_event(text_chunk("New answer."));
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        let history = history(&mut chat);
+        assert!(
+            history.contains(&"• Earlier answer.".to_owned()),
+            "{history:?}"
+        );
+        assert!(history.contains(&"• New answer.".to_owned()), "{history:?}");
     }
 }

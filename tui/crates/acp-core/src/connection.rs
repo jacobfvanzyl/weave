@@ -26,6 +26,7 @@ use agent_client_protocol::schema::v1::ElicitationMode;
 use agent_client_protocol::schema::v1::ElicitationUrlCapabilities;
 use agent_client_protocol::schema::v1::FileSystemCapabilities;
 use agent_client_protocol::schema::v1::KillTerminalRequest;
+use agent_client_protocol::schema::v1::Meta;
 use agent_client_protocol::schema::v1::PromptResponse;
 use agent_client_protocol::schema::v1::ReadTextFileRequest;
 use agent_client_protocol::schema::v1::ReleaseTerminalRequest;
@@ -49,6 +50,7 @@ use crate::PermissionRequest;
 use crate::ProtocolTrace;
 use crate::RequestKey;
 use crate::fs;
+use crate::terminal_meta;
 use crate::terminals::Terminals;
 
 /// Everything an agent sends, in the order the connection received it.
@@ -70,7 +72,8 @@ pub enum AgentEvent {
         session_id: SessionId,
         result: Result<PromptResponse, Error>,
     },
-    /// New output from a command the agent started with `terminal/create`.
+    /// New output from a command the agent started with `terminal/create`, or from one it
+    /// runs itself and reports through the terminal output extension (see `terminal_meta`).
     TerminalOutput {
         terminal_id: TerminalId,
         text: String,
@@ -131,7 +134,15 @@ impl ClientOptions {
                         .boolean(BooleanConfigOptionCapabilities::new()),
                 ),
             )
+            .meta(terminal_output_meta())
     }
+}
+
+/// `_meta` asking agents for their own commands' output as appended chunks.
+fn terminal_output_meta() -> Meta {
+    let mut meta = Meta::new();
+    meta.insert(terminal_meta::CAPABILITY.to_owned(), true.into());
+    meta
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -223,6 +234,11 @@ impl AgentConnection {
             .name("weave")
             .on_receive_notification(
                 async move |notification: SessionNotification, _cx| {
+                    // Output of commands the agent runs itself arrives in `_meta`; deliver it
+                    // first, so a tool call this update finishes already has it.
+                    for event in terminal_meta::terminal_events(&notification.update) {
+                        let _ = notifications.send(event);
+                    }
                     let _ = notifications.send(AgentEvent::SessionUpdate(notification));
                     Ok(())
                 },

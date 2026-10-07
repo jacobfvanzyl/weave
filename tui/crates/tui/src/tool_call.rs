@@ -123,11 +123,23 @@ impl ToolCallCell {
     }
 
     /// The terminals whose output this call embeds.
-    pub fn terminal_ids(&self) -> impl Iterator<Item = &TerminalId> {
-        self.content.iter().filter_map(|content| match content {
-            ToolCallContent::Terminal(terminal) => Some(&terminal.terminal_id),
-            _ => None,
-        })
+    /// The terminals this call embeds, and its own id, under which agents report the output
+    /// of commands they show without a terminal (see `weave_acp_core`'s terminal extension).
+    pub fn terminal_ids(&self) -> Vec<TerminalId> {
+        let mut ids: Vec<TerminalId> = self
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                ToolCallContent::Terminal(terminal) => Some(terminal.terminal_id.clone()),
+                _ => None,
+            })
+            .collect();
+        ids.push(self.own_terminal());
+        ids
+    }
+
+    fn own_terminal(&self) -> TerminalId {
+        TerminalId::new(self.id.to_string())
     }
 
     pub fn is_finished(&self) -> bool {
@@ -368,6 +380,14 @@ impl ToolCallCell {
                 _ => output.lines.push("[unsupported tool output]".to_owned()),
             }
         }
+        // Output reported under the call's own id, with no terminal content to show it in.
+        let embeds_own = self.content.iter().any(|content| {
+            matches!(content, ToolCallContent::Terminal(terminal) if terminal.terminal_id == self.own_terminal())
+        });
+        if !embeds_own && let Some(transcript) = terminals.get(&self.own_terminal()) {
+            output.lines.extend(terminal_lines(transcript.raw()));
+            output.exit = output.exit.or_else(|| transcript.exit_line());
+        }
         output
     }
 
@@ -466,7 +486,11 @@ impl ToolCallCell {
                 Some(command) => {
                     let mut detail = highlight::shell_lines(&command);
                     for (index, line) in detail.iter_mut().enumerate() {
-                        let lead = if index == 0 { "$ ".magenta() } else { Span::raw("  ") };
+                        let lead = if index == 0 {
+                            "$ ".magenta()
+                        } else {
+                            Span::raw("  ")
+                        };
                         line.spans.insert(0, lead);
                     }
                     Subject {

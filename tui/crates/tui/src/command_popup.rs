@@ -119,11 +119,7 @@ impl CommandPopup {
             let selected = index == self.selected;
             let style = Style::default().add_modifier(Modifier::BOLD);
             let marker = if selected { "› " } else { "  " };
-            let description = if selected {
-                Style::default()
-            } else {
-                dim()
-            };
+            let description = if selected { Style::default() } else { dim() };
             let mut line = Line::from(vec![
                 Span::styled(format!("{marker}/{:<name_width$}", command.name), style),
                 Span::styled(format!(" {}", command.description), description),

@@ -64,8 +64,8 @@ use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
 use crate::elicitation::ElicitationView;
 use crate::permission::PermissionView;
-use crate::tool_call::ToolCallCell;
 use crate::session::OpenedSession;
+use crate::tool_call::ToolCallCell;
 
 const WIDTH: u16 = 72;
 

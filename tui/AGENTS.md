@@ -33,7 +33,11 @@ crate, pinned exactly because 3.x is new.
 | `crates/fake-agent` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. |
 
 Keep protocol behavior in `acp-core`. Client services (`fs/*`, `terminal/*`) live there
-and are advertised per `ClientOptions`; never advertise one that isn't answered. Real
+and are advertised per `ClientOptions`; never advertise one that isn't answered.
+`acp-core` also declares and handles the terminal output extension
+(`_meta.terminal_output_delta`, Zed's convention that codex-acp and claude-agent-acp use for
+commands they run themselves): `terminal_meta.rs` turns its chunks and exits into the same
+terminal events as client terminals, including in replayed sessions. Real
 adapters may not call them (Claude's runs its own tools), so the fake agent is what
 exercises them: integration tests connect it in-process over `Channel::duplex`, and its
 prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`) drive the
