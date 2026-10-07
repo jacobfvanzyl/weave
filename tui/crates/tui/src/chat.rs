@@ -69,6 +69,8 @@ use crate::tool_output::TerminalTranscripts;
 use crate::transcript::Reading;
 use crate::transcript::TranscriptCell;
 use crate::transcript::TranscriptView;
+use crate::wrapping::DisplayLine;
+use crate::wrapping::plain_lines;
 
 /// Footer width given to the session title before it is shortened.
 const TITLE_WIDTH: usize = 32;
@@ -1099,7 +1101,7 @@ impl ChatWidget {
                 self.has_history = true;
             }
             None => {
-                let lines = cell.lines(self.content_width()).to_vec();
+                let lines = plain_lines(cell.lines(self.content_width()).iter().cloned());
                 self.push_lines(lines);
             }
         }
@@ -1139,10 +1141,10 @@ impl ChatWidget {
     }
 
     /// Live lines above the composer: running tool calls and the streaming message's tail.
-    fn live_lines(&self, width: usize) -> Vec<Line<'static>> {
+    fn live_lines(&self, width: usize) -> Vec<DisplayLine> {
         let mut lines = Vec::new();
         for cell in &self.tool_calls {
-            lines.push(Line::default());
+            lines.push(DisplayLine::default());
             lines.extend(cell.lines(width, &self.cwd, &self.terminals));
         }
         if let Some(stream) = &self.stream
@@ -1150,16 +1152,16 @@ impl ChatWidget {
         {
             let message = stream.render_all(width);
             if !message.is_empty() {
-                lines.push(Line::default());
+                lines.push(DisplayLine::default());
                 lines.extend(message);
             }
         } else if let Some(stream) = &self.stream {
             let tail = stream.tail();
             if !tail.is_empty() {
                 if !stream.has_committed() || !self.tool_calls.is_empty() {
-                    lines.push(Line::default());
+                    lines.push(DisplayLine::default());
                 }
-                lines.extend(tail);
+                lines.extend(tail.into_iter().map(DisplayLine::plain));
             }
         }
         lines
@@ -1308,7 +1310,7 @@ impl ChatWidget {
 
     /// Everything drawn above the composer or permission prompt.
     fn lines_above_input(&self, width: u16, now: Instant) -> Vec<Line<'static>> {
-        let mut lines = self.live_lines(usize::from(width));
+        let mut lines = plain_lines(self.live_lines(usize::from(width)));
         lines.push(Line::default());
         lines.extend(self.status_block(now));
         lines

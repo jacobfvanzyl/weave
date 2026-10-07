@@ -18,6 +18,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use weave_acp_core::schema::Plan;
 
@@ -26,20 +27,22 @@ use crate::history_cell::ToolCallCell;
 use crate::streaming::StreamKind;
 use crate::streaming::render_message;
 use crate::tool_output::TerminalTranscripts;
+use crate::wrapping::DisplayLine;
+use crate::wrapping::LineSource;
 
 /// Rows one wheel notch scrolls.
 const WHEEL_ROWS: isize = 3;
 
-type Render = dyn Fn(usize) -> Vec<Line<'static>> + Send + Sync;
+type Render = dyn Fn(usize) -> Vec<DisplayLine> + Send + Sync;
 
 /// One committed transcript entry, renderable at any width.
 pub struct TranscriptCell {
     render: Box<Render>,
-    cache: Mutex<Option<(usize, Arc<Vec<Line<'static>>>)>>,
+    cache: Mutex<Option<(usize, Arc<Vec<DisplayLine>>)>>,
 }
 
 impl TranscriptCell {
-    pub fn new(render: impl Fn(usize) -> Vec<Line<'static>> + Send + Sync + 'static) -> Self {
+    pub fn new(render: impl Fn(usize) -> Vec<DisplayLine> + Send + Sync + 'static) -> Self {
         Self {
             render: Box::new(render),
             cache: Mutex::new(None),
@@ -47,7 +50,7 @@ impl TranscriptCell {
     }
 
     /// The cell's lines at `width`, rendered once per width.
-    pub fn lines(&self, width: usize) -> Arc<Vec<Line<'static>>> {
+    pub fn lines(&self, width: usize) -> Arc<Vec<DisplayLine>> {
         let mut cache = self
             .cache
             .lock()
@@ -159,6 +162,73 @@ impl Selection {
             width
         };
         (from < to).then_some((from, to.min(width)))
+    }
+}
+
+/// Text being copied from a selection, a line at a time.
+#[derive(Default)]
+struct Copied {
+    lines: Vec<String>,
+    /// The logical line the last row left off in, and where, when the selection ran to that
+    /// row's end so the next row of the same line continues it.
+    open: Option<(Arc<str>, usize)>,
+}
+
+impl Copied {
+    /// Copy the columns `from..to` of a row showing `source`.
+    fn push_source(&mut self, source: &LineSource, from: usize, to: usize) {
+        let shown = &source.text[source.range.clone()];
+        let mut column = source.prefix_width;
+        let mut selected: Option<(usize, usize)> = None;
+        for (index, grapheme) in shown.grapheme_indices(true) {
+            if column >= from && column < to {
+                let byte = source.range.start + index;
+                let (start, _) = selected.get_or_insert((byte, byte));
+                selected = Some((*start, byte + grapheme.len()));
+            }
+            column += grapheme.width();
+        }
+        let reaches_end = to >= column;
+        let from_start = from <= source.prefix_width;
+        let (start, end) = selected.unwrap_or((source.range.end, source.range.end));
+        match &self.open {
+            Some((text, open_end))
+                if Arc::ptr_eq(text, &source.text)
+                    && from_start
+                    && *open_end <= start
+                    && !self.lines.is_empty() =>
+            {
+                let continued = &source.text[*open_end..end];
+                if let Some(line) = self.lines.last_mut() {
+                    line.push_str(continued);
+                }
+            }
+            _ => self.lines.push(source.text[start..end].to_owned()),
+        }
+        self.open = reaches_end.then(|| (Arc::clone(&source.text), end));
+    }
+
+    /// Copy the columns `from..to` of a row as it appears on screen.
+    fn push_shown(&mut self, line: &Line<'static>, width: u16, from: u16, to: u16) {
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, 1));
+        buf.set_line(0, 0, line, width);
+        let mut text = String::new();
+        let mut x = from;
+        while x < to {
+            let symbol = buf[(x, 0)].symbol();
+            text.push_str(symbol);
+            x += u16::try_from(symbol.width().max(1)).unwrap_or(1);
+        }
+        self.lines.push(text);
+        self.open = None;
+    }
+
+    fn finish(self) -> String {
+        self.lines
+            .iter()
+            .map(|line| line.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -325,7 +395,7 @@ impl TranscriptView {
 
     /// Wheel scrolling and drag selection over the transcript. Returns the selected text when
     /// a drag ends, for copying. `live` is the live content drawn below the cells.
-    pub fn handle_mouse(&mut self, event: MouseEvent, live: &[Line<'static>]) -> Option<String> {
+    pub fn handle_mouse(&mut self, event: MouseEvent, live: &[DisplayLine]) -> Option<String> {
         let geometry = self.geometry.get()?;
         let area = geometry.area;
         let inside = area.contains((event.column, event.row).into());
@@ -383,7 +453,9 @@ impl TranscriptView {
         }
     }
 
-    fn selected_text(&self, selection: Selection, live: &[Line<'static>]) -> String {
+    /// The selection as text: wrapped rows of one logical line rejoin (with the whitespace
+    /// wrapping dropped), and gutters stay out. Rows without a source copy as shown.
+    fn selected_text(&self, selection: Selection, live: &[DisplayLine]) -> String {
         let (start, end) = selection.ordered();
         let layout = self.layout(selection.width, live.len());
         let width = u16::try_from(selection.width).unwrap_or(u16::MAX);
@@ -394,25 +466,17 @@ impl TranscriptView {
             start.row,
             end.row - start.row + 1,
         );
-        let mut buf = Buffer::empty(Rect::new(0, 0, width, 1));
-        let mut text = Vec::new();
-        for (index, line) in rows.iter().enumerate() {
-            let row = start.row + index;
+        let mut copied = Copied::default();
+        for (row, display) in (start.row..).zip(&rows) {
             let Some((from, to)) = selection.columns(row, width) else {
                 continue;
             };
-            buf.reset();
-            buf.set_line(0, 0, line, width);
-            let mut row_text = String::new();
-            let mut x = from;
-            while x < to {
-                let symbol = buf[(x, 0)].symbol();
-                row_text.push_str(symbol);
-                x += u16::try_from(symbol.width().max(1)).unwrap_or(1);
+            match &display.source {
+                Some(source) => copied.push_source(source, usize::from(from), usize::from(to)),
+                None => copied.push_shown(&display.line, width, from, to),
             }
-            text.push(row_text.trim_end().to_owned());
         }
-        text.join("\n")
+        copied.finish()
     }
 
     fn layout(&self, width: usize, live: usize) -> Layout {
@@ -442,10 +506,10 @@ impl TranscriptView {
         &self,
         layout: &Layout,
         width: usize,
-        live: &[Line<'static>],
+        live: &[DisplayLine],
         from: usize,
         count: usize,
-    ) -> Vec<Line<'static>> {
+    ) -> Vec<DisplayLine> {
         let end = from.saturating_add(count).min(layout.total);
         let mut rows = Vec::with_capacity(end.saturating_sub(from));
         let mut row = from;
@@ -463,7 +527,7 @@ impl TranscriptView {
             while row < end && row < start + separator + lines.len() {
                 let offset = row - start;
                 rows.push(if offset < separator {
-                    Line::default()
+                    DisplayLine::default()
                 } else {
                     lines[offset - separator].clone()
                 });
@@ -484,7 +548,7 @@ impl TranscriptView {
 
     /// Draw the visible rows into `area`: the newest at the bottom while following, from the
     /// top while the transcript is shorter than the area.
-    pub fn render(&self, area: Rect, buf: &mut Buffer, width: usize, live: &[Line<'static>]) {
+    pub fn render(&self, area: Rect, buf: &mut Buffer, width: usize, live: &[DisplayLine]) {
         let layout = self.layout(width, live.len());
         let height = usize::from(area.height);
         let top = self.top(&layout, height);
@@ -495,8 +559,8 @@ impl TranscriptView {
             top,
         }));
         let rows = self.rows(&layout, width, live, top, height);
-        for (y, line) in (area.y..).zip(&rows) {
-            buf.set_line(area.x, y, line, area.width);
+        for (y, row) in (area.y..).zip(&rows) {
+            buf.set_line(area.x, y, &row.line, area.width);
         }
         let Some(selection) = self.selection.filter(|selection| selection.width == width) else {
             return;
@@ -526,7 +590,7 @@ mod tests {
         let mut view = TranscriptView::new();
         for n in 1..=count {
             view.push(TranscriptCell::new(move |_| {
-                vec![Line::from(format!("line {n}"))]
+                vec![DisplayLine::whole(Line::from(format!("line {n}")))]
             }));
         }
         view
@@ -630,5 +694,61 @@ mod tests {
         assert!(!buf[(3, 3)].modifier.contains(Modifier::REVERSED));
         view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 0), &[]);
         assert!(view.selection.is_none());
+    }
+
+    #[test]
+    fn copying_rejoins_wrapped_lines_and_leaves_gutters_out() {
+        let mut view = TranscriptView::new();
+        view.push(TranscriptCell::message(
+            StreamKind::Agent,
+            "The quick brown fox jumps over the lazy dog.\n\n- first item\n- second".to_owned(),
+        ));
+        // At 20 columns: "• The quick brown", "  fox jumps over the", "  lazy dog.", "",
+        // "  - first item", "  - second".
+        let rows = draw(&view, 6);
+        assert_eq!(rows[1], "  fox jumps over the");
+
+        let left = MouseButton::Left;
+        view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 0), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 5), &[]);
+        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 5), &[]);
+        assert_eq!(
+            copied.as_deref(),
+            Some("The quick brown fox jumps over the lazy dog.\n\n- first item\n- second")
+        );
+
+        // A selection inside a row takes just those characters.
+        view.handle_mouse(mouse(MouseEventKind::Down(left), 6, 1), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Drag(left), 10, 1), &[]);
+        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 10, 1), &[]);
+        assert_eq!(copied.as_deref(), Some("jumps"));
+    }
+
+    #[test]
+    fn copying_a_diff_takes_the_code_without_numbers_or_signs() {
+        use weave_acp_core::schema::Diff;
+        use weave_acp_core::schema::ToolCall;
+        use weave_acp_core::schema::ToolCallContent;
+        use weave_acp_core::schema::ToolCallStatus;
+
+        let call = ToolCall::new("t1", "Write notes.txt")
+            .status(ToolCallStatus::Completed)
+            .content(vec![ToolCallContent::Diff(Diff::new(
+                "/repo/notes.txt",
+                "hello\nworld\n",
+            ))]);
+        let mut view = TranscriptView::new();
+        view.push(TranscriptCell::tool_call(
+            ToolCallCell::new(call),
+            PathBuf::from("/repo"),
+            TerminalTranscripts::new(),
+        ));
+        assert_eq!(draw(&view, 4)[2], "       1 + hello");
+
+        let left = MouseButton::Left;
+        view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 2), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 3), &[]);
+        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 3), &[]);
+        assert_eq!(copied.as_deref(), Some("hello\nworld"));
     }
 }

@@ -15,6 +15,8 @@ use weave_acp_core::schema::MessageId;
 use crate::history_cell;
 use crate::history_cell::dim;
 use crate::markdown::render_markdown;
+use crate::wrapping::DisplayLine;
+use crate::wrapping::plain_lines;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamKind {
@@ -93,11 +95,11 @@ impl MessageStream {
     }
 
     fn render(&self, source: &str) -> Vec<Line<'static>> {
-        render_message(self.kind, source, self.width)
+        plain_lines(render_message(self.kind, source, self.width))
     }
 
     /// The whole message as it stands, at `width`; fullscreen redraws it live until it ends.
-    pub fn render_all(&self, width: usize) -> Vec<Line<'static>> {
+    pub fn render_all(&self, width: usize) -> Vec<DisplayLine> {
         render_message(self.kind, &self.source, width)
     }
 
@@ -107,7 +109,7 @@ impl MessageStream {
 }
 
 /// A message's full source rendered at `width`.
-pub fn render_message(kind: StreamKind, source: &str, width: usize) -> Vec<Line<'static>> {
+pub fn render_message(kind: StreamKind, source: &str, width: usize) -> Vec<DisplayLine> {
     if kind == StreamKind::User {
         return history_cell::user_message(source, width);
     }
@@ -118,16 +120,15 @@ pub fn render_message(kind: StreamKind, source: &str, width: usize) -> Vec<Line<
     };
     body.into_iter()
         .enumerate()
-        .map(|(index, line)| {
+        .map(|(index, mut row)| {
             let prefix = match index {
                 0 => "• ",
                 // Blank lines stay empty rather than ending in indentation.
-                _ if line.spans.is_empty() => "",
+                _ if row.line.spans.is_empty() => "",
                 _ => "  ",
             };
-            let mut spans = vec![Span::styled(prefix, marker)];
-            spans.extend(line.spans);
-            Line::from(spans).style(line.style.patch(body_style))
+            row.line.style = row.line.style.patch(body_style);
+            row.prefixed(&[Span::styled(prefix, marker)])
         })
         .collect()
 }

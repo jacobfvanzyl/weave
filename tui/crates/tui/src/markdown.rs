@@ -18,9 +18,12 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
-use crate::wrapping::wrap_with_prefix;
+use std::sync::Arc;
 
-pub fn render_markdown(source: &str, width: usize) -> Vec<Line<'static>> {
+use crate::wrapping::DisplayLine;
+use crate::wrapping::wrap_sourced;
+
+pub fn render_markdown(source: &str, width: usize) -> Vec<DisplayLine> {
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut renderer = Renderer::new(width);
     for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
@@ -50,7 +53,7 @@ fn has_closing_fence(block: &str) -> bool {
 
 struct Renderer {
     width: usize,
-    lines: Vec<Line<'static>>,
+    lines: Vec<DisplayLine>,
     spans: Vec<Span<'static>>,
     /// Inline styles in effect, innermost last.
     styles: Vec<Style>,
@@ -275,7 +278,7 @@ impl Renderer {
     fn start_block(&mut self) {
         if self.blank_before_next_block && !self.lines.is_empty() {
             let quote = self.quote_prefix();
-            self.lines.push(Line::from(quote));
+            self.lines.push(DisplayLine::plain(Line::from(quote)));
         }
         self.blank_before_next_block = false;
     }
@@ -330,27 +333,49 @@ impl Renderer {
     fn flush(&mut self) {
         let content = Line::from(std::mem::take(&mut self.spans));
         let hang = self.items.last().copied().unwrap_or(0);
-        let (first_indent, rest_indent) = match self.pending_marker.take() {
-            Some((indent, marker)) => (format!("{}{marker}", " ".repeat(indent)), " ".repeat(hang)),
+        let marker = self.pending_marker.take();
+        let (first_indent, rest_indent) = match &marker {
+            Some((indent, marker)) => {
+                (format!("{}{marker}", " ".repeat(*indent)), " ".repeat(hang))
+            }
             None => (" ".repeat(hang), " ".repeat(hang)),
         };
         let mut first = self.quote_prefix();
         first.push(Span::raw(first_indent));
         let mut rest = self.quote_prefix();
         rest.push(Span::raw(rest_indent));
-        self.lines.extend(wrap_with_prefix(
-            &content,
-            self.width,
-            &Line::from(first),
-            &Line::from(rest),
-        ));
+        let mut rows = wrap_sourced(&content, self.width, &Line::from(first), &Line::from(rest));
+        if let Some((_, marker)) = marker {
+            copy_with_marker(&mut rows, &marker);
+        }
+        self.lines.extend(rows);
     }
 
-    fn finish(mut self) -> Vec<Line<'static>> {
+    fn finish(mut self) -> Vec<DisplayLine> {
         if !self.spans.is_empty() || self.pending_marker.is_some() {
             self.flush();
         }
         self.lines
+    }
+}
+
+/// Make a list item's marker part of its copied text, so copied lists keep their bullets and
+/// numbers as markdown does.
+fn copy_with_marker(rows: &mut [DisplayLine], marker: &str) {
+    let Some(text) = rows.first().and_then(|row| row.source.as_ref()) else {
+        return;
+    };
+    let text: Arc<str> = format!("{marker}{}", text.text).into();
+    for (index, row) in rows.iter_mut().enumerate() {
+        if let Some(source) = &mut row.source {
+            source.text = Arc::clone(&text);
+            source.range = if index == 0 {
+                source.prefix_width = source.prefix_width.saturating_sub(marker.width());
+                0..source.range.end + marker.len()
+            } else {
+                source.range.start + marker.len()..source.range.end + marker.len()
+            };
+        }
     }
 }
 
@@ -378,7 +403,7 @@ mod tests {
     fn render(source: &str, width: usize) -> Vec<String> {
         render_markdown(source, width)
             .iter()
-            .map(ToString::to_string)
+            .map(|row| row.line.to_string())
             .collect()
     }
 

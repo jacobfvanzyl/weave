@@ -8,6 +8,7 @@ use std::path::Path;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use weave_acp_core::schema::ContentBlock;
@@ -24,7 +25,10 @@ use weave_acp_core::schema::ToolKind;
 
 use crate::tool_output::TerminalTranscripts;
 use crate::tool_output::diff_lines;
-use crate::wrapping::wrap_with_prefix;
+use crate::wrapping::DisplayLine;
+use crate::wrapping::GutterLine;
+use crate::wrapping::wrap_gutter_line;
+use crate::wrapping::wrap_sourced;
 
 /// Tool output lines shown before the rest is summarized.
 const TOOL_OUTPUT_LINES: usize = 5;
@@ -44,7 +48,7 @@ fn indent() -> Line<'static> {
     Line::from("  ")
 }
 
-pub fn user_message(text: &str, width: usize) -> Vec<Line<'static>> {
+pub fn user_message(text: &str, width: usize) -> Vec<DisplayLine> {
     let prompt = Line::from(Span::styled(
         "› ",
         Style::default()
@@ -55,7 +59,7 @@ pub fn user_message(text: &str, width: usize) -> Vec<Line<'static>> {
         .enumerate()
         .flat_map(|(index, source_line)| {
             let first = if index == 0 { prompt.clone() } else { indent() };
-            wrap_with_prefix(
+            wrap_sourced(
                 &Line::from(source_line.to_owned()),
                 width,
                 &first,
@@ -65,15 +69,15 @@ pub fn user_message(text: &str, width: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-pub fn info(text: &str, width: usize) -> Vec<Line<'static>> {
+pub fn info(text: &str, width: usize) -> Vec<DisplayLine> {
     let content = Line::from(Span::styled(text.to_owned(), dim()));
-    wrap_with_prefix(&content, width, &bullet(dim()), &indent())
+    wrap_sourced(&content, width, &bullet(dim()), &indent())
 }
 
-pub fn error(text: &str, width: usize) -> Vec<Line<'static>> {
+pub fn error(text: &str, width: usize) -> Vec<DisplayLine> {
     let red = Style::default().fg(Color::Red);
     let content = Line::from(Span::styled(text.to_owned(), red));
-    wrap_with_prefix(
+    wrap_sourced(
         &content,
         width,
         &Line::from(Span::styled("■ ", red)),
@@ -89,7 +93,7 @@ pub struct SessionHeader<'a> {
     pub settings: Option<&'a str>,
 }
 
-pub fn session_header(header: &SessionHeader<'_>, width: usize) -> Vec<Line<'static>> {
+pub fn session_header(header: &SessionHeader<'_>, width: usize) -> Vec<DisplayLine> {
     let mut title = vec![
         Span::styled("weave", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(format!(" {}  ", env!("CARGO_PKG_VERSION")), dim()),
@@ -103,12 +107,12 @@ pub fn session_header(header: &SessionHeader<'_>, width: usize) -> Vec<Line<'sta
     if let Some(version) = header.agent_version {
         title.push(Span::styled(format!(" {version}"), dim()));
     }
-    let mut lines = wrap_with_prefix(&Line::from(title), width, &bullet(dim()), &indent());
+    let mut lines = wrap_sourced(&Line::from(title), width, &bullet(dim()), &indent());
     let mut details = format!("directory {}", header.cwd.display());
     if let Some(settings) = header.settings {
         details.push_str(&format!("  ·  {settings}"));
     }
-    lines.extend(wrap_with_prefix(
+    lines.extend(wrap_sourced(
         &Line::from(Span::styled(details, dim())),
         width,
         &indent(),
@@ -117,11 +121,8 @@ pub fn session_header(header: &SessionHeader<'_>, width: usize) -> Vec<Line<'sta
     lines
 }
 
-pub fn plan(plan: &Plan, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(vec![
-        Span::styled("• ", dim()),
-        Span::styled("Plan", Style::default().add_modifier(Modifier::BOLD)),
-    ])];
+pub fn plan(plan: &Plan, width: usize) -> Vec<DisplayLine> {
+    let mut lines = vec![DisplayLine::whole(Line::from("Plan").bold()).prefixed(&["• ".dim()])];
     for entry in &plan.entries {
         let (mark, style) = match entry.status {
             PlanEntryStatus::Completed => ("✔ ", dim().add_modifier(Modifier::CROSSED_OUT)),
@@ -134,7 +135,7 @@ pub fn plan(plan: &Plan, width: usize) -> Vec<Line<'static>> {
         ]);
         let rest = Line::from("    ");
         let content = Line::from(Span::styled(entry.content.clone(), style));
-        lines.extend(wrap_with_prefix(&content, width, &first, &rest));
+        lines.extend(wrap_sourced(&content, width, &first, &rest));
     }
     lines
 }
@@ -224,7 +225,7 @@ impl ToolCallCell {
         width: usize,
         cwd: &Path,
         terminals: &TerminalTranscripts,
-    ) -> Vec<Line<'static>> {
+    ) -> Vec<DisplayLine> {
         let (mark, mark_style) = match self.status {
             ToolCallStatus::Completed => ("✓ ", Style::default().fg(Color::Green)),
             ToolCallStatus::Failed => ("✗ ", Style::default().fg(Color::Red)),
@@ -238,7 +239,7 @@ impl ToolCallCell {
             ),
             Span::styled(format!("  {}", kind_label(self.kind)), dim()),
         ]);
-        let mut lines = wrap_with_prefix(
+        let mut lines = wrap_sourced(
             &heading,
             width,
             &Line::from(Span::styled(mark, mark_style)),
@@ -254,7 +255,7 @@ impl ToolCallCell {
                 _ => None,
             })
             .collect();
-        let mut details: Vec<Line<'static>> = self
+        let mut details: Vec<GutterLine> = self
             .locations
             .iter()
             .filter(|location| !diff_paths.contains(&location.path.as_path()))
@@ -265,7 +266,7 @@ impl ToolCallCell {
                     Some(line) => format!("{path}:{line}"),
                     None => path,
                 };
-                Line::from(Span::styled(text, dim()))
+                GutterLine::from(Line::from(Span::styled(text, dim())))
             })
             .collect();
         for content in &self.content {
@@ -276,13 +277,10 @@ impl ToolCallCell {
                     details.extend(
                         text.into_iter()
                             .take(TOOL_OUTPUT_LINES)
-                            .map(|line| Line::from(Span::styled(line, dim()))),
+                            .map(|line| Line::from(Span::styled(line, dim())).into()),
                     );
                     if hidden > 0 {
-                        details.push(Line::from(Span::styled(
-                            format!("… +{hidden} lines"),
-                            dim(),
-                        )));
+                        details.push(Line::from(format!("… +{hidden} lines").dim()).into());
                     }
                 }
                 ToolCallContent::Diff(diff) => {
@@ -295,22 +293,24 @@ impl ToolCallCell {
                     ));
                 }
                 ToolCallContent::Terminal(terminal) => match terminals.get(&terminal.terminal_id) {
-                    Some(transcript) => details.extend(transcript.lines(TOOL_OUTPUT_LINES)),
+                    Some(transcript) => details.extend(
+                        transcript
+                            .lines(TOOL_OUTPUT_LINES)
+                            .into_iter()
+                            .map(GutterLine::from),
+                    ),
                     // A finished call can name a terminal this client never saw, as in a replay.
                     None if self.is_finished() => {
-                        details.push(Line::from(Span::styled(
-                            "terminal output unavailable",
-                            dim(),
-                        )));
+                        details.push(Line::from("terminal output unavailable".dim()).into());
                     }
-                    None => details.push(Line::from(Span::styled("waiting for output…", dim()))),
+                    None => details.push(Line::from("waiting for output…".dim()).into()),
                 },
-                _ => details.push(Line::from(Span::styled("[unsupported tool output]", dim()))),
+                _ => details.push(Line::from("[unsupported tool output]".dim()).into()),
             }
         }
         for (index, detail) in details.iter().enumerate() {
             let first = if index == 0 { "  └ " } else { "    " };
-            lines.extend(wrap_with_prefix(
+            lines.extend(wrap_gutter_line(
                 detail,
                 width,
                 &Line::from(Span::styled(first, dim())),
@@ -369,8 +369,8 @@ mod tests {
 
     use super::*;
 
-    fn text(lines: &[Line<'_>]) -> Vec<String> {
-        lines.iter().map(ToString::to_string).collect()
+    fn text(lines: &[DisplayLine]) -> Vec<String> {
+        lines.iter().map(|line| line.line.to_string()).collect()
     }
 
     #[test]

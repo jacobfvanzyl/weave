@@ -11,6 +11,7 @@ use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::TerminalId;
 
 use crate::history_cell::dim;
+use crate::wrapping::GutterLine;
 
 /// Output retained per terminal for display; the agent keeps its own full copy.
 const TRANSCRIPT_BYTES: usize = 64 * 1024;
@@ -142,19 +143,20 @@ fn strip_escape_sequences(raw: &str) -> String {
     out
 }
 
-/// A diff as a header line plus numbered, colored rows, the rows capped at `max`.
+/// A diff as a header line plus numbered, colored rows, the rows capped at `max`. Line
+/// numbers and signs are gutter, so copying takes just the text.
 pub fn diff_lines(
     path: &str,
     old_text: Option<&str>,
     new_text: &str,
     max: usize,
-) -> Vec<Line<'static>> {
+) -> Vec<GutterLine> {
     let patch = diffy::create_patch(old_text.unwrap_or_default(), new_text);
     let (mut added, mut removed) = (0, 0);
     let mut rows = Vec::new();
     for hunk in patch.hunks() {
         if !rows.is_empty() {
-            rows.push(Line::from(Span::styled("     ⋮", dim())));
+            rows.push(GutterLine::from(Line::from(Span::styled("     ⋮", dim()))));
         }
         let mut old_line = hunk.old_range().start();
         let mut new_line = hunk.new_range().start();
@@ -181,10 +183,13 @@ pub fn diff_lines(
             };
             let text = text.trim_end_matches(['\n', '\r']).replace('\t', "    ");
             let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
-            rows.push(Line::from(vec![
-                Span::styled(format!("{number:>4} "), dim()),
-                Span::styled(format!("{sign} {text}"), style),
-            ]));
+            rows.push(GutterLine {
+                gutter: vec![
+                    Span::styled(format!("{number:>4} "), dim()),
+                    Span::styled(format!("{sign} "), style),
+                ],
+                content: Line::from(Span::styled(text, style)),
+            });
         }
     }
 
@@ -192,20 +197,20 @@ pub fn diff_lines(
         None => format!(" (new file, +{added})"),
         Some(_) => format!(" (+{added} -{removed})"),
     };
-    let mut lines = vec![Line::from(vec![
+    let mut lines = vec![GutterLine::from(Line::from(vec![
         Span::styled(
             path.to_owned(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::styled(counts, dim()),
-    ])];
+    ]))];
     let hidden = rows.len().saturating_sub(max);
     lines.extend(rows.into_iter().take(max));
     if hidden > 0 {
-        lines.push(Line::from(Span::styled(
+        lines.push(GutterLine::from(Line::from(Span::styled(
             format!("… +{hidden} lines"),
             dim(),
-        )));
+        ))));
     }
     lines
 }
@@ -220,12 +225,26 @@ mod tests {
         lines.iter().map(ToString::to_string).collect()
     }
 
+    fn gutter_text(lines: &[GutterLine]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                let gutter: String = line
+                    .gutter
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                format!("{gutter}{}", line.content)
+            })
+            .collect()
+    }
+
     #[test]
     fn diffs_number_and_mark_changed_lines() {
         let old = "a\nb\nc\n";
         let new = "a\nB\nc\nd\n";
         assert_eq!(
-            text(&diff_lines("f.txt", Some(old), new, 20)),
+            gutter_text(&diff_lines("f.txt", Some(old), new, 20)),
             [
                 "f.txt (+2 -1)",
                 "   1   a",
@@ -240,7 +259,7 @@ mod tests {
     #[test]
     fn new_files_are_all_additions_and_rows_are_capped() {
         assert_eq!(
-            text(&diff_lines("new.txt", None, "1\n2\n3\n", 2)),
+            gutter_text(&diff_lines("new.txt", None, "1\n2\n3\n", 2)),
             [
                 "new.txt (new file, +3)",
                 "   1 + 1",
