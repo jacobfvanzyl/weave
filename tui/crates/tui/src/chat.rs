@@ -1162,10 +1162,8 @@ impl ChatWidget {
                     self.settings = None;
                     Vec::new()
                 }
-                PickerOutcome::Apply(change) => {
-                    self.settings = None;
-                    vec![AppCommand::ChangeSetting(change)]
-                }
+                // The picker stays open, showing the change once the agent confirms it.
+                PickerOutcome::Apply(change) => vec![AppCommand::ChangeSetting(change)],
             };
         }
         if ctrl && key.code == KeyCode::Char('o') {
@@ -2445,7 +2443,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_opens_settings_and_applies_a_choice() {
+    fn ctrl_o_opens_settings_that_stay_open_as_choices_apply() {
         let options = vec![SessionConfigOption::boolean("verbose", "Verbose", false)];
         let mut chat = chat_with(options);
         assert!(
@@ -2453,13 +2451,17 @@ mod tests {
                 .is_empty()
         );
         assert!(rows(&chat, 60).iter().any(|row| row == "› Verbose  off"));
+        let change =
+            SettingChange::ConfigOption("verbose".into(), SessionConfigOptionValue::boolean(true));
         assert_eq!(
             chat.handle_key(key(KeyCode::Enter)),
-            [AppCommand::ChangeSetting(SettingChange::ConfigOption(
-                "verbose".into(),
-                SessionConfigOptionValue::boolean(true)
-            ))]
+            [AppCommand::ChangeSetting(change.clone())]
         );
+        // Still open, and showing the change once the agent confirms it.
+        let confirmed = vec![SessionConfigOption::boolean("verbose", "Verbose", true)];
+        chat.setting_changed(change, Ok(Some(confirmed)));
+        assert!(rows(&chat, 60).iter().any(|row| row == "› Verbose  on"));
+        assert!(chat.handle_key(key(KeyCode::Esc)).is_empty());
         assert!(chat.settings.is_none());
     }
 

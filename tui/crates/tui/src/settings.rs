@@ -198,6 +198,7 @@ enum Page {
 pub enum PickerOutcome {
     Open,
     Close,
+    /// Make the change; the picker stays open, back on its list.
     Apply(SettingChange),
 }
 
@@ -229,6 +230,8 @@ impl SettingsPicker {
                 } else {
                     supported.len()
                 };
+                // A change can leave the agent offering fewer options.
+                *selected = (*selected).min(count.saturating_sub(1));
                 match key.code {
                     KeyCode::Esc => PickerOutcome::Close,
                     KeyCode::Up | KeyCode::Char('k') => {
@@ -243,12 +246,12 @@ impl SettingsPicker {
                         if supported.is_empty() {
                             return modes
                                 .and_then(|modes| modes.available_modes.get(*selected))
-                                .map_or(PickerOutcome::Close, |mode| {
+                                .map_or(PickerOutcome::Open, |mode| {
                                     PickerOutcome::Apply(SettingChange::Mode(mode.id.clone()))
                                 });
                         }
                         let Some(option) = supported.get(*selected) else {
-                            return PickerOutcome::Close;
+                            return PickerOutcome::Open;
                         };
                         match &option.kind {
                             SessionConfigKind::Boolean(boolean) => {
@@ -295,17 +298,18 @@ impl SettingsPicker {
                         *selected = (*selected + 1).min(values.len().saturating_sub(1));
                         PickerOutcome::Open
                     }
+                    // Back to the list, which stays open for more changes.
                     KeyCode::Enter => {
-                        values
-                            .get(*selected)
-                            .map_or(PickerOutcome::Close, |choice| {
-                                PickerOutcome::Apply(SettingChange::ConfigOption(
-                                    config.id.clone(),
-                                    SessionConfigOptionValue::ValueId {
-                                        value: choice.value.clone(),
-                                    },
-                                ))
-                            })
+                        let outcome = values.get(*selected).map_or(PickerOutcome::Open, |choice| {
+                            PickerOutcome::Apply(SettingChange::ConfigOption(
+                                config.id.clone(),
+                                SessionConfigOptionValue::ValueId {
+                                    value: choice.value.clone(),
+                                },
+                            ))
+                        });
+                        self.page = Page::Options { selected: *option };
+                        outcome
                     }
                     _ => PickerOutcome::Open,
                 }
@@ -537,6 +541,8 @@ mod tests {
             PickerOutcome::Apply(SettingChange::ConfigOption(id, value))
                 if id.to_string() == "model" && value == SessionConfigOptionValue::value_id("large")
         ));
+        // Back on the list, at the option just changed, for more changes.
+        assert_eq!(text(&picker.lines(&options, None))[2], "› Model  Small");
     }
 
     #[test]
