@@ -17,7 +17,6 @@ use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -60,6 +59,7 @@ use crate::history_cell::dim;
 use crate::history_cell::home_relative;
 use crate::permission::Decision;
 use crate::permission::PermissionView;
+use crate::permission::Subject;
 use crate::session::OpenedSession;
 use crate::session::Reopened;
 use crate::session::SessionTarget;
@@ -656,16 +656,15 @@ impl ChatWidget {
             let _ = request.cancel();
             return;
         }
-        let title = call.fields.title.clone().unwrap_or_else(|| {
-            self.tool_calls
-                .iter()
-                .find(|live| live.id == call.tool_call_id)
-                .map_or_else(
-                    || "this tool call".to_owned(),
-                    |live| live.title().to_owned(),
-                )
-        });
-        let view = PermissionView::new(title, request.request.options.clone());
+        let subject = self
+            .tool_calls
+            .iter()
+            .find(|live| live.id == call.tool_call_id)
+            .map_or_else(
+                || Subject::about("this tool call"),
+                |live| live.permission_subject(&self.cwd),
+            );
+        let view = PermissionView::new(subject, request.request.options.clone());
         self.permissions
             .push_back(PendingPermission { request, view });
     }
@@ -1500,7 +1499,7 @@ impl ChatWidget {
             }
             Some(Reading::EarlierWithNewOutput) => Line::from(Span::styled(
                 "  ↓ new output below · esc for latest",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(style::accent()),
             )),
             _ if self
                 .transcript

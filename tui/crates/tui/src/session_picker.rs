@@ -13,6 +13,7 @@ use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionInfo;
 
 use crate::history_cell::dim;
+use crate::style;
 
 const VISIBLE_ROWS: usize = 8;
 
@@ -177,13 +178,7 @@ impl SessionPicker {
             .take(VISIBLE_ROWS)
         {
             let selected = index == self.selected;
-            let style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+            let style = Style::default();
             let title = session
                 .title
                 .clone()
@@ -204,7 +199,12 @@ impl SessionPicker {
                     dim(),
                 ));
             }
-            lines.push(Line::from(spans));
+            let line = Line::from(spans);
+            lines.push(if selected {
+                line.style(style::selection())
+            } else {
+                line
+            });
         }
         if self.loading && !self.sessions.is_empty() {
             lines.push(Line::from(Span::styled("  Loading more…", dim())));
@@ -244,7 +244,7 @@ impl SessionPicker {
             .iter()
             .zip(area.y..area.bottom())
         {
-            buf.set_line(area.x, y, line, area.width);
+            style::set_line_filled(buf, area.x, y, line, area.width);
         }
     }
 }

@@ -64,6 +64,7 @@ use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
 use crate::elicitation::ElicitationView;
 use crate::permission::PermissionView;
+use crate::tool_call::ToolCallCell;
 use crate::session::OpenedSession;
 
 const WIDTH: u16 = 72;
@@ -380,8 +381,14 @@ fn render_view(height: u16, render: impl FnOnce(Rect, &mut Buffer)) -> String {
 
 #[test]
 fn prompt_permission() {
+    // The subject comes from the tool call, as a live permission request's does.
+    let call = ToolCallCell::new(
+        ToolCall::new("t1", "`cargo test`")
+            .kind(ToolKind::Execute)
+            .status(ToolCallStatus::Pending),
+    );
     let view = PermissionView::new(
-        "Run cargo test".into(),
+        call.permission_subject(&PathBuf::from("/repo")),
         vec![
             PermissionOption::new("once", "Allow once", PermissionOptionKind::AllowOnce),
             PermissionOption::new(

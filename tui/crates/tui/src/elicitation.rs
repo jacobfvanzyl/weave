@@ -28,6 +28,7 @@ use weave_acp_core::schema::MultiSelectItems;
 use weave_acp_core::schema::StringFormat;
 
 use crate::history_cell::dim;
+use crate::style;
 use crate::wrapping::wrap_with_prefix;
 
 /// What the user decided.
@@ -104,7 +105,7 @@ fn heading(agent: &str, message: &str, width: usize) -> Vec<Line<'static>> {
         Span::styled(
             format!("{agent} asks: "),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(style::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -115,10 +116,20 @@ fn heading(agent: &str, message: &str, width: usize) -> Vec<Line<'static>> {
     wrap_with_prefix(&line, width, &Line::from("  "), &Line::from("  "))
 }
 
+/// A chosen chip or button: filled as Codex fills selections.
 fn selected_style(selected: bool) -> Style {
     if selected {
+        style::selection()
+    } else {
         Style::default()
-            .fg(Color::Cyan)
+    }
+}
+
+/// The focused field's label.
+fn focus_style(focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(style::accent())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -300,7 +311,7 @@ impl FormView {
                 field.title
             );
             let padded = format!("{label:<width$}  ", width = label_width + 2);
-            let mut spans = vec![Span::styled(padded.clone(), selected_style(focused))];
+            let mut spans = vec![Span::styled(padded.clone(), focus_style(focused))];
             spans.extend(field.value_spans(focused));
             if focused
                 && matches!(

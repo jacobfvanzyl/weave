@@ -33,6 +33,7 @@ use weave_acp_core::schema::ToolCallUpdateFields;
 use weave_acp_core::schema::ToolKind;
 
 use crate::highlight;
+use crate::permission::Subject;
 use crate::status::activity_bullet;
 use crate::style;
 use crate::style::DiffKind;
@@ -431,6 +432,95 @@ impl ToolCallCell {
             }
         }
         rows
+    }
+}
+
+/// Detail rows a permission prompt shows of a call's text output, such as a plan to approve.
+const PERMISSION_DETAIL_ROWS: usize = 12;
+
+impl ToolCallCell {
+    /// What a permission prompt for this call asks, as Codex words its approvals.
+    pub fn permission_subject(&self, cwd: &Path) -> Subject {
+        if self.has_diff() {
+            let detail = self
+                .content
+                .iter()
+                .filter_map(|content| match content {
+                    ToolCallContent::Diff(diff) => Some(diff),
+                    _ => None,
+                })
+                .map(|diff| {
+                    let file = FileDiff::new(diff, cwd);
+                    let mut spans = vec![Span::raw(file.path.clone())];
+                    spans.extend(counts(file.added, file.removed));
+                    Line::from(spans)
+                })
+                .collect();
+            return Subject {
+                question: "Would you like to make the following edits?".to_owned(),
+                detail,
+            };
+        }
+        match self.kind {
+            ToolKind::Execute => match self.command() {
+                Some(command) => {
+                    let mut detail = highlight::shell_lines(&command);
+                    for (index, line) in detail.iter_mut().enumerate() {
+                        let lead = if index == 0 { "$ ".magenta() } else { Span::raw("  ") };
+                        line.spans.insert(0, lead);
+                    }
+                    Subject {
+                        question: "Would you like to run the following command?".to_owned(),
+                        detail,
+                    }
+                }
+                None => Subject::about(self.title()),
+            },
+            ToolKind::Fetch => match self.web_search_query() {
+                Some(query) => Subject {
+                    question: "Would you like to search the web for this?".to_owned(),
+                    detail: vec![Line::from(query)],
+                },
+                None => Subject {
+                    question: "Would you like to fetch this?".to_owned(),
+                    detail: vec![Line::from(self.fetch_target())],
+                },
+            },
+            ToolKind::Edit | ToolKind::Delete | ToolKind::Move => Subject {
+                question: "Would you like to make the following edits?".to_owned(),
+                detail: vec![Line::from(self.edit_target(cwd))],
+            },
+            ToolKind::Read => Subject {
+                question: "Would you like to allow this read?".to_owned(),
+                detail: vec![Line::from(self.read_names(cwd).join(", "))],
+            },
+            ToolKind::Search => Subject {
+                question: "Would you like to allow this search?".to_owned(),
+                detail: vec![Line::from(self.search_target())],
+            },
+            // Anything else, such as a plan to approve before switching modes: its title,
+            // and its text output, which is what is being approved.
+            _ => {
+                let output = self.content.iter().flat_map(|content| match content {
+                    ToolCallContent::Content(content) => content_lines(&content.content),
+                    _ => Vec::new(),
+                });
+                let lines: Vec<String> = output.collect();
+                let hidden = lines.len().saturating_sub(PERMISSION_DETAIL_ROWS);
+                let mut detail: Vec<Line<'static>> = lines
+                    .into_iter()
+                    .take(PERMISSION_DETAIL_ROWS)
+                    .map(|line| Line::from(line.dim()))
+                    .collect();
+                if hidden > 0 {
+                    detail.push(Line::from(format!("… +{hidden} lines").dim()));
+                }
+                Subject {
+                    detail,
+                    ..Subject::about(self.title())
+                }
+            }
+        }
     }
 }
 

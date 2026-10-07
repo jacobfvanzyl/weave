@@ -35,9 +35,17 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Ctrl+Home / Ctrl+End (or Alt+< / Alt+>) | Jump to the start / back to the newest output |
 | Esc while scrolled back | Return to the newest output (before it stops the turn) |
 | Drag | Select transcript text; it is copied when you release |
+| Ctrl+T | Full transcript: whole command output, diffs and thoughts (a pager inline) |
+| `?` | Keyboard shortcuts (on an empty composer) |
 
 Permission requests, agent questions (forms and links) and pickers take over the input
-area with their own keys. Links open in your browser only after you choose to.
+area with their own keys: approvals take `y` (allow), `a` (always), `esc` (reject) or a
+number. Links open in your browser only after you choose to.
+
+The transcript looks like Codex's: commands as `• Ran cmd` with their first lines of
+output, reads and searches grouped as `• Explored`, edits as numbered, tinted diffs, and
+code highlighted with Catppuccin themes. Colors adapt to your terminal's background, which
+weave asks the terminal for at startup.
 
 Fullscreen leaves your screen as it was when you quit, then prints how to reopen the
 session (`weave … --resume <id>`). Selections are copied with `pbcopy` on a local Mac,
@@ -55,6 +63,8 @@ default_agent = "claude"
 
 [tui]
 alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen
+# Footer status line: model, agent, mode, directory, session, context. [] shows "? for shortcuts".
+status_line = ["model", "directory", "session"]
 
 [agents.claude]
 terminal = false          # don't let it run commands through weave

@@ -8,7 +8,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -25,6 +24,7 @@ use weave_acp_core::schema::SessionModeId;
 use weave_acp_core::schema::SessionModeState;
 
 use crate::history_cell::dim;
+use crate::style;
 
 /// A change the user asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -323,13 +323,7 @@ impl SettingsPicker {
             .filter(|option| is_supported(option))
             .collect();
         let row = |selected: bool, label: String, detail: Option<String>| {
-            let style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+            let style = Style::default();
             let mut spans = vec![Span::styled(
                 format!("{}{label}", if selected { "› " } else { "  " }),
                 style,
@@ -337,7 +331,12 @@ impl SettingsPicker {
             if let Some(detail) = detail {
                 spans.push(Span::styled(format!("  {detail}"), dim()));
             }
-            Line::from(spans)
+            let line = Line::from(spans);
+            if selected {
+                line.style(style::selection())
+            } else {
+                line
+            }
         };
         let bold = Style::default().add_modifier(Modifier::BOLD);
         match &self.page {
@@ -423,7 +422,7 @@ impl SettingsPicker {
         modes: Option<&SessionModeState>,
     ) {
         for (line, y) in self.lines(options, modes).iter().zip(area.y..area.bottom()) {
-            buf.set_line(area.x, y, line, area.width);
+            style::set_line_filled(buf, area.x, y, line, area.width);
         }
     }
 }

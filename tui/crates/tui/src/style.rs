@@ -2,9 +2,12 @@
 //! (Apache-2.0). Shaded surfaces blend from the terminal's own background (see `palette`);
 //! when it is unknown they are left unshaded.
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::text::Line;
 
 use crate::palette;
 use crate::palette::Palette;
@@ -46,6 +49,43 @@ fn secondary_for(palette: &Palette) -> Style {
             .map_or_else(dim, |color| Style::default().fg(color)),
         _ => dim(),
     }
+}
+
+/// ChatGPT Blue 200 and 100, Codex's selection fills on dark and light backgrounds.
+const SELECTION_DARK: Rgb = (99, 168, 248);
+const SELECTION_LIGHT: Rgb = (164, 205, 251);
+/// Text on the selection fill.
+const SELECTION_TEXT: Rgb = (0, 0, 46);
+
+/// The selected row of a list or prompt, filled across its width as Codex does: blue with
+/// bold dark text, or reversed where the background is unknown.
+pub fn selection() -> Style {
+    selection_for(&palette::current())
+}
+
+fn selection_for(palette: &Palette) -> Style {
+    let fill = if palette.is_light() {
+        SELECTION_LIGHT
+    } else {
+        SELECTION_DARK
+    };
+    match (palette.bg, palette.color(fill), palette.color(SELECTION_TEXT)) {
+        (Some(_), Some(fill), Some(text)) => Style::default()
+            .bg(fill)
+            .fg(text)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+    }
+}
+
+/// Draw `line` at `y`, first filling the whole row with its style when that has a
+/// background or is reversed, as selected rows and shaded blocks are.
+pub fn set_line_filled(buf: &mut Buffer, x: u16, y: u16, line: &Line<'_>, width: u16) {
+    let style = line.style;
+    if style.bg.is_some() || style.add_modifier.contains(Modifier::REVERSED) {
+        buf.set_style(Rect::new(x, y, width, 1), style);
+    }
+    buf.set_line(x, y, line, width);
 }
 
 /// A diff row's kind.

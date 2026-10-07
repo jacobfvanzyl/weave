@@ -4,7 +4,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -13,6 +12,7 @@ use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::AvailableCommandInput;
 
 use crate::history_cell::dim;
+use crate::style;
 
 /// Rows shown at once; the list scrolls to keep the selection visible.
 pub const VISIBLE_ROWS: usize = 6;
@@ -117,21 +117,23 @@ impl CommandPopup {
             .enumerate()
         {
             let selected = index == self.selected;
-            let style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+            let style = Style::default().add_modifier(Modifier::BOLD);
             let marker = if selected { "› " } else { "  " };
-            let line = Line::from(vec![
+            let description = if selected {
+                Style::default()
+            } else {
+                dim()
+            };
+            let mut line = Line::from(vec![
                 Span::styled(format!("{marker}/{:<name_width$}", command.name), style),
-                Span::styled(format!(" {}", command.description), dim()),
+                Span::styled(format!(" {}", command.description), description),
             ]);
+            if selected {
+                line = line.style(style::selection());
+            }
             let y = area.y + u16::try_from(row).unwrap_or(0);
             if y < area.bottom() {
-                buf.set_line(area.x, y, &line, area.width);
+                style::set_line_filled(buf, area.x, y, &line, area.width);
             }
         }
     }
