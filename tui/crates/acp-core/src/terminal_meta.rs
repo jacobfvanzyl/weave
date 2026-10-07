@@ -19,12 +19,21 @@
 use agent_client_protocol::schema::v1::Meta;
 use agent_client_protocol::schema::v1::SessionUpdate;
 use agent_client_protocol::schema::v1::TerminalExitStatus;
+use agent_client_protocol::schema::v1::TerminalId;
+use agent_client_protocol::schema::v1::ToolCallId;
 use serde_json::Value;
 
 use crate::AgentEvent;
 
 /// The `clientCapabilities._meta` key that asks for appended output chunks.
 pub(crate) const CAPABILITY: &str = "terminal_output_delta";
+
+/// The terminal under which an agent using the extension reports a tool call's command:
+/// named after the call. Commands it shows without terminal content (codex-acp's reads and
+/// searches) still report their output there.
+pub fn extension_terminal_id(tool_call_id: &ToolCallId) -> TerminalId {
+    TerminalId::new(tool_call_id.to_string())
+}
 
 /// The terminal events in an update's `_meta`, output before exit.
 pub(crate) fn terminal_events(update: &SessionUpdate) -> Vec<AgentEvent> {

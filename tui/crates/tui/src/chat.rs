@@ -48,6 +48,7 @@ use crate::command_popup::CommandPopup;
 use crate::command_popup::PopupAction;
 use crate::composer::Composer;
 use crate::composer::ComposerAction;
+use crate::conventions::thought_heading;
 use crate::elicitation::ElicitationOutcome;
 use crate::elicitation::ElicitationView;
 use crate::footer;
@@ -1683,17 +1684,6 @@ fn clock_label() -> String {
     }
 }
 
-/// The heading of the latest `**Heading**` line in a thought, as Codex takes status headers
-/// from reasoning summaries.
-fn thought_heading(thought: &str) -> Option<String> {
-    thought.lines().rev().find_map(|line| {
-        let inner = line.trim().strip_prefix("**")?;
-        let end = inner.find("**")?;
-        let heading = inner[..end].trim();
-        (!heading.is_empty()).then(|| heading.to_owned())
-    })
-}
-
 fn content_text(content: &ContentBlock) -> String {
     match content {
         ContentBlock::Text(text) => text.text.clone(),
@@ -2346,9 +2336,10 @@ mod tests {
     /// A finished command that printed ten lines.
     fn ten_line_command(chat: &mut ChatWidget) {
         chat.handle_agent_event(update(SessionUpdate::ToolCall(
-            ToolCall::new("t1", "`seq 1 10`")
+            ToolCall::new("t1", "seq 1 10")
                 .kind(ToolKind::Execute)
                 .status(ToolCallStatus::InProgress)
+                .raw_input(serde_json::json!({"command": "seq 1 10"}))
                 .content(vec![ToolCallContent::Terminal(Terminal::new("term"))]),
         )));
         chat.handle_agent_event(AgentEvent::TerminalOutput {

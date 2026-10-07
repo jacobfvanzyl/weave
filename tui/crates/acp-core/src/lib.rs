@@ -25,6 +25,7 @@ pub use handle::is_auth_required;
 pub use requests::ElicitationRequest;
 pub use requests::PermissionRequest;
 pub use requests::RequestKey;
+pub use terminal_meta::extension_terminal_id;
 pub use trace::ProtocolTrace;
 pub use trace::trace_events;
 

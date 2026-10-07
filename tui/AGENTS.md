@@ -118,6 +118,10 @@ agent output, so keep them out of the repository.
   smoke check against each one.
 - Advertise only client capabilities that are fully implemented, and gate every optional
   agent method on its capability in `acp-core` (`AgentHandle`), before anything is sent.
+- Never branch on which agent is connected. Anything read beyond what ACP defines (the
+  shapes of `rawInput`, title wording, thought headings) lives in `tui/src/conventions.rs`,
+  with the agents that use it and a fallback to the title; `_meta` extensions are advertised
+  in `clientCapabilities._meta`, as the spec asks, and handled in `acp-core`.
 - URL elicitations: show the full URL and its host, default to not opening, and open only
   on explicit consent. Never fetch the URL from the client.
 - Preserve credentials: agents authenticate with their own CLI logins, and this

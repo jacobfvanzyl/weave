@@ -20,7 +20,7 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use serde_json::Value;
+use weave_acp_core::extension_terminal_id;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::Diff;
 use weave_acp_core::schema::TerminalId;
@@ -32,6 +32,8 @@ use weave_acp_core::schema::ToolCallStatus;
 use weave_acp_core::schema::ToolCallUpdateFields;
 use weave_acp_core::schema::ToolKind;
 
+use crate::conventions::ToolInput;
+use crate::conventions::title_without_verb;
 use crate::highlight;
 use crate::permission::Subject;
 use crate::status::activity_bullet;
@@ -73,7 +75,8 @@ pub struct ToolCallCell {
     pub status: ToolCallStatus,
     content: Vec<ToolCallContent>,
     locations: Vec<ToolCallLocation>,
-    raw_input: Option<Value>,
+    /// What its `rawInput` says, where it follows a known convention.
+    input: ToolInput,
     started: Instant,
 }
 
@@ -86,7 +89,7 @@ impl ToolCallCell {
             status: call.status,
             content: call.content,
             locations: call.locations,
-            raw_input: call.raw_input,
+            input: ToolInput::from_raw(call.raw_input.as_ref()),
             started: Instant::now(),
         }
     }
@@ -118,7 +121,7 @@ impl ToolCallCell {
             self.locations.clone_from(locations);
         }
         if let Some(raw_input) = &fields.raw_input {
-            self.raw_input = Some(raw_input.clone());
+            self.input = ToolInput::from_raw(Some(raw_input));
         }
     }
 
@@ -139,7 +142,7 @@ impl ToolCallCell {
     }
 
     fn own_terminal(&self) -> TerminalId {
-        TerminalId::new(self.id.to_string())
+        extension_terminal_id(&self.id)
     }
 
     pub fn is_finished(&self) -> bool {
@@ -247,53 +250,22 @@ impl ToolCallCell {
         rows
     }
 
-    /// The command an execute call runs: its raw input's `command` when given, else its title.
-    /// The command an execute call runs: its raw input's `command`, or a title that is code
-    /// (in backticks). `None` when the title only describes the command.
+    /// The command an execute call runs, when its raw input says.
     fn command(&self) -> Option<String> {
-        let from_input = self
-            .raw_input
-            .as_ref()
-            .and_then(|input| match input.get("command")? {
-                Value::String(command) => Some(command.clone()),
-                Value::Array(parts) => {
-                    let parts: Vec<&str> = parts.iter().filter_map(Value::as_str).collect();
-                    // `bash -lc script` shows as the script, as Codex shows it.
-                    match parts.as_slice() {
-                        [shell, flag, script]
-                            if shell.ends_with("sh")
-                                && flag.starts_with('-')
-                                && flag.contains('c') =>
-                        {
-                            Some((*script).to_owned())
-                        }
-                        _ => Some(parts.join(" ")),
-                    }
-                }
-                _ => None,
-            });
-        let title = self.title().trim();
-        from_input.or_else(|| {
-            (title.len() > 1 && title.starts_with('`') && title.ends_with('`'))
-                .then(|| title.trim_matches('`').to_owned())
-        })
+        self.input.command.clone()
     }
 
     fn fetch_target(&self) -> String {
-        let input = |key: &str| {
-            self.raw_input
-                .as_ref()
-                .and_then(|input| input.get(key))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        };
-        input("url").unwrap_or_else(|| self.title().to_owned())
+        self.input
+            .url
+            .clone()
+            .unwrap_or_else(|| title_without_verb(self.title(), &["fetch"]))
     }
 
     fn edit_target(&self, cwd: &Path) -> String {
         match self.locations.first() {
             Some(location) => display_path(&location.path, cwd),
-            None => strip_verb(
+            None => title_without_verb(
                 self.title(),
                 &["edit", "write", "update", "create", "delete", "move"],
             ),
@@ -351,11 +323,7 @@ impl ToolCallCell {
         if self.kind != ToolKind::Fetch {
             return None;
         }
-        self.raw_input
-            .as_ref()
-            .and_then(|input| input.get("query"))
-            .and_then(Value::as_str)
-            .map(str::to_owned)
+        self.input.query.clone()
     }
 
     /// Text and terminal output, as plain lines, with how a terminal ended.
@@ -933,7 +901,7 @@ impl ToolCallCell {
     /// File names a read covers, or its title without the verb.
     fn read_names(&self, cwd: &Path) -> Vec<String> {
         if self.locations.is_empty() {
-            return vec![strip_verb(self.title(), &["read"])];
+            return vec![title_without_verb(self.title(), &["read"])];
         }
         // File names only, as Codex lists what it read.
         self.locations
@@ -943,33 +911,13 @@ impl ToolCallCell {
     }
 
     fn search_target(&self) -> String {
-        let input = |key: &str| {
-            self.raw_input
-                .as_ref()
-                .and_then(|input| input.get(key))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        };
-        match (input("pattern").or_else(|| input("query")), input("path")) {
+        let input = &self.input;
+        match (input.pattern.as_ref().or(input.query.as_ref()), &input.path) {
             (Some(pattern), Some(path)) => format!("{pattern} in {path}"),
-            (Some(pattern), None) => pattern,
-            _ => strip_verb(self.title(), &["search", "grep", "find", "glob"]),
+            (Some(pattern), None) => pattern.clone(),
+            _ => title_without_verb(self.title(), &["search", "grep", "find", "glob"]),
         }
     }
-}
-
-/// `title` without a leading verb from `verbs` and without code backticks.
-fn strip_verb(title: &str, verbs: &[&str]) -> String {
-    let trimmed = title.trim();
-    let rest = verbs
-        .iter()
-        .find_map(|verb| {
-            let head = trimmed.get(..verb.len())?;
-            (head.eq_ignore_ascii_case(verb) && trimmed[verb.len()..].starts_with(' '))
-                .then(|| trimmed[verb.len()..].trim_start())
-        })
-        .unwrap_or(trimmed);
-    rest.replace('`', "")
 }
 
 fn content_lines(content: &ContentBlock) -> Vec<String> {
@@ -1058,9 +1006,10 @@ mod tests {
 
     #[test]
     fn silent_commands_say_so_and_long_commands_wrap_under_a_bar() {
-        let call = ToolCall::new("t1", "`true`")
+        let call = ToolCall::new("t1", "true")
             .kind(ToolKind::Execute)
-            .status(ToolCallStatus::Completed);
+            .status(ToolCallStatus::Completed)
+            .raw_input(serde_json::json!({"command": "true"}));
         let cell = ToolCallCell::new(call);
         assert_eq!(
             render(&cell, false, &TerminalTranscripts::new()),
@@ -1068,10 +1017,11 @@ mod tests {
         );
 
         let long =
-            "`cargo test --workspace --all-features -- --nocapture --test-threads 1 --exact name`";
+            "cargo test --workspace --all-features -- --nocapture --test-threads 1 --exact name";
         let call = ToolCall::new("t2", long)
             .kind(ToolKind::Execute)
-            .status(ToolCallStatus::InProgress);
+            .status(ToolCallStatus::InProgress)
+            .raw_input(serde_json::json!({ "command": long }));
         let rows = render(&ToolCallCell::new(call), false, &TerminalTranscripts::new());
         assert_eq!(
             rows[0],

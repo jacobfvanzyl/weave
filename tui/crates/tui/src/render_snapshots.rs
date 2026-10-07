@@ -383,9 +383,10 @@ fn render_view(height: u16, render: impl FnOnce(Rect, &mut Buffer)) -> String {
 fn prompt_permission() {
     // The subject comes from the tool call, as a live permission request's does.
     let call = ToolCallCell::new(
-        ToolCall::new("t1", "`cargo test`")
+        ToolCall::new("t1", "cargo test")
             .kind(ToolKind::Execute)
-            .status(ToolCallStatus::Pending),
+            .status(ToolCallStatus::Pending)
+            .raw_input(serde_json::json!({"command": "cargo test"})),
     );
     let view = PermissionView::new(
         call.permission_subject(&PathBuf::from("/repo")),
