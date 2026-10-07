@@ -6,6 +6,7 @@
 mod app;
 mod attachments;
 mod chat;
+mod clipboard;
 mod command_popup;
 mod composer;
 mod conventions;

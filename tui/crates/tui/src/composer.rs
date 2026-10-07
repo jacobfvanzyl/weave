@@ -63,6 +63,11 @@ impl Composer {
         self.shell = false;
     }
 
+    /// The character just before the cursor.
+    pub fn char_before_cursor(&self) -> Option<char> {
+        self.text[..self.cursor].chars().next_back()
+    }
+
     pub fn is_shell(&self) -> bool {
         self.shell
     }

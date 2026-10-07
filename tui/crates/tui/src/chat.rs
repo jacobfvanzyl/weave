@@ -45,6 +45,7 @@ use weave_acp_core::schema::ToolCallId;
 use weave_acp_core::schema::ToolCallStatus;
 
 use crate::attachments::Attachment;
+use crate::clipboard;
 use crate::command_popup;
 use crate::command_popup::CommandPopup;
 use crate::command_popup::PopupAction;
@@ -126,6 +127,9 @@ pub enum AppCommand {
     },
     /// Stop a command started with [`AppCommand::RunShell`].
     KillShell(String),
+    /// Ctrl+V: attach the clipboard's image; it comes back through
+    /// [`ChatWidget::attach_image`].
+    PasteImage,
     /// Something needs the user, such as a finished turn or an approval; the app raises a
     /// desktop notification when the terminal isn't focused.
     Notify(String),
@@ -222,6 +226,8 @@ pub struct ChatWidget {
     last_reply: Option<String>,
     /// Shell commands run so far, for naming the next.
     shell_runs: usize,
+    /// Images pasted into prompts, `[image 1]` first.
+    images: Vec<PathBuf>,
     /// The `?` shortcuts panel is open.
     shortcuts_open: bool,
     /// What the footer's status line shows.
@@ -269,6 +275,7 @@ impl ChatWidget {
             copied: None,
             last_reply: None,
             shell_runs: 0,
+            images: Vec::new(),
             shortcuts_open: false,
             status_items: StatusItem::DEFAULT.to_vec(),
         }
@@ -890,9 +897,45 @@ impl ChatWidget {
             return;
         }
         if self.permissions.is_empty() && self.settings.is_none() && self.session_picker.is_none() {
+            // A dragged-in image file pastes as its path; attach it instead, as Codex does.
+            if !self.composer.is_shell()
+                && let Some(path) = clipboard::pasted_image_path(text, &self.cwd)
+            {
+                self.attach_image(path);
+                return;
+            }
             self.composer.insert_str(text);
             self.sync_popup();
         }
+    }
+
+    /// Attach an image to the draft, shown there as `[image N]` as Codex shows them.
+    pub fn attach_image(&mut self, path: PathBuf) {
+        self.images.push(path);
+        let space = self
+            .composer
+            .char_before_cursor()
+            .is_some_and(|ch| !ch.is_whitespace());
+        let lead = if space { " " } else { "" };
+        self.composer
+            .insert_str(&format!("{lead}[image {}] ", self.images.len()));
+        self.sync_popup();
+    }
+
+    /// The images a prompt's text still refers to, with their labels.
+    pub fn prompt_images(&self, text: &str) -> Vec<(String, PathBuf)> {
+        self.images
+            .iter()
+            .enumerate()
+            .map(|(index, path)| (format!("image {}", index + 1), path))
+            .filter(|(label, _)| text.contains(&format!("[{label}]")))
+            .map(|(label, path)| (label, path.clone()))
+            .collect()
+    }
+
+    /// Show a note from outside the conversation.
+    pub fn report_info(&mut self, message: &str) {
+        self.push_cell(TranscriptCell::info(message));
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<AppCommand> {
@@ -1052,6 +1095,9 @@ impl ChatWidget {
         {
             self.shortcuts_open = true;
             return Vec::new();
+        }
+        if ctrl && key.code == KeyCode::Char('v') {
+            return vec![AppCommand::PasteImage];
         }
         if ctrl && key.code == KeyCode::Char('g') {
             return vec![AppCommand::EditPrompt(self.composer.text().to_owned())];
@@ -2692,6 +2738,24 @@ mod tests {
         assert_eq!(
             history(&mut chat),
             ["• You ran ls", "  └ a.rs", "", "• next"]
+        );
+    }
+
+    #[test]
+    fn pasted_images_become_tokens_the_prompt_refers_to() {
+        let mut chat = chat();
+        chat.handle_paste("what is");
+        chat.attach_image(PathBuf::from("/tmp/a.png"));
+        chat.attach_image(PathBuf::from("/tmp/b.png"));
+        assert_eq!(chat.composer.text(), "what is [image 1] [image 2] ");
+        assert_eq!(
+            chat.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL)),
+            [AppCommand::PasteImage]
+        );
+        // Deleting a token drops its image.
+        assert_eq!(
+            chat.prompt_images("what is [image 2]"),
+            [("image 2".to_owned(), PathBuf::from("/tmp/b.png"))]
         );
     }
 }

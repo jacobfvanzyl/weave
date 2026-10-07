@@ -27,6 +27,7 @@ use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
 use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
+use crate::clipboard;
 use crate::footer::StatusItem;
 use crate::input::Input;
 use crate::session::OpenedSession;
@@ -84,6 +85,8 @@ enum AppEvent {
         previous: Option<SessionId>,
     },
     SessionDeleted(SessionId, Result<(), Error>),
+    /// The clipboard's image, saved for attaching, or why there wasn't one.
+    ImagePasted(Result<std::path::PathBuf, String>),
     /// Output from a shell-mode command, then how it ended.
     ShellOutput(String, String),
     ShellExited(String, TerminalExitStatus),
@@ -279,6 +282,14 @@ impl App {
                 chat.session_deleted(&session_id, result);
                 Vec::new()
             }
+            AppEvent::ImagePasted(Ok(path)) => {
+                chat.attach_image(path);
+                Vec::new()
+            }
+            AppEvent::ImagePasted(Err(reason)) => {
+                chat.report_info(&format!("Couldn't paste an image: {reason}"));
+                Vec::new()
+            }
             AppEvent::ShellOutput(id, text) => {
                 chat.shell_output(&id, &text);
                 Vec::new()
@@ -304,8 +315,9 @@ impl App {
                         .agent()
                         .map(|agent| agent.agent_capabilities.prompt_capabilities.clone())
                         .unwrap_or_default();
+                    let images = chat.prompt_images(&text);
                     let (prompt, attachments) =
-                        prompt_blocks(&text, &self.setup.cwd, &capabilities);
+                        prompt_blocks(&text, &self.setup.cwd, &capabilities, &images);
                     chat.note_attachments(&attachments);
                     if let Err(error) = self.handle.prompt(session_id, prompt) {
                         chat.prompt_failed(&error);
@@ -365,6 +377,12 @@ impl App {
                         let cwd = self.setup.cwd.clone();
                         tokio::spawn(run_shell(id, command, cwd, results, killed));
                     }
+                }
+                AppCommand::PasteImage => {
+                    self.spawn(async {
+                        let saved = tokio::task::spawn_blocking(clipboard::save_image).await;
+                        AppEvent::ImagePasted(saved.unwrap_or_else(|error| Err(error.to_string())))
+                    });
                 }
                 AppCommand::KillShell(id) => {
                     if let Some(kill) = self.shells.remove(&id) {

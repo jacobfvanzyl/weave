@@ -32,10 +32,12 @@ pub struct Attachment {
 }
 
 /// The prompt's content blocks: the text, then one block per mentioned file that exists.
+/// `images` are files pasted into the prompt, each with the label it shows as there.
 pub fn prompt_blocks(
     text: &str,
     cwd: &Path,
     capabilities: &PromptCapabilities,
+    images: &[(String, PathBuf)],
 ) -> (Vec<ContentBlock>, Vec<Attachment>) {
     let mut blocks = vec![ContentBlock::Text(TextContent::new(text))];
     let mut attachments = Vec::new();
@@ -59,6 +61,19 @@ pub fn prompt_blocks(
             });
             blocks.push(block);
             seen.push(path);
+        }
+    }
+    for (label, path) in images {
+        if seen.contains(path) {
+            continue;
+        }
+        if let Some((block, kind)) = attach(path, capabilities) {
+            attachments.push(Attachment {
+                name: label.clone(),
+                kind,
+            });
+            blocks.push(block);
+            seen.push(path.clone());
         }
     }
     (blocks, attachments)
@@ -172,6 +187,7 @@ mod tests {
             "see @notes.md, @shot.png and @clip.wav plus @data.bin",
             dir.path(),
             &all,
+            &[],
         );
         assert_eq!(
             kinds(&blocks),
@@ -193,6 +209,7 @@ mod tests {
             "@notes.md @shot.png @clip.wav",
             dir.path(),
             &PromptCapabilities::new(),
+            &[],
         );
         assert_eq!(
             kinds(&blocks),
@@ -207,6 +224,7 @@ mod tests {
             "@missing.txt @notes.md @notes.md email@example.com",
             dir.path(),
             &PromptCapabilities::new(),
+            &[],
         );
         assert_eq!(kinds(&blocks), ["text", "resource_link"]);
         assert_eq!(attachments.len(), 1);

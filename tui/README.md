@@ -38,6 +38,7 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Ctrl+T | Full transcript: whole command output, diffs and thoughts (a pager inline) |
 | `?` | Keyboard shortcuts (on an empty composer) |
 | Ctrl+G | Edit the prompt in `$VISUAL` / `$EDITOR` |
+| Ctrl+V | Paste an image from the clipboard as `[image N]` (dragging an image file in works too) |
 | `!` | Shell mode: run a command in the session directory (shown here, not sent to the agent) |
 
 Permission requests, agent questions (forms and links) and pickers take over the input

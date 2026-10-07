@@ -277,6 +277,7 @@ pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
                 ("/", "Commands"),
                 ("@", "Attach a file"),
                 ("!", "Shell command"),
+                ("⌃v", "Paste image"),
                 ("⇧enter", "New line"),
                 ("enter", "Send or queue"),
                 ("⌃g", "External editor"),
