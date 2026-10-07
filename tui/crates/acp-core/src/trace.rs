@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
@@ -20,10 +21,12 @@ pub struct ProtocolTrace {
 }
 
 impl ProtocolTrace {
+    /// Append to `path`, creating it if needed, so reconnects extend one trace.
     pub fn create(path: &Path) -> std::io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
         Ok(Self {
             started: Instant::now(),
-            out: Mutex::new(BufWriter::new(File::create(path)?)),
+            out: Mutex::new(BufWriter::new(file)),
         })
     }
 

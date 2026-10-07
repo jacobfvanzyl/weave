@@ -1,4 +1,4 @@
-//! Agent selection and session options shared by the TUI and `smoke`.
+//! Agent selection and session options shared by every subcommand.
 
 use std::path::PathBuf;
 
@@ -7,12 +7,12 @@ use anyhow::bail;
 use clap::Args;
 use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
-use weave_acp_core::ProtocolTrace;
-use weave_acp_core::preset_ids;
+
+use crate::config::Config;
 
 #[derive(Args)]
 pub struct AgentArgs {
-    /// Built-in agent to launch: claude, codex or gemini.
+    /// Agent to launch: a preset (claude, codex, gemini) or one defined in the config file.
     #[arg(long, conflicts_with = "command")]
     agent: Option<String>,
 
@@ -24,9 +24,17 @@ pub struct AgentArgs {
     #[arg(long)]
     cwd: Option<PathBuf>,
 
+    /// An extra workspace root for the session; repeatable. Needs agent support.
+    #[arg(long = "add-dir", value_name = "DIR")]
+    add_dirs: Vec<PathBuf>,
+
     /// Append every line exchanged with the agent to this JSONL file.
     #[arg(long)]
     trace: Option<PathBuf>,
+
+    /// Config file. Defaults to ~/.config/weave/tui.toml.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     /// Don't offer the agent fs/read_text_file and fs/write_text_file.
     #[arg(long)]
@@ -37,47 +45,67 @@ pub struct AgentArgs {
     no_terminal: bool,
 }
 
+/// Everything needed to launch the agent and set up its sessions.
+pub struct Launch {
+    pub config: Config,
+    pub spec: AgentSpec,
+    pub options: ClientOptions,
+    pub cwd: PathBuf,
+    pub additional_directories: Vec<PathBuf>,
+    pub trace: Option<PathBuf>,
+}
+
 impl AgentArgs {
-    pub fn spec(&self) -> anyhow::Result<AgentSpec> {
-        match (&self.agent, self.command.split_first()) {
-            (Some(id), _) => AgentSpec::preset(id).with_context(|| {
-                let known = preset_ids().collect::<Vec<_>>().join(", ");
-                format!("unknown agent {id:?}; expected one of {known}, or a command after `--`")
-            }),
-            (None, Some((command, rest))) => Ok(AgentSpec::new(command, rest)),
-            (None, None) => {
-                let known = preset_ids().collect::<Vec<_>>().join(", ");
-                bail!("choose an agent with --agent ({known}) or give a command after `--`")
+    pub fn launch(&self) -> anyhow::Result<Launch> {
+        let config = Config::load(self.config.as_deref())?;
+        let (spec, mut options) = match (&self.agent, self.command.split_first()) {
+            (Some(id), _) => config.agent(id)?,
+            (None, Some((command, rest))) => {
+                (AgentSpec::new(command, rest), ClientOptions::default())
             }
+            (None, None) => match &config.default_agent {
+                Some(id) => config.agent(id)?,
+                None => {
+                    let known = weave_acp_core::preset_ids().collect::<Vec<_>>().join(", ");
+                    bail!(
+                        "choose an agent with --agent ({known}), give a command after `--`, \
+                         or set default_agent in the config file"
+                    )
+                }
+            },
+        };
+        if self.no_fs {
+            options.read_files = false;
+            options.write_files = false;
         }
+        if self.no_terminal {
+            options.terminals = false;
+        }
+        let additional_directories = self
+            .add_dirs
+            .iter()
+            .map(|dir| {
+                dir.canonicalize()
+                    .with_context(|| format!("directory {}", dir.display()))
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(Launch {
+            config,
+            spec,
+            options,
+            cwd: self.cwd()?,
+            additional_directories,
+            trace: self.trace.clone(),
+        })
     }
 
     /// The absolute session directory ACP requires.
-    pub fn cwd(&self) -> anyhow::Result<PathBuf> {
+    fn cwd(&self) -> anyhow::Result<PathBuf> {
         let cwd = match &self.cwd {
             Some(cwd) => cwd.clone(),
             None => std::env::current_dir()?,
         };
         cwd.canonicalize()
             .with_context(|| format!("session directory {}", cwd.display()))
-    }
-
-    /// The client services to advertise.
-    pub fn client_options(&self) -> ClientOptions {
-        ClientOptions {
-            read_files: !self.no_fs,
-            write_files: !self.no_fs,
-            terminals: !self.no_terminal,
-        }
-    }
-
-    pub fn trace(&self) -> anyhow::Result<Option<ProtocolTrace>> {
-        self.trace
-            .as_deref()
-            .map(|path| {
-                ProtocolTrace::create(path)
-                    .with_context(|| format!("creating trace {}", path.display()))
-            })
-            .transpose()
     }
 }

@@ -1,18 +1,21 @@
 mod agent_args;
+mod config;
 mod smoke;
+mod start;
 
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use anyhow::Context;
+use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
-use weave_acp_core::AgentConnection;
-use weave_acp_core::schema::ErrorCode;
 
 use crate::agent_args::AgentArgs;
+use crate::start::SignedIn;
+use crate::start::StartMode;
 
 /// Terminal client for ACP agents.
 #[derive(Parser)]
@@ -24,15 +27,49 @@ struct Cli {
     #[command(flatten)]
     agent: AgentArgs,
 
+    #[command(flatten)]
+    session: SessionArgs,
+
     /// Write diagnostics, including agent stderr, to this file.
     #[arg(long)]
     log_file: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct SessionArgs {
+    /// Reopen a session: by id, or choose one from a list when no id is given.
+    #[arg(long, value_name = "SESSION_ID", num_args = 0..=1, conflicts_with = "continue_last")]
+    resume: Option<Option<String>>,
+
+    /// Reopen the most recent session in this directory.
+    #[arg(long = "continue")]
+    continue_last: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Run one prompt headlessly and print every ACP event the agent sends.
     Smoke(smoke::SmokeArgs),
+    /// Sign in to the agent with one of the methods it offers.
+    Login(LoginArgs),
+    /// Sign out of the agent, if it supports signing out.
+    Logout(LogoutArgs),
+}
+
+#[derive(Args)]
+struct LoginArgs {
+    #[command(flatten)]
+    agent: AgentArgs,
+
+    /// The sign-in method's id; asked for when omitted.
+    #[arg(long)]
+    method: Option<String>,
+}
+
+#[derive(Args)]
+struct LogoutArgs {
+    #[command(flatten)]
+    agent: AgentArgs,
 }
 
 #[tokio::main]
@@ -40,13 +77,16 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Smoke(args)) => {
-            // stdout carries command output; diagnostics (including agent stderr at
-            // `RUST_LOG=agent_stderr=debug`) go to stderr.
-            tracing_subscriber::fmt()
-                .with_env_filter(env_filter("warn"))
-                .with_writer(std::io::stderr)
-                .init();
+            log_to_stderr();
             smoke::run(args).await
+        }
+        Some(Command::Login(args)) => {
+            log_to_stderr();
+            login(args).await
+        }
+        Some(Command::Logout(args)) => {
+            log_to_stderr();
+            logout(args).await
         }
         None => {
             // The TUI owns the terminal, so diagnostics can only go to a file.
@@ -59,55 +99,71 @@ async fn main() -> anyhow::Result<()> {
                     .with_ansi(false)
                     .init();
             }
-            run_tui(cli.agent).await
+            run_tui(cli.agent, cli.session).await
         }
     }
+}
+
+/// Diagnostics (including agent stderr at `RUST_LOG=agent_stderr=debug`) go to stderr.
+fn log_to_stderr() {
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter("warn"))
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 fn env_filter(default: &str) -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
 }
 
-async fn run_tui(args: AgentArgs) -> anyhow::Result<()> {
-    let spec = args.spec()?;
-    let cwd = args.cwd()?;
-    let trace = args.trace()?;
-
-    eprintln!("Starting {}", spec.display_command());
-    let (connection, events) = AgentConnection::spawn(&spec, trace, args.client_options()).await?;
-    let init = match connection.initialize().await {
-        Ok(init) => init,
-        Err(error) => {
-            connection.shutdown().await;
-            return Err(error.into());
-        }
+async fn run_tui(args: AgentArgs, session: SessionArgs) -> anyhow::Result<()> {
+    let launch = args.launch()?;
+    let mode = match (session.resume, session.continue_last) {
+        (Some(Some(id)), _) => StartMode::Resume(id.into()),
+        (Some(None), _) => StartMode::Pick,
+        (None, true) => StartMode::Continue,
+        (None, false) => StartMode::New,
     };
-    let session = match connection.new_session(cwd.clone()).await {
-        Ok(session) => session,
-        Err(error) => {
-            connection.shutdown().await;
-            if error.code == ErrorCode::AuthRequired {
-                anyhow::bail!(
-                    "the agent requires authentication ({error}); sign in with its own CLI first"
-                );
-            }
-            return Err(error).context("session/new");
-        }
-    };
-
-    let (agent_name, agent_version) = match init.agent_info {
+    eprintln!("Starting {}", launch.spec.display_command());
+    let started = start::start(&launch, &mode).await?;
+    let agent = started
+        .connection
+        .agent()
+        .and_then(|agent| agent.agent_info.clone());
+    let (agent_name, agent_version) = match agent {
         Some(info) => (info.title.unwrap_or(info.name), Some(info.version)),
-        None => (spec.command.clone(), None),
+        None => (launch.spec.command.clone(), None),
     };
     weave_tui::run(weave_tui::Session {
-        connection,
-        events,
-        session_id: session.session_id,
+        connection: started.connection,
+        events: started.events,
         agent_name,
         agent_version,
-        modes: session.modes,
-        config_options: session.config_options.unwrap_or_default(),
-        cwd,
+        setup: started.setup,
+        opened: started.opened,
+        notices: started.notices,
     })
     .await
+}
+
+async fn login(args: LoginArgs) -> anyhow::Result<()> {
+    let launch = args.agent.launch()?;
+    let (connection, _events) = start::connect(&launch).await?;
+    let result = start::sign_in(&connection, &launch.spec, args.method.as_deref()).await;
+    connection.shutdown().await;
+    match result? {
+        SignedIn::Ready => eprintln!("Signed in."),
+        SignedIn::Reconnect => eprintln!("Signed in. The next session will use it."),
+    }
+    Ok(())
+}
+
+async fn logout(args: LogoutArgs) -> anyhow::Result<()> {
+    let launch = args.agent.launch()?;
+    let (connection, _events) = start::connect(&launch).await?;
+    let result = connection.logout().await;
+    connection.shutdown().await;
+    result.context("logout")?;
+    eprintln!("Signed out.");
+    Ok(())
 }

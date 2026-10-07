@@ -21,12 +21,19 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use weave_acp_core::AgentEvent;
+use weave_acp_core::ElicitationRequest;
 use weave_acp_core::PermissionRequest;
 use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::ContentBlock;
+use weave_acp_core::schema::ContentChunk;
+use weave_acp_core::schema::ElicitationId;
+use weave_acp_core::schema::ElicitationMode;
+use weave_acp_core::schema::ElicitationScope;
 use weave_acp_core::schema::Error;
+use weave_acp_core::schema::ListSessionsResponse;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionConfigOption;
+use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
@@ -37,12 +44,19 @@ use crate::command_popup::CommandPopup;
 use crate::command_popup::PopupAction;
 use crate::composer::Composer;
 use crate::composer::ComposerAction;
+use crate::elicitation::ElicitationOutcome;
+use crate::elicitation::ElicitationView;
 use crate::history_cell;
 use crate::history_cell::SessionHeader;
 use crate::history_cell::ToolCallCell;
 use crate::history_cell::dim;
 use crate::permission::Decision;
 use crate::permission::PermissionView;
+use crate::session::OpenedSession;
+use crate::session::Reopened;
+use crate::session::SessionTarget;
+use crate::session_picker::PickerAction;
+use crate::session_picker::SessionPicker;
 use crate::settings;
 use crate::settings::PickerOutcome;
 use crate::settings::SettingChange;
@@ -61,7 +75,27 @@ pub enum AppCommand {
     Cancel,
     /// Change a session setting; the result comes back through [`ChatWidget::setting_changed`].
     ChangeSetting(SettingChange),
+    /// `session/list`; the result comes back through [`ChatWidget::sessions_listed`].
+    ListSessions {
+        all_directories: bool,
+        cursor: Option<String>,
+    },
+    /// Switch to another session (or a new one); see [`ChatWidget::begin_session`].
+    OpenSession {
+        target: SessionTarget,
+        title: Option<String>,
+    },
+    DeleteSession(SessionId),
+    /// Open a URL the user consented to in their browser.
+    OpenUrl(String),
     Quit,
+}
+
+/// Which optional session methods the agent offers.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SessionAbilities {
+    pub list: bool,
+    pub delete: bool,
 }
 
 struct Turn {
@@ -74,9 +108,23 @@ struct PendingPermission {
     view: PermissionView,
 }
 
+struct PendingElicitation {
+    request: ElicitationRequest,
+    view: ElicitationView,
+}
+
 pub struct ChatWidget {
     agent_name: String,
     cwd: PathBuf,
+    abilities: SessionAbilities,
+    /// The session prompts go to and whose events are shown; others' events are ignored.
+    active_session: Option<SessionId>,
+    /// Waiting for a session to finish loading; prompts wait until it has.
+    opening: bool,
+    session_picker: Option<SessionPicker>,
+    elicitations: VecDeque<PendingElicitation>,
+    /// URL elicitations the user accepted, awaiting their optional completion notice.
+    accepted_urls: HashSet<ElicitationId>,
     width: u16,
     pending_history: Vec<Line<'static>>,
     has_history: bool,
@@ -101,16 +149,16 @@ pub struct ChatWidget {
 }
 
 impl ChatWidget {
-    pub fn new(
-        agent_name: String,
-        cwd: PathBuf,
-        modes: Option<SessionModeState>,
-        config_options: Vec<SessionConfigOption>,
-        width: u16,
-    ) -> Self {
+    pub fn new(agent_name: String, cwd: PathBuf, abilities: SessionAbilities, width: u16) -> Self {
         Self {
             agent_name,
             cwd,
+            abilities,
+            active_session: None,
+            opening: false,
+            session_picker: None,
+            elicitations: VecDeque::new(),
+            accepted_urls: HashSet::new(),
             width,
             pending_history: Vec::new(),
             has_history: false,
@@ -121,8 +169,8 @@ impl ChatWidget {
             permissions: VecDeque::new(),
             composer: Composer::default(),
             queued: VecDeque::new(),
-            modes,
-            config_options,
+            modes: None,
+            config_options: Vec::new(),
             settings: None,
             commands: Vec::new(),
             popup: CommandPopup::default(),
@@ -133,7 +181,8 @@ impl ChatWidget {
         }
     }
 
-    pub fn push_header(&mut self, agent_version: Option<&str>) {
+    /// The startup banner, followed by any `notices` worth the user's attention.
+    pub fn push_header(&mut self, agent_version: Option<&str>, notices: &[String]) {
         let settings = settings::summary(&self.config_options, self.modes.as_ref()).join(" · ");
         let header = SessionHeader {
             agent: &self.agent_name,
@@ -143,6 +192,104 @@ impl ChatWidget {
         };
         let lines = history_cell::session_header(&header, self.content_width());
         self.push_cell(lines);
+        for notice in notices {
+            let lines = history_cell::error(notice, self.content_width());
+            self.push_cell(lines);
+        }
+    }
+
+    /// Switch to `session_id`. Its events show from now on; a replay follows for loads.
+    pub fn begin_session(&mut self, session_id: SessionId, title: Option<&str>) {
+        self.finish_live_cells();
+        self.answer_pending_requests_cancelled();
+        // Tool call ids are only unique within a session, and a reload replays its own.
+        self.committed_tool_calls.clear();
+        self.turn = None;
+        self.queued.clear();
+        self.commands.clear();
+        self.modes = None;
+        self.config_options.clear();
+        self.context = None;
+        self.session_picker = None;
+        self.settings = None;
+        self.active_session = Some(session_id);
+        self.opening = true;
+        if let Some(title) = title {
+            let lines = history_cell::info(&format!("Session: {title}"), self.content_width());
+            self.push_cell(lines);
+        }
+    }
+
+    /// The session opened by [`Self::begin_session`] is ready for prompts.
+    pub fn session_ready(&mut self, opened: OpenedSession) {
+        if self.active_session.as_ref() != Some(&opened.session_id) {
+            let title = self.has_history.then_some("new session");
+            self.begin_session(opened.session_id.clone(), title);
+        }
+        self.end_stream();
+        self.opening = false;
+        self.modes = opened.modes;
+        self.config_options = opened.config_options;
+        if opened.reopened == Some(Reopened::Resumed) {
+            let lines = history_cell::info(
+                "Resumed; the agent did not replay earlier messages",
+                self.content_width(),
+            );
+            self.push_cell(lines);
+        }
+    }
+
+    /// Opening a session failed; go back to `previous` (or the picker, at startup).
+    pub fn session_failed(
+        &mut self,
+        error: &Error,
+        previous: Option<SessionId>,
+    ) -> Vec<AppCommand> {
+        self.opening = false;
+        self.push_error(&format!("Couldn't open the session: {error}"));
+        self.active_session = previous;
+        if self.active_session.is_none() && self.abilities.list {
+            return self.open_session_picker(true);
+        }
+        Vec::new()
+    }
+
+    /// Show the session picker; `startup` means there is no session to return to.
+    pub fn open_session_picker(&mut self, startup: bool) -> Vec<AppCommand> {
+        self.session_picker = Some(SessionPicker::new(self.abilities.delete, startup));
+        vec![AppCommand::ListSessions {
+            all_directories: false,
+            cursor: None,
+        }]
+    }
+
+    pub fn sessions_listed(&mut self, result: Result<ListSessionsResponse, Error>, append: bool) {
+        let Some(picker) = &mut self.session_picker else {
+            return;
+        };
+        match result {
+            Ok(response) => picker.listed(response.sessions, response.next_cursor, append),
+            Err(error) => picker.failed(format!("Couldn't list sessions: {error}")),
+        }
+    }
+
+    pub fn session_deleted(&mut self, session_id: &SessionId, result: Result<(), Error>) {
+        match (result, &mut self.session_picker) {
+            (Ok(()), Some(picker)) => picker.deleted(session_id),
+            (Ok(()), None) => {}
+            (Err(error), _) => self.push_error(&format!("Couldn't delete the session: {error}")),
+        }
+    }
+
+    pub fn active_session(&self) -> Option<&SessionId> {
+        self.active_session.as_ref()
+    }
+
+    /// Whether `session_id` is the active session, or no session is tracked yet.
+    fn is_active(&self, session_id: &SessionId) -> bool {
+        self.active_session
+            .as_ref()
+            .is_none_or(|active| active == session_id)
     }
 
     pub fn set_width(&mut self, width: u16) {
@@ -162,14 +309,41 @@ impl ChatWidget {
     pub fn handle_agent_event(&mut self, event: AgentEvent) -> Vec<AppCommand> {
         match event {
             AgentEvent::SessionUpdate(notification) => {
-                self.handle_update(notification.update);
+                if self.is_active(&notification.session_id) {
+                    self.handle_update(notification.update);
+                }
                 Vec::new()
             }
             AgentEvent::PermissionRequested(request) => {
-                self.handle_permission(request);
+                if self.is_active(&request.request.session_id) {
+                    self.handle_permission(request);
+                } else {
+                    let _ = request.cancel();
+                }
                 Vec::new()
             }
-            AgentEvent::TurnEnded { result, .. } => self.end_turn(result),
+            AgentEvent::ElicitationRequested(request) => {
+                self.handle_elicitation(request);
+                Vec::new()
+            }
+            AgentEvent::ElicitationCompleted(id) => {
+                // Unknown or already-completed ids are ignored, as the spec requires.
+                if self.accepted_urls.remove(&id) {
+                    let lines = history_cell::info(
+                        "The agent finished the step you opened in the browser",
+                        self.content_width(),
+                    );
+                    self.push_cell(lines);
+                }
+                Vec::new()
+            }
+            AgentEvent::TurnEnded { session_id, result } => {
+                if self.is_active(&session_id) {
+                    self.end_turn(result)
+                } else {
+                    Vec::new()
+                }
+            }
             AgentEvent::TerminalOutput { terminal_id, text } => {
                 self.terminals.entry(terminal_id).or_default().append(&text);
                 Vec::new()
@@ -186,7 +360,7 @@ impl ChatWidget {
             }
             AgentEvent::Disconnected(error) => {
                 self.finish_live_cells();
-                self.answer_pending_permissions_cancelled();
+                self.answer_pending_requests_cancelled();
                 self.turn = None;
                 self.disconnected = true;
                 let reason =
@@ -243,17 +417,13 @@ impl ChatWidget {
     fn handle_update(&mut self, update: SessionUpdate) {
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
-                self.stream_content(StreamKind::Agent, &chunk.content)
+                self.stream_content(StreamKind::Agent, &chunk)
             }
             SessionUpdate::AgentThoughtChunk(chunk) => {
-                self.stream_content(StreamKind::Thought, &chunk.content)
+                self.stream_content(StreamKind::Thought, &chunk)
             }
-            SessionUpdate::UserMessageChunk(chunk) => {
-                self.end_stream();
-                let lines =
-                    history_cell::user_message(&content_text(&chunk.content), self.content_width());
-                self.push_cell(lines);
-            }
+            // Sent when an agent replays a session's history.
+            SessionUpdate::UserMessageChunk(chunk) => self.stream_content(StreamKind::User, &chunk),
             SessionUpdate::ToolCall(call) => {
                 self.end_stream();
                 if self.committed_tool_calls.contains(&call.tool_call_id) {
@@ -342,11 +512,34 @@ impl ChatWidget {
             .push_back(PendingPermission { request, view });
     }
 
+    fn handle_elicitation(&mut self, request: ElicitationRequest) {
+        // A session-scoped request for a session not shown here cannot be answered by the user.
+        let scope = match &request.request.mode {
+            ElicitationMode::Form(form) => Some(&form.scope),
+            ElicitationMode::Url(url) => Some(&url.scope),
+            _ => None,
+        };
+        if let Some(ElicitationScope::Session(scope)) = scope
+            && !self.is_active(&scope.session_id)
+        {
+            let _ = request.cancel();
+            return;
+        }
+        match ElicitationView::new(&request.request, &self.agent_name) {
+            Some(view) => self
+                .elicitations
+                .push_back(PendingElicitation { request, view }),
+            None => {
+                let _ = request.cancel();
+            }
+        }
+    }
+
     fn end_turn(&mut self, result: Result<PromptResponse, Error>) -> Vec<AppCommand> {
         self.finish_live_cells();
         // An agent must resolve its permission requests before ending the turn; any left over
         // can no longer be answered meaningfully.
-        self.answer_pending_permissions_cancelled();
+        self.answer_pending_requests_cancelled();
         let was_cancelling = self.turn.take().is_some_and(|turn| turn.cancelling);
         match result {
             Ok(response) => {
@@ -377,7 +570,11 @@ impl ChatWidget {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
-        if self.permissions.is_empty() && self.settings.is_none() {
+        if let Some(pending) = self.elicitations.front_mut() {
+            pending.view.handle_paste(text);
+            return;
+        }
+        if self.permissions.is_empty() && self.settings.is_none() && self.session_picker.is_none() {
             self.composer.insert_str(text);
             self.sync_popup();
         }
@@ -405,6 +602,84 @@ impl ChatWidget {
                 Some(Decision::CancelTurn) => self.cancel_turn(),
                 None => Vec::new(),
             };
+        }
+
+        if let Some(pending) = self.elicitations.front_mut() {
+            let Some(outcome) = pending.view.handle_key(key) else {
+                return Vec::new();
+            };
+            let Some(pending) = self.elicitations.pop_front() else {
+                return Vec::new();
+            };
+            return match outcome {
+                ElicitationOutcome::Accept(content) => {
+                    let _ = pending.request.accept(content);
+                    Vec::new()
+                }
+                ElicitationOutcome::OpenUrl(url) => {
+                    if let ElicitationView::Url(view) = &pending.view {
+                        self.accepted_urls.insert(view.elicitation_id.clone());
+                    }
+                    let _ = pending.request.accept(None);
+                    vec![AppCommand::OpenUrl(url)]
+                }
+                ElicitationOutcome::Decline => {
+                    let _ = pending.request.decline();
+                    Vec::new()
+                }
+                ElicitationOutcome::Cancel => {
+                    let _ = pending.request.cancel();
+                    Vec::new()
+                }
+            };
+        }
+
+        if let Some(picker) = &mut self.session_picker {
+            let Some(action) = picker.handle_key(key) else {
+                return Vec::new();
+            };
+            return match action {
+                PickerAction::Open(session) => vec![AppCommand::OpenSession {
+                    target: SessionTarget::Existing(session.session_id),
+                    title: session.title,
+                }],
+                PickerAction::New => vec![AppCommand::OpenSession {
+                    target: SessionTarget::New,
+                    title: None,
+                }],
+                PickerAction::Close => {
+                    self.session_picker = None;
+                    Vec::new()
+                }
+                PickerAction::Delete(session_id) => vec![AppCommand::DeleteSession(session_id)],
+                PickerAction::List {
+                    all_directories,
+                    cursor,
+                } => {
+                    vec![AppCommand::ListSessions {
+                        all_directories,
+                        cursor,
+                    }]
+                }
+            };
+        }
+
+        if ctrl && key.code == KeyCode::Char('r') {
+            if self.turn.is_some() {
+                let lines = history_cell::info(
+                    "Finish or cancel the current turn before switching sessions",
+                    self.content_width(),
+                );
+                self.push_cell(lines);
+                return Vec::new();
+            }
+            if !self.abilities.list {
+                let lines =
+                    history_cell::info("This agent can't list its sessions", self.content_width());
+                self.push_cell(lines);
+                return Vec::new();
+            }
+            return self.open_session_picker(false);
         }
 
         if let Some(picker) = &mut self.settings {
@@ -503,11 +778,11 @@ impl ChatWidget {
 
     fn submit(&mut self, action: ComposerAction) -> Vec<AppCommand> {
         match action {
-            ComposerAction::Submit(text) if self.disconnected => {
+            ComposerAction::Submit(text) if self.disconnected || self.active_session.is_none() => {
                 self.composer.insert_str(&text);
                 Vec::new()
             }
-            ComposerAction::Submit(text) if self.turn.is_some() => {
+            ComposerAction::Submit(text) if self.turn.is_some() || self.opening => {
                 self.queued.push_back(text);
                 Vec::new()
             }
@@ -551,7 +826,7 @@ impl ChatWidget {
             return Vec::new();
         }
         turn.cancelling = true;
-        self.answer_pending_permissions_cancelled();
+        self.answer_pending_requests_cancelled();
         // Like Codex, give queued follow-ups back for editing rather than sending them.
         if !self.queued.is_empty() && self.composer.is_empty() {
             let restored = self.queued.drain(..).collect::<Vec<_>>().join("\n");
@@ -560,24 +835,33 @@ impl ChatWidget {
         vec![AppCommand::Cancel]
     }
 
-    fn answer_pending_permissions_cancelled(&mut self) {
+    /// Resolve every outstanding request as cancelled: permissions (as the protocol requires
+    /// on cancellation) and elicitations (dismissed with the turn).
+    fn answer_pending_requests_cancelled(&mut self) {
         for pending in self.permissions.drain(..) {
+            let _ = pending.request.cancel();
+        }
+        for pending in self.elicitations.drain(..) {
             let _ = pending.request.cancel();
         }
     }
 
-    fn stream_content(&mut self, kind: StreamKind, content: &ContentBlock) {
-        if self
-            .stream
-            .as_ref()
-            .is_some_and(|stream| stream.kind() != kind)
-        {
+    fn stream_content(&mut self, kind: StreamKind, chunk: &ContentChunk) {
+        // A new kind, or a different message id where the agent provides them, starts a
+        // new message; chunks without ids continue the current one.
+        let new_message = self.stream.as_ref().is_some_and(|stream| {
+            stream.kind() != kind
+                || matches!((stream.message_id(), &chunk.message_id), (Some(current), Some(next)) if current != next)
+        });
+        if new_message {
             self.end_stream();
         }
         let width = self.content_width();
+        let message_id = chunk.message_id.clone();
         let stream = self
             .stream
-            .get_or_insert_with(|| MessageStream::new(kind, width));
+            .get_or_insert_with(|| MessageStream::new(kind, width, message_id));
+        let content = &chunk.content;
         let first = !stream.has_committed();
         stream.push(&content_text(content));
         let lines = stream.take_complete();
@@ -770,6 +1054,12 @@ impl ChatWidget {
         if let Some(pending) = self.permissions.front() {
             return pending.view.desired_height(width);
         }
+        if let Some(pending) = self.elicitations.front() {
+            return pending.view.desired_height(width);
+        }
+        if let Some(picker) = &self.session_picker {
+            return picker.desired_height();
+        }
         if let Some(picker) = &self.settings {
             return picker.desired_height(&self.config_options, self.modes.as_ref());
         }
@@ -790,7 +1080,7 @@ impl ChatWidget {
         let status = self.status_lines(now);
         let has_status = !status.is_empty();
         lines.extend(status);
-        if has_status && !self.permissions.is_empty() {
+        if has_status && (!self.permissions.is_empty() || !self.elicitations.is_empty()) {
             lines.push(Line::default());
         }
         lines
@@ -822,6 +1112,11 @@ impl ChatWidget {
         let input_area = Rect::new(area.x, y, area.width, input_height);
         let cursor = if let Some(pending) = self.permissions.front() {
             pending.view.render(input_area, buf);
+            None
+        } else if let Some(pending) = self.elicitations.front() {
+            pending.view.render(input_area, buf)
+        } else if let Some(picker) = &self.session_picker {
+            picker.render(input_area, buf);
             None
         } else if let Some(picker) = &self.settings {
             picker.render(input_area, buf, &self.config_options, self.modes.as_ref());
@@ -869,6 +1164,7 @@ mod tests {
     use weave_acp_core::schema::SessionConfigOptionCategory;
     use weave_acp_core::schema::SessionConfigOptionValue;
     use weave_acp_core::schema::SessionConfigSelectOption;
+    use weave_acp_core::schema::SessionInfo;
     use weave_acp_core::schema::SessionNotification;
     use weave_acp_core::schema::Terminal;
     use weave_acp_core::schema::TerminalExitStatus;
@@ -883,7 +1179,23 @@ mod tests {
     use super::*;
 
     fn chat() -> ChatWidget {
-        ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, Vec::new(), 60)
+        chat_with(Vec::new())
+    }
+
+    /// A widget with session `s1` open and `options` as its settings.
+    fn chat_with(options: Vec<SessionConfigOption>) -> ChatWidget {
+        let abilities = SessionAbilities {
+            list: true,
+            delete: true,
+        };
+        let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, 60);
+        chat.session_ready(OpenedSession {
+            session_id: "s1".into(),
+            modes: None,
+            config_options: options,
+            reopened: None,
+        });
+        chat
     }
 
     fn update(update: SessionUpdate) -> AgentEvent {
@@ -1084,7 +1396,7 @@ mod tests {
             )
             .category(SessionConfigOptionCategory::Mode),
         ];
-        let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, options, 60);
+        let mut chat = chat_with(options);
         let change =
             SettingChange::ConfigOption("mode".into(), SessionConfigOptionValue::value_id("code"));
         assert_eq!(
@@ -1116,7 +1428,7 @@ mod tests {
     #[test]
     fn ctrl_o_opens_settings_and_applies_a_choice() {
         let options = vec![SessionConfigOption::boolean("verbose", "Verbose", false)];
-        let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, options, 60);
+        let mut chat = chat_with(options);
         assert!(
             chat.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
                 .is_empty()
@@ -1135,7 +1447,7 @@ mod tests {
     #[test]
     fn narrow_footers_shed_optional_hints_before_details() {
         let options = vec![SessionConfigOption::boolean("verbose", "Verbose", false)];
-        let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, options, 60);
+        let mut chat = chat_with(options);
         chat.context = Some((25, 100));
         let footer = chat.footer(60, Instant::now()).to_string();
         assert!(
@@ -1149,6 +1461,126 @@ mod tests {
             footer.trim_end(),
             "  ⏎ send · ⌃C quit      75% context left"
         );
+    }
+
+    #[test]
+    fn events_from_other_sessions_are_ignored() {
+        let mut chat = chat();
+        chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+            "elsewhere",
+            SessionUpdate::AgentMessageChunk(ContentChunk::new("stray\n".into())),
+        )));
+        assert!(history(&mut chat).is_empty());
+    }
+
+    #[test]
+    fn loading_a_session_replays_its_history_under_a_heading() {
+        let mut chat = chat();
+        chat.take_history();
+        chat.begin_session("s2".into(), Some("Fix the build"));
+        for update in [
+            SessionUpdate::UserMessageChunk(ContentChunk::new("fix it".into())),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new("Done.".into())),
+        ] {
+            chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+                "s2", update,
+            )));
+        }
+        chat.session_ready(OpenedSession {
+            session_id: "s2".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Loaded),
+        });
+        assert_eq!(
+            history(&mut chat),
+            ["• Session: Fix the build", "", "› fix it", "", "• Done."]
+        );
+        assert_eq!(
+            submit(&mut chat, "next"),
+            [AppCommand::Prompt("next".into())]
+        );
+    }
+
+    #[test]
+    fn replays_show_tool_calls_whose_ids_were_seen_in_another_session() {
+        let mut chat = chat();
+        let finished = || {
+            SessionUpdate::ToolCall(
+                ToolCall::new("call-1", "Run it")
+                    .kind(ToolKind::Execute)
+                    .status(ToolCallStatus::Completed),
+            )
+        };
+        chat.handle_agent_event(update(finished()));
+        chat.take_history();
+
+        chat.begin_session("s2".into(), None);
+        chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+            "s2",
+            finished(),
+        )));
+        assert_eq!(history(&mut chat), ["", "✓ Run it  execute"]);
+    }
+
+    #[test]
+    fn replayed_messages_with_different_ids_stay_separate() {
+        let mut chat = chat();
+        for (id, text) in [("u1", "first"), ("u2", "second")] {
+            let chunk = ContentChunk::new(text.into())
+                .message_id(weave_acp_core::schema::MessageId::new(id));
+            chat.handle_agent_event(update(SessionUpdate::UserMessageChunk(chunk)));
+        }
+        chat.handle_agent_event(text_chunk("reply"));
+        // The reply is still streaming, so it stays live; the user messages were committed apart.
+        assert_eq!(history(&mut chat), ["› first", "", "› second"]);
+    }
+
+    #[test]
+    fn prompts_wait_while_a_session_loads() {
+        let mut chat = chat();
+        chat.begin_session("s2".into(), None);
+        assert!(submit(&mut chat, "too soon").is_empty());
+        assert_eq!(chat.queued.len(), 1);
+    }
+
+    #[test]
+    fn ctrl_r_opens_the_picker_and_choosing_opens_that_session() {
+        let mut chat = chat();
+        let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(
+            chat.handle_key(ctrl_r),
+            [AppCommand::ListSessions {
+                all_directories: false,
+                cursor: None
+            }]
+        );
+        chat.sessions_listed(
+            Ok(ListSessionsResponse::new(vec![
+                SessionInfo::new("s9", "/repo").title("Earlier work".to_owned()),
+            ])),
+            false,
+        );
+        assert!(
+            rows(&chat, 60)
+                .iter()
+                .any(|row| row.starts_with("› Earlier work"))
+        );
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Enter)),
+            [AppCommand::OpenSession {
+                target: SessionTarget::Existing("s9".into()),
+                title: Some("Earlier work".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failed_open_returns_to_the_previous_session() {
+        let mut chat = chat();
+        chat.begin_session("s2".into(), Some("Broken"));
+        chat.session_failed(&Error::internal_error(), Some("s1".into()));
+        assert_eq!(chat.active_session(), Some(&SessionId::from("s1")));
     }
 
     #[test]

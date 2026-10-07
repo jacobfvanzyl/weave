@@ -3,116 +3,26 @@
 // Test helpers outside `#[test]` functions fail fast too.
 #![allow(clippy::expect_used)]
 
+mod common;
+
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
-use agent_client_protocol::Channel;
+use common::Harness;
+use common::TurnLog;
 use pretty_assertions::assert_eq;
-use tokio::sync::mpsc::UnboundedReceiver;
-use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::SessionConfigKind;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionConfigOptionValue;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
-use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::TextContent;
 use weave_acp_core::schema::ToolCallContent;
-
-struct Harness {
-    connection: AgentConnection,
-    events: UnboundedReceiver<AgentEvent>,
-    session_id: SessionId,
-    dir: tempfile::TempDir,
-}
-
-/// What one turn produced, flattened for assertions.
-#[derive(Default)]
-struct TurnLog {
-    message: String,
-    updates: Vec<SessionUpdate>,
-    terminal_output: String,
-    exits: Vec<TerminalExitStatus>,
-    stop_reason: Option<StopReason>,
-}
-
-impl Harness {
-    async fn start(options: ClientOptions) -> Self {
-        let (client_side, agent_side) = Channel::duplex();
-        tokio::spawn(weave_fake_agent::serve(agent_side));
-        let (connection, events) = AgentConnection::connect(client_side, options)
-            .await
-            .expect("connect");
-        connection.initialize().await.expect("initialize");
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path().canonicalize().expect("canonical tempdir");
-        let session = connection.new_session(cwd).await.expect("session/new");
-        Self {
-            connection,
-            events,
-            session_id: session.session_id,
-            dir,
-        }
-    }
-
-    fn path(&self, name: &str) -> PathBuf {
-        self.dir
-            .path()
-            .canonicalize()
-            .expect("canonical tempdir")
-            .join(name)
-    }
-
-    /// Run one prompt to completion, answering permission requests with `answer`.
-    async fn turn(&mut self, prompt: &str, answer: &str) -> TurnLog {
-        self.connection
-            .prompt(
-                self.session_id.clone(),
-                vec![ContentBlock::Text(TextContent::new(prompt))],
-            )
-            .expect("prompt");
-        let mut log = TurnLog::default();
-        loop {
-            let event = tokio::time::timeout(Duration::from_secs(10), self.events.recv())
-                .await
-                .expect("turn timed out")
-                .expect("event stream closed");
-            match event {
-                AgentEvent::SessionUpdate(notification) => {
-                    if let SessionUpdate::AgentMessageChunk(chunk) = &notification.update
-                        && let ContentBlock::Text(text) = &chunk.content
-                    {
-                        log.message.push_str(&text.text);
-                    }
-                    log.updates.push(notification.update);
-                }
-                AgentEvent::PermissionRequested(request) => {
-                    let option = request
-                        .request
-                        .options
-                        .iter()
-                        .find(|option| option.option_id.to_string() == answer)
-                        .map(|option| option.option_id.clone())
-                        .expect("permission option");
-                    request.select(option).expect("answer permission");
-                }
-                AgentEvent::TerminalOutput { text, .. } => log.terminal_output.push_str(&text),
-                AgentEvent::TerminalExited { status, .. } => log.exits.push(status),
-                AgentEvent::TurnEnded { result, .. } => {
-                    log.stop_reason = Some(result.expect("prompt response").stop_reason);
-                    return log;
-                }
-                AgentEvent::Disconnected(error) => panic!("disconnected: {error:?}"),
-            }
-        }
-    }
-}
 
 fn diffs(log: &TurnLog) -> Vec<(PathBuf, Option<String>, String)> {
     log.updates
@@ -275,6 +185,7 @@ async fn withheld_services_are_not_advertised() {
         read_files: false,
         write_files: false,
         terminals: false,
+        ..ClientOptions::default()
     };
     let mut harness = Harness::start(options).await;
     let log = harness.turn("run echo hi", "allow").await;

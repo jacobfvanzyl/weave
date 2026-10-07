@@ -5,7 +5,6 @@
 //! the protocol requires; a second Ctrl-C abandons it.
 
 use std::io::Write;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -15,6 +14,8 @@ use serde::Serialize;
 use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::PermissionRequest;
+use weave_acp_core::ProtocolTrace;
+use weave_acp_core::SessionSetup;
 use weave_acp_core::schema::AuthMethod;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::ErrorCode;
@@ -24,6 +25,7 @@ use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::TextContent;
 
 use crate::agent_args::AgentArgs;
+use crate::agent_args::Launch;
 
 #[derive(Args)]
 pub struct SmokeArgs {
@@ -52,19 +54,25 @@ enum PermissionPolicy {
 }
 
 pub async fn run(args: SmokeArgs) -> anyhow::Result<()> {
-    let spec = args.agent.spec()?;
-    let cwd = args.agent.cwd()?;
-    let trace = args.agent.trace()?;
+    let launch = args.agent.launch()?;
+    let trace = launch
+        .trace
+        .as_deref()
+        .map(|path| {
+            ProtocolTrace::create(path)
+                .with_context(|| format!("creating trace {}", path.display()))
+        })
+        .transpose()?;
 
     let mut out = Printer::default();
-    out.event(format_args!("launching {}", spec.display_command()));
+    out.event(format_args!("launching {}", launch.spec.display_command()));
     let (connection, mut events) =
-        AgentConnection::spawn(&spec, trace, args.agent.client_options()).await?;
+        AgentConnection::spawn(&launch.spec, trace, launch.options).await?;
     let result = run_turn(
         &connection,
         &mut events,
         &mut out,
-        cwd,
+        &launch,
         args.prompt,
         args.permissions,
     )
@@ -77,14 +85,35 @@ async fn run_turn(
     connection: &AgentConnection,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     out: &mut Printer,
-    cwd: PathBuf,
+    launch: &Launch,
     prompt: String,
     policy: PermissionPolicy,
 ) -> anyhow::Result<()> {
     let init = connection.initialize().await?;
     describe_agent(out, &init);
 
-    let session = match connection.new_session(cwd).await {
+    let (mcp_servers, notices) = launch
+        .config
+        .mcp_servers(&init.agent_capabilities.mcp_capabilities);
+    for notice in notices {
+        out.event(format_args!("{notice}"));
+    }
+    let additional_directories = if init
+        .agent_capabilities
+        .session_capabilities
+        .additional_directories
+        .is_some()
+    {
+        launch.additional_directories.clone()
+    } else {
+        Vec::new()
+    };
+    let setup = SessionSetup {
+        cwd: launch.cwd.clone(),
+        additional_directories,
+        mcp_servers,
+    };
+    let session = match connection.new_session(&setup).await {
         Ok(session) => session,
         Err(error) if error.code == ErrorCode::AuthRequired => {
             bail!(
@@ -144,6 +173,16 @@ async fn run_turn(
             }
             Some(AgentEvent::PermissionRequested(request)) => {
                 answer_permission(out, request, policy)?
+            }
+            Some(AgentEvent::ElicitationRequested(request)) => {
+                out.event(format_args!(
+                    "elicitation {:?} dismissed: smoke cannot answer it",
+                    request.request.message
+                ));
+                request.cancel()?;
+            }
+            Some(AgentEvent::ElicitationCompleted(id)) => {
+                out.event(format_args!("elicitation {id} completed"))
             }
             Some(AgentEvent::TerminalOutput { terminal_id, text }) => {
                 for line in text.lines() {

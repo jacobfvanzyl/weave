@@ -287,6 +287,13 @@ impl ToolCallCell {
                 }
                 ToolCallContent::Terminal(terminal) => match terminals.get(&terminal.terminal_id) {
                     Some(transcript) => details.extend(transcript.lines(TOOL_OUTPUT_LINES)),
+                    // A finished call can name a terminal this client never saw, as in a replay.
+                    None if self.is_finished() => {
+                        details.push(Line::from(Span::styled(
+                            "terminal output unavailable",
+                            dim(),
+                        )));
+                    }
                     None => details.push(Line::from(Span::styled("waiting for output…", dim()))),
                 },
                 _ => details.push(Line::from(Span::styled("[unsupported tool output]", dim()))),

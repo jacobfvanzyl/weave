@@ -8,6 +8,9 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+use weave_acp_core::schema::MessageId;
+
+use crate::history_cell;
 use crate::history_cell::dim;
 use crate::markdown::render_markdown;
 
@@ -15,10 +18,14 @@ use crate::markdown::render_markdown;
 pub enum StreamKind {
     Agent,
     Thought,
+    /// The user's own messages, as an agent replays them when loading a session.
+    User,
 }
 
 pub struct MessageStream {
     kind: StreamKind,
+    /// The agent's id for this message, when it provides one.
+    message_id: Option<MessageId>,
     /// Fixed for the message's lifetime so committed and live lines always agree.
     width: usize,
     source: String,
@@ -27,9 +34,10 @@ pub struct MessageStream {
 }
 
 impl MessageStream {
-    pub fn new(kind: StreamKind, width: usize) -> Self {
+    pub fn new(kind: StreamKind, width: usize, message_id: Option<MessageId>) -> Self {
         Self {
             kind,
+            message_id,
             width,
             source: String::new(),
             committed: 0,
@@ -38,6 +46,10 @@ impl MessageStream {
 
     pub fn kind(&self) -> StreamKind {
         self.kind
+    }
+
+    pub fn message_id(&self) -> Option<&MessageId> {
+        self.message_id.as_ref()
     }
 
     pub fn push(&mut self, text: &str) {
@@ -79,10 +91,13 @@ impl MessageStream {
     }
 
     fn render(&self, source: &str) -> Vec<Line<'static>> {
+        if self.kind == StreamKind::User {
+            return history_cell::user_message(source, self.width);
+        }
         let body = render_markdown(source, self.width.saturating_sub(2));
         let (marker, body_style) = match self.kind {
             StreamKind::Agent => (Style::default(), Style::default()),
-            StreamKind::Thought => (dim(), dim().add_modifier(Modifier::ITALIC)),
+            StreamKind::Thought | StreamKind::User => (dim(), dim().add_modifier(Modifier::ITALIC)),
         };
         body.into_iter()
             .enumerate()
@@ -113,7 +128,7 @@ mod tests {
 
     #[test]
     fn commits_only_finished_lines_and_keeps_the_partial_one_live() {
-        let mut stream = MessageStream::new(StreamKind::Agent, 40);
+        let mut stream = MessageStream::new(StreamKind::Agent, 40, None);
         stream.push("Hello, wor");
         assert!(stream.take_complete().is_empty());
         assert_eq!(text(&stream.tail()), ["• Hello, wor"]);
@@ -127,13 +142,20 @@ mod tests {
     }
 
     #[test]
+    fn replayed_user_messages_render_as_prompts() {
+        let mut stream = MessageStream::new(StreamKind::User, 40, None);
+        stream.push("fix the build\nplease");
+        assert_eq!(text(&stream.finish()), ["› fix the build", "  please"]);
+    }
+
+    #[test]
     fn every_line_is_committed_exactly_once() {
         let source = "Plan:\n\n1. read\n2. edit\n\n```sh\nls\n```\nDone.";
-        let mut whole = MessageStream::new(StreamKind::Agent, 30);
+        let mut whole = MessageStream::new(StreamKind::Agent, 30, None);
         whole.push(source);
         let expected = text(&whole.finish());
 
-        let mut streamed = MessageStream::new(StreamKind::Agent, 30);
+        let mut streamed = MessageStream::new(StreamKind::Agent, 30, None);
         let mut committed = Vec::new();
         for ch in source.chars() {
             streamed.push(&ch.to_string());

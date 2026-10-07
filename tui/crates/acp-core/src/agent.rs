@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use agent_client_protocol::AcpAgentConfig;
+use agent_client_protocol::schema::v1::AuthMethodTerminal;
 
 /// Agent presets, pinned so a session is reproducible until a preset is deliberately bumped.
 const PRESETS: &[(&str, &str, &[&str])] = &[
@@ -62,6 +63,20 @@ impl AgentSpec {
             .join(" ")
     }
 
+    /// The interactive invocation for a `terminal` sign-in method: this agent's own command
+    /// with the method's arguments appended and its environment applied over ours.
+    pub fn for_terminal_sign_in(&self, method: &AuthMethodTerminal) -> Self {
+        let mut spec = self.clone();
+        spec.args.extend(method.args.iter().cloned());
+        spec.env.extend(
+            method
+                .env
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
+        spec
+    }
+
     pub(crate) fn to_config(&self) -> AcpAgentConfig {
         AcpAgentConfig::new(&self.command)
             .args(self.args.iter().cloned())
@@ -78,6 +93,21 @@ mod tests {
         for id in preset_ids() {
             assert!(AgentSpec::preset(id).is_some(), "missing preset {id}");
         }
+    }
+
+    #[test]
+    fn terminal_sign_in_appends_arguments_and_overrides_environment() {
+        let mut spec = AgentSpec::new("agent", ["--acp"]);
+        spec.env.insert("MODE".into(), "acp".into());
+        let method = AuthMethodTerminal::new("login", "Log in")
+            .args(vec!["--login".into()])
+            .env(std::collections::HashMap::from([(
+                "MODE".into(),
+                "login".into(),
+            )]));
+        let login = spec.for_terminal_sign_in(&method);
+        assert_eq!(login.args, ["--acp", "--login"]);
+        assert_eq!(login.env.get("MODE").map(String::as_str), Some("login"));
     }
 
     #[test]

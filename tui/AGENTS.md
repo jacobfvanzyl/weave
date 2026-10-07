@@ -63,7 +63,15 @@ cargo fmt
 ./target/debug/weave -- ./target/debug/weave-fake-agent   # scripted agent
 ```
 
-`--no-fs` and `--no-terminal` withhold those client services.
+`--no-fs` and `--no-terminal` withhold those client services. `--resume [ID]` opens a
+session (or the picker, also on Ctrl+R in the TUI), `--continue` the latest one here, and
+`--add-dir` adds workspace roots. `weave login` and `weave logout` manage sign-in; when
+the agent answers `auth_required` at startup, `weave` offers its methods and retries.
+Agents and MCP servers come from `~/.config/weave/tui.toml` (see `crates/cli/src/config.rs`).
+
+The fake agent reads `WEAVE_FAKE_AGENT_STATE` (persist sessions and sign-in to this JSON
+file), `WEAVE_FAKE_AGENT_REQUIRE_AUTH=1`, and `WEAVE_FAKE_AGENT_PAGE_SIZE`. Its scripts
+also include `/ask` (form elicitation), `/connect` (URL elicitation) and `/mcp`.
 
 Both run against a real agent and its existing login. `--log-file <file>` captures
 diagnostics and agent stderr in the TUI. For live TUI checks inside cmux, split a pane
@@ -78,6 +86,9 @@ agent output, so keep them out of the repository.
 - Clippy denies `unwrap`/`expect` outside tests. Use one `use` line per item.
 - Agent presets pin adapter versions. Bump them deliberately and re-run the
   smoke check against each one.
-- Advertise only client capabilities that are fully implemented.
+- Advertise only client capabilities that are fully implemented, and gate every optional
+  agent method on its capability in `acp-core` (`AgentHandle`), before anything is sent.
+- URL elicitations: show the full URL and its host, default to not opening, and open only
+  on explicit consent. Never fetch the URL from the client.
 - Preserve credentials: agents authenticate with their own CLI logins, and this
   project never reads or stores them.
