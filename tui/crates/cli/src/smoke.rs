@@ -14,10 +14,7 @@ use clap::ValueEnum;
 use serde::Serialize;
 use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
-use weave_acp_core::AgentSpec;
 use weave_acp_core::PermissionRequest;
-use weave_acp_core::ProtocolTrace;
-use weave_acp_core::preset_ids;
 use weave_acp_core::schema::AuthMethod;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::ErrorCode;
@@ -26,15 +23,12 @@ use weave_acp_core::schema::PermissionOptionKind;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::TextContent;
 
+use crate::agent_args::AgentArgs;
+
 #[derive(Args)]
 pub struct SmokeArgs {
-    /// Built-in agent to launch: claude, codex or gemini.
-    #[arg(long, conflicts_with = "command", required_unless_present = "command")]
-    agent: Option<String>,
-
-    /// A custom agent command and its arguments, given after `--`.
-    #[arg(last = true)]
-    command: Vec<String>,
+    #[command(flatten)]
+    agent: AgentArgs,
 
     /// The prompt to send.
     #[arg(
@@ -44,17 +38,9 @@ pub struct SmokeArgs {
     )]
     prompt: String,
 
-    /// Session working directory. Defaults to the current directory.
-    #[arg(long)]
-    cwd: Option<PathBuf>,
-
     /// How to answer the agent's permission requests.
     #[arg(long, value_enum, default_value_t = PermissionPolicy::Reject)]
     permissions: PermissionPolicy,
-
-    /// Append every line exchanged with the agent to this JSONL file.
-    #[arg(long)]
-    trace: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -66,29 +52,9 @@ enum PermissionPolicy {
 }
 
 pub async fn run(args: SmokeArgs) -> anyhow::Result<()> {
-    let spec = match (&args.agent, args.command.split_first()) {
-        (Some(id), _) => AgentSpec::preset(id).with_context(|| {
-            let known = preset_ids().collect::<Vec<_>>().join(", ");
-            format!("unknown agent {id:?}; expected one of {known}, or a command after `--`")
-        })?,
-        (None, Some((command, rest))) => AgentSpec::new(command, rest),
-        (None, None) => bail!("give an agent with --agent or a command after `--`"),
-    };
-    let cwd = match args.cwd {
-        Some(cwd) => cwd,
-        None => std::env::current_dir()?,
-    };
-    // ACP requires an absolute session directory.
-    let cwd = cwd
-        .canonicalize()
-        .with_context(|| format!("session directory {}", cwd.display()))?;
-    let trace = match &args.trace {
-        Some(path) => Some(
-            ProtocolTrace::create(path)
-                .with_context(|| format!("creating trace {}", path.display()))?,
-        ),
-        None => None,
-    };
+    let spec = args.agent.spec()?;
+    let cwd = args.agent.cwd()?;
+    let trace = args.agent.trace()?;
 
     let mut out = Printer::default();
     out.event(format_args!("launching {}", spec.display_command()));

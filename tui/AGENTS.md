@@ -25,9 +25,14 @@ crate, pinned exactly because 3.x is new.
 | Crate | Owns |
 | --- | --- |
 | `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace. No UI. |
+| `crates/tui` | The interactive client: inline viewport, scrollback history, chat state, composer. |
 | `crates/cli` | The `weave` binary and its subcommands. |
 
-The TUI crate arrives with milestone 2. Keep protocol behavior in `acp-core`.
+Keep protocol behavior in `acp-core`. In `tui`, `ChatWidget` stays free of I/O: it turns
+agent events and keys into transcript lines and `AppCommand`s, so it is tested without a
+terminal. Terminal mechanics (`custom_terminal`, `insert_history`) are tested on a vt100
+backend. Untrusted agent text reaches the terminal only after control characters are
+stripped.
 
 ## SDK rules
 
@@ -47,11 +52,15 @@ cargo build
 cargo test
 cargo clippy --all-targets   # Codex's lint set; must be clean
 cargo fmt
-./target/debug/weave smoke --agent claude   # or codex, gemini, or `-- <command>`
+./target/debug/weave --agent claude         # interactive; or codex, gemini, `-- <command>`
+./target/debug/weave smoke --agent claude   # one headless turn
 ```
 
-`smoke` runs one live turn against a real agent and its existing login.
-`--trace <file>` writes every protocol line as JSONL, and
+Both run against a real agent and its existing login. `--log-file <file>` captures
+diagnostics and agent stderr in the TUI. For live TUI checks inside cmux, split a pane
+(`cmux new-split right`), drive it with `cmux send`/`cmux send-key`, and read it with
+`cmux read-screen --scrollback`.
+`--trace <file>` writes every protocol line as JSONL, and with `smoke`,
 `RUST_LOG=agent_stderr=debug` shows agent stderr. Traces contain prompts and
 agent output, so keep them out of the repository.
 

@@ -1,2 +1,10 @@
 allow-expect-in-tests = true
 allow-unwrap-in-tests = true
+# From codex-rs/clippy.toml: ANSI colors follow the user's terminal theme.
+disallowed-methods = [
+    { path = "ratatui::style::Color::Rgb", reason = "Use ANSI colors, which work better in various terminal themes." },
+    { path = "ratatui::style::Color::Indexed", reason = "Use ANSI colors, which work better in various terminal themes." },
+    { path = "ratatui::style::Stylize::white", reason = "Avoid hardcoding white; prefer default fg or dim/bold." },
+    { path = "ratatui::style::Stylize::black", reason = "Avoid hardcoding black; prefer default fg or dim/bold." },
+    { path = "ratatui::style::Stylize::yellow", reason = "Avoid yellow; it is unreadable on light themes." },
+]
