@@ -67,6 +67,9 @@ pub struct Tui {
     mode: ScreenMode,
     last_screen: Size,
     keyboard_enhanced: bool,
+    /// Inline mode with a full-screen overlay (the Ctrl+T transcript) open: the inline
+    /// viewport to go back to.
+    overlay_from: Option<Rect>,
 }
 
 impl Tui {
@@ -107,7 +110,34 @@ impl Tui {
             mode,
             last_screen,
             keyboard_enhanced,
+            overlay_from: None,
         })
+    }
+
+    /// Inline mode: open a full-screen overlay on the alternate screen, as Codex opens its
+    /// transcript pager, leaving the shell's screen and scrollback untouched beneath it.
+    pub fn enter_overlay(&mut self) -> io::Result<()> {
+        if self.mode == ScreenMode::Fullscreen || self.overlay_from.is_some() {
+            return Ok(());
+        }
+        self.overlay_from = Some(self.terminal.viewport_area);
+        execute!(stdout(), EnterAlternateScreen, EnableMouseReporting)
+    }
+
+    /// Close the overlay and repaint the inline viewport where it was.
+    pub fn leave_overlay(&mut self) -> io::Result<()> {
+        let Some(area) = self.overlay_from.take() else {
+            return Ok(());
+        };
+        execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen)?;
+        // The terminal restores the main screen; the viewport's rows are cleared and drawn
+        // again in full, leaving history above them as it was.
+        self.terminal.set_viewport_area(area);
+        self.terminal.replace_viewport_area(area)
+    }
+
+    pub fn overlay_open(&self) -> bool {
+        self.overlay_from.is_some()
     }
 
     pub fn mode(&self) -> ScreenMode {
@@ -226,6 +256,9 @@ impl Tui {
     /// Restore the terminal. Inline mode clears the viewport so the shell resumes right after
     /// history; fullscreen returns to the screen as it was before weave started.
     pub fn exit(mut self) {
+        if self.overlay_from.take().is_some() {
+            let _ = execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen);
+        }
         if self.mode == ScreenMode::Inline {
             let top = self.terminal.viewport_area.y;
             let _ = queue!(

@@ -363,6 +363,17 @@ fn handle_terminal_event(chat: &mut ChatWidget, event: Event) -> Vec<AppCommand>
 }
 
 fn draw(tui: &mut Tui, chat: &mut ChatWidget) -> std::io::Result<()> {
+    // Inline mode shows the Ctrl+T transcript on the alternate screen, as Codex's pager.
+    if tui.mode() == ScreenMode::Inline && chat.pager_open() {
+        tui.enter_overlay()?;
+        return tui.draw_screen(|frame| {
+            let area = frame.area();
+            chat.render_pager(area, frame.buffer_mut());
+        });
+    }
+    if tui.overlay_open() {
+        tui.leave_overlay()?;
+    }
     if tui.mode() == ScreenMode::Fullscreen {
         return tui.draw_screen(|frame| {
             let area = frame.area();

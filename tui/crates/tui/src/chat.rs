@@ -18,6 +18,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -73,6 +74,7 @@ use crate::status::status_line;
 use crate::streaming::MessageStream;
 use crate::streaming::StreamKind;
 use crate::streaming::render_compact;
+use crate::style;
 use crate::tool_call::ExploreGroup;
 use crate::tool_call::RenderContext;
 use crate::tool_call::ToolCallCell;
@@ -162,6 +164,10 @@ pub struct ChatWidget {
     /// The transcript weave draws and scrolls itself in fullscreen mode. Without it, finished
     /// lines queue in `pending_history` for the terminal's scrollback.
     transcript: Option<TranscriptView>,
+    /// Inline mode keeps the transcript too, for the full-screen pager Ctrl+T opens (Codex's
+    /// transcript overlay); `pager_open` while it shows.
+    pager: Option<TranscriptView>,
+    pager_open: bool,
     /// The session being left, kept until the next one opens so a failed switch can go back.
     stashed: Option<Stashed>,
     pending_history: Vec<Line<'static>>,
@@ -212,6 +218,8 @@ impl ChatWidget {
             accepted_urls: HashSet::new(),
             width,
             transcript: None,
+            pager: Some(TranscriptView::detailed()),
+            pager_open: false,
             stashed: None,
             pending_history: Vec::new(),
             has_history: false,
@@ -249,7 +257,13 @@ impl ChatWidget {
     /// Draw the transcript in the widget (fullscreen) instead of handing it to scrollback.
     pub fn fullscreen(mut self) -> Self {
         self.transcript = Some(TranscriptView::new());
+        self.pager = None;
         self
+    }
+
+    /// Whether the inline pager (Ctrl+T) is showing.
+    pub fn pager_open(&self) -> bool {
+        self.pager_open
     }
 
     /// The startup banner, followed by any `notices` worth the user's attention.
@@ -742,6 +756,25 @@ impl ChatWidget {
         {
             return vec![AppCommand::Quit];
         }
+        if self.pager_open {
+            self.handle_pager_key(key);
+            return Vec::new();
+        }
+        if ctrl && key.code == KeyCode::Char('t') {
+            match &mut self.transcript {
+                Some(view) => {
+                    let detailed = view.is_detailed();
+                    view.set_detailed(!detailed);
+                }
+                None => {
+                    self.pager_open = true;
+                    if let Some(pager) = &mut self.pager {
+                        pager.follow();
+                    }
+                }
+            }
+            return Vec::new();
+        }
         if let Some(commands) = self.handle_scroll_key(key) {
             return commands;
         }
@@ -905,14 +938,36 @@ impl ChatWidget {
         Some(Vec::new())
     }
 
-    /// Wheel scrolling and drag selection in the fullscreen transcript; a finished selection
-    /// is copied.
-    pub fn handle_mouse(&mut self, event: MouseEvent) -> Vec<AppCommand> {
-        if self.transcript.is_none() {
-            return Vec::new();
+    /// The inline pager's keys: scrolling, and closing on Esc, q or Ctrl+T.
+    fn handle_pager_key(&mut self, key: KeyEvent) {
+        let Some(pager) = &mut self.pager else {
+            self.pager_open = false;
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.pager_open = false,
+            KeyCode::Char('t') if ctrl => self.pager_open = false,
+            KeyCode::Up | KeyCode::Char('k') => pager.scroll_rows(-1),
+            KeyCode::Down | KeyCode::Char('j') => pager.scroll_rows(1),
+            KeyCode::PageUp | KeyCode::Char('b') => pager.scroll_pages(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => pager.scroll_pages(1),
+            KeyCode::Home | KeyCode::Char('g') => pager.scroll_to_start(),
+            KeyCode::End | KeyCode::Char('G') => pager.follow(),
+            _ => {}
         }
+    }
+
+    /// Wheel scrolling and drag selection in the fullscreen transcript (or the inline pager);
+    /// a finished selection is copied.
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> Vec<AppCommand> {
         let live = self.live_lines(self.content_width());
-        let Some(view) = &mut self.transcript else {
+        let view = if self.pager_open {
+            self.pager.as_mut()
+        } else {
+            self.transcript.as_mut()
+        };
+        let Some(view) = view else {
             return Vec::new();
         };
         match view.handle_mouse(event, &live) {
@@ -1116,8 +1171,15 @@ impl ChatWidget {
             return;
         }
         let first = !stream.has_committed();
+        let (kind, source) = (stream.kind(), stream.source().to_owned());
         let lines = stream.finish();
         self.commit_stream_lines(first, lines);
+        // Scrollback got the lines as they streamed; the pager keeps the message whole.
+        if let Some(pager) = &mut self.pager
+            && !source.trim().is_empty()
+        {
+            pager.push(TranscriptCell::message(kind, source));
+        }
     }
 
     fn commit_stream_lines(&mut self, first: bool, lines: Vec<Line<'static>>) {
@@ -1198,6 +1260,9 @@ impl ChatWidget {
             None => {
                 let lines = plain_lines(cell.lines(self.content_width(), false).iter().cloned());
                 self.push_lines(lines);
+                if let Some(pager) = &mut self.pager {
+                    pager.push(cell);
+                }
             }
         }
     }
@@ -1437,6 +1502,17 @@ impl ChatWidget {
                 "  ↓ new output below · esc for latest",
                 Style::default().fg(Color::Cyan),
             )),
+            _ if self
+                .transcript
+                .as_ref()
+                .is_some_and(TranscriptView::is_detailed) =>
+            {
+                Line::from(vec![
+                    Span::styled("  Full transcript · ", style::secondary()),
+                    Span::raw("⌃t"),
+                    Span::styled(" to return", style::secondary()),
+                ])
+            }
             _ => Line::default(),
         }
     }
@@ -1445,6 +1521,39 @@ impl ChatWidget {
         let above = self.lines_above_input(width, Instant::now()).len();
         let total = above + usize::from(self.input_height(width) + self.footer_height());
         u16::try_from(total).unwrap_or(u16::MAX)
+    }
+
+    /// Draw the inline pager over the whole screen: the full transcript with live output
+    /// below it, a title row, and its keys.
+    pub fn render_pager(&self, area: Rect, buf: &mut Buffer) {
+        let Some(pager) = &self.pager else {
+            return;
+        };
+        if area.height < 3 {
+            return;
+        }
+        let title = Line::from(vec![
+            Span::styled("─ ", dim()),
+            Span::styled("Transcript", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" ", dim()),
+            Span::styled(
+                "─".repeat(usize::from(area.width).saturating_sub(13)),
+                dim(),
+            ),
+        ]);
+        buf.set_line(area.x, area.y, &title, area.width);
+        let body = Rect::new(area.x, area.y + 1, area.width, area.height - 2);
+        let width = usize::from(area.width.max(10));
+        pager.render(body, buf, width, &self.live_lines(width));
+        let hints = Line::from(vec![
+            Span::raw("  ↑↓ pgup pgdn"),
+            Span::styled(" scroll · ", style::secondary()),
+            Span::raw("esc"),
+            Span::styled(" or ", style::secondary()),
+            Span::raw("⌃t"),
+            Span::styled(" close", style::secondary()),
+        ]);
+        buf.set_line(area.x, area.bottom() - 1, &hints, area.width);
     }
 
     /// Draw the inline viewport. Returns where the terminal cursor belongs, if anywhere.
@@ -2204,5 +2313,84 @@ mod tests {
         assert!(rows.contains(&"› first session".to_owned()), "{rows:?}");
         assert!(!rows.contains(&"• Session: Other".to_owned()));
         assert_eq!(chat.resumable_session(), Some(&SessionId::from("s1")));
+    }
+
+    /// A finished command that printed ten lines.
+    fn ten_line_command(chat: &mut ChatWidget) {
+        chat.handle_agent_event(update(SessionUpdate::ToolCall(
+            ToolCall::new("t1", "`seq 1 10`")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress)
+                .content(vec![ToolCallContent::Terminal(Terminal::new("term"))]),
+        )));
+        chat.handle_agent_event(AgentEvent::TerminalOutput {
+            terminal_id: "term".into(),
+            text: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n".into(),
+        });
+        chat.handle_agent_event(update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t1",
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        ))));
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+    }
+
+    #[test]
+    fn ctrl_t_shows_the_full_transcript_and_back() {
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "count");
+        ten_line_command(&mut chat);
+        let compact = screen_rows(&chat, 60, 30);
+        assert!(
+            compact
+                .iter()
+                .any(|row| row.trim() == "+7 lines (⌃t to view transcript)")
+        );
+
+        let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert!(chat.handle_key(ctrl_t).is_empty());
+        let full = screen_rows(&chat, 60, 30);
+        assert!(full.iter().any(|row| row.trim() == "10"), "{full:?}");
+        assert!(
+            full.iter()
+                .any(|row| row.trim() == "Full transcript · ⌃t to return")
+        );
+
+        chat.handle_key(ctrl_t);
+        assert_eq!(screen_rows(&chat, 60, 30), compact);
+    }
+
+    #[test]
+    fn ctrl_t_inline_opens_a_pager_that_esc_closes() {
+        let mut chat = chat();
+        submit(&mut chat, "count");
+        chat.handle_agent_event(text_chunk("Counted."));
+        ten_line_command(&mut chat);
+        chat.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        assert!(chat.pager_open());
+
+        let area = Rect::new(0, 0, 60, 30);
+        let mut buf = Buffer::empty(area);
+        chat.render_pager(area, &mut buf);
+        let rows: Vec<String> = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect();
+        assert!(rows[0].starts_with("─ Transcript ─"));
+        assert!(rows.iter().any(|row| row.trim() == "10"), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.starts_with("• Counted.")),
+            "{rows:?}"
+        );
+
+        // Keys scroll the pager and don't reach the composer; Esc closes it.
+        chat.handle_key(key(KeyCode::Char('x')));
+        assert!(chat.composer.is_empty());
+        chat.handle_key(key(KeyCode::Esc));
+        assert!(!chat.pager_open());
     }
 }

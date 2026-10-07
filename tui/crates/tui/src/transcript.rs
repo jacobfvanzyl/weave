@@ -369,6 +369,13 @@ impl TranscriptView {
         self.note_activity();
     }
 
+    /// A view showing every cell in full, as the inline pager does.
+    pub fn detailed() -> Self {
+        let mut view = Self::new();
+        view.detailed = true;
+        view
+    }
+
     pub fn is_detailed(&self) -> bool {
         self.detailed
     }
