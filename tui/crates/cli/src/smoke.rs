@@ -58,7 +58,8 @@ pub async fn run(args: SmokeArgs) -> anyhow::Result<()> {
 
     let mut out = Printer::default();
     out.event(format_args!("launching {}", spec.display_command()));
-    let (connection, mut events) = AgentConnection::spawn(&spec, trace).await?;
+    let (connection, mut events) =
+        AgentConnection::spawn(&spec, trace, args.agent.client_options()).await?;
     let result = run_turn(
         &connection,
         &mut events,
@@ -144,6 +145,15 @@ async fn run_turn(
             Some(AgentEvent::PermissionRequested(request)) => {
                 answer_permission(out, request, policy)?
             }
+            Some(AgentEvent::TerminalOutput { terminal_id, text }) => {
+                for line in text.lines() {
+                    out.event(format_args!("{terminal_id} │ {line}"));
+                }
+            }
+            Some(AgentEvent::TerminalExited {
+                terminal_id,
+                status,
+            }) => out.event(format_args!("{terminal_id} exited {}", wire(&status))),
             Some(AgentEvent::TurnEnded { result, .. }) => {
                 let response = result.context("session/prompt")?;
                 out.event(format_args!("turn ended: {}", wire(&response.stop_reason)));

@@ -38,7 +38,6 @@ pub struct Composer {
 }
 
 impl Composer {
-    #[cfg(test)]
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -260,8 +259,15 @@ impl Composer {
         u16::try_from(rows.len().min(MAX_ROWS)).unwrap_or(1)
     }
 
-    /// Draw into `area` and return where the terminal cursor belongs.
-    pub fn render(&self, area: Rect, buf: &mut Buffer, placeholder: &str) -> Position {
+    /// Draw into `area` and return where the terminal cursor belongs. `hint` is shown dimmed
+    /// after single-line text, such as the input a slash command expects.
+    pub fn render(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        placeholder: &str,
+        hint: Option<&str>,
+    ) -> Position {
         let prompt = Span::styled(
             PROMPT,
             Style::default()
@@ -283,7 +289,13 @@ impl Composer {
             } else {
                 Span::raw("  ")
             };
-            let line = Line::from(vec![lead, Span::raw(row.clone())]);
+            let mut spans = vec![lead, Span::raw(row.clone())];
+            if let Some(hint) = hint
+                && rows.len() == 1
+            {
+                spans.push(Span::styled(hint.to_owned(), dim()));
+            }
+            let line = Line::from(spans);
             let y = area.y + u16::try_from(offset).unwrap_or(0);
             buf.set_line(area.x, y, &line, area.width);
         }

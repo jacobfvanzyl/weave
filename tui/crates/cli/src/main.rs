@@ -74,7 +74,7 @@ async fn run_tui(args: AgentArgs) -> anyhow::Result<()> {
     let trace = args.trace()?;
 
     eprintln!("Starting {}", spec.display_command());
-    let (connection, events) = AgentConnection::spawn(&spec, trace).await?;
+    let (connection, events) = AgentConnection::spawn(&spec, trace, args.client_options()).await?;
     let init = match connection.initialize().await {
         Ok(init) => init,
         Err(error) => {
@@ -106,6 +106,7 @@ async fn run_tui(args: AgentArgs) -> anyhow::Result<()> {
         agent_name,
         agent_version,
         modes: session.modes,
+        config_options: session.config_options.unwrap_or_default(),
         cwd,
     })
     .await

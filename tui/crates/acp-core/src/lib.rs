@@ -5,12 +5,16 @@
 
 mod agent;
 mod connection;
+mod fs;
+mod terminals;
 mod trace;
 
 pub use agent::AgentSpec;
 pub use agent::preset_ids;
 pub use connection::AgentConnection;
 pub use connection::AgentEvent;
+pub use connection::AgentHandle;
+pub use connection::ClientOptions;
 pub use connection::InitializeError;
 pub use connection::PermissionRequest;
 pub use connection::SpawnError;

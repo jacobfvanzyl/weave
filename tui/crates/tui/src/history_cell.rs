@@ -21,10 +21,15 @@ use weave_acp_core::schema::ToolCallStatus;
 use weave_acp_core::schema::ToolCallUpdateFields;
 use weave_acp_core::schema::ToolKind;
 
+use crate::tool_output::TerminalTranscripts;
+use crate::tool_output::diff_lines;
 use crate::wrapping::wrap_with_prefix;
 
 /// Tool output lines shown before the rest is summarized.
 const TOOL_OUTPUT_LINES: usize = 5;
+/// Diff rows shown per file before the rest is summarized.
+const DIFF_LINES: usize = 40;
+const MAX_LOCATIONS: usize = 3;
 
 pub fn dim() -> Style {
     Style::default().add_modifier(Modifier::DIM)
@@ -79,7 +84,8 @@ pub struct SessionHeader<'a> {
     pub agent: &'a str,
     pub agent_version: Option<&'a str>,
     pub cwd: &'a Path,
-    pub mode: Option<&'a str>,
+    /// Current settings, such as mode and model.
+    pub settings: Option<&'a str>,
 }
 
 pub fn session_header(header: &SessionHeader<'_>, width: usize) -> Vec<Line<'static>> {
@@ -98,8 +104,8 @@ pub fn session_header(header: &SessionHeader<'_>, width: usize) -> Vec<Line<'sta
     }
     let mut lines = wrap_with_prefix(&Line::from(title), width, &bullet(dim()), &indent());
     let mut details = format!("directory {}", header.cwd.display());
-    if let Some(mode) = header.mode {
-        details.push_str(&format!("  ·  mode {mode}"));
+    if let Some(settings) = header.settings {
+        details.push_str(&format!("  ·  {settings}"));
     }
     lines.extend(wrap_with_prefix(
         &Line::from(Span::styled(details, dim())),
@@ -202,8 +208,14 @@ impl ToolCallCell {
         }
     }
 
-    /// Render with paths shown relative to `cwd` where they fall inside it.
-    pub fn lines(&self, width: usize, cwd: &Path) -> Vec<Line<'static>> {
+    /// Render with paths shown relative to `cwd` where they fall inside it, and embedded
+    /// terminals from `terminals`.
+    pub fn lines(
+        &self,
+        width: usize,
+        cwd: &Path,
+        terminals: &TerminalTranscripts,
+    ) -> Vec<Line<'static>> {
         let (mark, mark_style) = match self.status {
             ToolCallStatus::Completed => ("✓ ", Style::default().fg(Color::Green)),
             ToolCallStatus::Failed => ("✗ ", Style::default().fg(Color::Red)),
@@ -233,50 +245,61 @@ impl ToolCallCell {
                 _ => None,
             })
             .collect();
-        let mut details: Vec<String> = self
+        let mut details: Vec<Line<'static>> = self
             .locations
             .iter()
             .filter(|location| !diff_paths.contains(&location.path.as_path()))
-            .map(|location| match location.line {
-                Some(line) => format!("{}:{line}", display_path(&location.path, cwd)),
-                None => display_path(&location.path, cwd),
+            .take(MAX_LOCATIONS)
+            .map(|location| {
+                let path = display_path(&location.path, cwd);
+                let text = match location.line {
+                    Some(line) => format!("{path}:{line}"),
+                    None => path,
+                };
+                Line::from(Span::styled(text, dim()))
             })
             .collect();
         for content in &self.content {
             match content {
                 ToolCallContent::Content(content) => {
-                    details.extend(content_lines(&content.content))
+                    let text = content_lines(&content.content);
+                    let hidden = text.len().saturating_sub(TOOL_OUTPUT_LINES);
+                    details.extend(
+                        text.into_iter()
+                            .take(TOOL_OUTPUT_LINES)
+                            .map(|line| Line::from(Span::styled(line, dim()))),
+                    );
+                    if hidden > 0 {
+                        details.push(Line::from(Span::styled(
+                            format!("… +{hidden} lines"),
+                            dim(),
+                        )));
+                    }
                 }
                 ToolCallContent::Diff(diff) => {
                     let path = display_path(&diff.path, cwd);
-                    details.push(diff_summary(
+                    details.extend(diff_lines(
                         &path,
                         diff.old_text.as_deref(),
                         &diff.new_text,
+                        DIFF_LINES,
                     ));
                 }
-                ToolCallContent::Terminal(terminal) => {
-                    details.push(format!("terminal {}", terminal.terminal_id))
-                }
-                _ => details.push("[unsupported tool output]".to_owned()),
+                ToolCallContent::Terminal(terminal) => match terminals.get(&terminal.terminal_id) {
+                    Some(transcript) => details.extend(transcript.lines(TOOL_OUTPUT_LINES)),
+                    None => details.push(Line::from(Span::styled("waiting for output…", dim()))),
+                },
+                _ => details.push(Line::from(Span::styled("[unsupported tool output]", dim()))),
             }
         }
-        let hidden = details.len().saturating_sub(TOOL_OUTPUT_LINES);
-        for (index, detail) in details.into_iter().take(TOOL_OUTPUT_LINES).enumerate() {
+        for (index, detail) in details.iter().enumerate() {
             let first = if index == 0 { "  └ " } else { "    " };
-            let content = Line::from(Span::styled(detail, dim()));
             lines.extend(wrap_with_prefix(
-                &content,
+                detail,
                 width,
                 &Line::from(Span::styled(first, dim())),
                 &Line::from("    "),
             ));
-        }
-        if hidden > 0 {
-            lines.push(Line::from(Span::styled(
-                format!("    … +{hidden} lines"),
-                dim(),
-            )));
         }
         lines
     }
@@ -304,7 +327,7 @@ fn content_lines(content: &ContentBlock) -> Vec<String> {
             .text
             .lines()
             .filter(|line| !line.trim_start().starts_with("```"))
-            .map(str::to_owned)
+            .map(|line| line.replace('\t', "    "))
             .collect(),
         ContentBlock::Image(_) => vec!["[image]".to_owned()],
         ContentBlock::Audio(_) => vec!["[audio]".to_owned()],
@@ -319,17 +342,6 @@ pub fn display_path(path: &Path, cwd: &Path) -> String {
     match path.strip_prefix(cwd) {
         Ok(relative) if !relative.as_os_str().is_empty() => relative.display().to_string(),
         _ => path.display().to_string(),
-    }
-}
-
-fn diff_summary(path: &str, old_text: Option<&str>, new_text: &str) -> String {
-    let count = |text: &str| match text.lines().count() {
-        1 => "1 line".to_owned(),
-        lines => format!("{lines} lines"),
-    };
-    match old_text {
-        None => format!("{path} (new file, {})", count(new_text)),
-        Some(old_text) => format!("{path} ({} → {})", count(old_text), count(new_text)),
     }
 }
 
@@ -360,7 +372,7 @@ mod tests {
 
         assert!(cell.is_finished());
         assert_eq!(
-            text(&cell.lines(40, Path::new("/repo"))),
+            text(&cell.lines(40, Path::new("/repo"), &TerminalTranscripts::new())),
             [
                 "✓ Read config  read",
                 "  └ config.toml:3",
@@ -368,7 +380,8 @@ mod tests {
                 "    b",
                 "    c",
                 "    d",
-                "    … +2 lines",
+                "    e",
+                "    … +1 lines",
             ]
         );
     }
@@ -386,10 +399,11 @@ mod tests {
                 ))]),
         );
         assert_eq!(
-            text(&cell.lines(60, Path::new("/repo"))),
+            text(&cell.lines(60, Path::new("/repo"), &TerminalTranscripts::new())),
             [
                 "✓ Write notes.txt  edit",
-                "  └ notes.txt (new file, 1 line)"
+                "  └ notes.txt (new file, +1)",
+                "       1 + hello"
             ]
         );
     }

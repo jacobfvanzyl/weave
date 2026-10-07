@@ -12,6 +12,7 @@ dependencies = [
  "agent-client-protocol-schema",
  "async-io",
  "async-process",
+ "blocking",
  "futures",
  "futures-concurrency",
  "rustc-hash",
@@ -336,6 +337,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
+name = "bytes"
+version = "1.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+
+[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -644,6 +651,15 @@ name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
+
+[[package]]
+name = "diffy"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b545b8c50194bdd008283985ab0b31dba153cfd5b3066a92770634fbc0d7d291"
+dependencies = [
+ "nu-ansi-term",
+]
 
 [[package]]
 name = "digest"
@@ -2351,6 +2367,7 @@ version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
+ "bytes",
  "libc",
  "mio",
  "pin-project-lite",
@@ -2609,10 +2626,14 @@ name = "weave-acp-core"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "libc",
+ "pretty_assertions",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "weave-fake-agent",
 ]
 
 [[package]]
@@ -2630,11 +2651,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "weave-fake-agent"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "tokio",
+]
+
+[[package]]
 name = "weave-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossterm",
+ "diffy",
  "futures",
  "insta",
  "pretty_assertions",

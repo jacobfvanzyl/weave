@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/acp-core", "crates/cli", "crates/tui"]
+members = ["crates/acp-core", "crates/cli", "crates/fake-agent", "crates/tui"]
 resolver = "3"
 
 [workspace.package]
@@ -10,19 +10,23 @@ publish = false
 
 [workspace.dependencies]
 weave-acp-core = { path = "crates/acp-core" }
+weave-fake-agent = { path = "crates/fake-agent" }
 weave-tui = { path = "crates/tui" }
 
 agent-client-protocol = { version = "=3.0.0", features = ["process"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29.0"
+diffy = "0.4.2"
 futures = "0.3"
 insta = "1.46.3"
+libc = "0.2"
 pretty_assertions = "1"
 pulldown-cmark = { version = "0.10", default-features = false }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
 serde = "1"
 serde_json = "1"
+tempfile = "3"
 thiserror = "2"
 tokio = "1"
 tracing = "0.1"

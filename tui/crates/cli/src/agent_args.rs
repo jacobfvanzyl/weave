@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
 use weave_acp_core::AgentSpec;
+use weave_acp_core::ClientOptions;
 use weave_acp_core::ProtocolTrace;
 use weave_acp_core::preset_ids;
 
@@ -26,6 +27,14 @@ pub struct AgentArgs {
     /// Append every line exchanged with the agent to this JSONL file.
     #[arg(long)]
     trace: Option<PathBuf>,
+
+    /// Don't offer the agent fs/read_text_file and fs/write_text_file.
+    #[arg(long)]
+    no_fs: bool,
+
+    /// Don't offer the agent terminals for running commands.
+    #[arg(long)]
+    no_terminal: bool,
 }
 
 impl AgentArgs {
@@ -51,6 +60,15 @@ impl AgentArgs {
         };
         cwd.canonicalize()
             .with_context(|| format!("session directory {}", cwd.display()))
+    }
+
+    /// The client services to advertise.
+    pub fn client_options(&self) -> ClientOptions {
+        ClientOptions {
+            read_files: !self.no_fs,
+            write_files: !self.no_fs,
+            terminals: !self.no_terminal,
+        }
     }
 
     pub fn trace(&self) -> anyhow::Result<Option<ProtocolTrace>> {

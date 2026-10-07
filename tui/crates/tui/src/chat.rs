@@ -22,14 +22,19 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::PermissionRequest;
+use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::Error;
 use weave_acp_core::schema::PromptResponse;
+use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::ToolCallId;
 
+use crate::command_popup;
+use crate::command_popup::CommandPopup;
+use crate::command_popup::PopupAction;
 use crate::composer::Composer;
 use crate::composer::ComposerAction;
 use crate::history_cell;
@@ -38,9 +43,14 @@ use crate::history_cell::ToolCallCell;
 use crate::history_cell::dim;
 use crate::permission::Decision;
 use crate::permission::PermissionView;
+use crate::settings;
+use crate::settings::PickerOutcome;
+use crate::settings::SettingChange;
+use crate::settings::SettingsPicker;
 use crate::status::status_line;
 use crate::streaming::MessageStream;
 use crate::streaming::StreamKind;
+use crate::tool_output::TerminalTranscripts;
 
 /// How long a first Ctrl-C keeps the second one armed to quit.
 const QUIT_WINDOW: Duration = Duration::from_secs(2);
@@ -49,6 +59,8 @@ const QUIT_WINDOW: Duration = Duration::from_secs(2);
 pub enum AppCommand {
     Prompt(String),
     Cancel,
+    /// Change a session setting; the result comes back through [`ChatWidget::setting_changed`].
+    ChangeSetting(SettingChange),
     Quit,
 }
 
@@ -78,6 +90,11 @@ pub struct ChatWidget {
     composer: Composer,
     queued: VecDeque<String>,
     modes: Option<SessionModeState>,
+    config_options: Vec<SessionConfigOption>,
+    settings: Option<SettingsPicker>,
+    commands: Vec<AvailableCommand>,
+    popup: CommandPopup,
+    terminals: TerminalTranscripts,
     context: Option<(u64, u64)>,
     disconnected: bool,
     quit_armed_until: Option<Instant>,
@@ -88,6 +105,7 @@ impl ChatWidget {
         agent_name: String,
         cwd: PathBuf,
         modes: Option<SessionModeState>,
+        config_options: Vec<SessionConfigOption>,
         width: u16,
     ) -> Self {
         Self {
@@ -104,6 +122,11 @@ impl ChatWidget {
             composer: Composer::default(),
             queued: VecDeque::new(),
             modes,
+            config_options,
+            settings: None,
+            commands: Vec::new(),
+            popup: CommandPopup::default(),
+            terminals: TerminalTranscripts::new(),
             context: None,
             disconnected: false,
             quit_armed_until: None,
@@ -111,12 +134,12 @@ impl ChatWidget {
     }
 
     pub fn push_header(&mut self, agent_version: Option<&str>) {
-        let mode = self.current_mode_name().map(str::to_owned);
+        let settings = settings::summary(&self.config_options, self.modes.as_ref()).join(" · ");
         let header = SessionHeader {
             agent: &self.agent_name,
             agent_version,
             cwd: &self.cwd,
-            mode: mode.as_deref(),
+            settings: (!settings.is_empty()).then_some(settings.as_str()),
         };
         let lines = history_cell::session_header(&header, self.content_width());
         self.push_cell(lines);
@@ -147,6 +170,20 @@ impl ChatWidget {
                 Vec::new()
             }
             AgentEvent::TurnEnded { result, .. } => self.end_turn(result),
+            AgentEvent::TerminalOutput { terminal_id, text } => {
+                self.terminals.entry(terminal_id).or_default().append(&text);
+                Vec::new()
+            }
+            AgentEvent::TerminalExited {
+                terminal_id,
+                status,
+            } => {
+                self.terminals
+                    .entry(terminal_id)
+                    .or_default()
+                    .set_exit(status);
+                Vec::new()
+            }
             AgentEvent::Disconnected(error) => {
                 self.finish_live_cells();
                 self.answer_pending_permissions_cancelled();
@@ -157,6 +194,43 @@ impl ChatWidget {
                 self.push_error(&format!("Disconnected: {reason}"));
                 Vec::new()
             }
+        }
+    }
+
+    /// The outcome of an [`AppCommand::ChangeSetting`]. Config option changes return every
+    /// option's new state.
+    pub fn setting_changed(
+        &mut self,
+        change: SettingChange,
+        result: Result<Option<Vec<SessionConfigOption>>, Error>,
+    ) {
+        match (change, result) {
+            (_, Err(error)) => self.push_error(&format!("Couldn't change the setting: {error}")),
+            (SettingChange::ConfigOption(..), Ok(options)) => {
+                if let Some(options) = options {
+                    self.replace_config_options(options);
+                }
+            }
+            (SettingChange::Mode(mode_id), Ok(_)) => {
+                if let Some(modes) = &mut self.modes {
+                    modes.current_mode_id = mode_id;
+                }
+                if let Some(name) = self.current_mode_name().map(str::to_owned) {
+                    let lines =
+                        history_cell::info(&format!("Mode set to {name}"), self.content_width());
+                    self.push_cell(lines);
+                }
+            }
+        }
+    }
+
+    fn replace_config_options(&mut self, options: Vec<SessionConfigOption>) {
+        let changes = settings::describe_changes(&self.config_options, &options);
+        self.config_options = options;
+        if !changes.is_empty() {
+            self.end_stream();
+            let lines = history_cell::info(&changes.join(" · "), self.content_width());
+            self.push_cell(lines);
         }
     }
 
@@ -206,6 +280,10 @@ impl ChatWidget {
                 if let Some(modes) = &mut self.modes {
                     modes.current_mode_id = update.current_mode_id;
                 }
+                // Agents with config options report the change there too.
+                if !self.config_options.is_empty() {
+                    return;
+                }
                 if let Some(name) = self.current_mode_name().map(str::to_owned) {
                     self.end_stream();
                     let lines = history_cell::info(
@@ -216,8 +294,14 @@ impl ChatWidget {
                 }
             }
             SessionUpdate::UsageUpdate(usage) => self.context = Some((usage.used, usage.size)),
-            // Commands, config options and session info drive UI that arrives with later
-            // milestones; nothing in the transcript depends on them.
+            SessionUpdate::ConfigOptionUpdate(update) => {
+                self.replace_config_options(update.config_options)
+            }
+            SessionUpdate::AvailableCommandsUpdate(update) => {
+                self.commands = update.available_commands;
+                self.sync_popup();
+            }
+            // Session titles have no place in a single-session transcript.
             _ => {}
         }
     }
@@ -293,8 +377,9 @@ impl ChatWidget {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
-        if self.permissions.is_empty() {
+        if self.permissions.is_empty() && self.settings.is_none() {
             self.composer.insert_str(text);
+            self.sync_popup();
         }
     }
 
@@ -322,10 +407,102 @@ impl ChatWidget {
             };
         }
 
+        if let Some(picker) = &mut self.settings {
+            return match picker.handle_key(key, &self.config_options, self.modes.as_ref()) {
+                PickerOutcome::Open => Vec::new(),
+                PickerOutcome::Close => {
+                    self.settings = None;
+                    Vec::new()
+                }
+                PickerOutcome::Apply(change) => {
+                    self.settings = None;
+                    vec![AppCommand::ChangeSetting(change)]
+                }
+            };
+        }
+        if ctrl && key.code == KeyCode::Char('o') {
+            if !self.disconnected {
+                self.settings = Some(SettingsPicker::new());
+            }
+            return Vec::new();
+        }
+        if key.code == KeyCode::BackTab {
+            return settings::next_mode(&self.config_options, self.modes.as_ref())
+                .filter(|_| !self.disconnected)
+                .map(AppCommand::ChangeSetting)
+                .into_iter()
+                .collect();
+        }
+        if let Some(commands) = self.handle_popup_key(key) {
+            return commands;
+        }
         if key.code == KeyCode::Esc {
             return self.cancel_turn();
         }
-        match self.composer.handle_key(key) {
+        let action = self.composer.handle_key(key);
+        self.sync_popup();
+        self.submit(action)
+    }
+
+    /// Keys the command popup claims while open: selection, completion, and dismissal.
+    fn handle_popup_key(&mut self, key: KeyEvent) -> Option<Vec<AppCommand>> {
+        let text = self.composer.text().to_owned();
+        let matches: Vec<AvailableCommand> = self
+            .popup
+            .matches(&text, &self.commands)
+            .into_iter()
+            .cloned()
+            .collect();
+        if matches.is_empty() {
+            return None;
+        }
+        let refs: Vec<&AvailableCommand> = matches.iter().collect();
+        let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        let action = match key.code {
+            KeyCode::Up => {
+                self.popup.move_selection(-1, refs.len());
+                return Some(Vec::new());
+            }
+            KeyCode::Down => {
+                self.popup.move_selection(1, refs.len());
+                return Some(Vec::new());
+            }
+            KeyCode::Esc => {
+                self.popup.dismiss(&text);
+                return Some(Vec::new());
+            }
+            KeyCode::Tab => self.popup.accept(&refs, false),
+            KeyCode::Enter if plain && key.modifiers.is_empty() => self.popup.accept(&refs, true),
+            _ => return None,
+        };
+        match action {
+            Some(PopupAction::Complete(command)) => {
+                self.composer.clear();
+                self.composer.insert_str(&format!("/{} ", command.name));
+                self.sync_popup();
+                Some(Vec::new())
+            }
+            Some(PopupAction::Submit(command)) => {
+                self.composer.clear();
+                self.composer.insert_str(&format!("/{}", command.name));
+                let action = self
+                    .composer
+                    .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                self.sync_popup();
+                Some(self.submit(action))
+            }
+            _ => None,
+        }
+    }
+
+    fn sync_popup(&mut self) {
+        let text = self.composer.text().to_owned();
+        let count = self.popup.matches(&text, &self.commands).len();
+        self.popup.sync(&text, count);
+    }
+
+    fn submit(&mut self, action: ComposerAction) -> Vec<AppCommand> {
+        match action {
             ComposerAction::Submit(text) if self.disconnected => {
                 self.composer.insert_str(&text);
                 Vec::new()
@@ -437,7 +614,7 @@ impl ChatWidget {
     }
 
     fn commit_tool_call(&mut self, cell: ToolCallCell) {
-        let lines = cell.lines(self.content_width(), &self.cwd);
+        let lines = cell.lines(self.content_width(), &self.cwd, &self.terminals);
         self.committed_tool_calls.insert(cell.id);
         self.push_cell(lines);
     }
@@ -481,7 +658,7 @@ impl ChatWidget {
         let mut lines = Vec::new();
         for cell in &self.tool_calls {
             lines.push(Line::default());
-            lines.extend(cell.lines(width, &self.cwd));
+            lines.extend(cell.lines(width, &self.cwd, &self.terminals));
         }
         if let Some(stream) = &self.stream {
             let tail = stream.tail();
@@ -516,31 +693,68 @@ impl ChatWidget {
     }
 
     fn footer(&self, width: u16, now: Instant) -> Line<'static> {
-        let hints = if self.disconnected {
-            Span::styled(
-                "agent disconnected · ctrl+c to quit",
+        // Hints in display order, each with how early it gives way when space is short.
+        let (mut hints, hint_style): (Vec<(&str, u8)>, Style) = if self.disconnected {
+            (
+                vec![("agent disconnected · ctrl+c to quit", 0)],
                 Style::default().fg(Color::Red),
             )
         } else if self.quit_armed_until.is_some_and(|until| now < until) {
-            Span::styled("ctrl+c again to quit", Style::default())
+            (vec![("ctrl+c again to quit", 0)], Style::default())
         } else if self.turn.is_some() {
-            Span::styled("enter queue a message · esc interrupt", dim())
+            (vec![("⏎ queue", 1), ("esc interrupt", 0)], dim())
         } else {
-            Span::styled("enter send · shift+enter newline · ctrl+c quit", dim())
+            let mut hints = vec![("⏎ send", 0), ("⇧⏎ newline", 3)];
+            if settings::next_mode(&self.config_options, self.modes.as_ref()).is_some() {
+                hints.push(("⇧⇥ mode", 2));
+            }
+            if !self.config_options.is_empty() || self.modes.is_some() {
+                hints.push(("⌃O settings", 1));
+            }
+            hints.push(("⌃C quit", 0));
+            (hints, dim())
         };
-        let mut details = self.agent_name.clone();
-        if let Some(mode) = self.current_mode_name() {
-            details.push_str(&format!(" · {mode}"));
-        }
+        let mut details = vec![self.agent_name.clone()];
+        details.extend(settings::summary(&self.config_options, self.modes.as_ref()));
         if let Some((used, size)) = self.context
             && size > 0
         {
             let left = 100u64.saturating_sub(used.saturating_mul(100) / size);
-            details.push_str(&format!(" · {left}% context left"));
+            details.push(format!("{left}% context left"));
         }
-        let left_width = hints.content.chars().count() + 2;
-        let gap = usize::from(width).saturating_sub(left_width + details.chars().count());
-        let mut spans = vec![Span::raw("  "), hints];
+
+        let width = usize::from(width);
+        let joined = |hints: &[(&str, u8)]| {
+            hints
+                .iter()
+                .map(|(hint, _)| *hint)
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        let fits = |hints: &str, details: &[String]| {
+            let details = details.join(" · ");
+            2 + hints.chars().count() + 2 + details.chars().count() <= width
+        };
+        // Shed the most optional hints first, then the leading details (the agent name).
+        while !fits(&joined(&hints), &details) {
+            if let Some(index) = hints
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, priority))| *priority > 0)
+                .max_by_key(|(index, (_, priority))| (*priority, *index))
+                .map(|(index, _)| index)
+            {
+                hints.remove(index);
+            } else if details.len() > 1 {
+                details.remove(0);
+            } else {
+                break;
+            }
+        }
+        let hints = joined(&hints);
+        let details = details.join(" · ");
+        let mut spans = vec![Span::raw("  "), Span::styled(hints.clone(), hint_style)];
+        let gap = width.saturating_sub(2 + hints.chars().count() + details.chars().count());
         if gap >= 2 {
             spans.push(Span::raw(" ".repeat(gap)));
             spans.push(Span::styled(details, dim()));
@@ -548,11 +762,25 @@ impl ChatWidget {
         Line::from(spans)
     }
 
+    fn popup_matches(&self) -> Vec<&AvailableCommand> {
+        self.popup.matches(self.composer.text(), &self.commands)
+    }
+
     fn input_height(&self, width: u16) -> u16 {
-        match self.permissions.front() {
-            Some(pending) => pending.view.desired_height(width),
-            None => self.composer.desired_height(width),
+        if let Some(pending) = self.permissions.front() {
+            return pending.view.desired_height(width);
         }
+        if let Some(picker) = &self.settings {
+            return picker.desired_height(&self.config_options, self.modes.as_ref());
+        }
+        CommandPopup::height(self.popup_matches().len()) + self.composer.desired_height(width)
+    }
+
+    /// The hint for the input of the command being typed, as in `/run ` → "shell command".
+    fn command_hint(&self) -> Option<&str> {
+        let name = self.composer.text().strip_prefix('/')?.strip_suffix(' ')?;
+        let command = self.commands.iter().find(|command| command.name == name)?;
+        command_popup::input_hint(command)
     }
 
     /// Everything drawn above the composer or permission prompt.
@@ -592,15 +820,28 @@ impl ChatWidget {
         }
 
         let input_area = Rect::new(area.x, y, area.width, input_height);
-        let cursor = match self.permissions.front() {
-            Some(pending) => {
-                pending.view.render(input_area, buf);
-                None
-            }
-            None => {
-                let placeholder = format!("Ask {} anything", self.agent_name);
-                Some(self.composer.render(input_area, buf, &placeholder))
-            }
+        let cursor = if let Some(pending) = self.permissions.front() {
+            pending.view.render(input_area, buf);
+            None
+        } else if let Some(picker) = &self.settings {
+            picker.render(input_area, buf, &self.config_options, self.modes.as_ref());
+            None
+        } else {
+            let matches = self.popup_matches();
+            let popup_height = CommandPopup::height(matches.len()).min(input_area.height);
+            let popup_area = Rect::new(input_area.x, input_area.y, input_area.width, popup_height);
+            self.popup.render(&matches, popup_area, buf);
+            let composer_area = Rect::new(
+                input_area.x,
+                input_area.y + popup_height,
+                input_area.width,
+                input_area.height - popup_height,
+            );
+            let placeholder = format!("Ask {} anything", self.agent_name);
+            Some(
+                self.composer
+                    .render(composer_area, buf, &placeholder, self.command_hint()),
+            )
         };
         let footer_y = (y + input_height).min(area.bottom().saturating_sub(1));
         buf.set_line(area.x, footer_y, &self.footer(area.width, now), area.width);
@@ -622,18 +863,27 @@ fn content_text(content: &ContentBlock) -> String {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use weave_acp_core::schema::AvailableCommandInput;
+    use weave_acp_core::schema::AvailableCommandsUpdate;
     use weave_acp_core::schema::ContentChunk;
+    use weave_acp_core::schema::SessionConfigOptionCategory;
+    use weave_acp_core::schema::SessionConfigOptionValue;
+    use weave_acp_core::schema::SessionConfigSelectOption;
     use weave_acp_core::schema::SessionNotification;
+    use weave_acp_core::schema::Terminal;
+    use weave_acp_core::schema::TerminalExitStatus;
     use weave_acp_core::schema::ToolCall;
+    use weave_acp_core::schema::ToolCallContent;
     use weave_acp_core::schema::ToolCallStatus;
     use weave_acp_core::schema::ToolCallUpdate;
     use weave_acp_core::schema::ToolCallUpdateFields;
     use weave_acp_core::schema::ToolKind;
+    use weave_acp_core::schema::UnstructuredCommandInput;
 
     use super::*;
 
     fn chat() -> ChatWidget {
-        ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, 60)
+        ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, Vec::new(), 60)
     }
 
     fn update(update: SessionUpdate) -> AgentEvent {
@@ -734,6 +984,171 @@ mod tests {
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(chat.handle_key(ctrl_c).is_empty());
         assert_eq!(chat.handle_key(ctrl_c), [AppCommand::Quit]);
+    }
+
+    fn rows(chat: &ChatWidget, width: u16) -> Vec<String> {
+        let area = Rect::new(0, 0, width, chat.desired_height(width));
+        let mut buf = Buffer::empty(area);
+        chat.render(area, &mut buf);
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn embedded_terminals_stream_live_and_commit_with_their_exit() {
+        let mut chat = chat();
+        submit(&mut chat, "go");
+        chat.take_history();
+        chat.handle_agent_event(update(SessionUpdate::ToolCall(
+            ToolCall::new("t1", "Run tests")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress)
+                .content(vec![ToolCallContent::Terminal(Terminal::new("term-1"))]),
+        )));
+        chat.handle_agent_event(AgentEvent::TerminalOutput {
+            terminal_id: "term-1".into(),
+            text: "\x1b[32mok\x1b[0m 1\n".into(),
+        });
+        assert!(rows(&chat, 60).contains(&"  └ ok 1".to_owned()));
+
+        chat.handle_agent_event(AgentEvent::TerminalExited {
+            terminal_id: "term-1".into(),
+            status: TerminalExitStatus::new().exit_code(1),
+        });
+        chat.handle_agent_event(update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t1",
+            ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+        ))));
+        assert_eq!(
+            history(&mut chat),
+            ["", "✗ Run tests  execute", "  └ ok 1", "    exit 1"]
+        );
+    }
+
+    #[test]
+    fn slash_commands_complete_from_the_agents_list() {
+        let mut chat = chat();
+        chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new("plan", "Make a plan"),
+                AvailableCommand::new("run", "Run a command").input(
+                    AvailableCommandInput::Unstructured(UnstructuredCommandInput::new(
+                        "shell command",
+                    )),
+                ),
+            ]),
+        )));
+        chat.handle_paste("/r");
+        assert!(
+            rows(&chat, 60)
+                .iter()
+                .any(|row| row.starts_with("› /run") && row.ends_with("Run a command"))
+        );
+
+        // Tab completes and the command's input hint appears.
+        assert!(chat.handle_key(key(KeyCode::Tab)).is_empty());
+        assert_eq!(chat.composer.text(), "/run ");
+        assert!(rows(&chat, 60).contains(&"› /run shell command".to_owned()));
+
+        // A command without input is sent as soon as it is chosen.
+        chat.composer.clear();
+        chat.handle_paste("/pl");
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Enter)),
+            [AppCommand::Prompt("/plan".into())]
+        );
+    }
+
+    #[test]
+    fn shift_tab_cycles_the_mode_and_results_are_announced() {
+        let options = vec![
+            SessionConfigOption::select(
+                "mode",
+                "Mode",
+                "ask",
+                vec![
+                    SessionConfigSelectOption::new("ask", "Ask"),
+                    SessionConfigSelectOption::new("code", "Code"),
+                ],
+            )
+            .category(SessionConfigOptionCategory::Mode),
+        ];
+        let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, options, 60);
+        let change =
+            SettingChange::ConfigOption("mode".into(), SessionConfigOptionValue::value_id("code"));
+        assert_eq!(
+            chat.handle_key(key(KeyCode::BackTab)),
+            [AppCommand::ChangeSetting(change.clone())]
+        );
+
+        let updated = vec![
+            SessionConfigOption::select(
+                "mode",
+                "Mode",
+                "code",
+                vec![
+                    SessionConfigSelectOption::new("ask", "Ask"),
+                    SessionConfigSelectOption::new("code", "Code"),
+                ],
+            )
+            .category(SessionConfigOptionCategory::Mode),
+        ];
+        chat.setting_changed(change, Ok(Some(updated)));
+        assert_eq!(history(&mut chat), ["• Mode set to Code"]);
+        assert!(
+            rows(&chat, 80)
+                .last()
+                .is_some_and(|footer| footer.ends_with("Agent · Code"))
+        );
+    }
+
+    #[test]
+    fn ctrl_o_opens_settings_and_applies_a_choice() {
+        let options = vec![SessionConfigOption::boolean("verbose", "Verbose", false)];
+        let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, options, 60);
+        assert!(
+            chat.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
+                .is_empty()
+        );
+        assert!(rows(&chat, 60).iter().any(|row| row == "› Verbose  off"));
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Enter)),
+            [AppCommand::ChangeSetting(SettingChange::ConfigOption(
+                "verbose".into(),
+                SessionConfigOptionValue::boolean(true)
+            ))]
+        );
+        assert!(chat.settings.is_none());
+    }
+
+    #[test]
+    fn narrow_footers_shed_optional_hints_before_details() {
+        let options = vec![SessionConfigOption::boolean("verbose", "Verbose", false)];
+        let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), None, options, 60);
+        chat.context = Some((25, 100));
+        let footer = chat.footer(60, Instant::now()).to_string();
+        assert!(
+            footer.starts_with("  ⏎ send · ⌃O settings · ⌃C quit"),
+            "{footer}"
+        );
+        assert!(footer.ends_with("Agent · 75% context left"), "{footer}");
+
+        let footer = chat.footer(40, Instant::now()).to_string();
+        assert_eq!(
+            footer.trim_end(),
+            "  ⏎ send · ⌃C quit      75% context left"
+        );
     }
 
     #[test]
