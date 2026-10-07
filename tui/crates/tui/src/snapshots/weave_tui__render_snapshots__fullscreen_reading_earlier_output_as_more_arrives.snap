@@ -1,0 +1,20 @@
+---
+source: crates/tui/src/render_snapshots.rs
+expression: "full_screen(&chat, 16)"
+---
+› question 1
+
+• Answer 1, first line.
+  And a second line.
+
+› question 2
+
+• Answer 2, first line.
+  And a second line.
+
+› question 3
+
+  ↓ new output below · esc for latest
+◦ Working (0s • esc to interrupt)
+› Ask Agent anything
+  ⏎ queue · esc interrupt                                          Agent

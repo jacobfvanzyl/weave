@@ -1,7 +1,9 @@
-//! A streaming agent message or thought, committed to scrollback one finished line at a time.
+//! A streaming agent message or thought.
 //!
-//! Follows Codex's newline-gated commit: everything up to the last newline is final and can
-//! leave the viewport, while the partial line after it keeps re-rendering in place.
+//! Inline mode follows Codex's newline-gated commit: everything up to the last newline is
+//! final and can go to scrollback, while the partial line after it keeps re-rendering in the
+//! viewport. Fullscreen keeps the whole message live and commits it as one transcript cell
+//! when it ends, so it reflows with the screen.
 
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -91,29 +93,43 @@ impl MessageStream {
     }
 
     fn render(&self, source: &str) -> Vec<Line<'static>> {
-        if self.kind == StreamKind::User {
-            return history_cell::user_message(source, self.width);
-        }
-        let body = render_markdown(source, self.width.saturating_sub(2));
-        let (marker, body_style) = match self.kind {
-            StreamKind::Agent => (Style::default(), Style::default()),
-            StreamKind::Thought | StreamKind::User => (dim(), dim().add_modifier(Modifier::ITALIC)),
-        };
-        body.into_iter()
-            .enumerate()
-            .map(|(index, line)| {
-                let prefix = match index {
-                    0 => "• ",
-                    // Blank lines stay empty rather than ending in indentation.
-                    _ if line.spans.is_empty() => "",
-                    _ => "  ",
-                };
-                let mut spans = vec![Span::styled(prefix, marker)];
-                spans.extend(line.spans);
-                Line::from(spans).style(line.style.patch(body_style))
-            })
-            .collect()
+        render_message(self.kind, source, self.width)
     }
+
+    /// The whole message as it stands, at `width`; fullscreen redraws it live until it ends.
+    pub fn render_all(&self, width: usize) -> Vec<Line<'static>> {
+        render_message(self.kind, &self.source, width)
+    }
+
+    pub fn into_source(self) -> String {
+        self.source
+    }
+}
+
+/// A message's full source rendered at `width`.
+pub fn render_message(kind: StreamKind, source: &str, width: usize) -> Vec<Line<'static>> {
+    if kind == StreamKind::User {
+        return history_cell::user_message(source, width);
+    }
+    let body = render_markdown(source, width.saturating_sub(2));
+    let (marker, body_style) = match kind {
+        StreamKind::Agent => (Style::default(), Style::default()),
+        StreamKind::Thought | StreamKind::User => (dim(), dim().add_modifier(Modifier::ITALIC)),
+    };
+    body.into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let prefix = match index {
+                0 => "• ",
+                // Blank lines stay empty rather than ending in indentation.
+                _ if line.spans.is_empty() => "",
+                _ => "  ",
+            };
+            let mut spans = vec![Span::styled(prefix, marker)];
+            spans.extend(line.spans);
+            Line::from(spans).style(line.style.patch(body_style))
+        })
+        .collect()
 }
 
 #[cfg(test)]

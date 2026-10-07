@@ -13,6 +13,7 @@ use std::time::Instant;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
@@ -48,8 +49,6 @@ use crate::composer::Composer;
 use crate::composer::ComposerAction;
 use crate::elicitation::ElicitationOutcome;
 use crate::elicitation::ElicitationView;
-use crate::history_cell;
-use crate::history_cell::SessionHeader;
 use crate::history_cell::ToolCallCell;
 use crate::history_cell::dim;
 use crate::permission::Decision;
@@ -67,12 +66,18 @@ use crate::status::status_line;
 use crate::streaming::MessageStream;
 use crate::streaming::StreamKind;
 use crate::tool_output::TerminalTranscripts;
+use crate::transcript::Reading;
+use crate::transcript::TranscriptCell;
+use crate::transcript::TranscriptView;
 
 /// Footer width given to the session title before it is shortened.
 const TITLE_WIDTH: usize = 32;
 
 /// How long a first Ctrl-C keeps the second one armed to quit.
 const QUIT_WINDOW: Duration = Duration::from_secs(2);
+
+/// How long the note that a selection was copied stays up.
+const COPIED_NOTE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AppCommand {
@@ -93,6 +98,8 @@ pub enum AppCommand {
     DeleteSession(SessionId),
     /// Open a URL the user consented to in their browser.
     OpenUrl(String),
+    /// Put text the user selected on the clipboard.
+    Copy(String),
     Quit,
 }
 
@@ -106,6 +113,13 @@ pub struct SessionAbilities {
 struct Turn {
     started: Instant,
     cancelling: bool,
+}
+
+struct Stashed {
+    session_id: SessionId,
+    /// Its fullscreen transcript.
+    cells: Vec<TranscriptCell>,
+    resumable: bool,
 }
 
 struct PendingPermission {
@@ -131,6 +145,11 @@ pub struct ChatWidget {
     /// URL elicitations the user accepted, awaiting their optional completion notice.
     accepted_urls: HashSet<ElicitationId>,
     width: u16,
+    /// The transcript weave draws and scrolls itself in fullscreen mode. Without it, finished
+    /// lines queue in `pending_history` for the terminal's scrollback.
+    transcript: Option<TranscriptView>,
+    /// The session being left, kept until the next one opens so a failed switch can go back.
+    stashed: Option<Stashed>,
     pending_history: Vec<Line<'static>>,
     has_history: bool,
     stream: Option<MessageStream>,
@@ -153,6 +172,10 @@ pub struct ChatWidget {
     title: Option<String>,
     disconnected: bool,
     quit_armed_until: Option<Instant>,
+    /// The active session has a conversation worth reopening later.
+    resumable: bool,
+    /// Confirmation that a selection was copied, until it expires.
+    copied: Option<(String, Instant)>,
 }
 
 impl ChatWidget {
@@ -167,6 +190,8 @@ impl ChatWidget {
             elicitations: VecDeque::new(),
             accepted_urls: HashSet::new(),
             width,
+            transcript: None,
+            stashed: None,
             pending_history: Vec::new(),
             has_history: false,
             stream: None,
@@ -186,23 +211,32 @@ impl ChatWidget {
             title: None,
             disconnected: false,
             quit_armed_until: None,
+            resumable: false,
+            copied: None,
         }
+    }
+
+    /// Draw the transcript in the widget (fullscreen) instead of handing it to scrollback.
+    pub fn fullscreen(mut self) -> Self {
+        self.transcript = Some(TranscriptView::new());
+        self
     }
 
     /// The startup banner, followed by any `notices` worth the user's attention.
     pub fn push_header(&mut self, agent_version: Option<&str>, notices: &[String]) {
         let settings = settings::summary(&self.config_options, self.modes.as_ref()).join(" · ");
-        let header = SessionHeader {
-            agent: &self.agent_name,
-            agent_version,
-            cwd: &self.cwd,
-            settings: (!settings.is_empty()).then_some(settings.as_str()),
-        };
-        let lines = history_cell::session_header(&header, self.content_width());
-        self.push_cell(lines);
+        self.push_cell(TranscriptCell::header(
+            self.agent_name.clone(),
+            agent_version.map(str::to_owned),
+            self.cwd.clone(),
+            (!settings.is_empty()).then_some(settings),
+        ));
         for notice in notices {
-            let lines = history_cell::error(notice, self.content_width());
-            self.push_cell(lines);
+            self.push_cell(TranscriptCell::error(notice));
+        }
+        // The header stays when the transcript is cleared for another session.
+        if let Some(view) = &mut self.transcript {
+            view.pin();
         }
     }
 
@@ -210,6 +244,18 @@ impl ChatWidget {
     pub fn begin_session(&mut self, session_id: SessionId, title: Option<&str>) {
         self.finish_live_cells();
         self.answer_pending_requests_cancelled();
+        // Like Codex, a fullscreen transcript shows one session at a time.
+        let cells = self
+            .transcript
+            .as_mut()
+            .map(TranscriptView::take_session)
+            .unwrap_or_default();
+        self.stashed = self.active_session.take().map(|session_id| Stashed {
+            session_id,
+            cells,
+            resumable: self.resumable,
+        });
+        self.resumable = false;
         // Tool call ids are only unique within a session, and a reload replays its own.
         self.committed_tool_calls.clear();
         self.turn = None;
@@ -224,8 +270,7 @@ impl ChatWidget {
         self.active_session = Some(session_id);
         self.opening = true;
         if let Some(title) = title {
-            let lines = history_cell::info(&format!("Session: {title}"), self.content_width());
-            self.push_cell(lines);
+            self.push_cell(TranscriptCell::info(&format!("Session: {title}")));
         }
     }
 
@@ -237,14 +282,14 @@ impl ChatWidget {
         }
         self.end_stream();
         self.opening = false;
+        self.stashed = None;
+        self.resumable |= opened.reopened.is_some();
         self.modes = opened.modes;
         self.config_options = opened.config_options;
         if opened.reopened == Some(Reopened::Resumed) {
-            let lines = history_cell::info(
+            self.push_cell(TranscriptCell::info(
                 "Resumed; the agent did not replay earlier messages",
-                self.content_width(),
-            );
-            self.push_cell(lines);
+            ));
         }
     }
 
@@ -255,6 +300,14 @@ impl ChatWidget {
         previous: Option<SessionId>,
     ) -> Vec<AppCommand> {
         self.opening = false;
+        if let Some(stashed) = self.stashed.take()
+            && previous.as_ref() == Some(&stashed.session_id)
+        {
+            self.resumable = stashed.resumable;
+            if let Some(view) = &mut self.transcript {
+                view.restore_session(stashed.cells);
+            }
+        }
         self.push_error(&format!("Couldn't open the session: {error}"));
         self.active_session = previous;
         if self.active_session.is_none() && self.abilities.list {
@@ -302,7 +355,17 @@ impl ChatWidget {
     }
 
     pub fn set_width(&mut self, width: u16) {
+        if width != self.width
+            && let Some(view) = &mut self.transcript
+        {
+            view.resized();
+        }
         self.width = width;
+    }
+
+    /// The session to offer reopening on exit: the active one, once it has a conversation.
+    pub fn resumable_session(&self) -> Option<&SessionId> {
+        self.active_session.as_ref().filter(|_| self.resumable)
     }
 
     /// Lines to write into scrollback above the viewport, in order.
@@ -312,7 +375,14 @@ impl ChatWidget {
 
     /// Whether the viewport changes over time on its own (the status timer and shimmer).
     pub fn is_animating(&self) -> bool {
-        self.turn.is_some()
+        self.turn.is_some() || self.copied.is_some()
+    }
+
+    /// Advance time-based state between frames.
+    pub fn tick(&mut self, now: Instant) {
+        if self.copied.as_ref().is_some_and(|(_, until)| now >= *until) {
+            self.copied = None;
+        }
     }
 
     pub fn handle_agent_event(&mut self, event: AgentEvent) -> Vec<AppCommand> {
@@ -356,20 +426,16 @@ impl ChatWidget {
                     None
                 };
                 if withdrawn.is_some() {
-                    let lines =
-                        history_cell::info("The agent withdrew its request", self.content_width());
-                    self.push_cell(lines);
+                    self.push_cell(TranscriptCell::info("The agent withdrew its request"));
                 }
                 Vec::new()
             }
             AgentEvent::ElicitationCompleted(id) => {
                 // Unknown or already-completed ids are ignored, as the spec requires.
                 if self.accepted_urls.remove(&id) {
-                    let lines = history_cell::info(
+                    self.push_cell(TranscriptCell::info(
                         "The agent finished the step you opened in the browser",
-                        self.content_width(),
-                    );
-                    self.push_cell(lines);
+                    ));
                 }
                 Vec::new()
             }
@@ -382,6 +448,7 @@ impl ChatWidget {
             }
             AgentEvent::TerminalOutput { terminal_id, text } => {
                 self.terminals.entry(terminal_id).or_default().append(&text);
+                self.note_activity();
                 Vec::new()
             }
             AgentEvent::TerminalExited {
@@ -426,9 +493,7 @@ impl ChatWidget {
                     modes.current_mode_id = mode_id;
                 }
                 if let Some(name) = self.current_mode_name().map(str::to_owned) {
-                    let lines =
-                        history_cell::info(&format!("Mode set to {name}"), self.content_width());
-                    self.push_cell(lines);
+                    self.push_cell(TranscriptCell::info(&format!("Mode set to {name}")));
                 }
             }
         }
@@ -439,8 +504,7 @@ impl ChatWidget {
         self.config_options = options;
         if !changes.is_empty() {
             self.end_stream();
-            let lines = history_cell::info(&changes.join(" · "), self.content_width());
-            self.push_cell(lines);
+            self.push_cell(TranscriptCell::info(&changes.join(" · ")));
         }
     }
 
@@ -454,8 +518,7 @@ impl ChatWidget {
             .map(|attachment| format!("{} ({})", attachment.name, attachment.kind))
             .collect::<Vec<_>>()
             .join(", ");
-        let lines = history_cell::info(&format!("Attached {list}"), self.content_width());
-        self.push_cell(lines);
+        self.push_cell(TranscriptCell::info(&format!("Attached {list}")));
     }
 
     /// The agent rejected the prompt request before the turn could start.
@@ -476,6 +539,7 @@ impl ChatWidget {
             SessionUpdate::UserMessageChunk(chunk) => self.stream_content(StreamKind::User, &chunk),
             SessionUpdate::ToolCall(call) => {
                 self.end_stream();
+                self.note_activity();
                 if self.committed_tool_calls.contains(&call.tool_call_id) {
                     return;
                 }
@@ -488,13 +552,13 @@ impl ChatWidget {
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 self.end_stream();
+                self.note_activity();
                 self.apply_tool_call_update(update.tool_call_id, &update.fields);
                 self.commit_finished_tool_calls();
             }
             SessionUpdate::Plan(plan) => {
                 self.end_stream();
-                let lines = history_cell::plan(&plan, self.content_width());
-                self.push_cell(lines);
+                self.push_cell(TranscriptCell::plan(plan));
             }
             SessionUpdate::CurrentModeUpdate(update) => {
                 if let Some(modes) = &mut self.modes {
@@ -506,11 +570,7 @@ impl ChatWidget {
                 }
                 if let Some(name) = self.current_mode_name().map(str::to_owned) {
                     self.end_stream();
-                    let lines = history_cell::info(
-                        &format!("Mode changed to {name}"),
-                        self.content_width(),
-                    );
-                    self.push_cell(lines);
+                    self.push_cell(TranscriptCell::info(&format!("Mode changed to {name}")));
                 }
             }
             SessionUpdate::UsageUpdate(usage) => self.context = Some((usage.used, usage.size)),
@@ -608,8 +668,7 @@ impl ChatWidget {
                     _ => Some("Stopped for an unrecognized reason"),
                 };
                 if let Some(note) = note {
-                    let lines = history_cell::info(note, self.content_width());
-                    self.push_cell(lines);
+                    self.push_cell(TranscriptCell::info(note));
                 }
             }
             Err(error) => self.push_error(&format!("Turn failed: {error}")),
@@ -643,6 +702,9 @@ impl ChatWidget {
         if ctrl && key.code == KeyCode::Char('d') && self.composer.is_empty() && self.turn.is_none()
         {
             return vec![AppCommand::Quit];
+        }
+        if let Some(commands) = self.handle_scroll_key(key) {
+            return commands;
         }
 
         if let Some(pending) = self.permissions.front_mut() {
@@ -720,17 +782,13 @@ impl ChatWidget {
 
         if ctrl && key.code == KeyCode::Char('r') {
             if self.turn.is_some() {
-                let lines = history_cell::info(
+                self.push_cell(TranscriptCell::info(
                     "Finish or cancel the current turn before switching sessions",
-                    self.content_width(),
-                );
-                self.push_cell(lines);
+                ));
                 return Vec::new();
             }
             if !self.abilities.list {
-                let lines =
-                    history_cell::info("This agent can't list its sessions", self.content_width());
-                self.push_cell(lines);
+                self.push_cell(TranscriptCell::info("This agent can't list its sessions"));
                 return Vec::new();
             }
             return self.open_session_picker(false);
@@ -771,6 +829,55 @@ impl ChatWidget {
         let action = self.composer.handle_key(key);
         self.sync_popup();
         self.submit(action)
+    }
+
+    /// Fullscreen transcript navigation. It comes before prompts and pickers so the transcript
+    /// can be read while one is open: PageUp/PageDown, Ctrl+Home/End (or Alt+< and Alt+>),
+    /// and Esc back to the newest output while reading.
+    fn handle_scroll_key(&mut self, key: KeyEvent) -> Option<Vec<AppCommand>> {
+        let view = self.transcript.as_mut()?;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::PageUp => view.scroll_pages(-1),
+            KeyCode::PageDown => view.scroll_pages(1),
+            KeyCode::Home if ctrl => view.scroll_to_start(),
+            KeyCode::End if ctrl => view.follow(),
+            KeyCode::Char('<') if alt => view.scroll_to_start(),
+            KeyCode::Char('>') if alt => view.follow(),
+            KeyCode::Char(',') if alt && shift => view.scroll_to_start(),
+            KeyCode::Char('.') if alt && shift => view.follow(),
+            KeyCode::Esc if view.reading() != Reading::Latest => view.follow(),
+            _ => return None,
+        }
+        Some(Vec::new())
+    }
+
+    /// Wheel scrolling and drag selection in the fullscreen transcript; a finished selection
+    /// is copied.
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> Vec<AppCommand> {
+        if self.transcript.is_none() {
+            return Vec::new();
+        }
+        let live = self.live_lines(self.content_width());
+        let Some(view) = &mut self.transcript else {
+            return Vec::new();
+        };
+        match view.handle_mouse(event, &live) {
+            Some(text) if !text.is_empty() => {
+                let count = text.chars().count();
+                let noun = if count == 1 {
+                    "character"
+                } else {
+                    "characters"
+                };
+                let note = format!("Copied {count} {noun}");
+                self.copied = Some((note, Instant::now() + COPIED_NOTE));
+                vec![AppCommand::Copy(text)]
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Keys the command popup claims while open: selection, completion, and dismissal.
@@ -863,8 +970,12 @@ impl ChatWidget {
     }
 
     fn start_prompt(&mut self, text: String) -> Vec<AppCommand> {
-        let lines = history_cell::user_message(&text, self.content_width());
-        self.push_cell(lines);
+        self.push_cell(TranscriptCell::user(&text));
+        self.resumable = true;
+        // Sending a message returns to the newest output, where its reply will appear.
+        if let Some(view) = &mut self.transcript {
+            view.follow();
+        }
         self.turn = Some(Turn {
             started: Instant::now(),
             cancelling: false,
@@ -915,19 +1026,32 @@ impl ChatWidget {
         let stream = self
             .stream
             .get_or_insert_with(|| MessageStream::new(kind, width, message_id));
-        let content = &chunk.content;
         let first = !stream.has_committed();
-        stream.push(&content_text(content));
+        stream.push(&content_text(&chunk.content));
+        // Fullscreen keeps the whole message live, reflowing with the screen, until it ends.
+        if let Some(view) = &mut self.transcript {
+            view.note_activity();
+            return;
+        }
         let lines = stream.take_complete();
         self.commit_stream_lines(first, lines);
     }
 
     fn end_stream(&mut self) {
-        if let Some(stream) = self.stream.take() {
-            let first = !stream.has_committed();
-            let lines = stream.finish();
-            self.commit_stream_lines(first, lines);
+        let Some(stream) = self.stream.take() else {
+            return;
+        };
+        if self.transcript.is_some() {
+            let kind = stream.kind();
+            let source = stream.into_source();
+            if !source.trim().is_empty() {
+                self.push_cell(TranscriptCell::message(kind, source));
+            }
+            return;
         }
+        let first = !stream.has_committed();
+        let lines = stream.finish();
+        self.commit_stream_lines(first, lines);
     }
 
     fn commit_stream_lines(&mut self, first: bool, lines: Vec<Line<'static>>) {
@@ -935,7 +1059,7 @@ impl ChatWidget {
             return;
         }
         if first {
-            self.push_cell(lines);
+            self.push_lines(lines);
         } else {
             self.pending_history.extend(lines);
         }
@@ -952,9 +1076,12 @@ impl ChatWidget {
     }
 
     fn commit_tool_call(&mut self, cell: ToolCallCell) {
-        let lines = cell.lines(self.content_width(), &self.cwd, &self.terminals);
-        self.committed_tool_calls.insert(cell.id);
-        self.push_cell(lines);
+        self.committed_tool_calls.insert(cell.id.clone());
+        let terminals = cell
+            .terminal_ids()
+            .filter_map(|id| Some((id.clone(), self.terminals.get(id)?.clone())))
+            .collect();
+        self.push_cell(TranscriptCell::tool_call(cell, self.cwd.clone(), terminals));
     }
 
     /// Commit everything still live, as it stands, when the turn ends.
@@ -965,7 +1092,21 @@ impl ChatWidget {
         }
     }
 
-    fn push_cell(&mut self, lines: Vec<Line<'static>>) {
+    fn push_cell(&mut self, cell: TranscriptCell) {
+        match &mut self.transcript {
+            Some(view) => {
+                view.push(cell);
+                self.has_history = true;
+            }
+            None => {
+                let lines = cell.lines(self.content_width()).to_vec();
+                self.push_lines(lines);
+            }
+        }
+    }
+
+    /// Queue a cell's lines for scrollback, after a blank separator.
+    fn push_lines(&mut self, lines: Vec<Line<'static>>) {
         if self.has_history {
             self.pending_history.push(Line::default());
         }
@@ -974,8 +1115,14 @@ impl ChatWidget {
     }
 
     fn push_error(&mut self, message: &str) {
-        let lines = history_cell::error(message, self.content_width());
-        self.push_cell(lines);
+        self.push_cell(TranscriptCell::error(message));
+    }
+
+    /// Output changed while the reader may be scrolled away from it.
+    fn note_activity(&mut self) {
+        if let Some(view) = &mut self.transcript {
+            view.note_activity();
+        }
     }
 
     fn content_width(&self) -> usize {
@@ -998,7 +1145,15 @@ impl ChatWidget {
             lines.push(Line::default());
             lines.extend(cell.lines(width, &self.cwd, &self.terminals));
         }
-        if let Some(stream) = &self.stream {
+        if let Some(stream) = &self.stream
+            && self.transcript.is_some()
+        {
+            let message = stream.render_all(width);
+            if !message.is_empty() {
+                lines.push(Line::default());
+                lines.extend(message);
+            }
+        } else if let Some(stream) = &self.stream {
             let tail = stream.tail();
             if !tail.is_empty() {
                 if !stream.has_committed() || !self.tool_calls.is_empty() {
@@ -1142,17 +1297,41 @@ impl ChatWidget {
         command_popup::input_hint(command)
     }
 
+    /// The turn status and queued messages, spaced from a prompt below them.
+    fn status_block(&self, now: Instant) -> Vec<Line<'static>> {
+        let mut lines = self.status_lines(now);
+        if !lines.is_empty() && (!self.permissions.is_empty() || !self.elicitations.is_empty()) {
+            lines.push(Line::default());
+        }
+        lines
+    }
+
     /// Everything drawn above the composer or permission prompt.
     fn lines_above_input(&self, width: u16, now: Instant) -> Vec<Line<'static>> {
         let mut lines = self.live_lines(usize::from(width));
         lines.push(Line::default());
-        let status = self.status_lines(now);
-        let has_status = !status.is_empty();
-        lines.extend(status);
-        if has_status && (!self.permissions.is_empty() || !self.elicitations.is_empty()) {
-            lines.push(Line::default());
-        }
+        lines.extend(self.status_block(now));
         lines
+    }
+
+    /// The row under the fullscreen transcript: a copy confirmation, or how to get back to the
+    /// newest output when scrolled away from it.
+    fn transcript_note(&self, now: Instant) -> Line<'static> {
+        if let Some((note, until)) = &self.copied
+            && now < *until
+        {
+            return Line::from(Span::styled(format!("  {note}"), dim()));
+        }
+        match self.transcript.as_ref().map(TranscriptView::reading) {
+            Some(Reading::Earlier) => {
+                Line::from(Span::styled("  ↑ scrolled back · esc for latest", dim()))
+            }
+            Some(Reading::EarlierWithNewOutput) => Line::from(Span::styled(
+                "  ↓ new output below · esc for latest",
+                Style::default().fg(Color::Cyan),
+            )),
+            _ => Line::default(),
+        }
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -1161,15 +1340,46 @@ impl ChatWidget {
         u16::try_from(total).unwrap_or(u16::MAX)
     }
 
-    /// Draw the viewport. Returns where the terminal cursor belongs, if anywhere.
+    /// Draw the inline viewport. Returns where the terminal cursor belongs, if anywhere.
     pub fn render(&self, area: Rect, buf: &mut Buffer) -> Option<Position> {
         let now = Instant::now();
+        let above = self.lines_above_input(area.width, now);
+        self.render_input(area, buf, &above, now)
+    }
+
+    /// Draw the whole screen in fullscreen mode: the transcript, with the status, input and
+    /// footer pinned below it. Returns where the terminal cursor belongs, if anywhere.
+    pub fn render_screen(&self, area: Rect, buf: &mut Buffer) -> Option<Position> {
+        let Some(view) = &self.transcript else {
+            return self.render(area, buf);
+        };
+        let now = Instant::now();
+        let mut above = vec![self.transcript_note(now)];
+        above.extend(self.status_block(now));
+        // As in Codex, the input takes at most two thirds of the screen, but at least 8 rows.
+        let cap = (area.height.saturating_mul(2) / 3).max(8).min(area.height);
+        let wanted = above.len() + usize::from(self.input_height(area.width)) + 1;
+        let bottom_height = u16::try_from(wanted).unwrap_or(u16::MAX).min(cap);
+        let transcript_area = Rect::new(area.x, area.y, area.width, area.height - bottom_height);
+        let width = usize::from(area.width.max(10));
+        view.render(transcript_area, buf, width, &self.live_lines(width));
+        let bottom = Rect::new(area.x, transcript_area.bottom(), area.width, bottom_height);
+        self.render_input(bottom, buf, &above, now)
+    }
+
+    /// Draw `above`, then the input and footer, into `area`, dropping the oldest of `above`
+    /// when space is short.
+    fn render_input(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        above: &[Line<'static>],
+        now: Instant,
+    ) -> Option<Position> {
         let input_height = self
             .input_height(area.width)
             .min(area.height.saturating_sub(1));
-        let above = self.lines_above_input(area.width, now);
 
-        // When space is short, keep the newest live lines and drop the oldest.
         let room = usize::from(area.height.saturating_sub(input_height + 1));
         let skip = above.len().saturating_sub(room);
         let mut y = area.y;
@@ -1689,5 +1899,122 @@ mod tests {
             "{rows:?}"
         );
         assert_eq!(rows[4], "› Ask Agent anything");
+    }
+
+    fn fullscreen_chat() -> ChatWidget {
+        let abilities = SessionAbilities {
+            list: true,
+            delete: true,
+        };
+        let mut chat =
+            ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, 40).fullscreen();
+        chat.session_ready(OpenedSession {
+            session_id: "s1".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: None,
+        });
+        chat
+    }
+
+    fn screen_rows(chat: &ChatWidget, width: u16, height: u16) -> Vec<String> {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        chat.render_screen(area, &mut buf);
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn reply(chat: &mut ChatWidget, id: &str, text: &str) {
+        let chunk =
+            ContentChunk::new(text.into()).message_id(weave_acp_core::schema::MessageId::new(id));
+        chat.handle_agent_event(update(SessionUpdate::AgentMessageChunk(chunk)));
+    }
+
+    #[test]
+    fn fullscreen_keeps_the_transcript_out_of_scrollback_and_reflows_it() {
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "go");
+        reply(&mut chat, "m1", &"word ".repeat(30));
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        assert!(chat.take_history().is_empty());
+
+        let count = |rows: Vec<String>| rows.iter().filter(|row| row.contains("word")).count();
+        assert!(count(screen_rows(&chat, 30, 20)) > count(screen_rows(&chat, 60, 20)));
+    }
+
+    #[test]
+    fn escape_returns_to_the_newest_output_before_it_interrupts() {
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "go");
+        for n in 1..=12 {
+            reply(&mut chat, &format!("m{n}"), &format!("reply {n}"));
+        }
+        assert!(screen_rows(&chat, 40, 10).contains(&"• reply 12".to_owned()));
+
+        chat.handle_key(key(KeyCode::PageUp));
+        let rows = screen_rows(&chat, 40, 10);
+        assert!(!rows.contains(&"• reply 12".to_owned()), "{rows:?}");
+        assert!(rows.iter().any(|row| row.contains("esc for latest")));
+
+        assert_eq!(chat.handle_key(key(KeyCode::Esc)), []);
+        assert!(screen_rows(&chat, 40, 10).contains(&"• reply 12".to_owned()));
+        assert_eq!(chat.handle_key(key(KeyCode::Esc)), [AppCommand::Cancel]);
+    }
+
+    #[test]
+    fn dragging_over_the_transcript_copies_the_selection() {
+        let mut chat = fullscreen_chat();
+        reply(&mut chat, "m1", "copy me");
+        screen_rows(&chat, 40, 10);
+        let mouse = |kind, column| MouseEvent {
+            kind,
+            column,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        let left = crossterm::event::MouseButton::Left;
+        use crossterm::event::MouseEventKind;
+        chat.handle_mouse(mouse(MouseEventKind::Down(left), 2));
+        chat.handle_mouse(mouse(MouseEventKind::Drag(left), 8));
+        assert_eq!(
+            chat.handle_mouse(mouse(MouseEventKind::Up(left), 8)),
+            [AppCommand::Copy("copy me".into())]
+        );
+        assert!(
+            screen_rows(&chat, 40, 10)
+                .iter()
+                .any(|row| row.trim() == "Copied 7 characters")
+        );
+    }
+
+    #[test]
+    fn fullscreen_shows_one_session_and_a_failed_switch_restores_the_last() {
+        let mut chat = fullscreen_chat();
+        chat.push_header(None, &[]);
+        submit(&mut chat, "first session");
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+
+        chat.begin_session("s2".into(), Some("Other"));
+        let rows = screen_rows(&chat, 40, 12);
+        assert!(
+            rows.iter().any(|row| row.starts_with("• weave")),
+            "{rows:?}"
+        );
+        assert!(rows.contains(&"• Session: Other".to_owned()));
+        assert!(!rows.contains(&"› first session".to_owned()));
+
+        chat.session_failed(&Error::internal_error(), Some("s1".into()));
+        let rows = screen_rows(&chat, 40, 12);
+        assert!(rows.contains(&"› first session".to_owned()), "{rows:?}");
+        assert!(!rows.contains(&"• Session: Other".to_owned()));
+        assert_eq!(chat.resumable_session(), Some(&SessionId::from("s1")));
     }
 }

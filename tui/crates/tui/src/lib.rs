@@ -1,6 +1,7 @@
-//! The interactive terminal client, following the structure of Codex CLI's TUI: an inline
-//! viewport for live content above the shell, with finished history written into the
-//! terminal's native scrollback.
+//! The interactive terminal client, following the structure of Codex CLI's TUI. By default
+//! it runs fullscreen on the alternate screen and draws and scrolls the transcript itself;
+//! inline mode instead keeps a viewport below the shell prompt and writes finished history
+//! into the terminal's native scrollback.
 
 mod app;
 mod attachments;
@@ -23,12 +24,15 @@ mod streaming;
 #[cfg(test)]
 mod test_backend;
 mod tool_output;
+mod transcript;
 mod tui;
 mod wrapping;
 
+pub use app::Exit;
 pub use app::Session;
 pub use app::run;
 pub use session::OpenedSession;
 pub use session::Reopened;
 pub use session::SessionTarget;
 pub use session::open_session;
+pub use tui::ScreenMode;

@@ -495,3 +495,75 @@ fn disconnected() {
     chat.handle_agent_event(AgentEvent::Disconnected(None));
     insta::assert_snapshot!(screen(&mut chat));
 }
+
+/// A fullscreen widget with session `s1` open.
+fn fullscreen_chat() -> ChatWidget {
+    let abilities = SessionAbilities {
+        list: true,
+        delete: true,
+    };
+    let mut chat =
+        ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, WIDTH).fullscreen();
+    chat.session_ready(OpenedSession {
+        session_id: "s1".into(),
+        modes: None,
+        config_options: Vec::new(),
+        reopened: None,
+    });
+    chat
+}
+
+fn full_screen(chat: &ChatWidget, height: u16) -> String {
+    let area = Rect::new(0, 0, WIDTH, height);
+    let mut buf = Buffer::empty(area);
+    chat.render_screen(area, &mut buf);
+    buffer_rows(&buf).join("\n")
+}
+
+/// A fullscreen conversation long enough to scroll, mid-turn with a tool call running.
+fn long_conversation() -> ChatWidget {
+    let mut chat = fullscreen_chat();
+    for turn in 1..=3 {
+        chat.handle_paste(&format!("question {turn}"));
+        chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        send(
+            &mut chat,
+            SessionUpdate::AgentMessageChunk(text(&format!(
+                "Answer {turn}, first line.\nAnd a second line."
+            ))),
+        );
+        if turn < 3 {
+            finish_turn(&mut chat);
+        }
+    }
+    send(
+        &mut chat,
+        SessionUpdate::ToolCall(
+            ToolCall::new("t1", "Run tests")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress),
+        ),
+    );
+    chat
+}
+
+#[test]
+fn fullscreen_following_the_newest_output() {
+    let chat = long_conversation();
+    insta::assert_snapshot!(full_screen(&chat, 16));
+}
+
+#[test]
+fn fullscreen_reading_earlier_output_as_more_arrives() {
+    let mut chat = long_conversation();
+    full_screen(&chat, 16);
+    chat.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+    send(
+        &mut chat,
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t1",
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        )),
+    );
+    insta::assert_snapshot!(full_screen(&chat, 16));
+}

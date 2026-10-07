@@ -14,6 +14,7 @@ use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 
 use crate::agent_args::AgentArgs;
+use crate::config::AlternateScreen;
 use crate::start::SignedIn;
 use crate::start::StartMode;
 
@@ -33,6 +34,11 @@ struct Cli {
     /// Write diagnostics, including agent stderr, to this file.
     #[arg(long)]
     log_file: Option<PathBuf>,
+
+    /// Run inline instead of fullscreen: a viewport below the prompt, with history in the
+    /// terminal's own scrollback. Also `alternate_screen = "never"` under `[tui]` in the config.
+    #[arg(long)]
+    no_alt_screen: bool,
 }
 
 #[derive(Args)]
@@ -99,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
                     .with_ansi(false)
                     .init();
             }
-            run_tui(cli.agent, cli.session).await
+            run_tui(cli.agent, cli.session, cli.no_alt_screen).await
         }
     }
 }
@@ -116,8 +122,14 @@ fn env_filter(default: &str) -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
 }
 
-async fn run_tui(args: AgentArgs, session: SessionArgs) -> anyhow::Result<()> {
+async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> anyhow::Result<()> {
     let launch = args.launch()?;
+    let screen = match (no_alt_screen, launch.config.tui.alternate_screen) {
+        (true, _) | (false, AlternateScreen::Never) => weave_tui::ScreenMode::Inline,
+        (false, AlternateScreen::Auto | AlternateScreen::Always) => {
+            weave_tui::ScreenMode::Fullscreen
+        }
+    };
     let mode = match (session.resume, session.continue_last) {
         (Some(Some(id)), _) => StartMode::Resume(id.into()),
         (Some(None), _) => StartMode::Pick,
@@ -134,16 +146,66 @@ async fn run_tui(args: AgentArgs, session: SessionArgs) -> anyhow::Result<()> {
         Some(info) => (info.title.unwrap_or(info.name), Some(info.version)),
         None => (launch.spec.command.clone(), None),
     };
-    weave_tui::run(weave_tui::Session {
-        connection: started.connection,
-        events: started.events,
-        agent_name,
-        agent_version,
-        setup: started.setup,
-        opened: started.opened,
-        notices: started.notices,
-    })
-    .await
+    let exit = weave_tui::run(
+        weave_tui::Session {
+            connection: started.connection,
+            events: started.events,
+            agent_name,
+            agent_version,
+            setup: started.setup,
+            opened: started.opened,
+            notices: started.notices,
+        },
+        screen,
+    )
+    .await?;
+    // Fullscreen leaves nothing behind in the terminal, so say how to get back, as Codex does.
+    if let Some(session_id) = exit.resumable_session {
+        let command = resume_command(std::env::args().skip(1), &session_id.to_string());
+        println!("To continue this session, run: {command}");
+    }
+    Ok(())
+}
+
+/// This invocation's command line, reopening `session_id` in place of any session choice.
+fn resume_command(args: impl IntoIterator<Item = String>, session_id: &str) -> String {
+    let mut words = vec!["weave".to_owned()];
+    let mut agent_command = Vec::new();
+    let mut args = args.into_iter().peekable();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--" => {
+                agent_command.push(arg);
+                agent_command.extend(args.by_ref());
+            }
+            "--continue" => {}
+            // The optional id is the next word, unless that is another option.
+            "--resume" => {
+                args.next_if(|next| !next.starts_with('-'));
+            }
+            _ if arg.starts_with("--resume=") => {}
+            _ => words.push(arg),
+        }
+    }
+    words.extend(["--resume".to_owned(), session_id.to_owned()]);
+    words.extend(agent_command);
+    words
+        .iter()
+        .map(|word| shell_quote(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
 }
 
 async fn login(args: LoginArgs) -> anyhow::Result<()> {
@@ -166,4 +228,37 @@ async fn logout(args: LogoutArgs) -> anyhow::Result<()> {
     result.context("logout")?;
     eprintln!("Signed out.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    fn words(line: &str) -> Vec<String> {
+        line.split(' ').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn the_resume_command_replaces_the_session_choice() {
+        assert_eq!(
+            resume_command(words("--agent claude --continue"), "s1"),
+            "weave --agent claude --resume s1"
+        );
+        assert_eq!(
+            resume_command(words("--resume old --no-fs"), "s1"),
+            "weave --no-fs --resume s1"
+        );
+        assert_eq!(
+            resume_command(words("--resume --cwd /tmp/repo"), "s1"),
+            "weave --cwd /tmp/repo --resume s1"
+        );
+        assert_eq!(
+            resume_command(words("--resume=old -- ./agent --acp"), "s1"),
+            "weave --resume s1 -- ./agent --acp"
+        );
+        let quoted = resume_command(vec!["--cwd".into(), "it's here".into()], "s1");
+        assert_eq!(quoted, "weave --cwd 'it'\\''s here' --resume s1");
+    }
 }

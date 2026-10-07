@@ -1,7 +1,10 @@
-//! `~/.config/weave/tui.toml`: agent definitions and MCP servers.
+//! `~/.config/weave/tui.toml`: agent definitions, MCP servers and display settings.
 //!
 //! ```toml
 //! default_agent = "claude"
+//!
+//! [tui]
+//! alternate_screen = "never" # inline mode: history in the terminal's own scrollback
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
@@ -48,6 +51,28 @@ pub struct Config {
     pub agents: BTreeMap<String, AgentConfig>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub tui: TuiConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TuiConfig {
+    #[serde(default)]
+    pub alternate_screen: AlternateScreen,
+}
+
+/// Whether to run fullscreen on the alternate screen, as Codex's `tui.alternate_screen`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AlternateScreen {
+    /// Fullscreen; reserved for exceptions where it works badly, as Codex makes for
+    /// Terminal.app over SSH.
+    #[default]
+    Auto,
+    Always,
+    /// Inline: a viewport below the prompt, with history in the terminal's scrollback.
+    Never,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -281,5 +306,6 @@ mod tests {
     #[test]
     fn unknown_keys_are_rejected() {
         assert!(toml::from_str::<Config>("defualt_agent = \"x\"").is_err());
+        assert!(toml::from_str::<Config>("[tui]\nalternate_screen = \"sometimes\"").is_err());
     }
 }

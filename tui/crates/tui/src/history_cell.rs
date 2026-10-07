@@ -1,7 +1,7 @@
 //! Renders each kind of transcript entry into terminal lines.
 //!
-//! Cells are rendered once when committed to scrollback, except tool calls, which stay live
-//! in the viewport and re-render until they reach a final status.
+//! Tool calls stay live and re-render until they reach a final status; every other entry is
+//! final once committed (see `transcript`).
 
 use std::path::Path;
 
@@ -13,6 +13,7 @@ use ratatui::text::Span;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::Plan;
 use weave_acp_core::schema::PlanEntryStatus;
+use weave_acp_core::schema::TerminalId;
 use weave_acp_core::schema::ToolCall;
 use weave_acp_core::schema::ToolCallContent;
 use weave_acp_core::schema::ToolCallId;
@@ -191,6 +192,14 @@ impl ToolCallCell {
         if let Some(locations) = &fields.locations {
             self.locations.clone_from(locations);
         }
+    }
+
+    /// The terminals whose output this call embeds.
+    pub fn terminal_ids(&self) -> impl Iterator<Item = &TerminalId> {
+        self.content.iter().filter_map(|content| match content {
+            ToolCallContent::Terminal(terminal) => Some(&terminal.terminal_id),
+            _ => None,
+        })
     }
 
     pub fn is_finished(&self) -> bool {

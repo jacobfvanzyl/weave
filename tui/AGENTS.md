@@ -11,8 +11,11 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
   RFDs stay out of scope unless the issue changes.
 - It launches agents locally. It has no dependency on `product/`, the Host Daemon
   or its protocol, and it is not a root Bun workspace.
-- One session per process, using Codex's inline-viewport model: finished history
-  goes to native terminal scrollback.
+- One session per process. Like Codex, it runs fullscreen by default: on the alternate
+  screen, `weave` owns the transcript (`transcript.rs`: retained cells that reflow,
+  scrolling, selection and copy). Inline mode (`--no-alt-screen`, `[tui]
+  alternate_screen = "never"`) keeps Codex's inline viewport, with finished history in
+  native terminal scrollback. Both modes must keep working.
 
 ## Stack
 
@@ -25,7 +28,7 @@ crate, pinned exactly because 3.x is new.
 | Crate | Owns |
 | --- | --- |
 | `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace. No UI. |
-| `crates/tui` | The interactive client: inline viewport, scrollback history, chat state, composer. |
+| `crates/tui` | The interactive client: fullscreen transcript or inline viewport, chat state, composer. |
 | `crates/cli` | The `weave` binary and its subcommands. |
 | `crates/fake-agent` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. |
 
@@ -35,8 +38,8 @@ adapters may not call them (Claude's runs its own tools), so the fake agent is w
 exercises them: integration tests connect it in-process over `Channel::duplex`, and its
 prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`) drive the
 real TUI. In `tui`, `ChatWidget` stays free of I/O: it turns
-agent events and keys into transcript lines and `AppCommand`s, so it is tested without a
-terminal. Terminal mechanics (`custom_terminal`, `insert_history`) are tested on a vt100
+agent events, keys and mouse input into transcript cells and `AppCommand`s, so it is
+tested without a terminal, in both screen modes. Terminal mechanics (`custom_terminal`, `insert_history`) are tested on a vt100
 backend. Untrusted agent text reaches the terminal only after control characters are
 stripped.
 
@@ -76,7 +79,9 @@ also include `/ask` (form elicitation), `/connect` (URL elicitation) and `/mcp`.
 Both run against a real agent and its existing login. `--log-file <file>` captures
 diagnostics and agent stderr in the TUI. For live TUI checks inside cmux, split a pane
 (`cmux new-split right`), drive it with `cmux send`/`cmux send-key`, and read it with
-`cmux read-screen --scrollback`.
+`cmux read-screen --scrollback`. `cmux send` splits escape sequences, so simulate mouse
+input under a private tmux server instead (`tmux -L <name> send-keys -H <bytes>`), with
+`SSH_CONNECTION` set so copying goes to OSC 52 rather than your clipboard.
 `--trace <file>` writes every protocol line as JSONL, and with `smoke`,
 `RUST_LOG=agent_stderr=debug` shows agent stderr. Traces contain prompts and
 agent output, so keep them out of the repository.

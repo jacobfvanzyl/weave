@@ -18,7 +18,7 @@ const TRANSCRIPT_BYTES: usize = 64 * 1024;
 pub type TerminalTranscripts = HashMap<TerminalId, TerminalTranscript>;
 
 /// What a terminal printed, kept after the agent releases it so tool calls can still show it.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TerminalTranscript {
     raw: String,
     exit: Option<TerminalExitStatus>,

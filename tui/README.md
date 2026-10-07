@@ -1,8 +1,9 @@
 # weave
 
 A terminal client for [ACP](https://agentclientprotocol.com) agents such as Claude,
-Codex and Gemini, built after Codex CLI's TUI: live content in an inline viewport,
-finished history in your terminal's own scrollback.
+Codex and Gemini, built after Codex CLI's TUI. Like Codex it runs fullscreen: the
+composer stays at the bottom while the transcript scrolls above it. `--no-alt-screen`
+runs inline instead, with finished history in your terminal's own scrollback.
 
 ## Run
 
@@ -30,9 +31,19 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Shift+Tab | Next mode |
 | Ctrl+O | Session settings (mode, model, and the agent's other options) |
 | Ctrl+R | Switch to another session |
+| PageUp / PageDown, wheel | Scroll the transcript (fullscreen) |
+| Ctrl+Home / Ctrl+End (or Alt+< / Alt+>) | Jump to the start / back to the newest output |
+| Esc while scrolled back | Return to the newest output (before it stops the turn) |
+| Drag | Select transcript text; it is copied when you release |
 
 Permission requests, agent questions (forms and links) and pickers take over the input
 area with their own keys. Links open in your browser only after you choose to.
+
+Fullscreen leaves your screen as it was when you quit, then prints how to reopen the
+session (`weave … --resume <id>`). Selections are copied with `pbcopy` on a local Mac,
+otherwise through the terminal (OSC 52, also over SSH and in tmux with passthrough on).
+Your terminal's own selection still works with its mouse-reporting override, usually
+Shift-drag (Option-drag in iTerm2).
 
 ## Configure
 
@@ -41,6 +52,9 @@ use, and MCP servers passed to every session:
 
 ```toml
 default_agent = "claude"
+
+[tui]
+alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen
 
 [agents.claude]
 terminal = false          # don't let it run commands through weave
@@ -59,5 +73,5 @@ name = "docs"
 url = "https://mcp.example.com"
 ```
 
-Other flags: `--cwd`, `--add-dir`, `--no-fs`, `--no-terminal`, `--trace FILE` (ACP SDK
+Other flags: `--no-alt-screen` (inline for this run), `--cwd`, `--add-dir`, `--no-fs`, `--no-terminal`, `--trace FILE` (ACP SDK
 trace-viewer format) and `--log-file FILE` (diagnostics and agent stderr).

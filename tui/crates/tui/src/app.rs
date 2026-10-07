@@ -4,6 +4,7 @@
 //! their own tasks and report back as [`AppEvent`]s, so the loop never blocks on the agent.
 
 use std::time::Duration;
+use std::time::Instant;
 
 use crossterm::event::Event;
 use crossterm::event::EventStream;
@@ -29,6 +30,7 @@ use crate::session::OpenedSession;
 use crate::session::SessionTarget;
 use crate::session::open_session;
 use crate::settings::SettingChange;
+use crate::tui::ScreenMode;
 use crate::tui::Tui;
 
 /// Animation frame interval while a turn runs.
@@ -50,6 +52,12 @@ pub struct Session {
     pub notices: Vec<String>,
 }
 
+/// How the client ended.
+pub struct Exit {
+    /// The session to offer reopening: the active one, if it had a conversation.
+    pub resumable_session: Option<SessionId>,
+}
+
 /// Results of requests the loop made off the UI thread.
 enum AppEvent {
     SettingChanged(
@@ -65,7 +73,7 @@ enum AppEvent {
 }
 
 /// Run the interactive client until the user quits, then close the connection.
-pub async fn run(session: Session) -> anyhow::Result<()> {
+pub async fn run(session: Session, screen: ScreenMode) -> anyhow::Result<Exit> {
     let Session {
         connection,
         mut events,
@@ -83,8 +91,11 @@ pub async fn run(session: Session) -> anyhow::Result<()> {
         list: capabilities.session_capabilities.list.is_some(),
         delete: capabilities.session_capabilities.delete.is_some(),
     };
-    let mut tui = Tui::init()?;
+    let mut tui = Tui::init(screen)?;
     let mut chat = ChatWidget::new(agent_name, setup.cwd.clone(), abilities, tui.size()?.width);
+    if screen == ScreenMode::Fullscreen {
+        chat = chat.fullscreen();
+    }
     let mut app = App {
         handle: connection.handle(),
         setup,
@@ -102,7 +113,9 @@ pub async fn run(session: Session) -> anyhow::Result<()> {
     let result = app.run(&mut tui, &mut chat, &mut events, startup).await;
     tui.exit();
     connection.shutdown().await;
-    result
+    result.map(|()| Exit {
+        resumable_session: chat.resumable_session().cloned(),
+    })
 }
 
 struct App {
@@ -124,7 +137,7 @@ impl App {
         self.results = Some(app_tx);
         let mut frames = tokio::time::interval(FRAME_INTERVAL);
         frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        if self.execute(chat, startup) {
+        if self.execute(tui, chat, startup) {
             return Ok(());
         }
         loop {
@@ -146,9 +159,12 @@ impl App {
                     commands
                 }
                 Some(event) = app_events.recv() => self.handle_app_event(chat, event),
-                _ = frames.tick(), if chat.is_animating() => Vec::new(),
+                _ = frames.tick(), if chat.is_animating() => {
+                    chat.tick(Instant::now());
+                    Vec::new()
+                }
             };
-            if self.execute(chat, commands) {
+            if self.execute(tui, chat, commands) {
                 return Ok(());
             }
         }
@@ -195,7 +211,7 @@ impl App {
     }
 
     /// Carry out commands. Returns whether the user quit.
-    fn execute(&mut self, chat: &mut ChatWidget, commands: Vec<AppCommand>) -> bool {
+    fn execute(&mut self, tui: &mut Tui, chat: &mut ChatWidget, commands: Vec<AppCommand>) -> bool {
         for command in commands {
             match command {
                 AppCommand::Prompt(text) => {
@@ -259,6 +275,7 @@ impl App {
                     });
                 }
                 AppCommand::OpenUrl(url) => open_in_browser(&url),
+                AppCommand::Copy(text) => tui.copy(&text),
                 AppCommand::Quit => return true,
             }
         }
@@ -323,6 +340,7 @@ fn handle_terminal_event(chat: &mut ChatWidget, event: Event) -> Vec<AppCommand>
             chat.handle_paste(&text);
             Vec::new()
         }
+        Event::Mouse(event) => chat.handle_mouse(event),
         Event::Resize(width, _) => {
             chat.set_width(width);
             Vec::new()
@@ -332,6 +350,14 @@ fn handle_terminal_event(chat: &mut ChatWidget, event: Event) -> Vec<AppCommand>
 }
 
 fn draw(tui: &mut Tui, chat: &mut ChatWidget) -> std::io::Result<()> {
+    if tui.mode() == ScreenMode::Fullscreen {
+        return tui.draw_screen(|frame| {
+            let area = frame.area();
+            if let Some(cursor) = chat.render_screen(area, frame.buffer_mut()) {
+                frame.set_cursor_position(cursor);
+            }
+        });
+    }
     let width = tui.size()?.width;
     let history = chat.take_history();
     let height = chat.desired_height(width);
