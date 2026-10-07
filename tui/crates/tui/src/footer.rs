@@ -110,6 +110,8 @@ pub enum FooterMode {
     /// A prompt or picker shows its own keys.
     Overlay,
     ShortcutsOpen,
+    /// The composer is in shell mode.
+    Shell,
     /// The usual footer: the status line (or `? for shortcuts`), and the context left.
     Contextual {
         composer_empty: bool,
@@ -133,6 +135,7 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
         )],
         FooterMode::Overlay => Vec::new(),
         FooterMode::ShortcutsOpen => key_hint("? / esc", " close"),
+        FooterMode::Shell => key_hint("enter", " to run · esc to leave shell mode"),
         FooterMode::Contextual {
             composer_empty,
             working,
@@ -273,6 +276,7 @@ pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
             &[
                 ("/", "Commands"),
                 ("@", "Attach a file"),
+                ("!", "Shell command"),
                 ("⇧enter", "New line"),
                 ("enter", "Send or queue"),
                 ("⌃g", "External editor"),

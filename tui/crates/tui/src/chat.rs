@@ -40,7 +40,9 @@ use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
+use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::ToolCallId;
+use weave_acp_core::schema::ToolCallStatus;
 
 use crate::attachments::Attachment;
 use crate::command_popup;
@@ -116,6 +118,14 @@ pub enum AppCommand {
     /// Ctrl+G: edit this draft in the user's editor; the result comes back through
     /// [`ChatWidget::set_draft`].
     EditPrompt(String),
+    /// Run a command from shell mode in the session directory; its output comes back
+    /// through [`ChatWidget::shell_output`] and [`ChatWidget::shell_exited`].
+    RunShell {
+        id: String,
+        command: String,
+    },
+    /// Stop a command started with [`AppCommand::RunShell`].
+    KillShell(String),
     /// Something needs the user, such as a finished turn or an approval; the app raises a
     /// desktop notification when the terminal isn't focused.
     Notify(String),
@@ -210,6 +220,8 @@ pub struct ChatWidget {
     copied: Option<(String, Instant)>,
     /// The agent's latest reply this turn, for the notification when it ends.
     last_reply: Option<String>,
+    /// Shell commands run so far, for naming the next.
+    shell_runs: usize,
     /// The `?` shortcuts panel is open.
     shortcuts_open: bool,
     /// What the footer's status line shows.
@@ -256,6 +268,7 @@ impl ChatWidget {
             resumable: false,
             copied: None,
             last_reply: None,
+            shell_runs: 0,
             shortcuts_open: false,
             status_items: StatusItem::DEFAULT.to_vec(),
         }
@@ -470,6 +483,45 @@ impl ChatWidget {
             Some(indicator) => format!("{indicator} {names}"),
             None => names,
         }
+    }
+
+    /// Run `command` from shell mode: shown live as `Running`, then `You ran`, with its
+    /// output. It stays local; ACP has no way to give the agent what the user ran.
+    fn start_shell(&mut self, command: String) -> Vec<AppCommand> {
+        self.shell_runs += 1;
+        let id = format!("user-shell-{}", self.shell_runs);
+        self.commit_finished_tool_calls();
+        self.tool_calls
+            .push(ToolCallCell::user_shell(&id, &command));
+        vec![AppCommand::RunShell { id, command }]
+    }
+
+    pub fn shell_output(&mut self, id: &str, text: &str) {
+        self.terminals
+            .entry(id.to_owned().into())
+            .or_default()
+            .append(text);
+        self.note_activity();
+    }
+
+    pub fn shell_exited(&mut self, id: &str, status: TerminalExitStatus) {
+        let succeeded = status.exit_code == Some(0);
+        self.terminals
+            .entry(id.to_owned().into())
+            .or_default()
+            .set_exit(status);
+        if let Some(cell) = self
+            .tool_calls
+            .iter_mut()
+            .find(|cell| cell.id.to_string() == id)
+        {
+            cell.status = if succeeded {
+                ToolCallStatus::Completed
+            } else {
+                ToolCallStatus::Failed
+            };
+        }
+        self.note_activity();
     }
 
     /// Replace the draft, as with text the user wrote in their editor.
@@ -1007,6 +1059,10 @@ impl ChatWidget {
         if let Some(commands) = self.handle_popup_key(key) {
             return commands;
         }
+        if key.code == KeyCode::Esc && self.composer.is_shell() && self.composer.is_empty() {
+            self.composer.leave_shell();
+            return Vec::new();
+        }
         if key.code == KeyCode::Esc {
             return self.cancel_turn();
         }
@@ -1154,6 +1210,7 @@ impl ChatWidget {
                 Vec::new()
             }
             ComposerAction::Submit(text) => self.start_prompt(text),
+            ComposerAction::Shell(command) => self.start_shell(command),
             ComposerAction::None => Vec::new(),
         }
     }
@@ -1162,6 +1219,14 @@ impl ChatWidget {
     fn interrupt(&mut self) -> Vec<AppCommand> {
         if self.turn.is_some() {
             return self.cancel_turn();
+        }
+        // Then a shell command still running.
+        if let Some(cell) = self
+            .tool_calls
+            .iter()
+            .find(|cell| cell.is_user_shell() && !cell.is_finished())
+        {
+            return vec![AppCommand::KillShell(cell.id.to_string())];
         }
         if !self.composer.is_empty() {
             self.composer.clear();
@@ -1500,6 +1565,8 @@ impl ChatWidget {
             FooterMode::Overlay
         } else if self.shortcuts_open {
             FooterMode::ShortcutsOpen
+        } else if self.composer.is_shell() {
+            FooterMode::Shell
         } else {
             FooterMode::Contextual {
                 composer_empty: self.composer.is_empty(),
@@ -1542,6 +1609,10 @@ impl ChatWidget {
     }
 
     fn popup_matches(&self) -> Vec<&AvailableCommand> {
+        // A shell command isn't a slash command.
+        if self.composer.is_shell() {
+            return Vec::new();
+        }
         self.popup.matches(self.composer.text(), &self.commands)
     }
 
@@ -2593,6 +2664,34 @@ mod tests {
         assert_eq!(
             chat.terminal_title(started + Duration::from_millis(250)),
             "⠹ Fix the build · repo"
+        );
+    }
+
+    #[test]
+    fn bang_runs_a_shell_command_that_ctrl_c_stops() {
+        let mut chat = chat();
+        chat.handle_key(key(KeyCode::Char('!')));
+        assert!(chat.composer.is_shell() && chat.composer.is_empty());
+        chat.handle_paste("ls");
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Enter)),
+            [AppCommand::RunShell {
+                id: "user-shell-1".into(),
+                command: "ls".into()
+            }]
+        );
+        assert!(!chat.composer.is_shell());
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            chat.handle_key(ctrl_c),
+            [AppCommand::KillShell("user-shell-1".into())]
+        );
+        chat.shell_output("user-shell-1", "a.rs\n");
+        chat.shell_exited("user-shell-1", TerminalExitStatus::new().exit_code(0));
+        chat.handle_agent_event(text_chunk("next\n"));
+        assert_eq!(
+            history(&mut chat),
+            ["• You ran ls", "  └ a.rs", "", "• next"]
         );
     }
 }

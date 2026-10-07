@@ -6,6 +6,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -29,6 +30,8 @@ const MAX_ROWS: usize = 8;
 pub enum ComposerAction {
     None,
     Submit(String),
+    /// A command to run in the user's shell, from shell mode.
+    Shell(String),
 }
 
 #[derive(Default)]
@@ -39,6 +42,9 @@ pub struct Composer {
     history: Vec<String>,
     /// Position while browsing history, and the draft it replaced.
     browsing: Option<(usize, String)>,
+    /// Shell mode, entered by typing `!` first, as in Codex: Enter runs the text as a
+    /// command instead of sending it.
+    shell: bool,
 }
 
 impl Composer {
@@ -54,6 +60,15 @@ impl Composer {
         self.text.clear();
         self.cursor = 0;
         self.browsing = None;
+        self.shell = false;
+    }
+
+    pub fn is_shell(&self) -> bool {
+        self.shell
+    }
+
+    pub fn leave_shell(&mut self) {
+        self.shell = false;
     }
 
     pub fn insert_str(&mut self, text: &str) {
@@ -65,6 +80,21 @@ impl Composer {
     pub fn handle_key(&mut self, key: KeyEvent) -> ComposerAction {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        // `!` first enters shell mode instead of being typed; Backspace on an empty line
+        // leaves it.
+        if self.text.is_empty() && !ctrl && !alt {
+            match key.code {
+                KeyCode::Char('!') if !self.shell => {
+                    self.shell = true;
+                    return ComposerAction::None;
+                }
+                KeyCode::Backspace if self.shell => {
+                    self.shell = false;
+                    return ComposerAction::None;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Enter
                 if key
@@ -116,6 +146,9 @@ impl Composer {
         self.browsing = None;
         if self.history.last() != Some(&text) {
             self.history.push(text.clone());
+        }
+        if std::mem::take(&mut self.shell) {
+            return ComposerAction::Shell(text);
         }
         ComposerAction::Submit(text)
     }
@@ -302,7 +335,21 @@ impl Composer {
         placeholder: &str,
         hint: Option<&str>,
     ) -> Position {
-        let prompt = Span::styled(PROMPT, Style::default().add_modifier(Modifier::BOLD));
+        let prompt = if self.shell {
+            Span::styled(
+                "! ",
+                Style::default()
+                    .fg(Color::LightRed)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(PROMPT, Style::default().add_modifier(Modifier::BOLD))
+        };
+        let placeholder = if self.shell {
+            "Run a shell command"
+        } else {
+            placeholder
+        };
         if self.text.is_empty() {
             let line = Line::from(vec![prompt, Span::styled(placeholder.to_owned(), dim())]);
             buf.set_line(area.x, area.y, &line, area.width);

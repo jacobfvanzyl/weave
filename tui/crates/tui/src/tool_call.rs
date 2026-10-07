@@ -49,6 +49,9 @@ use crate::wrapping::wrap_sourced;
 
 /// Output rows the compact view shows, as Codex's `PREVIEW_LINES`.
 const PREVIEW_ROWS: usize = 3;
+/// Output rows the compact view shows of the user's own shell commands, as Codex's
+/// `USER_SHELL_TOOL_CALL_MAX_LINES`.
+const USER_SHELL_PREVIEW_ROWS: usize = 50;
 /// Command rows after the first the compact view shows.
 const COMMAND_ROWS: usize = 2;
 /// Changed diff rows per file the compact view shows.
@@ -80,6 +83,8 @@ pub struct ToolCallCell {
     /// What its `rawInput` says, where it follows a known convention.
     input: ToolInput,
     started: Instant,
+    /// A command the user ran from shell mode, not one of the agent's.
+    user_shell: bool,
 }
 
 impl ToolCallCell {
@@ -94,7 +99,27 @@ impl ToolCallCell {
             locations: call.locations,
             input: ToolInput::from_raw(call.raw_input.as_ref()),
             started: Instant::now(),
+            user_shell: false,
         }
+    }
+
+    /// A command the user runs from shell mode, its output in the terminal named `id`.
+    pub fn user_shell(id: &str, command: &str) -> Self {
+        let call = ToolCall::new(id.to_owned(), command.to_owned())
+            .kind(ToolKind::Execute)
+            .status(ToolCallStatus::InProgress)
+            .raw_input(serde_json::json!({ "command": command }))
+            .content(vec![ToolCallContent::Terminal(
+                weave_acp_core::schema::Terminal::new(id.to_owned()),
+            )]);
+        Self {
+            user_shell: true,
+            ..Self::new(call)
+        }
+    }
+
+    pub fn is_user_shell(&self) -> bool {
+        self.user_shell
     }
 
     /// A cell for an update whose tool call was never announced.
@@ -231,7 +256,9 @@ impl ToolCallCell {
             // Without the command itself, the title says what ran.
             return self.titled_lines("", "", self.title(), false, width, cx);
         };
-        let header = self.header("Running", "Ran", cx.now);
+        // Codex says "You ran" for the user's own commands.
+        let done = if self.user_shell { "You ran" } else { "Ran" };
+        let header = self.header("Running", done, cx.now);
         let highlighted = highlight::shell_lines(&command);
         let continuation = Line::from("  │ ".dim());
         let mut rows = Vec::new();
@@ -252,7 +279,13 @@ impl ToolCallCell {
             }
             return rows;
         }
-        rows.extend(output_rows(&output, width, cx.detail));
+        // The user's own commands show more of what they asked to see, as in Codex.
+        let preview = if self.user_shell {
+            USER_SHELL_PREVIEW_ROWS
+        } else {
+            PREVIEW_ROWS
+        };
+        rows.extend(output_rows(&output, width, cx.detail, preview));
         rows
     }
 
@@ -330,7 +363,7 @@ impl ToolCallCell {
             return rows;
         }
         if !output.lines.is_empty() || output.exit.is_some() {
-            rows.extend(output_rows(&output, width, cx.detail));
+            rows.extend(output_rows(&output, width, cx.detail, PREVIEW_ROWS));
         }
         rows
     }
@@ -541,7 +574,7 @@ struct Output {
 }
 
 /// Output under `└`: three rows and a count of the rest when compact, all of it otherwise.
-fn output_rows(output: &Output, width: usize, detail: bool) -> Vec<DisplayLine> {
+fn output_rows(output: &Output, width: usize, detail: bool, preview: usize) -> Vec<DisplayLine> {
     let inner = width.saturating_sub(4).max(1);
     let mut rows: Vec<DisplayLine> = Vec::new();
     let mut shown_lines = 0;
@@ -553,8 +586,8 @@ fn output_rows(output: &Output, width: usize, detail: bool) -> Vec<DisplayLine> 
             &Line::default(),
             &Line::default(),
         );
-        if !detail && rows.len() + wrapped.len() > PREVIEW_ROWS {
-            let room = PREVIEW_ROWS.saturating_sub(rows.len());
+        if !detail && rows.len() + wrapped.len() > preview {
+            let room = preview.saturating_sub(rows.len());
             rows.extend(wrapped.into_iter().take(room));
             full = true;
             break;
@@ -567,8 +600,9 @@ fn output_rows(output: &Output, width: usize, detail: bool) -> Vec<DisplayLine> 
         let noun = if hidden == 1 { "line" } else { "lines" };
         rows.push(Line::from(format!("+{hidden} {noun} ({TRANSCRIPT_HINT})").dim()).into());
     } else if let Some(exit) = &output.exit
-        && detail
+        && (detail || output.lines.is_empty())
     {
+        // Silent commands say how they ended even compactly ("stopped by SIGTERM").
         rows.push(exit.clone().into());
     }
     elbow(rows, width)
@@ -1188,6 +1222,25 @@ mod tests {
                 &TerminalTranscripts::new()
             ),
             ["• Called github.get_issue"]
+        );
+    }
+
+    #[test]
+    fn user_commands_say_you_ran_and_silent_ones_how_they_ended() {
+        let cell = ToolCallCell::user_shell("user-shell-1", "sleep 30");
+        let mut terminals = TerminalTranscripts::new();
+        let mut transcript = TerminalTranscript::default();
+        transcript.set_exit(TerminalExitStatus::new().signal("SIGTERM".to_owned()));
+        terminals.insert("user-shell-1".into(), transcript);
+        let mut finished = cell.clone();
+        finished.status = ToolCallStatus::Failed;
+        assert_eq!(
+            render(&finished, false, &terminals),
+            ["• You ran sleep 30", "  └ stopped by SIGTERM (no output)"]
+        );
+        assert_eq!(
+            render(&cell, false, &TerminalTranscripts::new())[0],
+            "• Running sleep 30"
         );
     }
 }

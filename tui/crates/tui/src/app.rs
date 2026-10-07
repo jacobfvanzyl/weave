@@ -3,6 +3,7 @@
 //! Requests whose answers the UI waits on (settings, session lists, opening sessions) run on
 //! their own tasks and report back as [`AppEvent`]s, so the loop never blocks on the agent.
 
+use std::collections::HashMap;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -10,6 +11,7 @@ use crossterm::event::Event;
 use crossterm::event::KeyEventKind;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
 use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
@@ -19,6 +21,7 @@ use weave_acp_core::schema::Error;
 use weave_acp_core::schema::ListSessionsResponse;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
+use weave_acp_core::schema::TerminalExitStatus;
 
 use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
@@ -81,6 +84,9 @@ enum AppEvent {
         previous: Option<SessionId>,
     },
     SessionDeleted(SessionId, Result<(), Error>),
+    /// Output from a shell-mode command, then how it ended.
+    ShellOutput(String, String),
+    ShellExited(String, TerminalExitStatus),
 }
 
 /// Run the interactive client until the user quits, then close the connection.
@@ -121,6 +127,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         notifications,
         terminal_title,
         focused: true,
+        shells: HashMap::new(),
     };
     let startup = match opened {
         Some(opened) => {
@@ -147,6 +154,8 @@ struct App {
     terminal_title: bool,
     /// Whether the terminal has focus, from its focus reports.
     focused: bool,
+    /// Shell-mode commands still running, by id, and how to stop each.
+    shells: HashMap<String, oneshot::Sender<()>>,
 }
 
 impl App {
@@ -270,6 +279,15 @@ impl App {
                 chat.session_deleted(&session_id, result);
                 Vec::new()
             }
+            AppEvent::ShellOutput(id, text) => {
+                chat.shell_output(&id, &text);
+                Vec::new()
+            }
+            AppEvent::ShellExited(id, status) => {
+                self.shells.remove(&id);
+                chat.shell_exited(&id, status);
+                Vec::new()
+            }
         }
     }
 
@@ -340,6 +358,19 @@ impl App {
                 AppCommand::OpenUrl(url) => open_in_browser(&url),
                 // Handled in the run loop.
                 AppCommand::EditPrompt(_) => {}
+                AppCommand::RunShell { id, command } => {
+                    if let Some(results) = self.results.clone() {
+                        let (kill, killed) = oneshot::channel();
+                        self.shells.insert(id.clone(), kill);
+                        let cwd = self.setup.cwd.clone();
+                        tokio::spawn(run_shell(id, command, cwd, results, killed));
+                    }
+                }
+                AppCommand::KillShell(id) => {
+                    if let Some(kill) = self.shells.remove(&id) {
+                        let _ = kill.send(());
+                    }
+                }
                 AppCommand::Copy(text) => tui.copy(&text),
                 // As Codex, only while the terminal isn't in front of the user.
                 AppCommand::Notify(message) => {
@@ -377,6 +408,101 @@ impl App {
             });
         }
     }
+}
+
+/// Run a shell-mode command in `cwd`, streaming its output (stdout and stderr together, as
+/// a terminal shows them) until it exits or `killed` fires.
+async fn run_shell(
+    id: String,
+    command: String,
+    cwd: std::path::PathBuf,
+    results: mpsc::UnboundedSender<AppEvent>,
+    killed: oneshot::Receiver<()>,
+) {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned());
+    let spawned = tokio::process::Command::new(&shell)
+        .arg("-c")
+        .arg(&command)
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = results.send(AppEvent::ShellOutput(
+                id.clone(),
+                format!("{shell}: {error}\n"),
+            ));
+            let status = TerminalExitStatus::new().exit_code(127);
+            let _ = results.send(AppEvent::ShellExited(id, status));
+            return;
+        }
+    };
+    let forward = |stream: Option<Box<dyn tokio::io::AsyncRead + Unpin + Send>>| {
+        let results = results.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let Some(mut stream) = stream else {
+                return;
+            };
+            let mut buffer = [0_u8; 4096];
+            while let Ok(read) = stream.read(&mut buffer).await {
+                if read == 0 {
+                    break;
+                }
+                let text = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                if results
+                    .send(AppEvent::ShellOutput(id.clone(), text))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+    };
+    let stdout = forward(child.stdout.take().map(|out| Box::new(out) as _));
+    let stderr = forward(child.stderr.take().map(|err| Box::new(err) as _));
+    let status = tokio::select! {
+        status = child.wait() => status,
+        _ = killed => {
+            let _ = child.start_kill();
+            child.wait().await
+        }
+    };
+    // All output is in before the exit is reported.
+    let _ = stdout.await;
+    let _ = stderr.await;
+    let status = match status {
+        Ok(status) => exit_status(status),
+        Err(error) => {
+            let _ = results.send(AppEvent::ShellOutput(id.clone(), format!("{error}\n")));
+            TerminalExitStatus::new().exit_code(1)
+        }
+    };
+    let _ = results.send(AppEvent::ShellExited(id, status));
+}
+
+fn exit_status(status: std::process::ExitStatus) -> TerminalExitStatus {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal().map(|signal| match signal {
+            1 => "SIGHUP".to_owned(),
+            2 => "SIGINT".to_owned(),
+            9 => "SIGKILL".to_owned(),
+            15 => "SIGTERM".to_owned(),
+            other => format!("signal {other}"),
+        })
+    };
+    #[cfg(not(unix))]
+    let signal = None;
+    TerminalExitStatus::new()
+        .exit_code(status.code().and_then(|code| u32::try_from(code).ok()))
+        .signal(signal)
 }
 
 /// Write `draft` to a file, open it in the user's editor, and return what they saved.
