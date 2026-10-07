@@ -115,7 +115,9 @@ agent output, so keep them out of the repository.
 
 - Clippy denies `unwrap`/`expect` outside tests. Use one `use` line per item.
 - Agent presets pin adapter versions. Bump them deliberately and re-run the
-  smoke check against each one.
+  smoke check against each one. Registry agents (`cli/src/registry.rs`) launch exactly as
+  the ACP registry describes them, with the version it lists; never add per-agent fixes
+  there.
 - Advertise only client capabilities that are fully implemented, and gate every optional
   agent method on its capability in `acp-core` (`AgentHandle`), before anything is sent.
 - Never branch on which agent is connected. Anything read beyond what ACP defines (the

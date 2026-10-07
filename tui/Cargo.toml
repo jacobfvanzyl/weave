@@ -16,10 +16,13 @@ weave-tui = { path = "crates/tui" }
 agent-client-protocol = { version = "=3.0.0", features = ["process"] }
 anyhow = "1"
 base64 = "0.22"
+# Unpacking ACP registry agents' binary archives, as Codex unpacks its downloads.
+bzip2 = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29.0"
 diffy = "0.4.2"
+flate2 = "1"
 futures = "0.3"
 # Codex's file search: ripgrep's walker and nucleo's fuzzy matcher.
 ignore = "0.4.23"
@@ -29,11 +32,15 @@ libc = "0.2"
 pretty_assertions = "1"
 pulldown-cmark = { version = "0.10", default-features = false }
 regex-lite = "0.1"
+# Fetching the ACP agent registry and its agents' archives.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
 serde = "1"
 serde_json = "1"
+sha2 = "0.10"
 # Codex's syntax highlighting: syntect with two-face's grammars and themes.
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "plist-load", "regex-onig"] }
+tar = "0.4.46"
 tempfile = "3"
 thiserror = "2"
 tokio = "1"
@@ -45,6 +52,7 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 url = "2"
 vt100 = "0.16.2"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [workspace.lints]
 rust = {}

@@ -1,5 +1,6 @@
 mod agent_args;
 mod config;
+mod registry;
 mod smoke;
 mod start;
 
@@ -60,6 +61,19 @@ enum Command {
     Login(LoginArgs),
     /// Sign out of the agent, if it supports signing out.
     Logout(LogoutArgs),
+    /// List the agents `--agent` accepts: presets, the config's, and the ACP registry's.
+    Agents(AgentsArgs),
+}
+
+#[derive(Args)]
+struct AgentsArgs {
+    /// Fetch the ACP registry again rather than use the copy cached within the last day.
+    #[arg(long)]
+    refresh: bool,
+
+    /// Config file. Defaults to ~/.config/weave/tui.toml.
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -94,6 +108,10 @@ async fn main() -> anyhow::Result<()> {
             log_to_stderr();
             logout(args).await
         }
+        Some(Command::Agents(args)) => {
+            log_to_stderr();
+            agents(args).await
+        }
         None => {
             // The TUI owns the terminal, so diagnostics can only go to a file.
             if let Some(path) = &cli.log_file {
@@ -123,7 +141,7 @@ fn env_filter(default: &str) -> EnvFilter {
 }
 
 async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> anyhow::Result<()> {
-    let launch = args.launch()?;
+    let launch = args.launch().await?;
     let screen = match (no_alt_screen, launch.config.tui.alternate_screen) {
         (true, _) | (false, AlternateScreen::Never) => weave_tui::ScreenMode::Inline,
         (false, AlternateScreen::Auto | AlternateScreen::Always) => {
@@ -239,7 +257,7 @@ fn shell_quote(word: &str) -> String {
 }
 
 async fn login(args: LoginArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch()?;
+    let launch = args.agent.launch().await?;
     let (connection, _events) = start::connect(&launch).await?;
     let result = start::sign_in(&connection, &launch.spec, args.method.as_deref()).await;
     connection.shutdown().await;
@@ -251,13 +269,96 @@ async fn login(args: LoginArgs) -> anyhow::Result<()> {
 }
 
 async fn logout(args: LogoutArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch()?;
+    let launch = args.agent.launch().await?;
     let (connection, _events) = start::connect(&launch).await?;
     let result = connection.logout().await;
     connection.shutdown().await;
     result.context("logout")?;
     eprintln!("Signed out.");
     Ok(())
+}
+
+async fn agents(args: AgentsArgs) -> anyhow::Result<()> {
+    let config = config::Config::load(args.config.as_deref())?;
+    let default = config.default_agent.as_deref();
+    let marker = |id: &str| {
+        if Some(id) == default {
+            "  (default)"
+        } else {
+            ""
+        }
+    };
+    let local: Vec<(String, String)> = config
+        .known_agents()
+        .into_iter()
+        .filter_map(|id| {
+            let spec = config.local_agent(&id)?;
+            Some((id, spec.display_command()))
+        })
+        .collect();
+    let width = local
+        .iter()
+        .map(|(id, _)| id.len())
+        .max()
+        .unwrap_or_default();
+    println!("Presets and configured agents:");
+    for (id, command) in &local {
+        println!("  {id:width$}  {command}{}", marker(id));
+    }
+
+    let cache = registry::Cache::default_location()?;
+    let loaded = registry::load(&cache, args.refresh).await?;
+    if let Some(warning) = &loaded.warning {
+        eprintln!("weave: {warning}");
+    }
+    let agents = &loaded.registry.agents;
+    let platform = registry::platform();
+    println!();
+    println!(
+        "ACP registry ({} agents, fetched {} ago):",
+        agents.len(),
+        registry::age(loaded.fetched)
+    );
+    let id_width = agents
+        .iter()
+        .map(|agent| agent.id.len())
+        .max()
+        .unwrap_or_default();
+    let name_width = agents
+        .iter()
+        .map(|agent| agent.name.chars().count() + 1 + agent.version.len())
+        .max()
+        .unwrap_or_default();
+    for agent in agents {
+        let name = format!("{} {}", agent.name, agent.version);
+        let how = agent
+            .launcher(&platform)
+            .map_or("-", registry::Launcher::kind);
+        let note = if local.iter().any(|(id, _)| *id == agent.id) {
+            "  (the preset or config agent of this name is used)".to_owned()
+        } else if how == "-" {
+            format!("  (no build for {platform})")
+        } else {
+            marker(&agent.id).to_owned()
+        };
+        println!(
+            "  {:id_width$}  {name:name_width$}  {how:6}  {}{note}",
+            agent.id,
+            shorten(&agent.description, 60),
+        );
+    }
+    println!();
+    println!("Start one with: weave --agent <id>");
+    Ok(())
+}
+
+/// `text` cut to `max` characters, with an ellipsis when cut.
+fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", kept.trim_end())
 }
 
 #[cfg(test)]

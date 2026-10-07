@@ -10,12 +10,22 @@ runs inline instead, with finished history in your terminal's own scrollback.
 ```bash
 cargo build                                      # from tui/
 ./target/debug/weave --agent claude              # or codex, gemini
+./target/debug/weave --agent opencode            # any agent in the ACP registry
+./target/debug/weave agents                      # list presets, config and registry agents
 ./target/debug/weave -- my-agent --acp           # any ACP command
 ./target/debug/weave --agent claude --resume     # pick a previous session
 ./target/debug/weave --agent claude --continue   # latest session in this directory
 ./target/debug/weave login --agent codex         # sign in; `logout` signs out
 ./target/debug/weave smoke --agent claude        # one headless turn, every event printed
 ```
+
+`--agent` takes a preset, an agent from the config, or the id of an agent in the
+[ACP registry](https://agentclientprotocol.com/get-started/registry), in that order. The
+registry is fetched once a day (`weave agents --refresh` fetches it now) and cached under
+`~/.cache/weave` (`$XDG_CACHE_HOME/weave`). A registry agent runs from its own build for
+this platform when it has one: downloaded on first use, checked against the registry's
+sha256 when given, and unpacked into the cache. Otherwise it runs through `npx` or `uvx`,
+which must be installed.
 
 Agents sign in with their own CLIs. When an agent reports that sign-in is required,
 `weave` offers the agent's sign-in methods and retries.
@@ -74,6 +84,9 @@ terminal_title = true  # window title: activity spinner, session title, project
 
 [agents.claude]
 terminal = false          # don't let it run commands through weave
+
+[agents.opencode]         # a registry agent, with settings of its own
+terminal = false
 
 [agents.local]
 command = "/usr/local/bin/my-agent"

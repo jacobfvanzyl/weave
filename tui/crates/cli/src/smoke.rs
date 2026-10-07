@@ -54,7 +54,7 @@ enum PermissionPolicy {
 }
 
 pub async fn run(args: SmokeArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch()?;
+    let launch = args.agent.launch().await?;
     let trace = launch
         .trace
         .as_deref()

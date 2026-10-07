@@ -9,10 +9,12 @@ use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
 
 use crate::config::Config;
+use crate::registry;
 
 #[derive(Args)]
 pub struct AgentArgs {
-    /// Agent to launch: a preset (claude, codex, gemini) or one defined in the config file.
+    /// Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or
+    /// an ACP registry agent's id (`weave agents` lists them).
     #[arg(long, conflicts_with = "command")]
     agent: Option<String>,
 
@@ -56,15 +58,15 @@ pub struct Launch {
 }
 
 impl AgentArgs {
-    pub fn launch(&self) -> anyhow::Result<Launch> {
+    pub async fn launch(&self) -> anyhow::Result<Launch> {
         let config = Config::load(self.config.as_deref())?;
         let (spec, mut options) = match (&self.agent, self.command.split_first()) {
-            (Some(id), _) => config.agent(id)?,
+            (Some(id), _) => resolve(&config, id).await?,
             (None, Some((command, rest))) => {
                 (AgentSpec::new(command, rest), ClientOptions::default())
             }
             (None, None) => match &config.default_agent {
-                Some(id) => config.agent(id)?,
+                Some(id) => resolve(&config, id).await?,
                 None => {
                     let known = weave_acp_core::preset_ids().collect::<Vec<_>>().join(", ");
                     bail!(
@@ -108,4 +110,26 @@ impl AgentArgs {
         cwd.canonicalize()
             .with_context(|| format!("session directory {}", cwd.display()))
     }
+}
+
+/// The agent `id` names: one the config defines, a preset, or else an ACP registry agent,
+/// with the config's settings for that name applied.
+async fn resolve(config: &Config, id: &str) -> anyhow::Result<(AgentSpec, ClientOptions)> {
+    if let Some(spec) = config.local_agent(id) {
+        return Ok(config.configure(id, spec));
+    }
+    let cache = registry::Cache::default_location()?;
+    let loaded = registry::load(&cache, false).await?;
+    if let Some(warning) = &loaded.warning {
+        eprintln!("weave: {warning}");
+    }
+    let Some(agent) = loaded.registry.find(id) else {
+        bail!(
+            "unknown agent {id:?}: not one of {} or in the ACP registry (`weave agents` lists \
+             them); or give a command after `--`",
+            config.known_agents().join(", ")
+        );
+    };
+    let spec = registry::agent_spec(&cache, agent).await?;
+    Ok(config.configure(id, spec))
 }

@@ -12,6 +12,9 @@
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
 //!
+//! [agents.opencode]         # …or a registry agent (`weave agents` lists them)…
+//! terminal = false
+//!
 //! [agents.local]             # …or define an agent
 //! command = "/usr/local/bin/my-agent"
 //! args = ["--acp"]
@@ -88,7 +91,7 @@ pub enum AlternateScreen {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
-    /// Required unless the name is a preset.
+    /// Required unless the name is a preset or an ACP registry agent.
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
@@ -147,37 +150,45 @@ impl Config {
         }
     }
 
-    /// The launch command and client options for the agent named `id`.
-    pub fn agent(&self, id: &str) -> anyhow::Result<(AgentSpec, ClientOptions)> {
+    /// How to launch the agent named `id` when the config or a preset defines it. Registry
+    /// agents are the caller's to resolve.
+    pub fn local_agent(&self, id: &str) -> Option<AgentSpec> {
         let configured = self.agents.get(id);
-        let mut spec = match (
-            configured.and_then(|agent| agent.command.as_ref()),
-            AgentSpec::preset(id),
-        ) {
-            (Some(command), _) => AgentSpec::new(
+        match configured.and_then(|agent| agent.command.as_ref()) {
+            Some(command) => Some(AgentSpec::new(
                 command,
                 configured
                     .map(|agent| agent.args.clone())
                     .unwrap_or_default(),
-            ),
-            (None, Some(preset)) => preset,
-            (None, None) => {
-                let known = weave_acp_core::preset_ids()
-                    .map(str::to_owned)
-                    .chain(self.agents.keys().cloned())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                bail!("unknown agent {id:?}; expected one of {known}, or a command after `--`");
-            }
-        };
+            )),
+            None => AgentSpec::preset(id),
+        }
+    }
+
+    /// The config's settings for the agent named `id` applied to `spec`, however it was
+    /// found, with the client options they choose.
+    pub fn configure(&self, id: &str, mut spec: AgentSpec) -> (AgentSpec, ClientOptions) {
         let mut options = ClientOptions::default();
-        if let Some(agent) = configured {
+        if let Some(agent) = self.agents.get(id) {
             spec.env.extend(agent.env.clone());
             options.read_files = agent.fs.unwrap_or(true);
             options.write_files = agent.fs.unwrap_or(true);
             options.terminals = agent.terminal.unwrap_or(true);
         }
-        Ok((spec, options))
+        (spec, options)
+    }
+
+    /// The agent names the config and presets know, for error messages.
+    pub fn known_agents(&self) -> Vec<String> {
+        weave_acp_core::preset_ids()
+            .map(str::to_owned)
+            .chain(
+                self.agents
+                    .iter()
+                    .filter(|(_, agent)| agent.command.is_some())
+                    .map(|(id, _)| id.clone()),
+            )
+            .collect()
     }
 
     /// The configured MCP servers this agent can accept, plus a warning for each it can't.
@@ -273,17 +284,22 @@ mod tests {
             args = ["--acp"]
             "#,
         );
-        let (claude, options) = config.agent("claude").expect("preset");
+        let claude = config.local_agent("claude").expect("preset");
+        let (claude, options) = config.configure("claude", claude);
         assert_eq!(claude.command, "npx");
         assert_eq!(claude.env.get("DEBUG").map(String::as_str), Some("1"));
         assert!(!options.terminals && options.read_files);
 
-        let (local, _) = config.agent("local").expect("custom");
+        let local = config.local_agent("local").expect("custom");
         assert_eq!(
             (local.command.as_str(), local.args.as_slice()),
             ("my-agent", &["--acp".to_owned()][..])
         );
-        assert!(config.agent("missing").is_err());
+        assert_eq!(config.local_agent("missing"), None);
+        assert_eq!(
+            config.known_agents(),
+            ["claude", "codex", "gemini", "local"]
+        );
     }
 
     #[test]
