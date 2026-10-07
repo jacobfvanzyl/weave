@@ -14,11 +14,17 @@
 //! | `rawInput.pattern` and `rawInput.path` for a search | claude-agent-acp (Grep, Glob) |
 //! | titles that open with their verb: `Read a.rs`, `Fetch url` | claude-agent-acp |
 //! | a thought's `**Heading**` line names the work in progress | codex-acp reasoning summaries |
+//! | a `model_config` option that is a toggle (a boolean, or an On/Off select) names a model
+//! setting, such as "Fast mode", shown while it's on | codex-acp, claude-agent-acp |
 //!
 //! Output of commands agents run themselves is an advertised `_meta` extension, handled in
 //! `weave_acp_core` (`terminal_meta`, [`weave_acp_core::extension_terminal_id`]).
 
 use serde_json::Value;
+use weave_acp_core::schema::SessionConfigOption;
+use weave_acp_core::schema::SessionConfigOptionCategory;
+
+use crate::settings::current_value_name;
 
 /// What a tool call's `rawInput` says, where it follows a known convention.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -91,6 +97,25 @@ pub fn thought_heading(thought: &str) -> Option<String> {
     })
 }
 
+/// Model settings switched on, by short name: "Fast mode" reads "fast".
+pub fn model_toggles_on(options: &[SessionConfigOption]) -> Vec<String> {
+    options
+        .iter()
+        .filter(|option| option.category == Some(SessionConfigOptionCategory::ModelConfig))
+        .filter(|option| {
+            current_value_name(option).is_some_and(|value| value.eq_ignore_ascii_case("on"))
+        })
+        .map(|option| {
+            let name = option.name.trim().to_lowercase();
+            name.strip_suffix(" mode")
+                .unwrap_or(&name)
+                .trim()
+                .to_owned()
+        })
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -127,6 +152,34 @@ mod tests {
             (input.pattern.as_deref(), input.path.as_deref()),
             (Some("TODO"), Some("src"))
         );
+    }
+
+    #[test]
+    fn model_settings_that_are_on_read_by_short_name() {
+        use weave_acp_core::schema::SessionConfigSelectOption;
+
+        let fast = |on: bool| {
+            SessionConfigOption::boolean("fast-mode", "Fast mode", on)
+                .category(SessionConfigOptionCategory::ModelConfig)
+        };
+        // As codex-acp and claude-agent-acp offer it to clients with booleans.
+        assert_eq!(model_toggles_on(&[fast(true)]), ["fast"]);
+        assert!(model_toggles_on(&[fast(false)]).is_empty());
+        // And as an On/Off select to clients without them.
+        let select = SessionConfigOption::select(
+            "fast",
+            "Fast mode",
+            "on",
+            vec![
+                SessionConfigSelectOption::new("on", "On"),
+                SessionConfigSelectOption::new("off", "Off"),
+            ],
+        )
+        .category(SessionConfigOptionCategory::ModelConfig);
+        assert_eq!(model_toggles_on(&[select]), ["fast"]);
+        // Other categories aren't model settings.
+        let verbose = SessionConfigOption::boolean("verbose", "Verbose", true);
+        assert!(model_toggles_on(&[verbose]).is_empty());
     }
 
     #[test]

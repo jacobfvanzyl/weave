@@ -84,7 +84,7 @@ pub struct StatusValues {
     pub context_used: Option<u64>,
     /// What the session has cost so far, and in which ISO 4217 currency.
     pub cost: Option<(f64, String)>,
-    /// Whether the agent has settings to change, so the status line ends with Ctrl+O's hint.
+    /// Whether the agent has settings to change, so the footer ends with Ctrl+O's hint.
     pub settings: bool,
 }
 
@@ -125,7 +125,8 @@ pub enum FooterMode {
     ShortcutsOpen,
     /// The composer is in shell mode.
     Shell,
-    /// The usual footer: the status line (or `? for shortcuts`), and the session's cost.
+    /// The usual footer: the status line (or `? for shortcuts`), then the session's cost and
+    /// the settings hint.
     Contextual {
         composer_empty: bool,
         working: bool,
@@ -138,7 +139,8 @@ pub struct FooterProps<'a> {
     pub values: &'a StatusValues,
 }
 
-/// The footer row for `width` columns: left content, then the cost, right-aligned.
+/// The footer row for `width` columns: left content, then the cost and settings hint,
+/// right-aligned.
 pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
     let left = match props.mode {
         FooterMode::QuitReminder => key_hint("⌃c", " again to quit"),
@@ -164,17 +166,28 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
             }
         }
     };
-    // The cost gives way first when space is short.
-    let right = if matches!(props.mode, FooterMode::Contextual { .. }) {
-        cost(props.values)
+    let mut right = if matches!(props.mode, FooterMode::Contextual { .. }) {
+        trailing(props.values)
     } else {
         Vec::new()
     };
-    let needed = INDENT + spans_width(&left) + spans_width(&right) + INDENT + 2;
-    if right.is_empty() || needed > width {
-        return assemble(left, Vec::new(), width);
+    // The trailing slot gives way before the left side, its last part first.
+    let fits = |parts: &[Vec<Span<'static>>]| {
+        let width_of: usize = parts.iter().map(|part| spans_width(part)).sum();
+        let separators = SEPARATOR.width() * parts.len().saturating_sub(1);
+        INDENT + spans_width(&left) + width_of + separators + INDENT + 2 <= width
+    };
+    while !right.is_empty() && !fits(&right) {
+        right.pop();
     }
-    assemble(left, right, width)
+    let mut spans = Vec::new();
+    for part in right {
+        if !spans.is_empty() {
+            spans.push(Span::styled(SEPARATOR, secondary()));
+        }
+        spans.extend(part);
+    }
+    assemble(left, spans, width)
 }
 
 fn assemble(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
@@ -200,6 +213,16 @@ fn cost(values: &StatusValues) -> Vec<Span<'static>> {
         .collect()
 }
 
+/// The right-aligned parts: the cost, then the hint for the settings when there are any.
+fn trailing(values: &StatusValues) -> Vec<Vec<Span<'static>>> {
+    let mut parts = vec![cost(values)];
+    if values.settings {
+        parts.push(key_hint("⌃o", " Settings"));
+    }
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
 /// `$1.23`, `€0.40`, or `12.00 CHF` for currencies without a symbol here.
 fn format_cost(amount: f64, currency: &str) -> String {
     let symbol = match currency.to_ascii_uppercase().as_str() {
@@ -218,7 +241,7 @@ fn format_cost(amount: f64, currency: &str) -> String {
 }
 
 /// The configured items with known values, colored by theme scope and separated by dots,
-/// dropping trailing items that don't fit, then the hint for the settings when it fits.
+/// dropping trailing items that don't fit.
 fn status_line(items: &[StatusItem], values: &StatusValues, width: usize) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for item in items {
@@ -239,14 +262,6 @@ fn status_line(items: &[StatusItem], values: &StatusValues, width: usize) -> Vec
             }
             spans.push(Span::styled(part, style));
         }
-    }
-    let hint = key_hint("⌃o", " Settings");
-    if values.settings
-        && !spans.is_empty()
-        && spans_width(&spans) + SEPARATOR.width() + spans_width(&hint) <= width
-    {
-        spans.push(Span::styled(SEPARATOR, secondary()));
-        spans.extend(hint);
     }
     spans
 }
@@ -467,22 +482,26 @@ mod tests {
     };
 
     #[test]
-    fn the_status_line_leads_and_the_cost_sits_right() {
+    fn the_status_line_leads_and_the_cost_and_settings_hint_trail() {
         // Right-aligned with two columns of margin, so the trimmed line is width - 2 wide.
         let wide = render(IDLE, &StatusItem::DEFAULT, 100);
         assert!(
-            wide.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build · ⌃o Settings  "),
+            wide.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build  "),
             "{wide}"
         );
-        assert!(wide.ends_with("  $1.50"), "{wide}");
+        assert!(wide.ends_with("  $1.50 · ⌃o Settings"), "{wide}");
         assert_eq!(wide.width(), 98);
-        // Without room, the cost goes first, then the settings hint, then trailing parts.
-        assert_eq!(
-            render(IDLE, &StatusItem::DEFAULT, 68),
-            "  Claude · Opus 5.5 · high · 25% · Fix the build · ⌃o Settings"
+        // Without room, the trailing slot gives way first, the hint before the cost, then the
+        // status line's trailing parts.
+        let narrower = render(IDLE, &StatusItem::DEFAULT, 70);
+        assert!(
+            narrower.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build  ")
+                && narrower.ends_with("  $1.50")
+                && narrower.width() == 68,
+            "{narrower}"
         );
         assert_eq!(
-            render(IDLE, &StatusItem::DEFAULT, 53),
+            render(IDLE, &StatusItem::DEFAULT, 56),
             "  Claude · Opus 5.5 · high · 25% · Fix the build"
         );
         assert_eq!(
@@ -491,13 +510,11 @@ mod tests {
         );
         // The mode and directory show when configured.
         let configured = [StatusItem::Model, StatusItem::Mode, StatusItem::Directory];
-        assert!(
-            render(IDLE, &configured, 100)
-                .starts_with("  Opus 5.5 · high · Plan · ~/repo · ⌃o Settings  ")
-        );
-        // Without settings to change, there's no hint.
+        assert!(render(IDLE, &configured, 100).starts_with("  Opus 5.5 · high · Plan · ~/repo  "));
+        // Without settings to change or a cost, the slot is empty.
         let values = StatusValues {
             settings: false,
+            cost: None,
             ..values()
         };
         let props = FooterProps {
@@ -505,7 +522,10 @@ mod tests {
             items: &configured,
             values: &values,
         };
-        assert!(!footer_line(&props, 100).to_string().contains("⌃o"));
+        assert_eq!(
+            footer_line(&props, 100).to_string().trim_end(),
+            "  Opus 5.5 · high · Plan · ~/repo"
+        );
     }
 
     #[test]

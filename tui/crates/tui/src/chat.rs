@@ -55,6 +55,7 @@ use crate::compaction;
 use crate::compaction::Compaction;
 use crate::composer::Composer;
 use crate::composer::ComposerAction;
+use crate::conventions;
 use crate::conventions::thought_heading;
 use crate::elicitation::ElicitationOutcome;
 use crate::elicitation::ElicitationView;
@@ -1845,7 +1846,14 @@ impl ChatWidget {
         StatusValues {
             agent: self.agent_name.clone(),
             model: current(SessionConfigOptionCategory::Model),
-            reasoning: current(SessionConfigOptionCategory::ThoughtLevel),
+            // The level, then model settings that are on, as "high fast".
+            reasoning: {
+                let parts: Vec<String> = current(SessionConfigOptionCategory::ThoughtLevel)
+                    .into_iter()
+                    .chain(conventions::model_toggles_on(&self.config_options))
+                    .collect();
+                (!parts.is_empty()).then(|| parts.join(" "))
+            },
             mode: current(SessionConfigOptionCategory::Mode),
             directory: home_relative(&self.cwd),
             session: self.title.clone(),
@@ -2440,9 +2448,10 @@ mod tests {
         chat.setting_changed(change, Ok(Some(updated)));
         // The transcript announces it; the footer stays as it was.
         assert_eq!(history(&mut chat), ["• Mode set to Code"]);
-        assert_eq!(
-            rows(&chat, 80).last().map(String::as_str),
-            Some("  Agent · ⌃o Settings")
+        let footer = rows(&chat, 80).pop().unwrap_or_default();
+        assert!(
+            footer.starts_with("  Agent  ") && footer.ends_with("  ⌃o Settings"),
+            "{footer}"
         );
     }
 
@@ -2475,11 +2484,47 @@ mod tests {
         let mut chat = chat_with(options);
         chat.context = Some((25, 100));
         let footer = chat.footer(60, Instant::now()).to_string();
-        assert_eq!(footer.trim_end(), "  Agent · 25% · ⌃o Settings");
+        assert!(footer.starts_with("  Agent · 25%  "), "{footer}");
+        assert!(footer.trim_end().ends_with("  ⌃o Settings"), "{footer}");
 
         chat.status_items.clear();
         let footer = chat.footer(60, Instant::now()).to_string();
-        assert_eq!(footer.trim_end(), "  ? for shortcuts");
+        assert!(
+            footer.starts_with("  ? for shortcuts  ")
+                && footer.trim_end().ends_with("  ⌃o Settings"),
+            "{footer}"
+        );
+    }
+
+    #[test]
+    fn fast_mode_joins_the_reasoning_level() {
+        let level = |current: &'static str| {
+            SessionConfigOption::select(
+                "effort",
+                "Reasoning effort",
+                current,
+                vec![
+                    SessionConfigSelectOption::new("low", "Low"),
+                    SessionConfigSelectOption::new("high", "High"),
+                ],
+            )
+            .category(SessionConfigOptionCategory::ThoughtLevel)
+        };
+        let fast = |on: bool| {
+            SessionConfigOption::boolean("fast-mode", "Fast mode", on)
+                .category(SessionConfigOptionCategory::ModelConfig)
+        };
+        let reasoning = |options| chat_with(options).status_values().reasoning;
+        assert_eq!(
+            reasoning(vec![level("high"), fast(true)]).as_deref(),
+            Some("High fast")
+        );
+        assert_eq!(
+            reasoning(vec![level("high"), fast(false)]).as_deref(),
+            Some("High")
+        );
+        assert_eq!(reasoning(vec![fast(true)]).as_deref(), Some("fast"));
+        assert_eq!(reasoning(Vec::new()), None);
     }
 
     #[test]
