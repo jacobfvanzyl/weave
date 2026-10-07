@@ -13,6 +13,7 @@ mod conventions;
 mod custom_terminal;
 mod elicitation;
 mod file_popup;
+mod find;
 mod footer;
 mod highlight;
 mod history_cell;

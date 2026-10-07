@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
@@ -22,6 +25,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use weave_acp_core::schema::Plan;
 
+use crate::find;
 use crate::history_cell;
 use crate::streaming::StreamKind;
 use crate::streaming::render_compact;
@@ -281,6 +285,67 @@ impl Copied {
     }
 }
 
+/// Find (F3): the query, and the match being shown.
+struct Find {
+    query: String,
+    folded: String,
+    /// Typing the query, rather than reading what it found.
+    editing: bool,
+    /// The match shown: its start, anchored like a reading position so output arriving below
+    /// leaves it in place.
+    current: Option<FindAnchor>,
+    /// The match's place among all of them (from 1, oldest first), and how many there are,
+    /// as of the last search.
+    place: Option<(usize, usize)>,
+    /// Where searching starts: the bottom of the view when Find opened, matches above it
+    /// first, as Codex searches older history first.
+    origin: ViewPosition,
+    /// The view as it was, to return to.
+    saved: SavedView,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FindAnchor {
+    cell: usize,
+    offset: usize,
+    column: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SavedView {
+    detailed: bool,
+    position: ViewPosition,
+    other: Option<ViewPosition>,
+    unseen: bool,
+}
+
+/// Which match a search moves to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pick {
+    /// The nearest above where Find started; for a new query.
+    FromOrigin,
+    Older,
+    Newer,
+}
+
+/// Find's state, for the footer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FindStatus<'a> {
+    pub query: &'a str,
+    pub editing: bool,
+    /// The match shown, from 1 oldest first, and how many there are.
+    pub place: Option<(usize, usize)>,
+}
+
+/// Delete the word before the end of `query`, and the space after it.
+fn delete_word(query: &mut String) {
+    let kept = query.trim_end().len();
+    let word = query[..kept]
+        .rfind(char::is_whitespace)
+        .map_or(0, |space| space + 1);
+    query.truncate(word);
+}
+
 /// Where the transcript was last drawn, for mapping the mouse and paging.
 #[derive(Clone, Copy, Debug)]
 struct Geometry {
@@ -346,6 +411,7 @@ pub struct TranscriptView {
     selection: Option<Selection>,
     /// Where a drag began, until the mouse button is released.
     drag_from: Option<Point>,
+    find: Option<Find>,
     geometry: Cell<Option<Geometry>>,
 }
 
@@ -360,6 +426,7 @@ impl TranscriptView {
             unseen: false,
             selection: None,
             drag_from: None,
+            find: None,
             geometry: Cell::new(None),
         }
     }
@@ -383,6 +450,9 @@ impl TranscriptView {
     /// Switch between the compact and detailed views, each keeping its own place, as Codex's
     /// transcript presentation does.
     pub fn set_detailed(&mut self, detailed: bool) {
+        // Find shows the full transcript over whichever view was open; switching leaves it
+        // from that view.
+        self.drop_find();
         if self.detailed == detailed {
             return;
         }
@@ -404,6 +474,7 @@ impl TranscriptView {
 
     /// Clear everything after the pinned cells, returning what was removed.
     pub fn take_session(&mut self) -> Vec<TranscriptCell> {
+        self.drop_find();
         self.follow();
         self.selection = None;
         self.cells.split_off(self.pinned.min(self.cells.len()))
@@ -411,6 +482,7 @@ impl TranscriptView {
 
     /// Put back cells removed by [`Self::take_session`], replacing any added since.
     pub fn restore_session(&mut self, cells: Vec<TranscriptCell>) {
+        self.drop_find();
         self.cells.truncate(self.pinned);
         self.cells.extend(cells);
         self.follow();
@@ -468,6 +540,233 @@ impl TranscriptView {
         if layout.total > usize::from(geometry.area.height) {
             self.position = layout.anchor(0);
         }
+    }
+
+    /// Open Find, or go back to editing its query. Find searches the full transcript, so it
+    /// shows the detailed view until it closes.
+    pub fn begin_find(&mut self) {
+        if let Some(find) = &mut self.find {
+            find.editing = true;
+            return;
+        }
+        let saved = SavedView {
+            detailed: self.detailed,
+            position: self.position,
+            other: self.other_position,
+            unseen: self.unseen,
+        };
+        // Searching starts from the bottom of the view, when it already shows the detail.
+        let origin = match (self.detailed, self.position, self.geometry.get()) {
+            (true, ViewPosition::Reading { .. }, Some(geometry)) => {
+                let layout = self.layout(geometry.width, geometry.live);
+                let height = usize::from(geometry.area.height);
+                let bottom = self.top(&layout, height) + height;
+                layout.anchor(bottom.saturating_sub(1))
+            }
+            _ => ViewPosition::Latest,
+        };
+        if !self.detailed {
+            self.detailed = true;
+            self.position = ViewPosition::Latest;
+        }
+        self.selection = None;
+        self.drag_from = None;
+        self.find = Some(Find {
+            query: String::new(),
+            folded: String::new(),
+            editing: true,
+            current: None,
+            place: None,
+            origin,
+            saved,
+        });
+    }
+
+    pub fn find_status(&self) -> Option<FindStatus<'_>> {
+        self.find.as_ref().map(|find| FindStatus {
+            query: &find.query,
+            editing: find.editing,
+            place: find.place,
+        })
+    }
+
+    /// Find's keys, while it is open; returns whether the key was Find's. While the query is
+    /// being typed every key is; once a match is accepted only moving between matches,
+    /// editing the query again (F3) and closing (Esc) are, as in Codex.
+    pub fn find_key(&mut self, key: KeyEvent, live: &[DisplayLine]) -> bool {
+        let Some(find) = &mut self.find else {
+            return false;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if !find.editing {
+            match key.code {
+                KeyCode::Esc => self.end_find(),
+                KeyCode::F(3) => find.editing = true,
+                KeyCode::Char('p') if ctrl => self.search(live, Pick::Older),
+                KeyCode::Char('n') if ctrl => self.search(live, Pick::Newer),
+                _ => return false,
+            }
+            return true;
+        }
+        match key.code {
+            KeyCode::Esc => self.drop_find(),
+            KeyCode::Char('c') if ctrl => self.drop_find(),
+            // Accepting needs something to read.
+            KeyCode::Enter if find.place.is_some() => find.editing = false,
+            KeyCode::Up => self.search(live, Pick::Older),
+            KeyCode::Char('p') if ctrl => self.search(live, Pick::Older),
+            KeyCode::Down => self.search(live, Pick::Newer),
+            KeyCode::Char('n') if ctrl => self.search(live, Pick::Newer),
+            // Paging still scrolls.
+            KeyCode::PageUp | KeyCode::PageDown => return false,
+            KeyCode::Backspace if alt => {
+                delete_word(&mut find.query);
+                self.query_changed(live);
+            }
+            KeyCode::Char('w') if ctrl => {
+                delete_word(&mut find.query);
+                self.query_changed(live);
+            }
+            KeyCode::Char('u') if ctrl => {
+                find.query.clear();
+                self.query_changed(live);
+            }
+            KeyCode::Backspace => {
+                find.query.pop();
+                self.query_changed(live);
+            }
+            KeyCode::Char(ch) if !ctrl && !alt => {
+                find.query.push(ch);
+                self.query_changed(live);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// Paste into Find's query, while it is being typed; returns whether it was.
+    pub fn find_paste(&mut self, text: &str, live: &[DisplayLine]) -> bool {
+        let Some(find) = self.find.as_mut().filter(|find| find.editing) else {
+            return false;
+        };
+        // Matching is within lines, so only the first line can match.
+        find.query.push_str(text.lines().next().unwrap_or_default());
+        self.query_changed(live);
+        true
+    }
+
+    /// Close Find and return to the newest output, in the view that was open before.
+    pub fn end_find(&mut self) {
+        if let Some(find) = self.find.take() {
+            self.detailed = find.saved.detailed;
+            self.other_position = find.saved.other;
+            self.follow();
+        }
+    }
+
+    /// Close Find, restoring the view it opened over, as cancelling it does.
+    fn drop_find(&mut self) {
+        if let Some(find) = self.find.take() {
+            self.detailed = find.saved.detailed;
+            self.position = find.saved.position;
+            self.other_position = find.saved.other;
+            self.unseen =
+                find.saved.position != ViewPosition::Latest && (find.saved.unseen || self.unseen);
+        }
+    }
+
+    fn query_changed(&mut self, live: &[DisplayLine]) {
+        let Some(find) = &mut self.find else {
+            return;
+        };
+        find.folded = find::fold(&find.query);
+        find.current = None;
+        self.search(live, Pick::FromOrigin);
+    }
+
+    /// Move to the match `pick` names and scroll it into view, a third of the way down as
+    /// Codex places it, so what led up to it shows too.
+    fn search(&mut self, live: &[DisplayLine], pick: Pick) {
+        let Some(geometry) = self.geometry.get() else {
+            return;
+        };
+        let Some(find) = &self.find else {
+            return;
+        };
+        let layout = self.layout(geometry.width, live.len());
+        let hits = self.hits(&layout, geometry.width, live, &find.folded);
+        let current = find
+            .current
+            .map(|anchor| (layout.row(anchor.cell, anchor.offset), anchor.column));
+        let origin = match find.origin {
+            ViewPosition::Latest => layout.total,
+            ViewPosition::Reading { cell, offset } => layout.row(cell, offset) + 1,
+        };
+        let index = match (pick, current) {
+            (Pick::Older, Some(current)) => hits
+                .iter()
+                .rposition(|hit| hit.start() < current)
+                .or_else(|| hits.iter().position(|hit| hit.start() == current)),
+            (Pick::Newer, Some(current)) => hits
+                .iter()
+                .position(|hit| hit.start() > current)
+                .or_else(|| hits.iter().position(|hit| hit.start() == current)),
+            _ => hits
+                .iter()
+                .rposition(|hit| hit.row < origin)
+                .or_else(|| (!hits.is_empty()).then_some(0)),
+        };
+        let saved = find.saved;
+        let Some(find) = &mut self.find else {
+            return;
+        };
+        let Some(hit) = index.and_then(|index| hits.get(index)) else {
+            find.current = None;
+            find.place = None;
+            // Nothing to show: back to where Find started.
+            self.position = if saved.detailed {
+                saved.position
+            } else {
+                ViewPosition::Latest
+            };
+            return;
+        };
+        let ViewPosition::Reading { cell, offset } = layout.anchor(hit.row) else {
+            return;
+        };
+        find.current = Some(FindAnchor {
+            cell,
+            offset,
+            column: hit.column,
+        });
+        find.place = index.map(|index| (index + 1, hits.len()));
+        let height = usize::from(geometry.area.height);
+        if layout.total > height {
+            let top = hit.row.saturating_sub(height / 3);
+            self.position = layout.anchor(top.min(layout.total - height));
+        }
+    }
+
+    /// Every match of `folded` at `width`, oldest first.
+    fn hits(
+        &self,
+        layout: &Layout,
+        width: usize,
+        live: &[DisplayLine],
+        folded: &str,
+    ) -> Vec<find::Hit> {
+        let mut hits = Vec::new();
+        for (index, cell) in self.cells.iter().enumerate() {
+            let first = layout.starts[index] + usize::from(index > 0);
+            hits.extend(find::find_in_rows(
+                &cell.lines(width, self.detailed),
+                first,
+                folded,
+            ));
+        }
+        hits.extend(find::find_in_rows(live, layout.live_start, folded));
+        hits
     }
 
     /// The selection is laid out at one width; a resize ends it.
@@ -649,6 +948,7 @@ impl TranscriptView {
             }
             buf.set_line(area.x, y, &row.line, area.width);
         }
+        self.render_find(&layout, &rows, top, area, buf);
         let Some(selection) = self.selection.filter(|selection| selection.width == width) else {
             return;
         };
@@ -657,6 +957,40 @@ impl TranscriptView {
             if let Some((from, to)) = selection.columns(row, area.width) {
                 for x in from..to {
                     buf[(area.x + x, y)].set_style(highlight);
+                }
+            }
+        }
+    }
+
+    /// Mark Find's matches among the visible `rows`, which start at row `top`: the current one
+    /// reversed, as Codex marks it, and the others underlined.
+    fn render_find(
+        &self,
+        layout: &Layout,
+        rows: &[DisplayLine],
+        top: usize,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
+        let Some(find) = &self.find else {
+            return;
+        };
+        let current = find
+            .current
+            .map(|anchor| (layout.row(anchor.cell, anchor.offset), anchor.column));
+        for hit in find::find_in_rows(rows, top, &find.folded) {
+            let modifier = if Some(hit.start()) == current {
+                Modifier::REVERSED
+            } else {
+                Modifier::UNDERLINED
+            };
+            for segment in &hit.segments {
+                let Ok(y) = u16::try_from(segment.row - top) else {
+                    continue;
+                };
+                for x in segment.from..segment.to.min(area.width) {
+                    buf[(area.x + x, area.y + y)]
+                        .set_style(Style::default().add_modifier(modifier));
                 }
             }
         }
@@ -698,6 +1032,27 @@ mod tests {
             .collect()
     }
 
+    fn press(view: &mut TranscriptView, code: KeyCode) -> bool {
+        view.find_key(KeyEvent::new(code, KeyModifiers::NONE), &[])
+    }
+
+    fn type_query(view: &mut TranscriptView, text: &str) {
+        for ch in text.chars() {
+            assert!(press(view, KeyCode::Char(ch)));
+        }
+    }
+
+    /// The text of row `y` with `modifier`, as drawn.
+    fn marked(view: &TranscriptView, height: u16, y: u16, modifier: Modifier) -> String {
+        let area = Rect::new(0, 0, 20, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf, 20, &[]);
+        (0..20)
+            .filter(|x| buf[(*x, y)].modifier.contains(modifier))
+            .map(|x| buf[(x, y)].symbol())
+            .collect()
+    }
+
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
         MouseEvent {
             kind,
@@ -705,6 +1060,114 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         }
+    }
+
+    #[test]
+    fn find_starts_at_the_newest_match_and_steps_between_them() {
+        let mut view = numbered(30);
+        draw(&view, 5);
+        view.begin_find();
+        type_query(&mut view, "LINE 2");
+        // "line 2" and "line 20" to "line 29", the newest shown a third of the way down.
+        let status = view.find_status().expect("finding");
+        assert_eq!(status.place, Some((11, 11)));
+        assert_eq!(draw(&view, 5), ["line 28", "", "line 29", "", "line 30"]);
+        assert_eq!(marked(&view, 5, 2, Modifier::REVERSED), "line 2");
+        assert_eq!(marked(&view, 5, 0, Modifier::UNDERLINED), "line 2");
+
+        assert!(view.find_key(
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            &[]
+        ));
+        assert_eq!(
+            view.find_status().and_then(|status| status.place),
+            Some((10, 11))
+        );
+        assert_eq!(marked(&view, 5, 1, Modifier::REVERSED), "line 2");
+        assert!(press(&mut view, KeyCode::Down));
+        assert_eq!(
+            view.find_status().and_then(|status| status.place),
+            Some((11, 11))
+        );
+        // At the newest there is nothing newer; the match stays.
+        assert!(press(&mut view, KeyCode::Down));
+        assert_eq!(
+            view.find_status().and_then(|status| status.place),
+            Some((11, 11))
+        );
+
+        // A narrower query starts over from where Find opened.
+        assert!(press(&mut view, KeyCode::Backspace));
+        assert!(press(&mut view, KeyCode::Char('3')));
+        // "line 3" and "line 30".
+        assert_eq!(
+            view.find_status().and_then(|status| status.place),
+            Some((2, 2))
+        );
+        assert!(press(&mut view, KeyCode::Char('x')));
+        assert_eq!(view.find_status().and_then(|status| status.place), None);
+    }
+
+    #[test]
+    fn find_searches_the_detail_and_cancelling_restores_the_view() {
+        let mut view = TranscriptView::new();
+        view.push(TranscriptCell::with_detail(|_, detail| {
+            let mut lines = vec![DisplayLine::whole(Line::from("Ran tests"))];
+            if detail {
+                lines.push(DisplayLine::whole(Line::from("a needle in output")));
+            }
+            lines
+        }));
+        for n in 1..=10 {
+            view.push(TranscriptCell::new(move |_| {
+                vec![DisplayLine::whole(Line::from(format!("line {n}")))]
+            }));
+        }
+        draw(&view, 4);
+        view.scroll_rows(-2);
+        let before = draw(&view, 4);
+        assert!(!view.is_detailed());
+
+        view.begin_find();
+        assert!(view.is_detailed());
+        type_query(&mut view, "needle");
+        assert_eq!(draw(&view, 4)[1], "a needle in output");
+        assert!(press(&mut view, KeyCode::Esc));
+        assert_eq!(view.find_status(), None);
+        assert!(!view.is_detailed());
+        assert_eq!(draw(&view, 4), before);
+        assert_eq!(view.reading(), Reading::Earlier);
+    }
+
+    #[test]
+    fn accepting_a_match_leaves_other_keys_alone_until_esc() {
+        let mut view = numbered(20);
+        draw(&view, 5);
+        view.begin_find();
+        // Enter needs a match to accept.
+        type_query(&mut view, "nothing");
+        assert!(press(&mut view, KeyCode::Enter));
+        assert!(view.find_status().is_some_and(|status| status.editing));
+        assert!(view.find_key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            &[]
+        ));
+        type_query(&mut view, "line 3");
+        assert!(press(&mut view, KeyCode::Enter));
+        assert!(view.find_status().is_some_and(|status| !status.editing));
+        assert!(!press(&mut view, KeyCode::Char('x')));
+        assert!(!press(&mut view, KeyCode::PageUp));
+        assert_eq!(view.reading(), Reading::Earlier);
+
+        // F3 goes back to the query; Esc there cancels, and Esc while reading returns to the
+        // newest output.
+        assert!(press(&mut view, KeyCode::F(3)));
+        assert!(view.find_status().is_some_and(|status| status.editing));
+        assert!(press(&mut view, KeyCode::Enter));
+        assert!(press(&mut view, KeyCode::Esc));
+        assert_eq!(view.find_status(), None);
+        assert_eq!(view.reading(), Reading::Latest);
+        assert!(!view.is_detailed());
     }
 
     #[test]

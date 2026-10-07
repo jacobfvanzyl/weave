@@ -58,6 +58,7 @@ use crate::file_popup;
 use crate::file_popup::FileIndex;
 use crate::file_popup::FilePopup;
 use crate::footer;
+use crate::footer::FindKeys;
 use crate::footer::FooterMode;
 use crate::footer::FooterProps;
 use crate::footer::StatusItem;
@@ -86,6 +87,7 @@ use crate::tool_call::ExploreGroup;
 use crate::tool_call::RenderContext;
 use crate::tool_call::ToolCallCell;
 use crate::tool_output::TerminalTranscripts;
+use crate::transcript::FindStatus;
 use crate::transcript::Reading;
 use crate::transcript::TranscriptCell;
 use crate::transcript::TranscriptView;
@@ -903,6 +905,15 @@ impl ChatWidget {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
+        let live = self.live_lines(self.content_width());
+        let view = if self.pager_open {
+            self.pager.as_mut()
+        } else {
+            self.transcript.as_mut()
+        };
+        if view.is_some_and(|view| view.find_paste(text, &live)) {
+            return;
+        }
         if let Some(pending) = self.elicitations.front_mut() {
             pending.view.handle_paste(text);
             return;
@@ -951,6 +962,10 @@ impl ChatWidget {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<AppCommand> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Find's query takes every key while it's typed, Ctrl+C included, as in Codex.
+        if self.find_key(key) {
+            return Vec::new();
+        }
         if ctrl && key.code == KeyCode::Char('c') {
             return self.interrupt();
         }
@@ -961,6 +976,20 @@ impl ChatWidget {
         }
         if self.pager_open {
             self.handle_pager_key(key);
+            return Vec::new();
+        }
+        if key.code == KeyCode::F(3) {
+            match &mut self.transcript {
+                Some(view) => view.begin_find(),
+                // Inline, Find searches in the pager.
+                None => {
+                    if let Some(pager) = &mut self.pager {
+                        self.pager_open = true;
+                        pager.follow();
+                        pager.begin_find();
+                    }
+                }
+            }
             return Vec::new();
         }
         if ctrl && key.code == KeyCode::Char('t') {
@@ -1154,14 +1183,51 @@ impl ChatWidget {
         Some(Vec::new())
     }
 
-    /// The inline pager's keys: scrolling, and closing on Esc, q or Ctrl+T.
+    /// Find's keys in whichever transcript is showing; returns whether the key was Find's.
+    fn find_key(&mut self, key: KeyEvent) -> bool {
+        let live = self.live_lines(self.content_width());
+        let view = if self.pager_open {
+            self.pager.as_mut()
+        } else {
+            self.transcript.as_mut()
+        };
+        view.is_some_and(|view| view.find_key(key, &live))
+    }
+
+    /// The Find status of whichever transcript is showing, while Find is open.
+    fn find_status(&self) -> Option<FindStatus<'_>> {
+        let view = if self.pager_open {
+            self.pager.as_ref()
+        } else {
+            self.transcript.as_ref()
+        };
+        view.and_then(TranscriptView::find_status)
+    }
+
+    /// The inline pager's keys: scrolling, Find (`/`, then `n` and `N` between matches, as
+    /// in less), and closing on Esc, q or Ctrl+T.
     fn handle_pager_key(&mut self, key: KeyEvent) {
+        let live = self.live_lines(self.content_width());
         let Some(pager) = &mut self.pager else {
             self.pager_open = false;
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let finding = pager.find_status().is_some();
         match key.code {
+            KeyCode::Char('/') | KeyCode::F(3) => pager.begin_find(),
+            KeyCode::Char('n') if finding => {
+                pager.find_key(
+                    KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+                    &live,
+                );
+            }
+            KeyCode::Char('N') if finding => {
+                pager.find_key(
+                    KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                    &live,
+                );
+            }
             KeyCode::Esc | KeyCode::Char('q') => self.pager_open = false,
             KeyCode::Char('t') if ctrl => self.pager_open = false,
             KeyCode::Up | KeyCode::Char('k') => pager.scroll_rows(-1),
@@ -1357,6 +1423,7 @@ impl ChatWidget {
         self.last_reply = None;
         // Sending a message returns to the newest output, where its reply will appear.
         if let Some(view) = &mut self.transcript {
+            view.end_find();
             view.follow();
         }
         let now = Instant::now();
@@ -1748,7 +1815,7 @@ impl ChatWidget {
     /// Rows under the input: the slash command popup, which replaces the footer as in Codex,
     /// or the footer.
     fn footer_height(&self) -> u16 {
-        if self.has_overlay() {
+        if self.has_overlay() || self.find_status().is_some_and(|status| status.editing) {
             return 1;
         }
         if let Some(matches) = self.file_matches() {
@@ -1788,6 +1855,15 @@ impl ChatWidget {
             && now < *until
         {
             return Line::from(Span::styled(format!("  {note}"), dim()));
+        }
+        if let Some(status) = self
+            .transcript
+            .as_ref()
+            .and_then(TranscriptView::find_status)
+        {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(footer::find_hints(&status, FindKeys::Screen));
+            return Line::from(spans);
         }
         match self.transcript.as_ref().map(TranscriptView::reading) {
             Some(Reading::Earlier) => {
@@ -1840,14 +1916,33 @@ impl ChatWidget {
         let body = Rect::new(area.x, area.y + 1, area.width, area.height - 2);
         let width = usize::from(area.width.max(10));
         pager.render(body, buf, width, &self.live_lines(width));
-        let hints = Line::from(vec![
-            Span::raw("  ↑↓ pgup pgdn"),
-            Span::styled(" scroll · ", style::secondary()),
-            Span::raw("esc"),
-            Span::styled(" or ", style::secondary()),
-            Span::raw("⌃t"),
-            Span::styled(" close", style::secondary()),
-        ]);
+        let hints = match pager.find_status() {
+            Some(status) => {
+                let mut spans = vec![Span::raw("  ")];
+                if status.editing {
+                    // The pager draws no terminal cursor; a block stands in for it.
+                    let (line, _) = footer::find_query_line(status.query);
+                    spans.extend(line.spans);
+                    spans.push(Span::styled(
+                        " ",
+                        Style::default().add_modifier(Modifier::REVERSED),
+                    ));
+                    spans.push(Span::raw("  "));
+                }
+                spans.extend(footer::find_hints(&status, FindKeys::Pager));
+                Line::from(spans)
+            }
+            None => Line::from(vec![
+                Span::raw("  ↑↓ pgup pgdn"),
+                Span::styled(" scroll · ", style::secondary()),
+                Span::raw("/"),
+                Span::styled(" find · ", style::secondary()),
+                Span::raw("esc"),
+                Span::styled(" or ", style::secondary()),
+                Span::raw("⌃t"),
+                Span::styled(" close", style::secondary()),
+            ]),
+        };
         buf.set_line(area.x, area.bottom() - 1, &hints, area.width);
     }
 
@@ -1939,6 +2034,16 @@ impl ChatWidget {
             )
         };
         let matches = self.popup_matches();
+        if let Some(status) = self.find_status().filter(|status| status.editing) {
+            // Find's query is typed where the footer was, as in Codex; the cursor goes there.
+            let (line, column) = footer::find_query_line(status.query);
+            let line = Line::from([vec![Span::raw("  ")], line.spans].concat());
+            buf.set_line(area.x, footer_area.y, &line, area.width);
+            let x = u16::try_from(2 + column)
+                .unwrap_or(u16::MAX)
+                .min(area.width.saturating_sub(1));
+            return Some(Position::new(area.x + x, footer_area.y));
+        }
         if let Some(files) = self.file_matches() {
             self.file_popup.render(files.as_deref(), footer_area, buf);
         } else if !self.has_overlay() && !matches.is_empty() {
@@ -2688,6 +2793,79 @@ mod tests {
         assert!(chat.composer.is_empty());
         chat.handle_key(key(KeyCode::Esc));
         assert!(!chat.pager_open());
+    }
+
+    #[test]
+    fn f3_finds_text_in_the_fullscreen_transcript() {
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "go");
+        for n in 1..=12 {
+            reply(&mut chat, &format!("m{n}"), &format!("reply {n}"));
+        }
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        screen_rows(&chat, 40, 12);
+        chat.handle_key(key(KeyCode::F(3)));
+        for ch in "reply 3".chars() {
+            chat.handle_key(key(KeyCode::Char(ch)));
+        }
+        // The query goes to Find, not the composer, and is typed where the footer was.
+        assert!(chat.composer.is_empty());
+        let rows = screen_rows(&chat, 40, 12);
+        assert!(rows.contains(&"• reply 3".to_owned()), "{rows:?}");
+        assert!(!rows.contains(&"• reply 12".to_owned()), "{rows:?}");
+        assert!(rows.iter().any(|row| row == "  Find: reply 3"), "{rows:?}");
+        assert!(
+            rows.iter()
+                .any(|row| row.starts_with("  1 of 1 · enter accept")),
+            "{rows:?}"
+        );
+
+        // Accepted, the composer has the keys again; Esc returns to the newest output.
+        chat.handle_key(key(KeyCode::Enter));
+        chat.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(chat.composer.text(), "x");
+        let rows = screen_rows(&chat, 40, 12);
+        assert!(
+            rows.iter().any(|row| row.contains("⌃p older · ⌃n newer")),
+            "{rows:?}"
+        );
+        assert_eq!(chat.handle_key(key(KeyCode::Esc)), []);
+        assert!(screen_rows(&chat, 40, 12).contains(&"• reply 12".to_owned()));
+    }
+
+    #[test]
+    fn f3_inline_finds_in_the_pager() {
+        let mut chat = chat();
+        submit(&mut chat, "count");
+        ten_line_command(&mut chat);
+        chat.handle_agent_event(text_chunk("Counted."));
+        chat.handle_key(key(KeyCode::F(3)));
+        assert!(chat.pager_open());
+        let area = Rect::new(0, 0, 40, 12);
+        let mut buf = Buffer::empty(area);
+        chat.render_pager(area, &mut buf);
+        for ch in "count".chars() {
+            chat.handle_key(key(KeyCode::Char(ch)));
+        }
+        chat.render_pager(area, &mut buf);
+        let bottom: String = (0..area.width)
+            .map(|x| buf[(x, area.height - 1)].symbol())
+            .collect();
+        assert!(bottom.starts_with("  Find: count   2 of 2"), "{bottom:?}");
+
+        // Accepted, n and N step through matches as in less; Esc leaves Find, then the pager.
+        chat.handle_key(key(KeyCode::Enter));
+        chat.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(
+            chat.find_status().and_then(|status| status.place),
+            Some((1, 2))
+        );
+        chat.handle_key(key(KeyCode::Esc));
+        assert!(chat.pager_open());
+        assert_eq!(chat.find_status(), None);
+        chat.handle_key(key(KeyCode::Esc));
+        assert!(!chat.pager_open());
+        assert!(chat.composer.is_empty());
     }
 
     #[test]

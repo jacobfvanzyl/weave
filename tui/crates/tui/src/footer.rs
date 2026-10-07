@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::highlight;
 use crate::style::secondary;
+use crate::transcript::FindStatus;
 
 /// Columns of indent before the footer and after its right side.
 const INDENT: usize = 2;
@@ -240,6 +241,63 @@ fn status_line(items: &[StatusItem], values: &StatusValues, width: usize) -> Vec
     spans
 }
 
+/// Where Find is open, for its keys: the fullscreen transcript, or the inline pager, which
+/// takes less's keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FindKeys {
+    Screen,
+    Pager,
+}
+
+/// The row Find's query is typed in, and the column its cursor is at.
+pub fn find_query_line(query: &str) -> (Line<'static>, usize) {
+    const LABEL: &str = "Find: ";
+    let line = Line::from(vec![
+        Span::styled(LABEL, secondary()),
+        Span::raw(query.to_owned()),
+    ]);
+    (line, LABEL.width() + query.width())
+}
+
+/// Find's status and keys: how many matches, and how to move between them.
+pub fn find_hints(status: &FindStatus<'_>, keys: FindKeys) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut hint = |key: &str, text: &str| {
+        if !spans.is_empty() {
+            spans.push(Span::styled(SEPARATOR, secondary()));
+        }
+        spans.extend(key_hint(key, text));
+    };
+    let (older, newer, edit, close) = match keys {
+        FindKeys::Screen => ("⌃p", "⌃n", "f3", "esc"),
+        FindKeys::Pager => ("n", "N", "/", "esc"),
+    };
+    match (status.editing, status.place) {
+        (true, _) if status.query.is_empty() => hint("", "Type to find"),
+        (true, None) => hint("", "No matches"),
+        (true, Some((index, count))) => {
+            hint("", &format!("{index} of {count}"));
+            hint("enter", " accept");
+            hint("↑", " older");
+            hint("↓", " newer");
+        }
+        (false, place) => {
+            if let Some((index, count)) = place {
+                hint("", &format!("{index} of {count}"));
+            }
+            hint(older, " older");
+            hint(newer, " newer");
+            hint(edit, " edit");
+        }
+    }
+    match (status.editing, keys) {
+        (true, _) => hint(close, " cancel"),
+        (false, FindKeys::Screen) => hint(close, " latest"),
+        (false, FindKeys::Pager) => hint(close, " close find"),
+    }
+    spans
+}
+
 fn key_hint(key: &str, text: &str) -> Vec<Span<'static>> {
     vec![
         Span::raw(key.to_owned()),
@@ -297,6 +355,7 @@ pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
             "Transcript",
             &[
                 ("⌃t", "Full transcript"),
+                ("f3", "Find text"),
                 ("pgup / pgdn", "Scroll"),
                 ("⌃home / ⌃end", "Top / latest"),
                 ("drag", "Copy text"),

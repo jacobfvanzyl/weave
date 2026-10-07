@@ -13,7 +13,7 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
   or its protocol, and it is not a root Bun workspace.
 - One session per process. Like Codex, it runs fullscreen by default: on the alternate
   screen, `weave` owns the transcript (`transcript.rs`: retained cells that reflow,
-  scrolling, selection and copy). Inline mode (`--no-alt-screen`, `[tui]
+  scrolling, selection and copy, and Find, matched by `find.rs`). Inline mode (`--no-alt-screen`, `[tui]
   alternate_screen = "never"`) keeps Codex's inline viewport, with finished history in
   native terminal scrollback. Both modes must keep working.
 

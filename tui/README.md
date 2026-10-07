@@ -36,6 +36,7 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Esc while scrolled back | Return to the newest output (before it stops the turn) |
 | Drag | Select transcript text; it is copied when you release |
 | Ctrl+T | Full transcript: whole command output, diffs and thoughts (a pager inline) |
+| F3 | Find text in the full transcript: newest match first, ↑/↓ (or Ctrl+P/Ctrl+N) between matches, Enter to keep reading, Esc to close. In the inline pager, `/` then `n`/`N` |
 | `?` | Keyboard shortcuts (on an empty composer) |
 | Ctrl+G | Edit the prompt in `$VISUAL` / `$EDITOR` |
 | Ctrl+V | Paste an image from the clipboard as `[image N]` (dragging an image file in works too) |
