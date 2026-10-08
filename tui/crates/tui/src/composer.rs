@@ -275,6 +275,11 @@ impl Composer {
         ComposerAction::None
     }
 
+    /// Send the draft as Enter would in the basic composer, whichever composer has it.
+    pub fn submit_draft(&mut self) -> ComposerAction {
+        self.submit()
+    }
+
     /// A new line in the basic composer, which moves a growing draft into the Vim composer
     /// when it's available.
     fn new_line(&mut self) {

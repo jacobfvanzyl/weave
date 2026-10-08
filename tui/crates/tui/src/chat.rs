@@ -222,6 +222,8 @@ pub struct ChatWidget {
     settings: Option<SettingsPicker>,
     commands: Vec<AvailableCommand>,
     popup: CommandPopup,
+    /// The `$` skill picker, completing the agent's `$name` commands anywhere in a draft.
+    skill_popup: CommandPopup,
     terminals: TerminalTranscripts,
     context: Option<(u64, u64)>,
     /// The session's cumulative cost and its currency, when the agent reports one.
@@ -285,6 +287,7 @@ impl ChatWidget {
             settings: None,
             commands: Vec::new(),
             popup: CommandPopup::default(),
+            skill_popup: CommandPopup::default(),
             terminals: TerminalTranscripts::new(),
             context: None,
             cost: None,
@@ -1217,7 +1220,7 @@ impl ChatWidget {
             }
             return Vec::new();
         }
-        if self.handle_file_popup_key(key) {
+        if self.handle_file_popup_key(key) || self.handle_skill_popup_key(key) {
             return Vec::new();
         }
         if let Some(commands) = self.handle_popup_key(key) {
@@ -1392,6 +1395,53 @@ impl ChatWidget {
     }
 
     /// Keys the command popup claims while open: selection, completion, and dismissal.
+    /// The `$name` being typed before the cursor, and where it starts, while it completes.
+    fn skill_query(&self) -> Option<(usize, String)> {
+        if self.composer.is_shell() || self.has_overlay() || !self.composer.completes() {
+            return None;
+        }
+        let (start, word) = self.composer.word_before_cursor();
+        word.starts_with('$').then(|| (start, word.to_owned()))
+    }
+
+    /// Skills matching the `$name` being typed.
+    fn skill_matches(&self) -> Vec<&AvailableCommand> {
+        let Some((start, word)) = self.skill_query() else {
+            return Vec::new();
+        };
+        self.skill_popup
+            .mention_matches(&format!("{start}:{word}"), &word, &self.commands)
+    }
+
+    /// Keys the skill picker claims while open: selection, completion, and dismissal. A
+    /// chosen skill completes in place, as Codex's `$` mentions do, and is never sent alone.
+    fn handle_skill_popup_key(&mut self, key: KeyEvent) -> bool {
+        let Some((start, word)) = self.skill_query() else {
+            return false;
+        };
+        let matches: Vec<AvailableCommand> = self.skill_matches().into_iter().cloned().collect();
+        if matches.is_empty() {
+            return false;
+        }
+        let refs: Vec<&AvailableCommand> = matches.iter().collect();
+        let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        match key.code {
+            KeyCode::Up => self.skill_popup.move_selection(-1, refs.len()),
+            KeyCode::Down => self.skill_popup.move_selection(1, refs.len()),
+            KeyCode::Esc => self.skill_popup.dismiss(&format!("{start}:{word}")),
+            KeyCode::Tab | KeyCode::Enter if plain => {
+                if let Some(PopupAction::Complete(command)) = self.skill_popup.accept(&refs, false)
+                {
+                    self.composer
+                        .replace_before_cursor(start, &format!("{} ", command.name));
+                    self.sync_popup();
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     fn handle_popup_key(&mut self, key: KeyEvent) -> Option<Vec<AppCommand>> {
         let text = self.composer.text().to_owned();
         let matches: Vec<AvailableCommand> = self
@@ -1432,9 +1482,7 @@ impl ChatWidget {
             Some(PopupAction::Submit(command)) => {
                 self.composer.clear();
                 self.composer.insert_str(&format!("/{}", command.name));
-                let action = self
-                    .composer
-                    .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                let action = self.composer.submit_draft();
                 self.sync_popup();
                 Some(self.submit(action))
             }
@@ -1449,6 +1497,10 @@ impl ChatWidget {
         let text = self.composer.text().to_owned();
         let count = self.popup.matches(&text, &self.commands).len();
         self.popup.sync(&text, count);
+        if let Some((start, word)) = self.skill_query() {
+            let count = self.skill_matches().len();
+            self.skill_popup.sync(&format!("{start}:{word}"), count);
+        }
     }
 
     fn submit(&mut self, action: ComposerAction) -> Vec<AppCommand> {
@@ -1941,6 +1993,10 @@ impl ChatWidget {
         if let Some(matches) = self.file_matches() {
             return FilePopup::height(matches.as_deref());
         }
+        let skills = self.skill_matches().len();
+        if skills > 0 {
+            return CommandPopup::height(skills);
+        }
         CommandPopup::height(self.popup_matches().len()).max(1)
     }
 
@@ -2174,8 +2230,11 @@ impl ChatWidget {
                 .min(area.width.saturating_sub(1));
             return Some(Position::new(area.x + x, footer_area.y));
         }
+        let skills = self.skill_matches();
         if let Some(files) = self.file_matches() {
             self.file_popup.render(files.as_deref(), footer_area, buf);
+        } else if !skills.is_empty() {
+            self.skill_popup.render(&skills, footer_area, buf);
         } else if !self.has_overlay() && !matches.is_empty() {
             self.popup.render(&matches, footer_area, buf);
         } else {
@@ -2523,6 +2582,55 @@ mod tests {
         assert_eq!(
             history(&mut chat),
             ["", "• Run tests", "  └ ok 1", "", "• It failed."]
+        );
+    }
+
+    #[test]
+    fn dollar_mentions_complete_skills_anywhere_without_sending() {
+        let mut chat = chat();
+        chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new("plan", "Make a plan"),
+                AvailableCommand::new("$cmux", "Drive cmux"),
+                AvailableCommand::new("$code-review", "Review code"),
+            ]),
+        )));
+        chat.handle_paste("please use $cm");
+        let shown = rows(&chat, 60);
+        assert!(
+            shown
+                .iter()
+                .any(|row| row.starts_with("› $cmux") && row.ends_with("Drive cmux")),
+            "{shown:?}"
+        );
+        // Enter completes in place, and the message goes on.
+        assert!(chat.handle_key(key(KeyCode::Enter)).is_empty());
+        assert_eq!(chat.composer.text(), "please use $cmux ");
+        chat.handle_paste("now");
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Enter)),
+            [AppCommand::Prompt("please use $cmux now".into())]
+        );
+        // The slash list has the slash commands only.
+        chat.handle_paste("/");
+        let shown = rows(&chat, 60);
+        assert!(
+            shown.iter().any(|row| row.starts_with("› /plan")),
+            "{shown:?}"
+        );
+        assert!(!shown.iter().any(|row| row.contains("cmux")), "{shown:?}");
+    }
+
+    #[test]
+    fn a_slash_command_chosen_with_enter_sends_from_the_vim_composer() {
+        let mut chat = vim_chat(None);
+        chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![AvailableCommand::new("plan", "Make a plan")]),
+        )));
+        type_text(&mut chat, "/pl");
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Enter)),
+            [AppCommand::Prompt("/plan".into())]
         );
     }
 

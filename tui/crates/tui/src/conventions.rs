@@ -14,6 +14,8 @@
 //! | `rawInput.pattern` and `rawInput.path` for a search | claude-agent-acp (Grep, Glob) |
 //! | titles that open with their verb: `Read a.rs`, `Fetch url` | claude-agent-acp |
 //! | a thought's `**Heading**` line names the work in progress | codex-acp reasoning summaries |
+//! | a command named `$name` is a skill, invoked by mentioning `$name` anywhere in a message
+//! rather than as `/name` | codex-acp (Codex's skills) |
 //! | a `model_config` option that is a toggle (a boolean, or an On/Off select) names a model
 //! setting, such as "Fast mode", shown while it's on | codex-acp, claude-agent-acp |
 //!
@@ -95,6 +97,12 @@ pub fn thought_heading(thought: &str) -> Option<String> {
         let heading = inner[..end].trim();
         (!heading.is_empty()).then(|| heading.to_owned())
     })
+}
+
+/// Whether an advertised command is a skill mentioned as `$name` in a message, as Codex
+/// invokes skills, rather than a slash command sent as `/name`.
+pub fn is_mention_command(name: &str) -> bool {
+    name.starts_with('$')
 }
 
 /// Model settings switched on, by short name: "Fast mode" reads "fast".
