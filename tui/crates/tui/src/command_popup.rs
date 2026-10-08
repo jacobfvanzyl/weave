@@ -1,6 +1,4 @@
-//! The popup that completes the agent's advertised commands: slash commands while typing
-//! `/name` at the start of a draft, and skills (commands named `$name`, as Codex's) while
-//! typing `$name` anywhere in it.
+//! The popup that completes the agent's advertised slash commands while typing `/name`.
 //!
 //! Commands are sent as ordinary prompt text; the popup only helps type them.
 
@@ -13,7 +11,6 @@ use ratatui::text::Span;
 use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::AvailableCommandInput;
 
-use crate::conventions::is_mention_command;
 use crate::history_cell::dim;
 use crate::style;
 
@@ -50,31 +47,12 @@ impl CommandPopup {
         if query.contains(char::is_whitespace) || self.dismissed_for.as_deref() == Some(text) {
             return Vec::new();
         }
-        ranked(
-            &query.to_lowercase(),
-            commands
-                .iter()
-                .filter(|command| !is_mention_command(&command.name)),
-        )
-    }
-
-    /// Skills matching `word`, the `$name` being typed (keyed by `key` for dismissal):
-    /// commands named `$name`, ranked as [`Self::matches`] ranks them.
-    pub fn mention_matches<'a>(
-        &self,
-        key: &str,
-        word: &str,
-        commands: &'a [AvailableCommand],
-    ) -> Vec<&'a AvailableCommand> {
-        if !word.starts_with('$') || self.dismissed_for.as_deref() == Some(key) {
-            return Vec::new();
-        }
-        ranked(
-            &word.to_lowercase(),
-            commands
-                .iter()
-                .filter(|command| is_mention_command(&command.name)),
-        )
+        let query = query.to_lowercase();
+        let (prefix, other): (Vec<_>, Vec<_>) = commands
+            .iter()
+            .filter(|command| is_subsequence(&query, &command.name.to_lowercase()))
+            .partition(|command| command.name.to_lowercase().starts_with(&query));
+        prefix.into_iter().chain(other).collect()
     }
 
     /// Keep the selection valid as the query changes.
@@ -142,16 +120,8 @@ impl CommandPopup {
             let style = Style::default().add_modifier(Modifier::BOLD);
             let marker = if selected { "› " } else { "  " };
             let description = if selected { Style::default() } else { dim() };
-            let lead = if is_mention_command(&command.name) {
-                ""
-            } else {
-                "/"
-            };
             let mut line = Line::from(vec![
-                Span::styled(
-                    format!("{marker}{lead}{:<name_width$}", command.name),
-                    style,
-                ),
+                Span::styled(format!("{marker}/{:<name_width$}", command.name), style),
                 Span::styled(format!(" {}", command.description), description),
             ]);
             if selected {
@@ -163,18 +133,6 @@ impl CommandPopup {
             }
         }
     }
-}
-
-/// Commands whose names contain `query` in order: prefix matches first, then the rest, each
-/// in the agent's order.
-fn ranked<'a>(
-    query: &str,
-    commands: impl Iterator<Item = &'a AvailableCommand>,
-) -> Vec<&'a AvailableCommand> {
-    let (prefix, other): (Vec<_>, Vec<_>) = commands
-        .filter(|command| is_subsequence(query, &command.name.to_lowercase()))
-        .partition(|command| command.name.to_lowercase().starts_with(query));
-    prefix.into_iter().chain(other).collect()
 }
 
 /// The hint for a command's input, shown after `/name ` until the user types it.
@@ -218,29 +176,6 @@ mod tests {
             names(&popup.matches("/", &commands)),
             ["review", "plan", "prompts"]
         );
-    }
-
-    #[test]
-    fn skills_complete_after_a_dollar_and_stay_out_of_the_slash_list() {
-        let mut commands = commands();
-        commands.push(AvailableCommand::new("$code-review", "Review code"));
-        commands.push(AvailableCommand::new("$cmux", "Drive cmux"));
-        let mut popup = CommandPopup::default();
-        assert_eq!(
-            names(&popup.matches("/", &commands)),
-            ["review", "plan", "prompts"]
-        );
-        assert_eq!(
-            names(&popup.mention_matches("4:$c", "$c", &commands)),
-            ["$code-review", "$cmux"]
-        );
-        assert_eq!(
-            names(&popup.mention_matches("4:$cr", "$cr", &commands)),
-            ["$code-review"]
-        );
-        assert!(popup.mention_matches("4:c", "c", &commands).is_empty());
-        popup.dismiss("4:$c");
-        assert!(popup.mention_matches("4:$c", "$c", &commands).is_empty());
     }
 
     #[test]

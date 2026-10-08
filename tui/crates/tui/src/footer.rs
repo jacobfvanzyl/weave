@@ -427,7 +427,6 @@ type ShortcutColumn = (&'static str, &'static [(&'static str, &'static str)]);
 /// The composer's keys; with the Vim composer, a new line moves there.
 const COMPOSE: &[(&str, &str)] = &[
     ("/", "Commands"),
-    ("$", "Skills"),
     ("@", "Attach a file"),
     ("!", "Shell command"),
     ("⌃v", "Paste image"),
@@ -436,7 +435,6 @@ const COMPOSE: &[(&str, &str)] = &[
 ];
 const COMPOSE_WITH_VIM: &[(&str, &str)] = &[
     ("/", "Commands"),
-    ("$", "Skills"),
     ("@", "Attach a file"),
     ("!", "Shell command"),
     ("⌃v", "Paste image"),

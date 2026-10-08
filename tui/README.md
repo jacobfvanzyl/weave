@@ -37,7 +37,6 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Enter / Shift+Enter | Send / new line (messages sent mid-turn are queued) |
 | Esc, Ctrl+C | Stop the running turn; Ctrl+C twice when idle quits |
 | `/` | Complete the agent's slash commands |
-| `$` | Complete the agent's skills, for agents that offer them as `$name` (Codex): anywhere in a message, completed in place and sent with it |
 | `@` | Fuzzy-find a file to attach (tab completes; respects .gitignore): embedded, as an image or audio, or as a link, as the agent allows. Quote paths with spaces: `@"my notes.md"` |
 | Shift+Tab | Next mode |
 | Ctrl+O | Session settings (mode, model, and the agent's other options) |
