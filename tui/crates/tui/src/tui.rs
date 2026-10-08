@@ -13,6 +13,7 @@ use std::time::Duration;
 use base64::Engine;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::cursor::Show;
 use crossterm::event;
 use crossterm::event::DisableBracketedPaste;
@@ -48,6 +49,7 @@ use crate::notify;
 use crate::notify::NotifyMethod;
 use crate::palette;
 use crate::palette::Palette;
+use crate::vim::CursorShape;
 use crate::wrapping::wrap_line;
 
 /// Rows always left above the viewport so history can scroll through a valid region.
@@ -83,6 +85,8 @@ pub struct Tui {
     notify: NotifyMethod,
     /// The title last set, once weave has taken the title over.
     title: Option<String>,
+    /// The cursor shape last set, while weave has changed it from the terminal's own.
+    cursor_shape: Option<CursorShape>,
 }
 
 impl Tui {
@@ -119,6 +123,7 @@ impl Tui {
             overlay_from: None,
             notify: NotifyMethod::detect(),
             title: None,
+            cursor_shape: None,
         })
     }
 
@@ -144,31 +149,19 @@ impl Tui {
         self.terminal.replace_viewport_area(area)
     }
 
-    /// Hand the terminal to another program, such as the user's editor: its modes as they
-    /// were before weave, and the shell's screen. Pause input first.
-    pub fn suspend(&mut self) -> io::Result<()> {
-        if self.keyboard_enhanced {
-            execute!(stdout(), PopKeyboardEnhancementFlags)?;
+    /// Draw the cursor as `shape`, or as the terminal's own with `None`.
+    pub fn set_cursor_shape(&mut self, shape: Option<CursorShape>) {
+        if shape == self.cursor_shape {
+            return;
         }
-        if self.mode == ScreenMode::Fullscreen || self.overlay_from.is_some() {
-            execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen)?;
-        }
-        execute!(stdout(), DisableBracketedPaste, DisableFocusChange, Show)?;
-        disable_raw_mode()
-    }
-
-    /// Take the terminal back after [`Self::suspend`] and repaint in full.
-    pub fn resume(&mut self) -> io::Result<()> {
-        enable_raw_mode()?;
-        if self.mode == ScreenMode::Fullscreen || self.overlay_from.is_some() {
-            execute!(stdout(), EnterAlternateScreen, EnableMouseReporting)?;
-        }
-        execute!(stdout(), EnableBracketedPaste, EnableFocusChange)?;
-        if self.keyboard_enhanced {
-            execute!(stdout(), PushKeyboardEnhancementFlags(KEYBOARD_FLAGS))?;
-        }
-        let area = self.terminal.viewport_area;
-        self.terminal.replace_viewport_area(area)
+        self.cursor_shape = shape;
+        let style = match shape {
+            None => SetCursorStyle::DefaultUserShape,
+            Some(CursorShape::Block) => SetCursorStyle::SteadyBlock,
+            Some(CursorShape::Bar) => SetCursorStyle::SteadyBar,
+            Some(CursorShape::Underline) => SetCursorStyle::SteadyUnderScore,
+        };
+        let _ = execute!(stdout(), style);
     }
 
     /// Raise a desktop notification (or ring the bell) saying `message`.
@@ -321,6 +314,7 @@ impl Tui {
     /// Restore the terminal. Inline mode clears the viewport so the shell resumes right after
     /// history; fullscreen returns to the screen as it was before weave started.
     pub fn exit(mut self) {
+        self.set_cursor_shape(None);
         // Clear weave's title, then restore the shell's where the terminal saved it.
         if self.title.take().is_some() {
             let sequence = format!("{}{}", notify::title_sequence(""), notify::POP_TITLE);

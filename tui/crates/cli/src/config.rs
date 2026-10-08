@@ -8,6 +8,7 @@
 //! status_line = ["agent", "model", "context", "session"] # the default; [] for "? for shortcuts"
 //! notifications = false        # no desktop notifications when a turn ends or needs you
 //! terminal_title = false       # leave the window title alone
+//! vim = true                   # a Vim composer for new threads and multi-line drafts
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
@@ -75,6 +76,9 @@ pub struct TuiConfig {
     pub notifications: Option<bool>,
     /// Keep the window title on the session and activity (default true).
     pub terminal_title: Option<bool>,
+    /// The Vim composer, with relative line numbers, for new blank threads and multi-line
+    /// drafts; Ctrl+G switches to and from it (default false).
+    pub vim: Option<bool>,
 }
 
 /// Whether to run fullscreen on the alternate screen, as Codex's `tui.alternate_screen`.

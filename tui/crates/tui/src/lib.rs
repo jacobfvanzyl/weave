@@ -38,6 +38,7 @@ mod tool_call;
 mod tool_output;
 mod transcript;
 mod tui;
+mod vim;
 mod wrapping;
 
 pub use app::Exit;

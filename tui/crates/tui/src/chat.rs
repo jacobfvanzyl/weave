@@ -96,6 +96,7 @@ use crate::transcript::FindStatus;
 use crate::transcript::Reading;
 use crate::transcript::TranscriptCell;
 use crate::transcript::TranscriptView;
+use crate::vim::CursorShape;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::plain_lines;
 
@@ -126,9 +127,6 @@ pub enum AppCommand {
     OpenUrl(String),
     /// Put text the user selected on the clipboard.
     Copy(String),
-    /// Ctrl+G: edit this draft in the user's editor; the result comes back through
-    /// [`ChatWidget::set_draft`].
-    EditPrompt(String),
     /// Run a command from shell mode in the session directory; its output comes back
     /// through [`ChatWidget::shell_output`] and [`ChatWidget::shell_exited`].
     RunShell {
@@ -249,6 +247,8 @@ pub struct ChatWidget {
     shortcuts_open: bool,
     /// What the footer's status line shows.
     status_items: Vec<StatusItem>,
+    /// Whether the Vim composer is enabled (`[tui] vim = true`).
+    vim: bool,
 }
 
 impl ChatWidget {
@@ -300,12 +300,21 @@ impl ChatWidget {
             file_popup: FilePopup::default(),
             shortcuts_open: false,
             status_items: StatusItem::DEFAULT.to_vec(),
+            vim: false,
         }
     }
 
     /// Show `items` in the footer's status line; none shows `? for shortcuts` instead.
     pub fn with_status_line(mut self, items: Vec<StatusItem>) -> Self {
         self.status_items = items;
+        self
+    }
+
+    /// Enable the Vim composer: new blank threads open in it, a new line in the basic
+    /// composer moves there, and Ctrl+G switches between them.
+    pub fn with_vim(mut self, enabled: bool) -> Self {
+        self.vim = enabled;
+        self.composer.set_vim_available(enabled);
         self
     }
 
@@ -391,6 +400,10 @@ impl ChatWidget {
         self.resumable |= opened.reopened.is_some();
         self.modes = opened.modes;
         self.config_options = opened.config_options;
+        // A new, blank thread starts in the Vim composer, for a first message to write out.
+        if self.vim && opened.reopened.is_none() {
+            self.composer.enter_vim();
+        }
         if opened.reopened == Some(Reopened::Resumed) {
             self.push_cell(TranscriptCell::info(
                 "Resumed; the agent did not replay earlier messages",
@@ -459,13 +472,26 @@ impl ChatWidget {
             .is_none_or(|active| active == session_id)
     }
 
-    pub fn set_width(&mut self, width: u16) {
+    pub fn set_size(&mut self, width: u16, height: u16) {
         if width != self.width
             && let Some(view) = &mut self.transcript
         {
             view.resized();
         }
         self.width = width;
+        self.composer.set_screen_height(height);
+    }
+
+    /// The terminal cursor the composer wants, or `None` for the terminal's own: the Vim
+    /// composer's block, bar or underline while it has the keys.
+    pub fn cursor_shape(&self) -> Option<CursorShape> {
+        if self.has_overlay()
+            || self.pager_open
+            || self.find_status().is_some_and(|find| find.editing)
+        {
+            return None;
+        }
+        self.composer.cursor_shape()
     }
 
     /// The session to offer reopening on exit: the active one, once it has a conversation.
@@ -555,18 +581,6 @@ impl ChatWidget {
             };
         }
         self.note_activity();
-    }
-
-    /// Replace the draft, as with text the user wrote in their editor.
-    pub fn set_draft(&mut self, text: &str) {
-        self.composer.clear();
-        self.composer.insert_str(text);
-        self.sync_popup();
-    }
-
-    /// Show an error from outside the conversation, such as the editor failing.
-    pub fn report_error(&mut self, message: &str) {
-        self.push_error(message);
     }
 
     /// Advance time-based state between frames.
@@ -1188,6 +1202,7 @@ impl ChatWidget {
         } else if key.code == KeyCode::Char('?')
             && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
             && self.composer.is_empty()
+            && !self.composer.is_vim()
         {
             self.shortcuts_open = true;
             return Vec::new();
@@ -1196,7 +1211,11 @@ impl ChatWidget {
             return vec![AppCommand::PasteImage];
         }
         if ctrl && key.code == KeyCode::Char('g') {
-            return vec![AppCommand::EditPrompt(self.composer.text().to_owned())];
+            if self.vim {
+                self.composer.toggle_vim();
+                self.sync_popup();
+            }
+            return Vec::new();
         }
         if self.handle_file_popup_key(key) {
             return Vec::new();
@@ -1208,7 +1227,8 @@ impl ChatWidget {
             self.composer.leave_shell();
             return Vec::new();
         }
-        if key.code == KeyCode::Esc {
+        // In the Vim composer, Esc only ever changes mode; Ctrl+C interrupts.
+        if key.code == KeyCode::Esc && !self.composer.is_vim() {
             return self.cancel_turn();
         }
         let action = self.composer.handle_key(key);
@@ -1220,6 +1240,8 @@ impl ChatWidget {
     /// can be read while one is open: PageUp/PageDown, Ctrl+Home/End (or Alt+< and Alt+>),
     /// and Esc back to the newest output while reading.
     fn handle_scroll_key(&mut self, key: KeyEvent) -> Option<Vec<AppCommand>> {
+        // Esc belongs to the Vim composer, which uses it to change modes.
+        let vim = self.composer.is_vim() && !self.has_overlay();
         let view = self.transcript.as_mut()?;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -1233,7 +1255,7 @@ impl ChatWidget {
             KeyCode::Char('>') if alt => view.follow(),
             KeyCode::Char(',') if alt && shift => view.scroll_to_start(),
             KeyCode::Char('.') if alt && shift => view.follow(),
-            KeyCode::Esc if view.reading() != Reading::Latest => view.follow(),
+            KeyCode::Esc if view.reading() != Reading::Latest && !vim => view.follow(),
             _ => return None,
         }
         Some(Vec::new())
@@ -1326,7 +1348,7 @@ impl ChatWidget {
 
     /// The `@` mention being typed: where it starts in the draft and what follows the `@`.
     fn mention_query(&self) -> Option<(usize, String)> {
-        if self.composer.is_shell() || self.has_overlay() {
+        if self.composer.is_shell() || self.has_overlay() || !self.composer.completes() {
             return None;
         }
         let (start, word) = self.composer.word_before_cursor();
@@ -1832,10 +1854,16 @@ impl ChatWidget {
             }
         };
         let values = self.status_values();
+        let vim = self
+            .composer
+            .vim()
+            .filter(|_| !self.has_overlay())
+            .map(|vim| (vim.mode(), vim.pending_keys()));
         let props = FooterProps {
             mode,
             items: &self.status_items,
             values: &values,
+            vim,
         };
         footer::footer_line(&props, usize::from(width))
     }
@@ -1875,8 +1903,8 @@ impl ChatWidget {
     }
 
     fn popup_matches(&self) -> Vec<&AvailableCommand> {
-        // A shell command isn't a slash command.
-        if self.composer.is_shell() {
+        // A shell command isn't a slash command, and Normal mode keys aren't typing.
+        if self.composer.is_shell() || !self.composer.completes() {
             return Vec::new();
         }
         self.popup.matches(self.composer.text(), &self.commands)
@@ -1896,7 +1924,8 @@ impl ChatWidget {
             return picker.desired_height(&self.config_options, self.modes.as_ref());
         }
         let shortcuts = if self.shortcuts_open {
-            u16::try_from(footer::shortcut_lines(usize::from(width)).len()).unwrap_or(u16::MAX)
+            u16::try_from(footer::shortcut_lines(usize::from(width), self.vim).len())
+                .unwrap_or(u16::MAX)
         } else {
             0
         };
@@ -2108,7 +2137,7 @@ impl ChatWidget {
         } else {
             let mut composer_area = input_area;
             if self.shortcuts_open {
-                let lines = footer::shortcut_lines(usize::from(area.width));
+                let lines = footer::shortcut_lines(usize::from(area.width), self.vim);
                 let height = u16::try_from(lines.len())
                     .unwrap_or(u16::MAX)
                     .min(input_area.height.saturating_sub(1));
@@ -2130,6 +2159,17 @@ impl ChatWidget {
             let line = Line::from([vec![Span::raw("  ")], line.spans].concat());
             buf.set_line(area.x, footer_area.y, &line, area.width);
             let x = u16::try_from(2 + column)
+                .unwrap_or(u16::MAX)
+                .min(area.width.saturating_sub(1));
+            return Some(Position::new(area.x + x, footer_area.y));
+        }
+        // A Vim search is typed in the footer row, as on Vim's command line.
+        if let Some(prompt) = self.composer.vim().and_then(crate::vim::Vim::search_prompt)
+            && !self.has_overlay()
+        {
+            let line = Line::from(vec![Span::raw("  "), Span::raw(prompt.clone())]);
+            buf.set_line(area.x, footer_area.y, &line, area.width);
+            let x = u16::try_from(2 + unicode_width::UnicodeWidthStr::width(prompt.as_str()))
                 .unwrap_or(u16::MAX)
                 .min(area.width.saturating_sub(1));
             return Some(Position::new(area.x + x, footer_area.y));
@@ -2179,6 +2219,9 @@ mod tests {
     use weave_acp_core::schema::SessionConfigOptionCategory;
     use weave_acp_core::schema::SessionConfigOptionValue;
     use weave_acp_core::schema::SessionConfigSelectOption;
+
+    use crate::vim;
+    use crate::vim::Vim;
     use weave_acp_core::schema::SessionInfo;
     use weave_acp_core::schema::SessionNotification;
     use weave_acp_core::schema::Terminal;
@@ -2240,6 +2283,112 @@ mod tests {
     fn submit(chat: &mut ChatWidget, text: &str) -> Vec<AppCommand> {
         chat.handle_paste(text);
         chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    }
+
+    /// A chat with the Vim composer enabled, on a new blank session.
+    fn vim_chat(reopened: Option<Reopened>) -> ChatWidget {
+        let abilities = SessionAbilities {
+            list: true,
+            delete: true,
+        };
+        let mut chat =
+            ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, 60).with_vim(true);
+        chat.session_ready(OpenedSession {
+            session_id: "s1".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened,
+        });
+        chat
+    }
+
+    fn type_text(chat: &mut ChatWidget, text: &str) {
+        for ch in text.chars() {
+            chat.handle_key(key(KeyCode::Char(ch)));
+        }
+    }
+
+    #[test]
+    fn new_blank_threads_open_in_the_vim_composer_and_replies_do_not() {
+        let mut chat = vim_chat(None);
+        assert!(chat.composer.is_vim());
+        let footer = rows(&chat, 60).pop().unwrap_or_default();
+        assert!(footer.starts_with("  INSERT · Agent"), "{footer}");
+        assert!(footer.ends_with("⌃↵ send"), "{footer}");
+        // Enter is a new line; Ctrl+Enter sends, and the reply starts basic.
+        type_text(&mut chat, "write");
+        chat.handle_key(key(KeyCode::Enter));
+        type_text(&mut chat, "this");
+        assert_eq!(
+            chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
+            [AppCommand::Prompt("write\nthis".into())]
+        );
+        assert!(!chat.composer.is_vim());
+
+        // A reopened session continues a conversation.
+        let chat = vim_chat(Some(Reopened::Loaded));
+        assert!(!chat.composer.is_vim());
+    }
+
+    #[test]
+    fn esc_in_the_vim_composer_changes_mode_and_never_interrupts() {
+        let mut chat = vim_chat(None);
+        type_text(&mut chat, "go");
+        chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert!(chat.turn.is_some());
+        // Back in the Vim composer for a follow-up, Esc leaves Insert mode, then does nothing.
+        chat.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(chat.composer.is_vim());
+        type_text(&mut chat, "more");
+        assert!(chat.handle_key(key(KeyCode::Esc)).is_empty());
+        assert!(chat.handle_key(key(KeyCode::Esc)).is_empty());
+        assert_eq!(chat.composer.vim().map(Vim::mode), Some(vim::Mode::Normal));
+        assert!(chat.turn.as_ref().is_some_and(|turn| !turn.cancelling));
+        // Ctrl+C still interrupts.
+        assert_eq!(
+            chat.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            [AppCommand::Cancel]
+        );
+    }
+
+    #[test]
+    fn ctrl_g_switches_composers_only_when_vim_is_enabled() {
+        let mut chat = chat();
+        chat.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(!chat.composer.is_vim());
+
+        let mut chat = vim_chat(Some(Reopened::Loaded));
+        type_text(&mut chat, "draft");
+        chat.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(chat.composer.is_vim());
+        chat.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(!chat.composer.is_vim());
+        assert_eq!(chat.composer.text(), "draft");
+        // Shift+Enter moves a growing draft into it.
+        chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert!(chat.composer.is_vim());
+        assert_eq!(chat.composer.text(), "draft\n");
+    }
+
+    #[test]
+    fn normal_mode_keys_are_not_typing() {
+        let mut chat = vim_chat(None);
+        // `?` is text in Insert mode, not the shortcuts panel.
+        type_text(&mut chat, "?");
+        assert!(!chat.shortcuts_open);
+        chat.handle_key(key(KeyCode::Esc));
+        chat.handle_key(key(KeyCode::Char('d')));
+        chat.handle_key(key(KeyCode::Char('d')));
+        assert!(chat.composer.is_empty());
+        // A search is typed in the footer row.
+        type_text(&mut chat, "ione two");
+        chat.handle_key(key(KeyCode::Esc));
+        type_text(&mut chat, "?on");
+        let footer = rows(&chat, 60).pop().unwrap_or_default();
+        assert_eq!(footer, "  ?on");
+        chat.handle_key(key(KeyCode::Enter));
+        let footer = rows(&chat, 60).pop().unwrap_or_default();
+        assert!(footer.starts_with("  NORMAL · Agent"), "{footer}");
     }
 
     #[test]

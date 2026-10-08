@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::highlight;
 use crate::style::secondary;
 use crate::transcript::FindStatus;
+use crate::vim::Mode;
 
 /// Columns of indent before the footer and after its right side.
 const INDENT: usize = 2;
@@ -92,6 +93,15 @@ impl StatusValues {
     /// What `item` shows, as parts the status line sets apart: the model and its reasoning
     /// level are two. `items` are all the items shown, so the agent's name isn't repeated.
     fn parts(&self, item: StatusItem, items: &[StatusItem]) -> Vec<String> {
+        self.raw_parts(item, items)
+            .into_iter()
+            // One row: a title with line breaks reads as one line.
+            .map(|part| part.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|part| !part.is_empty())
+            .collect()
+    }
+
+    fn raw_parts(&self, item: StatusItem, items: &[StatusItem]) -> Vec<String> {
         let value = match item {
             StatusItem::Model => {
                 let model = self
@@ -137,6 +147,8 @@ pub struct FooterProps<'a> {
     pub mode: FooterMode,
     pub items: &'a [StatusItem],
     pub values: &'a StatusValues,
+    /// The Vim composer's mode and the keys of a command in progress, while it has the keys.
+    pub vim: Option<(Mode, &'a str)>,
 }
 
 /// The footer row for `width` columns: left content, then the cost and settings hint,
@@ -155,7 +167,24 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
             composer_empty,
             working,
         } => {
-            if working && !composer_empty {
+            if let Some((mode, pending)) = props.vim {
+                // The Vim composer's mode leads, as Vim's `showmode` and `showcmd` show it.
+                let mut spans = vec![Span::styled(mode.label(), mode_style(mode))];
+                if !pending.is_empty() {
+                    spans.push(Span::styled(format!(" {pending}"), secondary()));
+                }
+                let used = spans_width(&spans) + SEPARATOR.width();
+                let rest = status_line(
+                    props.items,
+                    props.values,
+                    width.saturating_sub(2 * INDENT + used),
+                );
+                if !rest.is_empty() {
+                    spans.push(Span::styled(SEPARATOR, secondary()));
+                    spans.extend(rest);
+                }
+                spans
+            } else if working && !composer_empty {
                 key_hint("enter", " to queue message")
             } else if !props.items.is_empty() {
                 status_line(props.items, props.values, width.saturating_sub(2 * INDENT))
@@ -167,7 +196,7 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
         }
     };
     let mut right = if matches!(props.mode, FooterMode::Contextual { .. }) {
-        trailing(props.values)
+        trailing(props.values, props.vim.is_some())
     } else {
         Vec::new()
     };
@@ -214,13 +243,30 @@ fn cost(values: &StatusValues) -> Vec<Span<'static>> {
 }
 
 /// The right-aligned parts: the cost, then the hint for the settings when there are any.
-fn trailing(values: &StatusValues) -> Vec<Vec<Span<'static>>> {
+fn trailing(values: &StatusValues, vim: bool) -> Vec<Vec<Span<'static>>> {
     let mut parts = vec![cost(values)];
+    // The Vim composer sends with Ctrl+Enter, as Enter starts a new line there.
+    if vim {
+        parts.push(key_hint("⌃↵", " send"));
+    }
     if values.settings {
         parts.push(key_hint("⌃o", " Settings"));
     }
     parts.retain(|part| !part.is_empty());
     parts
+}
+
+/// Each Vim mode's color in the footer, as Vim's status line plugins color them.
+fn mode_style(mode: Mode) -> Style {
+    let color = match mode {
+        Mode::Normal => Color::Blue,
+        Mode::Insert => Color::Green,
+        Mode::Replace => Color::Red,
+        Mode::Visual | Mode::VisualLine => Color::Magenta,
+    };
+    Style::default()
+        .fg(color)
+        .add_modifier(ratatui::style::Modifier::BOLD)
 }
 
 /// `$1.23`, `€0.40`, or `12.00 CHF` for currencies without a symbol here.
@@ -351,21 +397,30 @@ pub fn truncate(text: &str, width: usize) -> String {
 /// A titled column of keys and what they do.
 type ShortcutColumn = (&'static str, &'static [(&'static str, &'static str)]);
 
+/// The composer's keys; with the Vim composer, a new line moves there.
+const COMPOSE: &[(&str, &str)] = &[
+    ("/", "Commands"),
+    ("@", "Attach a file"),
+    ("!", "Shell command"),
+    ("⌃v", "Paste image"),
+    ("⇧enter", "New line"),
+    ("enter", "Send or queue"),
+];
+const COMPOSE_WITH_VIM: &[(&str, &str)] = &[
+    ("/", "Commands"),
+    ("@", "Attach a file"),
+    ("!", "Shell command"),
+    ("⌃v", "Paste image"),
+    ("⇧enter", "New line, in Vim"),
+    ("enter", "Send or queue"),
+    ("⌃g", "Vim composer"),
+    ("⌃↵", "Send from Vim"),
+];
+
 /// The `?` panel: weave's keys in three columns, as Codex lays out its shortcuts.
-pub fn shortcut_lines(width: usize) -> Vec<Line<'static>> {
+pub fn shortcut_lines(width: usize, vim: bool) -> Vec<Line<'static>> {
     let columns: [ShortcutColumn; 3] = [
-        (
-            "Compose",
-            &[
-                ("/", "Commands"),
-                ("@", "Attach a file"),
-                ("!", "Shell command"),
-                ("⌃v", "Paste image"),
-                ("⇧enter", "New line"),
-                ("enter", "Send or queue"),
-                ("⌃g", "External editor"),
-            ],
-        ),
+        ("Compose", if vim { COMPOSE_WITH_VIM } else { COMPOSE }),
         (
             "Session",
             &[
@@ -472,6 +527,7 @@ mod tests {
             mode,
             items,
             values: &values,
+            vim: None,
         };
         footer_line(&props, width).to_string().trim_end().to_owned()
     }
@@ -521,6 +577,7 @@ mod tests {
             mode: IDLE,
             items: &configured,
             values: &values,
+            vim: None,
         };
         assert_eq!(
             footer_line(&props, 100).to_string().trim_end(),
@@ -554,6 +611,18 @@ mod tests {
     }
 
     #[test]
+    fn values_read_as_one_line() {
+        let values = StatusValues {
+            session: Some("first line\nsecond  line".into()),
+            ..StatusValues::default()
+        };
+        assert_eq!(
+            values.parts(StatusItem::Session, &[]),
+            ["first line second line"]
+        );
+    }
+
+    #[test]
     fn the_model_stands_in_for_the_agent_only_when_the_agent_is_hidden() {
         let values = StatusValues {
             agent: "Gemini".into(),
@@ -574,10 +643,15 @@ mod tests {
 
     #[test]
     fn shortcuts_stack_on_narrow_screens() {
-        let wide = shortcut_lines(100);
+        let wide = shortcut_lines(100, false);
         assert!(wide[3].to_string().contains("Commands"));
         assert!(wide[3].to_string().contains("Next mode"));
-        let narrow = shortcut_lines(30);
+        let narrow = shortcut_lines(30, false);
+        let vim = shortcut_lines(100, true);
+        assert!(
+            vim.iter()
+                .any(|line| line.to_string().contains("Vim composer"))
+        );
         assert!(narrow.len() > wide.len());
     }
 }

@@ -43,7 +43,8 @@ real TUI. In `tui`, rendering follows Codex's look: `tool_call` maps ACP tool ki
 Codex's cells (exec, explored, patch, MCP), `history_cell`, `markdown` and `streaming` the
 rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the terminal's
 colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
-two-face; `footer` and `status` are the bottom pane. `ChatWidget` stays free of I/O: it turns
+two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
+(after Codex's composer Vim mode) editing the same text in the opt-in Vim composer. `ChatWidget` stays free of I/O: it turns
 agent events, keys and mouse input into transcript cells and `AppCommand`s, so it is
 tested without a terminal, in both screen modes. Terminal mechanics (`custom_terminal`, `insert_history`) are tested on a vt100
 backend. Untrusted agent text reaches the terminal only after control characters are

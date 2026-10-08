@@ -65,6 +65,8 @@ pub struct UiOptions {
     pub notifications: bool,
     /// Keep the window title on the session and what the agent is doing.
     pub terminal_title: bool,
+    /// The Vim composer, for new blank threads and multi-line drafts.
+    pub vim: bool,
 }
 
 /// How the client ended.
@@ -99,6 +101,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         status_line,
         notifications,
         terminal_title,
+        vim,
     } = ui;
     let Session {
         connection,
@@ -118,8 +121,11 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         delete: capabilities.session_capabilities.delete.is_some(),
     };
     let mut tui = Tui::init(screen)?;
-    let mut chat = ChatWidget::new(agent_name, setup.cwd.clone(), abilities, tui.size()?.width)
-        .with_status_line(status_line);
+    let size = tui.size()?;
+    let mut chat = ChatWidget::new(agent_name, setup.cwd.clone(), abilities, size.width)
+        .with_status_line(status_line)
+        .with_vim(vim);
+    chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
         chat = chat.fullscreen();
     }
@@ -182,6 +188,7 @@ impl App {
                 tui.set_title(&chat.terminal_title(Instant::now()));
             }
             draw(tui, chat)?;
+            tui.set_cursor_shape(chat.cursor_shape());
             let commands = tokio::select! {
                 event = input.next() => match event {
                     Some(Ok(Event::FocusGained)) => {
@@ -212,35 +219,8 @@ impl App {
                     Vec::new()
                 }
             };
-            // The editor needs the terminal to itself, so it runs here rather than in execute.
-            let (edits, commands): (Vec<AppCommand>, Vec<AppCommand>) = commands
-                .into_iter()
-                .partition(|command| matches!(command, AppCommand::EditPrompt(_)));
-            for command in edits {
-                if let AppCommand::EditPrompt(draft) = command {
-                    self.edit_prompt(tui, chat, &input, &draft).await;
-                }
-            }
             if self.execute(tui, chat, commands) {
                 return Ok(());
-            }
-        }
-    }
-
-    /// Ctrl+G: edit the draft in `$VISUAL` or `$EDITOR`, as Codex's external editor does.
-    async fn edit_prompt(&self, tui: &mut Tui, chat: &mut ChatWidget, input: &Input, draft: &str) {
-        input.pause();
-        let edited = match tui.suspend() {
-            Ok(()) => run_editor(draft).await,
-            Err(error) => Err(error.into()),
-        };
-        let resumed = tui.resume();
-        input.resume();
-        match (edited, resumed) {
-            (Ok(text), Ok(())) => chat.set_draft(&text),
-            (Err(error), _) => chat.report_error(&format!("Couldn't edit the prompt: {error:#}")),
-            (_, Err(error)) => {
-                chat.report_error(&format!("Couldn't restore the terminal: {error}"))
             }
         }
     }
@@ -369,7 +349,6 @@ impl App {
                 }
                 AppCommand::OpenUrl(url) => open_in_browser(&url),
                 // Handled in the run loop.
-                AppCommand::EditPrompt(_) => {}
                 AppCommand::RunShell { id, command } => {
                     if let Some(results) = self.results.clone() {
                         let (kill, killed) = oneshot::channel();
@@ -523,36 +502,6 @@ fn exit_status(status: std::process::ExitStatus) -> TerminalExitStatus {
         .signal(signal)
 }
 
-/// Write `draft` to a file, open it in the user's editor, and return what they saved.
-async fn run_editor(draft: &str) -> anyhow::Result<String> {
-    let path = std::env::temp_dir().join(format!("weave-prompt-{}.md", std::process::id()));
-    std::fs::write(&path, draft)?;
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .ok()
-        .filter(|editor| !editor.trim().is_empty())
-        .unwrap_or_else(|| "vi".to_owned());
-    // Through the shell, so an editor given with arguments (`code --wait`) works.
-    #[cfg(unix)]
-    let status = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$1\""))
-        .arg("weave-editor")
-        .arg(&path)
-        .status()
-        .await;
-    #[cfg(not(unix))]
-    let status = tokio::process::Command::new(&editor)
-        .arg(&path)
-        .status()
-        .await;
-    let text = std::fs::read_to_string(&path);
-    let _ = std::fs::remove_file(&path);
-    let status = status?;
-    anyhow::ensure!(status.success(), "{editor} exited with {status}");
-    Ok(text?.trim_end_matches(['\n', '\r']).to_owned())
-}
-
 /// Open a URL the user explicitly consented to, in their default browser. Nothing here fetches it.
 fn open_in_browser(url: &str) {
     #[cfg(target_os = "macos")]
@@ -586,8 +535,8 @@ fn handle_terminal_event(chat: &mut ChatWidget, event: Event) -> Vec<AppCommand>
             Vec::new()
         }
         Event::Mouse(event) => chat.handle_mouse(event),
-        Event::Resize(width, _) => {
-            chat.set_width(width);
+        Event::Resize(width, height) => {
+            chat.set_size(width, height);
             Vec::new()
         }
         _ => Vec::new(),

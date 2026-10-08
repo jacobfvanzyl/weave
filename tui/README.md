@@ -48,9 +48,28 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Ctrl+T | Full transcript: whole command output, diffs, thoughts and compaction summaries (a pager inline) |
 | F3 | Find text in the full transcript: newest match first, ↑/↓ (or Ctrl+P/Ctrl+N) between matches, Enter to keep reading, Esc to close. In the inline pager, `/` then `n`/`N` |
 | `?` | Keyboard shortcuts (on an empty composer) |
-| Ctrl+G | Edit the prompt in `$VISUAL` / `$EDITOR` |
+| Ctrl+G | Switch between the basic and Vim composers, keeping the draft (with `vim = true`) |
 | Ctrl+V | Paste an image from the clipboard as `[image N]` (dragging an image file in works too) |
 | `!` | Shell mode: run a command in the session directory (shown here, not sent to the agent) |
+
+### Vim composer
+
+With `[tui] vim = true`, longer drafts get a Vim composer: new blank threads open in it,
+Shift+Enter in the basic composer moves the draft there, and Ctrl+G switches either way.
+Replies start in the basic composer again. It has relative line numbers (the cursor's line
+numbered from the top), grows to 12 rows or 40% of the screen and then scrolls, and the
+footer shows the mode.
+
+- **Modes:** Normal, Insert (`i a I A o O`, `s S C`), Replace (`R`), Visual (`v`, `V`).
+- **Motions:** `h j k l`, `w b e ge` and `W B E`, `0 ^ $`, `gg G`, `f F t T ; ,`, `%`,
+  `{ }`, Enter, `+ -`, with counts.
+- **Editing:** `d c y` with motions or text objects (`iw aw iW aW`, brackets, quotes),
+  `dd cc yy D C Y x X r J ~ p P`, `u` and Ctrl+R, and `.`.
+- **Search:** `/` and `?` within the draft, then `n` and `N`.
+- **Keys that differ:** Ctrl+Enter sends from any mode (Cmd+Enter too, where the terminal
+  reports it), and Enter starts a new line. Esc only changes mode, so it never interrupts the
+  agent; Ctrl+C does. In Normal mode, `k` on the first line and `j` on the last step through
+  earlier prompts, and `/` on an empty draft starts a slash command.
 
 Permission requests, agent questions (forms and links) and pickers take over the input
 area with their own keys: approvals take `y` (allow), `a` (always), `esc` (reject) or a
@@ -82,6 +101,7 @@ alternate_screen = "never"  # always run inline; "auto" (default) and "always" r
 status_line = ["agent", "model", "context", "session"]  # the default; "mode" and "directory" are off
 notifications = true   # desktop notification when a turn ends or needs you, while unfocused
 terminal_title = true  # window title: activity spinner, session title, project
+vim = true             # the Vim composer for new threads and multi-line drafts (off by default)
 
 [agents.claude]
 terminal = false          # don't let it run commands through weave
