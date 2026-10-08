@@ -246,6 +246,77 @@ pub fn wrap_gutter_line(
 
 /// Split a line into alternating word and whitespace runs, each with its byte offset in the
 /// line's text and its span style.
+/// Word wrapping for text being edited: the rows one line of `text` (without line breaks)
+/// takes at `width` columns, as byte ranges that cover all of it, so the cursor can sit
+/// anywhere. Words move whole to the next row, and a word wider than a row breaks inside.
+/// The blanks a break falls on stay at the end of the row before it, past its edge, rather
+/// than starting the next one.
+pub fn wrap_editable(text: &str, width: usize) -> Vec<Range<usize>> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    let mut start = 0;
+    let mut column = 0;
+    let mut word_start = None;
+    let mut word_width = 0;
+    let flush_word = |rows: &mut Vec<Range<usize>>,
+                      start: &mut usize,
+                      column: &mut usize,
+                      word: usize,
+                      word_end: usize,
+                      word_width: usize| {
+        if *column + word_width <= width {
+            *column += word_width;
+            return;
+        }
+        // Onto a row of its own, if the row so far has anything on it.
+        if *column > 0 {
+            rows.push(*start..word);
+            *start = word;
+            *column = 0;
+        }
+        if word_width <= width {
+            *column = word_width;
+            return;
+        }
+        // Wider than a row: break it by grapheme.
+        for (offset, grapheme) in text[word..word_end].grapheme_indices(true) {
+            let grapheme_width = grapheme.width();
+            if *column + grapheme_width > width && *column > 0 {
+                rows.push(*start..word + offset);
+                *start = word + offset;
+                *column = 0;
+            }
+            *column += grapheme_width;
+        }
+    };
+    for (offset, grapheme) in text.grapheme_indices(true) {
+        if grapheme.chars().all(char::is_whitespace) {
+            if let Some(word) = word_start.take() {
+                flush_word(&mut rows, &mut start, &mut column, word, offset, word_width);
+            }
+            column += grapheme.width();
+        } else {
+            if word_start.is_none() {
+                word_start = Some(offset);
+                word_width = 0;
+            }
+            word_width += grapheme.width();
+        }
+    }
+    if let Some(word) = word_start {
+        flush_word(
+            &mut rows,
+            &mut start,
+            &mut column,
+            word,
+            text.len(),
+            word_width,
+        );
+    }
+    rows.push(start..text.len());
+    rows
+}
+
 fn tokens<'a>(line: &'a Line<'static>) -> Vec<(usize, &'a str, Style)> {
     let mut out = Vec::new();
     let mut base = 0;
@@ -273,6 +344,51 @@ fn push_text(spans: &mut Vec<Span<'static>>, text: &str, style: Style) {
     match spans.last_mut() {
         Some(last) if last.style == style => last.content.to_mut().push_str(text),
         _ => spans.push(Span::styled(text.to_owned(), style)),
+    }
+}
+
+#[cfg(test)]
+mod editable_tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    fn rows(text: &str, width: usize) -> Vec<&str> {
+        wrap_editable(text, width)
+            .into_iter()
+            .map(|range| &text[range])
+            .collect()
+    }
+
+    #[test]
+    fn words_move_whole_and_breaks_keep_their_blanks() {
+        assert_eq!(
+            rows("for my Dygma sonsei to include", 14),
+            ["for my Dygma ", "sonsei to ", "include"]
+        );
+        // Blanks past the edge hang there instead of starting the next row.
+        assert_eq!(rows("abc   def", 4), ["abc   ", "def"]);
+        assert_eq!(rows("", 4), [""]);
+        assert_eq!(rows("ab", 4), ["ab"]);
+    }
+
+    #[test]
+    fn a_word_wider_than_a_row_breaks_inside() {
+        assert_eq!(rows("abcdefgh", 4), ["abcd", "efgh"]);
+        assert_eq!(rows("a abcdefgh", 4), ["a ", "abcd", "efgh"]);
+        // Wide characters count their columns.
+        assert_eq!(rows("日本語 x", 4), ["日本", "語 x"]);
+    }
+
+    #[test]
+    fn the_rows_cover_every_byte() {
+        let text = "one two  three\tfour five";
+        let ranges = wrap_editable(text, 5);
+        assert_eq!(ranges.first().map(|range| range.start), Some(0));
+        assert_eq!(ranges.last().map(|range| range.end), Some(text.len()));
+        for pair in ranges.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start);
+        }
     }
 }
 

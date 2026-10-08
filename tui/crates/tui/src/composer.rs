@@ -24,6 +24,7 @@ use crate::vim::CursorShape;
 use crate::vim::Mode;
 use crate::vim::Outcome;
 use crate::vim::Vim;
+use crate::wrapping::wrap_editable;
 
 const PROMPT: &str = "› ";
 const PROMPT_WIDTH: u16 = 2;
@@ -404,39 +405,17 @@ impl Composer {
         self.cursor = self.text.len();
     }
 
-    /// Wrapped display rows and the cursor's (row, column) within them.
+    /// Wrapped display rows and the cursor's (row, column) within them. Words wrap whole;
+    /// the cursor on blanks past a row's edge shows at the edge.
     fn layout(&self, width: u16) -> (Vec<String>, (usize, u16)) {
-        let content_width = width.saturating_sub(PROMPT_WIDTH).max(1);
-        let mut rows = vec![String::new()];
-        let mut column: u16 = 0;
-        let mut cursor = (0, 0);
-        for (index, grapheme) in self.text.grapheme_indices(true) {
-            if index == self.cursor {
-                cursor = (rows.len() - 1, column);
-            }
-            if grapheme == "\n" {
-                rows.push(String::new());
-                column = 0;
-                continue;
-            }
-            let grapheme_width = u16::try_from(grapheme.width()).unwrap_or(1);
-            if column + grapheme_width > content_width {
-                rows.push(String::new());
-                column = 0;
-            }
-            if let Some(row) = rows.last_mut() {
-                row.push_str(grapheme);
-            }
-            column += grapheme_width;
-        }
-        if self.cursor >= self.text.len() {
-            if column >= content_width {
-                rows.push(String::new());
-                column = 0;
-            }
-            cursor = (rows.len() - 1, column);
-        }
-        (rows, cursor)
+        let content_width = usize::from(width.saturating_sub(PROMPT_WIDTH).max(1));
+        let ranges = editable_rows(&self.text, content_width);
+        let (row, column) = cursor_in(&self.text, &ranges, self.cursor, content_width);
+        let rows = ranges
+            .into_iter()
+            .map(|(_, range)| self.text[range].to_owned())
+            .collect();
+        (rows, (row, column))
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -504,32 +483,10 @@ impl Composer {
         let digits = lines.to_string().len().max(2);
         let gutter = u16::try_from(digits + 1).unwrap_or(3);
         let content_width = usize::from(width.saturating_sub(gutter).max(1));
-        let mut rows = Vec::new();
-        let mut start = 0;
-        for (line, text) in self.text.split('\n').enumerate() {
-            let mut row_start = start;
-            let mut column = 0;
-            let mut first = true;
-            for (offset, grapheme) in text.grapheme_indices(true) {
-                let grapheme_width = grapheme.width();
-                if column + grapheme_width > content_width && column > 0 {
-                    rows.push(VimRow {
-                        line,
-                        first,
-                        range: row_start..start + offset,
-                    });
-                    first = false;
-                    row_start = start + offset;
-                    column = 0;
-                }
-                column += grapheme_width;
-            }
-            rows.push(VimRow {
-                line,
-                first,
-                range: row_start..start + text.len(),
-            });
-            start += text.len() + 1;
+        let mut rows: Vec<VimRow> = Vec::new();
+        for (line, range) in editable_rows(&self.text, content_width) {
+            let first = rows.last().is_none_or(|row| row.line != line);
+            rows.push(VimRow { line, first, range });
         }
         (rows, gutter)
     }
@@ -539,10 +496,13 @@ impl Composer {
     /// selection, scrolled to keep the cursor in view.
     fn render_vim(&self, area: Rect, buf: &mut Buffer) -> VimView {
         let (rows, gutter) = self.vim_layout(area.width);
-        let cursor_row = rows
+        let content_width = usize::from(area.width.saturating_sub(gutter).max(1));
+        let ranges: Vec<(usize, Range<usize>)> = rows
             .iter()
-            .rposition(|row| row.range.start <= self.cursor)
-            .unwrap_or(0);
+            .map(|row| (row.line, row.range.clone()))
+            .collect();
+        let (cursor_row, cursor_column) =
+            cursor_in(&self.text, &ranges, self.cursor, content_width);
         let cursor_line = rows.get(cursor_row).map_or(0, |row| row.line);
         let visible = usize::from(area.height.max(1));
         let off = SCROLL_OFF.min(visible.saturating_sub(1) / 2);
@@ -609,15 +569,9 @@ impl Composer {
         };
         let above = lines_in(&rows[..top.min(rows.len())]);
         let below = lines_in(&rows[(top + visible).min(rows.len())..]);
-        let column = rows.get(cursor_row).map_or(0, |row| {
-            self.text[row.range.start..self.cursor.max(row.range.start)].width()
-        });
         let row = u16::try_from(cursor_row - top).unwrap_or(0);
         VimView {
-            cursor: Position::new(
-                area.x + gutter + u16::try_from(column).unwrap_or(0),
-                area.y + row,
-            ),
+            cursor: Position::new(area.x + gutter + cursor_column, area.y + row),
             above,
             below,
         }
@@ -670,6 +624,42 @@ impl Composer {
         let row = u16::try_from(cursor_row - first_visible).unwrap_or(0);
         Position::new(area.x + PROMPT_WIDTH + cursor_column, area.y + row)
     }
+}
+
+/// Every line of `text` word-wrapped at `width`, as (line index, byte range) rows.
+fn editable_rows(text: &str, width: usize) -> Vec<(usize, Range<usize>)> {
+    let mut rows = Vec::new();
+    let mut start = 0;
+    for (line, content) in text.split('\n').enumerate() {
+        for range in wrap_editable(content, width) {
+            rows.push((line, start + range.start..start + range.end));
+        }
+        start += content.len() + 1;
+    }
+    rows
+}
+
+/// The cursor's row and column among `rows`. A cursor where one row ends and the next
+/// begins is at the start of the next, unless the line ends there; blanks hanging past the
+/// edge put it at the edge.
+fn cursor_in(
+    text: &str,
+    rows: &[(usize, Range<usize>)],
+    cursor: usize,
+    width: usize,
+) -> (usize, u16) {
+    let row = rows
+        .iter()
+        .enumerate()
+        .position(|(index, (line, range))| {
+            let line_ends = rows.get(index + 1).is_none_or(|(next, _)| next != line);
+            range.start <= cursor && (cursor < range.end || (cursor == range.end && line_ends))
+        })
+        .unwrap_or(rows.len().saturating_sub(1));
+    let column = rows.get(row).map_or(0, |(_, range)| {
+        text[range.start..cursor.clamp(range.start, range.end)].width()
+    });
+    (row, u16::try_from(column.min(width)).unwrap_or(0))
 }
 
 /// Draw `line` against the right edge of `area` on row `y`.
@@ -748,10 +738,27 @@ mod tests {
 
     #[test]
     fn cursor_follows_wrapping() {
+        // A word wider than the row breaks inside it; the cursor after a full row sits at its
+        // edge rather than opening a new one.
         let composer = typed("abcdefgh");
         let (rows, cursor) = composer.layout(6);
-        assert_eq!(rows, ["abcd", "efgh", ""]);
-        assert_eq!(cursor, (2, 0));
+        assert_eq!(rows, ["abcd", "efgh"]);
+        assert_eq!(cursor, (1, 4));
+    }
+
+    #[test]
+    fn words_wrap_whole() {
+        let mut composer = typed("my Dygma sonsei to include");
+        let (rows, cursor) = composer.layout(16);
+        assert_eq!(rows, ["my Dygma ", "sonsei to ", "include"]);
+        assert_eq!(cursor, (2, 7));
+        // On the blank a row breaks at, the cursor stays on that row.
+        for _ in 0.."include".len() {
+            composer.handle_key(key(KeyCode::Left));
+        }
+        assert_eq!(composer.layout(16).1, (2, 0));
+        composer.handle_key(key(KeyCode::Left));
+        assert_eq!(composer.layout(16).1, (1, 9));
     }
 
     fn screen(composer: &Composer, width: u16, height: u16) -> Vec<String> {
