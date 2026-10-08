@@ -37,12 +37,20 @@ pub enum StatusItem {
     Session,
     /// How much of the context window is used, as a percentage.
     Context,
+    /// What the session has cost, as the agent reports it, shown at the right.
+    Cost,
 }
 
 impl StatusItem {
-    /// The agent, the model, the context used, and the session's title. Codex also shows the
-    /// directory; weave leaves it to `directory`.
-    pub const DEFAULT: [Self; 4] = [Self::Agent, Self::Model, Self::Context, Self::Session];
+    /// The agent, the model, the context used, the session's title, and its cost. Codex also
+    /// shows the directory; weave leaves it to `directory`.
+    pub const DEFAULT: [Self; 5] = [
+        Self::Agent,
+        Self::Model,
+        Self::Context,
+        Self::Session,
+        Self::Cost,
+    ];
 
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -52,12 +60,21 @@ impl StatusItem {
             "directory" => Self::Directory,
             "session" => Self::Session,
             "context" => Self::Context,
+            "cost" => Self::Cost,
             _ => return None,
         })
     }
 
     pub fn names() -> &'static [&'static str] {
-        &["model", "agent", "mode", "directory", "session", "context"]
+        &[
+            "model",
+            "agent",
+            "mode",
+            "directory",
+            "session",
+            "context",
+            "cost",
+        ]
     }
 
     /// Theme scopes to color the item by, as Codex does.
@@ -67,7 +84,7 @@ impl StatusItem {
             Self::Mode => &["storage.modifier", "keyword.operator"],
             Self::Directory => &["string", "markup.underline.link"],
             Self::Session => &["markup.heading", "entity.name.section"],
-            Self::Context => &["constant.numeric", "constant"],
+            Self::Context | Self::Cost => &["constant.numeric", "constant"],
         }
     }
 }
@@ -119,6 +136,8 @@ impl StatusValues {
             StatusItem::Directory => Some(self.directory.clone()),
             StatusItem::Session => self.session.clone(),
             StatusItem::Context => self.context_used.map(|used| format!("{used}%")),
+            // Shown at the right, with the hints, rather than in the line.
+            StatusItem::Cost => None,
         };
         value.into_iter().collect()
     }
@@ -196,7 +215,11 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
         }
     };
     let mut right = if matches!(props.mode, FooterMode::Contextual { .. }) {
-        trailing(props.values, props.vim.is_some())
+        trailing(
+            props.values,
+            props.items.contains(&StatusItem::Cost),
+            props.vim.is_some(),
+        )
     } else {
         Vec::new()
     };
@@ -242,9 +265,13 @@ fn cost(values: &StatusValues) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// The right-aligned parts: the cost, then the hint for the settings when there are any.
-fn trailing(values: &StatusValues, vim: bool) -> Vec<Vec<Span<'static>>> {
-    let mut parts = vec![cost(values)];
+/// The right-aligned parts: the cost, when `cost` is a status line item, the send key in the
+/// Vim composer, then the hint for the settings when there are any.
+fn trailing(values: &StatusValues, show_cost: bool, vim: bool) -> Vec<Vec<Span<'static>>> {
+    let mut parts = Vec::new();
+    if show_cost {
+        parts.push(cost(values));
+    }
     // The Vim composer sends with Ctrl+Enter, as Enter starts a new line there.
     if vim {
         parts.push(key_hint("⌃↵", " send"));
@@ -567,10 +594,15 @@ mod tests {
         // The mode and directory show when configured.
         let configured = [StatusItem::Model, StatusItem::Mode, StatusItem::Directory];
         assert!(render(IDLE, &configured, 100).starts_with("  Opus 5.5 · high · Plan · ~/repo  "));
-        // Without settings to change or a cost, the slot is empty.
+        // Without `cost` in the status line, the cost isn't shown even when reported.
+        assert!(
+            render(IDLE, &configured, 100).ends_with("  ⌃o Settings"),
+            "{}",
+            render(IDLE, &configured, 100)
+        );
+        // Without settings to change either, the slot is empty.
         let values = StatusValues {
             settings: false,
-            cost: None,
             ..values()
         };
         let props = FooterProps {
