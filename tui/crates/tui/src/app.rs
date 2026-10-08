@@ -310,6 +310,12 @@ impl App {
                         tracing::warn!(%error, "failed to send session/cancel");
                     }
                 }
+                // A subagent's cancel is the ordinary `session/cancel`, for its session.
+                AppCommand::CancelSubagent(session_id) => {
+                    if let Err(error) = self.handle.cancel(session_id) {
+                        tracing::warn!(%error, "failed to send session/cancel to a subagent");
+                    }
+                }
                 AppCommand::ChangeSetting(change) => {
                     if let Some(session_id) = chat.active_session().cloned() {
                         self.spawn_setting_change(session_id, change);
@@ -545,7 +551,7 @@ fn handle_terminal_event(chat: &mut ChatWidget, event: Event) -> Vec<AppCommand>
 
 fn draw(tui: &mut Tui, chat: &mut ChatWidget) -> std::io::Result<()> {
     // Inline mode shows the Ctrl+T transcript on the alternate screen, as Codex's pager.
-    if tui.mode() == ScreenMode::Inline && chat.pager_open() {
+    if tui.mode() == ScreenMode::Inline && chat.overlay_open() {
         tui.enter_overlay()?;
         return tui.draw_screen(|frame| {
             let area = frame.area();

@@ -11,6 +11,7 @@ use agent_client_protocol::Client;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::UntypedMessage;
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v1::BooleanPropertySchema;
 use agent_client_protocol::schema::v1::ClientCapabilities;
 use agent_client_protocol::schema::v1::CompactionStatus;
@@ -32,6 +33,7 @@ use agent_client_protocol::schema::v1::ElicitationSessionScope;
 use agent_client_protocol::schema::v1::ElicitationUrlMode;
 use agent_client_protocol::schema::v1::EnumOption;
 use agent_client_protocol::schema::v1::ErrorCode;
+use agent_client_protocol::schema::v1::IdleStateUpdate;
 use agent_client_protocol::schema::v1::IntegerPropertySchema;
 use agent_client_protocol::schema::v1::KillTerminalRequest;
 use agent_client_protocol::schema::v1::McpServer;
@@ -48,12 +50,18 @@ use agent_client_protocol::schema::v1::ReadTextFileRequest;
 use agent_client_protocol::schema::v1::ReleaseTerminalRequest;
 use agent_client_protocol::schema::v1::RequestPermissionOutcome;
 use agent_client_protocol::schema::v1::RequestPermissionRequest;
+use agent_client_protocol::schema::v1::RunningStateUpdate;
+use agent_client_protocol::schema::v1::SessionCancelCapabilities;
 use agent_client_protocol::schema::v1::SessionId;
 use agent_client_protocol::schema::v1::SessionInfoUpdate;
+use agent_client_protocol::schema::v1::SessionMessage;
 use agent_client_protocol::schema::v1::SessionNotification;
 use agent_client_protocol::schema::v1::SessionUpdate;
+use agent_client_protocol::schema::v1::StateUpdate;
 use agent_client_protocol::schema::v1::StopReason;
 use agent_client_protocol::schema::v1::StringPropertySchema;
+use agent_client_protocol::schema::v1::SubagentSessionCapabilities;
+use agent_client_protocol::schema::v1::SubagentUpdate;
 use agent_client_protocol::schema::v1::Terminal;
 use agent_client_protocol::schema::v1::TerminalOutputRequest;
 use agent_client_protocol::schema::v1::ToolCall;
@@ -72,6 +80,7 @@ use crate::state::Cancellation;
 use crate::state::State;
 use crate::state::now;
 use crate::state::supports_compaction;
+use crate::state::supports_subagents;
 
 static TOOL_CALLS: AtomicU64 = AtomicU64::new(1);
 
@@ -133,6 +142,8 @@ impl Turn {
             "mcp" => self.list_mcp_servers(cx).await?,
             "think" => self.think(cx).await?,
             "compact" => self.compact(cx).await?,
+            "delegate" => self.delegate(cx).await?,
+            "delegate-legacy" => self.delegate_legacy(cx).await?,
             "switch-mode" => self.switch_mode(cx).await?,
             "withdraw" => self.withdraw(cx).await?,
             "extension" => self.extension(cx).await?,
@@ -647,6 +658,156 @@ impl Turn {
         }
         self.record(SessionUpdate::CompactionUpdate(whole));
         self.say(cx, "Compacted.").await
+    }
+
+    /// Delegate to two subagents, as ACP's draft Subagent Sessions RFD reports them: each is
+    /// announced on this session, sent its task as a session message, works in its own
+    /// session, and goes idle. Clients that didn't ask for subagents get the result only.
+    async fn delegate(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        if !supports_subagents(&self.client) {
+            return self
+                .say(cx, "Robie counted 12 files; Ada found nothing to fix.")
+                .await;
+        }
+        let parent = self.session_id.clone();
+        let child = |name: &str| SessionId::new(format!("{parent}:{name}"));
+        let (robie, ada) = (child("robie"), child("ada"));
+        let running = || StateUpdate::Running(RunningStateUpdate::new());
+        let idle = |reason: Option<StopReason>| {
+            StateUpdate::Idle(IdleStateUpdate::new().stop_reason(reason))
+        };
+        for (id, title, description) in [
+            (&robie, "Robie", "Counts the files under src/"),
+            (&ada, "Ada", "Reviews the change"),
+        ] {
+            let announce = SubagentUpdate::new(id.clone())
+                .title(title.to_owned())
+                .description(description.to_owned())
+                .capabilities(
+                    SubagentSessionCapabilities::new().cancel(SessionCancelCapabilities::new()),
+                )
+                .state(running());
+            self.update(cx, SessionUpdate::SubagentUpdate(announce))?;
+            let task = vec![ContentBlock::from(format!("{description}, please."))];
+            let outgoing = SessionMessage::new(format!("to-{title}"))
+                .sender_session_id(parent.clone())
+                .recipient_session_id(id.clone())
+                .content(MaybeUndefined::Value(task.clone()));
+            self.update(cx, SessionUpdate::SessionMessage(outgoing))?;
+            let incoming = SessionMessage::new("task")
+                .sender_session_id(parent.clone())
+                .recipient_session_id(id.clone())
+                .content(MaybeUndefined::Value(task));
+            notify(cx, id, SessionUpdate::SessionMessage(incoming))?;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let read = next_tool_call_id();
+        notify(
+            cx,
+            &robie,
+            SessionUpdate::ToolCall(
+                ToolCall::new(read.clone(), "Read src")
+                    .kind(ToolKind::Read)
+                    .status(ToolCallStatus::Completed),
+            ),
+        )?;
+        // A subagent asks the user too, in its own session.
+        let note = next_tool_call_id();
+        let title = "Write count.txt".to_owned();
+        notify(
+            cx,
+            &robie,
+            SessionUpdate::ToolCall(
+                ToolCall::new(note.clone(), title.clone()).kind(ToolKind::Edit),
+            ),
+        )?;
+        let permission = RequestPermissionRequest::new(
+            robie.clone(),
+            ToolCallUpdate::new(note.clone(), ToolCallUpdateFields::new().title(title)),
+            vec![
+                PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
+                PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
+            ],
+        );
+        let allowed = matches!(
+            cx.send_request(permission).block_task().await?.outcome,
+            RequestPermissionOutcome::Selected(selected) if selected.option_id.to_string() == "allow"
+        );
+        let status = if allowed {
+            ToolCallStatus::Completed
+        } else {
+            ToolCallStatus::Failed
+        };
+        notify(
+            cx,
+            &robie,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                note,
+                ToolCallUpdateFields::new().status(status),
+            )),
+        )?;
+        for chunk in ["There are ", "12 files."] {
+            let chunk = ContentChunk::new(ContentBlock::from(chunk));
+            notify(cx, &robie, SessionUpdate::AgentMessageChunk(chunk))?;
+        }
+        self.update(
+            cx,
+            SessionUpdate::SubagentUpdate(
+                SubagentUpdate::new(robie.clone()).state(idle(Some(StopReason::EndTurn))),
+            ),
+        )?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let chunk = ContentChunk::new(ContentBlock::from("Nothing to fix."));
+        notify(cx, &ada, SessionUpdate::AgentMessageChunk(chunk))?;
+        self.update(
+            cx,
+            SessionUpdate::SubagentUpdate(
+                SubagentUpdate::new(ada).state(idle(Some(StopReason::EndTurn))),
+            ),
+        )?;
+        self.say(cx, "Robie counted 12 files; Ada found nothing to fix.")
+            .await
+    }
+
+    /// The same delegation in the RFD's earlier draft, which some adapters still send.
+    async fn delegate_legacy(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        if !supports_subagents(&self.client) {
+            return self.say(cx, "Robie counted 12 files.").await;
+        }
+        let parent = self.session_id.to_string();
+        let robie = format!("{parent}:robie");
+        cx.send_notification(UntypedMessage::new(
+            "session/update",
+            serde_json::json!({
+                "sessionId": parent,
+                "update": {
+                    "sessionUpdate": "subagent_spawned",
+                    "subagentSessionId": robie,
+                    "name": "Robie",
+                    "task": "Count the files",
+                    "prompt": "Count the files under src/.",
+                    "capabilities": {}
+                }
+            }),
+        )?)?;
+        let chunk = ContentChunk::new(ContentBlock::from("There are 12 files."));
+        notify(
+            cx,
+            &SessionId::new(robie.as_str()),
+            SessionUpdate::AgentMessageChunk(chunk),
+        )?;
+        cx.send_notification(UntypedMessage::new(
+            "session/update",
+            serde_json::json!({
+                "sessionId": parent,
+                "update": {
+                    "sessionUpdate": "subagent_state_update",
+                    "subagentSessionId": robie,
+                    "state": "completed"
+                }
+            }),
+        )?)?;
+        self.say(cx, "Robie counted 12 files.").await
     }
 
     /// Switch modes on the agent's own initiative, as a "leave plan mode" tool would.

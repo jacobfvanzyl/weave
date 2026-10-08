@@ -323,6 +323,11 @@ pub fn interactive_login(state_path: Option<&Path>) -> std::io::Result<bool> {
 }
 
 /// Whether `client` advertised `session.compaction`; agents send compaction updates only then.
+/// Whether `client` advertised `subagents`; agents send subagent updates only then.
+pub fn supports_subagents(client: &ClientCapabilities) -> bool {
+    client.subagents.is_some()
+}
+
 pub fn supports_compaction(client: &ClientCapabilities) -> bool {
     client
         .session

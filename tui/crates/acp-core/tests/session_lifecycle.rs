@@ -225,6 +225,70 @@ async fn compaction_updates_reach_only_clients_that_ask_and_replay_whole() {
     assert_eq!(log.message, "Context compacted.");
 }
 
+/// The titles subagents were announced with, and their final work states, in order.
+fn subagents(updates: &[SessionUpdate]) -> (Vec<String>, Vec<String>) {
+    let mut titles = Vec::new();
+    let mut states = Vec::new();
+    for update in updates {
+        let SessionUpdate::SubagentUpdate(subagent) = update else {
+            continue;
+        };
+        if let MaybeUndefined::Value(title) = &subagent.title {
+            titles.push(title.clone());
+        }
+        if let MaybeUndefined::Value(state) = &subagent.state {
+            states.push(format!("{state:?}"));
+        }
+    }
+    (titles, states)
+}
+
+#[tokio::test]
+async fn subagents_reach_clients_that_ask_in_either_draft() {
+    let mut harness = Harness::start(ClientOptions::default()).await;
+    let log = harness.turn("delegate", "allow").await;
+    let (titles, states) = subagents(&log.updates);
+    assert_eq!(titles, ["Robie", "Ada"]);
+    assert!(
+        states
+            .iter()
+            .all(|state| state.contains("Running") || state.contains("EndTurn")),
+        "{states:?}"
+    );
+    // The children's own updates arrive on the same connection, permission requests too.
+    assert!(
+        log.message.contains("There are 12 files."),
+        "{}",
+        log.message
+    );
+    assert!(log.updates.iter().any(|update| matches!(
+        update,
+        SessionUpdate::SessionMessage(message) if message.recipient_session_id.is_some()
+    )));
+
+    // The earlier draft some adapters still send is read as the current one.
+    let log = harness.turn("delegate-legacy", "allow").await;
+    let (titles, states) = subagents(&log.updates);
+    assert_eq!(titles, ["Robie"]);
+    assert!(
+        states.last().is_some_and(|state| state.contains("EndTurn")),
+        "{states:?}"
+    );
+
+    // A client that didn't ask gets the result only.
+    let declined = ClientOptions {
+        subagents: false,
+        ..ClientOptions::default()
+    };
+    let mut plain = Harness::start(declined).await;
+    let log = plain.turn("delegate", "allow").await;
+    assert_eq!(subagents(&log.updates), (Vec::new(), Vec::new()));
+    assert_eq!(
+        log.message,
+        "Robie counted 12 files; Ada found nothing to fix."
+    );
+}
+
 #[tokio::test]
 async fn sessions_survive_agent_restarts() {
     let state = tempfile::NamedTempFile::new().expect("state file");

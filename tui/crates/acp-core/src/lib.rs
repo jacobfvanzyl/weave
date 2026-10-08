@@ -8,6 +8,7 @@ mod connection;
 mod fs;
 mod handle;
 mod requests;
+mod subagent_compat;
 mod terminal_meta;
 mod terminals;
 mod trace;

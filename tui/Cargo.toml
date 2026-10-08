@@ -13,8 +13,9 @@ weave-acp-core = { path = "crates/acp-core" }
 weave-fake-agent = { path = "crates/fake-agent" }
 weave-tui = { path = "crates/tui" }
 
-# Session compaction is an ACP Preview feature (see tui/AGENTS.md); no other unstable feature.
-agent-client-protocol = { version = "=3.0.0", features = ["process", "unstable_session_compaction"] }
+# Session compaction (Preview) and subagent sessions (draft) are the only unstable ACP
+# features weave uses; see tui/AGENTS.md.
+agent-client-protocol = { version = "=3.0.0", features = ["process", "unstable_session_compaction", "unstable_subagents"] }
 anyhow = "1"
 base64 = "0.22"
 # Unpacking ACP registry agents' binary archives, as Codex unpacks its downloads.

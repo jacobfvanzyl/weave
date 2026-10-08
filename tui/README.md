@@ -46,6 +46,8 @@ Agents sign in with their own CLIs. When an agent reports that sign-in is requir
 | Esc while scrolled back | Return to the newest output (before it stops the turn) |
 | Drag | Select transcript text; it is copied when you release |
 | Ctrl+T | Full transcript: whole command output, diffs, thoughts and compaction summaries (a pager inline) |
+| Alt+← / Alt+→ | Watch the previous / next agent's transcript when the agent runs subagents (Alt+B / Alt+F on an empty draft); Esc goes back |
+| `/subagents` | Pick a subagent to watch, with what each is doing (once there are any) |
 | F3 | Find text in the full transcript: newest match first, ↑/↓ (or Ctrl+P/Ctrl+N) between matches, Enter to keep reading, Esc to close. In the inline pager, `/` then `n`/`N` |
 | `?` | Keyboard shortcuts (on an empty composer) |
 | Ctrl+G | Switch between the basic and Vim composers, keeping the draft (with `vim = true`) |
@@ -70,6 +72,15 @@ footer shows the mode.
   reports it), and Enter starts a new line. Esc only changes mode, so it never interrupts the
   agent; Ctrl+C does. In Normal mode, `k` on the first line and `j` on the last step through
   earlier prompts, and `/` on an empty draft starts a slash command.
+
+### Subagents
+
+When an agent delegates to subagents (ACP's draft Subagent Sessions; Claude and Codex both
+do), weave shows them as Codex shows its own. The main transcript gets a row as each one is
+spawned, sent input, and finished (`• Completed Robie └ <its reply>`), and the status shows
+how many are running. Alt+←/→ or `/subagents` switch to a subagent's own transcript; Esc
+comes back, Ctrl+C stops one the agent lets you stop, and its permission requests show here,
+named. Messages always go to the main session.
 
 Permission requests, agent questions (forms and links) and pickers take over the input
 area with their own keys: approvals take `y` (allow), `a` (always), `esc` (reject) or a
@@ -107,6 +118,7 @@ vim = true             # the Vim composer for new threads and multi-line drafts 
 [agents.claude]
 terminal = false          # don't let it run commands through weave
 compaction = false        # no compaction updates (an ACP Preview feature; on by default)
+subagents = false         # no subagent sessions (an ACP draft feature; on by default)
 
 [agents.opencode]         # a registry agent, with settings of its own
 terminal = false

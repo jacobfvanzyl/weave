@@ -35,14 +35,20 @@ use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationScope;
 use weave_acp_core::schema::Error;
 use weave_acp_core::schema::ListSessionsResponse;
+use weave_acp_core::schema::MessageId;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionConfigOptionCategory;
 use weave_acp_core::schema::SessionId;
+use weave_acp_core::schema::SessionMessage;
+use weave_acp_core::schema::SessionMessageChunk;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionUpdate;
+use weave_acp_core::schema::StateUpdate;
 use weave_acp_core::schema::StopReason;
+use weave_acp_core::schema::SubagentUpdate;
 use weave_acp_core::schema::TerminalExitStatus;
+use weave_acp_core::schema::TerminalId;
 use weave_acp_core::schema::ToolCallId;
 use weave_acp_core::schema::ToolCallStatus;
 
@@ -88,6 +94,8 @@ use crate::streaming::MessageStream;
 use crate::streaming::StreamKind;
 use crate::streaming::render_compact;
 use crate::style;
+use crate::subagents;
+use crate::subagents::Subagent;
 use crate::tool_call::ExploreGroup;
 use crate::tool_call::RenderContext;
 use crate::tool_call::ToolCallCell;
@@ -110,6 +118,8 @@ const COPIED_NOTE: Duration = Duration::from_secs(2);
 pub enum AppCommand {
     Prompt(String),
     Cancel,
+    /// `session/cancel` for a subagent's current work, which it lets the client stop.
+    CancelSubagent(SessionId),
     /// Change a session setting; the result comes back through [`ChatWidget::setting_changed`].
     ChangeSetting(SettingChange),
     /// `session/list`; the result comes back through [`ChatWidget::sessions_listed`].
@@ -249,6 +259,48 @@ pub struct ChatWidget {
     status_items: Vec<StatusItem>,
     /// Whether the Vim composer is enabled (`[tui] vim = true`).
     vim: bool,
+    /// Subagents this session created, in the order they appeared, each with its own chat.
+    subagents: Vec<Subagent>,
+    /// The subagent whose transcript is shown instead of this session's.
+    watching: Option<SessionId>,
+    subagent_picker: Option<subagents::Picker>,
+    /// Messages between this session and another, while they stream.
+    messages: Vec<SessionMessageEntry>,
+    /// In a subagent's own chat: what its parent is called.
+    parent_label: Option<String>,
+}
+
+/// A message between sessions as this chat shows it.
+struct MessageShape {
+    /// The other session's name.
+    label: String,
+    outgoing: bool,
+    /// Whether the other session is one of this one's subagents.
+    to_subagent: bool,
+    text: String,
+}
+
+impl MessageShape {
+    fn lines(&self, width: usize) -> Vec<DisplayLine> {
+        if !self.to_subagent {
+            return subagents::message_lines(!self.outgoing, &self.label, &self.text, width);
+        }
+        let text = self.text.clone();
+        let event = if self.outgoing {
+            subagents::Event::SentInput { text }
+        } else {
+            subagents::Event::MessageFrom { text }
+        };
+        subagents::event_lines(&self.label, &event, width)
+    }
+}
+
+/// A message between sessions, as it streams in.
+struct SessionMessageEntry {
+    id: MessageId,
+    sender: Option<SessionId>,
+    recipient: Option<SessionId>,
+    text: String,
 }
 
 impl ChatWidget {
@@ -301,6 +353,11 @@ impl ChatWidget {
             shortcuts_open: false,
             status_items: StatusItem::DEFAULT.to_vec(),
             vim: false,
+            subagents: Vec::new(),
+            watching: None,
+            subagent_picker: None,
+            messages: Vec::new(),
+            parent_label: None,
         }
     }
 
@@ -326,8 +383,15 @@ impl ChatWidget {
     }
 
     /// Whether the inline pager (Ctrl+T) is showing.
+    #[cfg(test)]
     pub fn pager_open(&self) -> bool {
         self.pager_open
+    }
+
+    /// Whether inline mode shows a full-screen overlay: the Ctrl+T pager, or a watched
+    /// subagent's transcript.
+    pub fn overlay_open(&self) -> bool {
+        self.pager_open || (self.transcript.is_none() && self.watching.is_some())
     }
 
     /// The startup banner, followed by any `notices` worth the user's attention.
@@ -368,6 +432,11 @@ impl ChatWidget {
         self.committed_tool_calls.clear();
         self.compactions.clear();
         self.committed_compactions.clear();
+        // Subagents belong to the session that created them.
+        self.subagents.clear();
+        self.watching = None;
+        self.subagent_picker = None;
+        self.messages.clear();
         self.turn = None;
         self.queued.clear();
         self.commands.clear();
@@ -480,6 +549,9 @@ impl ChatWidget {
         }
         self.width = width;
         self.composer.set_screen_height(height);
+        for subagent in &mut self.subagents {
+            subagent.chat.set_size(width, height);
+        }
     }
 
     /// The terminal cursor the composer wants, or `None` for the terminal's own: the Vim
@@ -595,12 +667,24 @@ impl ChatWidget {
             AgentEvent::SessionUpdate(notification) => {
                 if self.is_active(&notification.session_id) {
                     self.handle_update(notification.update);
+                } else if let Some(path) = self.path_to(&notification.session_id) {
+                    // A subagent's own update, for its transcript.
+                    self.chat_at_mut(&path).handle_update(notification.update);
+                    self.note_activity();
                 }
                 Vec::new()
             }
             AgentEvent::PermissionRequested(request) => {
                 if self.is_active(&request.request.session_id) {
                     self.handle_permission(request)
+                        .map(AppCommand::Notify)
+                        .into_iter()
+                        .collect()
+                } else if let Some(path) = self.path_to(&request.request.session_id) {
+                    // A subagent asks: its own chat says what about, and the user answers here.
+                    let label = self.label_at(&path);
+                    let subject = self.chat_at_mut(&path).permission_subject(&request);
+                    self.queue_permission(request, subject, Some(&label))
                         .map(AppCommand::Notify)
                         .into_iter()
                         .collect()
@@ -656,7 +740,7 @@ impl ChatWidget {
                 }
             }
             AgentEvent::TerminalOutput { terminal_id, text } => {
-                self.terminals.entry(terminal_id).or_default().append(&text);
+                self.terminal_output(&terminal_id, &text);
                 self.note_activity();
                 Vec::new()
             }
@@ -664,10 +748,7 @@ impl ChatWidget {
                 terminal_id,
                 status,
             } => {
-                self.terminals
-                    .entry(terminal_id)
-                    .or_default()
-                    .set_exit(status);
+                self.terminal_exited(&terminal_id, &status);
                 Vec::new()
             }
             AgentEvent::Disconnected(error) => {
@@ -680,6 +761,394 @@ impl ChatWidget {
                 self.push_error(&format!("Disconnected: {reason}"));
                 Vec::new()
             }
+        }
+    }
+
+    /// The way down to a subagent's chat, as indices from this one, if it is a descendant.
+    fn path_to(&self, id: &SessionId) -> Option<Vec<usize>> {
+        for (index, subagent) in self.subagents.iter().enumerate() {
+            if &subagent.id == id {
+                return Some(vec![index]);
+            }
+            if let Some(mut path) = subagent.chat.path_to(id) {
+                path.insert(0, index);
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    fn chat_at(&self, path: &[usize]) -> &ChatWidget {
+        match path.split_first() {
+            Some((first, rest)) => self
+                .subagents
+                .get(*first)
+                .map_or(self, |subagent| subagent.chat.chat_at(rest)),
+            None => self,
+        }
+    }
+
+    fn chat_at_mut(&mut self, path: &[usize]) -> &mut ChatWidget {
+        let Some((first, rest)) = path.split_first() else {
+            return self;
+        };
+        if *first >= self.subagents.len() {
+            return self;
+        }
+        self.subagents[*first].chat.chat_at_mut(rest)
+    }
+
+    /// The subagent at `path`.
+    fn subagent_at(&self, path: &[usize]) -> Option<&Subagent> {
+        let (last, parent) = path.split_last()?;
+        self.chat_at(parent).subagents.get(*last)
+    }
+
+    fn label_at(&self, path: &[usize]) -> String {
+        self.subagent_at(path)
+            .map_or_else(|| "A subagent".to_owned(), Subagent::label)
+    }
+
+    /// What another session is called, from this chat: one of its subagents, or its parent.
+    fn session_label(&self, id: &SessionId) -> String {
+        if let Some(path) = self.path_to(id) {
+            return self.label_at(&path);
+        }
+        self.parent_label
+            .clone()
+            .unwrap_or_else(|| "another agent".to_owned())
+    }
+
+    /// The chat whose transcript is shown: this one, or the subagent being watched.
+    fn shown(&self) -> &ChatWidget {
+        match self.watching.as_ref().and_then(|id| self.path_to(id)) {
+            Some(path) => self.chat_at(&path),
+            None => self,
+        }
+    }
+
+    fn shown_mut(&mut self) -> &mut ChatWidget {
+        match self.watching.clone().and_then(|id| self.path_to(&id)) {
+            Some(path) => self.chat_at_mut(&path),
+            None => self,
+        }
+    }
+
+    /// The subagent being watched.
+    fn watched(&self) -> Option<&Subagent> {
+        let path = self.path_to(self.watching.as_ref()?)?;
+        self.subagent_at(&path)
+    }
+
+    /// Every agent in the order Alt+Right visits them: this session, then each subagent
+    /// before its own, in the order they appeared.
+    fn agent_order(&self) -> Vec<Option<SessionId>> {
+        fn walk(chat: &ChatWidget, order: &mut Vec<Option<SessionId>>) {
+            for subagent in &chat.subagents {
+                order.push(Some(subagent.id.clone()));
+                walk(&subagent.chat, order);
+            }
+        }
+        let mut order = vec![None];
+        walk(self, &mut order);
+        order
+    }
+
+    /// Watch the next or previous agent, as Codex's Alt+Right and Alt+Left do.
+    fn cycle_agents(&mut self, forward: bool) {
+        let order = self.agent_order();
+        let current = order
+            .iter()
+            .position(|id| *id == self.watching)
+            .unwrap_or(0);
+        let next = if forward {
+            (current + 1) % order.len()
+        } else {
+            (current + order.len() - 1) % order.len()
+        };
+        self.watch(order.get(next).cloned().flatten());
+    }
+
+    fn watch(&mut self, id: Option<SessionId>) {
+        self.watching = id.filter(|id| self.path_to(id).is_some());
+        if let Some(view) = &mut self.shown_mut().transcript {
+            view.follow();
+        }
+    }
+
+    /// The picker's rows: this session, then every subagent, nested under its parent.
+    fn picker_entries(&self) -> Vec<subagents::PickerEntry> {
+        fn walk(
+            chat: &ChatWidget,
+            depth: usize,
+            now: Instant,
+            entries: &mut Vec<subagents::PickerEntry>,
+        ) {
+            for subagent in &chat.subagents {
+                entries.push(subagents::PickerEntry {
+                    id: Some(subagent.id.clone()),
+                    label: subagent.label(),
+                    description: subagent.description.clone(),
+                    running: subagent.is_running(),
+                    activity: subagent.activity(now),
+                    depth,
+                });
+                walk(&subagent.chat, depth + 1, now, entries);
+            }
+        }
+        let now = Instant::now();
+        let mut entries = vec![subagents::PickerEntry {
+            id: None,
+            label: "Main".to_owned(),
+            description: None,
+            running: self.turn.is_some(),
+            activity: if self.turn.is_some() {
+                "working".to_owned()
+            } else {
+                String::new()
+            },
+            depth: 0,
+        }];
+        walk(self, 0, now, &mut entries);
+        entries
+    }
+
+    fn running_subagents(&self) -> usize {
+        fn count(chat: &ChatWidget) -> usize {
+            chat.subagents
+                .iter()
+                .map(|subagent| usize::from(subagent.is_running()) + count(&subagent.chat))
+                .sum()
+        }
+        count(self)
+    }
+
+    /// Offer `/subagents`, which opens the picker here rather than going to the agent.
+    fn offer_subagents_command(&mut self) {
+        if !self
+            .commands
+            .iter()
+            .any(|command| command.name == subagents::COMMAND)
+        {
+            self.commands.push(AvailableCommand::new(
+                subagents::COMMAND,
+                subagents::COMMAND_DESCRIPTION,
+            ));
+        }
+    }
+
+    /// A new subagent's own chat, which shows its updates as this chat shows the session's.
+    fn subagent_chat(&self, id: &SessionId, label: &str) -> ChatWidget {
+        let abilities = SessionAbilities {
+            list: false,
+            delete: false,
+        };
+        let mut chat =
+            ChatWidget::new(label.to_owned(), self.cwd.clone(), abilities, self.width).fullscreen();
+        chat.begin_session(id.clone(), None);
+        chat.session_ready(OpenedSession {
+            session_id: id.clone(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Loaded),
+        });
+        chat
+    }
+
+    /// A subagent appeared, or what the parent says about it changed: its label, controls
+    /// or work. Its arrival and the end of its work become rows here, as in Codex.
+    fn apply_subagent_update(&mut self, update: SubagentUpdate) {
+        let now = Instant::now();
+        let existing = self
+            .subagents
+            .iter()
+            .position(|subagent| subagent.id == update.session_id);
+        let index = match existing {
+            Some(index) => index,
+            None => {
+                let number = self.subagents.len() + 1;
+                let label = format!("Subagent {number}");
+                let mut chat = self.subagent_chat(&update.session_id, &label);
+                chat.parent_label = Some(self.agent_label());
+                self.subagents.push(Subagent {
+                    id: update.session_id.clone(),
+                    title: None,
+                    description: None,
+                    number,
+                    cancel: false,
+                    state: None,
+                    since: now,
+                    chat: Box::new(chat),
+                });
+                self.offer_subagents_command();
+                self.subagents.len() - 1
+            }
+        };
+        let previous = self.subagents[index].apply(&update, now);
+        let label = self.subagents[index].label();
+        self.subagents[index].chat.agent_name.clone_from(&label);
+        if existing.is_none() {
+            let event = subagents::Event::Spawned {
+                description: self.subagents[index].description.clone(),
+            };
+            self.push_subagent_event(&label, event);
+        }
+        let MaybeUndefined::Value(state) = &update.state else {
+            return;
+        };
+        if matches!(state, StateUpdate::Idle(_)) {
+            // Its work is over for now: what it said settles into its transcript.
+            self.subagents[index].chat.finish_live_cells();
+        }
+        let reply = self.subagents[index].chat.last_reply.clone();
+        if let Some(event) = subagents::Event::for_state(previous.as_ref(), state, reply) {
+            self.push_subagent_event(&label, event);
+        }
+        if let StateUpdate::Idle(idle) = state
+            && idle.stop_reason == Some(StopReason::Cancelled)
+        {
+            let id = update.session_id.clone();
+            self.cancel_requests_from(&id);
+        }
+    }
+
+    fn push_subagent_event(&mut self, label: &str, event: subagents::Event) {
+        let label = label.to_owned();
+        self.push_cell(TranscriptCell::new(move |width| {
+            subagents::event_lines(&label, &event, width)
+        }));
+    }
+
+    /// What this chat is called by its subagents: "Main", or its own label.
+    fn agent_label(&self) -> String {
+        if self.parent_label.is_some() {
+            self.agent_name.clone()
+        } else {
+            "Main".to_owned()
+        }
+    }
+
+    /// A cancelled subagent's pending requests resolve as cancelled, as the RFD asks.
+    fn cancel_requests_from(&mut self, id: &SessionId) {
+        let (cancelled, kept): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.permissions)
+            .into_iter()
+            .partition(|pending| &pending.request.request.session_id == id);
+        self.permissions = kept;
+        for pending in cancelled {
+            let _ = pending.request.cancel();
+        }
+    }
+
+    fn message_entry(
+        &mut self,
+        id: &MessageId,
+        sender: Option<SessionId>,
+        recipient: Option<SessionId>,
+    ) -> &mut SessionMessageEntry {
+        let index = match self.messages.iter().position(|entry| &entry.id == id) {
+            Some(index) => index,
+            None => {
+                self.end_stream();
+                self.messages.push(SessionMessageEntry {
+                    id: id.clone(),
+                    sender: None,
+                    recipient: None,
+                    text: String::new(),
+                });
+                self.messages.len() - 1
+            }
+        };
+        let entry = &mut self.messages[index];
+        // Participants, once known, stay known.
+        if sender.is_some() {
+            entry.sender = sender;
+        }
+        if recipient.is_some() {
+            entry.recipient = recipient;
+        }
+        entry
+    }
+
+    fn apply_session_message(&mut self, message: SessionMessage) {
+        let entry = self.message_entry(
+            &message.message_id,
+            message.sender_session_id,
+            message.recipient_session_id,
+        );
+        match message.content {
+            MaybeUndefined::Undefined => {}
+            MaybeUndefined::Null => entry.text.clear(),
+            MaybeUndefined::Value(blocks) => {
+                entry.text = blocks.iter().map(content_text).collect();
+            }
+        }
+        self.note_activity();
+    }
+
+    fn append_session_message(&mut self, chunk: SessionMessageChunk) {
+        let entry = self.message_entry(
+            &chunk.message_id,
+            chunk.sender_session_id,
+            chunk.recipient_session_id,
+        );
+        entry.text.push_str(&content_text(&chunk.content));
+        self.note_activity();
+    }
+
+    /// How a message between sessions shows here: to or from one of this session's
+    /// subagents, as Codex shows those, or to or from this one's parent.
+    fn message_shape(&self, entry: &SessionMessageEntry) -> MessageShape {
+        let own = self.active_session.as_ref();
+        let outgoing = entry
+            .sender
+            .as_ref()
+            .is_some_and(|sender| Some(sender) == own)
+            || entry
+                .recipient
+                .as_ref()
+                .is_some_and(|recipient| Some(recipient) != own);
+        let other = if outgoing {
+            entry.recipient.as_ref()
+        } else {
+            entry.sender.as_ref()
+        };
+        MessageShape {
+            label: other.map_or_else(|| "another agent".to_owned(), |id| self.session_label(id)),
+            outgoing,
+            to_subagent: other.is_some_and(|id| self.path_to(id).is_some()),
+            text: entry.text.clone(),
+        }
+    }
+
+    /// Commit the messages that were streaming.
+    fn flush_messages(&mut self) {
+        if self.messages.is_empty() {
+            return;
+        }
+        for entry in std::mem::take(&mut self.messages) {
+            let shape = self.message_shape(&entry);
+            self.push_cell(TranscriptCell::new(move |width| shape.lines(width)));
+        }
+    }
+
+    fn terminal_output(&mut self, terminal_id: &TerminalId, text: &str) {
+        self.terminals
+            .entry(terminal_id.clone())
+            .or_default()
+            .append(text);
+        // A subagent's tool calls embed terminals too.
+        for subagent in &mut self.subagents {
+            subagent.chat.terminal_output(terminal_id, text);
+        }
+    }
+
+    fn terminal_exited(&mut self, terminal_id: &TerminalId, status: &TerminalExitStatus) {
+        self.terminals
+            .entry(terminal_id.clone())
+            .or_default()
+            .set_exit(status.clone());
+        for subagent in &mut self.subagents {
+            subagent.chat.terminal_exited(terminal_id, status);
         }
     }
 
@@ -737,6 +1206,13 @@ impl ChatWidget {
     }
 
     fn handle_update(&mut self, update: SessionUpdate) {
+        // A message between sessions ends when something else arrives.
+        if !matches!(
+            update,
+            SessionUpdate::SessionMessage(_) | SessionUpdate::SessionMessageChunk(_)
+        ) {
+            self.flush_messages();
+        }
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 self.stream_content(StreamKind::Agent, &chunk)
@@ -798,8 +1274,14 @@ impl ChatWidget {
             }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.commands = update.available_commands;
+                if !self.subagents.is_empty() {
+                    self.offer_subagents_command();
+                }
                 self.sync_popup();
             }
+            SessionUpdate::SubagentUpdate(update) => self.apply_subagent_update(update),
+            SessionUpdate::SessionMessage(message) => self.apply_session_message(message),
+            SessionUpdate::SessionMessageChunk(chunk) => self.append_session_message(chunk),
             SessionUpdate::SessionInfoUpdate(info) => match info.title {
                 MaybeUndefined::Value(title) => self.title = Some(title),
                 MaybeUndefined::Null => self.title = None,
@@ -864,27 +1346,50 @@ impl ChatWidget {
         }
         match self.tool_calls.iter_mut().find(|live| live.id == id) {
             Some(live) => live.apply(fields),
-            None => self.tool_calls.push(ToolCallCell::from_update(id, fields)),
+            // An update for a call never announced starts one, unless it has nothing to show,
+            // such as only `_meta` for a call the agent reported another way (a subagent).
+            None if has_content(fields) => {
+                self.tool_calls.push(ToolCallCell::from_update(id, fields));
+            }
+            None => {}
         }
     }
 
     /// Show a permission prompt; returns what a notification about it should say.
     fn handle_permission(&mut self, request: PermissionRequest) -> Option<String> {
-        let call = &request.request.tool_call;
-        self.apply_tool_call_update(call.tool_call_id.clone(), &call.fields);
+        let subject = self.permission_subject(&request);
         if self.turn.as_ref().is_some_and(|turn| turn.cancelling) {
             // The protocol requires every pending request to resolve as cancelled.
             let _ = request.cancel();
             return None;
         }
-        let subject = self
-            .tool_calls
+        self.queue_permission(request, subject, None)
+    }
+
+    /// What a permission request asks about, from the tool call it names in this chat.
+    fn permission_subject(&mut self, request: &PermissionRequest) -> Subject {
+        let call = &request.request.tool_call;
+        self.apply_tool_call_update(call.tool_call_id.clone(), &call.fields);
+        self.tool_calls
             .iter()
             .find(|live| live.id == call.tool_call_id)
             .map_or_else(
                 || Subject::about("this tool call"),
                 |live| live.permission_subject(&self.cwd),
-            );
+            )
+    }
+
+    /// Show a permission prompt, naming the subagent that asks when one does; returns what a
+    /// notification about it should say.
+    fn queue_permission(
+        &mut self,
+        request: PermissionRequest,
+        mut subject: Subject,
+        from: Option<&str>,
+    ) -> Option<String> {
+        if let Some(from) = from {
+            subject.question = format!("{from}: {}", subject.question);
+        }
         let notice = match subject.detail.first() {
             Some(detail) => format!("Approval requested: {detail}"),
             None => subject.question.clone(),
@@ -977,13 +1482,10 @@ impl ChatWidget {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
-        let live = self.live_lines(self.content_width());
-        let view = if self.pager_open {
-            self.pager.as_mut()
-        } else {
-            self.transcript.as_mut()
-        };
-        if view.is_some_and(|view| view.find_paste(text, &live)) {
+        if self
+            .viewed_mut()
+            .is_some_and(|(view, live)| view.find_paste(text, &live))
+        {
             return;
         }
         if let Some(pending) = self.elicitations.front_mut() {
@@ -1048,6 +1550,22 @@ impl ChatWidget {
         }
         if self.pager_open {
             self.handle_pager_key(key);
+            return Vec::new();
+        }
+        if let Some(commands) = self.handle_subagent_key(key) {
+            return commands;
+        }
+        if key.code == KeyCode::F(3) && self.watching.is_some() {
+            if let Some(view) = &mut self.shown_mut().transcript {
+                view.begin_find();
+            }
+            return Vec::new();
+        }
+        if ctrl && key.code == KeyCode::Char('t') && self.watching.is_some() {
+            if let Some(view) = &mut self.shown_mut().transcript {
+                let detailed = view.is_detailed();
+                view.set_detailed(!detailed);
+            }
             return Vec::new();
         }
         if key.code == KeyCode::F(3) {
@@ -1124,6 +1642,16 @@ impl ChatWidget {
                     Vec::new()
                 }
             };
+        }
+
+        if let Some(mut picker) = self.subagent_picker.take() {
+            let entries = self.picker_entries();
+            match picker.handle_key(key, &entries) {
+                Some(subagents::PickerAction::Watch(id)) => self.watch(id),
+                Some(subagents::PickerAction::Close) => {}
+                None => self.subagent_picker = Some(picker),
+            }
+            return Vec::new();
         }
 
         if let Some(picker) = &mut self.session_picker {
@@ -1227,6 +1755,18 @@ impl ChatWidget {
             self.composer.leave_shell();
             return Vec::new();
         }
+        // Watching a subagent, Esc goes back to this session, after popups have had it and
+        // unless a Vim draft is being edited.
+        if key.code == KeyCode::Esc
+            && self.watching.is_some()
+            && self
+                .composer
+                .vim()
+                .is_none_or(|vim| vim.mode() == crate::vim::Mode::Normal)
+        {
+            self.watch(None);
+            return Vec::new();
+        }
         // In the Vim composer, Esc only ever changes mode; Ctrl+C interrupts.
         if key.code == KeyCode::Esc && !self.composer.is_vim() {
             return self.cancel_turn();
@@ -1236,13 +1776,37 @@ impl ChatWidget {
         self.submit(action)
     }
 
+    /// Keys for subagents, once there are any: Alt+Left and Alt+Right watch the previous and
+    /// next agent, as in Codex (Alt+B and Alt+F too, on an empty draft, for terminals that
+    /// send those for Option+arrows).
+    fn handle_subagent_key(&mut self, key: KeyEvent) -> Option<Vec<AppCommand>> {
+        if self.subagents.is_empty() {
+            return None;
+        }
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let empty = self.composer.is_empty();
+        match key.code {
+            KeyCode::Left if alt => self.cycle_agents(false),
+            KeyCode::Right if alt => self.cycle_agents(true),
+            KeyCode::Char('b') if alt && empty => self.cycle_agents(false),
+            KeyCode::Char('f') if alt && empty => self.cycle_agents(true),
+            _ => return None,
+        }
+        Some(Vec::new())
+    }
+
+    fn open_subagent_picker(&mut self) {
+        let entries = self.picker_entries();
+        self.subagent_picker = Some(subagents::Picker::new(&entries, self.watching.as_ref()));
+    }
+
     /// Fullscreen transcript navigation. It comes before prompts and pickers so the transcript
     /// can be read while one is open: PageUp/PageDown, Ctrl+Home/End (or Alt+< and Alt+>),
     /// and Esc back to the newest output while reading.
     fn handle_scroll_key(&mut self, key: KeyEvent) -> Option<Vec<AppCommand>> {
         // Esc belongs to the Vim composer, which uses it to change modes.
         let vim = self.composer.is_vim() && !self.has_overlay();
-        let view = self.transcript.as_mut()?;
+        let view = self.shown_mut().transcript.as_mut()?;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -1263,23 +1827,42 @@ impl ChatWidget {
 
     /// Find's keys in whichever transcript is showing; returns whether the key was Find's.
     fn find_key(&mut self, key: KeyEvent) -> bool {
-        let live = self.live_lines(self.content_width());
+        self.viewed_mut()
+            .is_some_and(|(view, live)| view.find_key(key, &live))
+    }
+
+    /// The Find status of whichever transcript is showing, while Find is open.
+    fn find_status(&self) -> Option<FindStatus<'_>> {
+        self.viewed().and_then(TranscriptView::find_status)
+    }
+
+    /// The transcript being looked at, with the live rows drawn under it: a watched
+    /// subagent's, the inline pager, or this session's.
+    fn viewed_mut(&mut self) -> Option<(&mut TranscriptView, Vec<DisplayLine>)> {
+        let width = self.content_width();
+        if self.watching.is_some() {
+            let chat = self.shown_mut();
+            let live = chat.live_lines(width);
+            return chat.transcript.as_mut().map(|view| (view, live));
+        }
+        let live = self.live_lines(width);
         let view = if self.pager_open {
             self.pager.as_mut()
         } else {
             self.transcript.as_mut()
         };
-        view.is_some_and(|view| view.find_key(key, &live))
+        view.map(|view| (view, live))
     }
 
-    /// The Find status of whichever transcript is showing, while Find is open.
-    fn find_status(&self) -> Option<FindStatus<'_>> {
-        let view = if self.pager_open {
+    fn viewed(&self) -> Option<&TranscriptView> {
+        if self.watching.is_some() {
+            return self.shown().transcript.as_ref();
+        }
+        if self.pager_open {
             self.pager.as_ref()
         } else {
             self.transcript.as_ref()
-        };
-        view.and_then(TranscriptView::find_status)
+        }
     }
 
     /// The inline pager's keys: scrolling, Find (`/`, then `n` and `N` between matches, as
@@ -1321,13 +1904,7 @@ impl ChatWidget {
     /// Wheel scrolling and drag selection in the fullscreen transcript (or the inline pager);
     /// a finished selection is copied.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Vec<AppCommand> {
-        let live = self.live_lines(self.content_width());
-        let view = if self.pager_open {
-            self.pager.as_mut()
-        } else {
-            self.transcript.as_mut()
-        };
-        let Some(view) = view else {
+        let Some((view, live)) = self.viewed_mut() else {
             return Vec::new();
         };
         match view.handle_mouse(event, &live) {
@@ -1450,6 +2027,14 @@ impl ChatWidget {
     }
 
     fn submit(&mut self, action: ComposerAction) -> Vec<AppCommand> {
+        if let ComposerAction::Submit(text) = &action {
+            if text.trim() == format!("/{}", subagents::COMMAND) && !self.subagents.is_empty() {
+                self.open_subagent_picker();
+                return Vec::new();
+            }
+            // A message goes to this session, so it is what to watch.
+            self.watching = None;
+        }
         match action {
             ComposerAction::Submit(text) if self.disconnected || self.active_session.is_none() => {
                 self.composer.insert_str(&text);
@@ -1467,6 +2052,13 @@ impl ChatWidget {
 
     /// Ctrl-C: stop the turn if one runs, else clear the draft, else arm (then confirm) quitting.
     fn interrupt(&mut self) -> Vec<AppCommand> {
+        // Watching a subagent at work that may be stopped, Ctrl+C stops it.
+        if let Some(watched) = self.watched()
+            && watched.is_running()
+            && watched.cancel
+        {
+            return vec![AppCommand::CancelSubagent(watched.id.clone())];
+        }
         if self.turn.is_some() {
             return self.cancel_turn();
         }
@@ -1666,6 +2258,7 @@ impl ChatWidget {
 
     /// Commit everything still live, as it stands, when the turn ends.
     fn finish_live_cells(&mut self) {
+        self.flush_messages();
         self.end_stream();
         for cell in std::mem::take(&mut self.tool_calls) {
             self.commit_tool_call(cell);
@@ -1678,6 +2271,7 @@ impl ChatWidget {
 
     /// Commit `cell` after anything finished that came before it.
     fn push_cell(&mut self, cell: TranscriptCell) {
+        self.flush_messages();
         self.commit_finished_tool_calls();
         self.flush_exploring();
         self.push_cell_after_exploring(cell);
@@ -1763,6 +2357,10 @@ impl ChatWidget {
             lines.push(DisplayLine::default());
             lines.extend(cell.lines(width, &cx));
         }
+        for entry in &self.messages {
+            lines.push(DisplayLine::default());
+            lines.extend(self.message_shape(entry).lines(width));
+        }
         if let Some(stream) = &self.stream {
             if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
                 let message = if detail {
@@ -1831,6 +2429,20 @@ impl ChatWidget {
             let first_line = text.lines().next().unwrap_or_default();
             lines.push(Line::from(Span::styled(format!(" ↳ {first_line}"), dim())));
         }
+        // Subagents can work on after the turn that started them.
+        let running = self.running_subagents();
+        if running > 0 {
+            let noun = if running == 1 {
+                "subagent"
+            } else {
+                "subagents"
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {running} {noun} running · "), dim()),
+                Span::raw(format!("/{}", subagents::COMMAND)),
+                Span::styled(" or ⌥← ⌥→ to watch", dim()),
+            ]));
+        }
         lines
     }
 
@@ -1898,6 +2510,7 @@ impl ChatWidget {
             || !self.elicitations.is_empty()
             || self.session_picker.is_some()
             || self.settings.is_some()
+            || self.subagent_picker.is_some()
     }
 
     fn popup_matches(&self) -> Vec<&AvailableCommand> {
@@ -1914,6 +2527,10 @@ impl ChatWidget {
         }
         if let Some(pending) = self.elicitations.front() {
             return pending.view.desired_height(width);
+        }
+        if let Some(picker) = &self.subagent_picker {
+            let rows = picker.lines(&self.picker_entries()).len();
+            return u16::try_from(rows).unwrap_or(u16::MAX);
         }
         if let Some(picker) = &self.session_picker {
             return picker.desired_height();
@@ -1974,14 +2591,13 @@ impl ChatWidget {
         {
             return Line::from(Span::styled(format!("  {note}"), dim()));
         }
-        if let Some(status) = self
-            .transcript
-            .as_ref()
-            .and_then(TranscriptView::find_status)
-        {
+        if let Some(status) = self.viewed().and_then(TranscriptView::find_status) {
             let mut spans = vec![Span::raw("  ")];
             spans.extend(footer::find_hints(&status, FindKeys::Screen));
             return Line::from(spans);
+        }
+        if let Some(watched) = self.watched() {
+            return watching_note(watched, now);
         }
         match self.transcript.as_ref().map(TranscriptView::reading) {
             Some(Reading::Earlier) => {
@@ -2015,6 +2631,11 @@ impl ChatWidget {
     /// Draw the inline pager over the whole screen: the full transcript with live output
     /// below it, a title row, and its keys.
     pub fn render_pager(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(watched) = self.watched()
+            && !self.pager_open
+        {
+            return self.render_watched_overlay(watched, area, buf);
+        }
         let Some(pager) = &self.pager else {
             return;
         };
@@ -2064,6 +2685,35 @@ impl ChatWidget {
         buf.set_line(area.x, area.bottom() - 1, &hints, area.width);
     }
 
+    /// Inline mode: a watched subagent's transcript over the whole screen, as the pager is.
+    fn render_watched_overlay(&self, watched: &Subagent, area: Rect, buf: &mut Buffer) {
+        if area.height < 3 {
+            return;
+        }
+        let label = watched.label();
+        let title = Line::from(vec![
+            Span::styled("─ ", dim()),
+            Span::styled(label.clone(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" ", dim()),
+            Span::styled(
+                "─".repeat(usize::from(area.width).saturating_sub(label.chars().count() + 3)),
+                dim(),
+            ),
+        ]);
+        buf.set_line(area.x, area.y, &title, area.width);
+        let body = Rect::new(area.x, area.y + 1, area.width, area.height - 2);
+        let width = usize::from(area.width.max(10));
+        if let Some(view) = &watched.chat.transcript {
+            view.render(body, buf, width, &watched.chat.live_lines(width));
+        }
+        buf.set_line(
+            area.x,
+            area.bottom() - 1,
+            &watching_note(watched, Instant::now()),
+            area.width,
+        );
+    }
+
     /// Draw the inline viewport. Returns where the terminal cursor belongs, if anywhere.
     pub fn render(&self, area: Rect, buf: &mut Buffer) -> Option<Position> {
         let now = Instant::now();
@@ -2087,7 +2737,10 @@ impl ChatWidget {
         let bottom_height = u16::try_from(wanted).unwrap_or(u16::MAX).min(cap);
         let transcript_area = Rect::new(area.x, area.y, area.width, area.height - bottom_height);
         let width = usize::from(area.width.max(10));
-        view.render(transcript_area, buf, width, &self.live_lines(width));
+        // A watched subagent's transcript takes this session's place, as in Codex.
+        let shown = self.shown();
+        let view = shown.transcript.as_ref().unwrap_or(view);
+        view.render(transcript_area, buf, width, &shown.live_lines(width));
         let bottom = Rect::new(area.x, transcript_area.bottom(), area.width, bottom_height);
         self.render_input(bottom, buf, &above, now)
     }
@@ -2126,6 +2779,9 @@ impl ChatWidget {
             None
         } else if let Some(pending) = self.elicitations.front() {
             pending.view.render(input_area, buf)
+        } else if let Some(picker) = &self.subagent_picker {
+            picker.render(&self.picker_entries(), input_area, buf);
+            None
         } else if let Some(picker) = &self.session_picker {
             picker.render(input_area, buf);
             None
@@ -2186,6 +2842,46 @@ impl ChatWidget {
         }
         cursor
     }
+}
+
+/// The note while watching a subagent: which, what it is doing, and the keys.
+fn watching_note(watched: &Subagent, now: Instant) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled("  Watching ", style::secondary()),
+        Span::styled(
+            watched.label(),
+            Style::default()
+                .fg(style::accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    let activity = watched.activity(now);
+    if !activity.is_empty() {
+        spans.push(Span::styled(format!(" · {activity}"), dim()));
+    }
+    spans.push(Span::styled(" · ", style::secondary()));
+    spans.push(Span::raw("⌥← ⌥→"));
+    spans.push(Span::styled(" switch · ", style::secondary()));
+    spans.push(Span::raw("esc"));
+    spans.push(Span::styled(" back", style::secondary()));
+    if watched.is_running() && watched.cancel {
+        spans.push(Span::styled(" · ", style::secondary()));
+        spans.push(Span::raw("⌃c"));
+        spans.push(Span::styled(" stop it", style::secondary()));
+    }
+    Line::from(spans)
+}
+
+/// Whether a tool call update says anything a cell could show.
+fn has_content(fields: &weave_acp_core::schema::ToolCallUpdateFields) -> bool {
+    fields.kind.is_some()
+        || fields.status.is_some()
+        || fields.title.is_some()
+        || fields.name.is_some()
+        || fields.content.is_some()
+        || fields.locations.is_some()
+        || fields.raw_input.is_some()
+        || fields.raw_output.is_some()
 }
 
 /// The time of day for turn summaries; fixed in tests so snapshots stay stable.
@@ -3142,6 +3838,118 @@ mod tests {
         assert!(
             rows.contains(&"  Kept: the parser work.".to_owned()),
             "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn an_update_for_an_unknown_call_with_nothing_to_show_starts_nothing() {
+        let mut chat = chat();
+        submit(&mut chat, "go");
+        chat.handle_agent_event(update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "agent-call",
+            ToolCallUpdateFields::new(),
+        ))));
+        assert!(chat.tool_calls.is_empty());
+        chat.handle_agent_event(update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "late-call",
+            ToolCallUpdateFields::new().title("Read a.rs"),
+        ))));
+        assert_eq!(chat.tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn subagents_show_as_codex_rows_and_can_be_watched_and_stopped() {
+        use weave_acp_core::schema::IdleStateUpdate;
+        use weave_acp_core::schema::RunningStateUpdate;
+        use weave_acp_core::schema::SessionCancelCapabilities;
+        use weave_acp_core::schema::SubagentSessionCapabilities;
+
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "go");
+        let robie = SessionId::new("s1:robie");
+        chat.handle_agent_event(update(SessionUpdate::SubagentUpdate(
+            SubagentUpdate::new(robie.clone())
+                .title("Robie".to_owned())
+                .description("Counts the files".to_owned())
+                .capabilities(
+                    SubagentSessionCapabilities::new().cancel(SessionCancelCapabilities::new()),
+                )
+                .state(StateUpdate::Running(RunningStateUpdate::new())),
+        )));
+        chat.handle_agent_event(update(SessionUpdate::SessionMessage(
+            SessionMessage::new("m1")
+                .sender_session_id(SessionId::new("s1"))
+                .recipient_session_id(robie.clone())
+                .content(MaybeUndefined::Value(vec!["Count them".into()])),
+        )));
+        // The child's own update goes to its transcript, not this one.
+        chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+            robie.clone(),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new("There are 12 files.".into())),
+        )));
+        let rows = screen_rows(&chat, 60, 20);
+        for row in [
+            "• Spawned Robie",
+            "  └ Counts the files",
+            "• Sent input to Robie",
+            "  └ Count them",
+        ] {
+            assert!(rows.contains(&row.to_owned()), "{row:?} in {rows:?}");
+        }
+        assert!(!rows.iter().any(|row| row.contains("12 files")), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.contains("1 subagent running")),
+            "{rows:?}"
+        );
+
+        // Alt+Right watches it, as in Codex; Ctrl+C stops it rather than this turn.
+        chat.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        let rows = screen_rows(&chat, 60, 20);
+        assert!(
+            rows.contains(&"• There are 12 files.".to_owned()),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.starts_with("  Watching Robie · running")),
+            "{rows:?}"
+        );
+        assert_eq!(
+            chat.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            [AppCommand::CancelSubagent(robie.clone())]
+        );
+        // Esc goes back to this session without touching its turn.
+        assert!(chat.handle_key(key(KeyCode::Esc)).is_empty());
+        assert!(chat.turn.as_ref().is_some_and(|turn| !turn.cancelling));
+
+        chat.handle_agent_event(update(SessionUpdate::SubagentUpdate(
+            SubagentUpdate::new(robie).state(StateUpdate::Idle(
+                IdleStateUpdate::new().stop_reason(StopReason::EndTurn),
+            )),
+        )));
+        let rows = screen_rows(&chat, 60, 20);
+        assert!(rows.contains(&"• Completed Robie".to_owned()), "{rows:?}");
+        assert!(
+            rows.contains(&"  └ There are 12 files.".to_owned()),
+            "{rows:?}"
+        );
+
+        // `/subagents` opens the picker here rather than going to the agent.
+        chat.handle_paste("/subagents");
+        assert!(chat.handle_key(key(KeyCode::Enter)).is_empty());
+        let rows = screen_rows(&chat, 60, 20);
+        assert!(rows.iter().any(|row| row.trim() == "Subagents"), "{rows:?}");
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("2. • Robie  idle  Counts the files")),
+            "{rows:?}"
+        );
+        chat.handle_key(key(KeyCode::Down));
+        chat.handle_key(key(KeyCode::Enter));
+        assert!(
+            screen_rows(&chat, 60, 20)
+                .iter()
+                .any(|row| row.starts_with("  Watching Robie · idle")),
         );
     }
 

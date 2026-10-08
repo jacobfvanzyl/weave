@@ -10,8 +10,10 @@ use agent_client_protocol::Client;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
+use agent_client_protocol::Handled;
 use agent_client_protocol::LineDirection;
 use agent_client_protocol::RequestCancellation;
+use agent_client_protocol::UntypedMessage;
 use agent_client_protocol::schema::v1::AuthCapabilities;
 use agent_client_protocol::schema::v1::BooleanConfigOptionCapabilities;
 use agent_client_protocol::schema::v1::ClientCapabilities;
@@ -35,6 +37,7 @@ use agent_client_protocol::schema::v1::RequestPermissionRequest;
 use agent_client_protocol::schema::v1::SessionConfigOptionsCapabilities;
 use agent_client_protocol::schema::v1::SessionId;
 use agent_client_protocol::schema::v1::SessionNotification;
+use agent_client_protocol::schema::v1::SubagentCapabilities;
 use agent_client_protocol::schema::v1::TerminalExitStatus;
 use agent_client_protocol::schema::v1::TerminalId;
 use agent_client_protocol::schema::v1::TerminalOutputRequest;
@@ -51,6 +54,7 @@ use crate::PermissionRequest;
 use crate::ProtocolTrace;
 use crate::RequestKey;
 use crate::fs;
+use crate::subagent_compat;
 use crate::terminal_meta;
 use crate::terminals::Terminals;
 
@@ -104,6 +108,10 @@ pub struct ClientOptions {
     /// Context compaction updates (`compaction_update`, `compaction_summary_chunk`), an ACP
     /// Preview feature; without them agents describe compaction in ordinary output.
     pub compaction: bool,
+    /// Subagent sessions (`subagent_update`, session-directed messages, and the children's
+    /// own updates), from ACP's draft Subagent Sessions RFD; without them agents report
+    /// subagent work through the parent session.
+    pub subagents: bool,
 }
 
 impl Default for ClientOptions {
@@ -115,6 +123,7 @@ impl Default for ClientOptions {
             elicitation: true,
             terminal_auth: false,
             compaction: true,
+            subagents: true,
         }
     }
 }
@@ -141,6 +150,7 @@ impl ClientOptions {
                     )
                     .compaction(self.compaction.then(CompactionCapabilities::new)),
             )
+            .subagents(self.subagents.then(SubagentCapabilities::new))
             .meta(terminal_output_meta())
     }
 }
@@ -225,6 +235,7 @@ impl AgentConnection {
         let terminals = Arc::new(Terminals::new(events.clone(), Arc::clone(&session_dirs)));
 
         let notifications = events.clone();
+        let earlier_drafts = events.clone();
         let permissions = events.clone();
         let elicitations = events.clone();
         let keys = Arc::new(AtomicU64::new(1));
@@ -239,6 +250,25 @@ impl AgentConnection {
         let builder = Client
             .builder()
             .name("weave")
+            // Before the typed handler, which rejects them: subagent updates in the earlier
+            // draft that today's adapters still send, read as the current draft's.
+            .on_receive_notification(
+                async move |message: UntypedMessage, cx| {
+                    let Some(updates) =
+                        subagent_compat::translate(&message.method, &message.params)
+                    else {
+                        return Ok(Handled::No {
+                            message: (message, cx),
+                            retry: false,
+                        });
+                    };
+                    for notification in updates {
+                        let _ = earlier_drafts.send(AgentEvent::SessionUpdate(notification));
+                    }
+                    Ok(Handled::Yes)
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
             .on_receive_notification(
                 async move |notification: SessionNotification, _cx| {
                     // Output of commands the agent runs itself arrives in `_meta`; deliver it

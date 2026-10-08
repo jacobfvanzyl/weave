@@ -15,6 +15,8 @@
 //! | `connect` | a URL elicitation, completed shortly after consent |
 //! | `mcp` | lists the MCP servers the session was given |
 //! | `think` | thought chunks, then a message |
+//! | `delegate` | two subagents (draft RFD) that report work in their own sessions |
+//! | `delegate-legacy` | the same in the RFD's earlier draft, as some adapters send it |
 //! | `compact` | a context compaction with a streamed summary (Preview), when the client asks for them |
 //! | `switch-mode` | an agent-initiated mode change (`current_mode_update`, `config_option_update`) |
 //! | `withdraw` | a permission request withdrawn with `$/cancel_request` |
@@ -502,6 +504,12 @@ fn advertise_commands(cx: &ConnectionTo<Client>, session_id: &SessionId) -> Resu
         command("mcp", "List the MCP servers this session has", None),
         command("think", "Reason out loud, then answer", None),
         command("compact", "Compact the context, keeping a summary", None),
+        command("delegate", "Delegate to two subagents", None),
+        command(
+            "delegate-legacy",
+            "Delegate in the subagent RFD's earlier draft",
+            None,
+        ),
         command(
             "switch-mode",
             "Switch modes on the agent's own initiative",

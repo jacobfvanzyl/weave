@@ -32,6 +32,7 @@ mod settings;
 mod status;
 mod streaming;
 mod style;
+mod subagents;
 #[cfg(test)]
 mod test_backend;
 mod tool_call;

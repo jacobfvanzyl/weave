@@ -7,10 +7,11 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
 
 ## Boundaries
 
-- It speaks ACP v1 stable and implements it completely. One Preview RFD is in scope too:
-  session compaction, through the SDK's `unstable_session_compaction` feature, advertised
-  by default and withheld with `compaction = false` for an agent. The v2 draft and other
-  unstable RFDs stay out of scope unless the issue changes.
+- It speaks ACP v1 stable and implements it completely. Two unstable RFDs are in scope
+  too, each advertised by default and withheld per agent: session compaction (Preview;
+  `unstable_session_compaction`, `compaction = false`) and subagent sessions (draft;
+  `unstable_subagents`, `subagents = false`). The v2 draft and other unstable RFDs stay out
+  of scope unless the issue changes.
 - It launches agents locally. It has no dependency on `product/`, the Host Daemon
   or its protocol, and it is not a root Bun workspace.
 - One session per process. Like Codex, it runs fullscreen by default: on the alternate
@@ -38,13 +39,16 @@ Keep protocol behavior in `acp-core`. Client services (`fs/*`, `terminal/*`) liv
 and are advertised per `ClientOptions`; never advertise one that isn't answered. Real
 adapters may not call them (Claude's runs its own tools), so the fake agent is what
 exercises them: integration tests connect it in-process over `Channel::duplex`, and its
-prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`, `/compact`) drive the
+prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`, `/compact`,
+`/delegate`) drive the
 real TUI. In `tui`, rendering follows Codex's look: `tool_call` maps ACP tool kinds onto
 Codex's cells (exec, explored, patch, MCP), `history_cell`, `markdown` and `streaming` the
 rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the terminal's
 colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
 two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
-(after Codex's composer Vim mode) editing the same text in the opt-in Vim composer. `ChatWidget` stays free of I/O: it turns
+(after Codex's composer Vim mode) editing the same text in the opt-in Vim composer;
+`subagents` shows ACP subagents as Codex shows its own, each child session in a chat of its
+own that the parent routes updates to. `ChatWidget` stays free of I/O: it turns
 agent events, keys and mouse input into transcript cells and `AppCommand`s, so it is
 tested without a terminal, in both screen modes. Terminal mechanics (`custom_terminal`, `insert_history`) are tested on a vt100
 backend. Untrusted agent text reaches the terminal only after control characters are
@@ -54,6 +58,12 @@ stripped.
 (`_meta.terminal_output_delta`, Zed's convention that codex-acp and claude-agent-acp use for
 commands they run themselves): `terminal_meta.rs` turns its chunks and exits into the same
 terminal events as client terminals, including in replayed sessions.
+
+Subagents follow the current draft of the Subagent Sessions RFD (`subagent_update`,
+session-directed messages, `running`/`idle` states). claude-agent-acp and codex-acp still
+send the earlier draft (`subagent_spawned`, `subagent_state_update`), which the pinned schema
+rejects, so `subagent_compat.rs` reads it first, as the current draft, in an untyped handler
+registered before the typed one. Delete it once the adapters move over.
 
 ## SDK rules
 
