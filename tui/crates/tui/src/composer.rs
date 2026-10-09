@@ -460,12 +460,19 @@ impl Composer {
             area.width.saturating_sub(RIGHT_MARGIN),
             area.height - 2 * padding,
         );
-        if self.vim.is_none() {
+        let Some(vim) = &self.vim else {
             return self.render(inner, buf, hint);
-        }
+        };
         let view = self.render_vim(inner, buf);
-        // Lines scrolled out of view are counted in the padding rows.
+        // The bottom padding row shows the mode and the keys of a command in progress, as
+        // Vim's `showmode` and `showcmd` do, so the footer stays put as they change. Lines
+        // scrolled out of view are counted in the padding rows.
         if padding > 0 {
+            let mut spans = vec![Span::styled(vim.mode().label(), mode_style(vim.mode()))];
+            if !vim.pending_keys().is_empty() {
+                spans.push(Span::styled(format!(" {}", vim.pending_keys()), dim()));
+            }
+            buf.set_line(area.x, area.bottom() - 1, &Line::from(spans), area.width);
             let marker = |count: usize, arrow: &str| {
                 Line::from(Span::styled(format!("{arrow} {count} more  "), dim()))
             };
@@ -675,6 +682,17 @@ fn draw_right(buf: &mut Buffer, area: Rect, y: u16, line: &Line<'_>) {
     }
 }
 
+/// Each Vim mode's color, as Vim's status line plugins color them.
+fn mode_style(mode: Mode) -> Style {
+    let color = match mode {
+        Mode::Normal => Color::Blue,
+        Mode::Insert => Color::Green,
+        Mode::Replace => Color::Red,
+        Mode::Visual | Mode::VisualLine => Color::Magenta,
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -813,8 +831,13 @@ mod tests {
         composer.handle_key(key(KeyCode::Char('k')));
         assert_eq!(
             screen(&composer, 20, 5),
-            ["", " 1 one", "2  two", " 1 three", ""]
+            ["", " 1 one", "2  two", " 1 three", "NORMAL"]
         );
+        // A command's keys show after the mode until it ends.
+        composer.handle_key(key(KeyCode::Char('2')));
+        composer.handle_key(key(KeyCode::Char('d')));
+        assert_eq!(screen(&composer, 20, 5)[4], "NORMAL 2d");
+        composer.handle_key(key(KeyCode::Esc));
         assert_eq!(composer.cursor_shape(), Some(CursorShape::Block));
         assert!(!composer.completes());
         composer.handle_key(key(KeyCode::Char('i')));
@@ -834,14 +857,15 @@ mod tests {
         let rows = screen(&composer, 40, 10);
         assert_eq!(rows[0].trim(), "↑ 12 more");
         assert_eq!(rows[8], "20 line 20");
-        assert_eq!(rows[9], "");
+        assert_eq!(rows[9], "INSERT");
         // Going to the top keeps the cursor in view and counts the lines below instead.
         composer.handle_key(key(KeyCode::Esc));
         composer.handle_key(key(KeyCode::Char('g')));
         composer.handle_key(key(KeyCode::Char('g')));
         let rows = screen(&composer, 40, 10);
         assert_eq!(rows[1], "1  line 1");
-        assert_eq!(rows[9].trim(), "↓ 12 more");
+        assert!(rows[9].starts_with("NORMAL "), "{}", rows[9]);
+        assert!(rows[9].ends_with(" ↓ 12 more"), "{}", rows[9]);
     }
 
     #[test]

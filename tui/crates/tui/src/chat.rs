@@ -2464,16 +2464,11 @@ impl ChatWidget {
             }
         };
         let values = self.status_values();
-        let vim = self
-            .composer
-            .vim()
-            .filter(|_| !self.has_overlay())
-            .map(|vim| (vim.mode(), vim.pending_keys()));
         let props = FooterProps {
             mode,
             items: &self.status_items,
             values: &values,
-            vim,
+            vim: self.composer.is_vim() && !self.has_overlay(),
         };
         footer::footer_line(&props, usize::from(width))
     }
@@ -3006,9 +3001,12 @@ mod tests {
     fn new_blank_threads_open_in_the_vim_composer_and_replies_do_not() {
         let mut chat = vim_chat(None);
         assert!(chat.composer.is_vim());
-        let footer = rows(&chat, 60).pop().unwrap_or_default();
-        assert!(footer.starts_with("  INSERT · Agent"), "{footer}");
+        // The mode shows in the composer's bottom row, not the footer.
+        let mut screen = rows(&chat, 60);
+        let footer = screen.pop().unwrap_or_default();
+        assert!(footer.starts_with("  Agent"), "{footer}");
         assert!(footer.ends_with("⌃↵ send"), "{footer}");
+        assert_eq!(screen.pop().as_deref(), Some("INSERT"), "{screen:?}");
         // Enter is a new line; Ctrl+Enter sends, and the reply starts basic.
         type_text(&mut chat, "write");
         chat.handle_key(key(KeyCode::Enter));
@@ -3081,8 +3079,10 @@ mod tests {
         let footer = rows(&chat, 60).pop().unwrap_or_default();
         assert_eq!(footer, "  ?on");
         chat.handle_key(key(KeyCode::Enter));
-        let footer = rows(&chat, 60).pop().unwrap_or_default();
-        assert!(footer.starts_with("  NORMAL · Agent"), "{footer}");
+        let mut screen = rows(&chat, 60);
+        let footer = screen.pop().unwrap_or_default();
+        assert!(footer.starts_with("  Agent"), "{footer}");
+        assert_eq!(screen.pop().as_deref(), Some("NORMAL"), "{screen:?}");
     }
 
     #[test]

@@ -324,10 +324,14 @@ impl Vim {
     /// Settle a finished command: keep the draft before it for undo, and its keys for `.`,
     /// once it changed something. An Insert or Replace session settles when it ends.
     fn finish(&mut self, text: &str) {
-        if !self.at_rest() || matches!(self.mode, Mode::Insert | Mode::Replace) {
+        if !self.at_rest() {
             return;
         }
+        // The command's keys are done with, even when it starts an Insert or Replace session.
         self.typed.clear();
+        if matches!(self.mode, Mode::Insert | Mode::Replace) {
+            return;
+        }
         let changed = self
             .before
             .as_ref()
@@ -2223,6 +2227,10 @@ mod tests {
         let (_, _, vim) = run_with("|abc", "2d", Mode::Normal);
         assert_eq!(vim.pending_keys(), "2d");
         let (_, _, vim) = run_with("|abc", "2d<esc>", Mode::Normal);
+        assert_eq!(vim.pending_keys(), "");
+        // A command that starts Insert mode ends there.
+        let (_, _, vim) = run_with("|abc", "cw", Mode::Normal);
+        assert_eq!(vim.mode(), Mode::Insert);
         assert_eq!(vim.pending_keys(), "");
         let (_, _, vim) = run_with("|abc", "/ab", Mode::Normal);
         assert_eq!(vim.search_prompt().as_deref(), Some("/ab"));

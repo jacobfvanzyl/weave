@@ -15,7 +15,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::highlight;
 use crate::style::secondary;
 use crate::transcript::FindStatus;
-use crate::vim::Mode;
 
 /// Columns of indent before the footer and after its right side.
 const INDENT: usize = 2;
@@ -166,8 +165,8 @@ pub struct FooterProps<'a> {
     pub mode: FooterMode,
     pub items: &'a [StatusItem],
     pub values: &'a StatusValues,
-    /// The Vim composer's mode and the keys of a command in progress, while it has the keys.
-    pub vim: Option<(Mode, &'a str)>,
+    /// Whether the Vim composer has the keys.
+    pub vim: bool,
 }
 
 /// The footer row for `width` columns: left content, then the cost and settings hint,
@@ -186,23 +185,10 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
             composer_empty,
             working,
         } => {
-            if let Some((mode, pending)) = props.vim {
-                // The Vim composer's mode leads, as Vim's `showmode` and `showcmd` show it.
-                let mut spans = vec![Span::styled(mode.label(), mode_style(mode))];
-                if !pending.is_empty() {
-                    spans.push(Span::styled(format!(" {pending}"), secondary()));
-                }
-                let used = spans_width(&spans) + SEPARATOR.width();
-                let rest = status_line(
-                    props.items,
-                    props.values,
-                    width.saturating_sub(2 * INDENT + used),
-                );
-                if !rest.is_empty() {
-                    spans.push(Span::styled(SEPARATOR, secondary()));
-                    spans.extend(rest);
-                }
-                spans
+            if props.vim {
+                // The Vim composer shows its own mode, and Enter there starts a new line
+                // rather than queueing.
+                status_line(props.items, props.values, width.saturating_sub(2 * INDENT))
             } else if working && !composer_empty {
                 key_hint("enter", " to queue message")
             } else if !props.items.is_empty() {
@@ -218,7 +204,7 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
         trailing(
             props.values,
             props.items.contains(&StatusItem::Cost),
-            props.vim.is_some(),
+            props.vim,
         )
     } else {
         Vec::new()
@@ -281,19 +267,6 @@ fn trailing(values: &StatusValues, show_cost: bool, vim: bool) -> Vec<Vec<Span<'
     }
     parts.retain(|part| !part.is_empty());
     parts
-}
-
-/// Each Vim mode's color in the footer, as Vim's status line plugins color them.
-fn mode_style(mode: Mode) -> Style {
-    let color = match mode {
-        Mode::Normal => Color::Blue,
-        Mode::Insert => Color::Green,
-        Mode::Replace => Color::Red,
-        Mode::Visual | Mode::VisualLine => Color::Magenta,
-    };
-    Style::default()
-        .fg(color)
-        .add_modifier(ratatui::style::Modifier::BOLD)
 }
 
 /// `$1.23`, `€0.40`, or `12.00 CHF` for currencies without a symbol here.
@@ -554,7 +527,7 @@ mod tests {
             mode,
             items,
             values: &values,
-            vim: None,
+            vim: false,
         };
         footer_line(&props, width).to_string().trim_end().to_owned()
     }
@@ -609,7 +582,7 @@ mod tests {
             mode: IDLE,
             items: &configured,
             values: &values,
-            vim: None,
+            vim: false,
         };
         assert_eq!(
             footer_line(&props, 100).to_string().trim_end(),
