@@ -15,10 +15,10 @@ await run(['bun', 'run', 'check:desktop']);
 await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
 for (const [entry, name, format] of [['main', 'main.mjs', 'esm'], ['preload', 'preload.cjs', 'cjs']] as const) {
-  const result = await Bun.build({ entrypoints: [resolve(root, 'electron', `${entry}.ts`)], outdir: stage, naming: name, target: 'node', format, external: ['electron'], define: { ALPHA_CLIENT_BROWSER_PROTOTYPE: JSON.stringify(process.env.VITE_CLIENT_BROWSER_PROTOTYPE === '1'), ALPHA_ACCEPTANCE: JSON.stringify(process.env.VITE_ALPHA_ACCEPTANCE === '1') } });
+  const result = await Bun.build({ entrypoints: [resolve(root, 'electron', `${entry}.ts`)], outdir: stage, naming: name, target: 'node', format, external: ['electron'], define: { ALPHA_ACCEPTANCE: JSON.stringify(process.env.VITE_ALPHA_ACCEPTANCE === '1') } });
   if (!result.success) throw new AggregateError(result.logs, 'Electron build failed');
 }
-if (process.env.VITE_CLIENT_BROWSER_PROTOTYPE === '1') await cp(resolve(root, 'native/.build/client-browser/weave-client-browser.node'), resolve(stage, 'weave-client-browser.node'));
+await cp(resolve(root, 'native/.build/client-browser/weave-client-browser.node'), resolve(stage, 'weave-client-browser.node'));
 await cp(resolve(root, 'native/.build/macos/weave-terminal.node'), resolve(stage, 'weave-terminal.node'));
 await cp(resolve(root, 'native/.build/browser/macos/weave-browser.node'), resolve(stage, 'weave-browser.node'));
 await cp(resolve(root, 'native/.build/browser/macos/LIBVNC-LICENSE'), resolve(stage, 'LIBVNC-LICENSE'));
@@ -35,7 +35,7 @@ if (process.argv.includes('--dev') || process.argv.includes('--stage-only')) {
     dir: stage, out: resolve(root, 'release'), name: 'Weave Alpha', platform: 'darwin', arch: process.arch,
     electronVersion: manifest.devDependencies.electron, appBundleId: 'com.veezee.alpha.macos',
     extraResource: [resolve(root, 'src/assets/fonts/TerminalFonts')],
-    ...(process.env.VITE_CLIENT_BROWSER_PROTOTYPE === '1' ? { extendInfo: { NSCameraUsageDescription: 'Websites you open in Weave can request permission to use your camera.', NSMicrophoneUsageDescription: 'Websites you open in Weave can request permission to use your microphone.' } } : {}),
+    extendInfo: { NSCameraUsageDescription: 'Websites you open in Weave can request permission to use your camera.', NSMicrophoneUsageDescription: 'Websites you open in Weave can request permission to use your microphone.' },
     appVersion: manifest.version, overwrite: true, asar: { unpack: '**/*.node' }, prune: false,
     ...(identity ? { osxSign: { identity, optionsForFile: () => ({ hardenedRuntime: false }) } } : {}),
   });

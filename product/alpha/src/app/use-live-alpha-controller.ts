@@ -1132,7 +1132,7 @@ export function useLiveAlphaController(
     (selected.attention.state === "working" || selected.attention.state === "waiting");
 
   const openClientBrowserPane = async (reference: { hostId: string; workspaceId: string }, initialUrl = 'about:blank', popup?: { paneId: string; token: string; sourcePaneId: string }, placement?: { sourcePaneId: string; axis: 'horizontal' | 'vertical' }) => {
-    if (!clientBrowserAvailable) throw new Error('Client Browser requires an enabled Apple client on OS 26 or later.');
+    if (!clientBrowserAvailable) throw new Error('Client Browser requires an Apple client on OS 26 or later.');
     const client = clientsRef.current.get(reference.hostId);
     if (!client || statuses[reference.hostId] !== 'connected') throw new Error('Connect to this Host to create a Client Browser Pane.');
     if (!snapshots[reference.hostId]?.capabilities.includes('client-browser.panes.v1')) throw new Error('Update this Host to use Client Browser Panes.');

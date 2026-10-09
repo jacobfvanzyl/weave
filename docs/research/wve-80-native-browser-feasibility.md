@@ -2,6 +2,23 @@
 
 Date: 16 September 2026. Status: WKWebView inside SwiftUI approved and implemented. The popup/download capability gate passes; the complete Client Browser and full milestone acceptance remain unfinished.
 
+## Standard-build promotion — 5 October
+
+Client Browser is now included in ordinary Apple builds, with availability determined by the native bridge and OS support. The React feature flag and native prototype compile conditions have been removed. The Electron bridge, Capacitor plugin and shared Swift facade use production Client Browser names. Existing profile identifiers and pane checkpoint keys are unchanged. The isolated feasibility screen and webpage fixture reporting remain acceptance/debug-only.
+
+Normal Mac downloads now use a persistent folder under Downloads and expose Show in Finder after completion. iPad downloads remain in the app's Documents folder and expose native sharing. Named profiles, recently closed pages, real-site compatibility, full accessibility and crash/offline recovery remain unfinished; this promotion does not complete WVE-80.
+
+Validation used Bun 1.3.14 and the frozen lockfile:
+
+- Root tooling, boundary and all 46 protocol tests passed.
+- All 321 Alpha tests passed with two workers. The initial default-parallel root check timed out in existing UI tests during concurrent builds.
+- All 151 Host tests passed with a 15-second per-test bound; the initial five-second bound timed out in one existing profile-scope test. Host and desktop type checks and the normal renderer build passed.
+- The normal Mac native build and desktop packaging passed without a Client Browser feature flag. The bundle includes `weave-client-browser.node` and the camera/microphone usage descriptions.
+- Real-shell Mac Workspace acceptance passed creation, selection, movement, cancelled-close overlay retention and confirmed closure, retaining native page identity `2DF696C2-3FE3-4662-BC8C-9234837675B5`. This used the normal native browser addon, an isolated acceptance renderer/profile and a disposable Host with real terminals and no Host Browser backend. Shell controls were driven in-process; this is not a new native webpage input/accessibility or popup/download acceptance run. Evidence: `/tmp/weave-wve80-promotion-runtime/run-final/result.json`.
+- The normal iPad build was blocked by missing Xcode account/provisioning profiles. An unsigned generic iOS build passed with no Client Browser compile flag. The physical iPad was unavailable, so installation and physical acceptance were not repeated.
+
+The disposable Host and terminals were shut down and generated pairing inputs removed. The installed live Host remains healthy on protocol 8; using the newly built Alpha against it requires a matching protocol-9 Host upgrade. Its state and installed runtime were not changed during this validation.
+
 ## Workspace popup and shell-reload acceptance — 16 September
 
 The Workspace path now passes a native-input sequence on Mac and physical iPad: navigate through the SwiftUI address field, type an unsent field, submit a POST into a new window, receive its opener callback with the original body and profile cookie, close the popup from its webpage, reload the React shell, and verify that both the native page and original document/form state remain alive. Confirmed shared closure then removes the native page. This is deterministic fixture evidence, not a new real-provider OAuth sign-in.
@@ -164,7 +181,7 @@ These temporary paths are session artifacts, not portable repository fixtures. R
 ## Implementation boundaries
 
 - `product/alpha/native/client-browser/`: shared Swift module and public N-API/AppKit Mac adapter.
-- `product/alpha/ios/App/App/ClientBrowserPrototypePlugin.swift`: Capacitor adapter and proper child-view-controller hosting.
+- `product/alpha/ios/App/App/ClientBrowserPlugin.swift`: Capacitor adapter and proper child-view-controller hosting (promoted from the prototype).
 - `product/alpha/src/client-browser/`: temporary two-slot React screen and create/adopt/layout/snapshot/close interface.
 - `product/alpha/scripts/client-browser-fixture.ts`: local pages, popup callbacks, download endpoints, input and capability reports.
 
@@ -210,10 +227,10 @@ Apple provides the required lower-level boundaries through [WKUIDelegate new-vie
 To avoid copying Electron into another app bundle, use:
 
 ```sh
-VITE_CLIENT_BROWSER_PROTOTYPE=1 bun product/alpha/scripts/build-desktop.ts --stage-only
+VITE_ALPHA_ACCEPTANCE=1 bun product/alpha/scripts/build-desktop.ts --stage-only
 WEAVE_ALPHA_ACCEPTANCE_DIR=/tmp/weave-wve80-wk bun run --cwd product/alpha electron .electron --client-browser-prototype
 ```
 
-After building the flagged iPad app, build the Acceptance scheme for testing with the same `SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DEBUG WEAVE_CLIENT_BROWSER_PROTOTYPE` argument and the same `product/alpha/.ipad-build` derived-data directory. The generated `Build/Products/Acceptance_iphoneos26.5-arm64.xctestrun` contains the AlphaUITests configuration. Set its test-runner EnvironmentVariables keys `WEAVE_CLIENT_BROWSER_FIXTURE` to the reachable fixture URL and `WEAVE_CLIENT_BROWSER_ATTACH` to `1`. These are generated local settings, not tracked credentials.
+Build the iPad app with `VITE_ALPHA_ACCEPTANCE=1 bun run build:ipad`, then build the Acceptance scheme for testing in Debug with the same `product/alpha/.ipad-build` derived-data directory. No Client Browser compile condition is needed. The generated `Build/Products/Acceptance_iphoneos<SDK>-arm64.xctestrun` contains the AlphaUITests configuration. Set its test-runner EnvironmentVariables keys `WEAVE_CLIENT_BROWSER_FIXTURE` to the reachable fixture URL and `WEAVE_CLIENT_BROWSER_ATTACH` to `1`. These are generated local settings, not tracked credentials.
 
 Install the app and prelaunch it with devicectl using `--client-browser-prototype` and the fixture environment variable. Then run `xcodebuild test-without-building` with the generated xctestrun, the physical device destination, and `-only-testing:AlphaUITests/AlphaUITests/testClientBrowserPopupDownloadsAndRetention`. The attach mode avoids the observed Xcode/device application-launch failure. Keep the prelaunch explicit: attach mode must only target the isolated prototype screen.

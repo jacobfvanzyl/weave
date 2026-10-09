@@ -18,7 +18,7 @@ export function App() {
   useNativeFullscreen();
   useNativeKeyboard();
   const mockScenario = mockScenarioFromLocation();
-  if (import.meta.env.VITE_CLIENT_BROWSER_PROTOTYPE === '1' && new URLSearchParams(location.search).has('clientBrowserPrototype')) return <ClientBrowserPrototype />;
+  if (import.meta.env.VITE_ALPHA_ACCEPTANCE === '1' && new URLSearchParams(location.search).has('clientBrowserPrototype')) return <ClientBrowserPrototype />;
 
   return (
     <TooltipProvider>

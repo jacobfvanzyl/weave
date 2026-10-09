@@ -1,6 +1,6 @@
 # Weave
 
-Weave Alpha connects directly to Hosts to run structured ACP conversations and persistent terminals. The application uses the newer stack under `product/`. Filetree, dedicated Editor, embedded Browser, and Automation are outside the active product.
+Weave Alpha connects directly to Hosts to run structured ACP conversations, persistent terminals and Host Browser panes. Apple clients also provide local WebKit Client Browser panes. The application uses the newer stack under `product/`. Filetree, dedicated Editor and Automation are outside the active product.
 
 ## Develop
 

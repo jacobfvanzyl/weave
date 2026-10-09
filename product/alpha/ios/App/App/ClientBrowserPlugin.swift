@@ -1,19 +1,18 @@
-#if WEAVE_CLIENT_BROWSER_PROTOTYPE
 import Capacitor
 import UIKit
 
 @available(iOS 26.0, *)
-@objc(ClientBrowserPrototypePlugin)
-final class ClientBrowserPrototypePlugin: CAPPlugin, CAPBridgedPlugin {
-    let identifier = "ClientBrowserPrototypePlugin"
-    let jsName = "ClientBrowserPrototype"
-    let pluginMethods = ["create", "adopt", "layout", "snapshot", "focus", "list", "close"].compactMap { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
-    private var surfaces: [String: ClientBrowserPrototype] = [:]
+@objc(ClientBrowserPlugin)
+final class ClientBrowserPlugin: CAPPlugin, CAPBridgedPlugin {
+    let identifier = "ClientBrowserPlugin"
+    let jsName = "ClientBrowser"
+    let pluginMethods = ["create", "adopt", "layout", "snapshot", "focus", "command", "list", "close"].compactMap { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
+    private var surfaces: [String: ClientBrowser] = [:]
     private var shellLoading: NSKeyValueObservation?
     override func load() {
         shellLoading = bridge?.webView?.observe(\.isLoading, options: [.new]) { [weak self] web, _ in
             guard web.isLoading else { return }
-            DispatchQueue.main.async { for surface in self?.surfaces.values ?? Dictionary<String, ClientBrowserPrototype>().values { surface.present(x: 0, y: 0, width: 0, height: 0, visible: false, blocked: true) } }
+            DispatchQueue.main.async { for surface in self?.surfaces.values ?? Dictionary<String, ClientBrowser>().values { surface.present(x: 0, y: 0, width: 0, height: 0, visible: false, blocked: true) } }
         }
     }
     private var paneKeys: [String: String] = [:]
@@ -32,7 +31,7 @@ final class ClientBrowserPrototypePlugin: CAPPlugin, CAPBridgedPlugin {
                 payload["surfaceId"] = id
                 self?.notifyListeners("event", data: payload)
             }
-            let surface = key.map { ClientBrowserPrototype(address: address, paneKey: $0, event: handler) } ?? ClientBrowserPrototype(address: address, event: handler)
+            let surface = key.map { ClientBrowser(address: address, paneKey: $0, event: handler) } ?? ClientBrowser(address: address, event: handler)
             self.paneKeys[id] = key
             self.surfaces[id] = surface
             surface.attach(to: parent)
@@ -47,7 +46,7 @@ final class ClientBrowserPrototypePlugin: CAPPlugin, CAPBridgedPlugin {
             guard self.surfaces.count < 128, let parent = self.bridge?.viewController,
                   let token = call.getString("popupToken"), token.count < 128 else { call.reject("Invalid popup"); return }
             let id = UUID().uuidString
-            guard let surface = ClientBrowserPrototype.adoptPopup(token, event: { [weak self] event in
+            guard let surface = ClientBrowser.adoptPopup(token, event: { [weak self] event in
                 guard self?.surfaces[id] != nil else { return }
                 var payload = event as? [String: Any] ?? [:]; payload["surfaceId"] = id
                 self?.notifyListeners("event", data: payload)
@@ -82,6 +81,14 @@ final class ClientBrowserPrototypePlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func focus(_ call: CAPPluginCall) {
         DispatchQueue.main.async { if let id = call.getString("surfaceId") { self.surfaces[id]?.focusPage() }; call.resolve() }
     }
+    @objc func command(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let id = call.getString("surfaceId"), let surface = self.surfaces[id],
+                  let action = call.getString("action"),
+                  surface.command(action, address: call.getString("address") ?? "") else { call.reject("Invalid browser command or address"); return }
+            call.resolve()
+        }
+    }
     @objc func close(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             if let id = call.getString("surfaceId"), let surface = self.surfaces.removeValue(forKey:id) { surface.close(); self.paneKeys.removeValue(forKey: id) }
@@ -89,4 +96,3 @@ final class ClientBrowserPrototypePlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 }
-#endif

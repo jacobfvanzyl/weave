@@ -324,7 +324,12 @@ static napi_value create(napi_env env, napi_callback_info info) {
     container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     NSArray<NSView *> *webViews = parent.subviews.copy;
     [parent addSubview:container];
-    for (NSView *web in webViews) { [web removeFromSuperview]; [container addSubview:web]; }
+    // Chromium resets its frame when reparented. Keep the existing geometry
+    // when moving the shell and any Client Browser hosts into this container.
+    for (NSView *web in webViews) {
+      NSRect frame = web.frame;
+      [web removeFromSuperview]; [container addSubview:web]; web.frame = frame;
+    }
   }
   entry.view.inputBlocked = YES;
   [container addSubview:entry.view positioned:NSWindowBelow relativeTo:nil];

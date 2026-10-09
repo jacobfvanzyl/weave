@@ -1,5 +1,6 @@
 import { clientBrowserAvailable } from '@/client-browser/native-client-browser';
 import { HostBrowserSidebarTile } from './host-browser-sidebar-tile';
+import { ClientBrowserSidebarTile } from './client-browser-sidebar-tile';
 import type { CompactPane } from '@/app/compact-pane';
 import type { TerminalPaneAction } from '@/app/terminal-pane-actions';
 import { terminalFocusId } from '@/app/pane-focus';
@@ -8,8 +9,8 @@ import { HugeiconsIcon } from '@hugeicons/react';
 import { MoreVerticalIcon, MoreHorizontalIcon, ArrowDown01Icon, ArrowRight01Icon, FileBoxIcon, ComputerTerminal01Icon } from '@hugeicons/core-free-icons';
 import { paneTargets, terminalPaneTargets, type Workspace, type WorkspaceClosePlan } from '@weave/product-protocol';
 import { ConnectionsButton } from './connections-button';
-import { PathLabel } from './path-label';
-import { sidebarTerminalTitle } from '@/lib/display-path';
+import { PathLabel, TerminalTitle } from './path-label';
+import { compactPath, sidebarTerminalTitle } from '@/lib/display-path';
 import { cn } from '@/lib/utils';
 import type { AlphaController, AlphaThread } from '@/app/alpha-controller';
 import { workspaceKey, type WorkspaceReference } from '@/app/workspace-presentation';
@@ -21,7 +22,6 @@ import { AgentActivityIndicator } from './agent-activity-indicator';
 import { DraftChip } from './draft-chip';
 import { CodexIcon } from './codex-icon';
 import { Button } from './ui/button';
-import { Badge } from './ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from './ui/dropdown-menu';
 import { Sidebar, SidebarHeader, SidebarContent, SidebarGroup, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarMenuAction } from './ui/sidebar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
@@ -71,14 +71,14 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
     if (target && actions.createThreadInDirectory) { void actions.createThreadInDirectory(reference.hostId, target, reference.workspaceId); return; }
     setChoosingAgent({ reference, directories });
   };
-  const threadRow = (thread: AlphaThread) => {
+  const threadRow = (thread: AlphaThread, paneId: string) => {
     const ref = { hostId: thread.hostId, workspaceId: thread.workspaceId ?? '' };
     const workspace = state.compositions[thread.hostId]?.workspaces.find(workspace => workspace.workspaceId === thread.workspaceId);
     const panes = workspace ? paneTargets([workspace]) : [];
     const focused = panes.find(pane => pane.paneId === state.presentation.focusedPanes[workspaceKey(ref)]) ?? panes[0];
     const selected = state.presentation.activeWorkspace === workspaceKey(ref) && focused?.kind === 'agent' && focused.threadId === thread.threadId;
     const available = connected(thread.hostId);
-    return <SidebarMenuItem key={thread.id} data-thread-id={thread.id}>
+    return <SidebarMenuItem key={paneId} data-pane-id={paneId} data-thread-id={thread.id}>
       <SidebarMenuButton size='default' data-agent-pane-state={selected ? 'visible' : undefined} className='data-active:bg-terminal-focus data-active:text-terminal-focus-foreground data-active:hover:bg-terminal-focus data-active:hover:text-terminal-focus-foreground' isActive={selected} aria-label={`Agent ${thread.title}`} aria-describedby={`agent-activity-${thread.id}`} aria-pressed={selected} onClick={() => onSelectThread ? onSelectThread(thread.id) : void actions.selectThread(thread.id)} disabled={!available || model.busy}>
         <CodexIcon /><span className='flex min-w-0 flex-1 items-center gap-2 pr-0.5'><span className='min-w-0 flex-1 truncate'>{thread.draft || !thread.title.trim() ? <DraftChip /> : thread.title}</span><AgentActivityIndicator id={`agent-activity-${thread.id}`} attention={thread.attention} completionUnread={thread.completionUnread} available={available} selected={selected} /></span>
       </SidebarMenuButton>
@@ -117,20 +117,19 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
           const key = workspaceKey(reference), active = key === state.presentation.activeWorkspace, collapsed = state.presentation.collapsedWorkspaces.includes(key);
           const hostName = model.connections.find((connection) => connection.hostId === reference.hostId)?.displayName;
           const contextPath = (id: string) => model.executionContexts.find((context) => context.hostId === reference.hostId && context.executionContextId === id)?.canonicalPath;
-          const terminalTiles = terminalPaneTargets([workspace]).map((pane) => {
-            const terminal = records(reference.hostId).find((terminal) => terminal.terminalId === pane.terminalId);
-            const title = sidebarTerminalTitle(terminal?.title ?? 'Terminal', terminal?.processName);
-            return { path: terminal?.currentDirectory ?? pane.launchDirectory ?? terminal?.initialDirectory ?? contextPath(pane.executionContextId), tile: <SidebarMenuItem key={pane.paneId} data-pane-id={pane.paneId}><SidebarMenuButton className='data-active:bg-terminal-focus data-active:text-terminal-focus-foreground data-active:hover:bg-terminal-focus data-active:hover:text-terminal-focus-foreground' isActive={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} aria-label={`Terminal ${title}`} aria-pressed={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} onClick={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)}><HugeiconsIcon icon={ComputerTerminal01Icon} /><span className='min-w-0 flex-1 truncate'>{title}</span></SidebarMenuButton>{compact && <DropdownMenu><DropdownMenuTrigger render={<SidebarMenuAction aria-label={`Actions for terminal ${title}`} />}>⋯</DropdownMenuTrigger><DropdownMenuContent><DropdownMenuGroup><DropdownMenuItem disabled={!terminalActions?.[terminalFocusId(key, pane.paneId)]?.enabled} onClick={() => void terminalActions?.[terminalFocusId(key, pane.paneId)]?.terminate().catch(error => onActionError?.(error instanceof Error ? error.message : String(error)))}>Terminate terminal</DropdownMenuItem></DropdownMenuGroup></DropdownMenuContent></DropdownMenu>}</SidebarMenuItem> };
+          // Match the main view's split-tree traversal: left/top child before right/bottom.
+          const paneTiles = paneTargets([workspace]).map((pane) => {
+            if (pane.kind === 'terminal') {
+              const terminal = records(reference.hostId).find((terminal) => terminal.terminalId === pane.terminalId);
+              const directory = terminal?.currentDirectory ?? pane.launchDirectory ?? terminal?.initialDirectory ?? contextPath(pane.executionContextId);
+              const title = sidebarTerminalTitle(terminal?.title ?? 'Terminal', terminal?.processName, directory);
+              return <SidebarMenuItem key={pane.paneId} data-pane-id={pane.paneId}><SidebarMenuButton className='data-active:bg-terminal-focus data-active:text-terminal-focus-foreground data-active:hover:bg-terminal-focus data-active:hover:text-terminal-focus-foreground' isActive={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} aria-label={`Terminal ${title}`} aria-pressed={active && (compact ? selectedPane?.kind === 'terminal' && selectedPane.id === pane.paneId : state.presentation.focusedPanes[key] === pane.paneId)} onClick={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)}><HugeiconsIcon icon={ComputerTerminal01Icon} />{directory && title === compactPath(directory) ? <PathLabel path={directory} className='flex-1' /> : <TerminalTitle title={title} className='flex-1' />}</SidebarMenuButton>{compact && <DropdownMenu><DropdownMenuTrigger render={<SidebarMenuAction aria-label={`Actions for terminal ${title}`} />}>⋯</DropdownMenuTrigger><DropdownMenuContent><DropdownMenuGroup><DropdownMenuItem disabled={!terminalActions?.[terminalFocusId(key, pane.paneId)]?.enabled} onClick={() => void terminalActions?.[terminalFocusId(key, pane.paneId)]?.terminate().catch(error => onActionError?.(error instanceof Error ? error.message : String(error)))}>Terminate terminal</DropdownMenuItem></DropdownMenuGroup></DropdownMenuContent></DropdownMenu>}</SidebarMenuItem>;
+            }
+            if (pane.kind === 'host-browser') return <HostBrowserSidebarTile key={pane.paneId} controller={controller} hostId={reference.hostId} paneId={pane.paneId} profileId={pane.profileId} active={active && state.presentation.focusedPanes[key] === pane.paneId} select={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)} />;
+            if (pane.kind === 'client-browser') return <ClientBrowserSidebarTile key={pane.paneId} hostId={reference.hostId} paneId={pane.paneId} initialUrl={pane.initialUrl} active={active && state.presentation.focusedPanes[key] === pane.paneId} select={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)} />;
+            const thread = threads.find(thread => thread.hostId === reference.hostId && thread.threadId === pane.threadId);
+            return thread && matches(thread) ? threadRow(thread, pane.paneId) : null;
           });
-          const browserTiles = paneTargets([workspace]).filter(pane => pane.kind === 'host-browser').map(pane => <HostBrowserSidebarTile key={pane.paneId} controller={controller} hostId={reference.hostId} paneId={pane.paneId} profileId={pane.profileId} active={active && state.presentation.focusedPanes[key] === pane.paneId} select={() => onSelectTerminal ? onSelectTerminal(reference,pane.paneId) : workspaceActions?.focus(reference,pane.paneId)} />);
-          const clientBrowserTiles = paneTargets([workspace]).filter(pane => pane.kind === 'client-browser').map(pane => <SidebarMenuItem key={pane.paneId} data-pane-id={pane.paneId}><SidebarMenuButton isActive={active && state.presentation.focusedPanes[key] === pane.paneId} aria-label={`Client Browser ${pane.initialUrl}`} onClick={() => onSelectTerminal ? onSelectTerminal(reference, pane.paneId) : workspaceActions?.focus(reference, pane.paneId)}><span className='truncate'>Client Browser · {pane.initialUrl === 'about:blank' ? 'New page' : new URL(pane.initialUrl).hostname}</span></SidebarMenuButton></SidebarMenuItem>);
-          const agentTiles = paneTargets([workspace]).filter(pane => pane.kind === 'agent').flatMap(pane => threads.filter(thread => thread.hostId === reference.hostId && thread.threadId === pane.threadId && matches(thread))).map((thread) => ({ path: thread.workingDirectory ?? contextPath(thread.executionContextId), tile: threadRow(thread) }));
-          // Full paths group content; Pane selection comes from the composition.
-          const groups = new Map<string | undefined, ReactNode[]>();
-          for (const { path, tile } of [...terminalTiles, ...agentTiles]) {
-            const children = groups.get(path) ?? [];
-            children.push(tile); groups.set(path, children);
-          }
           return <SidebarGroup key={key} data-workspace-id={workspace.workspaceId}><div data-slot='workspace-card' className={cn('rounded-[calc(var(--radius-sm)+2px)]', active && 'bg-sidebar-selected')}><SidebarMenu><SidebarMenuItem>
             <div data-slot='workspace-selection-row' className='grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center rounded-[calc(var(--radius-sm)+2px)] hover:bg-sidebar-accent'>
               <SidebarMenuButton size='default' className='col-span-3 col-start-1 row-start-1 pr-8 hover:bg-transparent active:bg-transparent data-active:bg-transparent' isActive={active} aria-pressed={active} aria-label={`Workspace ${workspace.name}`} onClick={() => onSelectWorkspace ? onSelectWorkspace(reference) : workspaceActions?.activate(reference)}>
@@ -148,13 +147,7 @@ export function WorkspaceSidebar({ controller, onSelectThread, onSelectTerminal,
               </DropdownMenuGroup></DropdownMenuContent></DropdownMenu>
             </div>
           </SidebarMenuItem></SidebarMenu>
-          {!collapsed && <div className='flex min-w-0 flex-col gap-1 pb-1'>
-            {(browserTiles.length > 0 || clientBrowserTiles.length > 0) && <SidebarMenu>{browserTiles}{clientBrowserTiles}</SidebarMenu>}
-            {[...groups].map(([path, children]) => <div key={path ?? 'unknown'} data-slot='workspace-directory-group' data-directory={path} className='min-w-0'>
-              <div className='flex min-w-0 py-1 pl-8 pr-2'><Badge variant={active ? 'sidebar-selected' : 'sidebar'} className='max-w-full' title={!connected(reference.hostId) ? 'Last known directory — Host disconnected' : undefined}>{path ? <PathLabel path={path} /> : 'Directory unavailable'}</Badge></div>
-              <SidebarMenu>{children}</SidebarMenu>
-            </div>)}
-          </div>}
+          {!collapsed && <SidebarMenu className='pb-1'>{paneTiles}</SidebarMenu>}
           </div></SidebarGroup>;
         })}
 

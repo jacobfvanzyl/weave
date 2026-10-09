@@ -14,9 +14,15 @@ export function compactTerminalTitle(title: string): string {
   return title.replace(/(^|[ :])((?:~?\/|[a-z]:\\)[^\n]*)$/i, (_match, prefix: string, path: string) => `${prefix}${compactPath(path)}`);
 }
 
-/** Sidebar directory badges own paths; idle shell titles show the process only. */
-export function sidebarTerminalTitle(title: string, processName?: string): string {
+const shellNames = new Set(['sh', 'zsh', 'bash', 'fish', 'dash', 'ksh', 'nu', 'tcsh', 'csh', 'pwsh', 'powershell']);
+/** Plain shell rows show their location; application and custom titles remain useful. */
+export function sidebarTerminalTitle(title: string, processName?: string, directory?: string): string {
   const label = compactTerminalTitle(title);
-  if (/(?:^|[ :])(?:~?\/|[a-z]:\\|\.\.\.[\/\\])/i.test(label)) return processName?.split(/[\/\\]/).filter(Boolean).at(-1) || 'Terminal';
+  const process = processName?.split(/[\/\\]/).filter(Boolean).at(-1)?.replace(/^-/, '');
+  const shell = (value: string) => shellNames.has(value.toLowerCase().replace(/\.exe$/, ''));
+  const pathTitle = /^(?:~?\/|[a-z]:\\|\.\.\.[\/\\])/i.test(label);
+  const plainTitle = pathTitle || label === 'Terminal' || shell(label);
+  if (plainTitle && directory && (!process || shell(process))) return compactPath(directory);
+  if (plainTitle && process && !shell(process)) return process;
   return label;
 }

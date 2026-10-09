@@ -1,5 +1,4 @@
-// WVE-80 capability prototype. Compiled only into explicitly enabled builds.
-#if WEAVE_CLIENT_BROWSER_PROTOTYPE
+// Native Client Browser shared by the macOS and iPad shells.
 import Foundation
 import Observation
 import SwiftUI
@@ -11,6 +10,7 @@ import AppKit
 import UIKit
 #endif
 
+#if DEBUG || WEAVE_ACCEPTANCE
 @available(macOS 26.0, iOS 26.0, *)
 @MainActor
 private final class ProbeMessages: NSObject, WKScriptMessageHandler {
@@ -22,9 +22,11 @@ private final class ProbeMessages: NSObject, WKScriptMessageHandler {
     }
 }
 
+#endif
+
 @available(macOS 26.0, iOS 26.0, *)
 @MainActor @Observable
-private final class ProbeDownload: Identifiable {
+private final class ClientBrowserDownload: Identifiable {
     let id = UUID().uuidString
     var transfer: WKDownload?
     var name = "Download"
@@ -67,11 +69,12 @@ private final class ClientBrowserModel: NSObject, WKNavigationDelegate, WKUIDele
     var addressFocusRequest = 0
     var editingAddress = false
     var title = ""
+    var faviconURL = ""
     var loading = false
     var canGoBack = false
     var canGoForward = false
     var error: String?
-    var downloads: [ProbeDownload] = []
+    var downloads: [ClientBrowserDownload] = []
     var prompt: BrowserPrompt?
     var promptText = ""
     var showFilePicker = false
@@ -84,6 +87,42 @@ private final class ClientBrowserModel: NSObject, WKNavigationDelegate, WKUIDele
     private var observations: [NSKeyValueObservation] = []
     private var closed = false
     private var downloadPolicyInterruptions = 0
+    private var iconLookup: UUID?
+    private var lastIconRead = Date.distantPast
+
+    // Only local page metadata is read; the bridge never accepts page scripts.
+    func refreshFavicon() {
+        guard !closed, !page.isLoading, iconLookup == nil,
+              Date().timeIntervalSince(lastIconRead) >= 2,
+              let url = page.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return }
+        lastIconRead = Date()
+        let lookup = UUID(); iconLookup = lookup
+        page.evaluateJavaScript("""
+            (() => {
+                const links = Array.from(document.querySelectorAll('link[rel]'));
+                const has = (link, rel) => link.rel.toLowerCase().split(/\\s+/).includes(rel);
+                const icon = links.find(link => has(link, 'icon')) ?? links.find(link => has(link, 'apple-touch-icon'));
+                return icon?.href || '';
+            })()
+            """) { [weak self] result, _ in
+            guard let self, !self.closed, self.iconLookup == lookup else { return }
+            self.iconLookup = nil
+            guard self.page.url == url else { return }
+            self.faviconURL = self.validIcon(result as? String) ?? self.fallbackIcon(url)
+        }
+    }
+    private func validIcon(_ value: String?) -> String? {
+        guard let value, value.utf8.count <= 65536, let url = URL(string: value), url.user == nil, url.password == nil else { return nil }
+        if ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil { return value }
+        if value.range(of: "^data:image/(png|jpeg|gif|webp|x-icon|vnd\\.microsoft\\.icon|svg\\+xml)[;,]", options: [.regularExpression, .caseInsensitive]) != nil { return value }
+        return nil
+    }
+    private func fallbackIcon(_ url: URL?) -> String {
+        guard let url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return "" }
+        parts.path = "/favicon.ico"; parts.query = nil; parts.fragment = nil; parts.user = nil; parts.password = nil
+        return parts.url?.absoluteString ?? ""
+    }
 
     init(address: String?, configuration: WKWebViewConfiguration? = nil, paneKey: String? = nil) {
         self.paneKey = paneKey
@@ -102,16 +141,20 @@ private final class ClientBrowserModel: NSObject, WKNavigationDelegate, WKUIDele
 #endif
         config.preferences.isElementFullscreenEnabled = true
         // Keep WebKit's supplied popup configuration and relationship. Only the
-        // prototype's passive script-message endpoint needs a fresh owner.
+        // acceptance build's passive script-message endpoint needs a fresh owner.
         config.userContentController = WKUserContentController()
+#if DEBUG || WEAVE_ACCEPTANCE
         let messages = ProbeMessages()
         config.userContentController.add(messages, name: "weaveClientBrowserProbe")
+#endif
         page = WKWebView(frame: .zero, configuration: config)
         super.init()
+#if DEBUG || WEAVE_ACCEPTANCE
         messages.model = self
+        page.isInspectable = true
+#endif
         page.navigationDelegate = self; page.uiDelegate = self
         page.allowsBackForwardNavigationGestures = true
-        page.isInspectable = true
         observations = [page.observe(\.url, options: [.new]) { [weak self] _, _ in
             Task { @MainActor in self?.refresh() }
         }, page.observe(\.title, options: [.new]) { [weak self] _, _ in
@@ -167,8 +210,11 @@ private final class ClientBrowserModel: NSObject, WKNavigationDelegate, WKUIDele
         if attachment || !response.canShowMIMEType { downloadPolicyInterruptions += 1 }
         decisionHandler(attachment || !response.canShowMIMEType ? .download : .allow)
     }
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { if let url = webView.url?.absoluteString { recordCommittedAddress(url) } }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { if let url = webView.url?.absoluteString { recordCommittedAddress(url) }; refresh(); emit(["kind": "loaded"]) }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        iconLookup = nil; lastIconRead = .distantPast; faviconURL = fallbackIcon(webView.url)
+        if let url = webView.url?.absoluteString { recordCommittedAddress(url) }
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { if let url = webView.url?.absoluteString { recordCommittedAddress(url) }; refresh(); refreshFavicon(); emit(["kind": "loaded"]) }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { failed(error) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { failed(error) }
     private func failed(_ error: any Error) {
@@ -232,7 +278,7 @@ private final class ClientBrowserModel: NSObject, WKNavigationDelegate, WKUIDele
         error = "The webpage process stopped. Reload to recover."; emit(["kind": "process-terminated"])
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        guard let (token, child) = ClientBrowserPrototype.reservePopup(owner: identity, configuration: configuration) else { return nil }
+        guard let (token, child) = ClientBrowser.reservePopup(owner: identity, configuration: configuration) else { return nil }
         emit(["kind": "popup-created", "popupToken": token, "method": action.request.httpMethod ?? "GET"])
         // Do not replay action.request: WebKit loads it in this exact view,
         // preserving POST bodies, opener and initially-blank window semantics.
@@ -244,20 +290,21 @@ private final class ClientBrowserModel: NSObject, WKNavigationDelegate, WKUIDele
     private func attach(_ download: WKDownload) {
         guard !closed, downloads.filter({ $0.transfer != nil }).count < 8 else { download.cancel { _ in }; return }
         if downloads.count >= 20 { downloads.removeAll { $0.transfer == nil } }
-        downloads.append(ProbeDownload(download)); download.delegate = self
+        downloads.append(ClientBrowserDownload(download)); download.delegate = self
         emit(["kind": "download-started"])
     }
-    private func record(_ download: WKDownload) -> ProbeDownload? { downloads.first { $0.transfer === download } }
+    private func record(_ download: WKDownload) -> ClientBrowserDownload? { downloads.first { $0.transfer === download } }
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping @MainActor @Sendable (URL?) -> Void) {
         guard let record = record(download) else { completionHandler(nil); return }
-        // Disposable capability destination. Production destination selection,
-        // sharing and app-wide download ownership belong to the next milestone.
-#if os(macOS)
+        // Keep acceptance files disposable; normal downloads survive app exit.
+#if os(macOS) && WEAVE_ACCEPTANCE
         let base = FileManager.default.temporaryDirectory
+#elseif os(macOS)
+        let base = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
 #else
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 #endif
-        let directory = base.appendingPathComponent("WeaveClientBrowserPrototypeDownloads").appendingPathComponent(record.id)
+        let directory = base.appendingPathComponent("WeaveDownloads").appendingPathComponent(record.id)
         let name = (suggestedFilename as NSString).lastPathComponent
         record.name = name.isEmpty || name == "." || name == ".." ? "download" : String(name.prefix(180))
         do {
@@ -293,7 +340,7 @@ private final class ClientBrowserModel: NSObject, WKNavigationDelegate, WKUIDele
         answerPrompt(false)
         fileReply?(nil); fileReply = nil; showFilePicker = false
         for url in fileAccess { url.stopAccessingSecurityScopedResource() }; fileAccess.removeAll()
-        ClientBrowserPrototype.discardPendingPopups(owner: identity)
+        ClientBrowser.discardPendingPopups(owner: identity)
         for record in downloads { record.cancel() }
         observations.removeAll(); page.stopLoading()
         page.navigationDelegate = nil; page.uiDelegate = nil
@@ -332,6 +379,9 @@ private struct ClientBrowserContent: View {
     @FocusState private var addressFocused: Bool
     var body: some View {
         VStack(spacing: 0) {
+            // Workspace panes use the same React chrome as the Host Browser.
+            // The native fixture keeps its standalone address controls.
+            if model.paneKey == nil {
             HStack(spacing: 8) {
                 Button { model.page.goBack() } label: { Image(systemName: "chevron.left") }
                     .disabled(!model.canGoBack).accessibilityLabel("Back")
@@ -345,6 +395,7 @@ private struct ClientBrowserContent: View {
                     .accessibilityLabel(model.loading ? "Stop" : "Reload")
             }.padding(8)
             if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).padding(4) }
+            }
             NativeWebPage(page: model.page)
             if !model.downloads.isEmpty {
                 TimelineView(.periodic(from: .now, by: 0.3)) { _ in
@@ -353,6 +404,13 @@ private struct ClientBrowserContent: View {
                             HStack {
                                 Text("\(record.name): \(record.state) (\(record.transfer?.progress.completedUnitCount ?? record.bytes) bytes)")
                                     .font(.caption).lineLimit(1)
+                                if record.state == "complete", let destination = record.destination {
+#if os(macOS)
+                                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
+#else
+                                    ShareLink(item: destination) { Text("Share") }
+#endif
+                                }
                                 if record.transfer != nil { Button("Cancel") { record.cancel(); model.emit(["kind": "download-cancelled", "download": record.snapshot]) } }
                             }
                         }
@@ -382,8 +440,8 @@ private struct ClientBrowserContent: View {
 
 /// Objective-C facade used by both hosts. SwiftUI redraws never create a page.
 @available(macOS 26.0, iOS 26.0, *)
-@objc(WVClientBrowserPrototype)
-@MainActor public final class ClientBrowserPrototype: NSObject {
+@objc(WVClientBrowser)
+@MainActor public final class ClientBrowser: NSObject {
     private static var pending: [String: (owner: String, model: ClientBrowserModel)] = [:]
     fileprivate static func reservePopup(owner: String, configuration: WKWebViewConfiguration) -> (String, ClientBrowserModel)? {
         guard pending.count < 6 else { return nil }
@@ -399,9 +457,9 @@ private struct ClientBrowserContent: View {
         let tokens = pending.filter { $0.value.owner == owner }.map(\.key)
         for token in tokens { pending.removeValue(forKey: token)?.model.close() }
     }
-    @objc public static func adoptPopup(_ token: String, event: @escaping @MainActor (NSDictionary) -> Void) -> ClientBrowserPrototype? {
+    @objc public static func adoptPopup(_ token: String, event: @escaping @MainActor (NSDictionary) -> Void) -> ClientBrowser? {
         guard let child = pending.removeValue(forKey: token) else { return nil }
-        return ClientBrowserPrototype(model: child.model, event: event)
+        return ClientBrowser(model: child.model, event: event)
     }
     private let model: ClientBrowserModel
     private var requestedVisible = false
@@ -436,6 +494,20 @@ private struct ClientBrowserContent: View {
 #endif
         // iPad selection alone must not request the software keyboard.
     }
+    @objc public func command(_ action: String, address: String) -> Bool {
+        switch action {
+        case "navigate":
+            guard address.utf8.count <= 16384, let url = URL(string: address),
+                  address == "about:blank" || (["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host != nil) else { return false }
+            model.address = address; model.navigate()
+        case "back": model.page.goBack()
+        case "forward": model.page.goForward()
+        case "reload": model.page.reload()
+        case "stop": model.page.stopLoading()
+        default: return false
+        }
+        return true
+    }
     private init(model: ClientBrowserModel, event: @escaping @MainActor (NSDictionary) -> Void) {
         self.model = model
 #if os(macOS)
@@ -466,18 +538,23 @@ private struct ClientBrowserContent: View {
         guard !view.isHidden, let responder = view.window?.firstResponder as? NSView else { return false }
         return responder === view || responder.isDescendant(of: view)
     }
-    @objc public func focusAddress() { model.addressFocusRequest += 1 }
+    @objc public func focusAddress() {
+        if model.paneKey != nil { model.emit(["kind": "focus-address"]) }
+        else { model.addressFocusRequest += 1 }
+    }
 #endif
     @objc public func snapshot() -> NSDictionary {
         model.checkpoint()
+        model.refreshFavicon()
 #if os(macOS)
         let focused = ownsFocus()
 #else
         func containsResponder(_ view: UIView) -> Bool { view.isFirstResponder || view.subviews.contains(where: containsResponder) }
         let focused = !view.isHidden && containsResponder(view)
 #endif
-        return ["focused": focused, "pageIdentity": model.identity, "url": model.page.url?.absoluteString ?? "", "title": model.page.title ?? "",
+        return ["focused": focused, "pageIdentity": model.identity, "url": model.page.url?.absoluteString ?? "", "title": model.page.title ?? "", "faviconUrl": model.faviconURL,
          "loading": model.page.isLoading, "backCount": model.page.backForwardList.backList.count,
+         "canGoBack": model.page.canGoBack, "canGoForward": model.page.canGoForward,
          "width": view.frame.width, "height": view.frame.height, "hidden": view.isHidden, "requestedVisible": requestedVisible, "requestedBlocked": requestedBlocked,
          "downloads": model.downloads.map(\.snapshot), "error": model.error ?? "", "renderer": "SwiftUI/WKWebView"]
     }
@@ -492,4 +569,3 @@ private struct ClientBrowserContent: View {
 #endif
     }
 }
-#endif

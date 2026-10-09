@@ -1,4 +1,4 @@
-import { clientBrowserPrototype, type ClientBrowserPrototypeBridge } from './native-client-browser';
+import { nativeClientBrowser, type ClientBrowserBridge } from './native-client-browser';
 import type { WorkspaceReference } from '@/app/workspace-presentation';
 
 export const clientBrowserPaneKey = (hostId: string, paneId: string) => JSON.stringify([hostId, paneId]);
@@ -9,9 +9,17 @@ const hidden = { x: 0, y: 0, width: 0, height: 0, visible: false, blocked: true 
 /** Native shell ownership survives React unmount and renderer reload. */
 export class WorkspaceClientBrowser {
   private pendingPlacement = new Set<string>();
-  constructor(readonly bridge: ClientBrowserPrototypeBridge) {}
+  constructor(readonly bridge: ClientBrowserBridge) {}
   attach(target: WorkspaceReference & { paneId: string; initialUrl: string }) {
     return this.bridge.create({ address: target.initialUrl, paneKey: clientBrowserPaneKey(target.hostId, target.paneId) });
+  }
+  /** Sidebar reads never create or present a page, including on another Host. */
+  async metadata(hostId: string, paneId: string) {
+    const { panes } = await this.bridge.list();
+    const entry = panes.find(pane => pane.paneKey === clientBrowserPaneKey(hostId, paneId));
+    if (!entry) return;
+    const snapshot = await this.bridge.snapshot({ surfaceId: entry.surfaceId });
+    return snapshot.closed ? undefined : snapshot;
   }
   async adopt(hostId: string, paneId: string, popupToken: string) {
     const paneKey = clientBrowserPaneKey(hostId, paneId); this.pendingPlacement.add(paneKey);
@@ -30,4 +38,4 @@ export class WorkspaceClientBrowser {
   }
 }
 
-export const workspaceClientBrowser = new WorkspaceClientBrowser(clientBrowserPrototype);
+export const workspaceClientBrowser = new WorkspaceClientBrowser(nativeClientBrowser);

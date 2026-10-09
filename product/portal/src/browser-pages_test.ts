@@ -12,7 +12,11 @@ async function fixture() {
   const security = await PortalSecurity.open({ stateDirectory: root, displayName: 'Browser test', listen: { hostname: '127.0.0.1', port: 0 }, allowedOrigins: [], agents: [], executionContexts: [] });
   const fake = browserPageBackend();
   let offset = 0;
-  const access = new ManagedBrowserAccess({ managedPage: fake.backend.managedPage! }, security, () => Date.now() + offset); cleanup.push(() => access.close());
+  let favicon: unknown;
+  const access = new ManagedBrowserAccess({ async managedPage<T>(method: string, args: any) {
+    const result = await fake.backend.managedPage!<T>(method, args);
+    return method === 'page.cdp' && args.arguments?.method === 'Runtime.evaluate' ? { result: { value: favicon } } as T : result;
+  } }, security, () => Date.now() + offset); cleanup.push(() => access.close());
   const pair = async (actions: PortalGrants['actions'] = ['browser.profile.control'], ids = [fake.page.profileId]) => {
     const key = await generatePortalKey();
     const paired = await security.redeemPairing({ type: PORTAL_PAIR_REQUEST_TYPE, token: await security.createPairingToken(60000, { actions, browserProfileIds: ids, executionContextIds: [], agentIds: [], workspaceIds: ['*'] }), label: 'Browser fixture', publicKey: key.publicKey });
@@ -21,8 +25,34 @@ async function fixture() {
     return { principal, session: access.connect(principal) };
   };
   const attach = async (session: ReturnType<typeof access.connect>, mode: 'observe' | 'control' = 'control') => session.request('browser.page.view.attach', { profileId: fake.page.profileId, pageId: fake.page.pageId, generation: fake.page.generation!, mode });
-  return { ...fake, access, security, pair, attach, advance: (ms: number) => { offset += ms; } };
+  return { ...fake, access, security, pair, attach, advance: (ms: number) => { offset += ms; }, favicon: (value: unknown) => { favicon = value; } };
 }
+
+test('inspect metadata reads declared favicons without attaching, recreating or controlling the page', async () => {
+  const f = await fixture(), actor = await f.pair(['browser.profile.inspect']);
+  f.favicon({ url: f.page.url, icon: 'https://example.com/site.svg' });
+  const get = () => actor.session.request('browser.page.get', { profileId: f.page.profileId, pageId: f.page.pageId });
+  const [a, b] = await Promise.all([get(), get()]);
+  expect(a.page.faviconUrl).toBe('https://example.com/site.svg'); expect(b.page).toEqual(a.page);
+  expect(f.calls.filter(call => call.method === 'page.cdp')).toHaveLength(1);
+  expect(f.calls.filter(call => call.method !== 'page.list' && call.method !== 'page.cdp')).toHaveLength(0);
+  f.advance(2001); f.favicon({ url: f.page.url, icon: 'https://example.com/changed.svg' });
+  expect((await get()).page.faviconUrl).toBe('https://example.com/changed.svg');
+  f.page.url = 'https://other.test/path'; f.favicon({ url: 'https://example.com/', icon: 'https://example.com/stale.svg' });
+  expect((await get()).page.faviconUrl).toBe('https://other.test/favicon.ico');
+  f.page.url = 'about:blank';
+  expect((await get()).page).not.toHaveProperty('faviconUrl');
+});
+
+test('favicon failures retain page metadata and revocation during the read still rejects access', async () => {
+  const f = await fixture(), actor = await f.pair(['browser.profile.inspect']);
+  const get = () => actor.session.request('browser.page.get', { profileId: f.page.profileId, pageId: f.page.pageId });
+  f.intercept(async method => { if (method === 'page.cdp') throw new Error('Unavailable document'); });
+  expect((await get()).page).toMatchObject({ title: 'Fixture', faviconUrl: 'https://example.com/favicon.ico' });
+  f.advance(2001);
+  f.intercept(async method => { if (method === 'page.cdp') await f.security.revokeCredential(actor.principal.credentialId); });
+  await expect(get()).rejects.toThrow();
+});
 
 test('Profile access is explicit; metadata management and Workspace wildcards do not grant browser identity', async () => {
   const f = await fixture();

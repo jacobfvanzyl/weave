@@ -192,8 +192,8 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(PortalCredentialPlugin())
         bridge?.registerPluginInstance(nativeTerminal)
         bridge?.registerPluginInstance(NativeBrowserPlugin())
-#if WEAVE_CLIENT_BROWSER_PROTOTYPE
-        if #available(iOS 26.0, *) { bridge?.registerPluginInstance(ClientBrowserPrototypePlugin()) }
+        if #available(iOS 26.0, *) { bridge?.registerPluginInstance(ClientBrowserPlugin()) }
+#if DEBUG
         if #available(iOS 26.0, *), ProcessInfo.processInfo.arguments.contains("--client-browser-prototype") {
             var url = URLComponents(string: "capacitor://localhost/")!
             url.queryItems = [URLQueryItem(name:"clientBrowserPrototype",value:"1"), URLQueryItem(name:"fixture",value:ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"] ?? "http://localhost:43187")]
@@ -235,7 +235,6 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
     private var acceptanceStarted = false
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-#if WEAVE_CLIENT_BROWSER_PROTOTYPE
         if #available(iOS 26.0, *), ProcessInfo.processInfo.arguments.contains("--client-browser-prototype"), !acceptanceStarted {
             acceptanceStarted = true
             Task { @MainActor in
@@ -254,7 +253,6 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             }
             return
         }
-#endif
         let live = ProcessInfo.processInfo.arguments.contains("--host-acceptance")
         guard !acceptanceStarted, live else { return }
         acceptanceStarted = true

@@ -1,5 +1,5 @@
 import {
-  PORTAL_BROWSER_RFB_PATH, parseBrowserPage, parseBrowserPageRpcParams,
+  PORTAL_BROWSER_RFB_PATH, parseBrowserPage, parseBrowserPageRpcParams, browserFaviconUrl,
   type HostBrowserPage, type BrowserPageRpcContracts, type BrowserPageRpcMethod,
 } from '@weave/product-protocol';
 import type { BrowserServiceClient } from './browser-service/client.ts';
@@ -14,6 +14,14 @@ type View = {
   closeStream?: () => void; bound: boolean;
 };
 type Focus = { viewId: string; generation: string; epoch: number; width: number; height: number; deviceScaleFactor: number };
+type IconRead = { settled: boolean; at: number; value: Promise<string | undefined> };
+// Fixed read of the top-level document; clients cannot supply expressions.
+const FAVICON_READ = `(() => {
+  const links = Array.from(document.querySelectorAll('link[rel]'));
+  const has = (link, rel) => link.rel.toLowerCase().split(/\\s+/).includes(rel);
+  const icon = links.find(link => has(link, 'icon')) ?? links.find(link => has(link, 'apple-touch-icon'));
+  return { url: location.href, icon: (icon?.href || '').slice(0, 65537) };
+})()`;
 
 /** Connection-scoped viewing and Profile-scoped authority, independent of RFB messages. */
 export class ManagedBrowserAccess {
@@ -24,6 +32,7 @@ export class ManagedBrowserAccess {
   #epoch = 0;
   #closed = false;
   #checking = false;
+  #icons = new Map<string, IconRead>();
   #timer: ReturnType<typeof setInterval>;
   constructor(private backend: ManagedPageBackend, private security: Pick<PortalSecurity, 'authorize' | 'assertActive' | 'allows'>, private now: () => number = Date.now) {
     this.#timer = setInterval(() => void this.renew(), 5000);
@@ -56,6 +65,24 @@ export class ManagedBrowserAccess {
     if (!page || generation !== undefined && (!page.available || page.generation !== generation)) throw new Error('Stale or unavailable browser page');
     if (browserDiagnostics) recordBrowserTiming('page', start);
     return page;
+  }
+  async #favicon(page: ManagedPageSummary) {
+    const url = new URL(page.url);
+    const fallback = ['http:', 'https:'].includes(url.protocol) ? new URL('/favicon.ico', url).href : undefined;
+    if (!fallback) return;
+    if (!page.available || !page.generation) return fallback;
+    const key = JSON.stringify([page.profileId, page.pageId, page.generation, page.url]);
+    const cached = this.#icons.get(key);
+    if (cached && (!cached.settled || this.now() - cached.at < 2000)) return cached.value;
+    const read: IconRead = { settled: false, at: this.now(), value: Promise.resolve(fallback) };
+    read.value = this.backend.managedPage<{ result?: { value?: { url?: string; icon?: string } } }>('page.cdp', {
+      pageId: page.pageId, generation: page.generation,
+      arguments: { method: 'Runtime.evaluate', arguments: { expression: FAVICON_READ, returnByValue: true } },
+    }).then(result => result.result?.value?.url === page.url ? browserFaviconUrl(result.result.value.icon) ?? fallback : fallback)
+      .catch(() => fallback).finally(() => { read.settled = true; read.at = this.now(); });
+    if (this.#icons.size >= 256) this.#icons.delete(this.#icons.keys().next().value!);
+    this.#icons.set(key, read);
+    return read.value;
   }
   #ordered<T>(pageId: string, operation: () => Promise<T>) {
     if (this.#pending >= 64) return Promise.reject(new Error('Browser command queue full'));
@@ -110,7 +137,7 @@ export class ManagedBrowserAccess {
       } else {
         const page = await this.#page(input.profileId, input.pageId, input.generation);
         if (!active()) throw new Error('Browser connection closed');
-        if (method === 'browser.page.get') result = { page: parseBrowserPage(page) };
+        if (method === 'browser.page.get') result = { page: parseBrowserPage({ ...page, faviconUrl: await this.#favicon(page) }) };
         else if (method === 'browser.page.view.attach') {
           if (this.#views.size >= 64 || [...this.#views.values()].filter(view => view.sessionId === sessionId).length >= 16) throw new Error('Browser view capacity exceeded');
           await this.#authorize(principal, input.profileId, control);
@@ -176,6 +203,6 @@ export class ManagedBrowserAccess {
       })));
     } finally { this.#checking = false; }
   }
-  close() { this.#closed = true; clearInterval(this.#timer); for (const view of this.#views.values()) this.#detach(view); }
+  close() { this.#closed = true; clearInterval(this.#timer); this.#icons.clear(); for (const view of this.#views.values()) this.#detach(view); }
 }
 export type ManagedBrowserSession = ReturnType<ManagedBrowserAccess['connect']>;

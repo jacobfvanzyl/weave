@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from 'electron';
-declare const ALPHA_CLIENT_BROWSER_PROTOTYPE: boolean;
 // Fixed terminal operations only; no Node, native window pointer, Host credential,
 // arbitrary channel, or process execution capability crosses into the renderer.
 const invoke = (method: string, input?: unknown) => ipcRenderer.invoke('weave:terminal', method, input);
@@ -44,18 +43,19 @@ contextBridge.exposeInMainWorld('weaveDesktop', Object.freeze({
     ipcRenderer.on('weave:titlebar-pointer', receive);
     return () => ipcRenderer.removeListener('weave:titlebar-pointer', receive);
   },
-  clientBrowserPrototype: ALPHA_CLIENT_BROWSER_PROTOTYPE && process.argv.includes('--weave-client-browser-supported') ? Object.freeze({
-    create: (input: unknown) => ipcRenderer.invoke('weave:client-browser-prototype', 'create', input),
-    list: () => ipcRenderer.invoke('weave:client-browser-prototype', 'list'),
-    focus: (input: unknown) => ipcRenderer.invoke('weave:client-browser-prototype', 'focus', input),
-    adopt: (input: unknown) => ipcRenderer.invoke('weave:client-browser-prototype', 'adopt', input),
-    layout: (input: unknown) => ipcRenderer.invoke('weave:client-browser-prototype', 'layout', input),
-    snapshot: (input: unknown) => ipcRenderer.invoke('weave:client-browser-prototype', 'snapshot', input),
-    close: (input: unknown) => ipcRenderer.invoke('weave:client-browser-prototype', 'close', input),
+  nativeClientBrowser: process.argv.includes('--weave-client-browser-supported') ? Object.freeze({
+    create: (input: unknown) => ipcRenderer.invoke('weave:client-browser', 'create', input),
+    list: () => ipcRenderer.invoke('weave:client-browser', 'list'),
+    focus: (input: unknown) => ipcRenderer.invoke('weave:client-browser', 'focus', input),
+    command: (input: unknown) => ipcRenderer.invoke('weave:client-browser', 'command', input),
+    adopt: (input: unknown) => ipcRenderer.invoke('weave:client-browser', 'adopt', input),
+    layout: (input: unknown) => ipcRenderer.invoke('weave:client-browser', 'layout', input),
+    snapshot: (input: unknown) => ipcRenderer.invoke('weave:client-browser', 'snapshot', input),
+    close: (input: unknown) => ipcRenderer.invoke('weave:client-browser', 'close', input),
     addListener: async (_event: string, listener: (value: unknown) => void) => {
       const receive = (_sender: Electron.IpcRendererEvent, value: unknown) => listener(value);
-      ipcRenderer.on('weave:client-browser-prototype:event', receive);
-      return { remove: async () => { ipcRenderer.removeListener('weave:client-browser-prototype:event', receive); } };
+      ipcRenderer.on('weave:client-browser:event', receive);
+      return { remove: async () => { ipcRenderer.removeListener('weave:client-browser:event', receive); } };
     },
   }) : undefined,
   nativeBrowser: Object.freeze({

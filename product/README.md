@@ -42,8 +42,19 @@ remain interactive in the mocked shell.
 
 Alpha exposes ACP conversations and native libghostty terminals in Electron and on iPad.
 Desktop and iPad builds prepare the pinned native library automatically; no renderer flag is needed.
-Browser previews show an explicit unavailable terminal surface. Filetree, Editor and
-embedded Browser remain in `deferred/`, outside active builds.
+Web previews show explicit unavailable native terminal and browser surfaces. Filetree
+and Editor remain in `deferred/`, outside active builds.
+
+Normal Apple builds include the native Client Browser on macOS 26 and iOS/iPadOS 26
+or later. Use **New Client Browser** in an existing Workspace's menu or choose
+**Client Browser** when splitting a pane. Each device owns its WebKit pages,
+navigation and persistent website data; the Host shares placement and the initial
+address only. Creation, movement and shared closure require a connected Host with
+protocol 9 and the `client-browser.panes.v1` capability. Existing pages can continue
+browsing while disconnected. Host Browser panes continue to stream the Host's CEF
+browser. No Client Browser feature flag is required. Named profiles, recently
+closed pages and the remaining recovery/accessibility acceptance are tracked in
+WVE-80.
 
 From the repository root:
 

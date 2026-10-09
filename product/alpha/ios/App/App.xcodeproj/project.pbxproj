@@ -31,8 +31,8 @@ A79000000000000000000007 = {isa = PBXBuildFile; fileRef = A790000000000000000000
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-A80000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientBrowserPrototypePlugin.swift; sourceTree = "<group>"; };
-A80000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ClientBrowserPrototype.swift; path = ../../../native/client-browser/ClientBrowserPrototype.swift; sourceTree = "<group>"; };
+A80000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientBrowserPlugin.swift; sourceTree = "<group>"; };
+A80000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ClientBrowser.swift; path = ../../../native/client-browser/ClientBrowser.swift; sourceTree = "<group>"; };
 		A73000000000000000000002 /* TerminalFonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TerminalFonts; path = ../../src/assets/fonts/TerminalFonts; sourceTree = SOURCE_ROOT; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };

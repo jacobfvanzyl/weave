@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { paneTargets } from '@weave/product-protocol';
 import type { AlphaController } from '@/app/alpha-controller';
-import { clientBrowserAvailable, clientBrowserPrototype } from './native-client-browser';
+import { clientBrowserAvailable, nativeClientBrowser } from './native-client-browser';
 import { readClientBrowserPaneKey, workspaceClientBrowser } from './workspace-client-browser';
 
 export function useClientBrowserLifecycle(controller: AlphaController, report: (message: string) => void) {
@@ -10,10 +10,10 @@ export function useClientBrowserLifecycle(controller: AlphaController, report: (
     if (!clientBrowserAvailable) return;
     let disposed = false, reconciling = false;
     const fail = (error: unknown) => { if (!disposed) latest.current.report(error instanceof Error ? error.message : String(error)); };
-    const listener = clientBrowserPrototype.addListener('event', event => {
+    const listener = nativeClientBrowser.addListener('event', event => {
       if (!['popup-created', 'page-close'].includes(event.kind)) return;
       void (async () => {
-        const { panes } = await clientBrowserPrototype.list();
+        const { panes } = await nativeClientBrowser.list();
         const entry = panes.find(pane => pane.surfaceId === event.surfaceId);
         const target = entry && readClientBrowserPaneKey(entry.paneKey);
         if (!target || disposed) return;

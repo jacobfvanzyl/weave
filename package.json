@@ -27,6 +27,7 @@
     "run:desktop": "bun run --cwd product/alpha run:desktop",
     "check:desktop": "bun run --cwd product/alpha check:desktop",
     "test:desktop": "bun product/alpha/scripts/desktop-acceptance.ts",
+    "test:client-browser-window": "bun product/alpha/scripts/client-browser-window-acceptance.ts",
     "test:ipad": "bun product/alpha/scripts/test-ipad.ts",
     "probe:native-renderer": "bun product/alpha/scripts/probe-native-renderer.ts",
     "probe:ghostty": "bun product/alpha/scripts/probe-ghostty.ts",

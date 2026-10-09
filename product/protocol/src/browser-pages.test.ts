@@ -16,6 +16,16 @@ test('only bounded viewports and explicit input methods cross the public browser
   expect(() => parseBrowserPageRpcParams('browser.page.view.input', { viewId, focusEpoch: 1, method: 'Input.insertText', arguments: { text: 'x'.repeat(32769) } })).toThrow();
   expect(parsePortalRpcParams('browser.page.view.focus', { viewId, width: 800, height: 600 })).toEqual({ viewId, width: 800, height: 600 });
 });
+test('optional favicon metadata preserves declared icons and discards unsafe or oversized values', () => {
+  const page = { pageId, profileId, title: '', url: 'https://example.com/', available: false };
+  for (const faviconUrl of ['https://example.com/icon.svg', 'data:image/png;base64,aGVsbG8=']) {
+    expect(parseBrowserPage({ ...page, faviconUrl }).faviconUrl).toBe(faviconUrl);
+  }
+  for (const faviconUrl of ['file:///private/icon.png', 'javascript:alert(1)', 'https://user:pass@example.com/icon', 'data:text/html,<script>', 'x'.repeat(65537), 42]) {
+    expect(parseBrowserPage({ ...page, faviconUrl })).not.toHaveProperty('faviconUrl');
+  }
+  expect(parseBrowserPage(page)).not.toHaveProperty('faviconUrl');
+});
 test('navigation rejects credentials and privileged schemes; RFB authentication has its own audience', () => {
   for (const url of ['file:///etc/passwd', 'about:config', 'https://user:pass@example.com']) expect(() => parseBrowserPageRpcParams('browser.page.navigate', { pageId, profileId, generation, url })).toThrow();
   const challenge = { type: 'weave.portal.auth.challenge', challengeId: 'fixture', hostId: 'host', nonce: 'nonce', audience: PORTAL_BROWSER_RFB_PATH, origin: '-', expiresAt: new Date().toISOString() };

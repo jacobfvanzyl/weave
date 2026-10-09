@@ -1,6 +1,6 @@
-// WVE-80 feasibility entry, excluded unless explicitly enabled at build time.
+// Isolated feasibility entry, available only in acceptance builds.
 import { useEffect, useRef, useState } from 'react';
-import { clientBrowserPrototype, type ClientBrowserEvent, type ClientBrowserSnapshot } from './native-client-browser';
+import { nativeClientBrowser, type ClientBrowserEvent, type ClientBrowserSnapshot } from './native-client-browser';
 type Surface = { id: string; label: string };
 export function ClientBrowserPrototype() {
   const slots = useRef(new Map<string, HTMLDivElement>());
@@ -18,12 +18,12 @@ export function ClientBrowserPrototype() {
   useEffect(() => {
     let stopped = false;
     const events: ClientBrowserEvent[] = [];
-    let listener: Awaited<ReturnType<typeof clientBrowserPrototype.addListener>> | undefined;
+    let listener: Awaited<ReturnType<typeof nativeClientBrowser.addListener>> | undefined;
     const fail = (e: unknown) => { if (!stopped) setError(String(e)); };
     const measure = () => {
       for (const { id, label } of owned.current) {
         const rect = slots.current.get(id)?.getBoundingClientRect(); if (!rect) continue;
-        void clientBrowserPrototype.layout({ surfaceId: id, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+        void nativeClientBrowser.layout({ surfaceId: id, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
           visible: !document.hidden && !(label === 'Right' && flags.current.hidden) && !flags.current.overlay,
           blocked: flags.current.overlay }).catch(fail);
       }
@@ -33,33 +33,33 @@ export function ClientBrowserPrototype() {
     close.current = id => {
       owned.current = owned.current.filter(surface => surface.id !== id);
       setSurfaces([...owned.current]);
-      void clientBrowserPrototype.close({ surfaceId: id }).catch(fail);
+      void nativeClientBrowser.close({ surfaceId: id }).catch(fail);
     };
     const add = async (result: Promise<{ surfaceId: string }>, label: string) => {
       const { surfaceId } = await result;
-      if (stopped) { await clientBrowserPrototype.close({ surfaceId }); return; }
+      if (stopped) { await nativeClientBrowser.close({ surfaceId }); return; }
       owned.current.push({ id: surfaceId, label }); setSurfaces([...owned.current]);
     };
     window.addEventListener('resize', measure); document.addEventListener('visibilitychange', measure);
     const base = new URLSearchParams(location.search).get('fixture') || 'http://localhost:43187';
     void (async () => {
-      listener = await clientBrowserPrototype.addListener('event', event => {
+      listener = await nativeClientBrowser.addListener('event', event => {
         if (stopped) return;
         events.push(event); if (events.length > 300) events.shift();
         if (event.kind === 'popup-created' && typeof event.popupToken === 'string') {
-          void add(clientBrowserPrototype.adopt({ popupToken: event.popupToken }), 'Popup').catch(fail);
+          void add(nativeClientBrowser.adopt({ popupToken: event.popupToken }), 'Popup').catch(fail);
         }
         if (event.kind === 'page-close') close.current(event.surfaceId);
       });
       if (stopped) { await listener.remove(); return; }
       for (const label of ['Left', 'Right']) {
         if (stopped) return;
-        await add(clientBrowserPrototype.create({ address: `${base}/?pane=${label.toLowerCase()}` }), label);
+        await add(nativeClientBrowser.create({ address: `${base}/?pane=${label.toLowerCase()}` }), label);
       }
     })().catch(fail);
     const timer = setInterval(() => {
       const current = [...owned.current];
-      void Promise.all(current.map(async ({ id }) => [id, await clientBrowserPrototype.snapshot({ surfaceId: id })] as const)).then(values => {
+      void Promise.all(current.map(async ({ id }) => [id, await nativeClientBrowser.snapshot({ surfaceId: id })] as const)).then(values => {
         if (stopped) return;
         setSnapshots(Object.fromEntries(values));
         Object.assign(window, { clientBrowserPrototypeEvidence: { surfaces: current, snapshots: values.map(([, value]) => value),
@@ -68,7 +68,7 @@ export function ClientBrowserPrototype() {
     }, 500);
     return () => {
       stopped = true; clearInterval(timer); resize.disconnect(); window.removeEventListener('resize', measure); document.removeEventListener('visibilitychange', measure);
-      void listener?.remove(); owned.current.forEach(({ id }) => { void clientBrowserPrototype.close({ surfaceId: id }); }); owned.current = [];
+      void listener?.remove(); owned.current.forEach(({ id }) => { void nativeClientBrowser.close({ surfaceId: id }); }); owned.current = [];
     };
   }, []);
   const buttonStyle = { padding: '7px 12px', background: '#313244', borderRadius: 6, cursor: 'pointer' };

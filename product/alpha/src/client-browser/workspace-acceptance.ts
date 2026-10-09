@@ -1,6 +1,6 @@
 // Included only by the opt-in acceptance driver. Native webpage interaction is
 // performed through AppKit/UIKit input; these hooks only observe fixture events.
-import { clientBrowserPrototype, type ClientBrowserEvent } from './native-client-browser';
+import { nativeClientBrowser, type ClientBrowserEvent } from './native-client-browser';
 import type { LiveAcceptanceInput } from '@/acceptance';
 
 export const clientBrowserRecoveryKey = 'weave.client-browser.acceptance-reload';
@@ -26,10 +26,10 @@ const visibleSurface = (id: string) => [...document.querySelectorAll<HTMLElement
 
 export async function beginClientBrowserWorkspaceRecovery(input: LiveAcceptanceInput, surfaceId: string, workspaceId: string): Promise<never> {
   const events: ClientBrowserEvent[] = [];
-  const listener = await clientBrowserPrototype.addListener('event', event => { if (events.length < 1000) events.push(event); });
+  const listener = await nativeClientBrowser.addListener('event', event => { if (events.length < 1000) events.push(event); });
   try {
     stage('client-browser-address');
-    await wait(async () => (await clientBrowserPrototype.snapshot({ surfaceId })).url === input.clientBrowserRecovery);
+    await wait(async () => (await nativeClientBrowser.snapshot({ surfaceId })).url === input.clientBrowserRecovery);
     stage('client-browser-input');
     const typed = () => events.filter(event => event.surfaceId === surfaceId).map(fixture).find(value => value?.kind === 'input' && value.value === marker);
     await wait(typed);
@@ -43,9 +43,9 @@ export async function beginClientBrowserWorkspaceRecovery(input: LiveAcceptanceI
     await wait(popup);
     const popupSurface = popup()!.dataset.clientBrowserSurface!;
     stage('client-browser-close-popup');
-    await wait(async () => !(await clientBrowserPrototype.list()).panes.some(pane => pane.surfaceId === popupSurface));
+    await wait(async () => !(await nativeClientBrowser.list()).panes.some(pane => pane.surfaceId === popupSurface));
     await wait(() => visibleSurface(surfaceId));
-    const snapshot = await clientBrowserPrototype.snapshot({ surfaceId });
+    const snapshot = await nativeClientBrowser.snapshot({ surfaceId });
     const { pairingToken: _pairingToken, ...resumableInput } = input;
     const recovery: Recovery = { input: resumableInput, surfaceId, pageIdentity: snapshot.pageIdentity, documentIdentity: typed()!.identity, url: snapshot.url, workspaceId };
     sessionStorage.setItem(clientBrowserRecoveryKey, JSON.stringify(recovery));
@@ -57,12 +57,12 @@ export async function beginClientBrowserWorkspaceRecovery(input: LiveAcceptanceI
 
 export async function resumeClientBrowserWorkspaceRecovery(recovery: Recovery) {
   const events: ClientBrowserEvent[] = [];
-  const listener = await clientBrowserPrototype.addListener('event', event => { if (events.length < 1000) events.push(event); });
+  const listener = await nativeClientBrowser.addListener('event', event => { if (events.length < 1000) events.push(event); });
   try {
     stage('client-browser-reattach');
     await wait(() => visibleSurface(recovery.surfaceId));
-    await wait(async () => !(await clientBrowserPrototype.snapshot({ surfaceId: recovery.surfaceId })).hidden);
-    const snapshot = await clientBrowserPrototype.snapshot({ surfaceId: recovery.surfaceId });
+    await wait(async () => !(await nativeClientBrowser.snapshot({ surfaceId: recovery.surfaceId })).hidden);
+    const snapshot = await nativeClientBrowser.snapshot({ surfaceId: recovery.surfaceId });
     if (snapshot.pageIdentity !== recovery.pageIdentity || snapshot.url !== recovery.url) throw new Error('Shell reload replaced the native page or navigation');
     stage('client-browser-check-form');
     await wait(() => events.filter(event => event.surfaceId === recovery.surfaceId).map(fixture).some(value => value?.kind === 'retained-state' && value.identity === recovery.documentIdentity && value.value === marker));
@@ -70,7 +70,7 @@ export async function resumeClientBrowserWorkspaceRecovery(recovery: Recovery) {
     stage('client-browser-shared-close');
     await wait(() => button('Close Client Browser')); button('Close Client Browser')!.click();
     await wait(() => button('Close page')); button('Close page')!.click();
-    await wait(async () => !(await clientBrowserPrototype.list()).panes.some(pane => pane.surfaceId === recovery.surfaceId));
+    await wait(async () => !(await nativeClientBrowser.list()).panes.some(pane => pane.surfaceId === recovery.surfaceId));
     return { passed: true, clientBrowserRecovery: true, workspaceId: recovery.workspaceId, nativePageIdentity: recovery.pageIdentity, documentIdentity: recovery.documentIdentity, postPopupOpenerAndCookie: true, scriptClose: true, shellReload: true, unsentFormRetained: true, confirmedClose: true, driver: 'Native webpage input; shell controls driven in-process; passive fixture and native identity observations' };
   } finally { sessionStorage.removeItem(clientBrowserRecoveryKey); await listener.remove(); }
 }

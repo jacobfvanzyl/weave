@@ -1,10 +1,9 @@
 import XCTest
 
 final class AlphaUITests: XCTestCase {
-#if WEAVE_CLIENT_BROWSER_PROTOTYPE
     func testClientBrowserWorkspacePopupAndShellReload() throws {
         continueAfterFailure = false
-        let fixture = try XCTUnwrap(ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"])
+        guard let fixture = ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"] else { throw XCTSkip("Set WEAVE_CLIENT_BROWSER_FIXTURE to run native browser acceptance.") }
         let app = XCUIApplication()
         app.launchArguments = ["--host-acceptance", "--browser-acceptance"]
         XCUIDevice.shared.orientation = .landscapeRight
@@ -19,12 +18,12 @@ final class AlphaUITests: XCTestCase {
             XCTAssertEqual(stage.label, value)
         }
         expectStage("client-browser-address")
-        let address = app.textFields["ClientBrowserAddress"].firstMatch
+        let address = app.textFields["Client Browser address"].firstMatch
         XCTAssertTrue(address.waitForExistence(timeout: 10)); address.tap()
         address.press(forDuration: 1)
         if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
-        // The new pane starts at about:blank; selecting its complete value
-        // keeps the test independent of SwiftUI's initial focus selection.
+        // Workspace panes use the shared React address field. Clear any
+        // restored value before navigating through its submit handler.
         if let value = address.value as? String, value != "" { address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count)) }
         address.typeText(fixture + "\n")
         expectStage("client-browser-input")
@@ -51,7 +50,7 @@ final class AlphaUITests: XCTestCase {
 
     func testClientBrowserPopupDownloadsAndRetention() throws {
         continueAfterFailure = false
-        let fixture = try XCTUnwrap(ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"])
+        guard let fixture = ProcessInfo.processInfo.environment["WEAVE_CLIENT_BROWSER_FIXTURE"] else { throw XCTSkip("Set WEAVE_CLIENT_BROWSER_FIXTURE to run native browser acceptance.") }
         let app = XCUIApplication()
         app.launchArguments = ["--client-browser-prototype"]
         app.launchEnvironment["WEAVE_CLIENT_BROWSER_FIXTURE"] = fixture
@@ -111,7 +110,6 @@ final class AlphaUITests: XCTestCase {
         let cancel = app.buttons["Cancel"].firstMatch
         XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap(); expectText("weave-slow.bin: cancelled")
     }
-#endif
 
     func testBrowserKeyboardFollowsEditableTargets() throws {
         continueAfterFailure = false

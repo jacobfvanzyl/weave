@@ -10,7 +10,7 @@ export const BROWSER_PAGE_RPC_METHODS = [
 ] as const;
 export type BrowserPageRpcMethod = typeof BROWSER_PAGE_RPC_METHODS[number];
 export type HostBrowserPage = {
-  pageId: string; profileId: string; title: string; url: string; available: boolean;
+  pageId: string; profileId: string; title: string; url: string; available: boolean; faviconUrl?: string;
   generation?: string; openerPageId?: string; width?: number; height?: number; deviceScaleFactor?: number;
   canGoBack?: boolean; canGoForward?: boolean; temporary?: boolean; profileLocked?: boolean;
 };
@@ -71,6 +71,15 @@ export function browserPageUrl(value: unknown): string {
   if (!['http:', 'https:'].includes(url.protocol) && value !== 'about:blank' || url.username || url.password) throw new Error('Unsupported browser URL');
   return url.href;
 }
+/** Optional site metadata must never make the page itself unavailable. */
+export function browserFaviconUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value || value.length > 65536) return;
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) return;
+    if (['http:', 'https:'].includes(url.protocol) || /^data:image\/(?:png|jpeg|gif|webp|x-icon|vnd\.microsoft\.icon|svg\+xml)[;,]/i.test(value)) return value;
+  } catch { /* Discard malformed icons while retaining page metadata. */ }
+}
 function viewport(value: Record<string, unknown>): BrowserPageViewport {
   const width = integer(value.width, 4096), height = integer(value.height, 4096);
   if (width * height > 8388608) throw new Error('Browser viewport too large');
@@ -82,10 +91,12 @@ function viewport(value: Record<string, unknown>): BrowserPageViewport {
 }
 export function parseBrowserPage(value: unknown): HostBrowserPage {
   const page = object(value);
+  const faviconUrl = browserFaviconUrl(page.faviconUrl);
   if (typeof page.title !== 'string' || page.title.length > 1024 || typeof page.available !== 'boolean') throw new Error('Invalid Browser page');
   return {
     pageId: browserProfileId(page.pageId), profileId: browserProfileId(page.profileId),
     title: page.title, url: browserPageUrl(page.url), available: page.available, temporary: page.temporary === true, profileLocked: page.profileLocked === true,
+    ...(faviconUrl ? { faviconUrl } : {}),
     ...(page.openerPageId === undefined ? {} : { openerPageId: browserProfileId(page.openerPageId) }),
     ...(page.available ? { generation: browserProfileId(page.generation), ...viewport(page),
       canGoBack: page.canGoBack === true, canGoForward: page.canGoForward === true } : {}),

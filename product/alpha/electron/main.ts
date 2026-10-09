@@ -1,4 +1,4 @@
-import { installClientBrowserPrototype } from './client-browser-prototype';
+import { installClientBrowser } from './client-browser';
 import { installNativeBrowsers } from './native-browser';
 import { app, BrowserWindow, ipcMain, Menu, ClipboardItem, clipboard, net, protocol, screen, session, shell } from 'electron';
 import { join, relative, resolve } from 'node:path';
@@ -7,8 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { installNativeTerminals } from './native-terminal';
 declare const ALPHA_ACCEPTANCE: boolean;
-declare const ALPHA_CLIENT_BROWSER_PROTOTYPE: boolean;
-const clientPrototype = ALPHA_CLIENT_BROWSER_PROTOTYPE && process.argv.includes('--client-browser-prototype');
+const clientPrototype = ALPHA_ACCEPTANCE && process.argv.includes('--client-browser-prototype');
 
 const appOrigin = 'weave://app';
 protocol.registerSchemesAsPrivileged([{ scheme: 'weave', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -31,11 +30,11 @@ else {
       title: 'Weave Alpha', width: 1400, height: 920, minWidth: 680, minHeight: 480,
       backgroundColor: '#00000000', show: false,
       ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const, titleBarOverlay: true, trafficLightPosition: { x: 12, y: 9 } } : {}),
-      webPreferences: { additionalArguments: ALPHA_CLIENT_BROWSER_PROTOTYPE && Number.parseInt(release(), 10) >= 25 ? ['--weave-client-browser-supported'] : [], preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
+      webPreferences: { additionalArguments: Number.parseInt(release(), 10) >= 25 ? ['--weave-client-browser-supported'] : [], preload: join(import.meta.dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false },
     });
     const native = installNativeTerminals(window);
     const browsers = installNativeBrowsers(window);
-    if (ALPHA_CLIENT_BROWSER_PROTOTYPE && Number.parseInt(release(), 10) >= 25) installClientBrowserPrototype(window);
+    if (Number.parseInt(release(), 10) >= 25) installClientBrowser(window);
     const contents = window.webContents;
     if (acceptance) contents.on('console-message', (details) => { if (details.level === 'error') console.error('Acceptance renderer:', details.message); });
     const hostWindow = window;
@@ -123,7 +122,7 @@ else {
         finally { if (saved.length) await clipboard.write(saved); else clipboard.clear(); }
       };
       const key = (keyCode: string) => native.acceptance('key', keyCode);
-      let result: { passed?: boolean } | undefined;
+      let result: { passed?: boolean; hosts?: { clientBrowserWorkspace?: boolean }[] } | undefined;
       for (let attempt = 0; attempt < 1800 && !result; attempt++) {
         result = await contents.executeJavaScript('window.alphaAcceptance');
         const stage = await contents.executeJavaScript('window.alphaAcceptanceStage');
@@ -172,7 +171,7 @@ else {
       }
       if (result?.passed && !await contents.executeJavaScript('isSecureContext && typeof require === "undefined" && typeof window.ipcRenderer === "undefined"')) throw new Error('Renderer isolation check failed');
       await mkdir(evidence, { recursive: true });
-      if (result?.passed) {
+      if (result?.passed && !result.hosts?.every(host => host.clientBrowserWorkspace)) {
         const png = await contents.executeJavaScript(`Boolean(document.querySelector('[data-slot="native-browser-input"]'))`) ? (process.env.WEAVE_BROWSER_METAL === '0' && process.env.WEAVE_BROWSER_DIAGNOSTICS === '1' ? browsers.capture() : undefined) : native.acceptance('capture');
         if (png) await writeFile(join(evidence, 'native-reattached.png'), png);
       }

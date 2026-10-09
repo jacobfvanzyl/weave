@@ -20,11 +20,16 @@ it('removes shell identity prefixes while retaining ordinary title content', () 
   expect(compactTerminalTitle('https://jaco@example.com/path')).toBe('https://jaco@example.com/path');
 });
 
-it('leaves directory metadata to sidebar badges while keeping process and custom titles', () => {
-  expect(sidebarTerminalTitle('/Users/jaco/Keyphase/odin', 'zsh')).toBe('zsh');
-  expect(sidebarTerminalTitle('jaco@Mac:~/Keyphase/odin', '/bin/bash')).toBe('bash');
-  expect(sidebarTerminalTitle('/code/project')).toBe('Terminal');
-  expect(sidebarTerminalTitle('C:\\Users\\jaco\\code\\project', 'pwsh')).toBe('pwsh');
+it('uses truncated current directories for plain shells while retaining application and custom titles', () => {
+  expect(sidebarTerminalTitle('/Users/jaco/Keyphase/odin', 'zsh')).toBe('.../Keyphase/odin');
+  expect(sidebarTerminalTitle('zsh', '/bin/zsh', '/Users/jaco/Keyphase/odin')).toBe('.../Keyphase/odin');
+  expect(sidebarTerminalTitle('jaco@Mac:~/Keyphase/odin', '/bin/bash', '/Users/jaco/code/other')).toBe('.../code/other');
+  expect(sidebarTerminalTitle('/code/project')).toBe('/code/project');
+  expect(sidebarTerminalTitle('C:\\Users\\jaco\\code\\project', 'pwsh')).toBe('...\\code\\project');
   expect(sidebarTerminalTitle('nvim', 'nvim')).toBe('nvim');
-  expect(sidebarTerminalTitle('Build output', 'node')).toBe('Build output');
+  expect(sidebarTerminalTitle('Build output', 'node', '/code/project')).toBe('Build output');
+  expect(sidebarTerminalTitle('Notes', 'zsh', '/code/project')).toBe('Notes');
+  expect(sidebarTerminalTitle('/code/project', 'nvim', '/code/project')).toBe('nvim');
+  expect(sidebarTerminalTitle('Terminal', undefined, '/Users/jaco/code/project')).toBe('.../code/project');
+  expect(sidebarTerminalTitle('Terminal')).toBe('Terminal');
 });

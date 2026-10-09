@@ -1,11 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WorkspaceClientBrowser, clientBrowserPaneKey } from './workspace-client-browser';
-import type { ClientBrowserPrototypeBridge } from './native-client-browser';
+import type { ClientBrowserBridge } from './native-client-browser';
 const fixture = () => {
-  const bridge = { adopt: vi.fn().mockResolvedValue({ surfaceId: 'native' }), create: vi.fn().mockResolvedValue({ surfaceId: 'native' }), layout: vi.fn().mockResolvedValue(undefined), close: vi.fn().mockResolvedValue(undefined), list: vi.fn().mockResolvedValue({ panes: [{ surfaceId: 'native', paneKey: clientBrowserPaneKey('host', 'pane') }, { surfaceId: 'other-native', paneKey: clientBrowserPaneKey('other', 'pane') }] }) };
-  return { bridge, runtime: new WorkspaceClientBrowser(bridge as unknown as ClientBrowserPrototypeBridge) };
+  const bridge = { snapshot: vi.fn().mockResolvedValue({ title: 'Local title', url: 'https://local.test/', faviconUrl: 'https://local.test/icon.svg', hidden: true }), adopt: vi.fn().mockResolvedValue({ surfaceId: 'native' }), create: vi.fn().mockResolvedValue({ surfaceId: 'native' }), layout: vi.fn().mockResolvedValue(undefined), close: vi.fn().mockResolvedValue(undefined), list: vi.fn().mockResolvedValue({ panes: [{ surfaceId: 'native', paneKey: clientBrowserPaneKey('host', 'pane') }, { surfaceId: 'other-native', paneKey: clientBrowserPaneKey('other', 'pane') }] }) };
+  return { bridge, runtime: new WorkspaceClientBrowser(bridge as unknown as ClientBrowserBridge) };
 };
 describe('Client Browser Workspace ownership', () => {
+  it('reads hidden page metadata by Host and Pane identity without creating or presenting a page', async () => {
+    const { runtime, bridge } = fixture();
+    expect(await runtime.metadata('other', 'pane')).toMatchObject({ title: 'Local title', hidden: true });
+    expect(bridge.snapshot).toHaveBeenCalledExactlyOnceWith({ surfaceId: 'other-native' });
+    expect(await runtime.metadata('missing', 'pane')).toBeUndefined();
+    bridge.snapshot.mockResolvedValue({ closed: true } as any);
+    expect(await runtime.metadata('host', 'pane')).toBeUndefined();
+    expect(bridge.create).not.toHaveBeenCalled();
+    expect(bridge.layout).not.toHaveBeenCalled();
+    expect(bridge.close).not.toHaveBeenCalled();
+  });
   it('reattaches by Host and Pane identity independently of Workspace placement', async () => {
     const { runtime, bridge } = fixture();
     await runtime.attach({ hostId: 'host', workspaceId: 'one', paneId: 'pane', initialUrl: 'https://linear.app/' });
