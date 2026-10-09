@@ -2,6 +2,7 @@
 //! can list, load, and resume what an earlier one recorded.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,27 +71,42 @@ pub(crate) struct State {
     pub client: ClientCapabilities,
     pub authenticated: bool,
     pub sessions: Vec<StoredSession>,
+    /// Sessions deleted here, which another process's saved copy mustn't bring back.
+    pub deleted: HashSet<String>,
     pub live: HashMap<SessionId, LiveSession>,
 }
 
 impl State {
     pub fn new(config: FakeAgentConfig) -> Self {
-        let persisted = config
-            .state_path
-            .as_deref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|text| serde_json::from_str::<Persisted>(&text).ok())
-            .unwrap_or_default();
+        let persisted = saved(&config).unwrap_or_default();
         Self {
             config,
             client: ClientCapabilities::default(),
             authenticated: persisted.authenticated,
             sessions: persisted.sessions,
+            deleted: HashSet::new(),
             live: HashMap::new(),
         }
     }
 
-    pub fn persist(&self) {
+    /// Take in sessions other processes saved since this one started, as an agent's own
+    /// storage shows every process's sessions (the weave daemon runs one per session).
+    pub fn merge_saved(&mut self) {
+        let Some(persisted) = saved(&self.config) else {
+            return;
+        };
+        for session in persisted.sessions {
+            if !self.deleted.contains(&session.id)
+                && !self.sessions.iter().any(|known| known.id == session.id)
+            {
+                self.sessions.push(session);
+            }
+        }
+    }
+
+    /// Save, keeping what other processes saved.
+    pub fn persist(&mut self) {
+        self.merge_saved();
         let Some(path) = &self.config.state_path else {
             return;
         };
@@ -162,6 +178,11 @@ pub(crate) fn now() -> String {
 }
 
 /// A new, globally unique session id, so persisted sessions from different runs never collide.
+fn saved(config: &FakeAgentConfig) -> Option<Persisted> {
+    let text = std::fs::read_to_string(config.state_path.as_deref()?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 pub(crate) fn new_session_id() -> SessionId {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

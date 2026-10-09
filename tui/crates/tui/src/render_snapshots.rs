@@ -83,6 +83,7 @@ fn chat_with(
         modes,
         config_options,
         reopened: None,
+        cwd: None,
     });
     chat
 }
@@ -517,6 +518,7 @@ fn fullscreen_chat() -> ChatWidget {
         modes: None,
         config_options: Vec::new(),
         reopened: None,
+        cwd: None,
     });
     chat
 }

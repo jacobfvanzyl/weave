@@ -14,11 +14,20 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
   of scope unless the issue changes.
 - It launches agents locally. It has no dependency on `product/`, the Host Daemon
   or its protocol, and it is not a root Bun workspace.
-- One session per process. Like Codex, it runs fullscreen by default: on the alternate
-  screen, `weave` owns the transcript (`transcript.rs`: retained cells that reflow,
-  scrolling, selection and copy, and Find, matched by `find.rs`). Inline mode (`--no-alt-screen`, `[tui]
-  alternate_screen = "never"`) keeps Codex's inline viewport, with finished history in
-  native terminal scrollback. Both modes must keep working.
+- Agents run in the weave daemon (WVE-83), a per-user process the CLI starts on first use,
+  so sessions outlive the TUI: quitting, crashing or rebuilding it and reattaching
+  (`--resume`, `--continue`) finds the session, mid-turn if a turn is running. The daemon is
+  an ACP agent to its clients and an ACP client to the agents, one process per live
+  session; the TUI is unchanged ACP over its socket, plus the `_weave/*` extension
+  (`acp-core/src/daemon_protocol.rs`). `--no-daemon` (`[daemon] enabled = false`) runs the
+  same daemon in-process, so there is one code path. `smoke`, `login` and `logout` talk to
+  agents directly. Triggers (schedules, webhooks) are planned separately; `Daemon::run` and
+  the `PermissionPolicy` are what they will call.
+- The TUI shows one session at a time. Like Codex, it runs fullscreen by default: on the
+  alternate screen, `weave` owns the transcript (`transcript.rs`: retained cells that
+  reflow, scrolling, selection and copy, and Find, matched by `find.rs`). Inline mode
+  (`--no-alt-screen`, `[tui] alternate_screen = "never"`) keeps Codex's inline viewport,
+  with finished history in native terminal scrollback. Both modes must keep working.
 
 ## Stack
 
@@ -30,9 +39,10 @@ crate, pinned exactly because 3.x is new.
 
 | Crate | Owns |
 | --- | --- |
-| `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace. No UI. |
+| `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace, the daemon's `_weave/*` extension. No UI. |
+| `crates/daemon` | The weave daemon: client connections, live sessions and their agents, journals, permission policies, headless runs. No UI. |
 | `crates/tui` | The interactive client: fullscreen transcript or inline viewport, chat state, composer. |
-| `crates/cli` | The `weave` binary and its subcommands. |
+| `crates/cli` | The `weave` binary and its subcommands, daemon autostart included. |
 | `crates/fake-agent` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. |
 
 Keep protocol behavior in `acp-core`. Client services (`fs/*`, `terminal/*`) live there
@@ -58,6 +68,23 @@ stripped.
 (`_meta.terminal_output_delta`, Zed's convention that codex-acp and claude-agent-acp use for
 commands they run themselves): `terminal_meta.rs` turns its chunks and exits into the same
 terminal events as client terminals, including in replayed sessions.
+
+In `daemon`, `client` is one client's connection (the daemon as its agent) and `session`
+the task that owns a live session: its agent, its journal (`journal`, JSONL under
+`~/.local/state/weave/daemon/sessions`, 0600), the clients attached to it, its turns, and
+the requests waiting on a person. Everything a session's clients are sent is journaled, so
+`session/load` of a live session replays the journal and then streams live, and a restarted
+daemon resumes sessions it left open. Prompts are forwarded; the other attached clients get
+the prompt as `user_message_chunk` and the turn as `_weave/turn`. Permission requests and
+elicitations go to every attached client until one answers; a `cancelled` permission
+answer only means that client won't answer (the TUI cancels what's pending when it leaves a
+session), and `session/cancel` from any client answers them all. Daemon-run terminals reach
+clients as `_weave/terminal_output`/`_weave/terminal_exit`; the daemon strips agents'
+`_meta` terminal output after turning it into the same events, so each chunk arrives once.
+Agents start in the session's directory with the requesting client's environment
+(`instance.rs`), and a client's spare agent answers `initialize`, sign-in and listing until
+a session takes it. Daemon tests (`crates/daemon/tests/daemon.rs`) run in-process with fake
+agents sharing one state file.
 
 Subagents follow the current draft of the Subagent Sessions RFD (`subagent_update`,
 session-directed messages, `running`/`idle` states). claude-agent-acp and codex-acp still
@@ -89,17 +116,48 @@ cargo fmt
 ```
 
 `--no-fs` and `--no-terminal` withhold those client services. `--resume [ID]` opens a
-session (or the picker, also on Ctrl+R in the TUI), `--continue` the latest one here, and
-`--add-dir` adds workspace roots. `weave login` and `weave logout` manage sign-in; when
+session (or the picker, also on Ctrl+R in the TUI), `--continue` the latest one here (of the
+agent last used here, `cli/src/recent.rs`, unless `--agent` or `--` names one), and
+`--add-dir` adds workspace roots. Ctrl+D on an empty composer leaves the TUI with a turn
+still running in the daemon. `weave login` and `weave logout` manage sign-in; when
 the agent answers `auth_required` at startup, `weave` offers its methods and retries.
 Agents and MCP servers come from `~/.config/weave/tui.toml` (see `crates/cli/src/config.rs`).
 
+```bash
+./target/debug/weave run --approve read,edit "fix the tests" -- <agent>   # headless, in the daemon
+./target/debug/weave run --detach "…"     # leave it running; prints the session id
+./target/debug/weave run --continue "…"   # or --resume <id>, as the TUI names sessions
+./target/debug/weave sessions             # open in the daemon; also cancel <id>, close <id>
+./target/debug/weave daemon status        # also start, stop, restart, run (foreground)
+```
+
+`--resume <id>` reopens a session with the agent and directory its journal records,
+overriding `--agent` and `--cwd` (`start::choose`); the daemon refuses to attach a client of
+another agent. `session/list` through the daemon leads with its sessions of that agent in
+the directory, open ones and then ones a stopped daemon left open (its index of journals,
+`Registry::known`), and marks them in `_meta.weave` (activity, clients, headless), which the
+TUI's picker shows as badges and `--continue` uses to pass over headless runs. Load and
+resume answers carry the session's directory, which the TUI adopts.
+
+Commands share their argument groups (`cli/src/args.rs`): `AgentArgs` (which agent, its
+config and trace) everywhere an agent is involved, `WorkspaceArgs` where a session is,
+`SessionArgs` (`--resume`, `--continue`) where one is reopened, and `ApproveArgs`
+(`--approve <kinds>|all`, the rest rejected, through `acp-core`'s `PermissionPolicy`) where a
+turn runs headless. Prompts are positional, before the `--` agent command.
+
+`weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
+`daemon_protocol::PROTOCOL_VERSION` matches); sessions it had open resume when reattached.
+Set `WEAVE_DAEMON_DIR` to run a dev daemon (socket, lock, log and journals) beside the
+installed one; its log is `daemon.log` there.
+
 The fake agent reads `WEAVE_FAKE_AGENT_STATE` (persist sessions and sign-in to this JSON
-file), `WEAVE_FAKE_AGENT_REQUIRE_AUTH=1`, and `WEAVE_FAKE_AGENT_PAGE_SIZE`. Its scripts
+file, which its processes share and merge as an agent's own storage would),
+`WEAVE_FAKE_AGENT_REQUIRE_AUTH=1`, and `WEAVE_FAKE_AGENT_PAGE_SIZE`. Its scripts
 also include `/ask` (form elicitation), `/connect` (URL elicitation) and `/mcp`.
 
-Both run against a real agent and its existing login. `--log-file <file>` captures
-diagnostics and agent stderr in the TUI. For live TUI checks inside cmux, split a pane
+Both run against a real agent and its existing login. `--log-file <file>` captures the
+TUI's diagnostics; agent stderr goes to the daemon's log (to `--log-file` with
+`--no-daemon`). For live TUI checks inside cmux, split a pane
 (`cmux new-split right`), drive it with `cmux send`/`cmux send-key`, and read it with
 `cmux read-screen --scrollback`. `cmux send` splits escape sequences, so simulate mouse
 input under a private tmux server instead (`tmux -L <name> send-keys -H <bytes>`), with

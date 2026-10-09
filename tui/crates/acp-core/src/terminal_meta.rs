@@ -45,6 +45,21 @@ pub(crate) fn terminal_events(update: &SessionUpdate) -> Vec<AgentEvent> {
     meta.map(events_in).unwrap_or_default()
 }
 
+/// Remove the terminal progress [`terminal_events`] reads from an update's `_meta`, once it
+/// has become events: the weave daemon passes those on to its clients itself.
+pub fn strip_terminal_events(update: &mut SessionUpdate) {
+    let meta = match update {
+        SessionUpdate::ToolCall(call) => call.meta.as_mut(),
+        SessionUpdate::ToolCallUpdate(update) => update.meta.as_mut(),
+        _ => None,
+    };
+    if let Some(meta) = meta {
+        for key in ["terminal_output_delta", "terminal_output", "terminal_exit"] {
+            meta.remove(key);
+        }
+    }
+}
+
 fn events_in(meta: &Meta) -> Vec<AgentEvent> {
     let mut events = Vec::new();
     for key in ["terminal_output_delta", "terminal_output"] {
@@ -135,6 +150,22 @@ mod tests {
             "terminal_output": {"terminal_id": "exec-1", "data": "more"}
         })));
         assert_eq!(describe(&events), ["output exec-1: \"more\""]);
+    }
+
+    #[test]
+    fn stripping_leaves_only_what_isnt_terminal_progress() {
+        let mut stripped = update(json!({
+            "terminal_info": {"terminal_id": "exec-1"},
+            "terminal_output_delta": {"terminal_id": "exec-1", "data": "hello\n"},
+            "terminal_exit": {"terminal_id": "exec-1", "exit_code": 0}
+        }));
+        strip_terminal_events(&mut stripped);
+        assert!(terminal_events(&stripped).is_empty());
+        let SessionUpdate::ToolCallUpdate(update) = stripped else {
+            panic!("still a tool call update");
+        };
+        let keys: Vec<&String> = update.meta.iter().flat_map(|meta| meta.keys()).collect();
+        assert_eq!(keys, ["terminal_info"]);
     }
 
     #[test]

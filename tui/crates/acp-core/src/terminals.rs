@@ -41,11 +41,14 @@ use crate::AgentEvent;
 /// background children.
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(250);
 
+/// Terminal ids are unique across the process, not just one connection, since the weave
+/// daemon forwards several agents' terminals to the same client.
+static NEXT_TERMINAL: AtomicU64 = AtomicU64::new(1);
+
 pub(crate) struct Terminals {
     events: UnboundedSender<AgentEvent>,
     /// Working directory of each session, the default for its commands.
     session_dirs: Arc<Mutex<HashMap<SessionId, PathBuf>>>,
-    next_id: AtomicU64,
     live: Mutex<HashMap<TerminalId, Arc<TerminalProcess>>>,
 }
 
@@ -66,7 +69,6 @@ impl Terminals {
         Self {
             events,
             session_dirs,
-            next_id: AtomicU64::new(1),
             live: Mutex::new(HashMap::new()),
         }
     }
@@ -106,7 +108,7 @@ impl Terminals {
 
         let terminal_id = TerminalId::new(format!(
             "term-{}",
-            self.next_id.fetch_add(1, Ordering::Relaxed)
+            NEXT_TERMINAL.fetch_add(1, Ordering::Relaxed)
         ));
         let limit = request
             .output_byte_limit

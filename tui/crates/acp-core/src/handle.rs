@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use agent_client_protocol::Agent;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
+use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::AgentCapabilities;
 use agent_client_protocol::schema::v1::AuthMethod;
@@ -30,6 +31,7 @@ use agent_client_protocol::schema::v1::LoadSessionRequest;
 use agent_client_protocol::schema::v1::LoadSessionResponse;
 use agent_client_protocol::schema::v1::LogoutRequest;
 use agent_client_protocol::schema::v1::McpServer;
+use agent_client_protocol::schema::v1::Meta;
 use agent_client_protocol::schema::v1::NewSessionRequest;
 use agent_client_protocol::schema::v1::NewSessionResponse;
 use agent_client_protocol::schema::v1::PromptRequest;
@@ -114,9 +116,19 @@ impl AgentHandle {
 
     /// Negotiate ACP v1 and advertise this connection's client services.
     pub async fn initialize(&self) -> Result<InitializeResponse, InitializeError> {
+        self.initialize_with(None).await
+    }
+
+    /// [`Self::initialize`], with `_meta` for the agent, such as the weave daemon's
+    /// [`ClientHello`](crate::daemon_protocol::ClientHello).
+    pub async fn initialize_with(
+        &self,
+        meta: Option<Meta>,
+    ) -> Result<InitializeResponse, InitializeError> {
         let request = InitializeRequest::new(ProtocolVersion::V1)
             .client_capabilities(self.shared.options.capabilities())
-            .client_info(Implementation::new("weave", env!("CARGO_PKG_VERSION")));
+            .client_info(Implementation::new("weave", env!("CARGO_PKG_VERSION")))
+            .meta(meta);
         let response = self.cx().send_request(request).block_task().await?;
         // The agent answers with the version it will speak; the client must not
         // continue with one it does not support.
@@ -290,6 +302,14 @@ impl AgentHandle {
             .block_task()
             .await
             .map(|response| response.config_options)
+    }
+
+    /// An extension request, such as the weave daemon's `_weave/*` ones (`daemon_protocol`).
+    pub async fn extension<Request: JsonRpcRequest>(
+        &self,
+        request: Request,
+    ) -> Result<Request::Response, Error> {
+        self.cx().send_request(request).block_task().await
     }
 
     /// Reject setup the agent cannot accept: extra roots or MCP transports it did not advertise.

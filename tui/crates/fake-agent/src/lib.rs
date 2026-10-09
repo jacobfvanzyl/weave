@@ -274,6 +274,7 @@ pub async fn serve_with(
         .on_receive_request(
             async move |request: LoadSessionRequest, responder, cx: ConnectionTo<Client>| {
                 let mut state = lock(&on_load);
+                state.merge_saved();
                 if let Err(error) = state.require_auth() {
                     return responder.respond_with_error(error);
                 }
@@ -312,6 +313,7 @@ pub async fn serve_with(
         .on_receive_request(
             async move |request: ResumeSessionRequest, responder, cx: ConnectionTo<Client>| {
                 let mut state = lock(&on_resume);
+                state.merge_saved();
                 if let Err(error) = state.require_auth() {
                     return responder.respond_with_error(error);
                 }
@@ -332,7 +334,8 @@ pub async fn serve_with(
         )
         .on_receive_request(
             async move |request: ListSessionsRequest, responder, _cx| {
-                let state = lock(&on_list);
+                let mut state = lock(&on_list);
+                state.merge_saved();
                 if let Err(error) = state.require_auth() {
                     return responder.respond_with_error(error);
                 }
@@ -387,6 +390,7 @@ pub async fn serve_with(
                 let mut state = lock(&on_delete);
                 let id = request.session_id.to_string();
                 state.sessions.retain(|session| session.id != id);
+                state.deleted.insert(id);
                 if let Some(session) = state.live.remove(&request.session_id) {
                     session.cancel.cancel();
                 }

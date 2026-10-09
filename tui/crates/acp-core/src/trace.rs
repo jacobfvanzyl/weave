@@ -57,6 +57,37 @@ impl ProtocolTrace {
     }
 }
 
+/// The traces an agent's protocol goes to, which may change while it runs: the weave
+/// daemon traces a live session for each attached client that asked for a trace.
+#[derive(Default)]
+pub struct Traces(Mutex<Vec<(u64, ProtocolTrace)>>);
+
+impl Traces {
+    /// Trace into `trace` for `owner`, replacing any trace it had.
+    pub fn add(&self, owner: u64, trace: ProtocolTrace) {
+        let mut traces = self.lock();
+        traces.retain(|(existing, _)| *existing != owner);
+        traces.push((owner, trace));
+    }
+
+    /// Stop tracing for `owner`.
+    pub fn remove(&self, owner: u64) {
+        self.lock().retain(|(existing, _)| *existing != owner);
+    }
+
+    pub(crate) fn record(&self, direction: LineDirection, line: &str) {
+        for (_, trace) in self.lock().iter() {
+            trace.record(direction, line);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(u64, ProtocolTrace)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The trace events for one JSON-RPC message (or each message of a batch).
 pub fn trace_events(ts: f64, from: &str, to: &str, message: &Value) -> Vec<Value> {
     if let Value::Array(batch) = message {
@@ -121,6 +152,27 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn traces_come_and_go_while_the_agent_runs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = dir.path().join("first.jsonl");
+        let second = dir.path().join("second.jsonl");
+        let traces = Traces::default();
+        let line = r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"s1"}}"#;
+        traces.add(1, ProtocolTrace::create(&first).expect("trace"));
+        traces.record(LineDirection::Stdin, line);
+        traces.add(2, ProtocolTrace::create(&second).expect("trace"));
+        traces.record(LineDirection::Stdin, line);
+        traces.remove(1);
+        traces.record(LineDirection::Stdin, line);
+        let lines = |path: &Path| {
+            std::fs::read_to_string(path)
+                .map(|text| text.lines().count())
+                .unwrap_or_default()
+        };
+        assert_eq!((lines(&first), lines(&second)), (2, 2));
+    }
 
     #[test]
     fn requests_notifications_and_responses_match_the_viewer_format() {

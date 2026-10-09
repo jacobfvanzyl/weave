@@ -49,6 +49,11 @@ impl PermissionRequest {
             .respond_with_error(Error::request_cancelled())
     }
 
+    /// Answer with a response another client gave, as the weave daemon passes one on.
+    pub fn respond_with(self, response: RequestPermissionResponse) -> Result<(), Error> {
+        self.responder.respond(response)
+    }
+
     fn respond(self, outcome: RequestPermissionOutcome) -> Result<(), Error> {
         self.responder
             .respond(RequestPermissionResponse::new(outcome))
@@ -88,6 +93,11 @@ impl ElicitationRequest {
     pub fn withdrawn(self) -> Result<(), Error> {
         self.responder
             .respond_with_error(Error::request_cancelled())
+    }
+
+    /// Answer with a response another client gave, as the weave daemon passes one on.
+    pub fn respond_with(self, response: CreateElicitationResponse) -> Result<(), Error> {
+        self.responder.respond(response)
     }
 
     fn respond(self, action: ElicitationAction) -> Result<(), Error> {

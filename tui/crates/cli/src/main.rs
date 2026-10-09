@@ -1,11 +1,17 @@
-mod agent_args;
+mod args;
 mod config;
+mod daemon;
+mod recent;
 mod registry;
+mod run;
+mod sessions;
 mod smoke;
 mod start;
 
 use std::fs::File;
+use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Mutex;
 
 use anyhow::Context;
@@ -14,10 +20,14 @@ use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 
-use crate::agent_args::AgentArgs;
+use crate::args::AgentArgs;
+use crate::args::AgentChoice;
+use crate::args::SessionArgs;
+use crate::args::WorkspaceArgs;
 use crate::config::AlternateScreen;
+use crate::daemon::Target;
+use crate::recent::Recent;
 use crate::start::SignedIn;
-use crate::start::StartMode;
 
 /// Terminal client for ACP agents.
 #[derive(Parser)]
@@ -30,9 +40,12 @@ struct Cli {
     agent: AgentArgs,
 
     #[command(flatten)]
+    workspace: WorkspaceArgs,
+
+    #[command(flatten)]
     session: SessionArgs,
 
-    /// Write diagnostics, including agent stderr, to this file.
+    /// Write diagnostics to this file (with --no-daemon, agent stderr too).
     #[arg(long)]
     log_file: Option<PathBuf>,
 
@@ -40,21 +53,21 @@ struct Cli {
     /// terminal's own scrollback. Also `alternate_screen = "never"` under `[tui]` in the config.
     #[arg(long)]
     no_alt_screen: bool,
-}
 
-#[derive(Args)]
-struct SessionArgs {
-    /// Reopen a session: by id, or choose one from a list when no id is given.
-    #[arg(long, value_name = "SESSION_ID", num_args = 0..=1, conflicts_with = "continue_last")]
-    resume: Option<Option<String>>,
-
-    /// Reopen the most recent session in this directory.
-    #[arg(long = "continue")]
-    continue_last: bool,
+    /// Run the agent in this process rather than the weave daemon, so its sessions end when
+    /// weave does. Also `enabled = false` under `[daemon]` in the config.
+    #[arg(long)]
+    no_daemon: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run one prompt in a headless session in the daemon, printing the reply.
+    Run(run::RunArgs),
+    /// Sessions open in the daemon: list them, stop a turn, or close one.
+    Sessions(sessions::SessionsArgs),
+    /// Manage the weave daemon, which runs agents so their sessions outlive the TUI.
+    Daemon(daemon::DaemonArgs),
     /// Run one prompt headlessly and print every ACP event the agent sends.
     Smoke(smoke::SmokeArgs),
     /// Sign in to the agent with one of the methods it offers.
@@ -93,24 +106,37 @@ struct LogoutArgs {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
+async fn main() -> anyhow::Result<ExitCode> {
+    let mut cli = Cli::parse();
+    match cli.command.take() {
+        Some(Command::Run(args)) => {
+            log_to_stderr("warn");
+            run::run(args).await
+        }
+        Some(Command::Sessions(args)) => {
+            log_to_stderr("warn");
+            sessions::command(args).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Daemon(args)) => {
+            // A daemon's stderr is its log, agents' stderr included, as `--log-file` has it.
+            log_to_stderr("info,agent_stderr=debug");
+            daemon::command(args).await.map(|()| ExitCode::SUCCESS)
+        }
         Some(Command::Smoke(args)) => {
-            log_to_stderr();
-            smoke::run(args).await
+            log_to_stderr("warn");
+            smoke::run(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Login(args)) => {
-            log_to_stderr();
-            login(args).await
+            log_to_stderr("warn");
+            login(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Logout(args)) => {
-            log_to_stderr();
-            logout(args).await
+            log_to_stderr("warn");
+            logout(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Agents(args)) => {
-            log_to_stderr();
-            agents(args).await
+            log_to_stderr("warn");
+            agents(args).await.map(|()| ExitCode::SUCCESS)
         }
         None => {
             // The TUI owns the terminal, so diagnostics can only go to a file.
@@ -123,16 +149,18 @@ async fn main() -> anyhow::Result<()> {
                     .with_ansi(false)
                     .init();
             }
-            run_tui(cli.agent, cli.session, cli.no_alt_screen).await
+            run_tui(cli).await.map(|()| ExitCode::SUCCESS)
         }
     }
 }
 
 /// Diagnostics (including agent stderr at `RUST_LOG=agent_stderr=debug`) go to stderr.
-fn log_to_stderr() {
+fn log_to_stderr(default: &str) {
     tracing_subscriber::fmt()
-        .with_env_filter(env_filter("warn"))
+        .with_env_filter(env_filter(default))
         .with_writer(std::io::stderr)
+        // Colors only for a terminal: a background daemon's stderr is its log file.
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 }
 
@@ -140,22 +168,38 @@ fn env_filter(default: &str) -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
 }
 
-async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> anyhow::Result<()> {
-    let launch = args.launch().await?;
+async fn run_tui(cli: Cli) -> anyhow::Result<()> {
+    let mode = cli.session.mode();
+    let explicit = cli.agent.choice();
+    let recent = Recent::default_location();
+    let disabled = cli.agent.load_config()?.daemon.enabled == Some(false);
+    let target = Target::choose(cli.no_daemon || disabled)?;
+    let chosen = start::choose(
+        &mode,
+        explicit.clone(),
+        &cli.workspace,
+        &target,
+        recent.as_ref(),
+    )?;
+    if let Some(note) = &chosen.note {
+        eprintln!("{note}");
+    }
+    let launch = cli
+        .agent
+        .launch(&cli.workspace, chosen.agent, chosen.cwd)
+        .await?;
+    let no_alt_screen = cli.no_alt_screen;
     let screen = match (no_alt_screen, launch.config.tui.alternate_screen) {
         (true, _) | (false, AlternateScreen::Never) => weave_tui::ScreenMode::Inline,
         (false, AlternateScreen::Auto | AlternateScreen::Always) => {
             weave_tui::ScreenMode::Fullscreen
         }
     };
-    let mode = match (session.resume, session.continue_last) {
-        (Some(Some(id)), _) => StartMode::Resume(id.into()),
-        (Some(None), _) => StartMode::Pick,
-        (None, true) => StartMode::Continue,
-        (None, false) => StartMode::New,
-    };
     eprintln!("Starting {}", launch.spec.display_command());
-    let started = start::start(&launch, &mode).await?;
+    let started = start::start(&launch, &target, &mode).await?;
+    if let Some(recent) = &recent {
+        recent.record(&launch.cwd, &launch.agent);
+    }
     let agent = started
         .connection
         .agent()
@@ -189,13 +233,23 @@ async fn run_tui(args: AgentArgs, session: SessionArgs, no_alt_screen: bool) -> 
             notifications: launch.config.tui.notifications.unwrap_or(true),
             terminal_title: launch.config.tui.terminal_title.unwrap_or(true),
             vim: launch.config.tui.vim.unwrap_or(false),
+            detachable: matches!(target, Target::Shared(_)),
         },
     )
-    .await?;
+    .await;
+    target.finish().await;
+    let exit = exit?;
     // Fullscreen leaves nothing behind in the terminal, so say how to get back, as Codex does.
     if let Some(session_id) = exit.resumable_session {
-        let command = resume_command(std::env::args().skip(1), &session_id.to_string());
-        println!("To continue this session, run: {command}");
+        // Name the agent when the command line didn't, or named another, so this reopens
+        // the session with its own.
+        let agent = (explicit.as_ref() != Some(&launch.agent)).then_some(&launch.agent);
+        let command = resume_command(std::env::args().skip(1), &session_id.to_string(), agent);
+        if exit.turn_running && matches!(target, Target::Shared(_)) {
+            println!("The turn carries on in the weave daemon. To attach again, run: {command}");
+        } else {
+            println!("To continue this session, run: {command}");
+        }
     }
     Ok(())
 }
@@ -217,12 +271,30 @@ fn status_line_items(config: &config::Config) -> (Vec<weave_tui::StatusItem>, Ve
 }
 
 /// This invocation's command line, reopening `session_id` in place of any session choice.
-fn resume_command(args: impl IntoIterator<Item = String>, session_id: &str) -> String {
+fn resume_command(
+    args: impl IntoIterator<Item = String>,
+    session_id: &str,
+    agent: Option<&AgentChoice>,
+) -> String {
     let mut words = vec!["weave".to_owned()];
     let mut agent_command = Vec::new();
+    match agent {
+        Some(AgentChoice::Named(id)) => words.extend(["--agent".to_owned(), id.clone()]),
+        Some(AgentChoice::Command(command)) => {
+            agent_command.push("--".to_owned());
+            agent_command.extend(command.iter().cloned());
+        }
+        None => {}
+    }
     let mut args = args.into_iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            // The agent named instead replaces the one the command line gave.
+            "--agent" if agent.is_some() => {
+                args.next();
+            }
+            _ if agent.is_some() && arg.starts_with("--agent=") => {}
+            "--" if agent.is_some() => break,
             "--" => {
                 agent_command.push(arg);
                 agent_command.extend(args.by_ref());
@@ -238,28 +310,12 @@ fn resume_command(args: impl IntoIterator<Item = String>, session_id: &str) -> S
     }
     words.extend(["--resume".to_owned(), session_id.to_owned()]);
     words.extend(agent_command);
-    words
-        .iter()
-        .map(|word| shell_quote(word))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn shell_quote(word: &str) -> String {
-    let plain = !word.is_empty()
-        && word
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c));
-    if plain {
-        word.to_owned()
-    } else {
-        format!("'{}'", word.replace('\'', "'\\''"))
-    }
+    args::shell_words(&words)
 }
 
 async fn login(args: LoginArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch().await?;
-    let (connection, _events) = start::connect(&launch).await?;
+    let launch = args.agent.launch_here(&WorkspaceArgs::default()).await?;
+    let (connection, _events) = start::connect_direct(&launch).await?;
     let result = start::sign_in(&connection, &launch.spec, args.method.as_deref()).await;
     connection.shutdown().await;
     match result? {
@@ -270,8 +326,8 @@ async fn login(args: LoginArgs) -> anyhow::Result<()> {
 }
 
 async fn logout(args: LogoutArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch().await?;
-    let (connection, _events) = start::connect(&launch).await?;
+    let launch = args.agent.launch_here(&WorkspaceArgs::default()).await?;
+    let (connection, _events) = start::connect_direct(&launch).await?;
     let result = connection.logout().await;
     connection.shutdown().await;
     result.context("logout")?;
@@ -368,6 +424,39 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn the_command_line_is_well_formed() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+        let parses = |line: &[&str]| Cli::try_parse_from(line).is_ok();
+        // Prompts come first and the custom agent command last, in run and smoke alike.
+        assert!(parses(&[
+            "weave",
+            "run",
+            "--approve",
+            "read,edit",
+            "fix",
+            "it",
+            "--",
+            "agent",
+            "--acp"
+        ]));
+        assert!(parses(&["weave", "smoke", "hi", "--approve", "all"]));
+        // Sessions are named the same way everywhere.
+        assert!(parses(&["weave", "run", "--resume", "s1", "again"]));
+        assert!(parses(&["weave", "run", "--continue", "again"]));
+        assert!(parses(&["weave", "--continue"]));
+        assert!(!parses(&["weave", "run", "--session", "s1", "again"]));
+        // Signing in takes no workspace.
+        assert!(parses(&[
+            "weave", "login", "--agent", "claude", "--trace", "t.jsonl"
+        ]));
+        assert!(!parses(&["weave", "login", "--cwd", "/tmp"]));
+        assert!(parses(&["weave", "sessions"]));
+        assert!(parses(&["weave", "sessions", "close", "s1"]));
+        assert!(parses(&["weave", "sessions", "list", "--json"]));
+    }
+
     fn words(line: &str) -> Vec<String> {
         line.split(' ').map(str::to_owned).collect()
     }
@@ -375,22 +464,42 @@ mod tests {
     #[test]
     fn the_resume_command_replaces_the_session_choice() {
         assert_eq!(
-            resume_command(words("--agent claude --continue"), "s1"),
+            resume_command(words("--agent claude --continue"), "s1", None),
             "weave --agent claude --resume s1"
         );
         assert_eq!(
-            resume_command(words("--resume old --no-fs"), "s1"),
+            resume_command(words("--resume old --no-fs"), "s1", None),
             "weave --no-fs --resume s1"
         );
         assert_eq!(
-            resume_command(words("--resume --cwd /tmp/repo"), "s1"),
+            resume_command(words("--resume --cwd /tmp/repo"), "s1", None),
             "weave --cwd /tmp/repo --resume s1"
         );
         assert_eq!(
-            resume_command(words("--resume=old -- ./agent --acp"), "s1"),
+            resume_command(words("--resume=old -- ./agent --acp"), "s1", None),
             "weave --resume s1 -- ./agent --acp"
         );
-        let quoted = resume_command(vec!["--cwd".into(), "it's here".into()], "s1");
+        let quoted = resume_command(vec!["--cwd".into(), "it's here".into()], "s1", None);
         assert_eq!(quoted, "weave --cwd 'it'\\''s here' --resume s1");
+        // An agent the command line didn't name, such as the one `--continue` found, is named.
+        let codex = AgentChoice::Named("codex".into());
+        assert_eq!(
+            resume_command(words("--continue --no-fs"), "s1", Some(&codex)),
+            "weave --agent codex --no-fs --resume s1"
+        );
+        let custom = AgentChoice::Command(vec!["./agent".into(), "--acp".into()]);
+        assert_eq!(
+            resume_command(words("--continue"), "s1", Some(&custom)),
+            "weave --resume s1 -- ./agent --acp"
+        );
+        // A resumed session's own agent replaces the one given.
+        assert_eq!(
+            resume_command(words("--agent claude --resume s1"), "s1", Some(&codex)),
+            "weave --agent codex --resume s1"
+        );
+        assert_eq!(
+            resume_command(words("--resume s1 -- ./other"), "s1", Some(&codex)),
+            "weave --agent codex --resume s1"
+        );
     }
 }

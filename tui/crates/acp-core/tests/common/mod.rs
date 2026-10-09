@@ -159,6 +159,9 @@ impl Harness {
                     log.stop_reason = Some(result.expect("prompt response").stop_reason);
                     return log;
                 }
+                AgentEvent::TurnRunning { .. } | AgentEvent::SessionEnded { .. } => {
+                    panic!("only the weave daemon sends these")
+                }
                 AgentEvent::Disconnected(error) => panic!("disconnected: {error:?}"),
             }
         }

@@ -155,7 +155,7 @@ impl Turn {
         }
 
         self.report_usage(cx)?;
-        let state = lock(&self.state);
+        let mut state = lock(&self.state);
         state.persist();
         let stop_reason = if self.cancel.is_cancelled() {
             StopReason::Cancelled

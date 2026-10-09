@@ -28,10 +28,12 @@ pub fn preset_ids() -> impl Iterator<Item = &'static str> {
 }
 
 /// How to launch one ACP agent process.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct AgentSpec {
     pub command: String,
+    #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 }
 

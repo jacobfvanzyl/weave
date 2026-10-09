@@ -9,52 +9,55 @@ use std::io::Write;
 use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
-use clap::ValueEnum;
 use serde::Serialize;
 use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::PermissionRequest;
 use weave_acp_core::ProtocolTrace;
 use weave_acp_core::SessionSetup;
+use weave_acp_core::policy::PermissionPolicy;
+use weave_acp_core::policy::ToolKinds;
 use weave_acp_core::schema::AuthMethod;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::ErrorCode;
 use weave_acp_core::schema::InitializeResponse;
-use weave_acp_core::schema::PermissionOptionKind;
+use weave_acp_core::schema::RequestPermissionOutcome;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::TextContent;
+use weave_acp_core::schema::ToolKind;
 
-use crate::agent_args::AgentArgs;
-use crate::agent_args::Launch;
+use crate::args::AgentArgs;
+use crate::args::ApproveArgs;
+use crate::args::Launch;
+use crate::args::WorkspaceArgs;
 
 #[derive(Args)]
 pub struct SmokeArgs {
+    /// The prompt to send. Before the agent's arguments, whose custom command comes last,
+    /// after `--`.
+    prompt: Vec<String>,
+
     #[command(flatten)]
     agent: AgentArgs,
 
-    /// The prompt to send.
-    #[arg(
-        long,
-        short,
-        default_value = "Reply with one short sentence confirming you can read this."
-    )]
-    prompt: String,
+    #[command(flatten)]
+    workspace: WorkspaceArgs,
 
-    /// How to answer the agent's permission requests.
-    #[arg(long, value_enum, default_value_t = PermissionPolicy::Reject)]
-    permissions: PermissionPolicy,
+    #[command(flatten)]
+    approve: ApproveArgs,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum PermissionPolicy {
-    /// Choose the agent's one-time allow option.
-    Allow,
-    /// Choose the agent's one-time reject option.
-    Reject,
-}
+/// What smoke asks when no prompt is given.
+const DEFAULT_PROMPT: &str = "Reply with one short sentence confirming you can read this.";
 
 pub async fn run(args: SmokeArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch().await?;
+    let prompt = if args.prompt.is_empty() {
+        DEFAULT_PROMPT.to_owned()
+    } else {
+        args.prompt.join(" ")
+    };
+    let policy = PermissionPolicy::headless(args.approve.kinds()?);
+    let launch = args.agent.launch_here(&args.workspace).await?;
     let trace = launch
         .trace
         .as_deref()
@@ -68,15 +71,7 @@ pub async fn run(args: SmokeArgs) -> anyhow::Result<()> {
     out.event(format_args!("launching {}", launch.spec.display_command()));
     let (connection, mut events) =
         AgentConnection::spawn(&launch.spec, trace, launch.options).await?;
-    let result = run_turn(
-        &connection,
-        &mut events,
-        &mut out,
-        &launch,
-        args.prompt,
-        args.permissions,
-    )
-    .await;
+    let result = run_turn(&connection, &mut events, &mut out, &launch, prompt, &policy).await;
     connection.shutdown().await;
     result
 }
@@ -87,7 +82,7 @@ async fn run_turn(
     out: &mut Printer,
     launch: &Launch,
     prompt: String,
-    policy: PermissionPolicy,
+    policy: &PermissionPolicy,
 ) -> anyhow::Result<()> {
     let init = connection.initialize().await?;
     describe_agent(out, &init);
@@ -152,6 +147,7 @@ async fn run_turn(
     )?;
 
     let mut cancelling = false;
+    let mut tool_kinds = ToolKinds::default();
     loop {
         let event = tokio::select! {
             event = events.recv() => event,
@@ -166,13 +162,17 @@ async fn run_turn(
             }
         };
         match event {
-            Some(AgentEvent::SessionUpdate(notification)) => out.update(&notification.update),
+            Some(AgentEvent::SessionUpdate(notification)) => {
+                tool_kinds.observe(&notification.update);
+                out.update(&notification.update);
+            }
             Some(AgentEvent::PermissionRequested(request)) if cancelling => {
                 out.event(format_args!("permission request answered cancelled"));
                 request.cancel()?;
             }
             Some(AgentEvent::PermissionRequested(request)) => {
-                answer_permission(out, request, policy)?
+                let kind = tool_kinds.of(&request.request);
+                answer_permission(out, request, policy, kind)?;
             }
             Some(AgentEvent::ElicitationRequested(request)) => {
                 out.event(format_args!(
@@ -201,6 +201,8 @@ async fn run_turn(
                 out.event(format_args!("turn ended: {}", wire(&response.stop_reason)));
                 return Ok(());
             }
+            // Only the weave daemon sends these; smoke talks to the agent directly.
+            Some(AgentEvent::TurnRunning { .. } | AgentEvent::SessionEnded { .. }) => {}
             Some(AgentEvent::Disconnected(Some(error))) => {
                 bail!("connection closed mid-turn: {error}");
             }
@@ -237,12 +239,9 @@ fn describe_agent(out: &mut Printer, init: &InitializeResponse) {
 fn answer_permission(
     out: &mut Printer,
     request: PermissionRequest,
-    policy: PermissionPolicy,
+    policy: &PermissionPolicy,
+    kind: ToolKind,
 ) -> anyhow::Result<()> {
-    let wanted = match policy {
-        PermissionPolicy::Allow => PermissionOptionKind::AllowOnce,
-        PermissionPolicy::Reject => PermissionOptionKind::RejectOnce,
-    };
     let title = request
         .request
         .tool_call
@@ -250,25 +249,33 @@ fn answer_permission(
         .title
         .clone()
         .unwrap_or_default();
-    let choice = request
-        .request
-        .options
-        .iter()
-        .find(|option| option.kind == wanted)
-        .map(|option| (option.option_id.clone(), option.name.clone()));
-    match choice {
-        Some((id, name)) => {
-            out.event(format_args!("permission {title:?} -> {name}"));
-            request.select(id)?;
-        }
-        None => {
+    // A headless policy always answers.
+    let Some(answer) = policy.answer(&request.request, kind) else {
+        request.cancel()?;
+        return Ok(());
+    };
+    match &answer.outcome {
+        RequestPermissionOutcome::Selected(selected) => {
+            let name = request
+                .request
+                .options
+                .iter()
+                .find(|option| option.option_id == selected.option_id)
+                .map_or_else(
+                    || selected.option_id.to_string(),
+                    |option| option.name.clone(),
+                );
             out.event(format_args!(
-                "permission {title:?} offered no {} option; cancelled",
-                wire(&wanted)
+                "permission {title:?} ({}) -> {name}",
+                wire(&kind)
             ));
-            request.cancel()?;
         }
+        _ => out.event(format_args!(
+            "permission {title:?} ({}) offered no way to refuse; cancelled",
+            wire(&kind)
+        )),
     }
+    request.respond_with(answer)?;
     Ok(())
 }
 

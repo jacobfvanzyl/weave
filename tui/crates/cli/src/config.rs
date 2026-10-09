@@ -10,6 +10,9 @@
 //! terminal_title = false       # leave the window title alone
 //! vim = true                   # a Vim composer for new threads and multi-line drafts
 //!
+//! [daemon]
+//! enabled = false            # run agents inside each weave, not the shared daemon (`--no-daemon`)
+//!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
 //! compaction = false         # no compaction updates (ACP Preview; on by default)
@@ -62,6 +65,17 @@ pub struct Config {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub tui: TuiConfig,
+    #[serde(default)]
+    pub daemon: DaemonSettings,
+}
+
+/// The per-user daemon that runs agents (`weave daemon`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DaemonSettings {
+    /// Run agents in the daemon, so sessions outlive the TUI (default true). Without it each
+    /// `weave` runs its own, as `--no-daemon` does.
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]

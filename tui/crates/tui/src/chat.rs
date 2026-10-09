@@ -131,6 +131,8 @@ pub enum AppCommand {
     OpenSession {
         target: SessionTarget,
         title: Option<String>,
+        /// The directory an existing session works in, when the list said.
+        cwd: Option<PathBuf>,
     },
     DeleteSession(SessionId),
     /// Open a URL the user consented to in their browser.
@@ -259,6 +261,9 @@ pub struct ChatWidget {
     status_items: Vec<StatusItem>,
     /// Whether the Vim composer is enabled (`[tui] vim = true`).
     vim: bool,
+    /// Whether sessions outlive the TUI, in the weave daemon: Ctrl+D then leaves even while
+    /// a turn runs, and the turn carries on.
+    detachable: bool,
     /// Subagents this session created, in the order they appeared, each with its own chat.
     subagents: Vec<Subagent>,
     /// The subagent whose transcript is shown instead of this session's.
@@ -353,6 +358,7 @@ impl ChatWidget {
             shortcuts_open: false,
             status_items: StatusItem::DEFAULT.to_vec(),
             vim: false,
+            detachable: false,
             subagents: Vec::new(),
             watching: None,
             subagent_picker: None,
@@ -372,6 +378,20 @@ impl ChatWidget {
     pub fn with_vim(mut self, enabled: bool) -> Self {
         self.vim = enabled;
         self.composer.set_vim_available(enabled);
+        self
+    }
+
+    /// Work in `cwd` from now on: the directory a session opened from another one works in.
+    pub fn set_cwd(&mut self, cwd: PathBuf) {
+        if cwd != self.cwd {
+            self.files = FileIndex::new(cwd.clone());
+            self.cwd = cwd;
+        }
+    }
+
+    /// Sessions outlive the TUI, in the weave daemon, so leaving needn't stop a turn.
+    pub fn with_detach(mut self, detachable: bool) -> Self {
+        self.detachable = detachable;
         self
     }
 
@@ -461,9 +481,12 @@ impl ChatWidget {
             self.begin_session(opened.session_id.clone(), title);
         }
         // A loaded session's replay is over: what it finished settles into the transcript.
-        self.end_stream();
-        self.commit_finished_tool_calls();
-        self.flush_exploring();
+        // Unless a turn is still running in it, attached to mid-stream.
+        if self.turn.is_none() {
+            self.end_stream();
+            self.commit_finished_tool_calls();
+            self.flush_exploring();
+        }
         self.opening = false;
         self.stashed = None;
         self.resumable |= opened.reopened.is_some();
@@ -569,6 +592,11 @@ impl ChatWidget {
     /// The session to offer reopening on exit: the active one, once it has a conversation.
     pub fn resumable_session(&self) -> Option<&SessionId> {
         self.active_session.as_ref().filter(|_| self.resumable)
+    }
+
+    /// Whether a turn is running in the active session.
+    pub fn turn_running(&self) -> bool {
+        self.turn.is_some()
     }
 
     /// Lines to write into scrollback above the viewport, in order.
@@ -738,6 +766,25 @@ impl ChatWidget {
                 } else {
                     Vec::new()
                 }
+            }
+            AgentEvent::TurnRunning {
+                session_id,
+                elapsed,
+            } => {
+                if self.is_active(&session_id) {
+                    self.turn_running_elsewhere(elapsed);
+                }
+                Vec::new()
+            }
+            AgentEvent::SessionEnded { session_id, reason } => {
+                if self.active_session.as_ref() == Some(&session_id) {
+                    self.finish_live_cells();
+                    self.answer_pending_requests_cancelled();
+                    self.turn = None;
+                    self.disconnected = true;
+                    self.push_error(&format!("Session ended: {reason}"));
+                }
+                Vec::new()
             }
             AgentEvent::TerminalOutput { terminal_id, text } => {
                 self.terminal_output(&terminal_id, &text);
@@ -951,6 +998,7 @@ impl ChatWidget {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
+            cwd: None,
         });
         chat
     }
@@ -1544,7 +1592,10 @@ impl ChatWidget {
             return self.interrupt();
         }
         self.quit_armed_until = None;
-        if ctrl && key.code == KeyCode::Char('d') && self.composer.is_empty() && self.turn.is_none()
+        if ctrl
+            && key.code == KeyCode::Char('d')
+            && self.composer.is_empty()
+            && (self.turn.is_none() || self.detachable)
         {
             return vec![AppCommand::Quit];
         }
@@ -1662,10 +1713,12 @@ impl ChatWidget {
                 PickerAction::Open(session) => vec![AppCommand::OpenSession {
                     target: SessionTarget::Existing(session.session_id),
                     title: session.title,
+                    cwd: Some(session.cwd),
                 }],
                 PickerAction::New => vec![AppCommand::OpenSession {
                     target: SessionTarget::New,
                     title: None,
+                    cwd: None,
                 }],
                 PickerAction::Close => {
                     self.session_picker = None;
@@ -2104,6 +2157,23 @@ impl ChatWidget {
         vec![AppCommand::Prompt(text)]
     }
 
+    /// A turn this client didn't start is running: another client's (through the weave
+    /// daemon), or one that was underway when this client attached. It ends like any other.
+    fn turn_running_elsewhere(&mut self, elapsed: Duration) {
+        if self.turn.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        self.resumable = true;
+        self.last_reply = None;
+        self.turn = Some(Turn {
+            started: now.checked_sub(elapsed).unwrap_or(now),
+            cancelling: false,
+            label: "Working".to_owned(),
+            label_since: now,
+        });
+    }
+
     fn cancel_turn(&mut self) -> Vec<AppCommand> {
         let Some(turn) = &mut self.turn else {
             return Vec::new();
@@ -2534,8 +2604,10 @@ impl ChatWidget {
             return picker.desired_height(&self.config_options, self.modes.as_ref());
         }
         let shortcuts = if self.shortcuts_open {
-            u16::try_from(footer::shortcut_lines(usize::from(width), self.vim).len())
-                .unwrap_or(u16::MAX)
+            u16::try_from(
+                footer::shortcut_lines(usize::from(width), self.vim, self.detachable).len(),
+            )
+            .unwrap_or(u16::MAX)
         } else {
             0
         };
@@ -2786,7 +2858,8 @@ impl ChatWidget {
         } else {
             let mut composer_area = input_area;
             if self.shortcuts_open {
-                let lines = footer::shortcut_lines(usize::from(area.width), self.vim);
+                let lines =
+                    footer::shortcut_lines(usize::from(area.width), self.vim, self.detachable);
                 let height = u16::try_from(lines.len())
                     .unwrap_or(u16::MAX)
                     .min(input_area.height.saturating_sub(1));
@@ -2941,6 +3014,7 @@ mod tests {
             modes: None,
             config_options: options,
             reopened: None,
+            cwd: None,
         });
         chat
     }
@@ -2987,6 +3061,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened,
+            cwd: None,
         });
         chat
     }
@@ -3126,6 +3201,119 @@ mod tests {
             ]
         );
         assert!(!chat.is_animating());
+    }
+
+    #[test]
+    fn a_turn_started_elsewhere_runs_here_until_it_ends() {
+        // Another client of the weave daemon prompts: its message, its turn and the reply
+        // show here, and a message typed meanwhile waits for the turn as with one's own.
+        let mut chat = chat();
+        chat.handle_agent_event(update(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            "from the other window".into(),
+        ))));
+        chat.handle_agent_event(AgentEvent::TurnRunning {
+            session_id: "s1".into(),
+            elapsed: Duration::from_secs(90),
+        });
+        assert!(chat.is_animating());
+        assert!(submit(&mut chat, "next").is_empty());
+        chat.handle_agent_event(text_chunk("Done."));
+        assert_eq!(
+            chat.handle_agent_event(turn_ended(StopReason::EndTurn)),
+            [AppCommand::Prompt("next".into())]
+        );
+        let history = history(&mut chat);
+        assert!(
+            history.contains(&"› from the other window".to_owned()),
+            "{history:?}"
+        );
+        assert!(
+            history
+                .iter()
+                .any(|line| line.contains("Worked for 1m 30s")),
+            "{history:?}"
+        );
+    }
+
+    #[test]
+    fn attaching_mid_turn_keeps_the_reply_in_one_message() {
+        let mut chat = chat();
+        chat.begin_session("s2".into(), None);
+        let s2 = |update| AgentEvent::SessionUpdate(SessionNotification::new("s2", update));
+        chat.handle_agent_event(s2(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            "go".into(),
+        ))));
+        chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            "Half ".into(),
+        ))));
+        chat.handle_agent_event(AgentEvent::TurnRunning {
+            session_id: "s2".into(),
+            elapsed: Duration::ZERO,
+        });
+        chat.session_ready(OpenedSession {
+            session_id: "s2".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Loaded),
+            cwd: None,
+        });
+        chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            "and the rest.".into(),
+        ))));
+        chat.handle_agent_event(AgentEvent::TurnEnded {
+            session_id: "s2".into(),
+            result: Ok(PromptResponse::new(StopReason::EndTurn)),
+        });
+        let history = history(&mut chat);
+        assert!(
+            history.contains(&"• Half and the rest.".to_owned()),
+            "{history:?}"
+        );
+    }
+
+    #[test]
+    fn ctrl_d_leaves_a_running_turn_only_when_the_daemon_keeps_it() {
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        let mut chat = chat();
+        submit(&mut chat, "do it");
+        assert!(chat.handle_key(ctrl_d).is_empty());
+        let mut chat = chat_with(Vec::new()).with_detach(true);
+        submit(&mut chat, "do it");
+        assert_eq!(chat.handle_key(ctrl_d), [AppCommand::Quit]);
+        assert!(chat.turn_running());
+    }
+
+    #[test]
+    fn a_session_from_another_directory_moves_the_client_there() {
+        let mut chat = chat();
+        chat.set_cwd(PathBuf::from("/elsewhere/repo"));
+        assert_eq!(chat.status_values().directory, "/elsewhere/repo");
+        assert_eq!(chat.cwd, PathBuf::from("/elsewhere/repo"));
+    }
+
+    #[test]
+    fn a_session_the_daemon_ends_takes_no_more_prompts() {
+        let mut chat = chat();
+        submit(&mut chat, "do it");
+        // Another session ending changes nothing here.
+        chat.handle_agent_event(AgentEvent::SessionEnded {
+            session_id: "other".into(),
+            reason: "idle".into(),
+        });
+        assert!(chat.is_animating());
+        chat.handle_agent_event(AgentEvent::SessionEnded {
+            session_id: "s1".into(),
+            reason: "the agent exited".into(),
+        });
+        assert!(!chat.is_animating());
+        let history = history(&mut chat);
+        assert!(
+            history
+                .iter()
+                .any(|line| line.contains("Session ended: the agent exited")),
+            "{history:?}"
+        );
+        assert!(submit(&mut chat, "more").is_empty());
     }
 
     #[test]
@@ -3446,6 +3634,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
+            cwd: None,
         });
         assert_eq!(
             history(&mut chat),
@@ -3488,6 +3677,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
+            cwd: None,
         });
         assert_eq!(history(&mut chat), ["", "• Run it"]);
     }
@@ -3542,7 +3732,8 @@ mod tests {
             chat.handle_key(key(KeyCode::Enter)),
             [AppCommand::OpenSession {
                 target: SessionTarget::Existing("s9".into()),
-                title: Some("Earlier work".into())
+                title: Some("Earlier work".into()),
+                cwd: Some(PathBuf::from("/repo")),
             }]
         );
     }
@@ -3599,6 +3790,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: None,
+            cwd: None,
         });
         chat
     }

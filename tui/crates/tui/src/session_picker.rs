@@ -9,6 +9,9 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use weave_acp_core::daemon_protocol;
+use weave_acp_core::daemon_protocol::Activity;
+use weave_acp_core::daemon_protocol::ListedSession;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionInfo;
 
@@ -187,6 +190,7 @@ impl SessionPicker {
                 format!("{}{title}", if selected { "› " } else { "  " }),
                 style,
             )];
+            spans.extend(badge(session));
             if let Some(updated) = &session.updated_at {
                 spans.push(Span::styled(
                     format!("  · {}", relative_time(updated, now)),
@@ -247,6 +251,37 @@ impl SessionPicker {
             style::set_line_filled(buf, area.x, y, line, area.width);
         }
     }
+}
+
+/// What the weave daemon says a session is doing: open in it (running, waiting on you, or
+/// idle, with who's attached), and whether it's headless.
+fn badge(session: &SessionInfo) -> Vec<Span<'static>> {
+    let Some(listed) = daemon_protocol::read_meta::<ListedSession>(session.meta.as_ref()) else {
+        return Vec::new();
+    };
+    let mut spans = Vec::new();
+    if let Some(activity) = listed.activity {
+        let (label, color) = match activity {
+            Activity::Running => ("● running", Color::Green),
+            Activity::Waiting => ("● waiting on you", Color::Magenta),
+            Activity::Idle => ("● open", Color::Cyan),
+        };
+        spans.push(Span::styled(
+            format!("  {label}"),
+            Style::default().fg(color),
+        ));
+        if listed.clients > 0 {
+            spans.push(Span::styled(
+                format!(" · {} attached", listed.clients),
+                dim(),
+            ));
+        }
+    }
+    if listed.headless {
+        let gap = if spans.is_empty() { "  " } else { " · " };
+        spans.push(Span::styled(format!("{gap}headless"), dim()));
+    }
+    spans
 }
 
 /// "just now", "5m ago", "3h ago", "2d ago", or the date.
@@ -312,6 +347,64 @@ mod tests {
                 "  ⏎ open · n new · a all dirs · d delete · esc close",
             ]
         );
+    }
+
+    #[test]
+    fn sessions_open_in_the_daemon_wear_a_badge() {
+        let marked = |id: &str, title: &str, listed: ListedSession| {
+            session(id, title, "2026-10-07T11:55:00Z").meta(daemon_protocol::meta(&listed))
+        };
+        let mut picker = SessionPicker::new(false, false);
+        picker.listed(
+            vec![
+                marked(
+                    "s1",
+                    "Fix the build",
+                    ListedSession {
+                        activity: Some(Activity::Running),
+                        clients: 1,
+                        headless: false,
+                    },
+                ),
+                marked(
+                    "s2",
+                    "Nightly triage",
+                    ListedSession {
+                        activity: Some(Activity::Waiting),
+                        clients: 0,
+                        headless: true,
+                    },
+                ),
+                marked(
+                    "s3",
+                    "Old run",
+                    ListedSession {
+                        headless: true,
+                        ..ListedSession::default()
+                    },
+                ),
+                session("s4", "Plain", "2026-10-07T11:55:00Z"),
+            ],
+            None,
+            false,
+        );
+        let text: Vec<String> = picker
+            .lines(now())
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            &text[1..5],
+            [
+                "› Fix the build  ● running · 1 attached  · 5m ago",
+                "  Nightly triage  ● waiting on you · headless  · 5m ago",
+                "  Old run  headless  · 5m ago",
+                "  Plain  · 5m ago",
+            ]
+        );
+        // The running badge is green.
+        let running = &picker.lines(now())[1].spans[1];
+        assert_eq!(running.style.fg, Some(Color::Green));
     }
 
     #[test]

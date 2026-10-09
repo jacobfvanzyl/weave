@@ -67,12 +67,16 @@ pub struct UiOptions {
     pub terminal_title: bool,
     /// The Vim composer, for new blank threads and multi-line drafts.
     pub vim: bool,
+    /// Sessions outlive the TUI, in the weave daemon: leaving with Ctrl+D keeps a turn running.
+    pub detachable: bool,
 }
 
 /// How the client ended.
 pub struct Exit {
     /// The session to offer reopening: the active one, if it had a conversation.
     pub resumable_session: Option<SessionId>,
+    /// Whether its turn was still running, to carry on in the weave daemon.
+    pub turn_running: bool,
 }
 
 /// Results of requests the loop made off the UI thread.
@@ -102,16 +106,21 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         notifications,
         terminal_title,
         vim,
+        detachable,
     } = ui;
     let Session {
         connection,
         mut events,
         agent_name,
         agent_version,
-        setup,
+        mut setup,
         opened,
         notices,
     } = session;
+    // The session works where the daemon says, and so does this client.
+    if let Some(cwd) = opened.as_ref().and_then(|opened| opened.cwd.clone()) {
+        setup.cwd = cwd;
+    }
     let capabilities = connection
         .agent()
         .map(|agent| agent.agent_capabilities.clone())
@@ -124,7 +133,8 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     let size = tui.size()?;
     let mut chat = ChatWidget::new(agent_name, setup.cwd.clone(), abilities, size.width)
         .with_status_line(status_line)
-        .with_vim(vim);
+        .with_vim(vim)
+        .with_detach(detachable);
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
         chat = chat.fullscreen();
@@ -152,6 +162,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     connection.shutdown().await;
     result.map(|()| Exit {
         resumable_session: chat.resumable_session().cloned(),
+        turn_running: chat.turn_running(),
     })
 }
 
@@ -253,6 +264,11 @@ impl App {
                             tokio::spawn(async move { handle.close_session(previous).await });
                         }
                     }
+                    // It works where the daemon says, and so does this client from now on.
+                    if let Some(cwd) = opened.cwd.clone() {
+                        self.setup.cwd.clone_from(&cwd);
+                        chat.set_cwd(cwd);
+                    }
                     chat.session_ready(opened);
                     Vec::new()
                 }
@@ -332,7 +348,7 @@ impl App {
                         AppEvent::SessionsListed(handle.list_sessions(cwd, cursor).await, append)
                     });
                 }
-                AppCommand::OpenSession { target, title } => {
+                AppCommand::OpenSession { target, title, cwd } => {
                     let previous = chat.active_session().cloned();
                     // Show the target's events from now on, so a load's replay lands in place.
                     if let SessionTarget::Existing(session_id) = &target {
@@ -340,7 +356,11 @@ impl App {
                         chat.begin_session(session_id.clone(), Some(&title));
                     }
                     let handle = self.handle.clone();
-                    let setup = self.setup.clone();
+                    // A session from another directory reopens in its own.
+                    let setup = SessionSetup {
+                        cwd: cwd.unwrap_or_else(|| self.setup.cwd.clone()),
+                        ..self.setup.clone()
+                    };
                     self.spawn(async move {
                         let result = open_session(&handle, target, &setup).await;
                         AppEvent::SessionOpened { result, previous }

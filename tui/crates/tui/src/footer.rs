@@ -417,19 +417,36 @@ const COMPOSE_WITH_VIM: &[(&str, &str)] = &[
     ("⌃↵", "Send from Vim"),
 ];
 
+const SESSION: &[(&str, &str)] = &[
+    ("⇧tab", "Next mode"),
+    ("⌃o", "Settings"),
+    ("⌃r", "Sessions"),
+    ("esc", "Interrupt"),
+    ("⌃c", "Quit"),
+];
+
+/// With the weave daemon, a session outlives the TUI, so leaving needn't stop a turn.
+const SESSION_IN_DAEMON: &[(&str, &str)] = &[
+    ("⇧tab", "Next mode"),
+    ("⌃o", "Settings"),
+    ("⌃r", "Sessions"),
+    ("esc", "Interrupt"),
+    ("⌃c", "Quit"),
+    ("⌃d", "Leave it running"),
+];
+
 /// The `?` panel: weave's keys in three columns, as Codex lays out its shortcuts.
-pub fn shortcut_lines(width: usize, vim: bool) -> Vec<Line<'static>> {
+/// `detachable` when sessions outlive the TUI, in the weave daemon.
+pub fn shortcut_lines(width: usize, vim: bool, detachable: bool) -> Vec<Line<'static>> {
     let columns: [ShortcutColumn; 3] = [
         ("Compose", if vim { COMPOSE_WITH_VIM } else { COMPOSE }),
         (
             "Session",
-            &[
-                ("⇧tab", "Next mode"),
-                ("⌃o", "Settings"),
-                ("⌃r", "Sessions"),
-                ("esc", "Interrupt"),
-                ("⌃c", "Quit"),
-            ],
+            if detachable {
+                SESSION_IN_DAEMON
+            } else {
+                SESSION
+            },
         ),
         (
             "Transcript",
@@ -648,15 +665,26 @@ mod tests {
 
     #[test]
     fn shortcuts_stack_on_narrow_screens() {
-        let wide = shortcut_lines(100, false);
+        let wide = shortcut_lines(100, false, false);
         assert!(wide[3].to_string().contains("Commands"));
         assert!(wide[3].to_string().contains("Next mode"));
-        let narrow = shortcut_lines(30, false);
-        let vim = shortcut_lines(100, true);
+        let narrow = shortcut_lines(30, false, false);
+        let vim = shortcut_lines(100, true, false);
         assert!(
             vim.iter()
                 .any(|line| line.to_string().contains("Vim composer"))
         );
         assert!(narrow.len() > wide.len());
+        let detachable = shortcut_lines(100, false, true);
+        assert!(
+            detachable
+                .iter()
+                .any(|line| line.to_string().contains("Leave it running"))
+        );
+        assert!(
+            !wide
+                .iter()
+                .any(|line| line.to_string().contains("Leave it running"))
+        );
     }
 }

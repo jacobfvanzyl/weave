@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/acp-core", "crates/cli", "crates/fake-agent", "crates/tui"]
+members = ["crates/acp-core", "crates/cli", "crates/daemon", "crates/fake-agent", "crates/tui"]
 resolver = "3"
 
 [workspace.package]
@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 weave-acp-core = { path = "crates/acp-core" }
+weave-daemon = { path = "crates/daemon" }
 weave-fake-agent = { path = "crates/fake-agent" }
 weave-tui = { path = "crates/tui" }
 
@@ -46,6 +47,8 @@ tar = "0.4.46"
 tempfile = "3"
 thiserror = "2"
 tokio = "1"
+# The daemon's Unix socket, as byte streams for the ACP SDK.
+tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 two-face = { version = "0.5.1", default-features = false, features = ["syntect-onig"] }
