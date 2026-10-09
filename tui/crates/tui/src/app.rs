@@ -77,6 +77,10 @@ pub struct Exit {
     pub resumable_session: Option<SessionId>,
     /// Whether its turn was still running, to carry on in the weave daemon.
     pub turn_running: bool,
+    /// `/reload`: start again in place, reattaching to `active_session`.
+    pub reload: bool,
+    /// The session shown when it ended, conversation or not.
+    pub active_session: Option<SessionId>,
 }
 
 /// Results of requests the loop made off the UI thread.
@@ -147,6 +151,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         terminal_title,
         focused: true,
         shells: HashMap::new(),
+        reload: false,
     };
     let startup = match opened {
         Some(opened) => {
@@ -163,6 +168,8 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     result.map(|()| Exit {
         resumable_session: chat.resumable_session().cloned(),
         turn_running: chat.turn_running(),
+        reload: app.reload,
+        active_session: chat.active_session().cloned(),
     })
 }
 
@@ -176,6 +183,8 @@ struct App {
     focused: bool,
     /// Shell-mode commands still running, by id, and how to stop each.
     shells: HashMap<String, oneshot::Sender<()>>,
+    /// Quitting to start again in place (`/reload`).
+    reload: bool,
 }
 
 impl App {
@@ -402,6 +411,10 @@ impl App {
                     }
                 }
                 AppCommand::Quit => return true,
+                AppCommand::Reload => {
+                    self.reload = true;
+                    return true;
+                }
             }
         }
         false

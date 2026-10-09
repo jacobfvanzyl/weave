@@ -10,5 +10,6 @@ expression: screen(&mut chat)
 › /
 
 › /new     Start a new session in this directory
+  /reload  Restart this TUI, picking up a rebuilt weave, and reattach
   /review  Review the current changes
   /test    Run the test suite

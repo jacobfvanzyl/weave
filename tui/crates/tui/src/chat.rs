@@ -112,6 +112,8 @@ use crate::wrapping::plain_lines;
 const QUIT_WINDOW: Duration = Duration::from_secs(2);
 /// The slash command that starts a new session, handled here rather than by the agent.
 const NEW_COMMAND: &str = "new";
+/// The slash command that restarts the TUI in place, handled here too.
+const RELOAD_COMMAND: &str = "reload";
 
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
@@ -156,6 +158,8 @@ pub enum AppCommand {
     /// desktop notification when the terminal isn't focused.
     Notify(String),
     Quit,
+    /// Quit and start this TUI again in place, reattaching to the session: `/reload`.
+    Reload,
 }
 
 /// Which optional session methods the agent offers.
@@ -462,7 +466,7 @@ impl ChatWidget {
         self.turn = None;
         self.queued.clear();
         self.commands.clear();
-        self.offer_new_command();
+        self.offer_own_commands();
         self.modes = None;
         self.config_options.clear();
         self.context = None;
@@ -973,14 +977,23 @@ impl ChatWidget {
         count(self)
     }
 
-    /// Offer `/new`, which this client handles rather than sending it: first in the list, and
-    /// in place of any command of the agent's with that name, as Codex's built-ins are.
-    fn offer_new_command(&mut self) {
-        self.commands.retain(|command| command.name != NEW_COMMAND);
-        self.commands.insert(
-            0,
-            AvailableCommand::new(NEW_COMMAND, "Start a new session in this directory"),
-        );
+    /// Offer `/new` and `/reload`, which this client handles rather than sending them: first
+    /// in the list, and in place of any of the agent's commands with those names, as Codex's
+    /// built-ins are.
+    fn offer_own_commands(&mut self) {
+        let own = [
+            (NEW_COMMAND, "Start a new session in this directory"),
+            (
+                RELOAD_COMMAND,
+                "Restart this TUI, picking up a rebuilt weave, and reattach",
+            ),
+        ];
+        self.commands
+            .retain(|command| !own.iter().any(|(name, _)| command.name == *name));
+        for (index, (name, description)) in own.into_iter().enumerate() {
+            self.commands
+                .insert(index, AvailableCommand::new(name, description));
+        }
     }
 
     /// Offer `/subagents`, which opens the picker here rather than going to the agent.
@@ -1335,7 +1348,7 @@ impl ChatWidget {
             }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.commands = update.available_commands;
-                self.offer_new_command();
+                self.offer_own_commands();
                 if !self.subagents.is_empty() {
                     self.offer_subagents_command();
                 }
@@ -2098,6 +2111,18 @@ impl ChatWidget {
             if text.trim() == format!("/{}", subagents::COMMAND) && !self.subagents.is_empty() {
                 self.open_subagent_picker();
                 return Vec::new();
+            }
+            // Restart the TUI alone; the daemon keeps the session, even mid-turn. After the
+            // daemon restarted, this reconnects.
+            if text.trim() == format!("/{RELOAD_COMMAND}") {
+                if self.turn.is_some() && !self.detachable {
+                    self.push_cell(TranscriptCell::info(
+                        "The agent runs inside this weave (--no-daemon), so reloading now would \
+                         stop its turn; reload once it ends",
+                    ));
+                    return Vec::new();
+                }
+                return vec![AppCommand::Reload];
             }
             // A new session here, as the picker's `n` opens; a turn still running in the one
             // left carries on in the weave daemon.
@@ -3329,7 +3354,7 @@ mod tests {
             .iter()
             .map(|command| command.name.as_str())
             .collect();
-        assert_eq!(names, ["new", "review"]);
+        assert_eq!(names, ["new", "reload", "review"]);
         assert_eq!(
             chat.commands[0].description,
             "Start a new session in this directory"
@@ -3345,6 +3370,29 @@ mod tests {
             }]
         );
         assert!(chat.composer.is_empty());
+    }
+
+    #[test]
+    fn slash_reload_restarts_the_tui_unless_that_would_stop_a_turn() {
+        let mut chat = chat();
+        assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
+        // With the agent inside this weave, a running turn would die with it.
+        submit(&mut chat, "do it");
+        assert!(submit(&mut chat, "/reload").is_empty());
+        let history = history(&mut chat);
+        assert!(
+            history
+                .iter()
+                .any(|line| line.contains("reload once it ends")),
+            "{history:?}"
+        );
+        // In the daemon, it carries on, and reloading is fine.
+        let mut chat = chat_with(Vec::new()).with_detach(true);
+        submit(&mut chat, "do it");
+        assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
+        // As it is after the daemon went away: reloading reconnects.
+        chat.handle_agent_event(AgentEvent::Disconnected(None));
+        assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
     }
 
     #[test]
@@ -3490,7 +3538,7 @@ mod tests {
                 ),
             ]),
         )));
-        chat.handle_paste("/r");
+        chat.handle_paste("/ru");
         assert!(
             rows(&chat, 60)
                 .iter()

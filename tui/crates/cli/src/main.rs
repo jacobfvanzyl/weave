@@ -19,6 +19,7 @@ use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
+use weave_acp_core::schema::SessionId;
 
 use crate::args::AgentArgs;
 use crate::args::AgentChoice;
@@ -239,11 +240,14 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
     .await;
     target.finish().await;
     let exit = exit?;
+    // Name the agent when the command line didn't, or named another, so a resume reopens the
+    // session with its own.
+    let agent = (explicit.as_ref() != Some(&launch.agent)).then_some(&launch.agent);
+    if exit.reload {
+        return reload(exit.active_session.as_ref(), agent);
+    }
     // Fullscreen leaves nothing behind in the terminal, so say how to get back, as Codex does.
     if let Some(session_id) = exit.resumable_session {
-        // Name the agent when the command line didn't, or named another, so this reopens
-        // the session with its own.
-        let agent = (explicit.as_ref() != Some(&launch.agent)).then_some(&launch.agent);
         let command = resume_command(std::env::args().skip(1), &session_id.to_string(), agent);
         if exit.turn_running && matches!(target, Target::Shared(_)) {
             println!("The turn carries on in the weave daemon. To attach again, run: {command}");
@@ -270,6 +274,33 @@ fn status_line_items(config: &config::Config) -> (Vec<weave_tui::StatusItem>, Ve
     (items, unknown)
 }
 
+/// `/reload`: replace this process with whatever weave binary is at its path now (a rebuilt
+/// one, say), reattaching to `session` (or starting as this one did, without one). The daemon
+/// and its agents carry on regardless.
+fn reload(session: Option<&SessionId>, agent: Option<&AgentChoice>) -> anyhow::Result<()> {
+    let args: Vec<String> = match session {
+        Some(session_id) => resume_args(std::env::args().skip(1), &session_id.to_string(), agent),
+        None => std::env::args().skip(1).collect(),
+    };
+    let executable = std::env::current_exe().context("finding the weave executable")?;
+    eprintln!("Reloading weave…");
+    let mut command = std::process::Command::new(&executable);
+    command.args(&args);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Only returns if it couldn't.
+        Err(command.exec()).with_context(|| format!("reloading {}", executable.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .with_context(|| format!("reloading {}", executable.display()))?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
 /// This invocation's command line, reopening `session_id` in place of any session choice.
 fn resume_command(
     args: impl IntoIterator<Item = String>,
@@ -277,6 +308,18 @@ fn resume_command(
     agent: Option<&AgentChoice>,
 ) -> String {
     let mut words = vec!["weave".to_owned()];
+    words.extend(resume_args(args, session_id, agent));
+    args::shell_words(&words)
+}
+
+/// This invocation's arguments, reopening `session_id` in place of any session choice, and
+/// naming `agent` in place of the one given, when there's one to name.
+fn resume_args(
+    args: impl IntoIterator<Item = String>,
+    session_id: &str,
+    agent: Option<&AgentChoice>,
+) -> Vec<String> {
+    let mut words = Vec::new();
     let mut agent_command = Vec::new();
     match agent {
         Some(AgentChoice::Named(id)) => words.extend(["--agent".to_owned(), id.clone()]),
@@ -310,7 +353,7 @@ fn resume_command(
     }
     words.extend(["--resume".to_owned(), session_id.to_owned()]);
     words.extend(agent_command);
-    args::shell_words(&words)
+    words
 }
 
 async fn login(args: LoginArgs) -> anyhow::Result<()> {
@@ -491,6 +534,11 @@ mod tests {
         assert_eq!(
             resume_command(words("--continue"), "s1", Some(&custom)),
             "weave --resume s1 -- ./agent --acp"
+        );
+        // As arguments, for /reload to start again with.
+        assert_eq!(
+            resume_args(words("--continue --no-alt-screen"), "s1", Some(&codex)),
+            words("--agent codex --no-alt-screen --resume s1")
         );
         // A resumed session's own agent replaces the one given.
         assert_eq!(
