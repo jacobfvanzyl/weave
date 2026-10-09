@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -31,6 +32,8 @@ use weave_acp_core::daemon_protocol::StatusRequest;
 use weave_daemon::DaemonConfig;
 use weave_daemon::DaemonPaths;
 use weave_daemon::socket;
+use weave_tui::Reconnection;
+use weave_tui::Reconnector;
 
 /// A background daemon exits once nothing has been open or connected for this long.
 const BACKGROUND_IDLE_EXIT: Duration = Duration::from_secs(10 * 60);
@@ -88,6 +91,19 @@ impl Target {
         Ok((connection, events))
     }
 
+    /// How the TUI reaches the per-user daemon again after it goes away, without starting
+    /// one: a restarted daemon is picked up, a stopped one stays stopped. None in-process.
+    pub fn reconnector(&self, launch: Launch, options: ClientOptions) -> Option<Reconnector> {
+        let Self::Shared(paths) = self else {
+            return None;
+        };
+        let paths = paths.clone();
+        Some(Arc::new(move || {
+            let (paths, launch) = (paths.clone(), launch.clone());
+            Box::pin(async move { reconnect(&paths, launch, options).await })
+        }))
+    }
+
     /// Stop an in-process daemon's agents; the shared daemon keeps running.
     pub async fn finish(&self) {
         if let Self::InProcess(daemon) = self {
@@ -107,6 +123,37 @@ pub fn daemon_launch(launch: &crate::args::Launch) -> Launch {
         cwd: launch.cwd.clone(),
         environment,
         trace: launch.trace.clone(),
+    }
+}
+
+/// One attempt to reach a running daemon again.
+async fn reconnect(paths: &DaemonPaths, launch: Launch, options: ClientOptions) -> Reconnection {
+    let Ok(transport) = socket::connect(&paths.socket).await else {
+        return Reconnection::NotYet;
+    };
+    let Ok((connection, events)) = AgentConnection::connect(transport, options).await else {
+        return Reconnection::NotYet;
+    };
+    let hello = ClientHello {
+        protocol: PROTOCOL_VERSION,
+        launch: Some(launch),
+    };
+    match connection
+        .initialize_with(Some(daemon_protocol::meta(&hello)))
+        .await
+    {
+        Ok(init) => match check_version(daemon_protocol::read_meta(init.meta.as_ref())) {
+            Ok(()) => Reconnection::Connected(connection, events),
+            Err(error) => {
+                connection.shutdown().await;
+                Reconnection::Incompatible(error.to_string())
+            }
+        },
+        // Still starting up, say.
+        Err(_) => {
+            connection.shutdown().await;
+            Reconnection::NotYet
+        }
     }
 }
 

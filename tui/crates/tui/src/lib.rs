@@ -43,6 +43,8 @@ mod vim;
 mod wrapping;
 
 pub use app::Exit;
+pub use app::Reconnection;
+pub use app::Reconnector;
 pub use app::Session;
 pub use app::UiOptions;
 pub use app::run;

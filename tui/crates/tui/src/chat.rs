@@ -160,6 +160,9 @@ pub enum AppCommand {
     Quit,
     /// Quit and start this TUI again in place, reattaching to the session: `/reload`.
     Reload,
+    /// Reattach to the session shown, after reconnecting to the weave daemon, keeping the
+    /// transcript; see [`ChatWidget::reattached`].
+    Reattach(SessionId),
 }
 
 /// Which optional session methods the agent offers.
@@ -247,6 +250,10 @@ pub struct ChatWidget {
     /// The session's title, as the agent last reported it.
     title: Option<String>,
     disconnected: bool,
+    /// Waiting for the weave daemon to come back.
+    reconnecting: bool,
+    /// Said once the session reopened after reconnecting.
+    reconnected_note: bool,
     quit_armed_until: Option<Instant>,
     /// The active session has a conversation worth reopening later.
     resumable: bool,
@@ -353,6 +360,8 @@ impl ChatWidget {
             cost: None,
             title: None,
             disconnected: false,
+            reconnecting: false,
+            reconnected_note: false,
             quit_armed_until: None,
             resumable: false,
             copied: None,
@@ -508,6 +517,9 @@ impl ChatWidget {
                 "Resumed; the agent did not replay earlier messages",
             ));
         }
+        if std::mem::take(&mut self.reconnected_note) {
+            self.push_cell(TranscriptCell::info("Reconnected to the weave daemon"));
+        }
     }
 
     /// Opening a session failed; go back to `previous` (or the picker, at startup).
@@ -599,6 +611,63 @@ impl ChatWidget {
     /// The session to offer reopening on exit: the active one, once it has a conversation.
     pub fn resumable_session(&self) -> Option<&SessionId> {
         self.active_session.as_ref().filter(|_| self.resumable)
+    }
+
+    /// The weave daemon went away, and the client waits for it to come back: like a
+    /// disconnection, but the draft and the session are kept for when it does.
+    pub fn daemon_lost(&mut self) {
+        self.finish_live_cells();
+        self.answer_pending_requests_cancelled();
+        self.turn = None;
+        self.disconnected = true;
+        self.reconnecting = true;
+        self.push_cell(TranscriptCell::info(
+            "Lost the weave daemon; reconnecting when it's back",
+        ));
+    }
+
+    /// Connected to the weave daemon again: reattach to the session shown, which it takes up
+    /// again from its journal. The transcript here already has everything it would replay.
+    pub fn reconnected(&mut self) -> Vec<AppCommand> {
+        self.disconnected = false;
+        self.reconnecting = false;
+        match self.active_session.clone() {
+            Some(session_id) => vec![AppCommand::Reattach(session_id)],
+            None => {
+                self.push_cell(TranscriptCell::info("Reconnected to the weave daemon"));
+                Vec::new()
+            }
+        }
+    }
+
+    /// Reattached after reconnecting, the transcript as it was.
+    pub fn reattached(&mut self, opened: OpenedSession) {
+        if self.active_session.as_ref() != Some(&opened.session_id) {
+            return;
+        }
+        self.modes = opened.modes;
+        self.config_options = opened.config_options;
+        self.push_cell(TranscriptCell::info("Reconnected to the weave daemon"));
+    }
+
+    /// The agent can't reattach without a replay: reload the session shown instead, its
+    /// history replayed in place of the transcript here.
+    pub fn reload_session(&mut self) -> Vec<AppCommand> {
+        let Some(session_id) = self.active_session.clone() else {
+            return Vec::new();
+        };
+        self.reconnected_note = true;
+        vec![AppCommand::OpenSession {
+            target: SessionTarget::Existing(session_id),
+            title: self.title.clone(),
+            cwd: Some(self.cwd.clone()),
+        }]
+    }
+
+    /// The weave daemon didn't come back in time.
+    pub fn reconnect_gave_up(&mut self) {
+        self.reconnecting = false;
+        self.push_error("The weave daemon didn't come back; /reload starts it again");
     }
 
     /// Whether a turn is running in the active session.
@@ -2565,7 +2634,9 @@ impl ChatWidget {
     }
 
     fn footer(&self, width: u16, now: Instant) -> Line<'static> {
-        let mode = if self.disconnected {
+        let mode = if self.reconnecting {
+            FooterMode::Reconnecting
+        } else if self.disconnected {
             FooterMode::Disconnected
         } else if self.quit_armed_until.is_some_and(|until| now < until) {
             FooterMode::QuitReminder
@@ -3392,6 +3463,57 @@ mod tests {
         assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
         // As it is after the daemon went away: reloading reconnects.
         chat.handle_agent_event(AgentEvent::Disconnected(None));
+        assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
+    }
+
+    #[test]
+    fn losing_the_daemon_keeps_the_draft_and_reopens_the_session_once_its_back() {
+        let mut chat = chat();
+        submit(&mut chat, "do it");
+        chat.daemon_lost();
+        assert!(!chat.is_animating());
+        // A draft typed meanwhile stays put rather than being sent.
+        assert!(submit(&mut chat, "later").is_empty());
+        assert_eq!(chat.composer.text(), "later");
+        let footer = rows(&chat, 60).pop().unwrap_or_default();
+        assert!(
+            footer.contains("reconnecting to the weave daemon"),
+            "{footer}"
+        );
+
+        assert_eq!(chat.reconnected(), [AppCommand::Reattach("s1".into())]);
+        chat.reattached(OpenedSession {
+            session_id: "s1".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Resumed),
+            cwd: None,
+        });
+        // The transcript stays as it was, with what happened and that it's back.
+        let history = history(&mut chat);
+        let at = |text: &str| history.iter().position(|line| line.contains(text));
+        assert!(at("› do it").is_some(), "{history:?}");
+        assert!(at("Lost the weave daemon") < at("Reconnected to the weave daemon"));
+        // An agent that can't resume reloads the session instead.
+        assert_eq!(
+            chat.reload_session(),
+            [AppCommand::OpenSession {
+                target: SessionTarget::Existing("s1".into()),
+                title: None,
+                cwd: Some(PathBuf::from("/repo")),
+            }]
+        );
+        // The kept draft goes out once it's back.
+        assert_eq!(submit(&mut chat, ""), [AppCommand::Prompt("later".into())]);
+    }
+
+    #[test]
+    fn a_daemon_that_doesnt_come_back_leaves_reload() {
+        let mut chat = chat();
+        chat.daemon_lost();
+        chat.reconnect_gave_up();
+        let footer = rows(&chat, 60).pop().unwrap_or_default();
+        assert!(footer.contains("/reload"), "{footer}");
         assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
     }
 

@@ -9,4 +9,4 @@ expression: screen(&mut chat)
 
 ›
 
-  agent disconnected · ⌃c to quit
+  agent disconnected · /reload or ⌃c to quit

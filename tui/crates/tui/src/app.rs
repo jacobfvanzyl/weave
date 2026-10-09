@@ -4,11 +4,13 @@
 //! their own tasks and report back as [`AppEvent`]s, so the loop never blocks on the agent.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use crossterm::event::Event;
 use crossterm::event::KeyEventKind;
+use futures::future::BoxFuture;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
@@ -33,9 +35,28 @@ use crate::input::Input;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
 use crate::session::open_session;
+use crate::session::reattach_session;
 use crate::settings::SettingChange;
 use crate::tui::ScreenMode;
 use crate::tui::Tui;
+
+/// How long to wait for the weave daemon to come back after it went away.
+const RECONNECT_WINDOW: Duration = Duration::from_secs(15);
+/// How often to look for it meanwhile.
+const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Connects to the weave daemon again after it went away, without starting one, so a
+/// restarted daemon is picked up and a stopped one stays stopped.
+pub type Reconnector = Arc<dyn Fn() -> BoxFuture<'static, Reconnection> + Send + Sync>;
+
+/// One attempt to reach the weave daemon again.
+pub enum Reconnection {
+    Connected(AgentConnection, UnboundedReceiver<AgentEvent>),
+    /// No daemon is listening, yet.
+    NotYet,
+    /// A daemon answered that this TUI can't work with, as after an upgrade.
+    Incompatible(String),
+}
 
 /// Animation frame interval while a turn runs.
 const FRAME_INTERVAL: Duration = Duration::from_millis(80);
@@ -69,6 +90,8 @@ pub struct UiOptions {
     pub vim: bool,
     /// Sessions outlive the TUI, in the weave daemon: leaving with Ctrl+D keeps a turn running.
     pub detachable: bool,
+    /// How to reach the weave daemon again when it goes away; none without a daemon.
+    pub reconnect: Option<Reconnector>,
 }
 
 /// How the client ended.
@@ -100,6 +123,14 @@ enum AppEvent {
     /// Output from a shell-mode command, then how it ended.
     ShellOutput(String, String),
     ShellExited(String, TerminalExitStatus),
+    /// The weave daemon is back, connected afresh.
+    Reconnected(AgentConnection, UnboundedReceiver<AgentEvent>),
+    /// Reattached to the session shown after reconnecting, or why not.
+    Reattached(Result<OpenedSession, Error>),
+    /// A daemon is back that this TUI can't work with.
+    DaemonIncompatible(String),
+    /// No daemon came back in time.
+    ReconnectGaveUp,
 }
 
 /// Run the interactive client until the user quits, then close the connection.
@@ -111,10 +142,11 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         terminal_title,
         vim,
         detachable,
+        reconnect,
     } = ui;
     let Session {
         connection,
-        mut events,
+        events,
         agent_name,
         agent_version,
         mut setup,
@@ -145,6 +177,8 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     }
     let mut app = App {
         handle: connection.handle(),
+        connection,
+        reconnect,
         setup,
         results: None,
         notifications,
@@ -162,9 +196,9 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         None => chat.open_session_picker(true),
     };
     chat.push_header(agent_version.as_deref(), &notices);
-    let result = app.run(&mut tui, &mut chat, &mut events, startup).await;
+    let result = app.run(&mut tui, &mut chat, events, startup).await;
     tui.exit();
-    connection.shutdown().await;
+    app.connection.shutdown().await;
     result.map(|()| Exit {
         resumable_session: chat.resumable_session().cloned(),
         turn_running: chat.turn_running(),
@@ -175,6 +209,9 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
 
 struct App {
     handle: AgentHandle,
+    /// The connection to the agent, or to the weave daemon; replaced when it reconnects.
+    connection: AgentConnection,
+    reconnect: Option<Reconnector>,
     setup: SessionSetup,
     results: Option<mpsc::UnboundedSender<AppEvent>>,
     notifications: bool,
@@ -192,7 +229,7 @@ impl App {
         &mut self,
         tui: &mut Tui,
         chat: &mut ChatWidget,
-        events: &mut UnboundedReceiver<AgentEvent>,
+        mut events: UnboundedReceiver<AgentEvent>,
         startup: Vec<AppCommand>,
     ) -> anyhow::Result<()> {
         let mut input = Input::start();
@@ -223,17 +260,23 @@ impl App {
                     None => vec![AppCommand::Quit],
                 },
                 Some(event) = events.recv() => {
-                    let mut commands = chat.handle_agent_event(event);
+                    let mut commands = self.agent_event(chat, event);
                     // Apply a burst of streamed updates together so each frame shows several.
                     for _ in 0..EVENTS_PER_FRAME {
                         match events.try_recv() {
-                            Ok(event) => commands.extend(chat.handle_agent_event(event)),
+                            Ok(event) => commands.extend(self.agent_event(chat, event)),
                             Err(_) => break,
                         }
                     }
                     commands
                 }
-                Some(event) = app_events.recv() => self.handle_app_event(chat, event),
+                Some(event) = app_events.recv() => match event {
+                    AppEvent::Reconnected(connection, reconnected) => {
+                        events = reconnected;
+                        self.reconnected(chat, connection)
+                    }
+                    event => self.handle_app_event(chat, event),
+                },
                 _ = frames.tick(), if chat.is_animating() => {
                     chat.tick(Instant::now());
                     Vec::new()
@@ -245,8 +288,72 @@ impl App {
         }
     }
 
+    /// An agent event, unless it's the weave daemon going away, which this reconnects from.
+    fn agent_event(&mut self, chat: &mut ChatWidget, event: AgentEvent) -> Vec<AppCommand> {
+        if matches!(event, AgentEvent::Disconnected(_))
+            && let Some(reconnect) = self.reconnect.clone()
+        {
+            chat.daemon_lost();
+            self.spawn(async move {
+                let deadline = Instant::now() + RECONNECT_WINDOW;
+                loop {
+                    match reconnect().await {
+                        Reconnection::Connected(connection, events) => {
+                            return AppEvent::Reconnected(connection, events);
+                        }
+                        Reconnection::Incompatible(why) => {
+                            return AppEvent::DaemonIncompatible(why);
+                        }
+                        Reconnection::NotYet if Instant::now() < deadline => {
+                            tokio::time::sleep(RECONNECT_INTERVAL).await;
+                        }
+                        Reconnection::NotYet => return AppEvent::ReconnectGaveUp,
+                    }
+                }
+            });
+            return Vec::new();
+        }
+        chat.handle_agent_event(event)
+    }
+
+    /// Carry on over the new connection, and reopen the session shown: the daemon takes it up
+    /// again from its journal.
+    fn reconnected(
+        &mut self,
+        chat: &mut ChatWidget,
+        connection: AgentConnection,
+    ) -> Vec<AppCommand> {
+        let old = std::mem::replace(&mut self.connection, connection);
+        tokio::spawn(old.shutdown());
+        self.handle = self.connection.handle();
+        chat.reconnected()
+    }
+
     fn handle_app_event(&mut self, chat: &mut ChatWidget, event: AppEvent) -> Vec<AppCommand> {
         match event {
+            AppEvent::Reconnected(..) => Vec::new(),
+            AppEvent::Reattached(Ok(opened)) => {
+                if let Some(cwd) = opened.cwd.clone() {
+                    self.setup.cwd.clone_from(&cwd);
+                    chat.set_cwd(cwd);
+                }
+                chat.reattached(opened);
+                Vec::new()
+            }
+            // Resuming isn't something every agent does; a reload with its replay is.
+            AppEvent::Reattached(Err(error)) => {
+                tracing::info!(%error, "couldn't reattach without a replay; reloading the session");
+                chat.reload_session()
+            }
+            // The restart picked up a build this TUI doesn't match; so does a reload.
+            AppEvent::DaemonIncompatible(why) => {
+                tracing::info!(%why, "the weave daemon changed; reloading");
+                vec![AppCommand::Reload]
+            }
+            AppEvent::ReconnectGaveUp => {
+                chat.reconnect_gave_up();
+                Vec::new()
+            }
             AppEvent::SettingChanged(change, result) => {
                 chat.setting_changed(change, result);
                 Vec::new()
@@ -414,6 +521,13 @@ impl App {
                 AppCommand::Reload => {
                     self.reload = true;
                     return true;
+                }
+                AppCommand::Reattach(session_id) => {
+                    let handle = self.handle.clone();
+                    let setup = self.setup.clone();
+                    self.spawn(async move {
+                        AppEvent::Reattached(reattach_session(&handle, session_id, &setup).await)
+                    });
                 }
             }
         }

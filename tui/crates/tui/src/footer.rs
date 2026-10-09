@@ -148,6 +148,8 @@ pub enum FooterMode {
     /// Ctrl+C was pressed once while idle.
     QuitReminder,
     Disconnected,
+    /// The weave daemon went away, and the client is waiting for it to come back.
+    Reconnecting,
     /// A prompt or picker shows its own keys.
     Overlay,
     ShortcutsOpen,
@@ -175,8 +177,12 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
     let left = match props.mode {
         FooterMode::QuitReminder => key_hint("⌃c", " again to quit"),
         FooterMode::Disconnected => vec![Span::styled(
-            "agent disconnected · ⌃c to quit",
+            "agent disconnected · /reload or ⌃c to quit",
             Style::default().fg(Color::Red),
+        )],
+        FooterMode::Reconnecting => vec![Span::styled(
+            "reconnecting to the weave daemon… · ⌃c to quit",
+            secondary(),
         )],
         FooterMode::Overlay => Vec::new(),
         FooterMode::ShortcutsOpen => key_hint("? / esc", " close"),

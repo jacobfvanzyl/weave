@@ -43,6 +43,23 @@ pub enum Reopened {
     Resumed,
 }
 
+/// Reattach to a session this client already shows, after reconnecting: `session/resume`,
+/// with no replay of what it has. Fails, for a reload instead, when the agent can't resume.
+pub async fn reattach_session(
+    handle: &AgentHandle,
+    session_id: SessionId,
+    setup: &SessionSetup,
+) -> Result<OpenedSession, Error> {
+    let response = handle.resume_session(session_id.clone(), setup).await?;
+    Ok(OpenedSession {
+        session_id,
+        cwd: daemon_cwd(response.meta.as_ref()),
+        modes: response.modes,
+        config_options: response.config_options.unwrap_or_default(),
+        reopened: Some(Reopened::Resumed),
+    })
+}
+
 /// Open `target`, preferring `session/load` (which shows the history) over `session/resume`.
 pub async fn open_session(
     handle: &AgentHandle,

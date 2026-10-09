@@ -19,6 +19,7 @@ use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
+use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::SessionId;
 
 use crate::args::AgentArgs;
@@ -235,6 +236,13 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             terminal_title: launch.config.tui.terminal_title.unwrap_or(true),
             vim: launch.config.tui.vim.unwrap_or(false),
             detachable: matches!(target, Target::Shared(_)),
+            reconnect: target.reconnector(
+                daemon::daemon_launch(&launch),
+                ClientOptions {
+                    terminal_auth: true,
+                    ..launch.options
+                },
+            ),
         },
     )
     .await;

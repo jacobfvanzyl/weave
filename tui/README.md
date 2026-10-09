@@ -69,6 +69,11 @@ many TUIs are attached, and `headless` for `weave run`s.
 
 The daemon itself exits 10 minutes after its last session and client are gone.
 
+When the daemon restarts under an open TUI, the TUI reconnects by itself and carries on in
+the same session, its transcript and draft as they were; a turn the old daemon was running
+ends with it. It waits about 15 seconds for a daemon to come back without starting one, so
+`weave daemon stop` stays stopped; `/reload` then starts it again.
+
 `weave run` sends one prompt and prints the reply: in a session of its own, or in one
 named as the TUI names them (`--resume <id>`, `--continue`). Nobody is there to answer the
 agent, so `--approve` lists the tool kinds it may use (`read`, `edit`, `execute`, …, or
@@ -94,7 +99,7 @@ ending them when it exits.
 | Ctrl+D | Quit, on an empty composer; a running turn carries on in the daemon |
 | `/` | Complete the agent's slash commands |
 | `/new` | Start a new session in this directory, as Claude Code and Codex do; one still at work carries on in the daemon |
-| `/reload` | Restart the TUI in place, picking up a rebuilt weave, and reattach to the session; the daemon and the agent carry on, mid-turn too (rebuild the binary you run: `cargo build --release` for `weave` on your PATH). After `weave daemon restart`, it reconnects |
+| `/reload` | Restart the TUI in place, picking up a rebuilt weave, and reattach to the session; the daemon and the agent carry on, mid-turn too (rebuild the binary you run: `cargo build --release` for `weave` on your PATH). After the daemon went away for good, it starts it again |
 | `@` | Fuzzy-find a file to attach (tab completes; respects .gitignore): embedded, as an image or audio, or as a link, as the agent allows. Quote paths with spaces: `@"my notes.md"` |
 | Shift+Tab | Next mode |
 | Ctrl+O | Session settings (mode, model, and the agent's other options) |

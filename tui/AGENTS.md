@@ -59,7 +59,10 @@ two-face; `footer` and `status` are the bottom pane; `composer` is the input, wi
 (after Codex's composer Vim mode) editing the same text in the opt-in Vim composer;
 `/new`, `/reload` and `/subagents` are the TUI's own slash commands, offered with the agent's
 and handled locally (`/reload` ends the TUI and the CLI execs its own binary again with
-`--resume`); `subagents` shows ACP subagents as Codex shows its own, each child session in a chat of its
+`--resume`). When the daemon goes away, the app reconnects through the CLI's `Reconnector`
+(which never starts a daemon), then reattaches with `session/resume` so the transcript stays,
+reloading the session only for agents that can't resume, and `/reload`s itself if the new
+daemon speaks another extension version; `subagents` shows ACP subagents as Codex shows its own, each child session in a chat of its
 own that the parent routes updates to. `ChatWidget` stays free of I/O: it turns
 agent events, keys and mouse input into transcript cells and `AppCommand`s, so it is
 tested without a terminal, in both screen modes. Terminal mechanics (`custom_terminal`, `insert_history`) are tested on a vt100
