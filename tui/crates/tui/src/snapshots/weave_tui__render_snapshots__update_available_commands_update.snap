@@ -9,5 +9,6 @@ expression: screen(&mut chat)
 
 › /
 
-› /review  Review the current changes
+› /new     Start a new session in this directory
+  /review  Review the current changes
   /test    Run the test suite

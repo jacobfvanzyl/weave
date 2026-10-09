@@ -110,6 +110,8 @@ use crate::wrapping::plain_lines;
 
 /// How long a first Ctrl-C keeps the second one armed to quit.
 const QUIT_WINDOW: Duration = Duration::from_secs(2);
+/// The slash command that starts a new session, handled here rather than by the agent.
+const NEW_COMMAND: &str = "new";
 
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
@@ -460,6 +462,7 @@ impl ChatWidget {
         self.turn = None;
         self.queued.clear();
         self.commands.clear();
+        self.offer_new_command();
         self.modes = None;
         self.config_options.clear();
         self.context = None;
@@ -970,6 +973,16 @@ impl ChatWidget {
         count(self)
     }
 
+    /// Offer `/new`, which this client handles rather than sending it: first in the list, and
+    /// in place of any command of the agent's with that name, as Codex's built-ins are.
+    fn offer_new_command(&mut self) {
+        self.commands.retain(|command| command.name != NEW_COMMAND);
+        self.commands.insert(
+            0,
+            AvailableCommand::new(NEW_COMMAND, "Start a new session in this directory"),
+        );
+    }
+
     /// Offer `/subagents`, which opens the picker here rather than going to the agent.
     fn offer_subagents_command(&mut self) {
         if !self
@@ -1322,6 +1335,7 @@ impl ChatWidget {
             }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.commands = update.available_commands;
+                self.offer_new_command();
                 if !self.subagents.is_empty() {
                     self.offer_subagents_command();
                 }
@@ -2084,6 +2098,15 @@ impl ChatWidget {
             if text.trim() == format!("/{}", subagents::COMMAND) && !self.subagents.is_empty() {
                 self.open_subagent_picker();
                 return Vec::new();
+            }
+            // A new session here, as the picker's `n` opens; a turn still running in the one
+            // left carries on in the weave daemon.
+            if text.trim() == format!("/{NEW_COMMAND}") && !self.disconnected {
+                return vec![AppCommand::OpenSession {
+                    target: SessionTarget::New,
+                    title: None,
+                    cwd: None,
+                }];
             }
             // A message goes to this session, so it is what to watch.
             self.watching = None;
@@ -3289,6 +3312,39 @@ mod tests {
         chat.set_cwd(PathBuf::from("/elsewhere/repo"));
         assert_eq!(chat.status_values().directory, "/elsewhere/repo");
         assert_eq!(chat.cwd, PathBuf::from("/elsewhere/repo"));
+    }
+
+    #[test]
+    fn slash_new_starts_a_new_session_here_whatever_the_agent_offers() {
+        let mut chat = chat();
+        // The agent's commands, one of them also called `new`.
+        chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new("review", "Review the changes"),
+                AvailableCommand::new("new", "The agent's own"),
+            ]),
+        )));
+        let names: Vec<&str> = chat
+            .commands
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+        assert_eq!(names, ["new", "review"]);
+        assert_eq!(
+            chat.commands[0].description,
+            "Start a new session in this directory"
+        );
+        // Typed and sent, it opens a new session instead of reaching the agent, mid-turn too.
+        submit(&mut chat, "do it");
+        assert_eq!(
+            submit(&mut chat, "/new"),
+            [AppCommand::OpenSession {
+                target: SessionTarget::New,
+                title: None,
+                cwd: None,
+            }]
+        );
+        assert!(chat.composer.is_empty());
     }
 
     #[test]

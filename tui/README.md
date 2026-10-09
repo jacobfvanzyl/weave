@@ -93,6 +93,7 @@ ending them when it exits.
 | Esc, Ctrl+C | Stop the running turn; Ctrl+C twice when idle quits |
 | Ctrl+D | Quit, on an empty composer; a running turn carries on in the daemon |
 | `/` | Complete the agent's slash commands |
+| `/new` | Start a new session in this directory, as Claude Code and Codex do; one still at work carries on in the daemon |
 | `@` | Fuzzy-find a file to attach (tab completes; respects .gitignore): embedded, as an image or audio, or as a link, as the agent allows. Quote paths with spaces: `@"my notes.md"` |
 | Shift+Tab | Next mode |
 | Ctrl+O | Session settings (mode, model, and the agent's other options) |
