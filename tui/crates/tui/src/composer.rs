@@ -30,6 +30,8 @@ const PROMPT: &str = "› ";
 const PROMPT_WIDTH: u16 = 2;
 /// A shaded row above and below the text, as in Codex's composer.
 const BOX_PADDING: u16 = 1;
+/// A blank row between the Vim composer's text and its mode line.
+const MODE_GAP: u16 = 1;
 /// A column kept clear at the box's right edge.
 const RIGHT_MARGIN: u16 = 1;
 /// Rows the composer may grow to before it scrolls.
@@ -439,9 +441,11 @@ impl Composer {
         u16::try_from(rows).unwrap_or(1)
     }
 
-    /// Height of the shaded box at `width`: the text rows plus padding.
+    /// Height of the shaded box at `width`: the text rows plus padding, and in the Vim
+    /// composer a blank row above its mode line.
     pub fn box_height(&self, width: u16) -> u16 {
-        self.desired_height(width.saturating_sub(RIGHT_MARGIN)) + 2 * BOX_PADDING
+        let gap = if self.vim.is_some() { MODE_GAP } else { 0 };
+        self.desired_height(width.saturating_sub(RIGHT_MARGIN)) + 2 * BOX_PADDING + gap
     }
 
     /// Draw the composer as Codex does, in a box shaded from the terminal's background with
@@ -463,7 +467,19 @@ impl Composer {
         let Some(vim) = &self.vim else {
             return self.render(inner, buf, hint);
         };
-        let view = self.render_vim(inner, buf);
+        // The gap gives way to the text too, after the padding has.
+        let gap = if padding > 0 && inner.height > MODE_GAP {
+            MODE_GAP
+        } else {
+            0
+        };
+        let view = self.render_vim(
+            Rect {
+                height: inner.height - gap,
+                ..inner
+            },
+            buf,
+        );
         // The bottom padding row shows the mode and the keys of a command in progress, as
         // Vim's `showmode` and `showcmd` do, so the footer stays put as they change. Lines
         // scrolled out of view are counted in the padding rows.
@@ -829,14 +845,15 @@ mod tests {
         composer.insert_str("one\ntwo\nthree");
         composer.handle_key(key(KeyCode::Esc));
         composer.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(composer.box_height(20), 6);
         assert_eq!(
-            screen(&composer, 20, 5),
-            ["", " 1 one", "2  two", " 1 three", "NORMAL"]
+            screen(&composer, 20, 6),
+            ["", " 1 one", "2  two", " 1 three", "", "NORMAL"]
         );
         // A command's keys show after the mode until it ends.
         composer.handle_key(key(KeyCode::Char('2')));
         composer.handle_key(key(KeyCode::Char('d')));
-        assert_eq!(screen(&composer, 20, 5)[4], "NORMAL 2d");
+        assert_eq!(screen(&composer, 20, 6)[5], "NORMAL 2d");
         composer.handle_key(key(KeyCode::Esc));
         assert_eq!(composer.cursor_shape(), Some(CursorShape::Block));
         assert!(!composer.completes());
@@ -854,18 +871,19 @@ mod tests {
         composer.insert_str(&lines.join("\n"));
         // 40% of 20 rows.
         assert_eq!(composer.desired_height(40), 8);
-        let rows = screen(&composer, 40, 10);
+        let rows = screen(&composer, 40, 11);
         assert_eq!(rows[0].trim(), "↑ 12 more");
         assert_eq!(rows[8], "20 line 20");
-        assert_eq!(rows[9], "INSERT");
+        assert_eq!(rows[9], "");
+        assert_eq!(rows[10], "INSERT");
         // Going to the top keeps the cursor in view and counts the lines below instead.
         composer.handle_key(key(KeyCode::Esc));
         composer.handle_key(key(KeyCode::Char('g')));
         composer.handle_key(key(KeyCode::Char('g')));
-        let rows = screen(&composer, 40, 10);
+        let rows = screen(&composer, 40, 11);
         assert_eq!(rows[1], "1  line 1");
-        assert!(rows[9].starts_with("NORMAL "), "{}", rows[9]);
-        assert!(rows[9].ends_with(" ↓ 12 more"), "{}", rows[9]);
+        assert!(rows[10].starts_with("NORMAL "), "{}", rows[10]);
+        assert!(rows[10].ends_with(" ↓ 12 more"), "{}", rows[10]);
     }
 
     #[test]

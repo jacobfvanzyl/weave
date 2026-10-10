@@ -3201,6 +3201,7 @@ mod tests {
         assert!(footer.starts_with("  Agent"), "{footer}");
         assert!(footer.ends_with("⌃↵ send"), "{footer}");
         assert_eq!(screen.pop().as_deref(), Some("INSERT"), "{screen:?}");
+        assert_eq!(screen.pop().as_deref(), Some(""), "{screen:?}");
         // Enter is a new line; Ctrl+Enter sends, and the reply starts basic.
         type_text(&mut chat, "write");
         chat.handle_key(key(KeyCode::Enter));
