@@ -3717,11 +3717,11 @@ mod tests {
             .category(SessionConfigOptionCategory::Mode),
         ];
         chat.setting_changed(change, Ok(Some(updated)));
-        // The transcript announces it; the footer stays as it was.
+        // The transcript announces it, and the footer shows the new mode.
         assert_eq!(history(&mut chat), ["• Mode set to Code"]);
         let footer = rows(&chat, 80).pop().unwrap_or_default();
         assert!(
-            footer.starts_with("  Agent  ") && footer.ends_with("  ⌃o Settings"),
+            footer.starts_with("  Agent · Code  ") && footer.ends_with("  ⌃o Settings"),
             "{footer}"
         );
     }

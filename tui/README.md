@@ -173,7 +173,7 @@ alternate_screen = "never"  # always run inline; "auto" (default) and "always" r
 # Footer status line: model, agent, mode, directory, session, context (% used), and cost
 # (at the right; Claude's adapter reports an API-price estimate even under a subscription).
 # [] shows "? for shortcuts".
-status_line = ["agent", "model", "context", "session", "cost"]  # the default; "mode" and "directory" are off
+status_line = ["agent", "model", "mode", "context", "session", "cost"]  # the default; "directory" is off
 notifications = true   # desktop notification when a turn ends or needs you, while unfocused
 terminal_title = true  # window title: activity spinner, session title, project
 vim = true             # the Vim composer for new threads and multi-line drafts (off by default)

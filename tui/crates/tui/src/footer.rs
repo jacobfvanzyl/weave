@@ -30,6 +30,7 @@ pub enum StatusItem {
     Model,
     /// The agent's name: the title it reports, such as "Codex".
     Agent,
+    /// The session's mode, such as Claude's permission mode.
     Mode,
     Directory,
     /// The session's title.
@@ -41,11 +42,12 @@ pub enum StatusItem {
 }
 
 impl StatusItem {
-    /// The agent, the model, the context used, the session's title, and its cost. Codex also
-    /// shows the directory; weave leaves it to `directory`.
-    pub const DEFAULT: [Self; 5] = [
+    /// The agent, the model, the mode, the context used, the session's title, and its cost.
+    /// Codex also shows the directory; weave leaves it to `directory`.
+    pub const DEFAULT: [Self; 6] = [
         Self::Agent,
         Self::Model,
+        Self::Mode,
         Self::Context,
         Self::Session,
         Self::Cost,
@@ -565,7 +567,7 @@ mod tests {
         // Right-aligned with two columns of margin, so the trimmed line is width - 2 wide.
         let wide = render(IDLE, &StatusItem::DEFAULT, 100);
         assert!(
-            wide.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build  "),
+            wide.starts_with("  Claude · Opus 5.5 · high · Plan · 25% · Fix the build  "),
             "{wide}"
         );
         assert!(wide.ends_with("  $1.50 · ⌃o Settings"), "{wide}");
@@ -574,20 +576,20 @@ mod tests {
         // status line's trailing parts.
         let narrower = render(IDLE, &StatusItem::DEFAULT, 70);
         assert!(
-            narrower.starts_with("  Claude · Opus 5.5 · high · 25% · Fix the build  ")
+            narrower.starts_with("  Claude · Opus 5.5 · high · Plan · 25% · Fix the build  ")
                 && narrower.ends_with("  $1.50")
                 && narrower.width() == 68,
             "{narrower}"
         );
         assert_eq!(
-            render(IDLE, &StatusItem::DEFAULT, 56),
-            "  Claude · Opus 5.5 · high · 25% · Fix the build"
+            render(IDLE, &StatusItem::DEFAULT, 63),
+            "  Claude · Opus 5.5 · high · Plan · 25% · Fix the build"
         );
         assert_eq!(
             render(IDLE, &StatusItem::DEFAULT, 30),
             "  Claude · Opus 5.5 · high"
         );
-        // The mode and directory show when configured.
+        // The directory shows when configured.
         let configured = [StatusItem::Model, StatusItem::Mode, StatusItem::Directory];
         assert!(render(IDLE, &configured, 100).starts_with("  Opus 5.5 · high · Plan · ~/repo  "));
         // Without `cost` in the status line, the cost isn't shown even when reported.
