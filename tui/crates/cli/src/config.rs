@@ -17,6 +17,7 @@
 //! terminal = false           # don't offer it client terminals
 //! compaction = false         # no compaction updates (ACP Preview; on by default)
 //! subagents = false          # no subagent sessions (ACP draft; on by default)
+//! mode = "bypassPermissions" # the mode new sessions start in, by the agent's id or name
 //!
 //! [agents.opencode]         # …or a registry agent (`weave agents` lists them)…
 //! terminal = false
@@ -126,6 +127,12 @@ pub struct AgentConfig {
     pub compaction: Option<bool>,
     /// Ask for subagent sessions, from ACP's draft Subagent Sessions RFD (default true).
     pub subagents: Option<bool>,
+    /// The mode new sessions start in, by the agent's id or name for it, such as Codex's
+    /// `agent-full-access`, set through ACP once the session is open. It isn't applied to
+    /// sessions reopened by load or resume, which are in whatever mode the agent restores, or
+    /// to headless `weave run` sessions. Codex's adapter restores no mode, so for those set
+    /// its own `INITIAL_AGENT_MODE` in `env` too.
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,6 +210,11 @@ impl Config {
             options.subagents = agent.subagents.unwrap_or(true);
         }
         (spec, options)
+    }
+
+    /// The mode new sessions of the agent named `id` start in, if one is configured.
+    pub fn mode(&self, id: &str) -> Option<&str> {
+        self.agents.get(id)?.mode.as_deref()
     }
 
     /// The agent names the config and presets know, for error messages.
@@ -305,6 +317,7 @@ mod tests {
             [agents.claude]
             terminal = false
             env = { DEBUG = "1" }
+            mode = "bypassPermissions"
 
             [agents.local]
             command = "my-agent"
@@ -316,6 +329,8 @@ mod tests {
         assert_eq!(claude.command, "npx");
         assert_eq!(claude.env.get("DEBUG").map(String::as_str), Some("1"));
         assert!(!options.terminals && options.read_files);
+        assert_eq!(config.mode("claude"), Some("bypassPermissions"));
+        assert_eq!(config.mode("local"), None);
 
         let local = config.local_agent("local").expect("custom");
         assert_eq!(

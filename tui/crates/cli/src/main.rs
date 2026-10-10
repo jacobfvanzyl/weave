@@ -226,6 +226,7 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             agent_name,
             agent_version,
             setup: started.setup,
+            default_mode: launch.default_mode().map(str::to_owned),
             opened: started.opened,
             notices,
         },

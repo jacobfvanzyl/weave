@@ -71,6 +71,8 @@ pub struct Session {
     pub agent_version: Option<String>,
     /// How sessions opened from the TUI are set up.
     pub setup: SessionSetup,
+    /// The mode new sessions start in, from `[agents.<name>] mode`.
+    pub default_mode: Option<String>,
     /// The session to start in, or `None` to start in the session picker.
     pub opened: Option<OpenedSession>,
     /// Things worth telling the user at startup, such as skipped MCP servers.
@@ -150,6 +152,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         agent_name,
         agent_version,
         mut setup,
+        default_mode,
         opened,
         notices,
     } = session;
@@ -180,6 +183,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         connection,
         reconnect,
         setup,
+        default_mode,
         results: None,
         notifications,
         terminal_title,
@@ -213,6 +217,7 @@ struct App {
     connection: AgentConnection,
     reconnect: Option<Reconnector>,
     setup: SessionSetup,
+    default_mode: Option<String>,
     results: Option<mpsc::UnboundedSender<AppEvent>>,
     notifications: bool,
     terminal_title: bool,
@@ -477,8 +482,9 @@ impl App {
                         cwd: cwd.unwrap_or_else(|| self.setup.cwd.clone()),
                         ..self.setup.clone()
                     };
+                    let mode = self.default_mode.clone();
                     self.spawn(async move {
-                        let result = open_session(&handle, target, &setup).await;
+                        let result = open_session(&handle, target, &setup, mode.as_deref()).await;
                         AppEvent::SessionOpened { result, previous }
                     });
                 }

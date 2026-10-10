@@ -176,6 +176,16 @@ pub struct Launch {
     pub trace: Option<PathBuf>,
 }
 
+impl Launch {
+    /// The mode new sessions start in, from the chosen agent's config.
+    pub fn default_mode(&self) -> Option<&str> {
+        match &self.agent {
+            AgentChoice::Named(id) => self.config.mode(id),
+            AgentChoice::Command(_) => None,
+        }
+    }
+}
+
 impl AgentArgs {
     /// The agent chosen on the command line, if one was.
     pub fn choice(&self) -> Option<AgentChoice> {

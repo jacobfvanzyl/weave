@@ -517,6 +517,9 @@ impl ChatWidget {
                 "Resumed; the agent did not replay earlier messages",
             ));
         }
+        if let Some(notice) = &opened.notice {
+            self.push_cell(TranscriptCell::error(notice));
+        }
         if std::mem::take(&mut self.reconnected_note) {
             self.push_cell(TranscriptCell::info("Reconnected to the weave daemon"));
         }
@@ -1094,6 +1097,7 @@ impl ChatWidget {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             cwd: None,
+            notice: None,
         });
         chat
     }
@@ -3134,6 +3138,7 @@ mod tests {
             config_options: options,
             reopened: None,
             cwd: None,
+            notice: None,
         });
         chat
     }
@@ -3181,6 +3186,7 @@ mod tests {
             config_options: Vec::new(),
             reopened,
             cwd: None,
+            notice: None,
         });
         chat
     }
@@ -3376,6 +3382,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             cwd: None,
+            notice: None,
         });
         chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
             "and the rest.".into(),
@@ -3489,6 +3496,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Resumed),
             cwd: None,
+            notice: None,
         });
         // The transcript stays as it was, with what happened and that it's back.
         let history = history(&mut chat);
@@ -3862,6 +3870,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             cwd: None,
+            notice: None,
         });
         assert_eq!(
             history(&mut chat),
@@ -3905,6 +3914,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             cwd: None,
+            notice: None,
         });
         assert_eq!(history(&mut chat), ["", "• Run it"]);
     }
@@ -4018,6 +4028,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             cwd: None,
+            notice: None,
         });
         chat
     }

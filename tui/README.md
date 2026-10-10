@@ -185,6 +185,13 @@ enabled = false        # run agents inside each weave rather than the shared dae
 terminal = false          # don't let it run commands through weave
 compaction = false        # no compaction updates (an ACP Preview feature; on by default)
 subagents = false         # no subagent sessions (an ACP draft feature; on by default)
+mode = "acceptEdits"      # the mode new sessions start in, by the agent's id or name for it
+
+[agents.codex]
+mode = "workspace-write"  # Codex's modes: read-only, workspace-write, agent, agent-full-access
+# Sessions reloaded by load or resume, and `weave run` ones, aren't set to `mode`: they're in
+# whatever mode the agent restores, and codex-acp restores none. Its own default covers them.
+env = { INITIAL_AGENT_MODE = "workspace-write" }
 
 [agents.opencode]         # a registry agent, with settings of its own
 terminal = false

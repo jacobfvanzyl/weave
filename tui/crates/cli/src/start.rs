@@ -162,10 +162,12 @@ pub async fn start(launch: &Launch, target: &Target, mode: &StartMode) -> anyhow
         let (connection, events) = target.connect(daemon_launch(launch), options).await?;
         let (setup, notices) = session_setup(launch, &connection);
         loop {
-            match establish(&connection, &setup, mode).await {
-                Ok((opened, mut extra)) => {
+            match establish(&connection, &setup, mode, launch.default_mode()).await {
+                Ok((mut opened, mut extra)) => {
                     let mut notices = notices;
                     notices.append(&mut extra);
+                    // Shown with the header, as the other startup notices are.
+                    notices.extend(opened.as_mut().and_then(|opened| opened.notice.take()));
                     return Ok(Started {
                         connection,
                         events,
@@ -234,17 +236,18 @@ async fn establish(
     connection: &AgentConnection,
     setup: &SessionSetup,
     mode: &StartMode,
+    default_mode: Option<&str>,
 ) -> anyhow::Result<(Option<OpenedSession>, Vec<String>)> {
     let handle = connection.handle();
     match mode {
         StartMode::New => Ok((
-            Some(open_session(&handle, SessionTarget::New, setup).await?),
+            Some(open_session(&handle, SessionTarget::New, setup, default_mode).await?),
             Vec::new(),
         )),
         StartMode::Resume(session_id) => {
             let target = SessionTarget::Existing(session_id.clone());
             Ok((
-                Some(open_session(&handle, target, setup).await?),
+                Some(open_session(&handle, target, setup, default_mode).await?),
                 Vec::new(),
             ))
         }
@@ -260,12 +263,13 @@ async fn establish(
                 Some(latest) => {
                     let target = SessionTarget::Existing(latest.session_id);
                     Ok((
-                        Some(open_session(&handle, target, setup).await?),
+                        Some(open_session(&handle, target, setup, default_mode).await?),
                         Vec::new(),
                     ))
                 }
                 None => {
-                    let opened = open_session(&handle, SessionTarget::New, setup).await?;
+                    let opened =
+                        open_session(&handle, SessionTarget::New, setup, default_mode).await?;
                     Ok((
                         Some(opened),
                         vec!["No earlier session here; started a new one".to_owned()],

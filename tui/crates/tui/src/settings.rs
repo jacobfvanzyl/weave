@@ -127,6 +127,40 @@ pub fn next_mode(
     Some(SettingChange::Mode(next.id.clone()))
 }
 
+/// The change that puts the session in the mode `wanted` names, by its id or by its name in
+/// any case, as `[agents.<name>] mode` does for new sessions; `None` when the agent offers no
+/// such mode.
+pub fn mode_change(
+    options: &[SessionConfigOption],
+    modes: Option<&SessionModeState>,
+    wanted: &str,
+) -> Option<SettingChange> {
+    let named = |id: &str, name: &str| id == wanted || name.eq_ignore_ascii_case(wanted);
+    if let Some(option) = options
+        .iter()
+        .find(|option| option.category == Some(SessionConfigOptionCategory::Mode))
+        && let SessionConfigKind::Select(select) = &option.kind
+    {
+        let choice = choices(select)
+            .into_iter()
+            .find(|choice| named(&choice.value.0, choice.name))?;
+        return Some(SettingChange::ConfigOption(
+            option.id.clone(),
+            SessionConfigOptionValue::ValueId {
+                value: choice.value.clone(),
+            },
+        ));
+    }
+    if !options.is_empty() {
+        return None;
+    }
+    let mode = modes?
+        .available_modes
+        .iter()
+        .find(|mode| named(&mode.id.0, &mode.name))?;
+    Some(SettingChange::Mode(mode.id.clone()))
+}
+
 /// Short labels for the footer: mode and model first, as categories suggest.
 pub fn summary(options: &[SessionConfigOption], modes: Option<&SessionModeState>) -> Vec<String> {
     if options.is_empty() {
@@ -511,6 +545,33 @@ mod tests {
             next_mode(&[], Some(&modes)),
             Some(SettingChange::Mode("code".into()))
         );
+    }
+
+    #[test]
+    fn a_default_mode_is_found_by_id_or_name() {
+        let modes = SessionModeState::new(
+            "ask",
+            vec![
+                SessionMode::new("ask", "Ask"),
+                SessionMode::new("code", "Code"),
+            ],
+        );
+        let code =
+            SettingChange::ConfigOption("mode".into(), SessionConfigOptionValue::value_id("code"));
+        assert_eq!(
+            mode_change(&options(), Some(&modes), "code"),
+            Some(code.clone())
+        );
+        assert_eq!(mode_change(&options(), Some(&modes), "CODE"), Some(code));
+        // Modes stand in only for agents without config options, as for Shift+Tab.
+        assert_eq!(
+            mode_change(&[], Some(&modes), "Code"),
+            Some(SettingChange::Mode("code".into()))
+        );
+        let others = vec![SessionConfigOption::boolean("verbose", "Verbose", false)];
+        assert_eq!(mode_change(&others, Some(&modes), "code"), None);
+        assert_eq!(mode_change(&options(), Some(&modes), "yolo"), None);
+        assert_eq!(mode_change(&[], None, "code"), None);
     }
 
     #[test]
