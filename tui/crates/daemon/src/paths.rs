@@ -21,11 +21,7 @@ impl DaemonPaths {
         if let Some(dir) = std::env::var_os(DIR_VARIABLE).filter(|dir| !dir.is_empty()) {
             return Some(Self::in_dir(PathBuf::from(dir)));
         }
-        let state = std::env::var_os("XDG_STATE_HOME")
-            .filter(|dir| !dir.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| home().map(|home| home.join(".local/state")))?;
-        let dir = state.join("weave/daemon");
+        let dir = Self::default_dir()?;
         let socket = std::env::var_os("XDG_RUNTIME_DIR")
             .filter(|dir| !dir.is_empty())
             .map_or_else(
@@ -33,6 +29,16 @@ impl DaemonPaths {
                 |runtime| PathBuf::from(runtime).join("weave/daemon.sock"),
             );
         Some(Self { dir, socket })
+    }
+
+    /// The per-user Host's directory when `$WEAVE_DAEMON_DIR` doesn't name another:
+    /// `$XDG_STATE_HOME/weave/daemon`, by default `~/.local/state/weave/daemon`.
+    pub fn default_dir() -> Option<PathBuf> {
+        let state = std::env::var_os("XDG_STATE_HOME")
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home().map(|home| home.join(".local/state")))?;
+        Some(state.join("weave/daemon"))
     }
 
     /// Everything, socket included, in `dir`.

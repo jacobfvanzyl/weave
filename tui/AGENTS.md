@@ -177,7 +177,11 @@ config and trace) everywhere an agent is involved, `WorkspaceArgs` where a sessi
 (`--approve <kinds>|all`, the rest rejected, through `acp-core`'s `PermissionPolicy`) where a
 turn runs headless. Prompts are positional, before the `--` agent command.
 
-`weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
+`weave daemon install` runs the Host as a launchd user agent (`cli/src/service.rs`) from
+the binary it's run from, which can't be in `~/Documents`, `~/Desktop` or `~/Downloads`
+(macOS keeps launchd's processes out of them; install a copy such as `~/.local/bin/weave`).
+While it's installed, clients never start a Host and `start`/`stop`/`restart` use
+`launchctl`; `uninstall` removes it. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
 `weave_host_protocol::PROTOCOL_VERSION` is one it speaks); sessions it had open resume when
 reattached. The Host captures the login shell's environment when it starts, so restart it
 after changing your shell's. Set `WEAVE_DAEMON_DIR` to run a dev Host (socket, lock, log,

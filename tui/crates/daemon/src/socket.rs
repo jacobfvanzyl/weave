@@ -84,15 +84,26 @@ pub(crate) fn owner(listener: &UnixListener) -> Option<u32> {
     }
 }
 
-/// Whether `stream`'s peer runs as `owner`. Without an owner to compare with, the socket's
-/// file mode is the only check.
-pub(crate) fn same_user(stream: &UnixStream, owner: Option<u32>) -> bool {
+/// Who `stream`'s peer is, next to `owner`.
+pub(crate) enum Peer {
+    /// The socket owner, or anyone when there's no owner to compare with: the socket's file
+    /// mode is then the only check.
+    Owner,
+    /// Another user.
+    Other(u32),
+    /// Gone before it could be asked, as a probe that only checks the Host listens.
+    Unknown,
+}
+
+pub(crate) fn peer(stream: &UnixStream, owner: Option<u32>) -> Peer {
     let Some(owner) = owner else {
-        return true;
+        return Peer::Owner;
     };
-    stream
-        .peer_cred()
-        .is_ok_and(|credentials| credentials.uid() == owner)
+    match stream.peer_cred() {
+        Ok(credentials) if credentials.uid() == owner => Peer::Owner,
+        Ok(credentials) => Peer::Other(credentials.uid()),
+        Err(_) => Peer::Unknown,
+    }
 }
 
 #[cfg(test)]

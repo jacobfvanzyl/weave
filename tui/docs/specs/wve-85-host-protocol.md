@@ -488,7 +488,11 @@ The Host is the `weave daemon run` process; the CLI keeps the `weave daemon` com
   `weave` binary's `daemon run` at login and restarts it if it exits, with no idle exit,
   logging to `daemon.log`. `weave daemon uninstall` removes it. While it's installed,
   `start`, `stop` and `restart` go through `launchctl`, and the CLI never starts a Host of
-  its own. Installing again points the service at the current binary.
+  its own. Installing again points the service at the current binary. macOS keeps the
+  processes launchd starts out of `~/Documents`, `~/Desktop` and `~/Downloads` until they're
+  let in, so `install` refuses a binary in one of them, and macOS may ask to let weave in
+  when an agent first works in a session there. A Host directory of its own
+  (`WEAVE_DAEMON_DIR`) gets a service of its own.
 - **In-process.** `--no-daemon` runs a Host inside the client over an in-process channel,
   with journals in memory and traces under the system's temporary directory.
 

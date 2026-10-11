@@ -502,9 +502,16 @@ impl Daemon {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
-                        if !socket::same_user(&stream, owner) {
-                            tracing::warn!("refused a connection from another user");
-                            continue;
+                        match socket::peer(&stream, owner) {
+                            socket::Peer::Owner => {}
+                            socket::Peer::Other(uid) => {
+                                tracing::warn!(uid, "refused a connection from another user");
+                                continue;
+                            }
+                            socket::Peer::Unknown => {
+                                tracing::debug!("a connection closed before it could be checked");
+                                continue;
+                            }
                         }
                         let this = self.clone();
                         tokio::spawn(async move {
