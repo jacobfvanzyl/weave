@@ -1,0 +1,17 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&AnswerPendingRequest\n{\n    session_id: \"s-1\".into(), pending_id: \"p-1\".to_owned(), permission:\n    Some(RequestPermissionResponse::new(RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(\"once\")),)),\n    elicitation: None,\n})"
+---
+{
+  "method": "pending/answer",
+  "params": {
+    "sessionId": "s-1",
+    "pendingId": "p-1",
+    "permission": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "once"
+      }
+    }
+  }
+}

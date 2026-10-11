@@ -1,0 +1,10 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&CancelTurnRequest { session_id: \"s-1\".into(), })"
+---
+{
+  "method": "turn/cancel",
+  "params": {
+    "sessionId": "s-1"
+  }
+}

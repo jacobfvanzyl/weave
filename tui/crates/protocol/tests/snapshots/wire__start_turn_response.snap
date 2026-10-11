@@ -1,0 +1,7 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "round_trip(&StartTurnResponse { seq: 42 })"
+---
+{
+  "seq": 42
+}

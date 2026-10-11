@@ -1,0 +1,19 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&event(45, SessionEvent::TurnEnded\n{\n    session_id: \"s-1\".into(), response:\n    Some(PromptResponse::new(StopReason::EndTurn)), error: None,\n},))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 45,
+    "at": 1760180001234,
+    "event": {
+      "kind": "turnEnded",
+      "sessionId": "s-1",
+      "response": {
+        "stopReason": "end_turn"
+      }
+    }
+  }
+}

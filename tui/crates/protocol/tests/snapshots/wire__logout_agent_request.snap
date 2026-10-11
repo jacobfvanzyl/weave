@@ -1,0 +1,10 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&LogoutAgentRequest { agent_id: \"claude\".to_owned(), })"
+---
+{
+  "method": "agents/logout",
+  "params": {
+    "agentId": "claude"
+  }
+}

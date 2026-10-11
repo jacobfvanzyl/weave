@@ -1,0 +1,35 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&PendingAddedNotification\n{ session_id: \"s-1\".into(), pending: pending(), })"
+---
+{
+  "method": "pending/added",
+  "params": {
+    "sessionId": "s-1",
+    "pending": {
+      "id": "p-1",
+      "sessionId": "s-1",
+      "createdAt": 1760180001000,
+      "kind": "permission",
+      "request": {
+        "sessionId": "s-1",
+        "toolCall": {
+          "toolCallId": "t-1",
+          "title": "Write a.rs"
+        },
+        "options": [
+          {
+            "optionId": "once",
+            "name": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "no",
+            "name": "Reject",
+            "kind": "reject_once"
+          }
+        ]
+      }
+    }
+  }
+}

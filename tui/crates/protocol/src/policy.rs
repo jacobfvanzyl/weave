@@ -1,5 +1,5 @@
 //! Answering permission requests without asking anyone, by a [`PermissionPolicy`]: as the
-//! weave daemon does for headless sessions, and `weave smoke` for its one turn.
+//! Host does for headless sessions, and `weave smoke` for its one turn.
 
 use std::collections::HashMap;
 

@@ -1,0 +1,17 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&event(43, SessionEvent::TerminalOutput\n{ terminal_id: \"term-1\".into(), data: \"ok\\n\".to_owned(), },))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 43,
+    "at": 1760180001234,
+    "event": {
+      "kind": "terminalOutput",
+      "terminalId": "term-1",
+      "data": "ok\n"
+    }
+  }
+}

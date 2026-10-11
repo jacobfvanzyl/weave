@@ -1,0 +1,17 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "round_trip(&PendingRequest\n{\n    id: \"p-2\".to_owned(), session_id: Some(\"s-1\".into()), created_at:\n    1_760_180_001_000, request: PendingKind::Elicitation\n    {\n        request:\n        CreateElicitationRequest::new(ElicitationUrlMode::new(ElicitationSessionScope::new(\"s-1\"),\n        \"connect-1\", \"https://example.com/oauth\",),\n        \"Connect your Example account.\",),\n    },\n})"
+---
+{
+  "id": "p-2",
+  "sessionId": "s-1",
+  "createdAt": 1760180001000,
+  "kind": "elicitation",
+  "request": {
+    "mode": "url",
+    "sessionId": "s-1",
+    "elicitationId": "connect-1",
+    "url": "https://example.com/oauth",
+    "message": "Connect your Example account."
+  }
+}

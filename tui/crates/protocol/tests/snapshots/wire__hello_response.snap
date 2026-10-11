@@ -1,0 +1,21 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "round_trip(&HelloResponse\n{\n    protocol: 2, client_id: \"c7\".to_owned(), host: HostInfo\n    {\n        version: \"0.1.0\".to_owned(), pid: 4242, started_at: 1_760_180_000_000,\n    }, features: Vec::new(), acp: AcpInfo\n    {\n        protocol_version: 1, unstable:\n        vec![\"session_compaction\".to_owned(), \"subagents\".to_owned()],\n    },\n})"
+---
+{
+  "protocol": 2,
+  "clientId": "c7",
+  "host": {
+    "version": "0.1.0",
+    "pid": 4242,
+    "startedAt": 1760180000000
+  },
+  "features": [],
+  "acp": {
+    "protocolVersion": 1,
+    "unstable": [
+      "session_compaction",
+      "subagents"
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "round_trip(&Empty {})"
+---
+{}

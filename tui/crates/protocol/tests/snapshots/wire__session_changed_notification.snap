@@ -1,0 +1,12 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&SessionChangedNotification\n{\n    session_id: \"s-1\".into(), activity: Some(Activity::Idle), clients:\n    Some(1), title: None, blank: None,\n})"
+---
+{
+  "method": "session/changed",
+  "params": {
+    "sessionId": "s-1",
+    "activity": "idle",
+    "clients": 1
+  }
+}

@@ -13,6 +13,8 @@ workspace = true
 
 [dependencies]
 agent-client-protocol = { workspace = true }
+# For the permission policy, until the daemon's `_weave/*` extension goes (WVE-85).
+weave-host-protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

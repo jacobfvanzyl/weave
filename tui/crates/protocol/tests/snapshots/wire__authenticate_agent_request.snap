@@ -1,0 +1,11 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&AuthenticateAgentRequest\n{ agent_id: \"claude\".to_owned(), method_id: \"oauth\".into(), })"
+---
+{
+  "method": "agents/authenticate",
+  "params": {
+    "agentId": "claude",
+    "methodId": "oauth"
+  }
+}

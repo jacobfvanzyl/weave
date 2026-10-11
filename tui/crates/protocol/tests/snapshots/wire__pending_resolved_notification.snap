@@ -1,0 +1,13 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&PendingResolvedNotification\n{\n    session_id: \"s-1\".into(), pending_id: \"p-1\".to_owned(), outcome:\n    Resolution::Answered, by: Some(\"c7\".to_owned()),\n})"
+---
+{
+  "method": "pending/resolved",
+  "params": {
+    "sessionId": "s-1",
+    "pendingId": "p-1",
+    "outcome": "answered",
+    "by": "c7"
+  }
+}

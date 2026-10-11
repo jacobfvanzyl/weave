@@ -470,7 +470,7 @@ doesn't resolve anything: the request waits for another client, or for one to at
 ## Host management
 
 **`host/status`** `{}` →
-`{protocol, version, pid, startedAt, service: "launchd" | "on-demand" | "in-process", environment: "login-shell" | "process", sessions: SessionListing[]}`
+`{protocol, version, pid, startedAt, service: "launchd" | "onDemand" | "inProcess", environment: "loginShell" | "process", sessions: SessionListing[]}`
 
 `sessions` lists the open sessions.
 
