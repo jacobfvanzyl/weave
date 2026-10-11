@@ -1026,6 +1026,9 @@ impl Actor {
         }
         if blank {
             self.journal.discard();
+        } else {
+            // A journal that fell behind gets one last chance to be written out.
+            self.journal.flush();
         }
         if let Some(connection) = self.connection.take() {
             connection.shutdown().await;

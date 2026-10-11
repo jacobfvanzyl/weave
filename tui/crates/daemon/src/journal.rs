@@ -7,6 +7,10 @@
 //! header, at position 0; events follow at 1, 2, 3 and so on, each position being its line.
 //! A journal ends with [`Entry::Closed`] once its session is closed; one that doesn't end that
 //! way belonged to a Host that stopped, and can be recovered.
+//!
+//! Every record is kept in memory as well. When writing one fails, as on a full disk, the file
+//! is written again in full from memory once it can be, so no record is lost and every
+//! position on disk stays the one clients were given.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -18,6 +22,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -37,6 +42,9 @@ use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::sessions::TurnOrigin;
 
 const VERSION: u32 = 1;
+
+/// How long after a failed write a journal tries writing itself out in full again.
+const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How the agent was chosen, as journals record it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,20 +214,30 @@ impl Entry {
 
 pub(crate) struct Journal {
     records: Vec<Record>,
-    /// Where records are appended, unless the journal only lives in memory.
+    /// Where records are appended, unless the journal only lives in memory or writing failed.
     file: Option<File>,
     /// The file's path, unless the journal only lives in memory.
     path: Option<PathBuf>,
+    /// When writing last failed, while the file is behind memory.
+    failed_at: Option<Instant>,
+    /// How long after a failure to try again.
+    retry_interval: Duration,
 }
 
 impl Journal {
+    fn new(records: Vec<Record>, file: Option<File>, path: Option<PathBuf>) -> Self {
+        Self {
+            records,
+            file,
+            path,
+            failed_at: None,
+            retry_interval: RETRY_INTERVAL,
+        }
+    }
+
     /// A journal that is never written down, for a Host inside one client.
     pub(crate) fn memory(header: Entry) -> Self {
-        let mut journal = Self {
-            records: Vec::new(),
-            file: None,
-            path: None,
-        };
+        let mut journal = Self::new(Vec::new(), None, None);
         journal.append(header);
         journal
     }
@@ -229,27 +247,24 @@ impl Journal {
         create_private_dir(dir)?;
         let path = path_for(dir, session_id);
         let file = private_file(&path, true)?;
-        let mut journal = Self {
-            records: Vec::new(),
-            file: Some(file),
-            path: Some(path),
-        };
+        let mut journal = Self::new(Vec::new(), Some(file), Some(path));
         journal.append(header);
         Ok(journal)
     }
 
     /// Continue the journal at `path`, already read as `records`.
     pub(crate) fn reopen(path: &Path, records: Vec<Record>) -> io::Result<Self> {
-        Ok(Self {
+        Ok(Self::new(
             records,
-            file: Some(private_file(path, false)?),
-            path: Some(path.to_path_buf()),
-        })
+            Some(private_file(path, false)?),
+            Some(path.to_path_buf()),
+        ))
     }
 
     /// Remove the journal from disk: its session has nothing worth keeping.
     pub(crate) fn discard(&mut self) {
         self.file = None;
+        self.failed_at = None;
         if let Some(path) = self.path.take()
             && let Err(error) = std::fs::remove_file(&path)
         {
@@ -263,19 +278,77 @@ impl Journal {
             entry,
             at: now_ms(),
         };
-        if let Some(file) = &mut self.file {
-            let written = serde_json::to_string(&record)
-                .map_err(io::Error::other)
-                .and_then(|line| writeln!(file, "{line}"));
-            if let Err(error) = written {
-                // The session carries on; only a later recovery loses what follows.
-                tracing::warn!(%error, "journal write failed; keeping the rest in memory");
-                self.file = None;
-            }
-        }
+        let line = serde_json::to_string(&record).map_err(io::Error::other);
         let at = record.at;
         self.records.push(record);
+        if self.path.is_some() {
+            match (&mut self.file, self.failed_at) {
+                (Some(file), None) => {
+                    if let Err(error) = line.and_then(|line| writeln!(file, "{line}")) {
+                        // The session carries on, the record kept in memory.
+                        tracing::warn!(
+                            %error,
+                            "journal write failed; it's written again in full once it can be"
+                        );
+                        self.file = None;
+                        self.failed_at = Some(Instant::now());
+                    }
+                }
+                _ => self.retry(false),
+            }
+        }
         (self.head(), at)
+    }
+
+    /// Write a journal that fell behind out again, now: as its session stops.
+    pub(crate) fn flush(&mut self) {
+        if self.path.is_some() && self.failed_at.is_some() {
+            self.retry(true);
+        }
+    }
+
+    /// Write the journal out in full, if a failure was long enough ago or `now`.
+    fn retry(&mut self, now: bool) {
+        let due = self
+            .failed_at
+            .is_none_or(|failed| now || failed.elapsed() >= self.retry_interval);
+        if !due {
+            return;
+        }
+        match self.rewrite() {
+            Ok(file) => {
+                tracing::info!("journal written again in full");
+                self.file = Some(file);
+                self.failed_at = None;
+            }
+            Err(error) => {
+                tracing::debug!(%error, "journal still can't be written");
+                self.failed_at = Some(Instant::now());
+            }
+        }
+    }
+
+    /// Every record, to a new file that then replaces the journal's, so the old one stays
+    /// whole until the new one is. Returns the new file, open for appending.
+    fn rewrite(&self) -> io::Result<File> {
+        let Some(path) = &self.path else {
+            return Err(io::Error::other("the journal has no file"));
+        };
+        let temporary = path.with_extension("jsonl.tmp");
+        let written = (|| {
+            let mut file = private_file(&temporary, true)?;
+            for record in &self.records {
+                let line = serde_json::to_string(record).map_err(io::Error::other)?;
+                writeln!(file, "{line}")?;
+            }
+            file.sync_all()?;
+            std::fs::rename(&temporary, path)
+        })();
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+        private_file(path, false)
     }
 
     pub(crate) fn records(&self) -> &[Record] {
@@ -635,6 +708,73 @@ mod tests {
         assert!(kept("live"));
         assert!(!kept("stale"));
         assert!(kept("recent"));
+    }
+
+    /// Writes fail from here on: the file handle can only read.
+    fn break_writes(journal: &mut Journal) {
+        let path = journal.path.clone().expect("a file");
+        journal.file = Some(File::open(path).expect("read-only"));
+        journal.retry_interval = Duration::ZERO;
+    }
+
+    fn update(text: &str) -> Entry {
+        Entry::Update {
+            notification: Box::new(SessionNotification::new(
+                "s1",
+                SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into())),
+            )),
+        }
+    }
+
+    #[test]
+    fn a_journal_that_couldnt_be_written_is_written_again_in_full() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut journal = Journal::create(dir.path(), &"s1".into(), header("s1")).expect("create");
+        journal.append(update("one"));
+        break_writes(&mut journal);
+        // This one fails, and is kept in memory.
+        journal.append(update("two"));
+        let path = path_for(dir.path(), &"s1".into());
+        assert_eq!(read(&path).expect("read").len(), 2);
+        // The next one writes everything out again, in order, positions and all.
+        let (seq, _) = journal.append(update("three"));
+        assert_eq!(seq, 3);
+        let on_disk = read(&path).expect("read");
+        assert_eq!(on_disk.len(), 4);
+        assert!(matches!(
+            on_disk[2].entry.event(),
+            Some(SessionEvent::Update { notification })
+                if matches!(&notification.update, SessionUpdate::AgentMessageChunk(chunk)
+                    if matches!(&chunk.content, ContentBlock::Text(text) if text.text == "two"))
+        ));
+        // And it appends as before.
+        journal.append(update("four"));
+        assert_eq!(read(&path).expect("read").len(), 5);
+        assert!(!dir.path().join("s1.jsonl.tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn while_a_journal_cant_be_written_the_one_on_disk_stays_whole() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions = dir.path().join("sessions");
+        let mut journal = Journal::create(&sessions, &"s1".into(), header("s1")).expect("create");
+        journal.append(update("one"));
+        break_writes(&mut journal);
+        // Nothing can be created beside it, so writing it out again fails too.
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o500))
+            .expect("read-only directory");
+        journal.append(update("two"));
+        journal.append(update("three"));
+        journal.flush();
+        let path = path_for(&sessions, &"s1".into());
+        assert_eq!(read(&path).expect("read").len(), 2);
+        // Once it can be written, stopping writes it all.
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o700))
+            .expect("writable directory");
+        journal.flush();
+        assert_eq!(read(&path).expect("read").len(), 4);
     }
 
     #[test]
