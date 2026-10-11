@@ -492,9 +492,14 @@ impl ChatWidget {
 
     /// The session opened by [`Self::begin_session`] is ready for prompts.
     pub fn session_ready(&mut self, opened: OpenedSession) {
+        // A new session has no title until the agent names it, so the footer and window title
+        // show none; the transcript still marks where it begins.
         if self.active_session.as_ref() != Some(&opened.session_id) {
-            let title = self.has_history.then_some("new session");
-            self.begin_session(opened.session_id.clone(), title);
+            let marked = self.has_history;
+            self.begin_session(opened.session_id.clone(), None);
+            if marked {
+                self.push_cell(TranscriptCell::info("Session: new session"));
+            }
         }
         // A loaded session's replay is over: what it finished settles into the transcript.
         // Unless a turn is still running in it, attached to mid-stream.
@@ -3888,6 +3893,26 @@ mod tests {
             submit(&mut chat, "next"),
             [AppCommand::Prompt("next".into())]
         );
+    }
+
+    #[test]
+    fn a_new_session_is_marked_in_the_transcript_but_left_untitled() {
+        let mut chat = chat();
+        chat.handle_agent_event(text_chunk("Done."));
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        chat.take_history();
+        chat.session_ready(OpenedSession {
+            session_id: "s2".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: None,
+            cwd: None,
+            notice: None,
+        });
+        assert_eq!(history(&mut chat), ["", "• Session: new session"]);
+        let footer = rows(&chat, 80).pop().unwrap_or_default();
+        assert!(!footer.contains("new session"), "{footer}");
+        assert_eq!(chat.terminal_title(Instant::now()), "repo");
     }
 
     #[test]
