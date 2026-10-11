@@ -327,9 +327,11 @@ async fn install(
     }
     let parent = dir.parent().context("agent directory")?.to_owned();
     std::fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
-    eprintln!(
-        "Downloading {} {} for {platform} from {}",
-        agent.name, agent.version, target.archive
+    tracing::info!(
+        "downloading {} {} for {platform} from {}",
+        agent.name,
+        agent.version,
+        target.archive
     );
     let archive = parent.join(format!(".download-{}", std::process::id()));
     let downloaded = download(&target.archive, &archive, target.sha256.as_deref()).await;

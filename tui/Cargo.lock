@@ -3860,12 +3860,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "weave-cli"
+name = "weave-agents"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "bzip2",
- "clap",
  "flate2",
  "pretty_assertions",
  "reqwest",
@@ -3877,11 +3876,28 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "weave-acp-core",
+ "zip",
+]
+
+[[package]]
+name = "weave-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
  "tracing-subscriber",
  "weave-acp-core",
+ "weave-agents",
  "weave-daemon",
  "weave-tui",
- "zip",
 ]
 
 [[package]]

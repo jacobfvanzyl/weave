@@ -2,7 +2,6 @@ mod args;
 mod config;
 mod daemon;
 mod recent;
-mod registry;
 mod run;
 mod sessions;
 mod smoke;
@@ -21,6 +20,7 @@ use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::SessionId;
+use weave_agents::registry;
 
 use crate::args::AgentArgs;
 use crate::args::AgentChoice;
@@ -86,7 +86,7 @@ struct AgentsArgs {
     #[arg(long)]
     refresh: bool,
 
-    /// Config file. Defaults to ~/.config/weave/tui.toml.
+    /// Config file. Defaults to ~/.config/weave/config.toml.
     #[arg(long)]
     config: Option<PathBuf>,
 }
@@ -389,6 +389,10 @@ async fn logout(args: LogoutArgs) -> anyhow::Result<()> {
 
 async fn agents(args: AgentsArgs) -> anyhow::Result<()> {
     let config = config::Config::load(args.config.as_deref())?;
+    if let Some(notice) = &config.notice {
+        eprintln!("weave: {notice}");
+    }
+    let config = config.agents;
     let default = config.default_agent.as_deref();
     let marker = |id: &str| {
         if Some(id) == default {

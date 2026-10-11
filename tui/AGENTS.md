@@ -44,6 +44,8 @@ crate, pinned exactly because 3.x is new.
 | Crate | Owns |
 | --- | --- |
 | `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace, the daemon's `_weave/*` extension. No UI. |
+| `crates/protocol` | The Host protocol's wire types, roles, error codes and versions (WVE-85), and the permission policy. No I/O. |
+| `crates/agents` | Which agents there are and how to launch them: config, presets, the ACP registry, the login shell's environment. |
 | `crates/daemon` | The weave daemon: client connections, live sessions and their agents, journals, permission policies, headless runs. No UI. |
 | `crates/tui` | The interactive client: fullscreen transcript or inline viewport, chat state, composer. |
 | `crates/cli` | The `weave` binary and its subcommands, daemon autostart included. |
@@ -136,7 +138,9 @@ agent last used here, `cli/src/recent.rs`, unless `--agent` or `--` names one), 
 `--add-dir` adds workspace roots. Ctrl+D on an empty composer leaves the TUI with a turn
 still running in the daemon. `weave login` and `weave logout` manage sign-in; when
 the agent answers `auth_required` at startup, `weave` offers its methods and retries.
-Agents and MCP servers come from `~/.config/weave/tui.toml` (see `crates/cli/src/config.rs`).
+Agents and MCP servers come from `~/.config/weave/config.toml` (read from `tui.toml` while only
+that exists; see `crates/agents/src/config.rs`), whose `[tui]` and `[daemon]` are the CLI's
+(`crates/cli/src/config.rs`).
 
 ```bash
 ./target/debug/weave run --approve read,edit "fix the tests" -- <agent>   # headless, in the daemon
@@ -201,7 +205,7 @@ agent output, so keep them out of the repository.
 
 - Clippy denies `unwrap`/`expect` outside tests. Use one `use` line per item.
 - Agent presets pin adapter versions. Bump them deliberately and re-run the
-  smoke check against each one. Registry agents (`cli/src/registry.rs`) launch exactly as
+  smoke check against each one. Registry agents (`agents/src/registry.rs`) launch exactly as
   the ACP registry describes them, with the version it lists; never add per-agent fixes
   there.
 - Advertise only client capabilities that are fully implemented, and gate every optional

@@ -89,6 +89,7 @@ async fn run_turn(
 
     let (mcp_servers, notices) = launch
         .config
+        .agents
         .mcp_servers(&init.agent_capabilities.mcp_capabilities);
     for notice in notices {
         out.event(format_args!("{notice}"));

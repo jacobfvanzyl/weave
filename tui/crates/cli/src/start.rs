@@ -211,7 +211,11 @@ pub fn session_setup(launch: &Launch, connection: &AgentConnection) -> (SessionS
         .agent()
         .map(|agent| agent.agent_capabilities.clone())
         .unwrap_or_default();
-    let (mcp_servers, mut notices) = launch.config.mcp_servers(&capabilities.mcp_capabilities);
+    let (mcp_servers, mut notices) = launch
+        .config
+        .agents
+        .mcp_servers(&capabilities.mcp_capabilities);
+    notices.extend(launch.config.notice.clone());
     let mut additional_directories = launch.additional_directories.clone();
     if !additional_directories.is_empty()
         && capabilities

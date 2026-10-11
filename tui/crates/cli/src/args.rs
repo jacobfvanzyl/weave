@@ -12,7 +12,6 @@ pub use weave_acp_core::daemon_protocol::AgentChoice;
 use weave_acp_core::schema::ToolKind;
 
 use crate::config::Config;
-use crate::registry;
 use crate::start::StartMode;
 
 /// Which agent, for every command that talks to one.
@@ -32,7 +31,7 @@ pub struct AgentArgs {
     #[arg(long)]
     trace: Option<PathBuf>,
 
-    /// Config file. Defaults to ~/.config/weave/tui.toml.
+    /// Config file. Defaults to ~/.config/weave/config.toml.
     #[arg(long)]
     config: Option<PathBuf>,
 }
@@ -180,7 +179,7 @@ impl Launch {
     /// The mode new sessions start in, from the chosen agent's config.
     pub fn default_mode(&self) -> Option<&str> {
         match &self.agent {
-            AgentChoice::Named(id) => self.config.mode(id),
+            AgentChoice::Named(id) => self.config.agents.mode(id),
             AgentChoice::Command(_) => None,
         }
     }
@@ -218,7 +217,7 @@ impl AgentArgs {
         let config = Config::load(self.config.as_deref())?;
         let agent = match agent {
             Some(agent) => agent,
-            None => match &config.default_agent {
+            None => match &config.agents.default_agent {
                 Some(id) => AgentChoice::Named(id.clone()),
                 None => {
                     let known = weave_acp_core::preset_ids().collect::<Vec<_>>().join(", ");
@@ -230,7 +229,7 @@ impl AgentArgs {
             },
         };
         let (spec, mut options) = match &agent {
-            AgentChoice::Named(id) => resolve(&config, id).await?,
+            AgentChoice::Named(id) => resolve(&config.agents, id).await?,
             AgentChoice::Command(words) => match words.split_first() {
                 Some((command, rest)) => (AgentSpec::new(command, rest), ClientOptions::default()),
                 None => bail!("an empty agent command"),
@@ -281,24 +280,18 @@ impl WorkspaceArgs {
 
 /// The agent `id` names: one the config defines, a preset, or else an ACP registry agent,
 /// with the config's settings for that name applied.
-async fn resolve(config: &Config, id: &str) -> anyhow::Result<(AgentSpec, ClientOptions)> {
-    if let Some(spec) = config.local_agent(id) {
-        return Ok(config.configure(id, spec));
-    }
-    let cache = registry::Cache::default_location()?;
-    let loaded = registry::load(&cache, false).await?;
-    if let Some(warning) = &loaded.warning {
+async fn resolve(
+    config: &weave_agents::Config,
+    id: &str,
+) -> anyhow::Result<(AgentSpec, ClientOptions)> {
+    let cache = weave_agents::registry::Cache::default_location()?;
+    let resolved = weave_agents::resolve(config, id, &cache)
+        .await
+        .map_err(|error| error.context("or give a command after `--`"))?;
+    if let Some(warning) = &resolved.warning {
         eprintln!("weave: {warning}");
     }
-    let Some(agent) = loaded.registry.find(id) else {
-        bail!(
-            "unknown agent {id:?}: not one of {} or in the ACP registry (`weave agents` lists \
-             them); or give a command after `--`",
-            config.known_agents().join(", ")
-        );
-    };
-    let spec = registry::agent_spec(&cache, agent).await?;
-    Ok(config.configure(id, spec))
+    Ok((resolved.spec, resolved.options))
 }
 
 #[cfg(test)]

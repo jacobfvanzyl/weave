@@ -1,0 +1,32 @@
+[package]
+name = "weave-agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "weave_agents"
+
+[lints]
+workspace = true
+
+[dependencies]
+weave-acp-core = { workspace = true }
+anyhow = { workspace = true }
+bzip2 = { workspace = true }
+flate2 = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tokio = { workspace = true, features = ["fs", "process", "rt", "time"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
