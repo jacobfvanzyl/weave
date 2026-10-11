@@ -12,8 +12,8 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
   `unstable_session_compaction`, `compaction = false`) and subagent sessions (draft;
   `unstable_subagents`, `subagents = false`). The v2 draft and other unstable RFDs stay out
   of scope unless the issue changes.
-- It launches agents locally. It has no dependency on `product/`, the Host Daemon
-  or its protocol, and it is not a root Bun workspace.
+- It launches agents locally. It has no dependency on `product/` (Portal or its
+  protocol), and it is not a root Bun workspace.
 - Agents run in the weave daemon (WVE-83), a per-user process the CLI starts on first use,
   so sessions outlive the TUI: quitting, crashing or rebuilding it and reattaching
   (`--resume`, `--continue`) finds the session, mid-turn if a turn is running. The daemon is
@@ -23,6 +23,10 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
   same daemon in-process, so there is one code path. `smoke`, `login` and `logout` talk to
   agents directly. Triggers (schedules, webhooks) are planned separately; `Daemon::run` and
   the `PermissionPolicy` are what they will call.
+- The daemon is becoming the Host (`../docs/adr/0008-weave-daemon-is-the-host.md`, WVE-85,
+  spec `docs/specs/wve-85-host-protocol.md`): its clients move off ACP onto a protocol of
+  its own, and ACP stays only between the daemon and agents. Until that lands, the ACP
+  client side described here is current. Domain terms are in `CONTEXT.md`.
 - The TUI shows one session at a time. Like Codex, it runs fullscreen by default: on the
   alternate screen, `weave` owns the transcript (`transcript.rs`: retained cells that
   reflow, scrolling, selection and copy, and Find, matched by `find.rs`). Inline mode
