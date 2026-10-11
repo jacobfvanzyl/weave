@@ -24,6 +24,7 @@ use serde::Serialize;
 use crate::Empty;
 use crate::Timestamp;
 use crate::agents::AgentId;
+use crate::hello::ClientId;
 use crate::pending::PendingRequest;
 use crate::policy::PermissionPolicy;
 
@@ -83,8 +84,8 @@ pub struct SessionAgent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TurnOrigin {
-    /// A client's prompt.
-    Client { name: String },
+    /// A client's prompt: its name, and its connection, so it knows its own prompts.
+    Client { name: String, id: ClientId },
     /// A headless run.
     Run {},
 }

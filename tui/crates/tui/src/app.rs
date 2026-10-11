@@ -1,9 +1,13 @@
-//! The event loop: terminal input and agent events in, frames and protocol calls out.
+//! The event loop: terminal input and the Host's messages in, frames and Host requests out.
 //!
-//! Requests whose answers the UI waits on (settings, session lists, opening sessions) run on
-//! their own tasks and report back as [`AppEvent`]s, so the loop never blocks on the agent.
+//! Requests whose answers the UI waits on (settings, session lists) run on their own tasks
+//! and report back as [`AppEvent`]s, so the loop never blocks on the Host. Opening a session
+//! answers on the Host connection's own channel instead, in order with the session's events,
+//! so the transcript is ready for the replay that follows.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -15,69 +19,95 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
-use weave_acp_core::AgentConnection;
-use weave_acp_core::AgentEvent;
-use weave_acp_core::AgentHandle;
-use weave_acp_core::SessionSetup;
 use weave_acp_core::schema::Error;
-use weave_acp_core::schema::ListSessionsResponse;
+use weave_acp_core::schema::InitializeResponse;
+use weave_acp_core::schema::PromptCapabilities;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::TerminalExitStatus;
+use weave_host_client::HostConnection;
+use weave_host_client::HostEvent;
+use weave_host_client::HostHandle;
+use weave_host_client::Open;
+use weave_host_protocol::errors;
+use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::pending::AnswerPendingRequest;
+use weave_host_protocol::pending::PendingKind;
+use weave_host_protocol::pending::PendingRequest;
+use weave_host_protocol::sessions::AttachSessionRequest;
+use weave_host_protocol::sessions::CloseWhen;
+use weave_host_protocol::sessions::CreateSessionRequest;
+use weave_host_protocol::sessions::DeleteSessionRequest;
+use weave_host_protocol::sessions::DetachSessionRequest;
+use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::SessionState;
+use weave_host_protocol::sessions::SetConfigOptionRequest;
+use weave_host_protocol::sessions::SetModeRequest;
+use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::StartTurnRequest;
 
 use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
 use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
 use crate::clipboard;
+use crate::events::ChatEvent;
+use crate::events::ElicitationAsk;
+use crate::events::PermissionAsk;
 use crate::footer::StatusItem;
 use crate::input::Input;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
-use crate::session::open_session;
-use crate::session::reattach_session;
 use crate::settings::SettingChange;
 use crate::tui::ScreenMode;
 use crate::tui::Tui;
 
-/// How long to wait for the weave daemon to come back after it went away.
+/// How long to wait for the weave Host to come back after it went away.
 const RECONNECT_WINDOW: Duration = Duration::from_secs(15);
 /// How often to look for it meanwhile.
 const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
-/// How long quitting waits for a blank session to close; the daemon closes it later anyway.
+/// How long quitting waits for a blank session to close; the Host closes it later anyway.
 const CLOSE_ON_QUIT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Connects to the weave daemon again after it went away, without starting one, so a
-/// restarted daemon is picked up and a stopped one stays stopped.
+/// Connects to the weave Host again after it went away, without starting one, so a restarted
+/// Host is picked up and a stopped one stays stopped.
 pub type Reconnector = Arc<dyn Fn() -> BoxFuture<'static, Reconnection> + Send + Sync>;
 
-/// One attempt to reach the weave daemon again.
+/// One attempt to reach the weave Host again.
 pub enum Reconnection {
-    Connected(AgentConnection, UnboundedReceiver<AgentEvent>),
-    /// No daemon is listening, yet.
+    Connected(Box<HostConnection>, UnboundedReceiver<HostEvent>),
+    /// No Host is listening, yet.
     NotYet,
-    /// A daemon answered that this TUI can't work with, as after an upgrade.
+    /// A Host answered that this TUI can't work with, as after an upgrade.
     Incompatible(String),
 }
 
 /// Animation frame interval while a turn runs.
 const FRAME_INTERVAL: Duration = Duration::from_millis(80);
-/// Agent events applied per frame before input gets a turn.
+/// Host events applied per frame before input gets a turn.
 const EVENTS_PER_FRAME: usize = 256;
 
-/// An initialized agent connection, ready for the interactive client.
+/// A connection to the Host, ready for the interactive client.
 pub struct Session {
-    pub connection: AgentConnection,
-    pub events: UnboundedReceiver<AgentEvent>,
+    pub connection: HostConnection,
+    pub events: UnboundedReceiver<HostEvent>,
+    /// The agent this client's sessions run with, by id.
+    pub agent_id: String,
     pub agent_name: String,
     pub agent_version: Option<String>,
-    /// How sessions opened from the TUI are set up.
-    pub setup: SessionSetup,
-    /// The mode new sessions start in, from `[agents.<name>] mode`.
-    pub default_mode: Option<String>,
-    /// The session to start in, or `None` to start in the session picker.
-    pub opened: Option<OpenedSession>,
-    /// Things worth telling the user at startup, such as skipped MCP servers.
+    /// What the agent said about itself: what prompts may carry, which session methods it has.
+    pub agent: InitializeResponse,
+    /// Where new sessions work, until an opened session says otherwise.
+    pub cwd: PathBuf,
+    pub additional_directories: Vec<PathBuf>,
+    /// Have the Host trace sessions opened from here.
+    pub trace: bool,
+    /// The session to start in, opened already, or `None` to start in the session picker.
+    pub opened: Option<weave_host_client::OpenedSession>,
+    /// Things worth telling the user at startup.
     pub notices: Vec<String>,
 }
 
@@ -92,9 +122,9 @@ pub struct UiOptions {
     pub terminal_title: bool,
     /// The Vim composer, for new blank threads and multi-line drafts.
     pub vim: bool,
-    /// Sessions outlive the TUI, in the weave daemon: leaving with Ctrl+D keeps a turn running.
+    /// Sessions outlive the TUI, in the weave Host: leaving with Ctrl+D keeps a turn running.
     pub detachable: bool,
-    /// How to reach the weave daemon again when it goes away; none without a daemon.
+    /// How to reach the weave Host again when it goes away; none for one in this process.
     pub reconnect: Option<Reconnector>,
 }
 
@@ -102,7 +132,7 @@ pub struct UiOptions {
 pub struct Exit {
     /// The session to offer reopening: the active one, if it had a conversation.
     pub resumable_session: Option<SessionId>,
-    /// Whether its turn was still running, to carry on in the weave daemon.
+    /// Whether its turn was still running, to carry on in the weave Host.
     pub turn_running: bool,
     /// `/reload`: start again in place, reattaching to `active_session`.
     pub reload: bool,
@@ -117,24 +147,27 @@ enum AppEvent {
         Result<Option<Vec<SessionConfigOption>>, Error>,
     ),
     SessionsListed(Result<ListSessionsResponse, Error>, bool),
-    SessionOpened {
-        result: Result<OpenedSession, Error>,
-        previous: Option<SessionId>,
-    },
     SessionDeleted(SessionId, Result<(), Error>),
+    PromptFailed(Error),
     /// The clipboard's image, saved for attaching, or why there wasn't one.
-    ImagePasted(Result<std::path::PathBuf, String>),
+    ImagePasted(Result<PathBuf, String>),
     /// Output from a shell-mode command, then how it ended.
     ShellOutput(String, String),
     ShellExited(String, TerminalExitStatus),
-    /// The weave daemon is back, connected afresh.
-    Reconnected(AgentConnection, UnboundedReceiver<AgentEvent>),
-    /// Reattached to the session shown after reconnecting, or why not.
-    Reattached(Result<OpenedSession, Error>),
-    /// A daemon is back that this TUI can't work with.
-    DaemonIncompatible(String),
-    /// No daemon came back in time.
+    /// The weave Host is back, connected afresh.
+    Reconnected(Box<HostConnection>, UnboundedReceiver<HostEvent>),
+    /// A Host is back that this TUI can't work with.
+    HostIncompatible(String),
+    /// No Host came back in time.
     ReconnectGaveUp,
+}
+
+/// Why a session is being opened, for when the Host answers.
+enum OpenKind {
+    /// Switching to it (or starting in it), leaving `previous`.
+    Open { previous: Option<SessionId> },
+    /// Back to the session shown, after reconnecting.
+    Reattach,
 }
 
 /// Run the interactive client until the user quits, then close the connection.
@@ -151,28 +184,32 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     let Session {
         connection,
         events,
+        agent_id,
         agent_name,
         agent_version,
-        mut setup,
-        default_mode,
+        agent,
+        cwd,
+        additional_directories,
+        trace,
         opened,
         notices,
     } = session;
-    // The session works where the daemon says, and so does this client.
-    if let Some(cwd) = opened.as_ref().and_then(|opened| opened.cwd.clone()) {
-        setup.cwd = cwd;
-    }
-    let capabilities = connection
-        .agent()
-        .map(|agent| agent.agent_capabilities.clone())
-        .unwrap_or_default();
     let abilities = SessionAbilities {
-        list: capabilities.session_capabilities.list.is_some(),
-        delete: capabilities.session_capabilities.delete.is_some(),
+        // The Host lists sessions whatever the agent offers.
+        list: true,
+        delete: agent
+            .agent_capabilities
+            .session_capabilities
+            .delete
+            .is_some(),
     };
     let mut tui = Tui::init(screen)?;
     let size = tui.size()?;
-    let mut chat = ChatWidget::new(agent_name, setup.cwd.clone(), abilities, size.width)
+    // The session works where the Host says, and so does this client.
+    let cwd = opened
+        .as_ref()
+        .map_or(cwd, |opened| opened.state.cwd.clone());
+    let mut chat = ChatWidget::new(agent_name, cwd.clone(), abilities, size.width)
         .with_status_line(status_line)
         .with_vim(vim)
         .with_detach(detachable);
@@ -184,20 +221,26 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         handle: connection.handle(),
         connection,
         reconnect,
-        setup,
-        default_mode,
+        agent_id,
+        cwd,
+        additional_directories,
+        trace,
+        prompt_capabilities: agent.agent_capabilities.prompt_capabilities.clone(),
         results: None,
         notifications,
         terminal_title,
         focused: true,
         shells: HashMap::new(),
         reload: false,
+        opens: HashMap::new(),
+        next_tag: 1,
+        position: None,
+        replay_until: None,
     };
     let startup = match opened {
         Some(opened) => {
-            chat.begin_session(opened.session_id.clone(), None);
-            chat.session_ready(opened);
-            Vec::new()
+            chat.begin_session(opened.state.session_id.clone(), None);
+            app.session_opened(&mut chat, &opened)
         }
         None => chat.open_session_picker(true),
     };
@@ -205,11 +248,14 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     let result = app.run(&mut tui, &mut chat, events, startup).await;
     tui.exit();
     // A blank session has nothing to come back to, so it closes now and its agent stops,
-    // rather than when the daemon's grace for it ends. A reload reattaches to it instead.
+    // rather than when the Host's grace for it ends. A reload reattaches to it instead.
     if !app.reload
         && let Some(session_id) = chat.blank_session().cloned()
     {
-        let close = app.handle.close_session(session_id);
+        let close = app.handle.send(DetachSessionRequest {
+            session_id,
+            close: CloseWhen::IfUnused,
+        });
         if let Ok(Err(error)) = tokio::time::timeout(CLOSE_ON_QUIT_TIMEOUT, close).await {
             tracing::debug!(%error, "couldn't close the blank session");
         }
@@ -224,12 +270,16 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
 }
 
 struct App {
-    handle: AgentHandle,
-    /// The connection to the agent, or to the weave daemon; replaced when it reconnects.
-    connection: AgentConnection,
+    handle: HostHandle,
+    /// The connection to the Host; replaced when it reconnects.
+    connection: HostConnection,
     reconnect: Option<Reconnector>,
-    setup: SessionSetup,
-    default_mode: Option<String>,
+    agent_id: String,
+    /// Where the active session works.
+    cwd: PathBuf,
+    additional_directories: Vec<PathBuf>,
+    trace: bool,
+    prompt_capabilities: PromptCapabilities,
     results: Option<mpsc::UnboundedSender<AppEvent>>,
     notifications: bool,
     terminal_title: bool,
@@ -239,6 +289,13 @@ struct App {
     shells: HashMap<String, oneshot::Sender<()>>,
     /// Quitting to start again in place (`/reload`).
     reload: bool,
+    /// Sessions being opened, by the tag their answer comes back with.
+    opens: HashMap<u64, OpenKind>,
+    next_tag: u64,
+    /// The last event of the active session's journal this client has, to catch up from.
+    position: Option<JournalPosition>,
+    /// The last position the active session's replay covers, while it arrives.
+    replay_until: Option<u64>,
 }
 
 impl App {
@@ -246,7 +303,7 @@ impl App {
         &mut self,
         tui: &mut Tui,
         chat: &mut ChatWidget,
-        mut events: UnboundedReceiver<AgentEvent>,
+        mut events: UnboundedReceiver<HostEvent>,
         startup: Vec<AppCommand>,
     ) -> anyhow::Result<()> {
         let mut input = Input::start();
@@ -277,11 +334,11 @@ impl App {
                     None => vec![AppCommand::Quit],
                 },
                 Some(event) = events.recv() => {
-                    let mut commands = self.agent_event(chat, event);
+                    let mut commands = self.host_event(chat, event);
                     // Apply a burst of streamed updates together so each frame shows several.
                     for _ in 0..EVENTS_PER_FRAME {
                         match events.try_recv() {
-                            Ok(event) => commands.extend(self.agent_event(chat, event)),
+                            Ok(event) => commands.extend(self.host_event(chat, event)),
                             Err(_) => break,
                         }
                     }
@@ -290,7 +347,7 @@ impl App {
                 Some(event) = app_events.recv() => match event {
                     AppEvent::Reconnected(connection, reconnected) => {
                         events = reconnected;
-                        self.reconnected(chat, connection)
+                        self.reconnected(chat, *connection)
                     }
                     event => self.handle_app_event(chat, event),
                 },
@@ -305,66 +362,267 @@ impl App {
         }
     }
 
-    /// An agent event, unless it's the weave daemon going away, which this reconnects from.
-    fn agent_event(&mut self, chat: &mut ChatWidget, event: AgentEvent) -> Vec<AppCommand> {
-        if matches!(event, AgentEvent::Disconnected(_))
-            && let Some(reconnect) = self.reconnect.clone()
-        {
-            chat.daemon_lost();
-            self.spawn(async move {
-                let deadline = Instant::now() + RECONNECT_WINDOW;
-                loop {
-                    match reconnect().await {
-                        Reconnection::Connected(connection, events) => {
-                            return AppEvent::Reconnected(connection, events);
-                        }
-                        Reconnection::Incompatible(why) => {
-                            return AppEvent::DaemonIncompatible(why);
-                        }
-                        Reconnection::NotYet if Instant::now() < deadline => {
-                            tokio::time::sleep(RECONNECT_INTERVAL).await;
-                        }
-                        Reconnection::NotYet => return AppEvent::ReconnectGaveUp,
-                    }
+    /// What the Host sent, for the chat.
+    fn host_event(&mut self, chat: &mut ChatWidget, event: HostEvent) -> Vec<AppCommand> {
+        match event {
+            HostEvent::Event(notification) => {
+                // Another session's, as one just left.
+                if chat.active_session() != Some(&notification.session_id) {
+                    return Vec::new();
                 }
-            });
-            return Vec::new();
+                if let Some(position) = &mut self.position {
+                    position.seq = notification.seq;
+                }
+                let replayed = self
+                    .replay_until
+                    .is_some_and(|until| notification.seq <= until);
+                let notification = *notification;
+                let mut commands = self.session_event(
+                    chat,
+                    notification.session_id,
+                    notification.event,
+                    notification.at,
+                    replayed,
+                );
+                if self
+                    .replay_until
+                    .is_some_and(|until| notification.seq >= until)
+                {
+                    self.replay_until = None;
+                    chat.replay_finished();
+                }
+                commands.shrink_to_fit();
+                commands
+            }
+            HostEvent::Changed(_) => Vec::new(),
+            HostEvent::PendingAdded(added) => {
+                if chat.active_session() != Some(&added.session_id) {
+                    return Vec::new();
+                }
+                chat.handle_agent_event(pending_event(added.pending.clone()))
+            }
+            HostEvent::PendingResolved(resolved) => {
+                let elsewhere = resolved
+                    .by
+                    .as_ref()
+                    .is_some_and(|by| by != self.handle.client_id());
+                chat.handle_agent_event(ChatEvent::RequestResolved {
+                    id: resolved.pending_id,
+                    outcome: resolved.outcome,
+                    elsewhere,
+                })
+            }
+            HostEvent::ElicitationCompleted(completed) => chat.handle_agent_event(
+                ChatEvent::ElicitationCompleted(completed.notification.elicitation_id),
+            ),
+            HostEvent::Opened { tag, result } => {
+                let Some(kind) = self.opens.remove(&tag) else {
+                    return Vec::new();
+                };
+                self.opened(chat, kind, result)
+            }
+            HostEvent::Disconnected(error) => self.disconnected(chat, error),
         }
+    }
+
+    /// A journaled event of the active session.
+    fn session_event(
+        &self,
+        chat: &mut ChatWidget,
+        root: SessionId,
+        event: SessionEvent,
+        at: u64,
+        replayed: bool,
+    ) -> Vec<AppCommand> {
+        let event = match event {
+            SessionEvent::Update { notification } => ChatEvent::SessionUpdate(*notification),
+            SessionEvent::TurnStarted {
+                session_id,
+                prompt,
+                origin,
+            } => {
+                // This client's own prompt is on screen already, and its turn running.
+                let own = matches!(&origin, TurnOrigin::Client { id, .. } if id == self.handle.client_id());
+                if own && !replayed {
+                    return Vec::new();
+                }
+                ChatEvent::TurnStarted {
+                    session_id,
+                    prompt,
+                    elapsed: since(at),
+                    replayed,
+                }
+            }
+            SessionEvent::TurnEnded {
+                session_id,
+                response,
+                error,
+            } => ChatEvent::TurnEnded {
+                session_id,
+                result: match (response, error) {
+                    (Some(response), _) => Ok(response),
+                    (None, Some(error)) => Err(error),
+                    (None, None) => Err(Error::internal_error().data("the turn ended unexplained")),
+                },
+                replayed,
+            },
+            SessionEvent::TerminalOutput { terminal_id, data } => ChatEvent::TerminalOutput {
+                terminal_id,
+                text: data,
+            },
+            SessionEvent::TerminalExit {
+                terminal_id,
+                status,
+            } => ChatEvent::TerminalExited {
+                terminal_id,
+                status,
+            },
+            SessionEvent::Closed { reason } if !replayed => ChatEvent::SessionEnded {
+                session_id: root,
+                reason,
+            },
+            SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
+        };
         chat.handle_agent_event(event)
     }
 
-    /// Carry on over the new connection, and reopen the session shown: the daemon takes it up
-    /// again from its journal.
+    /// The Host answered an open: show the session, then what's running and waiting in it.
+    fn opened(
+        &mut self,
+        chat: &mut ChatWidget,
+        kind: OpenKind,
+        result: Result<Box<weave_host_client::OpenedSession>, Error>,
+    ) -> Vec<AppCommand> {
+        match (kind, result) {
+            (OpenKind::Open { previous }, Ok(opened)) => {
+                // Let go of the session left, which closes if nothing else needs it.
+                if let Some(previous) =
+                    previous.filter(|previous| *previous != opened.state.session_id)
+                {
+                    let handle = self.handle.clone();
+                    tokio::spawn(async move {
+                        handle
+                            .send(DetachSessionRequest {
+                                session_id: previous,
+                                close: CloseWhen::IfUnused,
+                            })
+                            .await
+                    });
+                }
+                self.session_opened(chat, &opened)
+            }
+            (OpenKind::Open { previous }, Err(error)) => chat.session_failed(&error, previous),
+            (OpenKind::Reattach, Ok(opened)) => {
+                let reset = opened.replay.as_ref().is_some_and(|replay| replay.reset);
+                if reset {
+                    // The transcript here isn't the journal's any more: it starts over.
+                    chat.begin_session(opened.state.session_id.clone(), None);
+                    return self.session_opened(chat, &opened);
+                }
+                self.track(chat, &opened);
+                chat.reattached(OpenedSession::from_state(
+                    &opened.state,
+                    opened.replay.as_ref(),
+                ));
+                self.show_state(chat, &opened.state)
+            }
+            (OpenKind::Reattach, Err(error)) => {
+                chat.report_info(&format!("Couldn't reattach to the session: {error}"));
+                Vec::new()
+            }
+        }
+    }
+
+    /// Show a session opened for this client, before its replay arrives.
+    fn session_opened(
+        &mut self,
+        chat: &mut ChatWidget,
+        opened: &weave_host_client::OpenedSession,
+    ) -> Vec<AppCommand> {
+        self.cwd.clone_from(&opened.state.cwd);
+        chat.set_cwd(opened.state.cwd.clone());
+        chat.session_ready(OpenedSession::from_state(
+            &opened.state,
+            opened.replay.as_ref(),
+        ));
+        self.track(chat, opened);
+        self.show_state(chat, &opened.state)
+    }
+
+    /// Follow the session's journal from where `opened`'s replay starts.
+    fn track(&mut self, chat: &mut ChatWidget, opened: &weave_host_client::OpenedSession) {
+        // A new session's first events follow its answer too.
+        let from = opened.replay.as_ref().map_or(1, |replay| replay.from);
+        let head = opened.state.journal.head;
+        self.position = Some(JournalPosition {
+            journal: opened.state.journal.id.clone(),
+            seq: from.saturating_sub(1),
+        });
+        self.replay_until = (head >= from).then_some(head);
+        if self.replay_until.is_none() {
+            chat.replay_finished();
+        }
+    }
+
+    /// What's running and waiting in a session just opened.
+    fn show_state(&self, chat: &mut ChatWidget, state: &SessionState) -> Vec<AppCommand> {
+        let mut commands = Vec::new();
+        for turn in &state.turns {
+            commands.extend(chat.handle_agent_event(ChatEvent::TurnRunning {
+                session_id: turn.session_id.clone(),
+                elapsed: since(turn.started_at),
+            }));
+        }
+        for pending in &state.pending {
+            commands.extend(chat.handle_agent_event(pending_event(pending.clone())));
+        }
+        commands
+    }
+
+    /// The Host went away: reconnect when it's back, unless it was in this process.
+    fn disconnected(&mut self, chat: &mut ChatWidget, error: Option<Error>) -> Vec<AppCommand> {
+        let Some(reconnect) = self.reconnect.clone() else {
+            return chat.handle_agent_event(ChatEvent::Disconnected(error));
+        };
+        chat.daemon_lost();
+        self.replay_until = None;
+        self.spawn(async move {
+            let deadline = Instant::now() + RECONNECT_WINDOW;
+            loop {
+                match reconnect().await {
+                    Reconnection::Connected(connection, events) => {
+                        return AppEvent::Reconnected(connection, events);
+                    }
+                    Reconnection::Incompatible(why) => return AppEvent::HostIncompatible(why),
+                    Reconnection::NotYet if Instant::now() < deadline => {
+                        tokio::time::sleep(RECONNECT_INTERVAL).await;
+                    }
+                    Reconnection::NotYet => return AppEvent::ReconnectGaveUp,
+                }
+            }
+        });
+        Vec::new()
+    }
+
+    /// Carry on over the new connection, and reattach to the session shown.
     fn reconnected(
         &mut self,
         chat: &mut ChatWidget,
-        connection: AgentConnection,
+        connection: HostConnection,
     ) -> Vec<AppCommand> {
         let old = std::mem::replace(&mut self.connection, connection);
         tokio::spawn(old.shutdown());
         self.handle = self.connection.handle();
+        self.opens.clear();
         chat.reconnected()
     }
 
     fn handle_app_event(&mut self, chat: &mut ChatWidget, event: AppEvent) -> Vec<AppCommand> {
         match event {
             AppEvent::Reconnected(..) => Vec::new(),
-            AppEvent::Reattached(Ok(opened)) => {
-                if let Some(cwd) = opened.cwd.clone() {
-                    self.setup.cwd.clone_from(&cwd);
-                    chat.set_cwd(cwd);
-                }
-                chat.reattached(opened);
-                Vec::new()
-            }
-            // Resuming isn't something every agent does; a reload with its replay is.
-            AppEvent::Reattached(Err(error)) => {
-                tracing::info!(%error, "couldn't reattach without a replay; reloading the session");
-                chat.reload_session()
-            }
             // The restart picked up a build this TUI doesn't match; so does a reload.
-            AppEvent::DaemonIncompatible(why) => {
-                tracing::info!(%why, "the weave daemon changed; reloading");
+            AppEvent::HostIncompatible(why) => {
+                tracing::info!(%why, "the weave Host changed; reloading");
                 vec![AppCommand::Reload]
             }
             AppEvent::ReconnectGaveUp => {
@@ -379,36 +637,12 @@ impl App {
                 chat.sessions_listed(result, append);
                 Vec::new()
             }
-            AppEvent::SessionOpened { result, previous } => match result {
-                Ok(opened) => {
-                    // Free the session we left, if the agent lets us.
-                    if let Some(previous) =
-                        previous.filter(|previous| *previous != opened.session_id)
-                    {
-                        let supported = self.handle.agent().is_some_and(|agent| {
-                            agent
-                                .agent_capabilities
-                                .session_capabilities
-                                .close
-                                .is_some()
-                        });
-                        if supported {
-                            let handle = self.handle.clone();
-                            tokio::spawn(async move { handle.close_session(previous).await });
-                        }
-                    }
-                    // It works where the daemon says, and so does this client from now on.
-                    if let Some(cwd) = opened.cwd.clone() {
-                        self.setup.cwd.clone_from(&cwd);
-                        chat.set_cwd(cwd);
-                    }
-                    chat.session_ready(opened);
-                    Vec::new()
-                }
-                Err(error) => chat.session_failed(&error, previous),
-            },
             AppEvent::SessionDeleted(session_id, result) => {
                 chat.session_deleted(&session_id, result);
+                Vec::new()
+            }
+            AppEvent::PromptFailed(error) => {
+                chat.prompt_failed(&error);
                 Vec::new()
             }
             AppEvent::ImagePasted(Ok(path)) => {
@@ -431,40 +665,35 @@ impl App {
         }
     }
 
-    /// Carry out commands. Returns whether the user quit.
+    /// Carry out commands, and any they lead to. Returns whether the user quit.
     fn execute(&mut self, tui: &mut Tui, chat: &mut ChatWidget, commands: Vec<AppCommand>) -> bool {
-        for command in commands {
+        let mut queue: VecDeque<AppCommand> = commands.into();
+        while let Some(command) = queue.pop_front() {
             match command {
                 AppCommand::Prompt(text) => {
                     let Some(session_id) = chat.active_session().cloned() else {
                         continue;
                     };
-                    let capabilities = self
-                        .handle
-                        .agent()
-                        .map(|agent| agent.agent_capabilities.prompt_capabilities.clone())
-                        .unwrap_or_default();
                     let images = chat.prompt_images(&text);
                     let (prompt, attachments) =
-                        prompt_blocks(&text, &self.setup.cwd, &capabilities, &images);
+                        prompt_blocks(&text, &self.cwd, &self.prompt_capabilities, &images);
                     chat.note_attachments(&attachments);
-                    if let Err(error) = self.handle.prompt(session_id, prompt) {
-                        chat.prompt_failed(&error);
-                    }
+                    let handle = self.handle.clone();
+                    self.spawn_unless_ok(async move {
+                        handle
+                            .send(StartTurnRequest { session_id, prompt })
+                            .await
+                            .err()
+                            .map(AppEvent::PromptFailed)
+                    });
                 }
                 AppCommand::Cancel => {
-                    if let Some(session_id) = chat.active_session().cloned()
-                        && let Err(error) = self.handle.cancel(session_id)
-                    {
-                        tracing::warn!(%error, "failed to send session/cancel");
+                    if let Some(session_id) = chat.active_session().cloned() {
+                        self.cancel(session_id);
                     }
                 }
-                // A subagent's cancel is the ordinary `session/cancel`, for its session.
-                AppCommand::CancelSubagent(session_id) => {
-                    if let Err(error) = self.handle.cancel(session_id) {
-                        tracing::warn!(%error, "failed to send session/cancel to a subagent");
-                    }
-                }
+                // A subagent's cancel is the ordinary one, for its session.
+                AppCommand::CancelSubagent(session_id) => self.cancel(session_id),
                 AppCommand::ChangeSetting(change) => {
                     if let Some(session_id) = chat.active_session().cloned() {
                         self.spawn_setting_change(session_id, change);
@@ -474,46 +703,49 @@ impl App {
                     all_directories,
                     cursor,
                 } => {
-                    let cwd = (!all_directories).then(|| self.setup.cwd.clone());
+                    let request = ListSessionsRequest {
+                        agent_id: Some(self.agent_id.clone()),
+                        cwd: (!all_directories).then(|| self.cwd.clone()),
+                        cursor: cursor.clone(),
+                    };
                     let append = cursor.is_some();
                     let handle = self.handle.clone();
                     self.spawn(async move {
-                        AppEvent::SessionsListed(handle.list_sessions(cwd, cursor).await, append)
+                        AppEvent::SessionsListed(handle.send(request).await, append)
                     });
                 }
                 AppCommand::OpenSession { target, title, cwd } => {
-                    let previous = chat.active_session().cloned();
-                    // Show the target's events from now on, so a load's replay lands in place.
-                    if let SessionTarget::Existing(session_id) = &target {
-                        let title = title.unwrap_or_else(|| session_id.to_string());
-                        chat.begin_session(session_id.clone(), Some(&title));
-                    }
-                    let handle = self.handle.clone();
-                    // A session from another directory reopens in its own.
-                    let setup = SessionSetup {
-                        cwd: cwd.unwrap_or_else(|| self.setup.cwd.clone()),
-                        ..self.setup.clone()
-                    };
-                    let mode = self.default_mode.clone();
-                    self.spawn(async move {
-                        let result = open_session(&handle, target, &setup, mode.as_deref()).await;
-                        AppEvent::SessionOpened { result, previous }
-                    });
+                    queue.extend(self.open_session(chat, target, title, cwd));
                 }
                 AppCommand::DeleteSession(session_id) => {
                     let handle = self.handle.clone();
+                    let request = DeleteSessionRequest {
+                        session_id: session_id.clone(),
+                        agent_id: Some(self.agent_id.clone()),
+                    };
                     self.spawn(async move {
-                        let result = handle.delete_session(session_id.clone()).await;
+                        let result = handle.send(request).await.map(drop);
                         AppEvent::SessionDeleted(session_id, result)
                     });
                 }
+                AppCommand::AnswerPermission { id, response } => {
+                    self.answer(chat, id, |request| AnswerPendingRequest {
+                        permission: Some(response),
+                        ..request
+                    });
+                }
+                AppCommand::AnswerElicitation { id, response } => {
+                    self.answer(chat, id, |request| AnswerPendingRequest {
+                        elicitation: Some(response),
+                        ..request
+                    });
+                }
                 AppCommand::OpenUrl(url) => open_in_browser(&url),
-                // Handled in the run loop.
                 AppCommand::RunShell { id, command } => {
                     if let Some(results) = self.results.clone() {
                         let (kill, killed) = oneshot::channel();
                         self.shells.insert(id.clone(), kill);
-                        let cwd = self.setup.cwd.clone();
+                        let cwd = self.cwd.clone();
                         tokio::spawn(run_shell(id, command, cwd, results, killed));
                     }
                 }
@@ -541,15 +773,113 @@ impl App {
                     return true;
                 }
                 AppCommand::Reattach(session_id) => {
-                    let handle = self.handle.clone();
-                    let setup = self.setup.clone();
-                    self.spawn(async move {
-                        AppEvent::Reattached(reattach_session(&handle, session_id, &setup).await)
-                    });
+                    let request = AttachSessionRequest {
+                        session_id,
+                        after: self.position.clone(),
+                        agent_id: Some(self.agent_id.clone()),
+                        cwd: Some(self.cwd.clone()),
+                        trace: self.trace,
+                    };
+                    if let Err(error) = self.request_open(Open::Attach(request), OpenKind::Reattach)
+                    {
+                        chat.report_info(&format!("Couldn't reattach to the session: {error}"));
+                    }
                 }
             }
         }
         false
+    }
+
+    /// Open `target`: a new session, or an existing one, whose events show from now on.
+    fn open_session(
+        &mut self,
+        chat: &mut ChatWidget,
+        target: SessionTarget,
+        title: Option<String>,
+        cwd: Option<PathBuf>,
+    ) -> Vec<AppCommand> {
+        let previous = chat.active_session().cloned();
+        let open = match target {
+            SessionTarget::New => Open::Create(CreateSessionRequest {
+                agent_id: self.agent_id.clone(),
+                cwd: self.cwd.clone(),
+                additional_directories: self.additional_directories.clone(),
+                mode: None,
+                policy: None,
+                trace: self.trace,
+            }),
+            SessionTarget::Existing(session_id) => {
+                let title = title.unwrap_or_else(|| session_id.to_string());
+                chat.begin_session(session_id.clone(), Some(&title));
+                // A session from another directory reopens in its own.
+                Open::Attach(AttachSessionRequest {
+                    session_id,
+                    after: None,
+                    agent_id: Some(self.agent_id.clone()),
+                    cwd: Some(cwd.unwrap_or_else(|| self.cwd.clone())),
+                    trace: self.trace,
+                })
+            }
+        };
+        self.position = None;
+        self.replay_until = None;
+        match self.request_open(
+            open,
+            OpenKind::Open {
+                previous: previous.clone(),
+            },
+        ) {
+            Ok(()) => Vec::new(),
+            Err(error) => chat.session_failed(&error, previous),
+        }
+    }
+
+    fn request_open(&mut self, open: Open, kind: OpenKind) -> Result<(), Error> {
+        let tag = self.next_tag;
+        self.next_tag += 1;
+        self.opens.insert(tag, kind);
+        let sent = self.handle.open(open, tag);
+        if sent.is_err() {
+            self.opens.remove(&tag);
+        }
+        sent
+    }
+
+    fn cancel(&self, session_id: SessionId) {
+        let handle = self.handle.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle.send(CancelTurnRequest { session_id }).await {
+                tracing::warn!(%error, "failed to cancel the turn");
+            }
+        });
+    }
+
+    /// Answer a pending request of the active session. Another client may have answered it
+    /// first, which is no failure.
+    fn answer(
+        &self,
+        chat: &ChatWidget,
+        pending_id: String,
+        fill: impl FnOnce(AnswerPendingRequest) -> AnswerPendingRequest,
+    ) {
+        let Some(session_id) = chat.active_session().cloned() else {
+            return;
+        };
+        let request = fill(AnswerPendingRequest {
+            session_id,
+            pending_id,
+            permission: None,
+            elicitation: None,
+        });
+        let handle = self.handle.clone();
+        tokio::spawn(async move {
+            match handle.send(request).await {
+                Err(error) if !errors::is(&error, errors::ALREADY_RESOLVED) => {
+                    tracing::warn!(%error, "couldn't answer the agent's request");
+                }
+                _ => {}
+            }
+        });
     }
 
     fn spawn_setting_change(&self, session_id: SessionId, change: SettingChange) {
@@ -557,13 +887,20 @@ impl App {
         self.spawn(async move {
             let result = match &change {
                 SettingChange::ConfigOption(config_id, value) => handle
-                    .set_config_option(session_id, config_id.clone(), value.clone())
+                    .send(SetConfigOptionRequest {
+                        session_id,
+                        config_id: config_id.clone(),
+                        value: value.clone(),
+                    })
                     .await
-                    .map(Some),
+                    .map(|response| Some(response.config_options)),
                 SettingChange::Mode(mode_id) => handle
-                    .set_mode(session_id, mode_id.clone())
+                    .send(SetModeRequest {
+                        session_id,
+                        mode_id: mode_id.clone(),
+                    })
                     .await
-                    .map(|()| None),
+                    .map(|_| None),
             };
             AppEvent::SettingChanged(change, result)
         });
@@ -576,6 +913,41 @@ impl App {
             });
         }
     }
+
+    /// Run `task`, reporting back only what it says to.
+    fn spawn_unless_ok(&self, task: impl Future<Output = Option<AppEvent>> + Send + 'static) {
+        if let Some(results) = self.results.clone() {
+            tokio::spawn(async move {
+                if let Some(event) = task.await {
+                    let _ = results.send(event);
+                }
+            });
+        }
+    }
+}
+
+/// A pending request, as the chat shows it.
+fn pending_event(pending: PendingRequest) -> ChatEvent {
+    match pending.request {
+        PendingKind::Permission { request } => ChatEvent::PermissionRequested(PermissionAsk {
+            id: pending.id,
+            request,
+        }),
+        PendingKind::Elicitation { request } => ChatEvent::ElicitationRequested(ElicitationAsk {
+            id: pending.id,
+            request,
+        }),
+    }
+}
+
+/// How long ago `at` was.
+fn since(at: u64) -> Duration {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        });
+    Duration::from_millis(now.saturating_sub(at))
 }
 
 /// Run a shell-mode command in `cwd`, streaming its output (stdout and stderr together, as
@@ -583,7 +955,7 @@ impl App {
 async fn run_shell(
     id: String,
     command: String,
-    cwd: std::path::PathBuf,
+    cwd: PathBuf,
     results: mpsc::UnboundedSender<AppEvent>,
     killed: oneshot::Receiver<()>,
 ) {

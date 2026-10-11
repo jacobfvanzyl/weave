@@ -196,6 +196,7 @@ fn state() -> SessionState {
             started_at: 1_760_180_000_000,
             origin: TurnOrigin::Client {
                 name: "weave-tui".to_owned(),
+                id: "c7".to_owned(),
             },
         }],
         pending: vec![pending()],
@@ -469,6 +470,7 @@ fn events() {
                 prompt: vec![text("hello")],
                 origin: TurnOrigin::Client {
                     name: "weave-tui".to_owned(),
+                    id: "c7".to_owned(),
                 },
             },
         ))

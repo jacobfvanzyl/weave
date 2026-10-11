@@ -1,18 +1,10 @@
-//! Opening sessions: new, or an existing one by load (with history) or resume (without).
+//! A session the Host opened for this client: new, or an existing one it attached to.
 
-use std::path::PathBuf;
-
-use weave_acp_core::AgentHandle;
-use weave_acp_core::SessionSetup;
-use weave_acp_core::daemon_protocol;
-use weave_acp_core::schema::Error;
-use weave_acp_core::schema::Meta;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionModeState;
-
-use crate::settings;
-use crate::settings::SettingChange;
+use weave_host_protocol::sessions::Replay;
+use weave_host_protocol::sessions::SessionState;
 
 /// Which session to open.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,159 +19,103 @@ pub struct OpenedSession {
     pub session_id: SessionId,
     pub modes: Option<SessionModeState>,
     pub config_options: Vec<SessionConfigOption>,
-    /// How an existing session was reopened: `None` for a new one, and for one the weave
-    /// daemon says is still blank, with nothing sent in it to reopen.
+    /// How an existing session was reopened: `None` for a new one, and for one the Host
+    /// says is still blank, with nothing sent in it to reopen.
     pub reopened: Option<Reopened>,
-    /// The directory it works in, when the weave daemon says: the client works there too.
-    pub cwd: Option<PathBuf>,
-    /// Why a new session didn't start in the configured mode.
-    pub notice: Option<String>,
-}
-
-/// The directory the weave daemon says a reopened session works in.
-fn daemon_cwd(meta: Option<&Meta>) -> Option<PathBuf> {
-    daemon_protocol::read_meta::<daemon_protocol::OpenedSession>(meta).map(|opened| opened.cwd)
-}
-
-/// How a session the weave daemon answered for in `meta` was reopened: as `how`, unless it's
-/// blank, when it's as good as new.
-fn reopened(meta: Option<&Meta>, how: Reopened) -> Option<Reopened> {
-    let blank = daemon_protocol::read_meta::<daemon_protocol::OpenedSession>(meta)
-        .is_some_and(|opened| opened.blank);
-    (!blank).then_some(how)
+    /// Worth telling the user, such as skipped MCP servers or a mode it couldn't start in.
+    pub notices: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reopened {
-    /// `session/load`: the history was replayed as updates before this returned.
+    /// Its history follows, from the Host's journal.
     Loaded,
-    /// `session/resume`: the agent has the context, but nothing was replayed.
+    /// The agent has the context, but there's no history to show.
     Resumed,
 }
 
-/// Reattach to a session this client already shows, after reconnecting: `session/resume`,
-/// with no replay of what it has. Fails, for a reload instead, when the agent can't resume.
-pub async fn reattach_session(
-    handle: &AgentHandle,
-    session_id: SessionId,
-    setup: &SessionSetup,
-) -> Result<OpenedSession, Error> {
-    let response = handle.resume_session(session_id.clone(), setup).await?;
-    Ok(OpenedSession {
-        session_id,
-        cwd: daemon_cwd(response.meta.as_ref()),
-        modes: response.modes,
-        config_options: response.config_options.unwrap_or_default(),
-        reopened: Some(Reopened::Resumed),
-        notice: None,
-    })
-}
-
-/// Open `target`, preferring `session/load` (which shows the history) over `session/resume`.
-/// A new session is put in `mode`, the agent's configured default; a reopened one is in
-/// whatever mode the agent restores.
-pub async fn open_session(
-    handle: &AgentHandle,
-    target: SessionTarget,
-    setup: &SessionSetup,
-    mode: Option<&str>,
-) -> Result<OpenedSession, Error> {
-    match target {
-        SessionTarget::New => {
-            let response = handle.new_session(setup).await?;
-            let mut opened = OpenedSession {
-                session_id: response.session_id,
-                modes: response.modes,
-                config_options: response.config_options.unwrap_or_default(),
-                reopened: None,
-                cwd: None,
-                notice: None,
-            };
-            if let Some(mode) = mode {
-                opened.notice = start_in_mode(handle, &mut opened, mode).await.err();
-            }
-            Ok(opened)
-        }
-        SessionTarget::Existing(session_id) => {
-            let capabilities = handle
-                .agent()
-                .map(|agent| agent.agent_capabilities.clone())
-                .unwrap_or_default();
-            if capabilities.load_session {
-                let response = handle.load_session(session_id.clone(), setup).await?;
-                Ok(OpenedSession {
-                    session_id,
-                    cwd: daemon_cwd(response.meta.as_ref()),
-                    reopened: reopened(response.meta.as_ref(), Reopened::Loaded),
-                    modes: response.modes,
-                    config_options: response.config_options.unwrap_or_default(),
-                    notice: None,
-                })
-            } else {
-                let response = handle.resume_session(session_id.clone(), setup).await?;
-                Ok(OpenedSession {
-                    session_id,
-                    cwd: daemon_cwd(response.meta.as_ref()),
-                    reopened: reopened(response.meta.as_ref(), Reopened::Resumed),
-                    modes: response.modes,
-                    config_options: response.config_options.unwrap_or_default(),
-                    notice: None,
-                })
-            }
+impl OpenedSession {
+    /// The session `state` describes, with `replay` saying what follows for one attached to.
+    pub fn from_state(state: &SessionState, replay: Option<&Replay>) -> Self {
+        let reopened = match replay {
+            _ if state.blank => None,
+            None => None,
+            Some(replay) if replay.from <= state.journal.head => Some(Reopened::Loaded),
+            Some(_) if state.journal.head == 0 => Some(Reopened::Resumed),
+            Some(_) => Some(Reopened::Loaded),
+        };
+        Self {
+            session_id: state.session_id.clone(),
+            modes: state.modes.clone(),
+            config_options: state.config_options.clone(),
+            reopened,
+            notices: state.notices.clone(),
         }
     }
-}
-
-/// Put a new session in `mode`, as choosing it in the settings would. The session stays open
-/// in the agent's own default when that fails, and the error says why.
-async fn start_in_mode(
-    handle: &AgentHandle,
-    opened: &mut OpenedSession,
-    mode: &str,
-) -> Result<(), String> {
-    let change = settings::mode_change(&opened.config_options, opened.modes.as_ref(), mode)
-        .ok_or_else(|| format!("The agent has no mode {mode}; the session uses its default"))?;
-    let failed = |error: Error| format!("Couldn't start in mode {mode}: {error}");
-    match change {
-        SettingChange::ConfigOption(config_id, value) => {
-            opened.config_options = handle
-                .set_config_option(opened.session_id.clone(), config_id, value)
-                .await
-                .map_err(failed)?;
-        }
-        SettingChange::Mode(mode_id) => {
-            handle
-                .set_mode(opened.session_id.clone(), mode_id.clone())
-                .await
-                .map_err(failed)?;
-            if let Some(modes) = &mut opened.modes {
-                modes.current_mode_id = mode_id;
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use weave_acp_core::schema::InitializeResponse;
+    use weave_host_protocol::policy::PermissionPolicy;
+    use weave_host_protocol::sessions::Activity;
+    use weave_host_protocol::sessions::JournalHead;
+    use weave_host_protocol::sessions::SessionAgent;
+    use weave_host_protocol::sessions::SessionStatus;
 
     use super::*;
 
+    fn state(blank: bool, head: u64) -> SessionState {
+        SessionState {
+            session_id: "s1".into(),
+            agent: SessionAgent {
+                id: "fake".into(),
+                name: "Fake".into(),
+                initialize: InitializeResponse::new(weave_acp_core::ProtocolVersion::V1),
+            },
+            cwd: "/repo".into(),
+            additional_directories: Vec::new(),
+            title: None,
+            state: SessionStatus::Open,
+            activity: Activity::Idle,
+            clients: 1,
+            blank,
+            policy: PermissionPolicy::ask(),
+            modes: None,
+            config_options: Vec::new(),
+            turns: Vec::new(),
+            pending: Vec::new(),
+            subagents: Vec::new(),
+            journal: JournalHead {
+                id: "1".into(),
+                head,
+            },
+            notices: Vec::new(),
+            trace: None,
+        }
+    }
+
     #[test]
-    fn a_session_the_daemon_says_is_blank_reopens_as_new() {
-        let meta = |blank| {
-            daemon_protocol::meta(&daemon_protocol::OpenedSession {
-                cwd: PathBuf::from("/repo"),
-                blank,
-            })
-        };
+    fn a_session_says_how_it_was_reopened() {
+        let replay = |from| Replay { from, reset: true };
+        // New, or blank: nothing to come back to.
         assert_eq!(
-            reopened(Some(&meta(false)), Reopened::Loaded),
+            OpenedSession::from_state(&state(false, 3), None).reopened,
+            None
+        );
+        assert_eq!(
+            OpenedSession::from_state(&state(true, 3), Some(&replay(1))).reopened,
+            None
+        );
+        // Attached with history to show, or none at all.
+        assert_eq!(
+            OpenedSession::from_state(&state(false, 3), Some(&replay(1))).reopened,
             Some(Reopened::Loaded)
         );
-        assert_eq!(reopened(Some(&meta(true)), Reopened::Loaded), None);
-        // An agent answering directly says nothing about it.
-        assert_eq!(reopened(None, Reopened::Resumed), Some(Reopened::Resumed));
+        assert_eq!(
+            OpenedSession::from_state(&state(false, 0), Some(&replay(1))).reopened,
+            Some(Reopened::Resumed)
+        );
     }
 }

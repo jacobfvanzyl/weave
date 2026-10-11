@@ -1,6 +1,6 @@
 ---
 source: crates/protocol/tests/wire.rs
-expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"hello\")], origin:\n    TurnOrigin::Client { name: \"weave-tui\".to_owned(), },\n},))"
+expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"hello\")], origin:\n    TurnOrigin::Client { name: \"weave-tui\".to_owned(), id: \"c7\".to_owned(), },\n},))"
 ---
 {
   "method": "session/event",
@@ -19,7 +19,8 @@ expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"
       ],
       "origin": {
         "client": {
-          "name": "weave-tui"
+          "name": "weave-tui",
+          "id": "c7"
         }
       }
     }

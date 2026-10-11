@@ -3856,7 +3856,6 @@ dependencies = [
  "tokio",
  "tracing",
  "weave-fake-agent",
- "weave-host-protocol",
 ]
 
 [[package]]
@@ -3897,6 +3896,8 @@ dependencies = [
  "weave-acp-core",
  "weave-agents",
  "weave-daemon",
+ "weave-host-client",
+ "weave-host-protocol",
  "weave-tui",
 ]
 
@@ -3915,7 +3916,10 @@ dependencies = [
  "tokio-util",
  "tracing",
  "weave-acp-core",
+ "weave-agents",
  "weave-fake-agent",
+ "weave-host-client",
+ "weave-host-protocol",
 ]
 
 [[package]]
@@ -3927,6 +3931,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "weave-host-client"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "weave-host-protocol",
 ]
 
 [[package]]
@@ -3970,6 +3985,8 @@ dependencies = [
  "url",
  "vt100",
  "weave-acp-core",
+ "weave-host-client",
+ "weave-host-protocol",
 ]
 
 [[package]]

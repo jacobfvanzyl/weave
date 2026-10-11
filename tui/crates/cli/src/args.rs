@@ -6,13 +6,47 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
+use serde::Deserialize;
+use serde::Serialize;
 use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
-pub use weave_acp_core::daemon_protocol::AgentChoice;
 use weave_acp_core::schema::ToolKind;
+use weave_daemon::Withheld;
 
 use crate::config::Config;
 use crate::start::StartMode;
+
+/// The id an in-process Host knows a custom command (`-- <command>`) by.
+pub const COMMAND_AGENT: &str = "command";
+
+/// An agent as the user chose it, by name or as a command, so it can be chosen again: what
+/// `--resume <id>` reopens a session with, and `--continue` remembers per directory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentChoice {
+    /// A preset, a config agent or a registry agent: `--agent <id>`.
+    Named(String),
+    /// A custom command: `-- <command>…`, which only a Host in this process runs.
+    Command(Vec<String>),
+}
+
+impl AgentChoice {
+    /// How it's named in messages.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Named(id) => id.clone(),
+            Self::Command(words) => words.join(" "),
+        }
+    }
+
+    /// The id the Host knows it by.
+    pub fn agent_id(&self) -> &str {
+        match self {
+            Self::Named(id) => id,
+            Self::Command(_) => COMMAND_AGENT,
+        }
+    }
+}
 
 /// Which agent, for every command that talks to one.
 #[derive(Args)]
@@ -27,8 +61,9 @@ pub struct AgentArgs {
     command: Vec<String>,
 
     /// Append a protocol trace of the agent to this file, viewable with
-    /// agent-client-protocol-trace-viewer. In the daemon, from when this weave attaches.
-    #[arg(long)]
+    /// agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in
+    /// its own directory and says where, give it without a file.
+    #[arg(long, num_args = 0..=1, default_missing_value = "")]
     trace: Option<PathBuf>,
 
     /// Config file. Defaults to ~/.config/weave/config.toml.
@@ -163,26 +198,33 @@ fn shell_quote(word: &str) -> String {
     }
 }
 
-/// Everything needed to launch the agent and set up its sessions.
-pub struct Launch {
+/// What a session through the Host is opened with.
+pub struct HostLaunch {
     pub config: Config,
     /// How the agent was chosen: on the command line, as last used here, or by default.
     pub agent: AgentChoice,
+    pub cwd: PathBuf,
+    pub additional_directories: Vec<PathBuf>,
+    /// Have the Host trace the agent's protocol.
+    pub trace: bool,
+}
+
+impl HostLaunch {
+    /// The id the Host knows the agent by.
+    pub fn agent_id(&self) -> &str {
+        self.agent.agent_id()
+    }
+}
+
+/// Everything needed to launch the agent directly, outside the Host, and set up its sessions:
+/// for `weave smoke`, `login` and `logout`.
+pub struct Launch {
+    pub config: Config,
     pub spec: AgentSpec,
     pub options: ClientOptions,
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
     pub trace: Option<PathBuf>,
-}
-
-impl Launch {
-    /// The mode new sessions start in, from the chosen agent's config.
-    pub fn default_mode(&self) -> Option<&str> {
-        match &self.agent {
-            AgentChoice::Named(id) => self.config.agents.mode(id),
-            AgentChoice::Command(_) => None,
-        }
-    }
 }
 
 impl AgentArgs {
@@ -198,6 +240,37 @@ impl AgentArgs {
     /// The config file this command reads.
     pub fn load_config(&self) -> anyhow::Result<Config> {
         Config::load(self.config.as_deref())
+    }
+
+    /// The config file given on the command line, for a Host in this process to read.
+    pub fn config_file(&self) -> Option<PathBuf> {
+        self.config.clone()
+    }
+
+    /// `agent` (else the config's `default_agent`), for a session through the Host in `cwd`
+    /// or else the workspace's directory, with the rest of the workspace's settings. The Host
+    /// resolves the agent.
+    pub fn host_launch(
+        &self,
+        workspace: &WorkspaceArgs,
+        agent: Option<AgentChoice>,
+        cwd: Option<PathBuf>,
+    ) -> anyhow::Result<HostLaunch> {
+        let config = Config::load(self.config.as_deref())?;
+        let agent = match agent {
+            Some(agent) => agent,
+            None => default_agent(&config)?,
+        };
+        Ok(HostLaunch {
+            config,
+            agent,
+            cwd: match cwd {
+                Some(cwd) => cwd,
+                None => workspace.cwd()?,
+            },
+            additional_directories: workspace.additional_directories()?,
+            trace: self.trace.is_some(),
+        })
     }
 
     /// Resolve the agent chosen on the command line (else the config's `default_agent`), to
@@ -217,16 +290,7 @@ impl AgentArgs {
         let config = Config::load(self.config.as_deref())?;
         let agent = match agent {
             Some(agent) => agent,
-            None => match &config.agents.default_agent {
-                Some(id) => AgentChoice::Named(id.clone()),
-                None => {
-                    let known = weave_acp_core::preset_ids().collect::<Vec<_>>().join(", ");
-                    bail!(
-                        "choose an agent with --agent ({known}), give a command after `--`, \
-                         or set default_agent in the config file"
-                    )
-                }
-            },
+            None => default_agent(&config)?,
         };
         let (spec, mut options) = match &agent {
             AgentChoice::Named(id) => resolve(&config.agents, id).await?,
@@ -242,17 +306,9 @@ impl AgentArgs {
         if workspace.no_terminal {
             options.terminals = false;
         }
-        let additional_directories = workspace
-            .add_dirs
-            .iter()
-            .map(|dir| {
-                dir.canonicalize()
-                    .with_context(|| format!("directory {}", dir.display()))
-            })
-            .collect::<anyhow::Result<_>>()?;
+        let additional_directories = workspace.additional_directories()?;
         Ok(Launch {
             config,
-            agent,
             spec,
             options,
             cwd: match cwd {
@@ -260,13 +316,47 @@ impl AgentArgs {
                 None => workspace.cwd()?,
             },
             additional_directories,
-            // The daemon opens it, from its own directory.
-            trace: self.trace.as_deref().map(std::path::absolute).transpose()?,
+            trace: self
+                .trace
+                .as_deref()
+                .filter(|path| !path.as_os_str().is_empty())
+                .map(std::path::absolute)
+                .transpose()?,
         })
     }
 }
 
+/// The config's `default_agent`, else a reason to give one.
+fn default_agent(config: &Config) -> anyhow::Result<AgentChoice> {
+    match &config.agents.default_agent {
+        Some(id) => Ok(AgentChoice::Named(id.clone())),
+        None => {
+            let known = weave_acp_core::preset_ids().collect::<Vec<_>>().join(", ");
+            bail!("choose an agent with --agent ({known}), or set default_agent in the config file")
+        }
+    }
+}
+
 impl WorkspaceArgs {
+    /// The extra workspace roots, as absolute paths.
+    pub fn additional_directories(&self) -> anyhow::Result<Vec<PathBuf>> {
+        self.add_dirs
+            .iter()
+            .map(|dir| {
+                dir.canonicalize()
+                    .with_context(|| format!("directory {}", dir.display()))
+            })
+            .collect()
+    }
+
+    /// What `--no-fs` and `--no-terminal` withhold from agents.
+    pub fn withheld(&self) -> Withheld {
+        Withheld {
+            fs: self.no_fs,
+            terminals: self.no_terminal,
+        }
+    }
+
     /// The absolute session directory ACP requires.
     pub fn cwd(&self) -> anyhow::Result<PathBuf> {
         let cwd = match &self.cwd {
@@ -285,9 +375,12 @@ async fn resolve(
     id: &str,
 ) -> anyhow::Result<(AgentSpec, ClientOptions)> {
     let cache = weave_agents::registry::Cache::default_location()?;
-    let resolved = weave_agents::resolve(config, id, &cache)
-        .await
-        .map_err(|error| error.context("or give a command after `--`"))?;
+    let Some(resolved) = weave_agents::resolve(config, id, &cache).await? else {
+        bail!(
+            "{}; or give a command after `--`",
+            weave_agents::unknown(config, id)
+        );
+    };
     if let Some(warning) = &resolved.warning {
         eprintln!("weave: {warning}");
     }

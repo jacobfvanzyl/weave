@@ -1,31 +1,35 @@
-//! The weave daemon: agent sessions that outlive the clients using them.
+//! The weave Host: agent sessions that outlive the clients using them.
 //!
-//! The daemon is an ACP agent to its clients (the TUI, `weave run`) and an ACP client to the
-//! agents it launches, through `weave-acp-core` like any other client. A client names the
-//! agent it wants at `initialize` and then speaks plain ACP; [`weave_acp_core::daemon_protocol`]
-//! covers the rest.
+//! Clients (the TUI, `weave run`, later others) speak the Host protocol
+//! ([`weave_host_protocol`]) to it; it speaks ACP to the agents it launches, through
+//! `weave-acp-core`. A client names an agent by id and a directory; the Host resolves the agent
+//! from its configuration ([`weave_agents`]) and starts it with the agent environment it
+//! captured. One connection reaches every session on the Host.
 //!
-//! Each live session has its own agent process, started in the session's directory with the
-//! environment of the client that opened it. A session stays live while a client is attached,
-//! while a turn runs or waits on a person, and for an idle grace period after that; quitting a
-//! client doesn't stop its turn. Everything a session's clients are sent goes into its
-//! journal, so a client that attaches later (`session/load`) sees the whole transcript, and a
-//! daemon that restarts can take the session up again. Requests that wait on a person go to
-//! every attached client, and to clients that attach later, until one answers; a session's
-//! [`PermissionPolicy`](weave_acp_core::daemon_protocol::PermissionPolicy) answers what it can
+//! Each open session has its own agent process, started in the session's directory. A session
+//! stays open while a client is attached, while a turn runs or waits on a person, and for an
+//! idle grace period after that; a client leaving doesn't stop its turn. Everything a
+//! session's clients are sent goes into its numbered journal, so a client that attaches later
+//! catches up from the last position it saw, and a Host that restarts can take the session up
+//! again. Requests that wait on a person are pending requests every attached client sees, and
+//! clients that attach later; the first answer counts. A session's
+//! [`PermissionPolicy`](weave_host_protocol::policy::PermissionPolicy) answers what it can
 //! without anyone.
 //!
-//! A daemon serves a Unix socket ([`socket`]), or, without one, a single client in the same
+//! A Host serves a Unix socket ([`socket`]), or, without one, a single client in the same
 //! process ([`Daemon::connect_in_process`]).
 
 mod client;
 mod instance;
 mod journal;
+mod modes;
 pub mod paths;
 mod session;
 pub mod socket;
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -34,22 +38,33 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use std::time::Instant;
 
-use agent_client_protocol::Agent;
 use agent_client_protocol::Channel;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::Error;
 use tokio::net::UnixListener;
 use tokio::sync::watch;
-use weave_acp_core::daemon_protocol::DaemonStatus;
-use weave_acp_core::daemon_protocol::PROTOCOL_VERSION;
-use weave_acp_core::daemon_protocol::RunRequest;
+use weave_acp_core::AgentHandle;
+use weave_acp_core::AgentSpec;
+use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::SessionId;
+use weave_agents::environment::Environment;
+use weave_host_protocol::Host;
+use weave_host_protocol::PROTOCOL_VERSION;
+use weave_host_protocol::agents::AgentSource;
+use weave_host_protocol::errors;
+use weave_host_protocol::host::EnvironmentSource;
+use weave_host_protocol::host::HostStatus;
+use weave_host_protocol::host::Service;
+use weave_host_protocol::sessions::RunRequest;
 
+use crate::instance::Instance;
+pub use crate::instance::Launch;
 use crate::instance::LaunchKey;
 pub use crate::instance::Launcher;
 pub use crate::instance::process_launcher;
 pub use crate::journal::Recorded;
+pub use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 pub use crate::paths::DaemonPaths;
 use crate::session::Command;
@@ -61,9 +76,11 @@ pub const DEFAULT_IDLE_GRACE: Duration = Duration::from_secs(30 * 60);
 /// How long a blank session (new, never prompted) nothing needs stays open: long enough for
 /// a client's `/reload` or reconnect to reattach.
 pub const DEFAULT_BLANK_GRACE: Duration = Duration::from_secs(60);
-/// Journals untouched for this long are removed when a daemon starts, and while it runs.
+/// How long an agent process started for no session waits to be taken by one.
+const SPARE_GRACE: Duration = Duration::from_secs(60);
+/// Journals untouched for this long are removed when a Host starts, and while it runs.
 const JOURNAL_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
-/// How often a running daemon prunes journals.
+/// How often a running Host prunes journals.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// How long stopping waits for each session's agent.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,26 +93,73 @@ pub struct DaemonConfig {
     /// How long a blank session nothing needs stays open.
     pub blank_grace: Duration,
     pub launcher: Launcher,
+    /// The config file agents and MCP servers come from; the default one when absent.
+    pub config_file: Option<PathBuf>,
+    /// Where the ACP registry's catalog and agents are kept; the default place when absent.
+    pub registry_cache: Option<PathBuf>,
+    /// Agents the client that started an in-process Host gave, ahead of the config's.
+    pub agents: BTreeMap<String, AgentSpec>,
+    /// Client services every agent goes without, as `--no-fs` and `--no-terminal` ask of an
+    /// in-process Host.
+    pub withheld: Withheld,
+    /// What agents start with, under their own settings.
+    pub environment: Environment,
+    pub service: Service,
+    /// Where protocol traces are written.
+    pub traces: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Withheld {
+    pub fs: bool,
+    pub terminals: bool,
 }
 
 impl DaemonConfig {
-    /// A daemon inside one client: journals in memory, agents as processes.
-    pub fn in_memory() -> Self {
+    /// A Host inside one client: journals in memory, agents as processes with the client's
+    /// own environment.
+    pub fn in_process(config_file: Option<PathBuf>) -> Self {
         Self {
             journals: None,
             idle_grace: DEFAULT_IDLE_GRACE,
             blank_grace: DEFAULT_BLANK_GRACE,
             launcher: process_launcher(),
+            config_file,
+            registry_cache: None,
+            agents: BTreeMap::new(),
+            withheld: Withheld::default(),
+            environment: Environment::process(),
+            service: Service::InProcess,
+            traces: std::env::temp_dir().join("weave-traces"),
         }
     }
 
-    /// The per-user daemon, with journals in its directory.
-    pub fn persistent(paths: &DaemonPaths) -> Self {
+    /// The per-user Host, with journals and traces in its directory.
+    pub fn persistent(paths: &DaemonPaths, service: Service, environment: Environment) -> Self {
         Self {
             journals: Some(paths.journals()),
-            ..Self::in_memory()
+            environment,
+            service,
+            traces: paths.dir.join("traces"),
+            ..Self::in_process(None)
         }
     }
+}
+
+/// An agent ready to start, as the Host resolved it.
+#[derive(Clone)]
+pub(crate) struct Agent {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) source: AgentSource,
+    /// The registry's version, for registry agents.
+    pub(crate) version: Option<String>,
+    pub(crate) spec: AgentSpec,
+    pub(crate) options: ClientOptions,
+    /// The mode its new sessions start in.
+    pub(crate) mode: Option<String>,
+    /// The configuration it came from, for its MCP servers.
+    pub(crate) config: Arc<weave_agents::Config>,
 }
 
 pub(crate) struct Shared {
@@ -110,25 +174,264 @@ impl Shared {
     pub(crate) fn registry(&self) -> MutexGuard<'_, Registry> {
         lock(&self.registry)
     }
+
+    /// The configuration, read afresh, so edits apply to the next session.
+    pub(crate) fn load_config(&self) -> Result<weave_agents::Config, Error> {
+        weave_agents::Config::load(self.config.config_file.as_deref())
+            .map(|loaded| loaded.config)
+            .map_err(|error| Error::internal_error().data(format!("{error:#}")))
+    }
+
+    pub(crate) fn registry_cache(&self) -> Result<weave_agents::registry::Cache, Error> {
+        match &self.config.registry_cache {
+            Some(root) => Ok(weave_agents::registry::Cache::new(root.clone())),
+            None => weave_agents::registry::Cache::default_location()
+                .map_err(|error| Error::internal_error().data(format!("{error:#}"))),
+        }
+    }
+
+    /// The agent `agent_id` names, from the agents an in-process Host was given, then the
+    /// configuration, the presets and the ACP registry.
+    pub(crate) async fn resolve(&self, agent_id: &str) -> Result<Agent, Error> {
+        let config = self.load_config()?;
+        let mode = config.mode(agent_id).map(str::to_owned);
+        let (name, source, version, spec, mut options) = match self.config.agents.get(agent_id) {
+            Some(spec) => (
+                agent_id.to_owned(),
+                AgentSource::Config,
+                None,
+                spec.clone(),
+                ClientOptions::default(),
+            ),
+            None => {
+                let cache = self.registry_cache()?;
+                let resolved = weave_agents::resolve(&config, agent_id, &cache)
+                    .await
+                    .map_err(|error| Error::internal_error().data(format!("{error:#}")))?
+                    .ok_or_else(|| errors::unknown_agent(agent_id))?;
+                if let Some(warning) = &resolved.warning {
+                    tracing::warn!("{warning}");
+                }
+                let source = match resolved.source {
+                    weave_agents::Source::Config => AgentSource::Config,
+                    weave_agents::Source::Preset => AgentSource::Preset,
+                    weave_agents::Source::Registry => AgentSource::Registry,
+                };
+                (
+                    resolved.name,
+                    source,
+                    resolved.version,
+                    resolved.spec,
+                    resolved.options,
+                )
+            }
+        };
+        if self.config.withheld.fs {
+            options.read_files = false;
+            options.write_files = false;
+        }
+        if self.config.withheld.terminals {
+            options.terminals = false;
+        }
+        Ok(Agent {
+            id: agent_id.to_owned(),
+            name,
+            source,
+            version,
+            spec,
+            options,
+            mode,
+            config: Arc::new(config),
+        })
+    }
+
+    pub(crate) fn launch(&self, agent: &Agent, cwd: &Path) -> Launch {
+        Launch {
+            agent_id: agent.id.clone(),
+            spec: agent.spec.clone(),
+            cwd: cwd.to_path_buf(),
+            environment: self.config.environment.vars.clone(),
+        }
+    }
+
+    /// An initialized agent for a new or reopened session: a spare one, or a new one.
+    pub(crate) async fn instance(
+        &self,
+        agent: &Agent,
+        cwd: &Path,
+        options: ClientOptions,
+    ) -> Result<Instance, Error> {
+        let launch = self.launch(agent, cwd);
+        let key = LaunchKey::new(&launch, options);
+        if let Some(spare) = self.registry().spares.remove(&key) {
+            return Ok(spare.instance);
+        }
+        let instance = Instance::start(&self.config.launcher, &launch, options).await?;
+        if let Some(init) = instance.init() {
+            self.registry().initialized.insert(key, init.clone());
+        }
+        Ok(instance)
+    }
+
+    /// Keep an agent no session took, as after `auth_required`, for the next request; it
+    /// stops if nothing takes it for a while.
+    pub(crate) fn keep_spare(self: &Arc<Self>, instance: Instance) {
+        let key = instance.key.clone();
+        let generation = {
+            let mut registry = self.registry();
+            if registry.spares.contains_key(&key) {
+                drop(registry);
+                tokio::spawn(instance.connection.shutdown());
+                return;
+            }
+            registry.next_spare += 1;
+            let generation = registry.next_spare;
+            registry.spares.insert(
+                key.clone(),
+                Spare {
+                    instance,
+                    generation,
+                },
+            );
+            generation
+        };
+        let shared = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(SPARE_GRACE).await;
+            let expired = {
+                let mut registry = shared.registry();
+                match registry.spares.get(&key) {
+                    Some(spare) if spare.generation == generation => registry.spares.remove(&key),
+                    _ => None,
+                }
+            };
+            if let Some(spare) = expired {
+                spare.instance.connection.shutdown().await;
+            }
+        });
+    }
+
+    /// An agent to ask something of outside any session (list, delete, sign in): an open
+    /// session's of the same agent, or a spare.
+    pub(crate) async fn agent_handle(
+        self: &Arc<Self>,
+        agent: &Agent,
+        cwd: &Path,
+        options: ClientOptions,
+    ) -> Result<AgentHandle, Error> {
+        let key = LaunchKey::new(&self.launch(agent, cwd), options);
+        {
+            let registry = self.registry();
+            if let Some(spare) = registry.spares.get(&key) {
+                return Ok(spare.instance.connection.handle());
+            }
+            let live = registry
+                .sessions
+                .values()
+                .find(|session| session.key == key)
+                .map(|session| session.agent.clone());
+            if let Some(agent) = live {
+                return Ok(agent);
+            }
+        }
+        let instance = self.instance(agent, cwd, options).await?;
+        let handle = instance.connection.handle();
+        self.keep_spare(instance);
+        Ok(handle)
+    }
+
+    /// The spare agents of `agent_id`, which the next sessions for it take.
+    pub(crate) fn spare_handles(&self, agent_id: &str) -> Vec<AgentHandle> {
+        self.registry()
+            .spares
+            .values()
+            .filter(|spare| spare.instance.agent_id == agent_id)
+            .map(|spare| spare.instance.connection.handle())
+            .collect()
+    }
+
+    /// Stop the spare agents of `agent_id`, as after signing in through a terminal, so the
+    /// next ones start signed in.
+    pub(crate) fn drop_spares(&self, agent_id: &str) {
+        let dropped: Vec<Spare> = {
+            let mut registry = self.registry();
+            let keys: Vec<LaunchKey> = registry
+                .spares
+                .iter()
+                .filter(|(_, spare)| spare.instance.agent_id == agent_id)
+                .map(|(key, _)| key.clone())
+                .collect();
+            keys.iter()
+                .filter_map(|key| registry.spares.remove(key))
+                .collect()
+        };
+        for spare in dropped {
+            tokio::spawn(spare.instance.connection.shutdown());
+        }
+    }
+
+    /// Where `session_id`'s protocol trace goes.
+    pub(crate) fn trace_path(&self, session_id: &SessionId) -> Result<PathBuf, Error> {
+        journal::create_private_dir(&self.config.traces).map_err(|error| {
+            Error::internal_error().data(format!(
+                "creating {}: {error}",
+                self.config.traces.display()
+            ))
+        })?;
+        let file = journal::path_for(&self.config.traces, session_id);
+        Ok(file.with_extension("jsons"))
+    }
+
+    pub(crate) fn status(&self) -> HostStatus {
+        let mut sessions: Vec<_> = self
+            .registry()
+            .sessions
+            .values()
+            .map(SessionHandle::summary)
+            .collect();
+        sessions.sort_by_key(|session| session.last_activity_ms);
+        HostStatus {
+            protocol: PROTOCOL_VERSION,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            pid: std::process::id(),
+            started_at: self.started_ms,
+            service: self.config.service,
+            environment: match self.config.environment.source {
+                weave_agents::environment::Source::LoginShell => EnvironmentSource::LoginShell,
+                weave_agents::environment::Source::Process => EnvironmentSource::Process,
+            },
+            sessions: sessions.iter().map(session::Summary::listing).collect(),
+        }
+    }
+}
+
+/// An agent started for no session yet.
+pub(crate) struct Spare {
+    instance: Instance,
+    /// Which keeping of it this is, so an old expiry leaves a newer one alone.
+    generation: u64,
 }
 
 #[derive(Default)]
 pub(crate) struct Registry {
-    /// Live sessions, by id.
+    /// Open sessions, by id.
     pub(crate) sessions: HashMap<SessionId, SessionHandle>,
-    /// Subagent sessions, and the live session they belong to.
+    /// Subagent sessions, and the open session they belong to.
     pub(crate) children: HashMap<SessionId, SessionId>,
-    /// Each agent's `initialize` answer, so clients attaching to it don't start another.
+    /// Each agent's `initialize` answer, so asking again starts nothing.
     pub(crate) initialized: HashMap<LaunchKey, InitializeResponse>,
-    /// Every session the journals record, live or not: which agent, where, under which
-    /// policy, and whether it was closed or left open by a daemon that stopped.
+    /// Every session the journals record, open or not: which agent, where, under which
+    /// policy, and whether it was closed or left open by a Host that stopped.
     pub(crate) known: HashMap<SessionId, Recorded>,
+    /// Agents started for no session yet.
+    spares: HashMap<LaunchKey, Spare>,
+    next_spare: u64,
     /// Clients connected now.
     pub(crate) clients: usize,
 }
 
 impl Registry {
-    /// The live session `session_id` is, or belongs to as a subagent.
+    /// The open session `session_id` is, or belongs to as a subagent.
     pub(crate) fn live(&self, session_id: &SessionId) -> Option<SessionHandle> {
         let root = self.children.get(session_id).unwrap_or(session_id);
         self.sessions.get(root).cloned()
@@ -167,17 +470,17 @@ impl Daemon {
     /// Serve one client over `transport` until it disconnects.
     pub async fn serve_client(
         &self,
-        transport: impl ConnectTo<Agent> + 'static,
+        transport: impl ConnectTo<Host> + 'static,
     ) -> Result<(), Error> {
         client::serve(Arc::clone(&self.shared), transport).await
     }
 
-    /// A connection to this daemon from the same process.
+    /// A connection to this Host from the same process.
     pub fn connect_in_process(&self) -> Channel {
-        let (client, daemon) = Channel::duplex();
+        let (client, host) = Channel::duplex();
         let this = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = this.serve_client(daemon).await {
+            if let Err(error) = this.serve_client(host).await {
                 tracing::debug!(%error, "in-process client ended");
             }
         });
@@ -185,8 +488,10 @@ impl Daemon {
     }
 
     /// Accept clients on `listener` until asked to stop, or until nothing has been open or
-    /// connected for `idle_exit`. Then stop every session, leaving them recoverable.
+    /// connected for `idle_exit`. Then stop every session, leaving them recoverable. Only
+    /// peers with the socket owner's user id are served.
     pub async fn serve(&self, listener: UnixListener, idle_exit: Option<Duration>) {
+        let owner = socket::owner(&listener);
         let mut stop = self.shared.stop.subscribe();
         let mut checks = tokio::time::interval(Duration::from_secs(1));
         // Starting pruned already.
@@ -197,6 +502,10 @@ impl Daemon {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
+                        if !socket::same_user(&stream, owner) {
+                            tracing::warn!("refused a connection from another user");
+                            continue;
+                        }
                         let this = self.clone();
                         tokio::spawn(async move {
                             if let Err(error) = this.serve_client(socket::transport(stream)).await {
@@ -231,7 +540,7 @@ impl Daemon {
         self.shutdown().await;
     }
 
-    /// Remove journals untouched for the retention period, except live sessions', and forget
+    /// Remove journals untouched for the retention period, except open sessions', and forget
     /// the sessions they recorded.
     fn prune(&self) {
         let Some(journals) = &self.shared.config.journals else {
@@ -250,8 +559,8 @@ impl Daemon {
         let _ = self.shared.stop.send(true);
     }
 
-    /// Stop every session's agent. Their journals stay open, so a later daemon can take
-    /// them up again.
+    /// Stop every session's agent, and the spare ones. Their journals stay open, so a later
+    /// Host can take them up again.
     pub async fn shutdown(&self) {
         let sessions: Vec<SessionHandle> =
             self.shared.registry().sessions.values().cloned().collect();
@@ -262,32 +571,35 @@ impl Daemon {
             )
         });
         futures::future::join_all(stops).await;
+        let spares: Vec<Spare> = self
+            .shared
+            .registry()
+            .spares
+            .drain()
+            .map(|(_, spare)| spare)
+            .collect();
+        for spare in spares {
+            spare.instance.connection.shutdown().await;
+        }
     }
 
-    /// What the daemon has open.
-    pub fn status(&self) -> DaemonStatus {
-        client::status(&self.shared)
+    /// What the Host has open.
+    pub fn status(&self) -> HostStatus {
+        self.shared.status()
     }
 
-    /// Open a session (`request.session_id`, or a new one), send it the prompt and leave the
-    /// turn running under the request's policy, with no client attached: what `_weave/run`
-    /// does, and what a trigger calls directly.
+    /// Open a session (`request.session_id`, or a new one), start a turn in it and leave it
+    /// running under the request's policy, with no client attached: what `session/run` does,
+    /// and what a trigger calls directly.
     pub async fn run(&self, request: RunRequest) -> Result<SessionId, Error> {
-        client::run(&self.shared, request, None).await
+        client::run(&self.shared, request, None)
+            .await
+            .map(|(session_id, _)| session_id)
     }
 }
 
-/// What the per-user daemon's journal in `paths` records about `session_id`: the agent and
-/// directory to reopen it with. Read from disk, so the daemon needn't be running.
+/// What the per-user Host's journal in `paths` records about `session_id`: the agent and
+/// directory to reopen it with. Read from disk, so the Host needn't be running.
 pub fn recorded_session(paths: &DaemonPaths, session_id: &SessionId) -> Option<Recorded> {
     journal::recorded(&paths.journals(), session_id)
-}
-
-/// The extension version and the daemon's own, for `initialize` and `_weave/status`.
-pub(crate) fn hello() -> weave_acp_core::daemon_protocol::DaemonHello {
-    weave_acp_core::daemon_protocol::DaemonHello {
-        protocol: PROTOCOL_VERSION,
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        pid: std::process::id(),
-    }
 }

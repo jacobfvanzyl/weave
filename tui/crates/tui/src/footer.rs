@@ -150,7 +150,7 @@ pub enum FooterMode {
     /// Ctrl+C was pressed once while idle.
     QuitReminder,
     Disconnected,
-    /// The weave daemon went away, and the client is waiting for it to come back.
+    /// The weave Host went away, and the client is waiting for it to come back.
     Reconnecting,
     /// A prompt or picker shows its own keys.
     Overlay,
@@ -183,7 +183,7 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
             Style::default().fg(Color::Red),
         )],
         FooterMode::Reconnecting => vec![Span::styled(
-            "reconnecting to the weave daemon… · ⌃c to quit",
+            "reconnecting to the weave Host… · ⌃c to quit",
             secondary(),
         )],
         FooterMode::Overlay => Vec::new(),
@@ -433,7 +433,7 @@ const SESSION: &[(&str, &str)] = &[
     ("⌃c", "Quit"),
 ];
 
-/// With the weave daemon, a session outlives the TUI, so leaving needn't stop a turn.
+/// With the weave Host, a session outlives the TUI, so leaving needn't stop a turn.
 const SESSION_IN_DAEMON: &[(&str, &str)] = &[
     ("⇧tab", "Next mode"),
     ("⌃o", "Settings"),
@@ -444,7 +444,7 @@ const SESSION_IN_DAEMON: &[(&str, &str)] = &[
 ];
 
 /// The `?` panel: weave's keys in three columns, as Codex lays out its shortcuts.
-/// `detachable` when sessions outlive the TUI, in the weave daemon.
+/// `detachable` when sessions outlive the TUI, in the weave Host.
 pub fn shortcut_lines(width: usize, vim: bool, detachable: bool) -> Vec<Line<'static>> {
     let columns: [ShortcutColumn; 3] = [
         ("Compose", if vim { COMPOSE_WITH_VIM } else { COMPOSE }),

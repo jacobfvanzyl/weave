@@ -1,4 +1,5 @@
-//! The daemon's Unix socket, guarded by a lock file so only one daemon serves a directory.
+//! The Host's Unix socket, guarded by a lock file so only one Host serves a directory. Its
+//! file mode keeps other users out, and the Host checks each peer's user id as well.
 
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -16,7 +17,7 @@ use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 use crate::paths::DaemonPaths;
 
-/// ACP over one socket connection, for either end.
+/// The Host protocol over one socket connection, for either end.
 pub type Transport = ByteStreams<Compat<OwnedWriteHalf>, Compat<OwnedReadHalf>>;
 
 /// The socket, listened on while the lock is held.
@@ -65,6 +66,33 @@ pub async fn connect(socket: &Path) -> io::Result<Transport> {
 pub(crate) fn transport(stream: UnixStream) -> Transport {
     let (read, write) = stream.into_split();
     ByteStreams::new(write.compat_write(), read.compat())
+}
+
+/// The user id that owns `listener`'s socket file: the Host's own.
+pub(crate) fn owner(listener: &UnixListener) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let address = listener.local_addr().ok()?;
+        let path = address.as_pathname()?;
+        std::fs::metadata(path).ok().map(|metadata| metadata.uid())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = listener;
+        None
+    }
+}
+
+/// Whether `stream`'s peer runs as `owner`. Without an owner to compare with, the socket's
+/// file mode is the only check.
+pub(crate) fn same_user(stream: &UnixStream, owner: Option<u32>) -> bool {
+    let Some(owner) = owner else {
+        return true;
+    };
+    stream
+        .peer_cred()
+        .is_ok_and(|credentials| credentials.uid() == owner)
 }
 
 #[cfg(test)]

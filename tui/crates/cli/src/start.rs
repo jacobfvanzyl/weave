@@ -1,5 +1,7 @@
-//! Connecting, signing in when the agent requires it, and opening the first session.
+//! Choosing and opening the first session through the Host, signing in when the agent
+//! requires it; and connecting to an agent directly, for `weave login` and `logout`.
 
+use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::io::Write;
 use std::path::PathBuf;
@@ -10,24 +12,31 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::AgentSpec;
-use weave_acp_core::ClientOptions;
 use weave_acp_core::ProtocolTrace;
-use weave_acp_core::SessionSetup;
-use weave_acp_core::daemon_protocol;
-use weave_acp_core::daemon_protocol::ListedSession;
 use weave_acp_core::is_auth_required;
 use weave_acp_core::schema::AuthMethod;
 use weave_acp_core::schema::AuthMethodTerminal;
+use weave_acp_core::schema::Error;
+use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::SessionId;
-use weave_tui::OpenedSession;
-use weave_tui::SessionTarget;
-use weave_tui::open_session;
+use weave_daemon::RecordedChoice;
+use weave_host_client::HostConnection;
+use weave_host_client::HostEvent;
+use weave_host_client::HostHandle;
+use weave_host_client::OpenedSession;
+use weave_host_protocol::agents::AuthenticateAgentRequest;
+use weave_host_protocol::agents::GetAgentRequest;
+use weave_host_protocol::agents::TerminalSignInRequest;
+use weave_host_protocol::sessions::AttachSessionRequest;
+use weave_host_protocol::sessions::CreateSessionRequest;
+use weave_host_protocol::sessions::ListSessionsRequest;
 
 use crate::args::AgentChoice;
+use crate::args::HostLaunch;
 use crate::args::Launch;
 use crate::args::WorkspaceArgs;
+use crate::daemon::Host;
 use crate::daemon::Target;
-use crate::daemon::daemon_launch;
 use crate::recent::Recent;
 
 /// The agent and directory to open a session with.
@@ -41,9 +50,9 @@ pub struct Chosen {
 }
 
 /// The agent and directory for `mode`. `--resume <id>` reopens the session with the agent and
-/// directory it was started with, whatever `--agent` and `--cwd` say, when the daemon's
-/// journal records them. `--continue` without an agent uses the one last used in the
-/// directory. Otherwise it's what the command line says.
+/// directory it was started with, whatever `--agent` and `--cwd` say, when the Host's journal
+/// records them. `--continue` without an agent uses the one last used in the directory.
+/// Otherwise it's what the command line says.
 pub fn choose(
     mode: &StartMode,
     explicit: Option<AgentChoice>,
@@ -67,7 +76,11 @@ pub fn choose(
             } else {
                 format!(" in {}", recorded.cwd.display())
             };
-            let agent = recorded.choice.clone().or(explicit.clone());
+            let recorded_agent = recorded.choice.as_ref().map(|choice| match choice {
+                RecordedChoice::Named(id) => AgentChoice::Named(id.clone()),
+                RecordedChoice::Command(words) => AgentChoice::Command(words.clone()),
+            });
+            let agent = recorded_agent.or(explicit.clone());
             let note = match (&agent, &explicit) {
                 (Some(agent), Some(given)) if agent != given => Some(format!(
                     "Resuming {session_id} with {}, the agent it was started with (not {}){elsewhere}",
@@ -119,9 +132,10 @@ pub enum StartMode {
 }
 
 pub struct Started {
-    pub connection: AgentConnection,
-    pub events: UnboundedReceiver<AgentEvent>,
-    pub setup: SessionSetup,
+    pub connection: HostConnection,
+    pub events: UnboundedReceiver<HostEvent>,
+    /// What the agent said about itself.
+    pub agent: InitializeResponse,
     pub opened: Option<OpenedSession>,
     pub notices: Vec<String>,
 }
@@ -129,7 +143,7 @@ pub struct Started {
 /// How many sign-in attempts to make before giving up.
 const SIGN_IN_ATTEMPTS: usize = 3;
 
-/// Launch the agent here, outside the daemon, and initialize it: for signing in and out.
+/// Launch the agent here, outside the Host, and initialize it: for signing in and out.
 pub async fn connect_direct(
     launch: &Launch,
 ) -> anyhow::Result<(AgentConnection, UnboundedReceiver<AgentEvent>)> {
@@ -149,142 +163,169 @@ pub async fn connect_direct(
     Ok((connection, events))
 }
 
-/// Connect through the daemon and open the session `mode` asks for, signing in first if the
-/// agent requires it.
-pub async fn start(launch: &Launch, target: &Target, mode: &StartMode) -> anyhow::Result<Started> {
-    // This client can rerun the agent's command here for terminal sign-in.
-    let options = ClientOptions {
-        terminal_auth: true,
-        ..launch.options
-    };
+/// Connect to the Host and open the session `mode` asks for, signing in first if the agent
+/// requires it.
+pub async fn start(launch: &HostLaunch, host: &Host, mode: &StartMode) -> anyhow::Result<Started> {
+    let (connection, events) = host.connect("weave-tui").await?;
+    let handle = connection.handle();
     let mut attempts = 0;
-    loop {
-        let (connection, events) = target.connect(daemon_launch(launch), options).await?;
-        let (setup, notices) = session_setup(launch, &connection);
-        loop {
-            match establish(&connection, &setup, mode, launch.default_mode()).await {
-                Ok((mut opened, mut extra)) => {
-                    let mut notices = notices;
-                    notices.append(&mut extra);
-                    // Shown with the header, as the other startup notices are.
-                    notices.extend(opened.as_mut().and_then(|opened| opened.notice.take()));
-                    return Ok(Started {
-                        connection,
-                        events,
-                        setup,
-                        opened,
-                        notices,
-                    });
-                }
-                Err(error) if needs_sign_in(&error) && attempts < SIGN_IN_ATTEMPTS => {
-                    attempts += 1;
-                    match sign_in(&connection, &launch.spec, None).await {
-                        Ok(SignedIn::Ready) => continue,
-                        Ok(SignedIn::Reconnect) => {
-                            connection.shutdown().await;
-                            break;
-                        }
-                        Err(error) => {
-                            connection.shutdown().await;
-                            return Err(error);
-                        }
-                    }
-                }
-                Err(error) => {
+    let (opened, notices) = loop {
+        match establish(&handle, launch, mode).await {
+            Ok(opened) => break opened,
+            Err(error) if is_auth_required(&error) && attempts < SIGN_IN_ATTEMPTS => {
+                attempts += 1;
+                if let Err(error) = sign_in_through(&handle, launch.agent_id(), None).await {
                     connection.shutdown().await;
                     return Err(error);
                 }
             }
+            Err(error) => {
+                connection.shutdown().await;
+                return Err(error.into());
+            }
         }
-    }
-}
-
-fn needs_sign_in(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<weave_acp_core::schema::Error>()
-        .is_some_and(is_auth_required)
-}
-
-/// The session setup this agent can accept, and notices about what it can't.
-pub fn session_setup(launch: &Launch, connection: &AgentConnection) -> (SessionSetup, Vec<String>) {
-    let capabilities = connection
-        .agent()
-        .map(|agent| agent.agent_capabilities.clone())
-        .unwrap_or_default();
-    let (mcp_servers, mut notices) = launch
-        .config
-        .agents
-        .mcp_servers(&capabilities.mcp_capabilities);
-    notices.extend(launch.config.notice.clone());
-    let mut additional_directories = launch.additional_directories.clone();
-    if !additional_directories.is_empty()
-        && capabilities
-            .session_capabilities
-            .additional_directories
-            .is_none()
-    {
-        notices.push(
-            "The agent doesn't support extra workspace roots; --add-dir was ignored".to_owned(),
-        );
-        additional_directories.clear();
-    }
-    let setup = SessionSetup {
-        cwd: launch.cwd.clone(),
-        additional_directories,
-        mcp_servers,
     };
-    (setup, notices)
+    let agent = match &opened {
+        Some(opened) => opened.state.agent.initialize.clone(),
+        None => {
+            let request = GetAgentRequest {
+                agent_id: launch.agent_id().to_owned(),
+            };
+            match handle.send(request).await {
+                Ok(got) => got.initialize,
+                Err(error) => {
+                    connection.shutdown().await;
+                    return Err(error.into());
+                }
+            }
+        }
+    };
+    let mut notices = notices;
+    notices.extend(launch.config.notice.clone());
+    Ok(Started {
+        connection,
+        events,
+        agent,
+        opened,
+        notices,
+    })
 }
 
+/// Open the session `mode` asks for, and anything worth telling the user about it.
 async fn establish(
-    connection: &AgentConnection,
-    setup: &SessionSetup,
+    handle: &HostHandle,
+    launch: &HostLaunch,
     mode: &StartMode,
-    default_mode: Option<&str>,
-) -> anyhow::Result<(Option<OpenedSession>, Vec<String>)> {
-    let handle = connection.handle();
+) -> Result<(Option<OpenedSession>, Vec<String>), Error> {
+    let create = || CreateSessionRequest {
+        agent_id: launch.agent_id().to_owned(),
+        cwd: launch.cwd.clone(),
+        additional_directories: launch.additional_directories.clone(),
+        mode: None,
+        policy: None,
+        trace: launch.trace,
+    };
+    let attach = |session_id: SessionId| AttachSessionRequest {
+        session_id,
+        after: None,
+        agent_id: Some(launch.agent_id().to_owned()),
+        cwd: Some(launch.cwd.clone()),
+        trace: launch.trace,
+    };
+    let created = async |handle: &HostHandle| {
+        handle.send(create()).await.map(|state| OpenedSession {
+            state,
+            replay: None,
+        })
+    };
+    let attached = async |handle: &HostHandle, session_id| {
+        handle
+            .send(attach(session_id))
+            .await
+            .map(|attached| OpenedSession {
+                state: attached.state,
+                replay: Some(attached.replay),
+            })
+    };
     match mode {
-        StartMode::New => Ok((
-            Some(open_session(&handle, SessionTarget::New, setup, default_mode).await?),
+        StartMode::New => Ok((Some(created(handle).await?), Vec::new())),
+        StartMode::Resume(session_id) => Ok((
+            Some(attached(handle, session_id.clone()).await?),
             Vec::new(),
         )),
-        StartMode::Resume(session_id) => {
-            let target = SessionTarget::Existing(session_id.clone());
-            Ok((
-                Some(open_session(&handle, target, setup, default_mode).await?),
-                Vec::new(),
-            ))
-        }
         StartMode::Continue => {
-            // The daemon lists the sessions it has here first; headless runs aren't for
+            // The Host lists the sessions it has here first; headless runs aren't for
             // continuing interactively, so `weave sessions` and `--resume <id>` reach those.
-            let listed = handle.list_sessions(Some(setup.cwd.clone()), None).await?;
-            let interactive = listed.sessions.into_iter().find(|info| {
-                !daemon_protocol::read_meta::<ListedSession>(info.meta.as_ref())
-                    .is_some_and(|listed| listed.headless)
-            });
-            match interactive {
-                Some(latest) => {
-                    let target = SessionTarget::Existing(latest.session_id);
-                    Ok((
-                        Some(open_session(&handle, target, setup, default_mode).await?),
-                        Vec::new(),
-                    ))
-                }
-                None => {
-                    let opened =
-                        open_session(&handle, SessionTarget::New, setup, default_mode).await?;
-                    Ok((
-                        Some(opened),
-                        vec!["No earlier session here; started a new one".to_owned()],
-                    ))
-                }
+            let listed = handle
+                .send(ListSessionsRequest {
+                    agent_id: Some(launch.agent_id().to_owned()),
+                    cwd: Some(launch.cwd.clone()),
+                    cursor: None,
+                })
+                .await?;
+            match listed
+                .sessions
+                .into_iter()
+                .find(|listing| !listing.headless)
+            {
+                Some(latest) => Ok((
+                    Some(attached(handle, latest.info.session_id).await?),
+                    Vec::new(),
+                )),
+                None => Ok((
+                    Some(created(handle).await?),
+                    vec!["No earlier session here; started a new one".to_owned()],
+                )),
             }
         }
         StartMode::Pick => {
             // Listing here surfaces sign-in requirements before the TUI starts.
-            handle.list_sessions(Some(setup.cwd.clone()), None).await?;
+            handle
+                .send(ListSessionsRequest {
+                    agent_id: Some(launch.agent_id().to_owned()),
+                    cwd: Some(launch.cwd.clone()),
+                    cursor: None,
+                })
+                .await?;
             Ok((None, Vec::new()))
+        }
+    }
+}
+
+/// Sign in to `agent_id` through the Host, with `method` or one the user picks: in this
+/// terminal for a terminal method, otherwise through the agent.
+pub async fn sign_in_through(
+    handle: &HostHandle,
+    agent_id: &str,
+    method: Option<&str>,
+) -> anyhow::Result<()> {
+    let got = handle
+        .send(GetAgentRequest {
+            agent_id: agent_id.to_owned(),
+        })
+        .await?;
+    let name = got.agent.name.clone();
+    let methods = &got.initialize.auth_methods;
+    let chosen = pick_method(&name, methods, method)?;
+    match chosen {
+        AuthMethod::Terminal(terminal) => {
+            let login = handle
+                .send(TerminalSignInRequest {
+                    agent_id: agent_id.to_owned(),
+                    method_id: terminal.id.clone(),
+                })
+                .await?;
+            run_command(&login.command, &login.args, &login.env)
+        }
+        other => {
+            eprintln!("Signing in with {}…", other.name());
+            handle
+                .send(AuthenticateAgentRequest {
+                    agent_id: agent_id.to_owned(),
+                    method_id: other.id().clone(),
+                })
+                .await?;
+            Ok(())
         }
     }
 }
@@ -296,7 +337,8 @@ pub enum SignedIn {
     Reconnect,
 }
 
-/// Offer the agent's sign-in methods (or use `method`) and run the chosen one.
+/// Offer the agent's sign-in methods (or use `method`) and run the chosen one, talking to
+/// the agent directly.
 pub async fn sign_in(
     connection: &AgentConnection,
     spec: &AgentSpec,
@@ -309,18 +351,7 @@ pub async fn sign_in(
         || spec.command.clone(),
         |info| info.title.clone().unwrap_or_else(|| info.name.clone()),
     );
-    let methods = &agent.auth_methods;
-    if methods.is_empty() {
-        bail!("{name} requires sign-in but offers no sign-in methods; sign in with its own CLI");
-    }
-    let chosen = match method {
-        Some(id) => methods
-            .iter()
-            .find(|candidate| candidate.id().to_string() == id)
-            .with_context(|| format!("{name} has no sign-in method {id:?}"))?,
-        None => choose_method(&name, methods)?,
-    };
-    match chosen {
+    match pick_method(&name, &agent.auth_methods, method)? {
         AuthMethod::Terminal(terminal) => {
             run_terminal_sign_in(spec, terminal)?;
             Ok(SignedIn::Reconnect)
@@ -330,6 +361,24 @@ pub async fn sign_in(
             connection.authenticate(other.id().clone()).await?;
             Ok(SignedIn::Ready)
         }
+    }
+}
+
+/// `method`, or the one the user chooses from `methods`.
+fn pick_method<'a>(
+    name: &str,
+    methods: &'a [AuthMethod],
+    method: Option<&str>,
+) -> anyhow::Result<&'a AuthMethod> {
+    if methods.is_empty() {
+        bail!("{name} requires sign-in but offers no sign-in methods; sign in with its own CLI");
+    }
+    match method {
+        Some(id) => methods
+            .iter()
+            .find(|candidate| candidate.id().to_string() == id)
+            .with_context(|| format!("{name} has no sign-in method {id:?}")),
+        None => choose_method(name, methods),
     }
 }
 
@@ -381,12 +430,25 @@ fn choose_method<'a>(agent: &str, methods: &'a [AuthMethod]) -> anyhow::Result<&
 /// Run the agent's own command with the method's arguments, interactively, as the spec defines.
 fn run_terminal_sign_in(spec: &AgentSpec, method: &AuthMethodTerminal) -> anyhow::Result<()> {
     let login = spec.for_terminal_sign_in(method);
-    eprintln!("Running {} to sign in…", login.display_command());
-    let status = std::process::Command::new(&login.command)
-        .args(&login.args)
-        .envs(&login.env)
+    run_command(&login.command, &login.args, &login.env)
+}
+
+/// Run a sign-in command in this terminal.
+fn run_command(
+    command: &str,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    let line = std::iter::once(command)
+        .chain(args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!("Running {line} to sign in…");
+    let status = std::process::Command::new(command)
+        .args(args)
+        .envs(env)
         .status()
-        .with_context(|| format!("starting {}", login.command))?;
+        .with_context(|| format!("starting {command}"))?;
     if !status.success() {
         bail!("sign-in did not succeed ({status})");
     }
@@ -400,7 +462,7 @@ mod tests {
 
     use super::*;
 
-    /// A journal header as the daemon writes one.
+    /// A journal header as the Host writes one.
     fn record(paths: &DaemonPaths, session_id: &str, choice: &str, cwd: &str) {
         let dir = paths.journals();
         std::fs::create_dir_all(&dir).expect("journals");

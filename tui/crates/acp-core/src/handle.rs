@@ -12,7 +12,6 @@ use std::sync::OnceLock;
 use agent_client_protocol::Agent;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
-use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::AgentCapabilities;
 use agent_client_protocol::schema::v1::AuthMethod;
@@ -119,8 +118,7 @@ impl AgentHandle {
         self.initialize_with(None).await
     }
 
-    /// [`Self::initialize`], with `_meta` for the agent, such as the weave daemon's
-    /// [`ClientHello`](crate::daemon_protocol::ClientHello).
+    /// [`Self::initialize`], with `_meta` for the agent.
     pub async fn initialize_with(
         &self,
         meta: Option<Meta>,
@@ -302,14 +300,6 @@ impl AgentHandle {
             .block_task()
             .await
             .map(|response| response.config_options)
-    }
-
-    /// An extension request, such as the weave daemon's `_weave/*` ones (`daemon_protocol`).
-    pub async fn extension<Request: JsonRpcRequest>(
-        &self,
-        request: Request,
-    ) -> Result<Request::Response, Error> {
-        self.cx().send_request(request).block_task().await
     }
 
     /// Reject setup the agent cannot accept: extra roots or MCP transports it did not advertise.

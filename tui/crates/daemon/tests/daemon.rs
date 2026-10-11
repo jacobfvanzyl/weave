@@ -1,44 +1,76 @@
-//! The daemon end to end: real clients (`weave-acp-core`) connected in-process to a daemon
+//! The Host end to end: real clients (`weave-host-client`) connected in-process to a Host
 //! whose agents are in-process fake agents sharing one state file, as separate processes of
 //! one agent would share its storage.
 
 #![allow(clippy::expect_used)]
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::Channel;
+use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
+use agent_client_protocol::Role as _;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::UnboundedReceiver;
 use weave_acp_core::AgentConnection;
-use weave_acp_core::AgentEvent;
-use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
-use weave_acp_core::SessionSetup;
-use weave_acp_core::daemon_protocol;
-use weave_acp_core::daemon_protocol::Activity;
-use weave_acp_core::daemon_protocol::AgentChoice;
-use weave_acp_core::daemon_protocol::ClientHello;
-use weave_acp_core::daemon_protocol::DaemonHello;
-use weave_acp_core::daemon_protocol::Launch;
-use weave_acp_core::daemon_protocol::PROTOCOL_VERSION;
-use weave_acp_core::daemon_protocol::PermissionPolicy;
-use weave_acp_core::daemon_protocol::RunRequest;
-use weave_acp_core::daemon_protocol::StatusRequest;
-use weave_acp_core::daemon_protocol::Unapproved;
 use weave_acp_core::schema::ContentBlock;
+use weave_acp_core::schema::InitializeRequest;
+use weave_acp_core::schema::PermissionOptionId;
+use weave_acp_core::schema::RequestPermissionOutcome;
+use weave_acp_core::schema::RequestPermissionResponse;
+use weave_acp_core::schema::SelectedPermissionOutcome;
+use weave_acp_core::schema::SessionConfigKind;
+use weave_acp_core::schema::SessionConfigOptionCategory;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::ToolKind;
+use weave_agents::environment::Environment;
 use weave_daemon::Daemon;
 use weave_daemon::DaemonConfig;
+use weave_daemon::Launch;
 use weave_daemon::Launcher;
+use weave_daemon::Withheld;
 use weave_fake_agent::FakeAgentConfig;
+use weave_host_client::HostConnection;
+use weave_host_client::HostEvent;
+use weave_host_protocol::Host;
+use weave_host_protocol::HostClient;
+use weave_host_protocol::VersionRange;
+use weave_host_protocol::errors;
+use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::hello::Auth;
+use weave_host_protocol::hello::ClientCapabilities;
+use weave_host_protocol::hello::ClientInfo;
+use weave_host_protocol::hello::HelloRequest;
+use weave_host_protocol::host::Service;
+use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::pending::AnswerPendingRequest;
+use weave_host_protocol::pending::PendingKind;
+use weave_host_protocol::pending::PendingRequest;
+use weave_host_protocol::pending::Resolution;
+use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::policy::Unapproved;
+use weave_host_protocol::sessions::Activity;
+use weave_host_protocol::sessions::AttachSessionRequest;
+use weave_host_protocol::sessions::AttachSessionResponse;
+use weave_host_protocol::sessions::CloseSessionRequest;
+use weave_host_protocol::sessions::CloseWhen;
+use weave_host_protocol::sessions::CreateSessionRequest;
+use weave_host_protocol::sessions::DetachSessionRequest;
+use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::RunRequest;
+use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionState;
+use weave_host_protocol::sessions::SessionStatus;
+use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::StartTurnRequest;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -66,22 +98,41 @@ struct World {
 
 impl World {
     fn new() -> Self {
-        Self {
-            dir: tempfile::tempdir().expect("tempdir"),
-        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Two agents the Host knows from its config; the launcher runs both as the fake one.
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[agents.fake]\ncommand = \"fake-agent\"\nmode = \"code\"\n\n\
+             [agents.other]\ncommand = \"other-agent\"\n",
+        )
+        .expect("config");
+        Self { dir }
     }
 
     fn daemon(&self, journals: bool, idle_grace: Duration) -> Daemon {
-        self.daemon_with(journals, idle_grace, Duration::from_secs(60))
+        self.daemon_with(journals, idle_grace, Duration::from_secs(60), false)
     }
 
-    /// A daemon whose blank sessions close `blank_grace` after nothing needs them.
-    fn daemon_with(&self, journals: bool, idle_grace: Duration, blank_grace: Duration) -> Daemon {
+    /// A Host whose blank sessions close `blank_grace` after nothing needs them.
+    fn daemon_with(
+        &self,
+        journals: bool,
+        idle_grace: Duration,
+        blank_grace: Duration,
+        require_auth: bool,
+    ) -> Daemon {
         Daemon::new(DaemonConfig {
             journals: journals.then(|| self.journals()),
             idle_grace,
             blank_grace,
-            launcher: fake_agents(self.dir.path().join("agent-state.json"), false),
+            launcher: fake_agents(self.dir.path().join("agent-state.json"), require_auth),
+            config_file: Some(self.dir.path().join("config.toml")),
+            registry_cache: Some(self.dir.path().join("cache")),
+            agents: Default::default(),
+            withheld: Withheld::default(),
+            environment: Environment::default(),
+            service: Service::InProcess,
+            traces: self.dir.path().join("traces"),
         })
     }
 
@@ -89,7 +140,7 @@ impl World {
         self.dir.path().join("sessions")
     }
 
-    /// Whether the daemon keeps a journal of `session_id`. The fake agent's ids need no
+    /// Whether the Host keeps a journal of `session_id`. The fake agent's ids need no
     /// escaping in a file name.
     fn has_journal(&self, session_id: &SessionId) -> bool {
         self.journals().join(format!("{session_id}.jsonl")).exists()
@@ -99,61 +150,30 @@ impl World {
         self.dir.path().to_path_buf()
     }
 
-    fn launch(&self) -> Launch {
-        self.launch_of(AgentChoice::Named("fake".into()))
-    }
-
-    fn launch_of(&self, choice: AgentChoice) -> Launch {
-        Launch {
-            spec: AgentSpec::new("fake-agent", Vec::<String>::new()),
-            choice: Some(choice),
-            cwd: self.cwd(),
-            environment: BTreeMap::new(),
-            trace: None,
-        }
-    }
-
-    fn setup(&self) -> SessionSetup {
-        SessionSetup {
-            cwd: self.cwd(),
-            ..SessionSetup::default()
-        }
-    }
-
     async fn client(&self, daemon: &Daemon) -> TestClient {
-        self.client_with(daemon, ClientOptions::default(), self.launch())
-            .await
-            .expect("initialize")
-    }
-
-    async fn client_with(
-        &self,
-        daemon: &Daemon,
-        options: ClientOptions,
-        launch: Launch,
-    ) -> Result<TestClient, weave_acp_core::InitializeError> {
-        let (connection, events) = AgentConnection::connect(daemon.connect_in_process(), options)
-            .await
-            .expect("connect");
-        let hello = ClientHello {
-            protocol: PROTOCOL_VERSION,
-            launch: Some(launch),
-        };
-        let init = connection
-            .initialize_with(Some(daemon_protocol::meta(&hello)))
-            .await?;
-        let daemon_hello: Option<DaemonHello> = daemon_protocol::read_meta(init.meta.as_ref());
-        assert_eq!(
-            daemon_hello.map(|hello| hello.protocol),
-            Some(PROTOCOL_VERSION)
-        );
-        Ok(TestClient { connection, events })
+        let (connection, events) = HostConnection::connect(
+            daemon.connect_in_process(),
+            ClientInfo {
+                name: "test".to_owned(),
+                version: "0".to_owned(),
+            },
+            ClientCapabilities::default(),
+        )
+        .await
+        .expect("connect");
+        TestClient {
+            connection,
+            events,
+            position: None,
+        }
     }
 }
 
 struct TestClient {
-    connection: AgentConnection,
-    events: UnboundedReceiver<AgentEvent>,
+    connection: HostConnection,
+    events: UnboundedReceiver<HostEvent>,
+    /// The last event seen, to catch up from.
+    position: Option<JournalPosition>,
 }
 
 /// What a client saw, flattened for assertions.
@@ -162,41 +182,108 @@ struct Seen {
     user: String,
     agent: String,
     terminal: String,
-    turns_running: usize,
+    started: usize,
     ended: Option<StopReason>,
+    closed: Option<String>,
+}
+
+fn text(block: &ContentBlock) -> String {
+    match block {
+        ContentBlock::Text(text) => text.text.clone(),
+        _ => String::new(),
+    }
 }
 
 impl TestClient {
-    async fn new_session(&self, world: &World) -> SessionId {
-        self.connection
-            .new_session(&world.setup())
-            .await
-            .expect("session/new")
-            .session_id
+    fn create_request(world: &World, agent: &str) -> CreateSessionRequest {
+        CreateSessionRequest {
+            agent_id: agent.to_owned(),
+            cwd: world.cwd(),
+            additional_directories: Vec::new(),
+            mode: None,
+            policy: None,
+            trace: false,
+        }
     }
 
-    /// The sessions `session/list` gives for the world's directory, in order.
-    async fn list(&self, world: &World) -> Vec<SessionId> {
-        self.connection
-            .list_sessions(Some(world.cwd()), None)
+    async fn create(&mut self, world: &World) -> SessionId {
+        self.create_with(world, "fake").await.session_id
+    }
+
+    async fn create_with(&mut self, world: &World, agent: &str) -> SessionState {
+        let state = self
+            .connection
+            .send(Self::create_request(world, agent))
             .await
-            .expect("session/list")
-            .sessions
+            .expect("session/create");
+        self.position = Some(JournalPosition {
+            journal: state.journal.id.clone(),
+            seq: state.journal.head,
+        });
+        state
+    }
+
+    async fn attach(&mut self, session_id: &SessionId) -> AttachSessionResponse {
+        self.attach_after(session_id, None)
+            .await
+            .expect("session/attach")
+    }
+
+    async fn attach_after(
+        &mut self,
+        session_id: &SessionId,
+        after: Option<JournalPosition>,
+    ) -> Result<AttachSessionResponse, Error> {
+        let attached = self
+            .connection
+            .send(AttachSessionRequest {
+                session_id: session_id.clone(),
+                after,
+                agent_id: None,
+                cwd: None,
+                trace: false,
+            })
+            .await?;
+        self.position = Some(JournalPosition {
+            journal: attached.state.journal.id.clone(),
+            seq: attached.state.journal.head,
+        });
+        Ok(attached)
+    }
+
+    /// The sessions the fake agent's listing gives for the world's directory, in order.
+    async fn list(&self, world: &World) -> Vec<SessionId> {
+        self.listing(world)
+            .await
             .into_iter()
-            .map(|info| info.session_id)
+            .map(|listing| listing.info.session_id)
             .collect()
     }
 
-    fn prompt(&self, session_id: &SessionId, text: &str) {
+    async fn listing(&self, world: &World) -> Vec<SessionListing> {
         self.connection
-            .prompt(
-                session_id.clone(),
-                vec![ContentBlock::from(text.to_owned())],
-            )
-            .expect("session/prompt");
+            .send(ListSessionsRequest {
+                agent_id: Some("fake".to_owned()),
+                cwd: Some(world.cwd()),
+                cursor: None,
+            })
+            .await
+            .expect("sessions/list")
+            .sessions
     }
 
-    async fn next(&mut self) -> AgentEvent {
+    async fn prompt(&self, session_id: &SessionId, text: &str) -> u64 {
+        self.connection
+            .send(StartTurnRequest {
+                session_id: session_id.clone(),
+                prompt: vec![ContentBlock::from(text.to_owned())],
+            })
+            .await
+            .expect("turn/start")
+            .seq
+    }
+
+    async fn next(&mut self) -> HostEvent {
         tokio::time::timeout(WAIT, self.events.recv())
             .await
             .expect("an event in time")
@@ -207,42 +294,104 @@ impl TestClient {
     async fn until_turn_ends(&mut self, seen: &mut Seen, allow: Option<&str>) {
         loop {
             let event = self.next().await;
-            if self.note(event, seen, allow) {
+            if self.note(event, seen, allow).await {
                 return;
             }
         }
     }
 
     /// Record an event; returns whether it ended the turn.
-    fn note(&mut self, event: AgentEvent, seen: &mut Seen, allow: Option<&str>) -> bool {
+    async fn note(&mut self, event: HostEvent, seen: &mut Seen, allow: Option<&str>) -> bool {
         match event {
-            AgentEvent::SessionUpdate(notification) => match notification.update {
-                SessionUpdate::UserMessageChunk(chunk) => seen.user.push_str(&text(&chunk.content)),
-                SessionUpdate::AgentMessageChunk(chunk) => {
-                    seen.agent.push_str(&text(&chunk.content));
+            HostEvent::Event(event) => {
+                self.position = Some(JournalPosition {
+                    journal: self
+                        .position
+                        .as_ref()
+                        .map(|position| position.journal.clone())
+                        .unwrap_or_default(),
+                    seq: event.seq,
+                });
+                return seen.note(event.event);
+            }
+            HostEvent::PendingAdded(added) => {
+                if let Some(option) = allow {
+                    self.allow(&added.session_id, &added.pending, option)
+                        .await
+                        .expect("answer");
                 }
-                _ => {}
-            },
-            AgentEvent::TerminalOutput { text, .. } => seen.terminal.push_str(&text),
-            AgentEvent::TurnRunning { .. } => seen.turns_running += 1,
-            AgentEvent::PermissionRequested(request) => match allow {
-                Some(option) => request.select(option.to_owned().into()).expect("answer"),
-                None => drop(request),
-            },
-            AgentEvent::TurnEnded { result, .. } => {
-                seen.ended = Some(result.expect("the turn succeeds").stop_reason);
-                return true;
             }
             _ => {}
         }
         false
     }
+
+    async fn allow(
+        &self,
+        session_id: &SessionId,
+        pending: &PendingRequest,
+        option: &str,
+    ) -> Result<(), Error> {
+        self.connection
+            .send(AnswerPendingRequest {
+                session_id: session_id.clone(),
+                pending_id: pending.id.clone(),
+                permission: Some(RequestPermissionResponse::new(
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                        PermissionOptionId::new(option.to_owned()),
+                    )),
+                )),
+                elicitation: None,
+            })
+            .await
+            .map(drop)
+    }
+
+    /// Wait for a pending permission request.
+    async fn asked(&mut self, seen: &mut Seen) -> (SessionId, PendingRequest) {
+        loop {
+            match self.next().await {
+                HostEvent::PendingAdded(added) => return (added.session_id, added.pending),
+                event => {
+                    self.note(event, seen, None).await;
+                }
+            }
+        }
+    }
 }
 
-fn text(block: &ContentBlock) -> String {
-    match block {
-        ContentBlock::Text(text) => text.text.clone(),
-        _ => String::new(),
+impl Seen {
+    /// Record an event; returns whether it ended a turn.
+    fn note(&mut self, event: SessionEvent) -> bool {
+        match event {
+            SessionEvent::Update { notification } => match notification.update {
+                SessionUpdate::UserMessageChunk(chunk) => self.user.push_str(&text(&chunk.content)),
+                SessionUpdate::AgentMessageChunk(chunk) => {
+                    self.agent.push_str(&text(&chunk.content));
+                }
+                _ => {}
+            },
+            SessionEvent::TurnStarted { prompt, .. } => {
+                self.started += 1;
+                for block in &prompt {
+                    self.user.push_str(&text(block));
+                }
+            }
+            SessionEvent::TerminalOutput { data, .. } => self.terminal.push_str(&data),
+            SessionEvent::TurnEnded {
+                response, error, ..
+            } => {
+                self.ended = match (response, error) {
+                    (Some(response), _) => Some(response.stop_reason),
+                    (None, Some(error)) => panic!("the turn failed: {error}"),
+                    (None, None) => None,
+                };
+                return true;
+            }
+            SessionEvent::Closed { reason } => self.closed = Some(reason),
+            _ => {}
+        }
+        false
     }
 }
 
@@ -256,27 +405,44 @@ async fn wait_for(mut condition: impl FnMut() -> bool) {
     .expect("the condition in time");
 }
 
+fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest {
+    RunRequest {
+        agent_id: "fake".to_owned(),
+        cwd: world.cwd(),
+        session_id: None,
+        additional_directories: Vec::new(),
+        prompt: vec![ContentBlock::from(format!("write {} ok", path.display()))],
+        policy: PermissionPolicy {
+            approve,
+            otherwise: Unapproved::Reject,
+        },
+        attach: false,
+        trace: false,
+    }
+}
+
 #[tokio::test]
 async fn a_client_reattaches_mid_turn_and_sees_the_whole_transcript() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.new_session(&world).await;
-    first.prompt(&session_id, "slow 4");
+    let session_id = first.create(&world).await;
+    first.prompt(&session_id, "slow 4").await;
     // Two chunks in, the first client goes away.
     let mut seen = Seen::default();
     while seen.agent.matches("Chunk").count() < 2 {
         let event = first.next().await;
-        first.note(event, &mut seen, None);
+        first.note(event, &mut seen, None).await;
     }
     first.connection.shutdown().await;
 
     let mut second = world.client(&daemon).await;
-    second
-        .connection
-        .load_session(session_id.clone(), &world.setup())
-        .await
-        .expect("session/load attaches");
+    let attached = second.attach(&session_id).await;
+    assert_eq!(attached.state.turns.len(), 1, "told the turn is running");
+    assert!(
+        attached.replay.reset,
+        "nothing to catch up from: everything"
+    );
     let mut seen = Seen::default();
     second.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.user, "slow 4");
@@ -284,11 +450,49 @@ async fn a_client_reattaches_mid_turn_and_sees_the_whole_transcript() {
         seen.agent,
         "Chunk 1 of 4.\nChunk 2 of 4.\nChunk 3 of 4.\nChunk 4 of 4.\n"
     );
-    assert_eq!(
-        seen.turns_running, 1,
-        "told the turn was running when it attached"
-    );
     assert_eq!(seen.ended, Some(StopReason::EndTurn));
+}
+
+#[tokio::test]
+async fn a_client_catches_up_from_its_position_without_the_rest() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut first = world.client(&daemon).await;
+    let session_id = first.create(&world).await;
+    first.prompt(&session_id, "hello").await;
+    first.until_turn_ends(&mut Seen::default(), None).await;
+    let position = first.position.clone();
+    first.connection.shutdown().await;
+
+    // While it's away, another turn runs.
+    let mut other = world.client(&daemon).await;
+    other.attach(&session_id).await;
+    other.prompt(&session_id, "again").await;
+    other.until_turn_ends(&mut Seen::default(), None).await;
+
+    let mut back = world.client(&daemon).await;
+    let attached = back
+        .attach_after(&session_id, position)
+        .await
+        .expect("attach");
+    assert!(!attached.replay.reset);
+    let mut seen = Seen::default();
+    back.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.user, "again", "only what it missed");
+    assert_eq!(seen.agent, "You said: again");
+
+    // From another journal's position, it gets everything, and is told to start over.
+    let mut stranger = world.client(&daemon).await;
+    let elsewhere = JournalPosition {
+        journal: "another".to_owned(),
+        seq: 2,
+    };
+    let attached = stranger
+        .attach_after(&session_id, Some(elsewhere))
+        .await
+        .expect("attach");
+    assert!(attached.replay.reset);
+    assert_eq!(attached.replay.from, 1);
 }
 
 #[tokio::test]
@@ -296,53 +500,50 @@ async fn attached_clients_share_turns_and_the_first_answer_wins() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.new_session(&world).await;
+    let session_id = first.create(&world).await;
     let mut second = world.client(&daemon).await;
-    second
-        .connection
-        .load_session(session_id.clone(), &world.setup())
-        .await
-        .expect("attach");
+    second.attach(&session_id).await;
 
     let target = world.cwd().join("out.txt");
-    first.prompt(&session_id, &format!("write {} hello", target.display()));
-    // Both are asked; the second answers, and the first's prompt is withdrawn.
-    let asked_first = loop {
-        if let AgentEvent::PermissionRequested(request) = first.next().await {
-            break request;
-        }
-    };
+    first
+        .prompt(&session_id, &format!("write {} hello", target.display()))
+        .await;
+    // Both are asked; the second answers, and the first hears it was.
+    let (_, asked_first) = first.asked(&mut Seen::default()).await;
     let mut seen = Seen::default();
-    let asked_second = loop {
-        match second.next().await {
-            AgentEvent::PermissionRequested(request) => break request,
-            event => {
-                second.note(event, &mut seen, None);
-            }
-        }
-    };
-    assert_eq!(
-        asked_first.request.tool_call.tool_call_id,
-        asked_second.request.tool_call.tool_call_id
-    );
-    asked_second
-        .select("allow".to_owned().into())
-        .expect("answer");
+    let (_, asked_second) = second.asked(&mut seen).await;
+    assert_eq!(asked_first.id, asked_second.id);
+    second
+        .allow(&session_id, &asked_second, "allow")
+        .await
+        .expect("the first answer");
     loop {
         match first.next().await {
-            AgentEvent::RequestWithdrawn(key) => {
-                assert_eq!(key, asked_first.key);
+            HostEvent::PendingResolved(resolved) => {
+                assert_eq!(resolved.pending_id, asked_first.id);
+                assert_eq!(resolved.outcome, Resolution::Answered);
+                assert_eq!(resolved.by.as_ref(), Some(second.connection.client_id()));
                 break;
             }
-            AgentEvent::TurnEnded { .. } => panic!("the turn ended before the withdrawal"),
+            HostEvent::Event(event) => {
+                assert!(
+                    !matches!(event.event, SessionEvent::TurnEnded { .. }),
+                    "the turn ended before the answer was told"
+                );
+            }
             _ => {}
         }
     }
-    let _ = asked_first.withdrawn();
+    let late = first.allow(&session_id, &asked_first, "allow").await;
+    assert!(
+        late.as_ref()
+            .is_err_and(|error| errors::is(error, errors::ALREADY_RESOLVED)),
+        "{late:?}"
+    );
     second.until_turn_ends(&mut seen, None).await;
-    // The second client saw the first's prompt and a turn it didn't start.
+    // The second client saw the first's prompt, in a turn it didn't start.
     assert!(seen.user.starts_with("write "), "{seen:?}");
-    assert_eq!(seen.turns_running, 1);
+    assert_eq!(seen.started, 1);
     assert_eq!(seen.ended, Some(StopReason::EndTurn));
     let mut first_seen = Seen::default();
     first.until_turn_ends(&mut first_seen, None).await;
@@ -358,26 +559,30 @@ async fn a_client_leaving_doesnt_answer_for_the_others() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.new_session(&world).await;
+    let session_id = first.create(&world).await;
     let target = world.cwd().join("later.txt");
-    first.prompt(&session_id, &format!("write {} later", target.display()));
-    let asked = loop {
-        if let AgentEvent::PermissionRequested(request) = first.next().await {
-            break request;
-        }
-    };
-    // As the TUI does when it switches away from a session.
-    asked.cancel().expect("cancelled");
+    first
+        .prompt(&session_id, &format!("write {} later", target.display()))
+        .await;
+    first.asked(&mut Seen::default()).await;
     first.connection.shutdown().await;
 
+    // A client attaching later finds the request still waiting, and answers it.
     let mut second = world.client(&daemon).await;
+    let attached = second.attach(&session_id).await;
+    let pending = attached
+        .state
+        .pending
+        .first()
+        .cloned()
+        .expect("still pending");
+    assert!(matches!(pending.request, PendingKind::Permission { .. }));
+    assert_eq!(attached.state.activity, Activity::Waiting);
     second
-        .connection
-        .load_session(session_id, &world.setup())
+        .allow(&session_id, &pending, "allow")
         .await
-        .expect("attach");
-    let mut seen = Seen::default();
-    second.until_turn_ends(&mut seen, Some("allow")).await;
+        .expect("answer");
+    second.until_turn_ends(&mut Seen::default(), None).await;
     assert_eq!(
         std::fs::read_to_string(&target).ok().as_deref(),
         Some("later\n")
@@ -385,26 +590,41 @@ async fn a_client_leaving_doesnt_answer_for_the_others() {
 }
 
 #[tokio::test]
-async fn cancelling_answers_pending_permissions_for_every_client() {
+async fn cancelling_cancels_pending_requests_for_every_client() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
-    client.prompt(
-        &session_id,
-        &format!("write {} never", world.cwd().join("never.txt").display()),
-    );
-    let _asked = loop {
-        if let AgentEvent::PermissionRequested(request) = client.next().await {
-            break request;
-        }
-    };
+    let session_id = client.create(&world).await;
+    client
+        .prompt(
+            &session_id,
+            &format!("write {} never", world.cwd().join("never.txt").display()),
+        )
+        .await;
+    let (_, asked) = client.asked(&mut Seen::default()).await;
     client
         .connection
-        .cancel(session_id.clone())
-        .expect("session/cancel");
+        .send(CancelTurnRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("turn/cancel");
     let mut seen = Seen::default();
-    client.until_turn_ends(&mut seen, None).await;
+    let mut cancelled = false;
+    loop {
+        match client.next().await {
+            HostEvent::PendingResolved(resolved) => {
+                assert_eq!(resolved.pending_id, asked.id);
+                cancelled = resolved.outcome == Resolution::Cancelled;
+            }
+            event => {
+                if client.note(event, &mut seen, None).await {
+                    break;
+                }
+            }
+        }
+    }
+    assert!(cancelled);
     assert!(!world.cwd().join("never.txt").exists());
 }
 
@@ -414,70 +634,65 @@ async fn headless_runs_follow_their_policy() {
     let daemon = world.daemon(false, Duration::from_secs(60));
     let approved = world.cwd().join("approved.txt");
     let rejected = world.cwd().join("rejected.txt");
-    let run = |path: &Path, approve: Vec<ToolKind>| RunRequest {
-        launch: world.launch(),
-        session_id: None,
-        additional_directories: Vec::new(),
-        mcp_servers: Vec::new(),
-        prompt: vec![ContentBlock::from(format!("write {} ok", path.display()))],
-        policy: PermissionPolicy {
-            approve,
-            otherwise: Unapproved::Reject,
-        },
-        attach: false,
-    };
 
     // In-process, as a trigger would: nobody attached.
     let session_id = daemon
-        .run(run(&approved, vec![ToolKind::Edit]))
+        .run(run_request(&world, &approved, vec![ToolKind::Edit]))
         .await
         .expect("run");
     wait_for(|| approved.exists()).await;
     wait_for(|| {
-        daemon
-            .status()
-            .sessions
-            .iter()
-            .any(|session| session.session_id == session_id && session.activity == Activity::Idle)
+        daemon.status().sessions.iter().any(|session| {
+            session.info.session_id == session_id && session.activity == Some(Activity::Idle)
+        })
     })
     .await;
 
-    // Through `_weave/run`, attached for the whole turn, as `weave run` is.
+    // Through `session/run`, attached for the whole turn, as `weave run` is.
     let mut client = world.client(&daemon).await;
-    let mut request = run(&rejected, Vec::new());
+    let mut request = run_request(&world, &rejected, Vec::new());
     request.attach = true;
-    let response = client
-        .connection
-        .extension(request)
-        .await
-        .expect("_weave/run");
+    let response = client.connection.send(request).await.expect("session/run");
+    assert!(response.state.is_some(), "attached");
     let mut seen = Seen::default();
-    client.until_turn_ends(&mut seen, None).await;
+    let mut origin = None;
+    loop {
+        let event = client.next().await;
+        if let HostEvent::Event(event) = &event
+            && let SessionEvent::TurnStarted {
+                origin: started, ..
+            } = &event.event
+        {
+            origin = Some(started.clone());
+        }
+        if client.note(event, &mut seen, None).await {
+            break;
+        }
+    }
+    assert_eq!(origin, Some(TurnOrigin::Run {}));
     assert!(seen.user.starts_with("write "));
-    assert_eq!(seen.turns_running, 1);
     assert!(!rejected.exists(), "the policy rejected the write");
     let status = client
         .connection
-        .extension(StatusRequest {})
+        .send(StatusRequest {})
         .await
-        .expect("_weave/status");
+        .expect("host/status");
     assert!(
         status
             .sessions
             .iter()
-            .any(|session| session.session_id == response.session_id
-                && session.policy.otherwise == Unapproved::Reject)
+            .any(|session| session.info.session_id == response.session_id && session.headless)
     );
 }
 
 #[tokio::test]
-async fn a_restarted_daemon_takes_sessions_up_from_their_journals() {
+async fn a_restarted_host_takes_sessions_up_from_their_journals() {
     let world = World::new();
     let session_id = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
-        let session_id = client.new_session(&world).await;
-        client.prompt(&session_id, "hello there");
+        let session_id = client.create(&world).await;
+        client.prompt(&session_id, "hello there").await;
         client.until_turn_ends(&mut Seen::default(), None).await;
         daemon.shutdown().await;
         session_id
@@ -485,17 +700,14 @@ async fn a_restarted_daemon_takes_sessions_up_from_their_journals() {
 
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    client
-        .connection
-        .load_session(session_id.clone(), &world.setup())
-        .await
-        .expect("session/load recovers");
+    client.attach(&session_id).await;
     // The history comes once, from the journal, not again from the agent.
     let mut seen = Seen::default();
-    client.prompt(&session_id, "again");
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.user, "hello there");
+    client.prompt(&session_id, "again").await;
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.agent, "You said: hello thereYou said: again");
-    assert_eq!(seen.user, "hello there");
 }
 
 #[tokio::test]
@@ -503,21 +715,18 @@ async fn idle_sessions_close_after_their_grace_and_reopen_in_the_agent() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_millis(100));
     let mut client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
-    client.prompt(&session_id, "first");
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "first").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     client.connection.shutdown().await;
     wait_for(|| daemon.status().sessions.is_empty()).await;
 
-    // No longer live, it's loaded from the agent like any other session, which replays it.
+    // Closed, it's loaded from the agent, whose replay fills a new journal.
     let mut client = world.client(&daemon).await;
-    client
-        .connection
-        .load_session(session_id.clone(), &world.setup())
-        .await
-        .expect("session/load");
-    client.prompt(&session_id, "back");
+    let attached = client.attach(&session_id).await;
+    assert!(attached.replay.reset);
     let mut seen = Seen::default();
+    client.prompt(&session_id, "back").await;
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.agent, "You said: firstYou said: back");
 }
@@ -527,11 +736,11 @@ async fn blank_sessions_are_left_out_of_the_list_until_prompted() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
+    let session_id = client.create(&world).await;
     // A blank session offers nothing a new one doesn't, so it isn't listed even by an agent
     // that saved it, as the fake agent does.
     assert_eq!(client.list(&world).await, Vec::<SessionId>::new());
-    client.prompt(&session_id, "hello");
+    client.prompt(&session_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     assert_eq!(client.list(&world).await, [session_id]);
 }
@@ -541,77 +750,77 @@ async fn a_client_reattaching_to_a_blank_session_is_told_it_is_blank() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
-    let blank = async |session_id: &SessionId| {
-        let loaded = world
-            .client(&daemon)
-            .await
-            .connection
-            .load_session(session_id.clone(), &world.setup())
-            .await
-            .expect("session/load");
-        daemon_protocol::read_meta::<daemon_protocol::OpenedSession>(loaded.meta.as_ref())
-            .map(|opened| opened.blank)
-    };
+    let state = client.create_with(&world, "fake").await;
+    assert!(state.blank);
+    let session_id = state.session_id;
     // As after a reload, which reattaches by id.
-    assert_eq!(blank(&session_id).await, Some(true));
-    client.prompt(&session_id, "hello");
+    let mut again = world.client(&daemon).await;
+    assert!(again.attach(&session_id).await.state.blank);
+    client.prompt(&session_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
-    assert_eq!(blank(&session_id).await, Some(false));
+    let mut later = world.client(&daemon).await;
+    assert!(!later.attach(&session_id).await.state.blank);
 }
 
 #[tokio::test]
 async fn a_blank_session_closes_soon_after_it_is_left_and_keeps_no_journal() {
     let world = World::new();
-    let daemon = world.daemon_with(true, Duration::from_secs(60), Duration::from_millis(100));
+    let daemon = world.daemon_with(
+        true,
+        Duration::from_secs(60),
+        Duration::from_millis(100),
+        false,
+    );
     let mut used = world.client(&daemon).await;
-    let prompted = used.new_session(&world).await;
-    used.prompt(&prompted, "hello");
+    let prompted = used.create(&world).await;
+    used.prompt(&prompted, "hello").await;
     used.until_turn_ends(&mut Seen::default(), None).await;
     used.connection.shutdown().await;
-    let left = world.client(&daemon).await;
-    let blank = left.new_session(&world).await;
+    let mut left = world.client(&daemon).await;
+    let blank = left.create(&world).await;
     assert!(world.has_journal(&blank));
     left.connection.shutdown().await;
 
     wait_for(|| daemon.status().sessions.len() == 1).await;
     // The prompted session waits out the idle grace and keeps its journal.
-    assert_eq!(daemon.status().sessions[0].session_id, prompted);
+    assert_eq!(daemon.status().sessions[0].info.session_id, prompted);
     assert!(world.has_journal(&prompted));
     assert!(!world.has_journal(&blank));
 }
 
 #[tokio::test]
-async fn a_stopping_daemon_closes_blank_sessions_instead_of_leaving_them_open() {
+async fn a_stopping_host_closes_blank_sessions_instead_of_leaving_them_open() {
     let world = World::new();
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let prompted = client.new_session(&world).await;
-    client.prompt(&prompted, "hello");
+    let prompted = client.create(&world).await;
+    client.prompt(&prompted, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
-    let blank = client.new_session(&world).await;
+    let blank = client.create(&world).await;
     daemon.shutdown().await;
-    // The prompted session is left for a later daemon to take up; the blank one is gone.
+    // The prompted session is left for a later Host to take up; the blank one is gone.
     assert!(world.has_journal(&prompted));
     assert!(!world.has_journal(&blank));
 }
 
 #[tokio::test]
-async fn sessions_a_stopped_daemon_left_open_stop_leading_the_list_after_the_idle_grace() {
+async fn sessions_a_stopped_host_left_open_stop_leading_the_list_after_the_idle_grace() {
     let world = World::new();
     let (left_open, closed) = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
-        let left_open = client.new_session(&world).await;
-        client.prompt(&left_open, "first");
+        let left_open = client.create(&world).await;
+        client.prompt(&left_open, "first").await;
         client.until_turn_ends(&mut Seen::default(), None).await;
         // Used later but closed, so the agent lists it first.
-        let closed = client.new_session(&world).await;
-        client.prompt(&closed, "later");
+        let closed = client.create(&world).await;
+        client.prompt(&closed, "later").await;
         client.until_turn_ends(&mut Seen::default(), None).await;
         client
             .connection
-            .close_session(closed.clone())
+            .send(CloseSessionRequest {
+                session_id: closed.clone(),
+            })
             .await
             .expect("session/close");
         daemon.shutdown().await;
@@ -630,18 +839,16 @@ async fn sessions_a_stopped_daemon_left_open_stop_leading_the_list_after_the_idl
     tokio::time::sleep(grace + Duration::from_millis(100)).await;
     let daemon = world.daemon(true, grace);
     let mut client = world.client(&daemon).await;
-    assert_eq!(
-        client.list(&world).await,
-        [closed.clone(), left_open.clone()]
-    );
+    let listing = client.listing(&world).await;
+    let order: Vec<&SessionId> = listing
+        .iter()
+        .map(|listing| &listing.info.session_id)
+        .collect();
+    assert_eq!(order, [&closed, &left_open]);
+    assert_eq!(listing[1].state, SessionStatus::Suspended);
     // ...but it still reopens from its journal.
-    client
-        .connection
-        .load_session(left_open.clone(), &world.setup())
-        .await
-        .expect("session/load recovers");
+    client.attach(&left_open).await;
     let mut seen = Seen::default();
-    client.prompt(&left_open, "again");
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.user, "first");
 }
@@ -651,24 +858,17 @@ async fn command_output_reaches_clients_and_is_replayed() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
-    client.prompt(&session_id, "run echo from-the-daemon");
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "run echo from-the-host").await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
-    assert_eq!(seen.terminal, "from-the-daemon\n");
+    assert_eq!(seen.terminal, "from-the-host\n");
 
     let mut late = world.client(&daemon).await;
-    late.connection
-        .load_session(session_id.clone(), &world.setup())
-        .await
-        .expect("attach");
-    let mut replayed = String::new();
-    while let Ok(event) = late.events.try_recv() {
-        if let AgentEvent::TerminalOutput { text, .. } = event {
-            replayed.push_str(&text);
-        }
-    }
-    assert_eq!(replayed, "from-the-daemon\n");
+    late.attach(&session_id).await;
+    let mut seen = Seen::default();
+    late.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.terminal, "from-the-host\n");
 }
 
 #[tokio::test]
@@ -676,171 +876,173 @@ async fn sessions_list_with_their_activity_and_close_when_left() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
-    client.prompt(&session_id, "hello");
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
-    let listed = client
-        .connection
-        .list_sessions(Some(world.cwd()), None)
-        .await
-        .expect("session/list");
-    let entry = listed
-        .sessions
+    let listing = client.listing(&world).await;
+    let entry = listing
         .iter()
-        .find(|info| info.session_id == session_id)
-        .expect("the live session is listed");
-    let live: Option<daemon_protocol::ListedSession> =
-        daemon_protocol::read_meta(entry.meta.as_ref());
-    assert_eq!(live.map(|live| live.clients), Some(1));
+        .find(|listing| listing.info.session_id == session_id)
+        .expect("the open session is listed");
+    assert_eq!(
+        (entry.state, entry.clients, entry.activity),
+        (SessionStatus::Open, 1, Some(Activity::Idle))
+    );
+    // Across agents too.
+    let everything = client
+        .connection
+        .send(ListSessionsRequest::default())
+        .await
+        .expect("sessions/list");
+    assert!(
+        everything
+            .sessions
+            .iter()
+            .any(|listing| listing.info.session_id == session_id && listing.agent_id == "fake")
+    );
 
     client
         .connection
-        .close_session(session_id)
+        .send(DetachSessionRequest {
+            session_id,
+            close: CloseWhen::IfUnused,
+        })
         .await
-        .expect("session/close");
+        .expect("session/detach");
     wait_for(|| daemon.status().sessions.is_empty()).await;
 }
 
 #[tokio::test]
-async fn a_client_signs_in_through_its_own_agent_and_retries() {
+async fn a_client_signs_in_through_the_host_and_retries() {
     let world = World::new();
-    let daemon = Daemon::new(DaemonConfig {
-        journals: None,
-        idle_grace: Duration::from_secs(60),
-        blank_grace: Duration::from_secs(60),
-        launcher: fake_agents(world.dir.path().join("agent-state.json"), true),
-    });
-    let client = world.client(&daemon).await;
+    let daemon = world.daemon_with(
+        false,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        true,
+    );
+    let mut client = world.client(&daemon).await;
     let error = client
         .connection
-        .new_session(&world.setup())
+        .send(TestClient::create_request(&world, "fake"))
         .await
         .expect_err("the agent wants a sign-in first");
     assert!(weave_acp_core::is_auth_required(&error), "{error}");
     client
         .connection
-        .authenticate("token".into())
+        .send(weave_host_protocol::agents::AuthenticateAgentRequest {
+            agent_id: "fake".to_owned(),
+            method_id: "token".into(),
+        })
         .await
-        .expect("authenticate");
-    let session_id = client.new_session(&world).await;
+        .expect("agents/authenticate");
+    let session_id = client.create(&world).await;
     assert!(
         daemon
             .status()
             .sessions
             .iter()
-            .any(|session| session.session_id == session_id)
+            .any(|session| session.info.session_id == session_id)
     );
 }
 
 #[tokio::test]
-async fn live_sessions_lead_the_list_so_continue_finds_them() {
+async fn open_sessions_lead_the_list_so_continue_finds_them() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut left = world.client(&daemon).await;
-    let live = left.new_session(&world).await;
-    left.prompt(&live, "first");
+    let open = left.create(&world).await;
+    left.prompt(&open, "first").await;
     left.until_turn_ends(&mut Seen::default(), None).await;
     left.connection.shutdown().await;
     // A session used more recently, but closed, so the agent lists it first.
     let mut other = world.client(&daemon).await;
-    let closed = other.new_session(&world).await;
-    other.prompt(&closed, "later");
+    let closed = other.create(&world).await;
+    other.prompt(&closed, "later").await;
     other.until_turn_ends(&mut Seen::default(), None).await;
     other
         .connection
-        .close_session(closed.clone())
+        .send(CloseSessionRequest {
+            session_id: closed.clone(),
+        })
         .await
         .expect("session/close");
     wait_for(|| daemon.status().sessions.len() == 1).await;
-
-    let listed = other
-        .connection
-        .list_sessions(Some(world.cwd()), None)
-        .await
-        .expect("session/list");
-    let order: Vec<&SessionId> = listed
-        .sessions
-        .iter()
-        .map(|info| &info.session_id)
-        .collect();
-    assert_eq!(order, [&live, &closed]);
+    assert_eq!(other.list(&world).await, [open, closed]);
 }
 
 #[tokio::test]
-async fn ending_a_session_ends_it_for_every_client() {
+async fn closing_a_session_closes_it_for_every_client() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
-    client.prompt(&session_id, "slow 20");
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "slow 20").await;
     let control = world.client(&daemon).await;
     control
         .connection
-        .extension(weave_acp_core::daemon_protocol::EndSessionRequest {
+        .send(CloseSessionRequest {
             session_id: session_id.clone(),
         })
         .await
-        .expect("_weave/end_session");
+        .expect("session/close");
+    let mut failed = false;
     let reason = loop {
-        match client.next().await {
-            AgentEvent::SessionEnded { reason, .. } => break reason,
-            AgentEvent::TurnEnded { result, .. } => {
-                assert!(result.is_err(), "the turn ends with the session");
+        if let HostEvent::Event(event) = client.next().await {
+            match event.event {
+                SessionEvent::Closed { reason } => break reason,
+                SessionEvent::TurnEnded { error, .. } => failed = error.is_some(),
+                _ => {}
             }
-            _ => {}
         }
     };
-    assert_eq!(reason, "closed from the command line");
+    assert!(failed, "the turn ends with the session");
+    assert_eq!(reason, "closed by a client");
     assert!(daemon.status().sessions.is_empty());
     let again = control
         .connection
-        .extension(weave_acp_core::daemon_protocol::EndSessionRequest { session_id })
+        .send(CloseSessionRequest { session_id })
         .await;
-    assert!(again.is_err(), "it isn't open any more");
-}
-
-fn listed(info: &weave_acp_core::schema::SessionInfo) -> daemon_protocol::ListedSession {
-    daemon_protocol::read_meta(info.meta.as_ref()).unwrap_or_default()
+    assert!(
+        again
+            .as_ref()
+            .is_err_and(|error| errors::is(error, errors::SESSION_NOT_OPEN)),
+        "{again:?}"
+    );
 }
 
 #[tokio::test]
-async fn sessions_a_stopped_daemon_left_open_lead_the_list_with_headless_ones_marked() {
+async fn sessions_a_stopped_host_left_open_lead_the_list_with_headless_ones_marked() {
     let world = World::new();
     let (interactive, headless, closed) = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut left = world.client(&daemon).await;
-        let interactive = left.new_session(&world).await;
-        left.prompt(&interactive, "mine");
+        let interactive = left.create(&world).await;
+        left.prompt(&interactive, "mine").await;
         left.until_turn_ends(&mut Seen::default(), None).await;
         left.connection.shutdown().await;
-        let headless = daemon
-            .run(RunRequest {
-                launch: world.launch(),
-                session_id: None,
-                additional_directories: Vec::new(),
-                mcp_servers: Vec::new(),
-                prompt: vec![ContentBlock::from("a headless run".to_owned())],
-                policy: PermissionPolicy::headless(Vec::new()),
-                attach: false,
-            })
-            .await
-            .expect("run");
+        let mut run = run_request(&world, &world.cwd().join("unused"), Vec::new());
+        run.prompt = vec![ContentBlock::from("a headless run".to_owned())];
+        run.policy = PermissionPolicy::headless(Vec::new());
+        let headless = daemon.run(run).await.expect("run");
         wait_for(|| {
             daemon
                 .status()
                 .sessions
                 .iter()
-                .all(|session| session.activity == Activity::Idle)
+                .all(|session| session.activity == Some(Activity::Idle))
         })
         .await;
         // Used last but closed, so the agent lists it first.
         let mut other = world.client(&daemon).await;
-        let closed = other.new_session(&world).await;
-        other.prompt(&closed, "later");
+        let closed = other.create(&world).await;
+        other.prompt(&closed, "later").await;
         other.until_turn_ends(&mut Seen::default(), None).await;
         other
             .connection
-            .close_session(closed.clone())
+            .send(CloseSessionRequest {
+                session_id: closed.clone(),
+            })
             .await
             .expect("close");
         daemon.shutdown().await;
@@ -848,31 +1050,14 @@ async fn sessions_a_stopped_daemon_left_open_lead_the_list_with_headless_ones_ma
     };
 
     let daemon = world.daemon(true, Duration::from_secs(60));
-    // Listed by a client offering less than the one that opened them: they still lead.
-    let options = ClientOptions {
-        read_files: false,
-        ..ClientOptions::default()
-    };
-    let client = world
-        .client_with(&daemon, options, world.launch())
-        .await
-        .expect("initialize");
-    let listed_sessions = client
-        .connection
-        .list_sessions(Some(world.cwd()), None)
-        .await
-        .expect("session/list");
-    let order: Vec<&SessionId> = listed_sessions
-        .sessions
+    let client = world.client(&daemon).await;
+    let listing = client.listing(&world).await;
+    let order: Vec<&SessionId> = listing
         .iter()
-        .map(|info| &info.session_id)
+        .map(|listing| &listing.info.session_id)
         .collect();
     assert_eq!(order, [&headless, &interactive, &closed]);
-    let flags: Vec<bool> = listed_sessions
-        .sessions
-        .iter()
-        .map(|info| listed(info).headless)
-        .collect();
+    let flags: Vec<bool> = listing.iter().map(|listing| listing.headless).collect();
     assert_eq!(flags, [true, false, false]);
 }
 
@@ -880,36 +1065,200 @@ async fn sessions_a_stopped_daemon_left_open_lead_the_list_with_headless_ones_ma
 async fn a_session_opens_only_with_its_own_agent_and_says_where_it_works() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
-    let client = world.client(&daemon).await;
-    let session_id = client.new_session(&world).await;
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
 
-    let other = world
-        .client_with(
-            &daemon,
-            ClientOptions::default(),
-            world.launch_of(AgentChoice::Named("other".into())),
-        )
-        .await
-        .expect("initialize");
+    let other = world.client(&daemon).await;
     let refused = other
         .connection
-        .load_session(session_id.clone(), &world.setup())
+        .send(AttachSessionRequest {
+            session_id: session_id.clone(),
+            after: None,
+            agent_id: Some("other".to_owned()),
+            cwd: None,
+            trace: false,
+        })
         .await
         .expect_err("another agent's session");
-    assert!(refused.to_string().contains("runs with fake"), "{refused}");
+    assert!(errors::is(&refused, errors::WRONG_AGENT), "{refused}");
 
-    // Loaded from elsewhere, the session still works in its own directory.
-    let elsewhere = SessionSetup {
-        cwd: std::env::temp_dir(),
-        ..SessionSetup::default()
+    // Attached from anywhere, the session still works in its own directory.
+    let mut second = world.client(&daemon).await;
+    let attached = second.attach(&session_id).await;
+    assert_eq!(attached.state.cwd, world.cwd());
+    assert_eq!(attached.state.agent.id, "fake");
+}
+
+#[tokio::test]
+async fn one_connection_reaches_sessions_of_two_agents() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let fake = client.create_with(&world, "fake").await;
+    let other = client.create_with(&world, "other").await;
+    assert_eq!(
+        (fake.agent.id.as_str(), other.agent.id.as_str()),
+        ("fake", "other")
+    );
+    client.prompt(&fake.session_id, "one").await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    client.prompt(&other.session_id, "two").await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.agent, "You said: two");
+    let status = daemon.status();
+    assert_eq!(status.sessions.len(), 2);
+}
+
+#[tokio::test]
+async fn new_sessions_start_in_the_configured_mode_unless_asked_for_another() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    // The fake agent offers its modes as a config option, which takes precedence.
+    let current_mode = |state: &SessionState| {
+        state
+            .config_options
+            .iter()
+            .find_map(|option| match (&option.category, &option.kind) {
+                (Some(SessionConfigOptionCategory::Mode), SessionConfigKind::Select(select)) => {
+                    Some(select.current_value.to_string())
+                }
+                _ => None,
+            })
     };
-    let second = world.client(&daemon).await;
-    let loaded = second
+    let configured = client.create_with(&world, "fake").await;
+    assert_eq!(current_mode(&configured).as_deref(), Some("code"));
+    let mut request = TestClient::create_request(&world, "fake");
+    request.mode = Some("Ask".to_owned());
+    let asked = client.connection.send(request).await.expect("create");
+    assert_eq!(current_mode(&asked).as_deref(), Some("ask"));
+    let mut request = TestClient::create_request(&world, "fake");
+    request.mode = Some("nonsense".to_owned());
+    let missing = client.connection.send(request).await.expect("create");
+    assert!(
+        missing
+            .notices
+            .iter()
+            .any(|notice| notice.contains("no mode nonsense")),
+        "{:?}",
+        missing.notices
+    );
+}
+
+#[tokio::test]
+async fn agents_are_listed_and_unknown_ones_refused() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let client = world.client(&daemon).await;
+    let listed = client
         .connection
-        .load_session(session_id, &elsewhere)
+        .send(weave_host_protocol::agents::ListAgentsRequest::default())
         .await
-        .expect("session/load");
-    let opened: Option<daemon_protocol::OpenedSession> =
-        daemon_protocol::read_meta(loaded.meta.as_ref());
-    assert_eq!(opened.map(|opened| opened.cwd), Some(world.cwd()));
+        .expect("agents/list");
+    let ids: Vec<&str> = listed
+        .agents
+        .iter()
+        .map(|agent| agent.id.as_str())
+        .collect();
+    for id in ["claude", "codex", "gemini", "fake", "other"] {
+        assert!(ids.contains(&id), "{ids:?}");
+    }
+    let got = client
+        .connection
+        .send(weave_host_protocol::agents::GetAgentRequest {
+            agent_id: "fake".to_owned(),
+        })
+        .await
+        .expect("agents/get");
+    assert!(got.initialize.agent_capabilities.load_session);
+    let refused = client
+        .connection
+        .send(TestClient::create_request(&world, "nobody"))
+        .await
+        .expect_err("no such agent");
+    assert!(errors::is(&refused, errors::UNKNOWN_AGENT), "{refused}");
+}
+
+/// A raw connection, to say things a well-behaved client wouldn't.
+async fn raw(daemon: &Daemon) -> (ConnectionTo<Host>, tokio::task::JoinHandle<()>) {
+    let transport = daemon.connect_in_process();
+    let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
+    let driver = tokio::spawn(async move {
+        let _ = HostClient
+            .builder()
+            .connect_with(transport, async move |cx: ConnectionTo<Host>| {
+                let _ = cx_tx.send(cx.clone());
+                cx.incoming_closed().await;
+                Ok(())
+            })
+            .await;
+    });
+    (cx_rx.await.expect("connected"), driver)
+}
+
+#[tokio::test]
+async fn hello_comes_first_and_settles_the_version() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let (cx, driver) = raw(&daemon).await;
+    let early = cx
+        .send_request(StatusRequest {})
+        .block_task()
+        .await
+        .expect_err("before hello");
+    assert!(errors::is(&early, errors::UNAUTHENTICATED), "{early}");
+    let hello = |protocol| HelloRequest {
+        protocol,
+        client: ClientInfo {
+            name: "raw".to_owned(),
+            version: "0".to_owned(),
+        },
+        auth: Auth::Local,
+        capabilities: ClientCapabilities::default(),
+    };
+    let newer = cx
+        .send_request(hello(VersionRange { min: 3, max: 4 }))
+        .block_task()
+        .await
+        .expect_err("no common version");
+    assert!(errors::is(&newer, errors::INCOMPATIBLE_PROTOCOL), "{newer}");
+    let mut token = hello(VersionRange::supported());
+    token.auth = Auth::Token {
+        token: "x".to_owned(),
+    };
+    let refused = cx
+        .send_request(token)
+        .block_task()
+        .await
+        .expect_err("no tokens yet");
+    assert!(errors::is(&refused, errors::UNAUTHENTICATED), "{refused}");
+    let accepted = cx
+        .send_request(hello(VersionRange { min: 1, max: 9 }))
+        .block_task()
+        .await
+        .expect("hello");
+    assert_eq!(accepted.protocol, 2);
+    driver.abort();
+}
+
+/// A TUI built before this protocol says ACP `initialize`, and reads the version it's told.
+#[tokio::test]
+async fn a_client_from_before_this_protocol_is_told_the_version() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let (cx, driver) = raw(&daemon).await;
+    let answer = cx
+        .send_request(InitializeRequest::new(weave_acp_core::ProtocolVersion::V1))
+        .block_task()
+        .await
+        .expect("initialize");
+    let protocol = answer
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("weave"))
+        .and_then(|weave| weave.get("protocol"))
+        .and_then(serde_json::Value::as_u64);
+    assert_eq!(protocol, Some(2));
+    driver.abort();
 }

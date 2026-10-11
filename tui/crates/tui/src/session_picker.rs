@@ -9,11 +9,9 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use weave_acp_core::daemon_protocol;
-use weave_acp_core::daemon_protocol::Activity;
-use weave_acp_core::daemon_protocol::ListedSession;
 use weave_acp_core::schema::SessionId;
-use weave_acp_core::schema::SessionInfo;
+use weave_host_protocol::sessions::Activity;
+use weave_host_protocol::sessions::SessionListing;
 
 use crate::history_cell::dim;
 use crate::style;
@@ -21,7 +19,7 @@ use crate::style;
 const VISIBLE_ROWS: usize = 8;
 
 pub enum PickerAction {
-    Open(SessionInfo),
+    Open(Box<SessionListing>),
     New,
     Close,
     Delete(SessionId),
@@ -33,7 +31,7 @@ pub enum PickerAction {
 }
 
 pub struct SessionPicker {
-    sessions: Vec<SessionInfo>,
+    sessions: Vec<SessionListing>,
     next_cursor: Option<String>,
     selected: usize,
     loading: bool,
@@ -63,7 +61,7 @@ impl SessionPicker {
     /// A page arrived; `append` continues the list instead of replacing it.
     pub fn listed(
         &mut self,
-        sessions: Vec<SessionInfo>,
+        sessions: Vec<SessionListing>,
         next_cursor: Option<String>,
         append: bool,
     ) {
@@ -84,7 +82,7 @@ impl SessionPicker {
 
     pub fn deleted(&mut self, session_id: &SessionId) {
         self.sessions
-            .retain(|session| session.session_id != *session_id);
+            .retain(|session| session.info.session_id != *session_id);
         self.selected = self.selected.min(self.sessions.len().saturating_sub(1));
     }
 
@@ -112,7 +110,7 @@ impl SessionPicker {
                 .sessions
                 .get(self.selected)
                 .cloned()
-                .map(PickerAction::Open),
+                .map(|session| PickerAction::Open(Box::new(session))),
             KeyCode::Char('a') => {
                 self.all_directories = !self.all_directories;
                 self.loading = true;
@@ -124,7 +122,7 @@ impl SessionPicker {
             KeyCode::Char('d') if self.can_delete => {
                 let session = self.sessions.get(self.selected)?;
                 if confirming {
-                    Some(PickerAction::Delete(session.session_id.clone()))
+                    Some(PickerAction::Delete(session.info.session_id.clone()))
                 } else {
                     self.confirm_delete = true;
                     None
@@ -182,26 +180,24 @@ impl SessionPicker {
         {
             let selected = index == self.selected;
             let style = Style::default();
-            let title = session
+            let info = &session.info;
+            let title = info
                 .title
                 .clone()
-                .unwrap_or_else(|| format!("Untitled ({})", session.session_id));
+                .unwrap_or_else(|| format!("Untitled ({})", info.session_id));
             let mut spans = vec![Span::styled(
                 format!("{}{title}", if selected { "› " } else { "  " }),
                 style,
             )];
             spans.extend(badge(session));
-            if let Some(updated) = &session.updated_at {
+            if let Some(updated) = &info.updated_at {
                 spans.push(Span::styled(
                     format!("  · {}", relative_time(updated, now)),
                     dim(),
                 ));
             }
             if self.all_directories {
-                spans.push(Span::styled(
-                    format!("  · {}", session.cwd.display()),
-                    dim(),
-                ));
+                spans.push(Span::styled(format!("  · {}", info.cwd.display()), dim()));
             }
             let line = Line::from(spans);
             lines.push(if selected {
@@ -253,12 +249,9 @@ impl SessionPicker {
     }
 }
 
-/// What the weave daemon says a session is doing: open in it (running, waiting on you, or
-/// idle, with who's attached), and whether it's headless.
-fn badge(session: &SessionInfo) -> Vec<Span<'static>> {
-    let Some(listed) = daemon_protocol::read_meta::<ListedSession>(session.meta.as_ref()) else {
-        return Vec::new();
-    };
+/// What the Host says a session is doing: open in it (running, waiting on you, or idle, with
+/// who's attached), and whether it's headless.
+fn badge(listed: &SessionListing) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     if let Some(activity) = listed.activity {
         let (label, color) = match activity {
@@ -299,6 +292,20 @@ fn relative_time(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> String 
     }
 }
 
+/// A session the agent lists and the Host has nothing to add to, for tests.
+#[cfg(test)]
+pub(crate) fn listing(info: weave_acp_core::schema::SessionInfo) -> SessionListing {
+    SessionListing {
+        info,
+        agent_id: "fake".to_owned(),
+        state: weave_host_protocol::sessions::SessionStatus::Closed,
+        activity: None,
+        clients: 0,
+        headless: false,
+        last_activity_at: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::KeyModifiers;
@@ -310,10 +317,12 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn session(id: &str, title: &str, updated: &str) -> SessionInfo {
-        SessionInfo::new(id.to_owned(), "/repo")
-            .title(title.to_owned())
-            .updated_at(updated.to_owned())
+    fn session(id: &str, title: &str, updated: &str) -> SessionListing {
+        listing(
+            weave_acp_core::schema::SessionInfo::new(id.to_owned(), "/repo")
+                .title(title.to_owned())
+                .updated_at(updated.to_owned()),
+        )
     }
 
     fn now() -> chrono::DateTime<chrono::Utc> {
@@ -350,39 +359,19 @@ mod tests {
     }
 
     #[test]
-    fn sessions_open_in_the_daemon_wear_a_badge() {
-        let marked = |id: &str, title: &str, listed: ListedSession| {
-            session(id, title, "2026-10-07T11:55:00Z").meta(daemon_protocol::meta(&listed))
+    fn sessions_open_in_the_host_wear_a_badge() {
+        let marked = |id: &str, title: &str, (activity, clients, headless)| SessionListing {
+            activity,
+            clients,
+            headless,
+            ..session(id, title, "2026-10-07T11:55:00Z")
         };
         let mut picker = SessionPicker::new(false, false);
         picker.listed(
             vec![
-                marked(
-                    "s1",
-                    "Fix the build",
-                    ListedSession {
-                        activity: Some(Activity::Running),
-                        clients: 1,
-                        headless: false,
-                    },
-                ),
-                marked(
-                    "s2",
-                    "Nightly triage",
-                    ListedSession {
-                        activity: Some(Activity::Waiting),
-                        clients: 0,
-                        headless: true,
-                    },
-                ),
-                marked(
-                    "s3",
-                    "Old run",
-                    ListedSession {
-                        headless: true,
-                        ..ListedSession::default()
-                    },
-                ),
+                marked("s1", "Fix the build", (Some(Activity::Running), 1, false)),
+                marked("s2", "Nightly triage", (Some(Activity::Waiting), 0, true)),
+                marked("s3", "Old run", (None, 0, true)),
                 session("s4", "Plain", "2026-10-07T11:55:00Z"),
             ],
             None,

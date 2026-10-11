@@ -1,11 +1,10 @@
-//! A live session: the agent process bound to it, its journal, the clients attached to it,
+//! An open session: the agent process bound to it, its journal, the clients attached to it,
 //! its turns, and the requests waiting on a person. One task owns all of it, so every client
 //! sees the session's events in the same order, and an attaching client gets a consistent
-//! cut: the journal so far, then everything after.
+//! cut: its answer, the journal after the position it asked from, then everything after.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -14,12 +13,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use agent_client_protocol::Client;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::Responder;
-use futures::future::BoxFuture;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use weave_acp_core::AgentConnection;
@@ -29,32 +26,42 @@ use weave_acp_core::ElicitationRequest;
 use weave_acp_core::PermissionRequest;
 use weave_acp_core::RequestKey;
 use weave_acp_core::Traces;
-use weave_acp_core::daemon_protocol::Activity;
-use weave_acp_core::daemon_protocol::AgentChoice;
-use weave_acp_core::daemon_protocol::LiveSession;
-use weave_acp_core::daemon_protocol::PermissionPolicy;
-use weave_acp_core::daemon_protocol::SessionEndedNotification;
-use weave_acp_core::daemon_protocol::TerminalExitNotification;
-use weave_acp_core::daemon_protocol::TerminalOutputNotification;
-use weave_acp_core::daemon_protocol::TurnNotification;
-use weave_acp_core::daemon_protocol::TurnState;
-use weave_acp_core::policy::ToolKinds;
 use weave_acp_core::schema::CompleteElicitationNotification;
 use weave_acp_core::schema::ContentBlock;
-use weave_acp_core::schema::ContentChunk;
 use weave_acp_core::schema::CreateElicitationResponse;
-use weave_acp_core::schema::ElicitationAction;
 use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationScope;
 use weave_acp_core::schema::PromptResponse;
-use weave_acp_core::schema::RequestPermissionOutcome;
 use weave_acp_core::schema::RequestPermissionResponse;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
+use weave_acp_core::schema::SessionInfo;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::strip_terminal_events;
+use weave_host_protocol::HostClient;
+use weave_host_protocol::errors;
+use weave_host_protocol::events::ElicitationCompletedNotification;
+use weave_host_protocol::events::SessionChangedNotification;
+use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::pending::PendingAddedNotification;
+use weave_host_protocol::pending::PendingKind;
+use weave_host_protocol::pending::PendingResolvedNotification;
+use weave_host_protocol::pending::Resolution;
+use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::policy::ToolKinds;
+use weave_host_protocol::sessions::Activity;
+use weave_host_protocol::sessions::AttachSessionResponse;
+use weave_host_protocol::sessions::JournalHead;
+use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::Replay;
+use weave_host_protocol::sessions::RunningTurn;
+use weave_host_protocol::sessions::SessionAgent;
+use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionState;
+use weave_host_protocol::sessions::SessionStatus;
+use weave_host_protocol::sessions::TurnOrigin;
 
 use crate::Shared;
 use crate::instance::Instance;
@@ -62,15 +69,22 @@ use crate::instance::LaunchKey;
 use crate::journal::Entry;
 use crate::journal::Journal;
 use crate::journal::Recorded;
+use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 
 /// How long closing the agent's session may take before its process is stopped anyway.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// One connection to the daemon.
+/// One connection to the Host.
 pub(crate) type ClientId = u64;
 
-/// What a load or resume answers with: the session's modes and config options now.
+/// An attached client: how to reach it.
+#[derive(Clone)]
+pub(crate) struct ClientLink {
+    pub(crate) cx: ConnectionTo<HostClient>,
+}
+
+/// What a session's agent says about it now: its modes and config options.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Snapshot {
     pub(crate) modes: Option<SessionModeState>,
@@ -93,59 +107,94 @@ impl Snapshot {
     }
 }
 
-/// How the sender of a prompt hears back.
-pub(crate) enum Reply {
-    /// A client's `session/prompt`, answered when the turn ends.
-    Responder(Responder<PromptResponse>),
-    /// `_weave/run`, told only whether the prompt went out.
-    Started(oneshot::Sender<Result<(), Error>>),
+/// Where an attaching client's replay starts.
+pub(crate) enum ReplayFrom {
+    /// The whole journal.
+    Start,
+    /// After the last event the client handled, unless that was in another journal.
+    After(JournalPosition),
+    /// Nothing: from what happens next, as for a run that attaches to see its turn.
+    Now,
 }
 
-impl Reply {
+/// How an attaching client is answered: before its replay, so it knows where it starts.
+pub(crate) enum AttachReply {
+    /// `session/create`.
+    Created(Responder<SessionState>),
+    /// `session/attach`.
+    Attached(Responder<AttachSessionResponse>),
+    /// `session/run` with `attach`, which answers once its turn has started.
+    Run(oneshot::Sender<SessionState>),
+}
+
+impl AttachReply {
+    fn send(self, state: SessionState, replay: Replay) {
+        let sent = match self {
+            Self::Created(responder) => responder.respond(state),
+            Self::Attached(responder) => responder.respond(AttachSessionResponse { state, replay }),
+            Self::Run(sender) => {
+                let _ = sender.send(state);
+                Ok(())
+            }
+        };
+        if let Err(error) = sent {
+            tracing::debug!(%error, "couldn't answer an attaching client");
+        }
+    }
+
     pub(crate) fn fail(self, error: Error) {
         match self {
-            Self::Responder(responder) => {
+            Self::Created(responder) => {
                 let _ = responder.respond_with_error(error);
             }
-            Self::Started(started) => {
-                let _ = started.send(Err(error));
+            Self::Attached(responder) => {
+                let _ = responder.respond_with_error(error);
             }
+            Self::Run(_) => {}
         }
     }
 }
 
-/// A client's answer to a request the session forwarded to it.
+/// A client's answer to a pending request.
 pub(crate) enum Answer {
     Permission(RequestPermissionResponse),
     Elicitation(CreateElicitationResponse),
 }
 
 pub(crate) enum Command {
-    /// Attach a client: replay the journal to it first when it loads the session, then
-    /// tell it what's running and ask it what's pending.
+    /// Attach a client: answer it, send it the journal after `after`, then what follows.
     Attach {
         client: ClientId,
-        cx: ConnectionTo<Client>,
-        replay: bool,
-        done: oneshot::Sender<Snapshot>,
+        link: ClientLink,
+        from: ReplayFrom,
+        /// Worth telling the client, such as skipped MCP servers.
+        notices: Vec<String>,
+        trace: Option<PathBuf>,
+        reply: AttachReply,
     },
     Detach {
         client: ClientId,
     },
     Prompt {
-        /// The sending client; none for `_weave/run`.
-        client: Option<ClientId>,
+        origin: TurnOrigin,
         session_id: SessionId,
         prompt: Vec<ContentBlock>,
-        reply: Reply,
+        /// The position of the turn's `turnStarted`, once it has started.
+        reply: oneshot::Sender<Result<u64, Error>>,
     },
     Cancel {
         session_id: SessionId,
     },
-    /// A client changed a mode or config option; the others hear of it.
+    /// A client changed a mode or config option; every client hears of it.
     Changed {
-        client: ClientId,
         notification: Box<SessionNotification>,
+    },
+    Answer {
+        pending_id: String,
+        /// The answering client's `clientId`.
+        by: String,
+        answer: Answer,
+        reply: oneshot::Sender<Result<(), Error>>,
     },
     /// A client is done with the session, which closes if nothing else needs it.
     Close {
@@ -157,46 +206,55 @@ pub(crate) enum Command {
         reason: String,
         done: oneshot::Sender<()>,
     },
-    /// Stop the agent but leave the session recoverable: the daemon is stopping.
+    /// Stop the agent but leave the session recoverable: the Host is stopping.
     Suspend {
         done: oneshot::Sender<()>,
     },
-    Answered {
-        pending: u64,
-        client: ClientId,
-        answer: Result<Answer, Error>,
-    },
 }
 
-/// The daemon's handle on a live session.
+/// What a session is, for listings and status.
+#[derive(Clone, Debug)]
+pub(crate) struct Summary {
+    pub(crate) session_id: SessionId,
+    pub(crate) agent_id: String,
+    pub(crate) cwd: PathBuf,
+    pub(crate) title: Option<String>,
+    pub(crate) activity: Activity,
+    pub(crate) clients: u32,
+    pub(crate) policy: PermissionPolicy,
+    pub(crate) last_activity_ms: u64,
+}
+
+impl Summary {
+    pub(crate) fn listing(&self) -> SessionListing {
+        let mut info = SessionInfo::new(self.session_id.clone(), self.cwd.clone());
+        info.title.clone_from(&self.title);
+        SessionListing {
+            info,
+            agent_id: self.agent_id.clone(),
+            state: SessionStatus::Open,
+            activity: Some(self.activity),
+            clients: self.clients,
+            headless: self.policy.is_headless(),
+            last_activity_at: Some(self.last_activity_ms),
+        }
+    }
+}
+
+/// The Host's handle on an open session.
 #[derive(Clone)]
 pub(crate) struct SessionHandle {
     pub(crate) commands: mpsc::UnboundedSender<Command>,
     pub(crate) agent: AgentHandle,
     pub(crate) key: LaunchKey,
+    pub(crate) agent_id: String,
     /// Where the agent's protocol is traced, for each attached client that asked.
     pub(crate) traces: Arc<Traces>,
-    pub(crate) summary: Arc<Mutex<LiveSession>>,
+    pub(crate) summary: Arc<Mutex<Summary>>,
     blank: Arc<AtomicBool>,
 }
 
 impl SessionHandle {
-    pub(crate) async fn attach(
-        &self,
-        client: ClientId,
-        cx: ConnectionTo<Client>,
-        replay: bool,
-    ) -> Result<Snapshot, Error> {
-        let (done, attached) = oneshot::channel();
-        self.send(Command::Attach {
-            client,
-            cx,
-            replay,
-            done,
-        })?;
-        attached.await.map_err(|_| ended())
-    }
-
     /// Send a command and wait for the session to carry it out.
     pub(crate) async fn finish(
         &self,
@@ -211,18 +269,18 @@ impl SessionHandle {
         self.commands.send(command).map_err(|_| ended())
     }
 
-    pub(crate) fn summary(&self) -> LiveSession {
+    pub(crate) fn summary(&self) -> Summary {
         lock(&self.summary).clone()
     }
 
-    /// Whether the session is blank: `session/new` opened it, and nothing has been sent in it.
+    /// Whether the session is blank: `session/create` opened it, and nobody has prompted it.
     /// There's nothing in it to come back to.
     pub(crate) fn is_blank(&self) -> bool {
         self.blank.load(Ordering::Relaxed)
     }
 }
 
-fn ended() -> Error {
+pub(crate) fn ended() -> Error {
     Error::invalid_request().data("the session has ended")
 }
 
@@ -230,54 +288,54 @@ fn ended() -> Error {
 pub(crate) struct Opened {
     pub(crate) session_id: SessionId,
     pub(crate) instance: Instance,
+    pub(crate) agent: SessionAgent,
     pub(crate) journal: Journal,
     pub(crate) policy: PermissionPolicy,
     pub(crate) snapshot: Snapshot,
     pub(crate) cwd: PathBuf,
-    pub(crate) agent: String,
-    pub(crate) choice: Option<AgentChoice>,
-    /// Opened by `session/new`, so blank until it's prompted.
+    pub(crate) additional_directories: Vec<PathBuf>,
+    /// Opened by `session/create`, so blank until it's prompted.
     pub(crate) blank: bool,
 }
 
-/// Start the task that owns a session, and register it with the daemon.
+/// Start the task that owns a session, and register it with the Host.
 pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
     let Opened {
         session_id,
         instance,
+        agent,
         journal,
         policy,
         snapshot,
         cwd,
-        agent,
-        choice,
+        additional_directories,
         blank,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
     let now = now_ms();
-    let summary = Arc::new(Mutex::new(LiveSession {
+    let summary = Arc::new(Mutex::new(Summary {
         session_id: session_id.clone(),
+        agent_id: agent.id.clone(),
         cwd: cwd.clone(),
-        agent,
-        choice: choice.clone(),
         title: None,
         activity: Activity::Idle,
         clients: 0,
         policy: policy.clone(),
-        started_at_ms: now,
         last_activity_ms: now,
     }));
     let Instance {
+        agent_id: _,
         connection,
         events,
         key,
         traces,
     } = instance;
     let handle = SessionHandle {
-        commands: commands_tx.clone(),
+        commands: commands_tx,
         agent: connection.handle(),
         key,
+        agent_id: agent.id.clone(),
         traces,
         summary: Arc::clone(&summary),
         blank: Arc::clone(&blank),
@@ -289,8 +347,8 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
             session_id.clone(),
             Recorded {
                 agent: handle.key.spec().clone(),
-                choice,
-                cwd,
+                choice: Some(RecordedChoice::Named(agent.id.clone())),
+                cwd: cwd.clone(),
                 policy: policy.clone(),
                 closed: false,
                 last_activity_ms: now,
@@ -300,21 +358,24 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
     let actor = Actor {
         root: session_id,
         shared: Arc::clone(shared),
-        agent: connection.handle(),
+        handle: connection.handle(),
         connection: Some(connection),
         events,
         commands,
-        commands_tx,
         journal,
         clients: BTreeMap::new(),
-        children: HashSet::new(),
+        children: Vec::new(),
         turns: HashMap::new(),
         pending: Vec::new(),
         next_pending: 1,
         policy,
         tool_kinds: ToolKinds::default(),
         snapshot,
+        agent,
+        cwd,
+        additional_directories,
         summary,
+        reported: Reported::default(),
         blank,
         idle_since: None,
         stopping: None,
@@ -325,9 +386,8 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
 }
 
 struct Turn {
-    started: Instant,
-    /// The client whose prompt this is, to answer when it ends.
-    sender: Option<(ClientId, Responder<PromptResponse>)>,
+    started_ms: u64,
+    origin: TurnOrigin,
 }
 
 enum PendingRequest {
@@ -335,13 +395,12 @@ enum PendingRequest {
     Elicitation(ElicitationRequest),
 }
 
-/// A request waiting on a person, and the clients it was forwarded to. Dropping a client's
-/// entry withdraws the request from that client.
+/// A request waiting on a person.
 struct Pending {
-    id: u64,
+    id: String,
     session_id: Option<SessionId>,
+    created_ms: u64,
     request: PendingRequest,
-    forwards: HashMap<ClientId, oneshot::Sender<()>>,
 }
 
 impl Pending {
@@ -352,18 +411,20 @@ impl Pending {
         }
     }
 
-    fn answer(self, answer: Answer) {
-        let result = match (self.request, answer) {
-            (PendingRequest::Permission(request), Answer::Permission(response)) => {
-                request.respond_with(response)
-            }
-            (PendingRequest::Elicitation(request), Answer::Elicitation(response)) => {
-                request.respond_with(response)
-            }
-            _ => Ok(()),
-        };
-        if let Err(error) = result {
-            tracing::debug!(%error, "couldn't pass an answer on to the agent");
+    /// As clients see it.
+    fn describe(&self) -> weave_host_protocol::pending::PendingRequest {
+        weave_host_protocol::pending::PendingRequest {
+            id: self.id.clone(),
+            session_id: self.session_id.clone(),
+            created_at: self.created_ms,
+            request: match &self.request {
+                PendingRequest::Permission(request) => PendingKind::Permission {
+                    request: request.request.clone(),
+                },
+                PendingRequest::Elicitation(request) => PendingKind::Elicitation {
+                    request: request.request.clone(),
+                },
+            },
         }
     }
 
@@ -388,23 +449,30 @@ enum Ending {
     Closed(String),
     /// The agent went away by itself.
     AgentGone(String),
-    /// The daemon is stopping; the journal stays open for a later daemon to recover.
+    /// The Host is stopping; the journal stays open for a later Host to recover.
     Suspended,
+}
+
+/// What attached clients were last told about the session, to tell them what changes.
+#[derive(Default, PartialEq)]
+struct Reported {
+    activity: Option<Activity>,
+    clients: Option<u32>,
+    title: Option<String>,
+    blank: Option<bool>,
 }
 
 struct Actor {
     root: SessionId,
     shared: Arc<Shared>,
-    agent: AgentHandle,
+    handle: AgentHandle,
     connection: Option<AgentConnection>,
     events: mpsc::UnboundedReceiver<AgentEvent>,
     commands: mpsc::UnboundedReceiver<Command>,
-    /// For the tasks that wait on clients' answers.
-    commands_tx: mpsc::UnboundedSender<Command>,
     journal: Journal,
-    clients: BTreeMap<ClientId, ConnectionTo<Client>>,
-    /// Subagent sessions the agent reported under this one.
-    children: HashSet<SessionId>,
+    clients: BTreeMap<ClientId, ClientLink>,
+    /// Subagent sessions the agent reported under this one, in order.
+    children: Vec<SessionId>,
     /// Turns running, by session: this one's, or a subagent's.
     turns: HashMap<SessionId, Turn>,
     pending: Vec<Pending>,
@@ -413,7 +481,11 @@ struct Actor {
     /// Each tool call's kind, as reported, for the policy.
     tool_kinds: ToolKinds,
     snapshot: Snapshot,
-    summary: Arc<Mutex<LiveSession>>,
+    agent: SessionAgent,
+    cwd: PathBuf,
+    additional_directories: Vec<PathBuf>,
+    summary: Arc<Mutex<Summary>>,
+    reported: Reported,
     /// Whether the session is blank; see [`SessionHandle::is_blank`].
     blank: Arc<AtomicBool>,
     /// When nothing last needed the session; it closes once that's the idle grace ago.
@@ -473,33 +545,40 @@ impl Actor {
         match command {
             Command::Attach {
                 client,
-                cx,
-                replay,
-                done,
-            } => {
-                let snapshot = self.attach(client, cx, replay);
-                let _ = done.send(snapshot);
+                link,
+                from,
+                notices,
+                trace,
+                reply,
+            } => self.attach(client, link, from, notices, trace, reply),
+            Command::Detach { client } => {
+                self.clients.remove(&client);
             }
-            Command::Detach { client } => self.detach(client),
             Command::Prompt {
-                client,
+                origin,
                 session_id,
                 prompt,
                 reply,
-            } => self.prompt(client, session_id, prompt, reply),
-            Command::Cancel { session_id } => self.cancel(&session_id),
-            Command::Changed {
-                client,
-                notification,
             } => {
+                let _ = reply.send(self.prompt(origin, session_id, prompt));
+            }
+            Command::Cancel { session_id } => self.cancel(&session_id),
+            Command::Changed { notification } => {
                 if notification.session_id == self.root {
                     self.snapshot.apply(&notification.update);
                 }
-                self.broadcast(notification.as_ref(), Some(client));
-                self.journal.append(Entry::Update { notification });
+                self.record(Entry::Update { notification });
+            }
+            Command::Answer {
+                pending_id,
+                by,
+                answer,
+                reply,
+            } => {
+                let _ = reply.send(self.answer(&pending_id, by, answer));
             }
             Command::Close { client, done } => {
-                self.detach(client);
+                self.clients.remove(&client);
                 if self.is_idle() {
                     self.waiting.push(done);
                     self.stop(Ending::Closed("closed".to_owned()));
@@ -515,137 +594,123 @@ impl Actor {
                 self.waiting.push(done);
                 self.stop(Ending::Suspended);
             }
-            Command::Answered {
-                pending,
-                client,
-                answer,
-            } => self.answered(pending, client, answer),
         }
     }
 
-    fn attach(&mut self, client: ClientId, cx: ConnectionTo<Client>, replay: bool) -> Snapshot {
-        if replay {
-            for entry in self.journal.entries() {
-                let sent = match entry {
-                    Entry::Update { notification } => {
-                        cx.send_notification(notification.as_ref().clone())
-                    }
-                    Entry::TerminalOutput { terminal_id, data } => {
-                        cx.send_notification(TerminalOutputNotification {
-                            session_id: self.root.clone(),
-                            terminal_id: terminal_id.clone(),
-                            data: data.clone(),
-                        })
-                    }
-                    Entry::TerminalExit {
-                        terminal_id,
-                        status,
-                    } => cx.send_notification(TerminalExitNotification {
-                        session_id: self.root.clone(),
-                        terminal_id: terminal_id.clone(),
-                        status: status.clone(),
-                    }),
-                    _ => Ok(()),
-                };
-                if sent.is_err() {
-                    break;
-                }
-            }
-        }
-        self.clients.insert(client, cx.clone());
+    fn attach(
+        &mut self,
+        client: ClientId,
+        link: ClientLink,
+        from: ReplayFrom,
+        notices: Vec<String>,
+        trace: Option<PathBuf>,
+        reply: AttachReply,
+    ) {
         // What the agent sent before the request that brought this client here was answered
-        // (a load's replay, say) reaches it before that answer.
+        // (a load's replay, say) goes into the journal first.
         while let Ok(event) = self.events.try_recv() {
             self.agent_event(event);
         }
-        for (session_id, turn) in &self.turns {
-            let elapsed = u64::try_from(turn.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let _ = cx.send_notification(TurnNotification {
-                session_id: session_id.clone(),
-                turn: TurnState::Running {
-                    elapsed_ms: elapsed,
-                },
-            });
+        let journal_id = self.journal.id();
+        let (from, reset) = match from {
+            ReplayFrom::After(after) if after.journal == journal_id => {
+                (after.seq.saturating_add(1), false)
+            }
+            ReplayFrom::After(_) | ReplayFrom::Start => (1, true),
+            ReplayFrom::Now => (self.journal.head().saturating_add(1), false),
+        };
+        self.clients.insert(client, link.clone());
+        let state = self.state(notices, trace);
+        reply.send(state, Replay { from, reset });
+        let skip = usize::try_from(from).unwrap_or(usize::MAX);
+        for (seq, record) in self.journal.records().iter().enumerate().skip(skip) {
+            let Some(event) = record.entry.event() else {
+                continue;
+            };
+            let notification = SessionEventNotification {
+                session_id: self.root.clone(),
+                seq: u64::try_from(seq).unwrap_or(u64::MAX),
+                at: record.at,
+                event,
+            };
+            if link.cx.send_notification(notification).is_err() {
+                self.clients.remove(&client);
+                return;
+            }
         }
-        for pending in &mut self.pending {
-            forward(pending, client, &cx, &self.commands_tx);
-        }
-        self.snapshot.clone()
     }
 
-    fn detach(&mut self, client: ClientId) {
-        self.clients.remove(&client);
-        for pending in &mut self.pending {
-            pending.forwards.remove(&client);
+    /// The session as a client attaching now sees it.
+    fn state(&self, notices: Vec<String>, trace: Option<PathBuf>) -> SessionState {
+        let summary = lock(&self.summary).clone();
+        SessionState {
+            session_id: self.root.clone(),
+            agent: self.agent.clone(),
+            cwd: self.cwd.clone(),
+            additional_directories: self.additional_directories.clone(),
+            title: summary.title,
+            state: SessionStatus::Open,
+            activity: self.activity(),
+            clients: u32::try_from(self.clients.len()).unwrap_or(u32::MAX),
+            blank: self.blank.load(Ordering::Relaxed),
+            policy: self.policy.clone(),
+            modes: self.snapshot.modes.clone(),
+            config_options: self.snapshot.config_options.clone(),
+            turns: self
+                .turns
+                .iter()
+                .map(|(session_id, turn)| RunningTurn {
+                    session_id: session_id.clone(),
+                    started_at: turn.started_ms,
+                    origin: turn.origin.clone(),
+                })
+                .collect(),
+            pending: self.pending.iter().map(Pending::describe).collect(),
+            subagents: self.children.clone(),
+            journal: JournalHead {
+                id: self.journal.id(),
+                head: self.journal.head(),
+            },
+            notices,
+            trace,
         }
     }
 
     fn prompt(
         &mut self,
-        client: Option<ClientId>,
+        origin: TurnOrigin,
         session_id: SessionId,
         prompt: Vec<ContentBlock>,
-        reply: Reply,
-    ) {
+    ) -> Result<u64, Error> {
         if self.turns.contains_key(&session_id) {
-            reply.fail(Error::invalid_request().data("a turn is already running in this session"));
-            return;
+            return Err(errors::turn_running());
         }
-        if let Err(error) = self.agent.prompt(session_id.clone(), prompt.clone()) {
-            reply.fail(error);
-            return;
-        }
+        self.handle.prompt(session_id.clone(), prompt.clone())?;
         self.blank.store(false, Ordering::Relaxed);
-        // Agents don't echo prompts, so this is how the other clients and the journal see it.
-        // The agent's events come after: this task reads them next.
-        for block in prompt {
-            let notification = SessionNotification::new(
-                session_id.clone(),
-                SessionUpdate::UserMessageChunk(ContentChunk::new(block)),
-            );
-            self.journal.append(Entry::Update {
-                notification: Box::new(notification.clone()),
-            });
-            self.broadcast(&notification, client);
-        }
-        self.journal.append(Entry::TurnStarted {
+        let (seq, at) = self.record(Entry::TurnStarted {
             session_id: session_id.clone(),
             at_ms: now_ms(),
+            prompt,
+            origin: Some(origin.clone()),
         });
-        self.broadcast(
-            &TurnNotification {
-                session_id: session_id.clone(),
-                turn: TurnState::Running { elapsed_ms: 0 },
-            },
-            client,
-        );
-        let sender = match reply {
-            Reply::Responder(responder) => client.map(|client| (client, responder)),
-            Reply::Started(started) => {
-                let _ = started.send(Ok(()));
-                None
-            }
-        };
         self.turns.insert(
             session_id,
             Turn {
-                started: Instant::now(),
-                sender,
+                started_ms: at,
+                origin,
             },
         );
+        Ok(seq)
     }
 
-    /// `session/cancel` from any client. The protocol has the client answer every pending
-    /// permission request as cancelled; the daemon is that client.
+    /// `turn/cancel`. The protocol has the client answer every pending permission request
+    /// as cancelled; the Host is that client.
     fn cancel(&mut self, session_id: &SessionId) {
-        let (cancelled, kept) = std::mem::take(&mut self.pending)
-            .into_iter()
-            .partition(|pending| pending.session_id.as_ref() == Some(session_id));
-        self.pending = kept;
-        for pending in cancelled {
-            pending.cancel();
-        }
-        if let Err(error) = self.agent.cancel(session_id.clone()) {
+        self.resolve_where(
+            |pending| pending.session_id.as_ref() == Some(session_id),
+            Resolution::Cancelled,
+        );
+        if let Err(error) = self.handle.cancel(session_id.clone()) {
             tracing::warn!(%error, "failed to send session/cancel");
         }
     }
@@ -667,10 +732,9 @@ impl Actor {
                 } else {
                     self.adopt(&notification.session_id);
                 }
-                self.journal.append(Entry::Update {
-                    notification: Box::new(notification.clone()),
+                self.record(Entry::Update {
+                    notification: Box::new(notification),
                 });
-                self.broadcast(&notification, None);
             }
             AgentEvent::PermissionRequested(request) => {
                 let kind = self.tool_kinds.of(&request.request);
@@ -707,43 +771,34 @@ impl Actor {
                 }
             }
             AgentEvent::ElicitationCompleted(id) => {
-                self.broadcast(&CompleteElicitationNotification::new(id), None);
+                self.broadcast(&ElicitationCompletedNotification {
+                    session_id: self.root.clone(),
+                    notification: CompleteElicitationNotification::new(id),
+                });
             }
             AgentEvent::RequestWithdrawn(key) => {
                 if let Some(index) = self.pending.iter().position(|p| p.key() == key) {
-                    self.pending.remove(index).withdrawn();
+                    let pending = self.pending.remove(index);
+                    self.resolved(&pending.id, Resolution::Withdrawn, None);
+                    pending.withdrawn();
                 }
             }
             AgentEvent::TurnEnded { session_id, result } => self.turn_ended(session_id, result),
             AgentEvent::TerminalOutput { terminal_id, text } => {
-                self.journal.append(Entry::TerminalOutput {
-                    terminal_id: terminal_id.clone(),
-                    data: text.clone(),
-                });
-                let notification = TerminalOutputNotification {
-                    session_id: self.root.clone(),
+                self.record(Entry::TerminalOutput {
                     terminal_id,
                     data: text,
-                };
-                self.broadcast(&notification, None);
+                });
             }
             AgentEvent::TerminalExited {
                 terminal_id,
                 status,
             } => {
-                self.journal.append(Entry::TerminalExit {
-                    terminal_id: terminal_id.clone(),
-                    status: status.clone(),
-                });
-                let notification = TerminalExitNotification {
-                    session_id: self.root.clone(),
+                self.record(Entry::TerminalExit {
                     terminal_id,
                     status,
-                };
-                self.broadcast(&notification, None);
+                });
             }
-            // Only a daemon sends these.
-            AgentEvent::TurnRunning { .. } | AgentEvent::SessionEnded { .. } => {}
             AgentEvent::Disconnected(error) => {
                 let reason = error.map_or_else(
                     || "the agent exited".to_owned(),
@@ -756,7 +811,8 @@ impl Actor {
 
     /// A subagent session the agent reports under this one: requests for it come here.
     fn adopt(&mut self, child: &SessionId) {
-        if self.children.insert(child.clone()) {
+        if !self.children.contains(child) {
+            self.children.push(child.clone());
             self.shared
                 .registry()
                 .children
@@ -765,113 +821,156 @@ impl Actor {
     }
 
     fn ask(&mut self, session_id: Option<SessionId>, request: PendingRequest) {
-        let mut pending = Pending {
-            id: self.next_pending,
+        let pending = Pending {
+            id: format!("p{}", self.next_pending),
             session_id,
+            created_ms: now_ms(),
             request,
-            forwards: HashMap::new(),
         };
         self.next_pending += 1;
-        for (client, cx) in &self.clients {
-            forward(&mut pending, *client, cx, &self.commands_tx);
-        }
+        self.broadcast(&PendingAddedNotification {
+            session_id: self.root.clone(),
+            pending: pending.describe(),
+        });
         self.pending.push(pending);
     }
 
-    /// A client answered. The first real answer goes to the agent and the request is withdrawn
-    /// from everyone else. A cancelled permission isn't one: the TUI cancels what's pending when
-    /// it leaves a session, and a cancelled turn's requests were already answered here. A
-    /// dismissed elicitation is, once no other client could still answer it.
-    fn answered(&mut self, id: u64, client: ClientId, answer: Result<Answer, Error>) {
-        let Some(index) = self.pending.iter().position(|pending| pending.id == id) else {
-            return;
-        };
-        self.pending[index].forwards.remove(&client);
-        let answer = match answer {
-            Ok(Answer::Permission(response))
-                if matches!(response.outcome, RequestPermissionOutcome::Cancelled) =>
-            {
-                return;
+    /// `pending/answer`: the first answer goes to the agent.
+    fn answer(&mut self, pending_id: &str, by: String, answer: Answer) -> Result<(), Error> {
+        let index = self
+            .pending
+            .iter()
+            .position(|pending| pending.id == pending_id)
+            .ok_or_else(errors::already_resolved)?;
+        let matches = matches!(
+            (&self.pending[index].request, &answer),
+            (PendingRequest::Permission(_), Answer::Permission(_))
+                | (PendingRequest::Elicitation(_), Answer::Elicitation(_))
+        );
+        if !matches {
+            return Err(Error::invalid_params().data("that answer is for another kind of request"));
+        }
+        let pending = self.pending.remove(index);
+        self.resolved(&pending.id, Resolution::Answered, Some(by));
+        let passed = match (pending.request, answer) {
+            (PendingRequest::Permission(request), Answer::Permission(response)) => {
+                request.respond_with(response)
             }
-            Ok(Answer::Elicitation(response))
-                if matches!(response.action, ElicitationAction::Cancel)
-                    && !self.pending[index].forwards.is_empty() =>
-            {
-                return;
+            (PendingRequest::Elicitation(request), Answer::Elicitation(response)) => {
+                request.respond_with(response)
             }
-            Ok(answer) => answer,
-            Err(_) => return,
+            _ => Ok(()),
         };
-        self.pending.remove(index).answer(answer);
+        if let Err(error) = passed {
+            tracing::debug!(%error, "couldn't pass an answer on to the agent");
+        }
+        Ok(())
+    }
+
+    /// Resolve the pending requests `which` picks as `outcome`, answering the agent as the
+    /// protocol asks for a cancelled turn.
+    fn resolve_where(&mut self, which: impl Fn(&Pending) -> bool, outcome: Resolution) {
+        let (resolved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(which);
+        self.pending = kept;
+        for pending in resolved {
+            self.resolved(&pending.id, outcome, None);
+            pending.cancel();
+        }
+    }
+
+    fn resolved(&mut self, pending_id: &str, outcome: Resolution, by: Option<String>) {
+        self.broadcast(&PendingResolvedNotification {
+            session_id: self.root.clone(),
+            pending_id: pending_id.to_owned(),
+            outcome,
+            by,
+        });
     }
 
     fn turn_ended(&mut self, session_id: SessionId, result: Result<PromptResponse, Error>) {
-        let turn = self.turns.remove(&session_id);
+        self.turns.remove(&session_id);
         // An agent resolves its requests before ending a turn; any left can't matter now.
-        let (leftover, kept) = std::mem::take(&mut self.pending)
-            .into_iter()
-            .partition(|pending| pending.session_id.as_ref() == Some(&session_id));
-        self.pending = kept;
-        for pending in leftover {
-            pending.cancel();
-        }
-        let (stop_reason, error) = match &result {
-            Ok(response) => (Some(response.stop_reason), None),
-            Err(error) => (None, Some(error.clone())),
-        };
-        self.journal.append(Entry::TurnEnded {
-            session_id: session_id.clone(),
-            stop_reason,
-            error: error.clone(),
-        });
-        let sender = turn.and_then(|turn| turn.sender);
-        let except = sender.as_ref().map(|(client, _)| *client);
-        if let Some((_, responder)) = sender {
-            let _ = responder.respond_with_result(result);
-        }
-        self.broadcast(
-            &TurnNotification {
-                session_id,
-                turn: TurnState::Ended { stop_reason, error },
-            },
-            except,
+        self.resolve_where(
+            |pending| pending.session_id.as_ref() == Some(&session_id),
+            Resolution::Cancelled,
         );
+        self.record(Entry::turn_ended(session_id, &result));
     }
 
-    /// Send to every attached client but `except`, dropping clients that have gone.
-    fn broadcast<N: JsonRpcNotification + Clone>(
-        &mut self,
-        notification: &N,
-        except: Option<ClientId>,
-    ) {
-        self.clients.retain(|client, cx| {
-            Some(*client) == except || cx.send_notification(notification.clone()).is_ok()
-        });
+    /// Journal `entry` and send it to every attached client. Returns its position and time.
+    fn record(&mut self, entry: Entry) -> (u64, u64) {
+        let event = entry.event();
+        let (seq, at) = self.journal.append(entry);
+        if let Some(event) = event {
+            self.broadcast(&SessionEventNotification {
+                session_id: self.root.clone(),
+                seq,
+                at,
+                event,
+            });
+        }
+        (seq, at)
     }
 
-    fn update_summary(&self) {
-        let mut summary = lock(&self.summary);
-        summary.clients = self.clients.len();
-        summary.activity = if !self.pending.is_empty() {
+    /// Send to every attached client, dropping clients that have gone.
+    fn broadcast<N: JsonRpcNotification + Clone>(&mut self, notification: &N) {
+        self.clients
+            .retain(|_, link| link.cx.send_notification(notification.clone()).is_ok());
+    }
+
+    fn activity(&self) -> Activity {
+        if !self.pending.is_empty() {
             Activity::Waiting
         } else if !self.turns.is_empty() {
             Activity::Running
         } else {
             Activity::Idle
+        }
+    }
+
+    /// Keep the summary current, and tell attached clients what changed.
+    fn update_summary(&mut self) {
+        let activity = self.activity();
+        let clients = u32::try_from(self.clients.len()).unwrap_or(u32::MAX);
+        let title = {
+            let mut summary = lock(&self.summary);
+            summary.clients = clients;
+            summary.activity = activity;
+            summary.title.clone()
         };
+        let now = Reported {
+            activity: Some(activity),
+            clients: Some(clients),
+            title,
+            blank: Some(self.blank.load(Ordering::Relaxed)),
+        };
+        if now == self.reported {
+            return;
+        }
+        let notification = SessionChangedNotification {
+            session_id: self.root.clone(),
+            activity: changed(&now.activity, &self.reported.activity),
+            clients: changed(&now.clients, &self.reported.clients),
+            title: changed(&now.title, &self.reported.title),
+            blank: changed(&now.blank, &self.reported.blank),
+        };
+        self.reported = now;
+        self.broadcast(&notification);
     }
 
     async fn finish(mut self, ending: Ending) {
-        // A blank session isn't worth leaving for a later daemon, or keeping a journal of.
+        // A blank session isn't worth leaving for a later Host, or keeping a journal of.
         let blank = self.blank.load(Ordering::Relaxed);
         let ending = match ending {
-            Ending::Suspended if blank => Ending::Closed("the daemon stopped".to_owned()),
+            Ending::Suspended if blank => Ending::Closed("the Host stopped".to_owned()),
             ending => ending,
         };
         let suspended = matches!(ending, Ending::Suspended);
         let reason = match &ending {
             Ending::Closed(reason) | Ending::AgentGone(reason) => reason.clone(),
-            Ending::Suspended => "the daemon stopped".to_owned(),
+            Ending::Suspended => "the Host stopped".to_owned(),
         };
         // Nothing reaches this session from now on.
         {
@@ -881,7 +980,7 @@ impl Actor {
             for child in &self.children {
                 registry.children.remove(child);
             }
-            // Left open for a later daemon when this one stops; closed otherwise.
+            // Left open for a later Host when this one stops; closed otherwise.
             if blank {
                 registry.known.remove(&self.root);
             } else if let Some(known) = registry.known.get_mut(&self.root) {
@@ -889,42 +988,30 @@ impl Actor {
                 known.last_activity_ms = last_activity_ms;
             }
         }
-        let error = Error::internal_error().data(format!("the session ended: {reason}"));
-        for (session_id, turn) in std::mem::take(&mut self.turns) {
-            let except = turn.sender.as_ref().map(|(client, _)| *client);
-            if let Some((_, responder)) = turn.sender {
-                let _ = responder.respond_with_error(error.clone());
+        let pending_all = |_: &Pending| true;
+        if suspended {
+            // The journal stays as it was, for a later Host to carry on from.
+            for pending in std::mem::take(&mut self.pending) {
+                pending.cancel();
             }
-            if !suspended {
-                self.journal.append(Entry::TurnEnded {
-                    session_id: session_id.clone(),
-                    stop_reason: None,
-                    error: Some(error.clone()),
-                });
+        } else {
+            let error = Error::internal_error().data(format!("the session ended: {reason}"));
+            let turns: Vec<SessionId> = self
+                .turns
+                .drain()
+                .map(|(session_id, _)| session_id)
+                .collect();
+            for session_id in turns {
+                self.record(Entry::turn_ended(session_id, &Err(error.clone())));
             }
-            self.broadcast(
-                &TurnNotification {
-                    session_id,
-                    turn: TurnState::Ended {
-                        stop_reason: None,
-                        error: Some(error.clone()),
-                    },
-                },
-                except,
-            );
+            self.resolve_where(pending_all, Resolution::Cancelled);
+            self.record(Entry::Closed {
+                reason,
+                at_ms: now_ms(),
+            });
         }
-        for pending in std::mem::take(&mut self.pending) {
-            pending.cancel();
-        }
-        self.broadcast(
-            &SessionEndedNotification {
-                session_id: self.root.clone(),
-                reason: reason.clone(),
-            },
-            None,
-        );
         if matches!(ending, Ending::Closed(_))
-            && self.agent.agent().is_some_and(|agent| {
+            && self.handle.agent().is_some_and(|agent| {
                 agent
                     .agent_capabilities
                     .session_capabilities
@@ -932,18 +1019,13 @@ impl Actor {
                     .is_some()
             })
         {
-            let close = self.agent.close_session(self.root.clone());
+            let close = self.handle.close_session(self.root.clone());
             if let Ok(Err(error)) = tokio::time::timeout(CLOSE_TIMEOUT, close).await {
                 tracing::debug!(%error, "the agent didn't close the session");
             }
         }
         if blank {
             self.journal.discard();
-        } else if !suspended {
-            self.journal.append(Entry::Closed {
-                reason,
-                at_ms: now_ms(),
-            });
         }
         if let Some(connection) = self.connection.take() {
             connection.shutdown().await;
@@ -954,37 +1036,9 @@ impl Actor {
     }
 }
 
-/// Ask `client` the pending request, reporting its answer back to the session unless the
-/// request is withdrawn from it first.
-fn forward(
-    pending: &mut Pending,
-    client: ClientId,
-    cx: &ConnectionTo<Client>,
-    commands: &mpsc::UnboundedSender<Command>,
-) {
-    let (withdraw, withdrawn) = oneshot::channel::<()>();
-    pending.forwards.insert(client, withdraw);
-    let answer: BoxFuture<'static, Result<Answer, Error>> = match &pending.request {
-        PendingRequest::Permission(request) => {
-            let sent = cx.send_request(request.request.clone());
-            Box::pin(async move { sent.block_task().await.map(Answer::Permission) })
-        }
-        PendingRequest::Elicitation(request) => {
-            let sent = cx.send_request(request.request.clone());
-            Box::pin(async move { sent.block_task().await.map(Answer::Elicitation) })
-        }
-    };
-    let commands = commands.clone();
-    let id = pending.id;
-    tokio::spawn(async move {
-        tokio::select! {
-            answer = answer => {
-                let _ = commands.send(Command::Answered { pending: id, client, answer });
-            }
-            // Dropping the request asks the client to withdraw it.
-            _ = withdrawn => {}
-        }
-    });
+/// `new`, if it isn't what clients were last told.
+fn changed<T: Clone + PartialEq>(new: &Option<T>, old: &Option<T>) -> Option<T> {
+    (new != old).then(|| new.clone()).flatten()
 }
 
 async fn sleep_until(deadline: Option<Instant>) {

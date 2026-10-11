@@ -1,10 +1,12 @@
-//! Each live session's journal: what its clients were sent, so a client that attaches later
-//! sees the same transcript, and a restarted daemon can take the session up again.
+//! Each session's journal: the numbered record of what its attached clients are sent, so a
+//! client catches up from the last position it saw, and a restarted Host can take the
+//! session up again.
 //!
-//! On disk it is JSONL, one [`Entry`] per line, readable only by the user since it holds
-//! prompts and agent output. The client environment a session was launched with is never
-//! written. A journal ends with [`Entry::Closed`] once its session is closed; one that
-//! doesn't end that way belonged to a daemon that stopped, and can be recovered.
+//! On disk it is JSONL, one [`Record`] per line, readable only by the user since it holds
+//! prompts and agent output. The agent's environment is never written. The first line is the
+//! header, at position 0; events follow at 1, 2, 3 and so on, each position being its line.
+//! A journal ends with [`Entry::Closed`] once its session is closed; one that doesn't end that
+//! way belonged to a Host that stopped, and can be recovered.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -23,15 +25,44 @@ use agent_client_protocol::Error;
 use serde::Deserialize;
 use serde::Serialize;
 use weave_acp_core::AgentSpec;
-use weave_acp_core::daemon_protocol::AgentChoice;
-use weave_acp_core::daemon_protocol::PermissionPolicy;
+use weave_acp_core::schema::ContentBlock;
+use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::TerminalId;
+use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::sessions::TurnOrigin;
 
 const VERSION: u32 = 1;
+
+/// How the agent was chosen, as journals record it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordedChoice {
+    /// By id.
+    Named(String),
+    /// A custom command, in journals from before agents were named only by id.
+    Command(Vec<String>),
+}
+
+/// One line of a journal.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Record {
+    #[serde(flatten)]
+    pub(crate) entry: Entry,
+    /// When it was written; absent in journals from before records were timed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) at: u64,
+}
+
+// Serde hands `skip_serializing_if` a reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -42,9 +73,9 @@ pub(crate) enum Entry {
         version: u32,
         session_id: SessionId,
         agent: AgentSpec,
-        /// How the user chose the agent; absent in journals from before it was recorded.
+        /// How the agent was chosen; absent in journals from before it was recorded.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        choice: Option<AgentChoice>,
+        choice: Option<RecordedChoice>,
         cwd: PathBuf,
         policy: PermissionPolicy,
         created_ms: u64,
@@ -53,7 +84,7 @@ pub(crate) enum Entry {
     Update {
         notification: Box<SessionNotification>,
     },
-    /// Output from a command the daemon runs for the agent.
+    /// Output from a command the Host runs for the agent.
     #[serde(rename_all = "camelCase")]
     TerminalOutput {
         terminal_id: TerminalId,
@@ -64,11 +95,24 @@ pub(crate) enum Entry {
         terminal_id: TerminalId,
         status: TerminalExitStatus,
     },
+    /// A turn started. Journals from before prompts were kept here recorded them as
+    /// `user_message_chunk` updates just before, and no origin.
     #[serde(rename_all = "camelCase")]
-    TurnStarted { session_id: SessionId, at_ms: u64 },
+    TurnStarted {
+        session_id: SessionId,
+        at_ms: u64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        prompt: Vec<ContentBlock>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<TurnOrigin>,
+    },
+    /// A turn ended: the agent's answer, or why it failed. Journals from before answers were
+    /// kept recorded only the stop reason.
     #[serde(rename_all = "camelCase")]
     TurnEnded {
         session_id: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response: Option<PromptResponse>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stop_reason: Option<StopReason>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,7 +126,7 @@ impl Entry {
     pub(crate) fn header(
         session_id: SessionId,
         agent: AgentSpec,
-        choice: Option<AgentChoice>,
+        agent_id: &str,
         cwd: PathBuf,
         policy: PermissionPolicy,
     ) -> Self {
@@ -90,30 +134,94 @@ impl Entry {
             version: VERSION,
             session_id,
             agent,
-            choice,
+            choice: Some(RecordedChoice::Named(agent_id.to_owned())),
             cwd,
             policy,
             created_ms: now_ms(),
         }
     }
+
+    pub(crate) fn turn_ended(
+        session_id: SessionId,
+        result: &Result<PromptResponse, Error>,
+    ) -> Self {
+        let (response, error) = match result {
+            Ok(response) => (Some(response.clone()), None),
+            Err(error) => (None, Some(error.clone())),
+        };
+        Self::TurnEnded {
+            session_id,
+            response,
+            stop_reason: None,
+            error,
+        }
+    }
+
+    /// The entry as clients are sent it; none for the header.
+    pub(crate) fn event(&self) -> Option<SessionEvent> {
+        Some(match self {
+            Self::Header { .. } => return None,
+            Self::Update { notification } => SessionEvent::Update {
+                notification: notification.clone(),
+            },
+            Self::TerminalOutput { terminal_id, data } => SessionEvent::TerminalOutput {
+                terminal_id: terminal_id.clone(),
+                data: data.clone(),
+            },
+            Self::TerminalExit {
+                terminal_id,
+                status,
+            } => SessionEvent::TerminalExit {
+                terminal_id: terminal_id.clone(),
+                status: status.clone(),
+            },
+            Self::TurnStarted {
+                session_id,
+                prompt,
+                origin,
+                ..
+            } => SessionEvent::TurnStarted {
+                session_id: session_id.clone(),
+                prompt: prompt.clone(),
+                origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
+            },
+            Self::TurnEnded {
+                session_id,
+                response,
+                stop_reason,
+                error,
+            } => SessionEvent::TurnEnded {
+                session_id: session_id.clone(),
+                response: response
+                    .clone()
+                    .or_else(|| stop_reason.map(PromptResponse::new)),
+                error: error.clone(),
+            },
+            Self::Closed { reason, .. } => SessionEvent::Closed {
+                reason: reason.clone(),
+            },
+        })
+    }
 }
 
 pub(crate) struct Journal {
-    entries: Vec<Entry>,
-    /// Where entries are appended, unless the journal only lives in memory.
+    records: Vec<Record>,
+    /// Where records are appended, unless the journal only lives in memory.
     file: Option<File>,
     /// The file's path, unless the journal only lives in memory.
     path: Option<PathBuf>,
 }
 
 impl Journal {
-    /// A journal that is never written down, for a daemon inside one client.
+    /// A journal that is never written down, for a Host inside one client.
     pub(crate) fn memory(header: Entry) -> Self {
-        Self {
-            entries: vec![header],
+        let mut journal = Self {
+            records: Vec::new(),
             file: None,
             path: None,
-        }
+        };
+        journal.append(header);
+        journal
     }
 
     /// A new journal for a session in `dir`, replacing any earlier one of the same session.
@@ -122,7 +230,7 @@ impl Journal {
         let path = path_for(dir, session_id);
         let file = private_file(&path, true)?;
         let mut journal = Self {
-            entries: Vec::new(),
+            records: Vec::new(),
             file: Some(file),
             path: Some(path),
         };
@@ -130,10 +238,10 @@ impl Journal {
         Ok(journal)
     }
 
-    /// Continue the journal at `path`, already read as `entries`.
-    pub(crate) fn reopen(path: &Path, entries: Vec<Entry>) -> io::Result<Self> {
+    /// Continue the journal at `path`, already read as `records`.
+    pub(crate) fn reopen(path: &Path, records: Vec<Record>) -> io::Result<Self> {
         Ok(Self {
-            entries,
+            records,
             file: Some(private_file(path, false)?),
             path: Some(path.to_path_buf()),
         })
@@ -149,9 +257,14 @@ impl Journal {
         }
     }
 
-    pub(crate) fn append(&mut self, entry: Entry) {
+    /// Append `entry`; returns its position and when it was written.
+    pub(crate) fn append(&mut self, entry: Entry) -> (u64, u64) {
+        let record = Record {
+            entry,
+            at: now_ms(),
+        };
         if let Some(file) = &mut self.file {
-            let written = serde_json::to_string(&entry)
+            let written = serde_json::to_string(&record)
                 .map_err(io::Error::other)
                 .and_then(|line| writeln!(file, "{line}"));
             if let Err(error) = written {
@@ -160,11 +273,27 @@ impl Journal {
                 self.file = None;
             }
         }
-        self.entries.push(entry);
+        let at = record.at;
+        self.records.push(record);
+        (self.head(), at)
     }
 
-    pub(crate) fn entries(&self) -> &[Entry] {
-        &self.entries
+    pub(crate) fn records(&self) -> &[Record] {
+        &self.records
+    }
+
+    /// The position of the last record; 0 when there's only the header.
+    pub(crate) fn head(&self) -> u64 {
+        u64::try_from(self.records.len().saturating_sub(1)).unwrap_or(u64::MAX)
+    }
+
+    /// The journal's id: when its header was written. A session opened again after it closed
+    /// gets a new journal, and with it a new id.
+    pub(crate) fn id(&self) -> String {
+        match self.records.first().map(|record| &record.entry) {
+            Some(Entry::Header { created_ms, .. }) => created_ms.to_string(),
+            _ => "0".to_owned(),
+        }
     }
 }
 
@@ -180,31 +309,51 @@ pub(crate) fn path_for(dir: &Path, session_id: &SessionId) -> PathBuf {
     dir.join(format!("{name}.jsonl"))
 }
 
-/// A journal's entries. A line the daemon was still writing when it stopped is skipped.
-pub(crate) fn read(path: &Path) -> io::Result<Vec<Entry>> {
+/// A journal's records. A line the Host was still writing when it stopped is skipped, and so
+/// are records whose time is missing given the one before.
+pub(crate) fn read(path: &Path) -> io::Result<Vec<Record>> {
     let file = File::open(path)?;
-    let mut entries = Vec::new();
+    let mut records: Vec<Record> = Vec::new();
     for line in io::BufReader::new(file).lines() {
         let line = line?;
-        match serde_json::from_str(&line) {
-            Ok(entry) => entries.push(entry),
+        match serde_json::from_str::<Record>(&line) {
+            Ok(mut record) => {
+                if record.at == 0 {
+                    record.at = match (&record.entry, records.last()) {
+                        (Entry::Header { created_ms, .. }, _) => *created_ms,
+                        (_, Some(previous)) => previous.at,
+                        (_, None) => 0,
+                    };
+                }
+                records.push(record);
+            }
             Err(error) => tracing::warn!(%error, path = %path.display(), "skipping a journal line"),
         }
     }
-    Ok(entries)
+    Ok(records)
 }
 
 /// What a journal says about its session: which agent, where, under which policy, and
-/// whether it was closed or left open by a daemon that stopped.
+/// whether it was closed or left open by a Host that stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recorded {
     pub agent: AgentSpec,
-    pub choice: Option<AgentChoice>,
+    pub choice: Option<RecordedChoice>,
     pub cwd: PathBuf,
     pub policy: PermissionPolicy,
     pub closed: bool,
     /// When it was last written to.
     pub last_activity_ms: u64,
+}
+
+impl Recorded {
+    /// The agent it runs with, by id, when the journal names one.
+    pub fn agent_id(&self) -> Option<&str> {
+        match &self.choice {
+            Some(RecordedChoice::Named(id)) => Some(id),
+            _ => None,
+        }
+    }
 }
 
 /// The record of `session_id`'s journal in `dir`, if it has one.
@@ -228,7 +377,7 @@ pub(crate) fn index(dir: &Path) -> HashMap<SessionId, Recorded> {
         .collect()
 }
 
-/// A journal's header and whether its last entry closed it, without reading the rest.
+/// A journal's header and whether its last record closed it, without reading the rest.
 fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
     let file = File::open(path).ok()?;
     let modified = file
@@ -249,13 +398,13 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         cwd,
         policy,
         ..
-    } = serde_json::from_str(&header).ok()?
+    } = serde_json::from_str::<Record>(&header).ok()?.entry
     else {
         return None;
     };
     let closed = last
-        .and_then(|line| serde_json::from_str::<Entry>(&line).ok())
-        .is_some_and(|entry| matches!(entry, Entry::Closed { .. }));
+        .and_then(|line| serde_json::from_str::<Record>(&line).ok())
+        .is_some_and(|record| matches!(record.entry, Entry::Closed { .. }));
     Some((
         session_id,
         Recorded {
@@ -269,17 +418,20 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
     ))
 }
 
-/// Whether the session the journal records was closed, rather than left by a daemon that
+/// Whether the session the journal records was closed, rather than left by a Host that
 /// stopped.
-pub(crate) fn is_closed(entries: &[Entry]) -> bool {
-    matches!(entries.last(), Some(Entry::Closed { .. }))
+pub(crate) fn is_closed(records: &[Record]) -> bool {
+    matches!(
+        records.last().map(|record| &record.entry),
+        Some(Entry::Closed { .. })
+    )
 }
 
 /// Sessions whose turn started and never ended.
-pub(crate) fn open_turns(entries: &[Entry]) -> Vec<SessionId> {
+pub(crate) fn open_turns(records: &[Record]) -> Vec<SessionId> {
     let mut open: Vec<SessionId> = Vec::new();
-    for entry in entries {
-        match entry {
+    for record in records {
+        match &record.entry {
             Entry::TurnStarted { session_id, .. } => open.push(session_id.clone()),
             Entry::TurnEnded { session_id, .. } => open.retain(|open| open != session_id),
             _ => {}
@@ -288,7 +440,7 @@ pub(crate) fn open_turns(entries: &[Entry]) -> Vec<SessionId> {
     open
 }
 
-/// Remove journals untouched for `age`: closed sessions, and ones left by a daemon that
+/// Remove journals untouched for `age`: closed sessions, and ones left by a Host that
 /// stopped and never taken up again. The `live` sessions' journals stay, however quiet.
 pub(crate) fn prune(dir: &Path, age: Duration, live: &[SessionId]) {
     let Ok(listing) = std::fs::read_dir(dir) else {
@@ -362,7 +514,7 @@ mod tests {
         Entry::header(
             SessionId::new(session_id.to_owned()),
             AgentSpec::new("agent", ["--acp"]),
-            Some(AgentChoice::Named("agent".into())),
+            "agent",
             "/repo".into(),
             PermissionPolicy::ask(),
         )
@@ -373,10 +525,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let id = SessionId::new("s/1");
         let mut journal = Journal::create(dir.path(), &id, header("s/1")).expect("create");
-        journal.append(Entry::TurnStarted {
+        assert_eq!(journal.head(), 0);
+        let (seq, _) = journal.append(Entry::TurnStarted {
             session_id: id.clone(),
             at_ms: 1,
+            prompt: vec![ContentBlock::from("hi".to_owned())],
+            origin: None,
         });
+        assert_eq!(seq, 1);
         journal.append(Entry::Update {
             notification: Box::new(SessionNotification::new(
                 id.clone(),
@@ -388,32 +544,59 @@ mod tests {
             path.file_name().and_then(|name| name.to_str()),
             Some("s~2f1.jsonl")
         );
-        let entries = read(&path).expect("read");
-        assert_eq!(entries.len(), 3);
-        assert!(!is_closed(&entries));
-        assert_eq!(open_turns(&entries), std::slice::from_ref(&id));
+        let records = read(&path).expect("read");
+        assert_eq!(records.len(), 3);
+        assert!(!is_closed(&records));
+        assert_eq!(open_turns(&records), std::slice::from_ref(&id));
 
-        // Reopened after a restart, it carries on where it was.
-        let mut journal = Journal::reopen(&path, entries).expect("reopen");
-        journal.append(Entry::TurnEnded {
-            session_id: id,
-            stop_reason: Some(StopReason::Cancelled),
-            error: None,
-        });
-        journal.append(Entry::Closed {
+        // Reopened after a restart, it carries on where it was, under the same id.
+        let id_before = journal.id();
+        let mut journal = Journal::reopen(&path, records).expect("reopen");
+        assert_eq!(journal.id(), id_before);
+        journal.append(Entry::turn_ended(
+            id,
+            &Ok(PromptResponse::new(StopReason::Cancelled)),
+        ));
+        let (seq, _) = journal.append(Entry::Closed {
             reason: "closed".into(),
             at_ms: 2,
         });
-        let entries = read(&path).expect("read");
-        assert!(open_turns(&entries).is_empty());
-        assert!(is_closed(&entries));
+        assert_eq!(seq, 4);
+        let records = read(&path).expect("read");
+        assert!(open_turns(&records).is_empty());
+        assert!(is_closed(&records));
         // Its record, alone and in the index.
         let recorded = recorded(dir.path(), &SessionId::new("s/1")).expect("recorded");
-        assert_eq!(recorded.choice, Some(AgentChoice::Named("agent".into())));
+        assert_eq!(recorded.agent_id(), Some("agent"));
         assert_eq!(recorded.cwd, PathBuf::from("/repo"));
         assert!(recorded.closed);
         let index = index(dir.path());
         assert_eq!(index.get(&SessionId::new("s/1")), Some(&recorded));
+    }
+
+    /// Journals from before records were timed, prompts kept with their turn, and answers
+    /// kept whole still read, and replay as clients expect.
+    #[test]
+    fn journals_written_before_this_format_still_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("old.jsonl");
+        let lines = [
+            r#"{"type":"header","version":1,"sessionId":"old","agent":{"command":"npx","args":["x"]},"choice":{"command":["my-agent"]},"cwd":"/repo","policy":{},"createdMs":5}"#,
+            r#"{"type":"update","notification":{"sessionId":"old","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"}}}}"#,
+            r#"{"type":"turnStarted","sessionId":"old","atMs":6}"#,
+            r#"{"type":"turnEnded","sessionId":"old","stopReason":"end_turn"}"#,
+        ];
+        std::fs::write(&path, lines.join("\n")).expect("old journal");
+        let records = read(&path).expect("read");
+        assert_eq!(records.len(), 4);
+        assert!(records.iter().all(|record| record.at == 5));
+        assert!(matches!(
+            records[3].entry.event(),
+            Some(SessionEvent::TurnEnded { response: Some(response), .. })
+                if response.stop_reason == StopReason::EndTurn
+        ));
+        let (_, recorded) = record_of(&path).expect("recorded");
+        assert_eq!(recorded.agent_id(), None);
     }
 
     #[cfg(unix)]

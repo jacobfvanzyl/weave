@@ -46,7 +46,7 @@ pub(crate) fn terminal_events(update: &SessionUpdate) -> Vec<AgentEvent> {
 }
 
 /// Remove the terminal progress [`terminal_events`] reads from an update's `_meta`, once it
-/// has become events: the weave daemon passes those on to its clients itself.
+/// has become events: the weave Host passes those on to its clients itself.
 pub fn strip_terminal_events(update: &mut SessionUpdate) {
     let meta = match update {
         SessionUpdate::ToolCall(call) => call.meta.as_mut(),

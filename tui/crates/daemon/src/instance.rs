@@ -1,6 +1,7 @@
-//! Agent processes: one per live session, started in the session's directory with the
-//! environment of the client that asked for it, as if that client had started it.
+//! Agent processes: one per open session, started in the session's directory with the
+//! Host's agent environment under the agent's own settings.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,8 +14,19 @@ use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::InitializeError;
 use weave_acp_core::Traces;
-use weave_acp_core::daemon_protocol::Launch;
 use weave_acp_core::schema::InitializeResponse;
+
+/// An agent to start: how, and where.
+#[derive(Clone, Debug)]
+pub struct Launch {
+    /// The agent's id, as clients name it.
+    pub agent_id: String,
+    pub spec: AgentSpec,
+    /// Where the agent process starts, and the session's directory.
+    pub cwd: PathBuf,
+    /// The environment the agent inherits, under its own settings. Never written to disk.
+    pub environment: BTreeMap<String, String>,
+}
 
 /// Starts an agent and connects to it, uninitialized, tracing its protocol into whatever
 /// the traces hold: as a process, or in tests in-process.
@@ -68,6 +80,7 @@ impl LaunchKey {
 
 /// An initialized agent.
 pub(crate) struct Instance {
+    pub(crate) agent_id: String,
     pub(crate) connection: AgentConnection,
     pub(crate) events: UnboundedReceiver<AgentEvent>,
     pub(crate) key: LaunchKey,
@@ -92,6 +105,7 @@ impl Instance {
             });
         }
         Ok(Self {
+            agent_id: launch.agent_id.clone(),
             connection,
             events,
             key: LaunchKey::new(launch, options),
@@ -110,7 +124,7 @@ impl Instance {
     }
 }
 
-/// `launch`'s command, started in its directory with the client's environment under the
+/// `launch`'s command, started in its directory with the Host's agent environment under the
 /// command's own. The SDK can't set a child's directory, so `sh` changes to it and then
 /// becomes the agent.
 fn in_directory(launch: &Launch) -> AgentSpec {
@@ -154,18 +168,17 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn agents_start_in_their_directory_with_the_clients_environment() {
+    fn agents_start_in_their_directory_with_the_hosts_environment() {
         let mut spec = AgentSpec::new("agent", ["--acp"]);
         spec.env.insert("MODE".into(), "acp".into());
         let launch = Launch {
+            agent_id: "agent".into(),
             spec,
-            choice: None,
             cwd: "/repo dir".into(),
             environment: BTreeMap::from([
                 ("PATH".to_owned(), "/client/bin".to_owned()),
                 ("MODE".to_owned(), "shell".to_owned()),
             ]),
-            trace: None,
         };
         let spec = in_directory(&launch);
         assert_eq!(spec.command, "/bin/sh");
@@ -174,7 +187,7 @@ mod tests {
             spec.env.get("PATH").map(String::as_str),
             Some("/client/bin")
         );
-        // The agent's own settings win over the client's environment.
+        // The agent's own settings win over the Host's environment.
         assert_eq!(spec.env.get("MODE").map(String::as_str), Some("acp"));
         assert_eq!(spec.env.get("PWD").map(String::as_str), Some("/repo dir"));
 

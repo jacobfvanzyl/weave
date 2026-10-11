@@ -1,9 +1,9 @@
-//! `weave run`: one prompt in a headless session, in the daemon.
+//! `weave run`: one prompt in a headless session, in the weave Host.
 //!
 //! The session's permission requests are answered by its policy: the tool kinds given with
 //! `--approve` are allowed once, everything else is rejected, and elicitations are dismissed,
 //! since nobody is there to answer. The reply streams to stdout until the turn ends; with
-//! `--detach` the turn is left running in the daemon, to attach to later with `weave --resume`.
+//! `--detach` the turn is left running in the Host, to attach to later with `weave --resume`.
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -13,13 +13,18 @@ use std::process::ExitCode;
 use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
-use weave_acp_core::AgentEvent;
-use weave_acp_core::ClientOptions;
-use weave_acp_core::daemon_protocol::RunRequest;
-use weave_acp_core::policy::PermissionPolicy;
 use weave_acp_core::schema::ContentBlock;
+use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
+use weave_host_client::HostEvent;
+use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::sessions::CloseWhen;
+use weave_host_protocol::sessions::DetachSessionRequest;
+use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::RunRequest;
+use weave_host_protocol::turns::CancelTurnRequest;
 
 use crate::args::AgentArgs;
 use crate::args::ApproveArgs;
@@ -27,11 +32,9 @@ use crate::args::SessionArgs;
 use crate::args::WorkspaceArgs;
 use crate::args::reopen_command;
 use crate::daemon::Target;
-use crate::daemon::daemon_launch;
 use crate::recent::Recent;
 use crate::start::StartMode;
 use crate::start::choose;
-use crate::start::session_setup;
 
 #[derive(Args)]
 pub struct RunArgs {
@@ -53,7 +56,7 @@ pub struct RunArgs {
     #[command(flatten)]
     approve: ApproveArgs,
 
-    /// Leave the turn running in the daemon and print the session's id.
+    /// Leave the turn running in the weave Host and print the session's id.
     #[arg(long)]
     detach: bool,
 
@@ -61,7 +64,7 @@ pub struct RunArgs {
     #[arg(long)]
     json: bool,
 
-    /// Run the agent in this process rather than the daemon.
+    /// Run the agent in this process rather than the weave Host.
     #[arg(long, conflicts_with = "detach")]
     no_daemon: bool,
 }
@@ -88,37 +91,35 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     }
     let launch = args
         .agent
-        .launch(&args.workspace, chosen.agent, chosen.cwd)
-        .await?;
-    if args.detach && matches!(target, Target::InProcess(_)) {
-        bail!("--detach needs the daemon, which the config turns off");
-    }
-    // Nobody can sign in at a terminal partway through a headless run.
-    let options = ClientOptions {
-        terminal_auth: false,
-        ..launch.options
-    };
-    let (connection, mut events) = target.connect(daemon_launch(&launch), options).await?;
-    let (setup, notices) = session_setup(&launch, &connection);
-    for notice in notices {
+        .host_launch(&args.workspace, chosen.agent, chosen.cwd)?;
+    if let Some(notice) = &launch.config.notice {
         eprintln!("weave: {notice}");
     }
+    if args.detach && matches!(target, Target::InProcess) {
+        bail!("--detach needs the weave Host, which the config turns off");
+    }
+    let host = target.host(&launch, &args.workspace, args.agent.config_file())?;
+    let (connection, mut events) = host.connect("weave-cli").await?;
     let session_id = match mode {
         StartMode::Resume(session_id) => Some(session_id),
-        // The live session here first, as the daemon lists them.
+        // The open session here first, as the Host lists them.
         StartMode::Continue => {
             let listed = connection
-                .list_sessions(Some(launch.cwd.clone()), None)
+                .send(ListSessionsRequest {
+                    agent_id: Some(launch.agent_id().to_owned()),
+                    cwd: Some(launch.cwd.clone()),
+                    cursor: None,
+                })
                 .await;
             match listed.map(|listed| listed.sessions.into_iter().next()) {
-                Ok(Some(latest)) => Some(latest.session_id),
+                Ok(Some(latest)) => Some(latest.info.session_id),
                 Ok(None) => {
                     eprintln!("weave: no earlier session here; starting one");
                     None
                 }
                 Err(error) => {
                     connection.shutdown().await;
-                    target.finish().await;
+                    host.finish().await;
                     return Err(error).context("finding the last session here");
                 }
             }
@@ -126,32 +127,44 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         StartMode::New | StartMode::Pick => None,
     };
     let request = RunRequest {
-        launch: daemon_launch(&launch),
+        agent_id: launch.agent_id().to_owned(),
+        cwd: launch.cwd.clone(),
         session_id,
-        additional_directories: setup.additional_directories,
-        mcp_servers: setup.mcp_servers,
+        additional_directories: launch.additional_directories.clone(),
         prompt: vec![ContentBlock::from(prompt)],
         policy,
         attach: !args.detach,
+        trace: launch.trace,
     };
-    let session_id = match connection.extension(request).await {
+    let response = match connection.send(request).await {
         Ok(response) => {
             if let Some(recent) = &recent {
                 recent.record(&launch.cwd, &launch.agent);
             }
-            response.session_id
+            response
         }
         Err(error) => {
             connection.shutdown().await;
-            target.finish().await;
+            host.finish().await;
             return Err(error).context("starting the run");
         }
     };
+    let session_id = response.session_id;
+    for notice in response.state.iter().flat_map(|state| &state.notices) {
+        eprintln!("weave: {notice}");
+    }
+    if let Some(trace) = response
+        .state
+        .as_ref()
+        .and_then(|state| state.trace.as_ref())
+    {
+        eprintln!("weave: tracing the agent to {}", trace.display());
+    }
     if args.detach {
         connection.shutdown().await;
         println!("{session_id}");
         eprintln!(
-            "Running in the weave daemon; attach with: {}",
+            "Running in the weave Host; attach with: {}",
             reopen_command(&launch.agent, &session_id.to_string())
         );
         return Ok(ExitCode::SUCCESS);
@@ -159,7 +172,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
 
     let mut out = Output::new(args.json);
     let mut cancelling = false;
-    let outcome = loop {
+    let outcome: anyhow::Result<PromptResponse> = loop {
         let event = tokio::select! {
             event = events.recv() => event,
             _ = tokio::signal::ctrl_c() => {
@@ -168,47 +181,63 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                 }
                 cancelling = true;
                 eprintln!("\nweave: cancelling (Ctrl-C again to leave it)");
-                connection.cancel(session_id.clone())?;
+                connection
+                    .send(CancelTurnRequest {
+                        session_id: session_id.clone(),
+                    })
+                    .await?;
                 continue;
             }
         };
         match event {
-            Some(AgentEvent::SessionUpdate(notification))
-                if notification.session_id == session_id =>
-            {
-                out.update(&notification.update)?;
-            }
-            Some(AgentEvent::TurnEnded {
-                session_id: ended,
-                result,
-            }) if ended == session_id => break result.map_err(anyhow::Error::from),
-            Some(AgentEvent::SessionEnded { reason, .. }) => {
-                break Err(anyhow::anyhow!("the session ended: {reason}"));
-            }
-            Some(AgentEvent::Disconnected(Some(error))) => {
-                break Err(anyhow::anyhow!("lost the daemon: {error}"));
-            }
-            Some(AgentEvent::Disconnected(None)) | None => {
-                break Err(anyhow::anyhow!("lost the daemon"));
+            Some(HostEvent::Event(notification)) if notification.session_id == session_id => {
+                match notification.event {
+                    SessionEvent::Update { notification }
+                        if notification.session_id == session_id =>
+                    {
+                        out.update(&notification.update)?;
+                    }
+                    SessionEvent::TurnEnded {
+                        session_id: ended,
+                        response,
+                        error,
+                    } if ended == session_id => {
+                        break match (response, error) {
+                            (Some(response), _) => Ok(response),
+                            (None, Some(error)) => Err(error.into()),
+                            (None, None) => Err(anyhow::anyhow!("the turn ended unexplained")),
+                        };
+                    }
+                    SessionEvent::Closed { reason } => {
+                        break Err(anyhow::anyhow!("the session ended: {reason}"));
+                    }
+                    _ => {}
+                }
             }
             // A new session's policy answers what the agent asks. A session that asks its
-            // clients instead (continued with --session) has to wait for one that can answer.
-            Some(AgentEvent::PermissionRequested(request)) => {
-                eprintln!("weave: the agent asks permission; answer it in the TUI");
-                let _ = request.cancel();
+            // clients instead (continued with --resume) waits for one that can answer.
+            Some(HostEvent::PendingAdded(_)) => {
+                eprintln!("weave: the agent is waiting on you; answer it in the TUI");
             }
-            Some(AgentEvent::ElicitationRequested(request)) => {
-                eprintln!("weave: the agent asks a question; answer it in the TUI");
-                let _ = request.cancel();
+            Some(HostEvent::Disconnected(Some(error))) => {
+                break Err(anyhow::anyhow!("lost the weave Host: {error}"));
+            }
+            Some(HostEvent::Disconnected(None)) | None => {
+                break Err(anyhow::anyhow!("lost the weave Host"));
             }
             _ => {}
         }
     };
     out.finish()?;
-    // Done with it: close it rather than leave it idle in the daemon.
-    let _ = connection.close_session(session_id.clone()).await;
+    // Done with it: close it rather than leave it idle in the Host.
+    let _ = connection
+        .send(DetachSessionRequest {
+            session_id: session_id.clone(),
+            close: CloseWhen::IfUnused,
+        })
+        .await;
     connection.shutdown().await;
-    target.finish().await;
+    host.finish().await;
     let response = outcome?;
     eprintln!(
         "weave: session {session_id}; continue it with {}",

@@ -5,12 +5,13 @@
 
 use std::path::PathBuf;
 
+use crate::events::ChatEvent;
+use crate::session_picker::listing;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use weave_acp_core::AgentEvent;
 use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::AvailableCommandInput;
 use weave_acp_core::schema::AvailableCommandsUpdate;
@@ -26,7 +27,6 @@ use weave_acp_core::schema::ElicitationSessionScope;
 use weave_acp_core::schema::ElicitationUrlMode;
 use weave_acp_core::schema::EnumOption;
 use weave_acp_core::schema::IntegerPropertySchema;
-use weave_acp_core::schema::ListSessionsResponse;
 use weave_acp_core::schema::MessageId;
 use weave_acp_core::schema::MultiSelectPropertySchema;
 use weave_acp_core::schema::PermissionOption;
@@ -83,8 +83,7 @@ fn chat_with(
         modes,
         config_options,
         reopened: None,
-        cwd: None,
-        notice: None,
+        notices: Vec::new(),
     });
     chat
 }
@@ -94,16 +93,17 @@ fn chat() -> ChatWidget {
 }
 
 fn send(chat: &mut ChatWidget, update: SessionUpdate) {
-    chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+    chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
         "s1", update,
     )));
 }
 
 /// End the turn so streamed content commits to the transcript.
 fn finish_turn(chat: &mut ChatWidget) {
-    chat.handle_agent_event(AgentEvent::TurnEnded {
+    chat.handle_agent_event(ChatEvent::TurnEnded {
         session_id: "s1".into(),
         result: Ok(PromptResponse::new(StopReason::EndTurn)),
+        replayed: false,
     });
 }
 
@@ -242,11 +242,11 @@ fn update_tool_call_update() {
                 .content(vec![ToolCallContent::Terminal(Terminal::new("term-1"))]),
         ),
     );
-    chat.handle_agent_event(AgentEvent::TerminalOutput {
+    chat.handle_agent_event(ChatEvent::TerminalOutput {
         terminal_id: "term-1".into(),
         text: "running 3 tests\n\u{1b}[31mFAILED\u{1b}[0m parser::empty\n".into(),
     });
-    chat.handle_agent_event(AgentEvent::TerminalExited {
+    chat.handle_agent_event(ChatEvent::TerminalExited {
         terminal_id: "term-1".into(),
         status: TerminalExitStatus::new().exit_code(101),
     });
@@ -472,11 +472,15 @@ fn picker_sessions() {
     chat.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
     // Untimed entries keep the snapshot independent of the clock.
     chat.sessions_listed(
-        Ok(ListSessionsResponse::new(vec![
-            SessionInfo::new("a", "/repo").title("Fix the flaky parser test".to_owned()),
-            SessionInfo::new("b", "/repo"),
-        ])
-        .next_cursor("page-2".to_owned())),
+        Ok(weave_host_protocol::sessions::ListSessionsResponse {
+            sessions: vec![
+                listing(
+                    SessionInfo::new("a", "/repo").title("Fix the flaky parser test".to_owned()),
+                ),
+                listing(SessionInfo::new("b", "/repo")),
+            ],
+            next_cursor: Some("page-2".to_owned()),
+        }),
         false,
     );
     insta::assert_snapshot!(screen(&mut chat));
@@ -502,7 +506,7 @@ fn turn_running_with_a_queued_message() {
 #[test]
 fn disconnected() {
     let mut chat = chat();
-    chat.handle_agent_event(AgentEvent::Disconnected(None));
+    chat.handle_agent_event(ChatEvent::Disconnected(None));
     insta::assert_snapshot!(screen(&mut chat));
 }
 
@@ -519,8 +523,7 @@ fn fullscreen_chat() -> ChatWidget {
         modes: None,
         config_options: Vec::new(),
         reopened: None,
-        cwd: None,
-        notice: None,
+        notices: Vec::new(),
     });
     chat
 }

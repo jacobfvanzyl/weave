@@ -3,6 +3,7 @@ mod config;
 mod daemon;
 mod recent;
 mod run;
+mod service;
 mod sessions;
 mod smoke;
 mod start;
@@ -18,7 +19,6 @@ use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
-use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::SessionId;
 use weave_agents::registry;
 
@@ -56,19 +56,19 @@ struct Cli {
     #[arg(long)]
     no_alt_screen: bool,
 
-    /// Run the agent in this process rather than the weave daemon, so its sessions end when
-    /// weave does. Also `enabled = false` under `[daemon]` in the config.
+    /// Run the agent in a Host inside this process rather than the shared weave Host, so its
+    /// sessions end when weave does. Also `enabled = false` under `[daemon]` in the config.
     #[arg(long)]
     no_daemon: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run one prompt in a headless session in the daemon, printing the reply.
+    /// Run one prompt in a headless session in the weave Host, printing the reply.
     Run(run::RunArgs),
-    /// Sessions open in the daemon: list them, stop a turn, or close one.
+    /// Sessions open in the weave Host: list them, stop a turn, or close one.
     Sessions(sessions::SessionsArgs),
-    /// Manage the weave daemon, which runs agents so their sessions outlive the TUI.
+    /// Manage the weave Host, which runs agents so their sessions outlive the TUI.
     Daemon(daemon::DaemonArgs),
     /// Run one prompt headlessly and print every ACP event the agent sends.
     Smoke(smoke::SmokeArgs),
@@ -120,7 +120,7 @@ async fn main() -> anyhow::Result<ExitCode> {
             sessions::command(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Daemon(args)) => {
-            // A daemon's stderr is its log, agents' stderr included, as `--log-file` has it.
+            // A Host's stderr is its log, agents' stderr included, as `--log-file` has it.
             log_to_stderr("info,agent_stderr=debug");
             daemon::command(args).await.map(|()| ExitCode::SUCCESS)
         }
@@ -188,8 +188,8 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
     }
     let launch = cli
         .agent
-        .launch(&cli.workspace, chosen.agent, chosen.cwd)
-        .await?;
+        .host_launch(&cli.workspace, chosen.agent, chosen.cwd)?;
+    let host = target.host(&launch, &cli.workspace, cli.agent.config_file())?;
     let no_alt_screen = cli.no_alt_screen;
     let screen = match (no_alt_screen, launch.config.tui.alternate_screen) {
         (true, _) | (false, AlternateScreen::Never) => weave_tui::ScreenMode::Inline,
@@ -197,18 +197,13 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             weave_tui::ScreenMode::Fullscreen
         }
     };
-    eprintln!("Starting {}", launch.spec.display_command());
-    let started = start::start(&launch, &target, &mode).await?;
+    let started = start::start(&launch, &host, &mode).await?;
     if let Some(recent) = &recent {
         recent.record(&launch.cwd, &launch.agent);
     }
-    let agent = started
-        .connection
-        .agent()
-        .and_then(|agent| agent.agent_info.clone());
-    let (agent_name, agent_version) = match agent {
+    let (agent_name, agent_version) = match started.agent.agent_info.clone() {
         Some(info) => (info.title.unwrap_or(info.name), Some(info.version)),
-        None => (launch.spec.command.clone(), None),
+        None => (launch.agent.describe(), None),
     };
     let (status_line, unknown) = status_line_items(&launch.config);
     let mut notices = started.notices;
@@ -219,14 +214,24 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             weave_tui::StatusItem::names().join(", ")
         ));
     }
+    if let Some(trace) = started
+        .opened
+        .as_ref()
+        .and_then(|opened| opened.state.trace.as_ref())
+    {
+        notices.push(format!("Tracing the agent to {}", trace.display()));
+    }
     let exit = weave_tui::run(
         weave_tui::Session {
             connection: started.connection,
             events: started.events,
+            agent_id: launch.agent_id().to_owned(),
             agent_name,
             agent_version,
-            setup: started.setup,
-            default_mode: launch.default_mode().map(str::to_owned),
+            agent: started.agent,
+            cwd: launch.cwd.clone(),
+            additional_directories: launch.additional_directories.clone(),
+            trace: launch.trace,
             opened: started.opened,
             notices,
         },
@@ -236,18 +241,12 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             notifications: launch.config.tui.notifications.unwrap_or(true),
             terminal_title: launch.config.tui.terminal_title.unwrap_or(true),
             vim: launch.config.tui.vim.unwrap_or(false),
-            detachable: matches!(target, Target::Shared(_)),
-            reconnect: target.reconnector(
-                daemon::daemon_launch(&launch),
-                ClientOptions {
-                    terminal_auth: true,
-                    ..launch.options
-                },
-            ),
+            detachable: host.is_shared(),
+            reconnect: host.reconnector(),
         },
     )
     .await;
-    target.finish().await;
+    host.finish().await;
     let exit = exit?;
     // Name the agent when the command line didn't, or named another, so a resume reopens the
     // session with its own.
@@ -258,8 +257,8 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
     // Fullscreen leaves nothing behind in the terminal, so say how to get back, as Codex does.
     if let Some(session_id) = exit.resumable_session {
         let command = resume_command(std::env::args().skip(1), &session_id.to_string(), agent);
-        if exit.turn_running && matches!(target, Target::Shared(_)) {
-            println!("The turn carries on in the weave daemon. To attach again, run: {command}");
+        if exit.turn_running && host.is_shared() {
+            println!("The turn carries on in the weave Host. To attach again, run: {command}");
         } else {
             println!("To continue this session, run: {command}");
         }
@@ -284,7 +283,7 @@ fn status_line_items(config: &config::Config) -> (Vec<weave_tui::StatusItem>, Ve
 }
 
 /// `/reload`: replace this process with whatever weave binary is at its path now (a rebuilt
-/// one, say), reattaching to `session` (or starting as this one did, without one). The daemon
+/// one, say), reattaching to `session` (or starting as this one did, without one). The Host
 /// and its agents carry on regardless.
 fn reload(session: Option<&SessionId>, agent: Option<&AgentChoice>) -> anyhow::Result<()> {
     let args: Vec<String> = match session {

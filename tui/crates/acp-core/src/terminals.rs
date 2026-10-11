@@ -42,7 +42,7 @@ use crate::AgentEvent;
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(250);
 
 /// Terminal ids are unique across the process, not just one connection, since the weave
-/// daemon forwards several agents' terminals to the same client.
+/// Host forwards several agents' terminals to the same client.
 static NEXT_TERMINAL: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) struct Terminals {

@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use agent_client_protocol::AcpAgent;
 use agent_client_protocol::Agent;
@@ -38,7 +37,6 @@ use agent_client_protocol::schema::v1::RequestPermissionRequest;
 use agent_client_protocol::schema::v1::SessionConfigOptionsCapabilities;
 use agent_client_protocol::schema::v1::SessionId;
 use agent_client_protocol::schema::v1::SessionNotification;
-use agent_client_protocol::schema::v1::StopReason;
 use agent_client_protocol::schema::v1::SubagentCapabilities;
 use agent_client_protocol::schema::v1::TerminalExitStatus;
 use agent_client_protocol::schema::v1::TerminalId;
@@ -56,11 +54,6 @@ use crate::PermissionRequest;
 use crate::ProtocolTrace;
 use crate::RequestKey;
 use crate::Traces;
-use crate::daemon_protocol::SessionEndedNotification;
-use crate::daemon_protocol::TerminalExitNotification;
-use crate::daemon_protocol::TerminalOutputNotification;
-use crate::daemon_protocol::TurnNotification;
-use crate::daemon_protocol::TurnState;
 use crate::fs;
 use crate::subagent_compat;
 use crate::terminal_meta;
@@ -85,14 +78,6 @@ pub enum AgentEvent {
         session_id: SessionId,
         result: Result<PromptResponse, Error>,
     },
-    /// A turn this client didn't start is running: another client of the weave daemon
-    /// started it, or it was underway when this client attached. It ends with
-    /// [`AgentEvent::TurnEnded`] like any other.
-    TurnRunning {
-        session_id: SessionId,
-        /// How long it has been running.
-        elapsed: Duration,
-    },
     /// New output from a command the agent started with `terminal/create`, or from one it
     /// runs itself and reports through the terminal output extension (see `terminal_meta`).
     TerminalOutput {
@@ -103,12 +88,6 @@ pub enum AgentEvent {
     TerminalExited {
         terminal_id: TerminalId,
         status: TerminalExitStatus,
-    },
-    /// The weave daemon ended a session: its agent exited, or the daemon closed it. Other
-    /// sessions on the connection carry on.
-    SessionEnded {
-        session_id: SessionId,
-        reason: String,
     },
     /// The connection ended. Carries the reason unless the agent closed it cleanly.
     Disconnected(Option<Error>),
@@ -243,7 +222,7 @@ impl AgentConnection {
     }
 
     /// [`Self::spawn`], advertising exactly `options`, and tracing into whatever `traces`
-    /// holds as it changes: for the weave daemon, which offers an agent what its client
+    /// holds as it changes: for the weave Host, which offers an agent what its configuration
     /// offers, terminal sign-in included, and traces for each client that asks.
     pub async fn spawn_exactly(
         spec: &AgentSpec,
@@ -276,10 +255,6 @@ impl AgentConnection {
         let permission_keys = Arc::clone(&keys);
         let elicitation_keys = keys;
         let completions = events.clone();
-        let turns = events.clone();
-        let daemon_output = events.clone();
-        let daemon_exits = events.clone();
-        let endings = events.clone();
         let create = Arc::clone(&terminals);
         let output = Arc::clone(&terminals);
         let wait = Arc::clone(&terminals);
@@ -387,60 +362,6 @@ impl AgentConnection {
                     let _ = completions.send(AgentEvent::ElicitationCompleted(
                         notification.elicitation_id,
                     ));
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            // The weave daemon's notifications (see `daemon_protocol`); agents don't send them.
-            .on_receive_notification(
-                async move |notification: TurnNotification, _cx| {
-                    let session_id = notification.session_id;
-                    let event = match notification.turn {
-                        TurnState::Running { elapsed_ms } => AgentEvent::TurnRunning {
-                            session_id,
-                            elapsed: Duration::from_millis(elapsed_ms),
-                        },
-                        TurnState::Ended { stop_reason, error } => AgentEvent::TurnEnded {
-                            session_id,
-                            result: match error {
-                                Some(error) => Err(error),
-                                None => Ok(PromptResponse::new(
-                                    stop_reason.unwrap_or(StopReason::EndTurn),
-                                )),
-                            },
-                        },
-                    };
-                    let _ = turns.send(event);
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                async move |notification: TerminalOutputNotification, _cx| {
-                    let _ = daemon_output.send(AgentEvent::TerminalOutput {
-                        terminal_id: notification.terminal_id,
-                        text: notification.data,
-                    });
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                async move |notification: TerminalExitNotification, _cx| {
-                    let _ = daemon_exits.send(AgentEvent::TerminalExited {
-                        terminal_id: notification.terminal_id,
-                        status: notification.status,
-                    });
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                async move |notification: SessionEndedNotification, _cx| {
-                    let _ = endings.send(AgentEvent::SessionEnded {
-                        session_id: notification.session_id,
-                        reason: notification.reason,
-                    });
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),

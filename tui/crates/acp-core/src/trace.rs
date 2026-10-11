@@ -58,7 +58,7 @@ impl ProtocolTrace {
 }
 
 /// The traces an agent's protocol goes to, which may change while it runs: the weave
-/// daemon traces a live session for each attached client that asked for a trace.
+/// Host traces an open session for each attached client that asked for a trace.
 #[derive(Default)]
 pub struct Traces(Mutex<Vec<(u64, ProtocolTrace)>>);
 

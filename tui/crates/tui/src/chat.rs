@@ -21,22 +21,24 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use weave_acp_core::AgentEvent;
-use weave_acp_core::ElicitationRequest;
 use weave_acp_core::MaybeUndefined;
-use weave_acp_core::PermissionRequest;
 use weave_acp_core::schema::AvailableCommand;
 use weave_acp_core::schema::CompactionId;
 use weave_acp_core::schema::CompactionUpdate;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::ContentChunk;
+use weave_acp_core::schema::CreateElicitationResponse;
+use weave_acp_core::schema::ElicitationAcceptAction;
+use weave_acp_core::schema::ElicitationAction;
 use weave_acp_core::schema::ElicitationId;
 use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationScope;
 use weave_acp_core::schema::Error;
-use weave_acp_core::schema::ListSessionsResponse;
 use weave_acp_core::schema::MessageId;
 use weave_acp_core::schema::PromptResponse;
+use weave_acp_core::schema::RequestPermissionOutcome;
+use weave_acp_core::schema::RequestPermissionResponse;
+use weave_acp_core::schema::SelectedPermissionOutcome;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionConfigOptionCategory;
 use weave_acp_core::schema::SessionId;
@@ -52,6 +54,9 @@ use weave_acp_core::schema::TerminalId;
 use weave_acp_core::schema::ToolCallId;
 use weave_acp_core::schema::ToolCallStatus;
 
+use weave_host_protocol::pending::PendingId;
+use weave_host_protocol::pending::Resolution;
+
 use crate::attachments::Attachment;
 use crate::clipboard;
 use crate::command_popup;
@@ -65,6 +70,9 @@ use crate::conventions;
 use crate::conventions::thought_heading;
 use crate::elicitation::ElicitationOutcome;
 use crate::elicitation::ElicitationView;
+use crate::events::ChatEvent;
+use crate::events::ElicitationAsk;
+use crate::events::PermissionAsk;
 use crate::file_popup;
 use crate::file_popup::FileIndex;
 use crate::file_popup::FilePopup;
@@ -118,7 +126,7 @@ const RELOAD_COMMAND: &str = "reload";
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum AppCommand {
     Prompt(String),
     Cancel,
@@ -160,9 +168,19 @@ pub enum AppCommand {
     Quit,
     /// Quit and start this TUI again in place, reattaching to the session: `/reload`.
     Reload,
-    /// Reattach to the session shown, after reconnecting to the weave daemon, keeping the
-    /// transcript; see [`ChatWidget::reattached`].
+    /// Reattach to the session shown, after reconnecting to the weave Host, catching up from
+    /// where the transcript is; see [`ChatWidget::reattached`].
     Reattach(SessionId),
+    /// Answer a pending permission request.
+    AnswerPermission {
+        id: PendingId,
+        response: RequestPermissionResponse,
+    },
+    /// Answer a pending elicitation.
+    AnswerElicitation {
+        id: PendingId,
+        response: CreateElicitationResponse,
+    },
 }
 
 /// Which optional session methods the agent offers.
@@ -189,12 +207,12 @@ struct Stashed {
 }
 
 struct PendingPermission {
-    request: PermissionRequest,
+    request: PermissionAsk,
     view: PermissionView,
 }
 
 struct PendingElicitation {
-    request: ElicitationRequest,
+    request: ElicitationAsk,
     view: ElicitationView,
 }
 
@@ -250,7 +268,7 @@ pub struct ChatWidget {
     /// The session's title, as the agent last reported it.
     title: Option<String>,
     disconnected: bool,
-    /// Waiting for the weave daemon to come back.
+    /// Waiting for the weave Host to come back.
     reconnecting: bool,
     /// Said once the session reopened after reconnecting.
     reconnected_note: bool,
@@ -274,7 +292,7 @@ pub struct ChatWidget {
     status_items: Vec<StatusItem>,
     /// Whether the Vim composer is enabled (`[tui] vim = true`).
     vim: bool,
-    /// Whether sessions outlive the TUI, in the weave daemon: Ctrl+D then leaves even while
+    /// Whether sessions outlive the TUI, in the weave Host: Ctrl+D then leaves even while
     /// a turn runs, and the turn carries on.
     detachable: bool,
     /// Subagents this session created, in the order they appeared, each with its own chat.
@@ -404,7 +422,7 @@ impl ChatWidget {
         }
     }
 
-    /// Sessions outlive the TUI, in the weave daemon, so leaving needn't stop a turn.
+    /// Sessions outlive the TUI, in the weave Host, so leaving needn't stop a turn.
     pub fn with_detach(mut self, detachable: bool) -> Self {
         self.detachable = detachable;
         self
@@ -450,7 +468,7 @@ impl ChatWidget {
     /// Switch to `session_id`. Its events show from now on; a replay follows for loads.
     pub fn begin_session(&mut self, session_id: SessionId, title: Option<&str>) {
         self.finish_live_cells();
-        self.answer_pending_requests_cancelled();
+        self.drop_pending_requests();
         // Like Codex, a fullscreen transcript shows one session at a time.
         let cells = self
             .transcript
@@ -501,13 +519,7 @@ impl ChatWidget {
                 self.push_cell(TranscriptCell::info("Session: new session"));
             }
         }
-        // A loaded session's replay is over: what it finished settles into the transcript.
-        // Unless a turn is still running in it, attached to mid-stream.
-        if self.turn.is_none() {
-            self.end_stream();
-            self.commit_finished_tool_calls();
-            self.flush_exploring();
-        }
+        self.settle();
         self.opening = false;
         self.stashed = None;
         self.resumable |= opened.reopened.is_some();
@@ -522,11 +534,26 @@ impl ChatWidget {
                 "Resumed; the agent did not replay earlier messages",
             ));
         }
-        if let Some(notice) = &opened.notice {
+        for notice in &opened.notices {
             self.push_cell(TranscriptCell::error(notice));
         }
         if std::mem::take(&mut self.reconnected_note) {
-            self.push_cell(TranscriptCell::info("Reconnected to the weave daemon"));
+            self.push_cell(TranscriptCell::info("Reconnected to the weave Host"));
+        }
+    }
+
+    /// The journal's replay is over: what it finished settles into the transcript.
+    pub fn replay_finished(&mut self) {
+        self.settle();
+    }
+
+    /// Settle what finished into the transcript, unless a turn is still running, attached to
+    /// mid-stream.
+    fn settle(&mut self) {
+        if self.turn.is_none() {
+            self.end_stream();
+            self.commit_finished_tool_calls();
+            self.flush_exploring();
         }
     }
 
@@ -562,7 +589,11 @@ impl ChatWidget {
         }]
     }
 
-    pub fn sessions_listed(&mut self, result: Result<ListSessionsResponse, Error>, append: bool) {
+    pub fn sessions_listed(
+        &mut self,
+        result: Result<weave_host_protocol::sessions::ListSessionsResponse, Error>,
+        append: bool,
+    ) {
         let Some(picker) = &mut self.session_picker else {
             return;
         };
@@ -622,29 +653,29 @@ impl ChatWidget {
     }
 
     /// The active session while it's blank: new, with nothing sent in it yet. There's nothing
-    /// in it to come back to, so the weave daemon doesn't keep it.
+    /// in it to come back to, so the weave Host doesn't keep it.
     pub fn blank_session(&self) -> Option<&SessionId> {
         self.active_session
             .as_ref()
             .filter(|_| !self.resumable && !self.opening)
     }
 
-    /// The weave daemon went away, and the client waits for it to come back: like a
+    /// The weave Host went away, and the client waits for it to come back: like a
     /// disconnection, but the draft and the session are kept for when it does.
     pub fn daemon_lost(&mut self) {
         self.finish_live_cells();
-        self.answer_pending_requests_cancelled();
+        self.drop_pending_requests();
         self.turn = None;
         self.disconnected = true;
         self.reconnecting = true;
         self.push_cell(TranscriptCell::info(
-            "Lost the weave daemon; reconnecting when it's back",
+            "Lost the weave Host; reconnecting when it's back",
         ));
     }
 
-    /// Connected to the weave daemon again: reattach to the session shown, which it takes up
-    /// again from its journal. The transcript here already has everything it would replay.
-    /// A blank session didn't outlast the daemon it was in, so a new one takes its place.
+    /// Connected to the weave Host again: reattach to the session shown, catching up from
+    /// where the transcript is. A blank session didn't outlast the Host it was in, so a new
+    /// one takes its place.
     pub fn reconnected(&mut self) -> Vec<AppCommand> {
         self.disconnected = false;
         self.reconnecting = false;
@@ -659,40 +690,26 @@ impl ChatWidget {
         match self.active_session.clone() {
             Some(session_id) => vec![AppCommand::Reattach(session_id)],
             None => {
-                self.push_cell(TranscriptCell::info("Reconnected to the weave daemon"));
+                self.push_cell(TranscriptCell::info("Reconnected to the weave Host"));
                 Vec::new()
             }
         }
     }
 
-    /// Reattached after reconnecting, the transcript as it was.
+    /// Reattached after reconnecting, the transcript as it was; what it missed follows.
     pub fn reattached(&mut self, opened: OpenedSession) {
         if self.active_session.as_ref() != Some(&opened.session_id) {
             return;
         }
         self.modes = opened.modes;
         self.config_options = opened.config_options;
-        self.push_cell(TranscriptCell::info("Reconnected to the weave daemon"));
+        self.push_cell(TranscriptCell::info("Reconnected to the weave Host"));
     }
 
-    /// The agent can't reattach without a replay: reload the session shown instead, its
-    /// history replayed in place of the transcript here.
-    pub fn reload_session(&mut self) -> Vec<AppCommand> {
-        let Some(session_id) = self.active_session.clone() else {
-            return Vec::new();
-        };
-        self.reconnected_note = true;
-        vec![AppCommand::OpenSession {
-            target: SessionTarget::Existing(session_id),
-            title: self.title.clone(),
-            cwd: Some(self.cwd.clone()),
-        }]
-    }
-
-    /// The weave daemon didn't come back in time.
+    /// The weave Host didn't come back in time.
     pub fn reconnect_gave_up(&mut self) {
         self.reconnecting = false;
-        self.push_error("The weave daemon didn't come back; /reload starts it again");
+        self.push_error("The weave Host didn't come back; /reload starts it again");
     }
 
     /// Whether a turn is running in the active session.
@@ -791,9 +808,9 @@ impl ChatWidget {
         }
     }
 
-    pub fn handle_agent_event(&mut self, event: AgentEvent) -> Vec<AppCommand> {
+    pub fn handle_agent_event(&mut self, event: ChatEvent) -> Vec<AppCommand> {
         match event {
-            AgentEvent::SessionUpdate(notification) => {
+            ChatEvent::SessionUpdate(notification) => {
                 if self.is_active(&notification.session_id) {
                     self.handle_update(notification.update);
                 } else if let Some(path) = self.path_to(&notification.session_id) {
@@ -803,12 +820,9 @@ impl ChatWidget {
                 }
                 Vec::new()
             }
-            AgentEvent::PermissionRequested(request) => {
+            ChatEvent::PermissionRequested(request) => {
                 if self.is_active(&request.request.session_id) {
                     self.handle_permission(request)
-                        .map(AppCommand::Notify)
-                        .into_iter()
-                        .collect()
                 } else if let Some(path) = self.path_to(&request.request.session_id) {
                     // A subagent asks: its own chat says what about, and the user answers here.
                     let label = self.label_at(&path);
@@ -818,41 +832,42 @@ impl ChatWidget {
                         .into_iter()
                         .collect()
                 } else {
-                    let _ = request.cancel();
+                    // Another session's: a client showing it answers.
                     Vec::new()
                 }
             }
-            AgentEvent::ElicitationRequested(request) => self
-                .handle_elicitation(request)
-                .map(AppCommand::Notify)
-                .into_iter()
-                .collect(),
-            AgentEvent::RequestWithdrawn(key) => {
-                let withdrawn = if let Some(index) = self
+            ChatEvent::ElicitationRequested(request) => self.handle_elicitation(request),
+            ChatEvent::RequestResolved {
+                id,
+                outcome,
+                elsewhere,
+            } => {
+                let shown = if let Some(index) = self
                     .permissions
                     .iter()
-                    .position(|pending| pending.request.key == key)
+                    .position(|pending| pending.request.id == id)
                 {
-                    self.permissions
-                        .remove(index)
-                        .map(|pending| pending.request.withdrawn())
+                    self.permissions.remove(index).is_some()
                 } else if let Some(index) = self
                     .elicitations
                     .iter()
-                    .position(|pending| pending.request.key == key)
+                    .position(|pending| pending.request.id == id)
                 {
-                    self.elicitations
-                        .remove(index)
-                        .map(|pending| pending.request.withdrawn())
+                    self.elicitations.remove(index).is_some()
                 } else {
-                    None
+                    false
                 };
-                if withdrawn.is_some() {
-                    self.push_cell(TranscriptCell::info("The agent withdrew its request"));
+                let note = match outcome {
+                    Resolution::Withdrawn => Some("The agent withdrew its request"),
+                    Resolution::Answered if elsewhere => Some("Answered on another client"),
+                    _ => None,
+                };
+                if shown && let Some(note) = note {
+                    self.push_cell(TranscriptCell::info(note));
                 }
                 Vec::new()
             }
-            AgentEvent::ElicitationCompleted(id) => {
+            ChatEvent::ElicitationCompleted(id) => {
                 // Unknown or already-completed ids are ignored, as the spec requires.
                 if self.accepted_urls.remove(&id) {
                     self.push_cell(TranscriptCell::info(
@@ -861,14 +876,42 @@ impl ChatWidget {
                 }
                 Vec::new()
             }
-            AgentEvent::TurnEnded { session_id, result } => {
-                if self.is_active(&session_id) {
-                    self.end_turn(result)
-                } else {
+            ChatEvent::TurnStarted {
+                session_id,
+                prompt,
+                elapsed,
+                replayed,
+            } => {
+                if !self.is_active(&session_id) {
+                    return Vec::new();
+                }
+                // Anything still live belongs to what came before.
+                self.finish_live_cells();
+                for block in prompt {
+                    self.handle_update(SessionUpdate::UserMessageChunk(ContentChunk::new(block)));
+                }
+                self.resumable = true;
+                if !replayed {
+                    self.turn_running_elsewhere(elapsed);
+                }
+                Vec::new()
+            }
+            ChatEvent::TurnEnded {
+                session_id,
+                result,
+                replayed,
+            } => {
+                if !self.is_active(&session_id) {
                     Vec::new()
+                } else if replayed {
+                    // History: what it finished settles, and nobody needs telling.
+                    self.finish_live_cells();
+                    Vec::new()
+                } else {
+                    self.end_turn(result)
                 }
             }
-            AgentEvent::TurnRunning {
+            ChatEvent::TurnRunning {
                 session_id,
                 elapsed,
             } => {
@@ -877,35 +920,37 @@ impl ChatWidget {
                 }
                 Vec::new()
             }
-            AgentEvent::SessionEnded { session_id, reason } => {
+            ChatEvent::SessionEnded { session_id, reason } => {
                 if self.active_session.as_ref() == Some(&session_id) {
                     self.finish_live_cells();
-                    self.answer_pending_requests_cancelled();
+                    self.drop_pending_requests();
                     self.turn = None;
                     self.disconnected = true;
                     self.push_error(&format!("Session ended: {reason}"));
                 }
                 Vec::new()
             }
-            AgentEvent::TerminalOutput { terminal_id, text } => {
+            ChatEvent::TerminalOutput { terminal_id, text } => {
                 self.terminal_output(&terminal_id, &text);
                 self.note_activity();
                 Vec::new()
             }
-            AgentEvent::TerminalExited {
+            ChatEvent::TerminalExited {
                 terminal_id,
                 status,
             } => {
                 self.terminal_exited(&terminal_id, &status);
                 Vec::new()
             }
-            AgentEvent::Disconnected(error) => {
+            ChatEvent::Disconnected(error) => {
                 self.finish_live_cells();
-                self.answer_pending_requests_cancelled();
+                self.drop_pending_requests();
                 self.turn = None;
                 self.disconnected = true;
-                let reason =
-                    error.map_or_else(|| "the agent exited".to_owned(), |error| error.to_string());
+                let reason = error.map_or_else(
+                    || "the connection closed".to_owned(),
+                    |error| error.to_string(),
+                );
                 self.push_error(&format!("Disconnected: {reason}"));
                 Vec::new()
             }
@@ -1118,8 +1163,7 @@ impl ChatWidget {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         chat
     }
@@ -1197,15 +1241,11 @@ impl ChatWidget {
         }
     }
 
-    /// A cancelled subagent's pending requests resolve as cancelled, as the RFD asks.
+    /// A cancelled subagent's pending requests resolve as cancelled, as the RFD asks: the
+    /// Host does that when the subagent's turn is cancelled, so they stop showing here.
     fn cancel_requests_from(&mut self, id: &SessionId) {
-        let (cancelled, kept): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.permissions)
-            .into_iter()
-            .partition(|pending| &pending.request.request.session_id == id);
-        self.permissions = kept;
-        for pending in cancelled {
-            let _ = pending.request.cancel();
-        }
+        self.permissions
+            .retain(|pending| &pending.request.request.session_id != id);
     }
 
     fn message_entry(
@@ -1525,19 +1565,24 @@ impl ChatWidget {
         }
     }
 
-    /// Show a permission prompt; returns what a notification about it should say.
-    fn handle_permission(&mut self, request: PermissionRequest) -> Option<String> {
+    /// Show a permission prompt, with a notification about it.
+    fn handle_permission(&mut self, request: PermissionAsk) -> Vec<AppCommand> {
         let subject = self.permission_subject(&request);
         if self.turn.as_ref().is_some_and(|turn| turn.cancelling) {
             // The protocol requires every pending request to resolve as cancelled.
-            let _ = request.cancel();
-            return None;
+            return vec![AppCommand::AnswerPermission {
+                id: request.id,
+                response: RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled),
+            }];
         }
         self.queue_permission(request, subject, None)
+            .map(AppCommand::Notify)
+            .into_iter()
+            .collect()
     }
 
     /// What a permission request asks about, from the tool call it names in this chat.
-    fn permission_subject(&mut self, request: &PermissionRequest) -> Subject {
+    fn permission_subject(&mut self, request: &PermissionAsk) -> Subject {
         let call = &request.request.tool_call;
         self.apply_tool_call_update(call.tool_call_id.clone(), &call.fields);
         self.tool_calls
@@ -1553,7 +1598,7 @@ impl ChatWidget {
     /// notification about it should say.
     fn queue_permission(
         &mut self,
-        request: PermissionRequest,
+        request: PermissionAsk,
         mut subject: Subject,
         from: Option<&str>,
     ) -> Option<String> {
@@ -1570,9 +1615,9 @@ impl ChatWidget {
         Some(notice)
     }
 
-    /// Show an elicitation; returns what a notification about it should say.
-    fn handle_elicitation(&mut self, request: ElicitationRequest) -> Option<String> {
-        // A session-scoped request for a session not shown here cannot be answered by the user.
+    /// Show an elicitation, with a notification about it.
+    fn handle_elicitation(&mut self, request: ElicitationAsk) -> Vec<AppCommand> {
+        // A session-scoped request for a session not shown here is for a client showing it.
         let scope = match &request.request.mode {
             ElicitationMode::Form(form) => Some(&form.scope),
             ElicitationMode::Url(url) => Some(&url.scope),
@@ -1581,28 +1626,28 @@ impl ChatWidget {
         if let Some(ElicitationScope::Session(scope)) = scope
             && !self.is_active(&scope.session_id)
         {
-            let _ = request.cancel();
-            return None;
+            return Vec::new();
         }
         match ElicitationView::new(&request.request, &self.agent_name) {
             Some(view) => {
                 let notice = format!("{} asks: {}", self.agent_name, request.request.message);
                 self.elicitations
                     .push_back(PendingElicitation { request, view });
-                Some(notice)
+                vec![AppCommand::Notify(notice)]
             }
-            None => {
-                let _ = request.cancel();
-                None
-            }
+            // One this client can't show is dismissed, rather than left to block the turn.
+            None => vec![AppCommand::AnswerElicitation {
+                id: request.id,
+                response: CreateElicitationResponse::new(ElicitationAction::Cancel),
+            }],
         }
     }
 
     fn end_turn(&mut self, result: Result<PromptResponse, Error>) -> Vec<AppCommand> {
         self.finish_live_cells();
-        // An agent must resolve its permission requests before ending the turn; any left over
-        // can no longer be answered meaningfully.
-        self.answer_pending_requests_cancelled();
+        // An agent must resolve its permission requests before ending the turn; the Host
+        // cancels any left over.
+        self.drop_pending_requests();
         let turn = self.turn.take();
         let was_cancelling = turn.as_ref().is_some_and(|turn| turn.cancelling);
         let notice = match &result {
@@ -1776,12 +1821,17 @@ impl ChatWidget {
 
         if let Some(pending) = self.permissions.front_mut() {
             return match pending.view.handle_key(key) {
-                Some(Decision::Select(option_id)) => {
-                    if let Some(pending) = self.permissions.pop_front() {
-                        let _ = pending.request.select(option_id);
-                    }
-                    Vec::new()
-                }
+                Some(Decision::Select(option_id)) => match self.permissions.pop_front() {
+                    Some(pending) => vec![AppCommand::AnswerPermission {
+                        id: pending.request.id,
+                        response: RequestPermissionResponse::new(
+                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                option_id,
+                            )),
+                        ),
+                    }],
+                    None => Vec::new(),
+                },
                 Some(Decision::CancelTurn) => self.cancel_turn(),
                 None => Vec::new(),
             };
@@ -1794,26 +1844,25 @@ impl ChatWidget {
             let Some(pending) = self.elicitations.pop_front() else {
                 return Vec::new();
             };
+            let answer = |action| AppCommand::AnswerElicitation {
+                id: pending.request.id.clone(),
+                response: CreateElicitationResponse::new(action),
+            };
             return match outcome {
-                ElicitationOutcome::Accept(content) => {
-                    let _ = pending.request.accept(content);
-                    Vec::new()
-                }
+                ElicitationOutcome::Accept(content) => vec![answer(ElicitationAction::Accept(
+                    ElicitationAcceptAction::new().content(content),
+                ))],
                 ElicitationOutcome::OpenUrl(url) => {
                     if let ElicitationView::Url(view) = &pending.view {
                         self.accepted_urls.insert(view.elicitation_id.clone());
                     }
-                    let _ = pending.request.accept(None);
-                    vec![AppCommand::OpenUrl(url)]
+                    vec![
+                        answer(ElicitationAction::Accept(ElicitationAcceptAction::new())),
+                        AppCommand::OpenUrl(url),
+                    ]
                 }
-                ElicitationOutcome::Decline => {
-                    let _ = pending.request.decline();
-                    Vec::new()
-                }
-                ElicitationOutcome::Cancel => {
-                    let _ = pending.request.cancel();
-                    Vec::new()
-                }
+                ElicitationOutcome::Decline => vec![answer(ElicitationAction::Decline)],
+                ElicitationOutcome::Cancel => vec![answer(ElicitationAction::Cancel)],
             };
         }
 
@@ -1833,9 +1882,9 @@ impl ChatWidget {
             };
             return match action {
                 PickerAction::Open(session) => vec![AppCommand::OpenSession {
-                    target: SessionTarget::Existing(session.session_id),
-                    title: session.title,
-                    cwd: Some(session.cwd),
+                    target: SessionTarget::Existing(session.info.session_id),
+                    title: session.info.title,
+                    cwd: Some(session.info.cwd),
                 }],
                 PickerAction::New => vec![AppCommand::OpenSession {
                     target: SessionTarget::New,
@@ -2220,7 +2269,7 @@ impl ChatWidget {
                 return vec![AppCommand::Reload];
             }
             // A new session here, as the picker's `n` opens; a turn still running in the one
-            // left carries on in the weave daemon.
+            // left carries on in the weave Host.
             if text.trim() == format!("/{NEW_COMMAND}") && !self.disconnected {
                 return vec![AppCommand::OpenSession {
                     target: SessionTarget::New,
@@ -2325,7 +2374,8 @@ impl ChatWidget {
             return Vec::new();
         }
         turn.cancelling = true;
-        self.answer_pending_requests_cancelled();
+        // The Host cancels them with the turn.
+        self.drop_pending_requests();
         // Like Codex, give queued follow-ups back for editing rather than sending them.
         if !self.queued.is_empty() && self.composer.is_empty() {
             let restored = self.queued.drain(..).collect::<Vec<_>>().join("\n");
@@ -2334,15 +2384,11 @@ impl ChatWidget {
         vec![AppCommand::Cancel]
     }
 
-    /// Resolve every outstanding request as cancelled: permissions (as the protocol requires
-    /// on cancellation) and elicitations (dismissed with the turn).
-    fn answer_pending_requests_cancelled(&mut self) {
-        for pending in self.permissions.drain(..) {
-            let _ = pending.request.cancel();
-        }
-        for pending in self.elicitations.drain(..) {
-            let _ = pending.request.cancel();
-        }
+    /// Stop showing every outstanding request. The Host resolves them: with the turn, or
+    /// for another client to answer.
+    fn drop_pending_requests(&mut self) {
+        self.permissions.clear();
+        self.elicitations.clear();
     }
 
     fn stream_content(&mut self, kind: StreamKind, chunk: &ContentChunk) {
@@ -3159,26 +3205,26 @@ mod tests {
             modes: None,
             config_options: options,
             reopened: None,
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         chat
     }
 
-    fn update(update: SessionUpdate) -> AgentEvent {
-        AgentEvent::SessionUpdate(SessionNotification::new("s1", update))
+    fn update(update: SessionUpdate) -> ChatEvent {
+        ChatEvent::SessionUpdate(SessionNotification::new("s1", update))
     }
 
-    fn text_chunk(text: &str) -> AgentEvent {
+    fn text_chunk(text: &str) -> ChatEvent {
         update(SessionUpdate::AgentMessageChunk(ContentChunk::new(
             text.into(),
         )))
     }
 
-    fn turn_ended(stop_reason: StopReason) -> AgentEvent {
-        AgentEvent::TurnEnded {
+    fn turn_ended(stop_reason: StopReason) -> ChatEvent {
+        ChatEvent::TurnEnded {
             session_id: "s1".into(),
             result: Ok(PromptResponse::new(stop_reason)),
+            replayed: false,
         }
     }
 
@@ -3207,8 +3253,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened,
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         chat
     }
@@ -3353,13 +3398,13 @@ mod tests {
 
     #[test]
     fn a_turn_started_elsewhere_runs_here_until_it_ends() {
-        // Another client of the weave daemon prompts: its message, its turn and the reply
+        // Another client of the weave Host prompts: its message, its turn and the reply
         // show here, and a message typed meanwhile waits for the turn as with one's own.
         let mut chat = chat();
         chat.handle_agent_event(update(SessionUpdate::UserMessageChunk(ContentChunk::new(
             "from the other window".into(),
         ))));
-        chat.handle_agent_event(AgentEvent::TurnRunning {
+        chat.handle_agent_event(ChatEvent::TurnRunning {
             session_id: "s1".into(),
             elapsed: Duration::from_secs(90),
         });
@@ -3387,14 +3432,14 @@ mod tests {
     fn attaching_mid_turn_keeps_the_reply_in_one_message() {
         let mut chat = chat();
         chat.begin_session("s2".into(), None);
-        let s2 = |update| AgentEvent::SessionUpdate(SessionNotification::new("s2", update));
+        let s2 = |update| ChatEvent::SessionUpdate(SessionNotification::new("s2", update));
         chat.handle_agent_event(s2(SessionUpdate::UserMessageChunk(ContentChunk::new(
             "go".into(),
         ))));
         chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
             "Half ".into(),
         ))));
-        chat.handle_agent_event(AgentEvent::TurnRunning {
+        chat.handle_agent_event(ChatEvent::TurnRunning {
             session_id: "s2".into(),
             elapsed: Duration::ZERO,
         });
@@ -3403,15 +3448,15 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
             "and the rest.".into(),
         ))));
-        chat.handle_agent_event(AgentEvent::TurnEnded {
+        chat.handle_agent_event(ChatEvent::TurnEnded {
             session_id: "s2".into(),
             result: Ok(PromptResponse::new(StopReason::EndTurn)),
+            replayed: false,
         });
         let history = history(&mut chat);
         assert!(
@@ -3492,7 +3537,7 @@ mod tests {
         submit(&mut chat, "do it");
         assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
         // As it is after the daemon went away: reloading reconnects.
-        chat.handle_agent_event(AgentEvent::Disconnected(None));
+        chat.handle_agent_event(ChatEvent::Disconnected(None));
         assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
     }
 
@@ -3507,7 +3552,7 @@ mod tests {
         assert_eq!(chat.composer.text(), "later");
         let footer = rows(&chat, 60).pop().unwrap_or_default();
         assert!(
-            footer.contains("reconnecting to the weave daemon"),
+            footer.contains("reconnecting to the weave Host"),
             "{footer}"
         );
 
@@ -3517,23 +3562,13 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Resumed),
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         // The transcript stays as it was, with what happened and that it's back.
         let history = history(&mut chat);
         let at = |text: &str| history.iter().position(|line| line.contains(text));
         assert!(at("› do it").is_some(), "{history:?}");
-        assert!(at("Lost the weave daemon") < at("Reconnected to the weave daemon"));
-        // An agent that can't resume reloads the session instead.
-        assert_eq!(
-            chat.reload_session(),
-            [AppCommand::OpenSession {
-                target: SessionTarget::Existing("s1".into()),
-                title: None,
-                cwd: Some(PathBuf::from("/repo")),
-            }]
-        );
+        assert!(at("Lost the weave Host") < at("Reconnected to the weave Host"));
         // The kept draft goes out once it's back.
         assert_eq!(submit(&mut chat, ""), [AppCommand::Prompt("later".into())]);
     }
@@ -3553,8 +3588,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         assert_eq!(reopened.blank_session(), None);
     }
@@ -3589,12 +3623,12 @@ mod tests {
         let mut chat = chat();
         submit(&mut chat, "do it");
         // Another session ending changes nothing here.
-        chat.handle_agent_event(AgentEvent::SessionEnded {
+        chat.handle_agent_event(ChatEvent::SessionEnded {
             session_id: "other".into(),
             reason: "idle".into(),
         });
         assert!(chat.is_animating());
-        chat.handle_agent_event(AgentEvent::SessionEnded {
+        chat.handle_agent_event(ChatEvent::SessionEnded {
             session_id: "s1".into(),
             reason: "the agent exited".into(),
         });
@@ -3663,6 +3697,119 @@ mod tests {
             .collect()
     }
 
+    fn permission(id: &str) -> ChatEvent {
+        ChatEvent::PermissionRequested(PermissionAsk {
+            id: id.to_owned(),
+            request: weave_acp_core::schema::RequestPermissionRequest::new(
+                "s1",
+                ToolCallUpdate::new("t1", ToolCallUpdateFields::new().title("Write a.rs")),
+                vec![
+                    weave_acp_core::schema::PermissionOption::new(
+                        "allow",
+                        "Allow",
+                        weave_acp_core::schema::PermissionOptionKind::AllowOnce,
+                    ),
+                    weave_acp_core::schema::PermissionOption::new(
+                        "deny",
+                        "Deny",
+                        weave_acp_core::schema::PermissionOptionKind::RejectOnce,
+                    ),
+                ],
+            ),
+        })
+    }
+
+    #[test]
+    fn a_permission_is_answered_through_the_host() {
+        let mut chat = chat();
+        submit(&mut chat, "write it");
+        chat.handle_agent_event(permission("p1"));
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Char('1'))),
+            [AppCommand::AnswerPermission {
+                id: "p1".to_owned(),
+                response: RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                    SelectedPermissionOutcome::new("allow")
+                )),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_request_another_client_answered_stops_showing() {
+        let mut chat = chat();
+        submit(&mut chat, "write it");
+        chat.handle_agent_event(permission("p1"));
+        assert_eq!(
+            chat.terminal_title(Instant::now()).chars().next(),
+            Some('●')
+        );
+        chat.handle_agent_event(ChatEvent::RequestResolved {
+            id: "p1".to_owned(),
+            outcome: Resolution::Answered,
+            elsewhere: true,
+        });
+        // No longer waiting on the user, and the transcript says why.
+        assert_ne!(
+            chat.terminal_title(Instant::now()).chars().next(),
+            Some('●')
+        );
+        assert!(
+            history(&mut chat)
+                .iter()
+                .any(|line| line.contains("Answered on another client"))
+        );
+    }
+
+    #[test]
+    fn a_turn_cancelled_here_answers_late_requests_as_cancelled() {
+        let mut chat = chat();
+        submit(&mut chat, "write it");
+        assert_eq!(chat.handle_key(key(KeyCode::Esc)), [AppCommand::Cancel]);
+        assert_eq!(
+            chat.handle_agent_event(permission("p2")),
+            [AppCommand::AnswerPermission {
+                id: "p2".to_owned(),
+                response: RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_replayed_turn_is_history_and_a_live_one_from_elsewhere_runs_here() {
+        let mut chat = chat();
+        let started = |replayed| ChatEvent::TurnStarted {
+            session_id: "s1".into(),
+            prompt: vec![ContentBlock::from("from the journal".to_owned())],
+            elapsed: Duration::from_secs(1),
+            replayed,
+        };
+        let ended = |replayed| ChatEvent::TurnEnded {
+            session_id: "s1".into(),
+            result: Ok(PromptResponse::new(StopReason::EndTurn)),
+            replayed,
+        };
+        // Replayed: the prompt and reply show, nothing runs, and nobody is notified.
+        assert_eq!(chat.handle_agent_event(started(true)), []);
+        chat.handle_agent_event(text_chunk("Done."));
+        assert!(!chat.turn_running());
+        assert_eq!(chat.handle_agent_event(ended(true)), []);
+        let shown = history(&mut chat);
+        assert!(
+            shown.iter().any(|line| line.contains("from the journal")),
+            "{shown:?}"
+        );
+        // Live, from another client: it runs here too, and its end is news.
+        chat.handle_agent_event(started(false));
+        assert!(chat.turn_running());
+        chat.handle_agent_event(text_chunk("Again."));
+        assert_eq!(
+            chat.handle_agent_event(ended(false)),
+            [AppCommand::Notify("Again.".to_owned())]
+        );
+        assert!(!chat.turn_running());
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
@@ -3678,13 +3825,13 @@ mod tests {
                 .status(ToolCallStatus::InProgress)
                 .content(vec![ToolCallContent::Terminal(Terminal::new("term-1"))]),
         )));
-        chat.handle_agent_event(AgentEvent::TerminalOutput {
+        chat.handle_agent_event(ChatEvent::TerminalOutput {
             terminal_id: "term-1".into(),
             text: "\x1b[32mok\x1b[0m 1\n".into(),
         });
         assert!(rows(&chat, 60).contains(&"  └ ok 1".to_owned()));
 
-        chat.handle_agent_event(AgentEvent::TerminalExited {
+        chat.handle_agent_event(ChatEvent::TerminalExited {
             terminal_id: "term-1".into(),
             status: TerminalExitStatus::new().exit_code(1),
         });
@@ -3902,7 +4049,7 @@ mod tests {
     #[test]
     fn events_from_other_sessions_are_ignored() {
         let mut chat = chat();
-        chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+        chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
             "elsewhere",
             SessionUpdate::AgentMessageChunk(ContentChunk::new("stray\n".into())),
         )));
@@ -3918,7 +4065,7 @@ mod tests {
             SessionUpdate::UserMessageChunk(ContentChunk::new("fix it".into())),
             SessionUpdate::AgentMessageChunk(ContentChunk::new("Done.".into())),
         ] {
-            chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+            chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
                 "s2", update,
             )));
         }
@@ -3927,8 +4074,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         assert_eq!(
             history(&mut chat),
@@ -3959,8 +4105,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: None,
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         assert_eq!(history(&mut chat), ["", "• Session: new session"]);
         let footer = rows(&chat, 80).pop().unwrap_or_default();
@@ -3982,7 +4127,7 @@ mod tests {
         chat.begin_session("s2".into(), None);
         assert_eq!(history(&mut chat), ["• Run it"]);
 
-        chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+        chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
             "s2",
             finished(),
         )));
@@ -3991,8 +4136,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         assert_eq!(history(&mut chat), ["", "• Run it"]);
     }
@@ -4033,9 +4177,12 @@ mod tests {
             }]
         );
         chat.sessions_listed(
-            Ok(ListSessionsResponse::new(vec![
-                SessionInfo::new("s9", "/repo").title("Earlier work".to_owned()),
-            ])),
+            Ok(weave_host_protocol::sessions::ListSessionsResponse {
+                sessions: vec![crate::session_picker::listing(
+                    SessionInfo::new("s9", "/repo").title("Earlier work".to_owned()),
+                )],
+                next_cursor: None,
+            }),
             false,
         );
         assert!(
@@ -4105,8 +4252,7 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             reopened: None,
-            cwd: None,
-            notice: None,
+            notices: Vec::new(),
         });
         chat
     }
@@ -4221,7 +4367,7 @@ mod tests {
                 .raw_input(serde_json::json!({"command": "seq 1 10"}))
                 .content(vec![ToolCallContent::Terminal(Terminal::new("term"))]),
         )));
-        chat.handle_agent_event(AgentEvent::TerminalOutput {
+        chat.handle_agent_event(ChatEvent::TerminalOutput {
             terminal_id: "term".into(),
             text: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n".into(),
         });
@@ -4391,7 +4537,7 @@ mod tests {
                 .content(MaybeUndefined::Value(vec!["Count them".into()])),
         )));
         // The child's own update goes to its transcript, not this one.
-        chat.handle_agent_event(AgentEvent::SessionUpdate(SessionNotification::new(
+        chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
             robie.clone(),
             SessionUpdate::AgentMessageChunk(ContentChunk::new("There are 12 files.".into())),
         )));
@@ -4547,11 +4693,11 @@ mod tests {
                 .raw_input(serde_json::json!({"command": ["/bin/zsh", "-lc", "cargo test"]}))
                 .content(vec![ToolCallContent::Terminal(Terminal::new("exec-1"))]),
         )));
-        chat.handle_agent_event(AgentEvent::TerminalOutput {
+        chat.handle_agent_event(ChatEvent::TerminalOutput {
             terminal_id: "exec-1".into(),
             text: "test result: ok\n".into(),
         });
-        chat.handle_agent_event(AgentEvent::TerminalExited {
+        chat.handle_agent_event(ChatEvent::TerminalExited {
             terminal_id: "exec-1".into(),
             status: TerminalExitStatus::new().exit_code(0),
         });

@@ -13,6 +13,8 @@ workspace = true
 
 [dependencies]
 weave-acp-core = { workspace = true }
+weave-host-client = { workspace = true }
+weave-host-protocol = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }

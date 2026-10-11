@@ -7,7 +7,6 @@ pub mod config;
 pub mod environment;
 pub mod registry;
 
-use anyhow::bail;
 use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
 
@@ -42,19 +41,19 @@ pub struct Resolved {
 
 /// The agent `id` names: one the configuration defines, a preset, or else an ACP registry
 /// agent, downloaded into `cache` if it runs from its own build, with the configuration's
-/// settings for that name applied.
+/// settings for that name applied. `None` when nothing has that name.
 pub async fn resolve(
     config: &Config,
     id: &str,
     cache: &registry::Cache,
-) -> anyhow::Result<Resolved> {
+) -> anyhow::Result<Option<Resolved>> {
     let defined = config
         .agents
         .get(id)
         .is_some_and(|agent| agent.command.is_some());
     if let Some(spec) = config.local_agent(id) {
         let (spec, options) = config.configure(id, spec);
-        return Ok(Resolved {
+        return Ok(Some(Resolved {
             id: id.to_owned(),
             name: id.to_owned(),
             source: if defined {
@@ -66,19 +65,15 @@ pub async fn resolve(
             spec,
             options,
             warning: None,
-        });
+        }));
     }
     let loaded = registry::load(cache, false).await?;
     let Some(agent) = loaded.registry.find(id) else {
-        bail!(
-            "unknown agent {id:?}: not one of {} or in the ACP registry (`weave agents` lists \
-             them)",
-            config.known_agents().join(", ")
-        );
+        return Ok(None);
     };
     let spec = registry::agent_spec(cache, agent).await?;
     let (spec, options) = config.configure(id, spec);
-    Ok(Resolved {
+    Ok(Some(Resolved {
         id: id.to_owned(),
         name: agent.name.clone(),
         source: Source::Registry,
@@ -86,7 +81,15 @@ pub async fn resolve(
         spec,
         options,
         warning: loaded.warning,
-    })
+    }))
+}
+
+/// Why `id` names no agent, for messages.
+pub fn unknown(config: &Config, id: &str) -> String {
+    format!(
+        "unknown agent {id:?}: not one of {} or in the ACP registry (`weave agents` lists them)",
+        config.known_agents().join(", ")
+    )
 }
 
 #[cfg(test)]
@@ -109,10 +112,16 @@ mod tests {
         .expect("config");
         // A cache with no catalog in it: these never reach for one.
         let cache = registry::Cache::new(std::path::PathBuf::from("/nonexistent"));
-        let claude = resolve(&config, "claude", &cache).await.expect("preset");
+        let claude = resolve(&config, "claude", &cache)
+            .await
+            .expect("resolves")
+            .expect("preset");
         assert_eq!(claude.source, Source::Preset);
         assert!(!claude.options.terminals);
-        let local = resolve(&config, "local", &cache).await.expect("configured");
+        let local = resolve(&config, "local", &cache)
+            .await
+            .expect("resolves")
+            .expect("configured");
         assert_eq!(
             (local.source, local.spec.command.as_str()),
             (Source::Config, "my-agent")

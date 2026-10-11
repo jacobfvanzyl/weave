@@ -313,6 +313,19 @@ pub async fn agent_spec(cache: &Cache, agent: &RegistryAgent) -> anyhow::Result<
     Ok(spec)
 }
 
+/// Whether `agent` runs without a download first: a package agent always does, a build once
+/// it's unpacked.
+pub fn is_installed(cache: &Cache, agent: &RegistryAgent) -> bool {
+    let platform = platform();
+    match agent.launcher(&platform) {
+        Some(Launcher::Binary(_)) => cache
+            .agent_dir(agent, &platform)
+            .is_ok_and(|dir| dir.join(INSTALLED_MARKER).is_file()),
+        Some(Launcher::Npx(_) | Launcher::Uvx(_)) => true,
+        None => false,
+    }
+}
+
 /// The program of `agent`'s build for `platform`, downloaded and unpacked the first time.
 async fn install(
     cache: &Cache,

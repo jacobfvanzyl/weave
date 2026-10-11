@@ -1,10 +1,11 @@
-//! Reaching the weave daemon, which runs agents so sessions outlive the TUI: the per-user one
+//! Reaching the weave Host, which runs agents so sessions outlive the TUI: the per-user one
 //! over its socket, started on first use, or one inside this process (`--no-daemon`). And
 //! `weave daemon`, which manages the per-user one.
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,94 +18,144 @@ use anyhow::bail;
 use clap::Args;
 use clap::Subcommand;
 use tokio::sync::mpsc::UnboundedReceiver;
-use weave_acp_core::AgentConnection;
-use weave_acp_core::AgentEvent;
-use weave_acp_core::ClientOptions;
-use weave_acp_core::daemon_protocol;
-use weave_acp_core::daemon_protocol::Activity;
-use weave_acp_core::daemon_protocol::ClientHello;
-use weave_acp_core::daemon_protocol::DaemonHello;
-use weave_acp_core::daemon_protocol::DaemonStatus;
-use weave_acp_core::daemon_protocol::Launch;
-use weave_acp_core::daemon_protocol::PROTOCOL_VERSION;
-use weave_acp_core::daemon_protocol::ShutdownRequest;
-use weave_acp_core::daemon_protocol::StatusRequest;
+use weave_acp_core::AgentSpec;
+use weave_agents::environment::CAPTURE_TIMEOUT;
+use weave_agents::environment::Environment;
 use weave_daemon::DaemonConfig;
 use weave_daemon::DaemonPaths;
+use weave_daemon::Withheld;
 use weave_daemon::socket;
+use weave_host_client::ConnectError;
+use weave_host_client::HostConnection;
+use weave_host_client::HostEvent;
+use weave_host_protocol::hello::ClientCapabilities;
+use weave_host_protocol::hello::ClientInfo;
+use weave_host_protocol::host::HostStatus;
+use weave_host_protocol::host::Service;
+use weave_host_protocol::host::ShutdownRequest;
+use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::sessions::Activity;
 use weave_tui::Reconnection;
 use weave_tui::Reconnector;
 
-/// A background daemon exits once nothing has been open or connected for this long.
+use crate::args::AgentChoice;
+use crate::args::COMMAND_AGENT;
+use crate::args::HostLaunch;
+use crate::args::WorkspaceArgs;
+use crate::service;
+
+/// A background Host exits once nothing has been open or connected for this long.
 const BACKGROUND_IDLE_EXIT: Duration = Duration::from_secs(10 * 60);
-/// How long to wait for a daemon to start listening, or to stop.
+/// How long to wait for a Host to start listening, or to stop.
 const STARTUP_WAIT: Duration = Duration::from_secs(10);
-/// A log bigger than this is set aside (as `daemon.log.old`) when a daemon starts.
+/// A log bigger than this is set aside (as `daemon.log.old`) when a Host starts.
 const LOG_LIMIT: u64 = 10 * 1024 * 1024;
 
-/// Where this invocation's agents run.
-#[derive(Clone)]
+/// Where this invocation's agents run, before it knows which agent.
 pub enum Target {
-    /// The per-user daemon, started on first use.
+    /// The per-user Host, started on first use.
     Shared(DaemonPaths),
-    /// A daemon inside this process, which ends with it.
+    /// A Host inside this process, which ends with it.
+    InProcess,
+}
+
+/// The Host this invocation talks to.
+pub enum Host {
+    Shared(DaemonPaths),
     InProcess(weave_daemon::Daemon),
 }
 
 impl Target {
     pub fn choose(no_daemon: bool) -> anyhow::Result<Self> {
         if no_daemon {
-            return Ok(Self::InProcess(weave_daemon::Daemon::new(
-                DaemonConfig::in_memory(),
-            )));
+            return Ok(Self::InProcess);
         }
         Ok(Self::Shared(paths()?))
     }
 
-    /// Connect and initialize, asking the daemon for `launch`'s agent.
+    /// The Host for `launch`. One in this process is given a custom command as an agent of
+    /// its own, and withholds what the workspace asks it to; the shared one can't be.
+    pub fn host(
+        &self,
+        launch: &HostLaunch,
+        workspace: &WorkspaceArgs,
+        config_file: Option<PathBuf>,
+    ) -> anyhow::Result<Host> {
+        let withheld = workspace.withheld();
+        match self {
+            Self::Shared(paths) => {
+                if let AgentChoice::Command(_) = &launch.agent {
+                    bail!(
+                        "the weave Host runs agents its config defines: add this one under \
+                         [agents.<id>] with its command, and use --agent <id>; or use \
+                         --no-daemon"
+                    );
+                }
+                if withheld != Withheld::default() {
+                    bail!(
+                        "--no-fs and --no-terminal apply with --no-daemon; for the weave Host, \
+                         set fs = false or terminal = false under the agent in the config"
+                    );
+                }
+                Ok(Host::Shared(paths.clone()))
+            }
+            Self::InProcess => {
+                let mut config = DaemonConfig::in_process(config_file);
+                config.withheld = withheld;
+                if let AgentChoice::Command(words) = &launch.agent
+                    && let Some((command, args)) = words.split_first()
+                {
+                    config.agents =
+                        BTreeMap::from([(COMMAND_AGENT.to_owned(), AgentSpec::new(command, args))]);
+                }
+                Ok(Host::InProcess(weave_daemon::Daemon::new(config)))
+            }
+        }
+    }
+}
+
+impl Host {
+    /// Connect and say hello as `client`.
     pub async fn connect(
         &self,
-        launch: Launch,
-        options: ClientOptions,
-    ) -> anyhow::Result<(AgentConnection, UnboundedReceiver<AgentEvent>)> {
-        let (connection, events) = match self {
-            Self::Shared(paths) => AgentConnection::connect(open(paths).await?, options).await?,
+        client: &str,
+    ) -> anyhow::Result<(HostConnection, UnboundedReceiver<HostEvent>)> {
+        let connected = match self {
+            Self::Shared(paths) => {
+                HostConnection::connect(open(paths).await?, client_info(client), capabilities())
+                    .await
+            }
             Self::InProcess(daemon) => {
-                AgentConnection::connect(daemon.connect_in_process(), options).await?
+                HostConnection::connect(
+                    daemon.connect_in_process(),
+                    client_info(client),
+                    capabilities(),
+                )
+                .await
             }
         };
-        let hello = ClientHello {
-            protocol: PROTOCOL_VERSION,
-            launch: Some(launch),
-        };
-        let initialized = connection
-            .initialize_with(Some(daemon_protocol::meta(&hello)))
-            .await;
-        let checked = match initialized {
-            Ok(init) => check_version(daemon_protocol::read_meta(init.meta.as_ref())),
-            Err(error) => Err(error.into()),
-        };
-        if let Err(error) = checked {
-            connection.shutdown().await;
-            return Err(error);
-        }
-        Ok((connection, events))
+        connected.map_err(anyhow::Error::from)
     }
 
-    /// How the TUI reaches the per-user daemon again after it goes away, without starting
-    /// one: a restarted daemon is picked up, a stopped one stays stopped. None in-process.
-    pub fn reconnector(&self, launch: Launch, options: ClientOptions) -> Option<Reconnector> {
+    /// Whether sessions outlive this process.
+    pub fn is_shared(&self) -> bool {
+        matches!(self, Self::Shared(_))
+    }
+
+    /// How the TUI reaches the per-user Host again after it goes away, without starting one:
+    /// a restarted Host is picked up, a stopped one stays stopped. None in-process.
+    pub fn reconnector(&self) -> Option<Reconnector> {
         let Self::Shared(paths) = self else {
             return None;
         };
         let paths = paths.clone();
         Some(Arc::new(move || {
-            let (paths, launch) = (paths.clone(), launch.clone());
-            Box::pin(async move { reconnect(&paths, launch, options).await })
+            let paths = paths.clone();
+            Box::pin(async move { reconnect(&paths).await })
         }))
     }
 
-    /// Stop an in-process daemon's agents; the shared daemon keeps running.
+    /// Stop an in-process Host's agents; the shared one keeps running.
     pub async fn finish(&self) {
         if let Self::InProcess(daemon) = self {
             daemon.shutdown().await;
@@ -112,69 +163,38 @@ impl Target {
     }
 }
 
-/// `launch` as the daemon gets it, with this process's environment for the agent to inherit.
-pub fn daemon_launch(launch: &crate::args::Launch) -> Launch {
-    let environment: BTreeMap<String, String> = std::env::vars_os()
-        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
-        .collect();
-    Launch {
-        spec: launch.spec.clone(),
-        choice: Some(launch.agent.clone()),
-        cwd: launch.cwd.clone(),
-        environment,
-        trace: launch.trace.clone(),
+fn client_info(name: &str) -> ClientInfo {
+    ClientInfo {
+        name: name.to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
     }
 }
 
-/// One attempt to reach a running daemon again.
-async fn reconnect(paths: &DaemonPaths, launch: Launch, options: ClientOptions) -> Reconnection {
+/// This client runs on the Host's computer, so it can run sign-in commands in its terminal.
+fn capabilities() -> ClientCapabilities {
+    ClientCapabilities {
+        terminal_sign_in: true,
+    }
+}
+
+/// One attempt to reach a running Host again.
+async fn reconnect(paths: &DaemonPaths) -> Reconnection {
     let Ok(transport) = socket::connect(&paths.socket).await else {
         return Reconnection::NotYet;
     };
-    let Ok((connection, events)) = AgentConnection::connect(transport, options).await else {
-        return Reconnection::NotYet;
-    };
-    let hello = ClientHello {
-        protocol: PROTOCOL_VERSION,
-        launch: Some(launch),
-    };
-    match connection
-        .initialize_with(Some(daemon_protocol::meta(&hello)))
-        .await
-    {
-        Ok(init) => match check_version(daemon_protocol::read_meta(init.meta.as_ref())) {
-            Ok(()) => Reconnection::Connected(connection, events),
-            Err(error) => {
-                connection.shutdown().await;
-                Reconnection::Incompatible(error.to_string())
-            }
-        },
+    match HostConnection::connect(transport, client_info("weave-tui"), capabilities()).await {
+        Ok((connection, events)) => Reconnection::Connected(Box::new(connection), events),
+        Err(ConnectError::Incompatible(why)) => Reconnection::Incompatible(why),
         // Still starting up, say.
-        Err(_) => {
-            connection.shutdown().await;
-            Reconnection::NotYet
-        }
-    }
-}
-
-fn check_version(hello: Option<DaemonHello>) -> anyhow::Result<()> {
-    match hello {
-        Some(hello) if hello.protocol == PROTOCOL_VERSION => Ok(()),
-        Some(hello) => bail!(
-            "the running weave daemon (version {}, pid {}) speaks a different protocol than this \
-             weave; restart it with `weave daemon restart`",
-            hello.version,
-            hello.pid
-        ),
-        None => bail!("the weave daemon's socket answered, but not as a weave daemon"),
+        Err(_) => Reconnection::NotYet,
     }
 }
 
 pub(crate) fn paths() -> anyhow::Result<DaemonPaths> {
-    DaemonPaths::from_env().context("no home directory for the weave daemon; set WEAVE_DAEMON_DIR")
+    DaemonPaths::from_env().context("no home directory for the weave Host; set WEAVE_DAEMON_DIR")
 }
 
-/// A connection to the per-user daemon, starting it if it isn't running.
+/// A connection to the per-user Host, starting it if it isn't running.
 async fn open(paths: &DaemonPaths) -> anyhow::Result<socket::Transport> {
     match socket::connect(&paths.socket).await {
         Ok(transport) => return Ok(transport),
@@ -182,6 +202,12 @@ async fn open(paths: &DaemonPaths) -> anyhow::Result<socket::Transport> {
         Err(error) => {
             return Err(error).with_context(|| format!("connecting to {}", paths.socket.display()));
         }
+    }
+    if service::installed(paths) {
+        bail!(
+            "the weave Host's service is installed but not running; start it with `weave \
+             daemon start`"
+        );
     }
     start_in_background(paths)?;
     wait_until_listening(paths).await
@@ -194,7 +220,7 @@ fn not_running(error: &io::Error) -> bool {
     )
 }
 
-/// Start `weave daemon run` detached from this terminal, logging to the daemon's log.
+/// Start `weave daemon run` detached from this terminal, logging to the Host's log.
 fn start_in_background(paths: &DaemonPaths) -> anyhow::Result<()> {
     paths
         .prepare()
@@ -227,13 +253,13 @@ fn start_in_background(paths: &DaemonPaths) -> anyhow::Result<()> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().context("starting the weave daemon")?;
+    let mut child = command.spawn().context("starting the weave Host")?;
     // Reap it if it exits while this process still runs.
     std::thread::spawn(move || child.wait());
     Ok(())
 }
 
-async fn wait_until_listening(paths: &DaemonPaths) -> anyhow::Result<socket::Transport> {
+pub(crate) async fn wait_until_listening(paths: &DaemonPaths) -> anyhow::Result<socket::Transport> {
     let deadline = Instant::now() + STARTUP_WAIT;
     loop {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -242,18 +268,27 @@ async fn wait_until_listening(paths: &DaemonPaths) -> anyhow::Result<socket::Tra
             Err(error) if not_running(&error) && Instant::now() < deadline => {}
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!(
-                        "the weave daemon didn't start; see {}",
-                        paths.log().display()
-                    )
+                    format!("the weave Host didn't start; see {}", paths.log().display())
                 });
             }
         }
     }
 }
 
-/// A connection for managing the daemon, if it's running.
-pub(crate) async fn control(paths: &DaemonPaths) -> anyhow::Result<Option<AgentConnection>> {
+/// Wait for the Host to stop listening.
+pub(crate) async fn wait_until_stopped(paths: &DaemonPaths) -> anyhow::Result<()> {
+    let deadline = Instant::now() + STARTUP_WAIT;
+    while socket::connect(&paths.socket).await.is_ok() {
+        if Instant::now() >= deadline {
+            bail!("the weave Host didn't stop");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(())
+}
+
+/// A connection for managing the Host, if it's running.
+pub(crate) async fn control(paths: &DaemonPaths) -> anyhow::Result<Option<HostConnection>> {
     let transport = match socket::connect(&paths.socket).await {
         Ok(transport) => transport,
         Err(error) if not_running(&error) => return Ok(None),
@@ -262,18 +297,7 @@ pub(crate) async fn control(paths: &DaemonPaths) -> anyhow::Result<Option<AgentC
         }
     };
     let (connection, _events) =
-        AgentConnection::connect(transport, ClientOptions::default()).await?;
-    let hello = ClientHello {
-        protocol: PROTOCOL_VERSION,
-        launch: None,
-    };
-    let init = connection
-        .initialize_with(Some(daemon_protocol::meta(&hello)))
-        .await?;
-    if let Err(error) = check_version(daemon_protocol::read_meta(init.meta.as_ref())) {
-        connection.shutdown().await;
-        return Err(error);
-    }
+        HostConnection::connect(transport, client_info("weave-cli"), capabilities()).await?;
     Ok(Some(connection))
 }
 
@@ -287,14 +311,18 @@ pub struct DaemonArgs {
 enum DaemonCommand {
     /// Serve in the foreground until stopped (for launchd, or to watch its log).
     Run(RunArgs),
-    /// Start the daemon in the background, if it isn't running.
+    /// Start the Host in the background, if it isn't running.
     Start,
-    /// Stop the daemon and its agents. Sessions it had open can be reopened later.
+    /// Stop the Host and its agents. Sessions it had open can be reopened later.
     Stop,
-    /// Stop the daemon if it's running, then start it again: after rebuilding weave.
+    /// Stop the Host if it's running, then start it again: after rebuilding weave.
     Restart,
-    /// What the daemon is running.
+    /// What the Host is running.
     Status,
+    /// Run the Host as a launchd user agent: at login, kept running, with no idle exit.
+    Install,
+    /// Remove the launchd user agent `install` wrote, stopping the Host.
+    Uninstall,
 }
 
 #[derive(Args)]
@@ -302,16 +330,25 @@ struct RunArgs {
     /// Exit after this many seconds with no sessions open and no clients connected.
     #[arg(long, value_name = "SECONDS")]
     idle_exit: Option<u64>,
+
+    /// The config file agents and MCP servers come from. Defaults to
+    /// ~/.config/weave/config.toml.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Run as launchd's service, as `weave daemon install` sets it up.
+    #[arg(long, hide = true)]
+    launchd: bool,
 }
 
 pub async fn command(args: DaemonArgs) -> anyhow::Result<()> {
     let paths = paths()?;
     match args.command {
-        DaemonCommand::Run(run) => serve(&paths, run.idle_exit.map(Duration::from_secs)).await,
+        DaemonCommand::Run(run) => serve(&paths, run).await,
         DaemonCommand::Start => start(&paths).await,
         DaemonCommand::Stop => {
             if !stop(&paths).await? {
-                eprintln!("The weave daemon isn't running.");
+                eprintln!("The weave Host isn't running.");
             }
             Ok(())
         }
@@ -320,13 +357,23 @@ pub async fn command(args: DaemonArgs) -> anyhow::Result<()> {
             start(&paths).await
         }
         DaemonCommand::Status => status(&paths).await,
+        DaemonCommand::Install => service::install(&paths).await,
+        DaemonCommand::Uninstall => service::uninstall(&paths).await,
     }
 }
 
-async fn serve(paths: &DaemonPaths, idle_exit: Option<Duration>) -> anyhow::Result<()> {
+async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     let listening = socket::listen(paths)
         .with_context(|| format!("listening on {}", paths.socket.display()))?;
-    let daemon = weave_daemon::Daemon::new(DaemonConfig::persistent(paths));
+    let environment = Environment::capture(CAPTURE_TIMEOUT).await;
+    let service = if run.launchd {
+        Service::Launchd
+    } else {
+        Service::OnDemand
+    };
+    let mut config = DaemonConfig::persistent(paths, service, environment);
+    config.config_file = run.config;
+    let daemon = weave_daemon::Daemon::new(config);
     let stopper = daemon.clone();
     tokio::spawn(async move {
         stop_signal().await;
@@ -336,11 +383,17 @@ async fn serve(paths: &DaemonPaths, idle_exit: Option<Duration>) -> anyhow::Resu
         socket = %paths.socket.display(),
         pid = std::process::id(),
         version = env!("CARGO_PKG_VERSION"),
-        "weave daemon serving"
+        "weave Host serving"
     );
+    // launchd keeps it running; one started on demand goes when it's no longer used.
+    let idle_exit = if run.launchd {
+        None
+    } else {
+        run.idle_exit.map(Duration::from_secs)
+    };
     daemon.serve(listening.listener, idle_exit).await;
     let _ = std::fs::remove_file(&paths.socket);
-    tracing::info!("weave daemon stopped");
+    tracing::info!("weave Host stopped");
     Ok(())
 }
 
@@ -368,58 +421,75 @@ async fn stop_signal() {
 
 async fn start(paths: &DaemonPaths) -> anyhow::Result<()> {
     if let Some(connection) = control(paths).await? {
-        let status = connection.extension(StatusRequest {}).await?;
+        let status = connection.send(StatusRequest {}).await?;
         connection.shutdown().await;
-        eprintln!("The weave daemon is already running (pid {}).", status.pid);
+        eprintln!("The weave Host is already running (pid {}).", status.pid);
         return Ok(());
     }
-    start_in_background(paths)?;
+    if service::installed(paths) {
+        service::start(paths)?;
+    } else {
+        start_in_background(paths)?;
+    }
     drop(wait_until_listening(paths).await?);
     eprintln!(
-        "Started the weave daemon on {}; it logs to {}.",
+        "Started the weave Host on {}; it logs to {}.",
         paths.socket.display(),
         paths.log().display()
     );
     Ok(())
 }
 
-/// Stop the daemon and wait for it to go. Returns whether it was running.
-async fn stop(paths: &DaemonPaths) -> anyhow::Result<bool> {
+/// Stop the Host and wait for it to go. Returns whether it was running.
+pub(crate) async fn stop(paths: &DaemonPaths) -> anyhow::Result<bool> {
+    if service::installed(paths) {
+        let running = socket::connect(&paths.socket).await.is_ok();
+        service::stop(paths)?;
+        wait_until_stopped(paths).await?;
+        if running {
+            eprintln!("Stopped the weave Host.");
+        }
+        return Ok(running);
+    }
     let Some(connection) = control(paths).await? else {
         return Ok(false);
     };
-    connection.extension(ShutdownRequest {}).await?;
+    connection.send(ShutdownRequest {}).await?;
     connection.shutdown().await;
-    let deadline = Instant::now() + STARTUP_WAIT;
-    while socket::connect(&paths.socket).await.is_ok() {
-        if Instant::now() >= deadline {
-            bail!("the weave daemon didn't stop");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    eprintln!("Stopped the weave daemon.");
+    wait_until_stopped(paths).await?;
+    eprintln!("Stopped the weave Host.");
     Ok(true)
 }
 
 async fn status(paths: &DaemonPaths) -> anyhow::Result<()> {
+    let installed = service::installed(paths);
     let Some(connection) = control(paths).await? else {
+        let service = if installed {
+            "; its launchd service is installed"
+        } else {
+            ""
+        };
         println!(
-            "The weave daemon isn't running ({}).",
+            "The weave Host isn't running ({}){service}.",
             paths.socket.display()
         );
         return Ok(());
     };
-    let status = connection.extension(StatusRequest {}).await;
+    let status = connection.send(StatusRequest {}).await;
     connection.shutdown().await;
     print!("{}", describe(&status?, paths, now_ms()));
     Ok(())
 }
 
-fn describe(status: &DaemonStatus, paths: &DaemonPaths, now_ms: u64) -> String {
+fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
     let running = status
         .sessions
         .iter()
-        .filter(|session| session.activity != Activity::Idle)
+        .filter(|session| {
+            session
+                .activity
+                .is_some_and(|activity| activity != Activity::Idle)
+        })
         .count();
     let sessions = match (status.sessions.len(), running) {
         (0, _) => "No sessions open.".to_owned(),
@@ -430,11 +500,22 @@ fn describe(status: &DaemonStatus, paths: &DaemonPaths, now_ms: u64) -> String {
             format!("{open} sessions open, {running} at work; `weave sessions` lists them.")
         }
     };
+    let service = match status.service {
+        Service::Launchd => "launchd",
+        Service::OnDemand => "on demand",
+        Service::InProcess => "in-process",
+    };
+    let environment = match status.environment {
+        weave_host_protocol::host::EnvironmentSource::LoginShell => "your login shell's",
+        weave_host_protocol::host::EnvironmentSource::Process => {
+            "its own (the login shell's couldn't be read)"
+        }
+    };
     format!(
-        "weave daemon {} (pid {}), up {}\n  socket   {}\n  journals {}\n\n{sessions}\n",
+        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n  agents get {environment} environment\n\n{sessions}\n",
         status.version,
         status.pid,
-        ago(now_ms, status.started_at_ms),
+        ago(now_ms, status.started_at),
         paths.socket.display(),
         paths.journals().display(),
     )
@@ -461,38 +542,41 @@ pub(crate) fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-    use weave_acp_core::daemon_protocol::LiveSession;
-    use weave_acp_core::daemon_protocol::PermissionPolicy;
+    use weave_acp_core::schema::SessionInfo;
+    use weave_host_protocol::PROTOCOL_VERSION;
+    use weave_host_protocol::host::EnvironmentSource;
+    use weave_host_protocol::sessions::SessionListing;
+    use weave_host_protocol::sessions::SessionStatus;
 
     use super::*;
 
     #[test]
-    fn status_says_what_the_daemon_has_open() {
+    fn status_says_what_the_host_has_open() {
         let paths = DaemonPaths::in_dir("/state/weave/daemon".into());
-        let mut status = DaemonStatus {
+        let mut status = HostStatus {
             protocol: PROTOCOL_VERSION,
             version: "0.1.0".into(),
             pid: 42,
-            started_at_ms: 0,
+            started_at: 0,
+            service: Service::OnDemand,
+            environment: EnvironmentSource::LoginShell,
             sessions: Vec::new(),
         };
         assert!(describe(&status, &paths, 90_000).ends_with("No sessions open.\n"));
-        status.sessions.push(LiveSession {
-            session_id: "s1".into(),
-            cwd: "/repo".into(),
-            agent: "npx claude-agent-acp".into(),
-            choice: None,
-            title: Some("Fix the build".into()),
-            activity: Activity::Waiting,
+        status.sessions.push(SessionListing {
+            info: SessionInfo::new("s1", "/repo").title("Fix the build".to_owned()),
+            agent_id: "claude".into(),
+            state: SessionStatus::Open,
+            activity: Some(Activity::Waiting),
             clients: 0,
-            policy: PermissionPolicy::ask(),
-            started_at_ms: 0,
-            last_activity_ms: 30_000,
+            headless: false,
+            last_activity_at: Some(30_000),
         });
         assert_eq!(
             describe(&status, &paths, 7_230_000),
-            "weave daemon 0.1.0 (pid 42), up 2h\n  socket   /state/weave/daemon/daemon.sock\n  \
-             journals /state/weave/daemon/sessions\n\n1 session open, at work; `weave sessions` \
+            "weave Host 0.1.0 (pid 42), up 2h, run on demand\n  socket   \
+             /state/weave/daemon/daemon.sock\n  journals /state/weave/daemon/sessions\n  agents \
+             get your login shell's environment\n\n1 session open, at work; `weave sessions` \
              lists it.\n"
         );
     }

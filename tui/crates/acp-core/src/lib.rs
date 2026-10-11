@@ -5,7 +5,6 @@
 
 mod agent;
 mod connection;
-pub mod daemon_protocol;
 mod fs;
 mod handle;
 mod requests;
@@ -32,7 +31,6 @@ pub use terminal_meta::strip_terminal_events;
 pub use trace::ProtocolTrace;
 pub use trace::Traces;
 pub use trace::trace_events;
-pub use weave_host_protocol::policy;
 
 pub use agent_client_protocol::schema::MaybeUndefined;
 pub use agent_client_protocol::schema::ProtocolVersion;

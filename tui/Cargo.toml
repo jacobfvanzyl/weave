@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/acp-core", "crates/agents", "crates/cli", "crates/daemon", "crates/fake-agent", "crates/protocol", "crates/tui"]
+members = ["crates/acp-core", "crates/agents", "crates/cli", "crates/daemon", "crates/fake-agent", "crates/host-client", "crates/protocol", "crates/tui"]
 resolver = "3"
 
 [workspace.package]
@@ -13,6 +13,7 @@ weave-acp-core = { path = "crates/acp-core" }
 weave-agents = { path = "crates/agents" }
 weave-daemon = { path = "crates/daemon" }
 weave-fake-agent = { path = "crates/fake-agent" }
+weave-host-client = { path = "crates/host-client" }
 weave-host-protocol = { path = "crates/protocol" }
 weave-tui = { path = "crates/tui" }
 

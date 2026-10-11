@@ -123,10 +123,10 @@ request with `unauthenticated`.
   highest version both support, or fails with `incompatible_protocol`, whose `data` gives
   the Host's own range. See [Versioning](#versioning).
 - `auth` is checked against the transport. `local` succeeds only on the Unix socket or
-  in-process, and only when the socket's peer has the Host's own user id (`getpeereid`),
-  on top of the socket's file mode. `token` is reserved for the WebSocket and fails with
-  `unauthenticated` until that exists. A client that fails authentication is disconnected
-  after the error.
+  in-process, and only when the socket's peer has the Host's own user id (`getpeereid`,
+  checked when it connects), on top of the socket's file mode. `token` is reserved for the
+  WebSocket and fails with `unauthenticated` until that exists. A client that hasn't said a
+  successful hello gets `unauthenticated` for everything else.
 - `capabilities.terminalSignIn` says the client can run an agent's sign-in command in a
   terminal on the Host's computer. Only `local` clients may claim it.
 - `clientId` names this connection in other messages (who answered a pending request,
@@ -390,8 +390,8 @@ the session, as when a closed session is opened again. A client that remembers
 | `terminalExit` | `terminalId`, `status`: ACP `TerminalExitStatus` | that command exits |
 | `closed` | `reason` | the session closes |
 
-`origin` is `{"client": {"name": "weave-tui"}}` for a client's prompt or `{"run": {}}` for a
-headless run. Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
+`origin` is `{"client": {"name": "weave-tui", "id": "c7"}}` for a client's prompt, with the
+connection's `clientId` so a client recognizes its own, or `{"run": {}}` for a headless run. Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
 updates. Terminal output an agent reports in `_meta` (`terminal_output_delta`) becomes
 `terminalOutput` and `terminalExit` events and is stripped from the update, so each chunk
 arrives once.
@@ -411,9 +411,9 @@ These aren't journaled. They go to the session's attached clients.
 
 ### Slow clients
 
-The Host may disconnect a client whose unsent messages pass a limit, rather than buffer
-without end or slow other clients down. The client reconnects and catches up from its
-position.
+A client that falls behind is buffered for: the ACP SDK's channels are unbounded. Once
+remote clients exist, the Host should instead disconnect a client whose unsent messages
+pass a limit, and let it reconnect and catch up from its position (see Later).
 
 ## Turns
 
@@ -566,7 +566,8 @@ revoking tokens (pairing), and which directories remote clients may open session
 - The TUI remembers its journal position. When the Host goes away, it reconnects (never
   starting a Host), attaches again from that position and gets only what it missed. The
   Host now resumes or loads the session in its agent itself.
-- Leaving a blank session detaches with `ifUnused`. Switching sessions detaches.
+- Leaving a session, when the TUI quits from a blank one or switches to another, detaches
+  with `ifUnused`, so a session nothing else needs closes at once, as before.
 - The default mode, MCP servers and their notices, and extra directories the agent can't
   accept move to the Host. `weave --trace` asks the Host for a trace and shows its path.
 - Shell mode (`!`), `@` file search, attachments and pasted images stay local. That is
@@ -582,7 +583,8 @@ revoking tokens (pairing), and which directories remote clients may open session
 - `weave run`, `weave sessions` (`cancel`, `close`) and `weave daemon status|stop` use
   `session/run`, `sessions/list`, `turn/cancel`, `session/close`, `host/status` and
   `host/shutdown`.
-- `weave agents` uses `agents/list`.
+- `weave agents` reads the same configuration and registry through `weave-agents`, as
+  `smoke`, `login` and `logout` do, so listing agents doesn't start a Host.
 - `weave --resume <id>` and `--continue` choose through `sessions/list`. `--continue` keeps
   using the agent last used in the directory (`recent.rs`), a client preference.
 - `weave smoke`, `login` and `logout` resolve agents with `weave-agents` and talk to them
@@ -630,16 +632,18 @@ New, in-process with fake agents:
 - a turn started by one client ends in `turnEnded` for both;
 - `host/hello` picks the highest common version and fails without overlap; every other
   method fails before hello;
-- `local` authentication fails for a peer with another user id (unit test of the check);
+- `local` authentication: the peer check runs for every socket connection; testing a peer
+  with another user id needs a second account, so it's checked by hand;
 - agents run from the config, in the session's directory, with the layered environment;
   environment capture falls back when the shell times out;
-- a client that falls behind is disconnected and catches up after reconnecting;
 - a suspended session resumes when attached, with its interrupted turn ended as cancelled;
 - golden fixtures match for every message type.
 
-TUI, in-process with the fake agent: the app reconnects mid-turn after the Host restarts
-and catches up from its position without replaying the transcript; insta snapshots stay
-unchanged.
+TUI: `ChatWidget` tests cover answering pending requests through the Host, requests
+another client answered, and replayed turns staying history; insta snapshots stay
+unchanged but for the disconnection wording. Reconnecting mid-turn after the Host restarts,
+catching up from the position, is checked live against a development Host
+(`WEAVE_DAEMON_DIR`) with the fake agent.
 
 Live, as now: `WEAVE_LIVE_AGENTS=claude,codex` against the real adapters, through the
 Host.
@@ -658,3 +662,4 @@ into the new binary.
   Capacitor app.
 - `--continue` choosing the latest session in the directory across agents, since the Host
   now knows them.
+- Disconnecting clients that fall behind, for remote clients on slow links.

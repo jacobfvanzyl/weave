@@ -62,7 +62,8 @@ expression: round_trip(&state())
       "startedAt": 1760180000000,
       "origin": {
         "client": {
-          "name": "weave-tui"
+          "name": "weave-tui",
+          "id": "c7"
         }
       }
     }

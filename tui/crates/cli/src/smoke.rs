@@ -15,8 +15,6 @@ use weave_acp_core::AgentEvent;
 use weave_acp_core::PermissionRequest;
 use weave_acp_core::ProtocolTrace;
 use weave_acp_core::SessionSetup;
-use weave_acp_core::policy::PermissionPolicy;
-use weave_acp_core::policy::ToolKinds;
 use weave_acp_core::schema::AuthMethod;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::ErrorCode;
@@ -25,6 +23,8 @@ use weave_acp_core::schema::RequestPermissionOutcome;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::TextContent;
 use weave_acp_core::schema::ToolKind;
+use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::policy::ToolKinds;
 
 use crate::args::AgentArgs;
 use crate::args::ApproveArgs;
@@ -203,7 +203,6 @@ async fn run_turn(
                 return Ok(());
             }
             // Only the weave daemon sends these; smoke talks to the agent directly.
-            Some(AgentEvent::TurnRunning { .. } | AgentEvent::SessionEnded { .. }) => {}
             Some(AgentEvent::Disconnected(Some(error))) => {
                 bail!("connection closed mid-turn: {error}");
             }
