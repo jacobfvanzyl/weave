@@ -451,11 +451,23 @@ pub(crate) async fn stop(paths: &DaemonPaths) -> anyhow::Result<bool> {
         }
         return Ok(running);
     }
-    let Some(connection) = control(paths).await? else {
-        return Ok(false);
-    };
-    connection.send(ShutdownRequest {}).await?;
-    connection.shutdown().await;
+    match control(paths).await {
+        Ok(Some(connection)) => {
+            connection.send(ShutdownRequest {}).await?;
+            connection.shutdown().await;
+        }
+        Ok(None) => return Ok(false),
+        // A Host of another version, as after rebuilding weave, can't be asked to stop; it
+        // stops on SIGTERM all the same.
+        Err(error) if matches!(error.downcast_ref(), Some(ConnectError::Incompatible(_))) => {
+            socket::terminate_listener(&paths.socket)
+                .await
+                .with_context(|| {
+                    format!("stopping the weave Host on {}", paths.socket.display())
+                })?;
+        }
+        Err(error) => return Err(error),
+    }
     wait_until_stopped(paths).await?;
     eprintln!("Stopped the weave Host.");
     Ok(true)

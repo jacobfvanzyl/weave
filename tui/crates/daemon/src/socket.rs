@@ -63,6 +63,39 @@ pub async fn connect(socket: &Path) -> io::Result<Transport> {
     Ok(transport(UnixStream::connect(socket).await?))
 }
 
+/// Stop the Host listening on `socket` with SIGTERM, for one that speaks another protocol
+/// version and so can't be asked to. Returns its pid.
+pub async fn terminate_listener(socket: &Path) -> io::Result<u32> {
+    let pid = listener_pid(socket).await?;
+    #[cfg(unix)]
+    {
+        let signalled = libc::pid_t::try_from(pid).map_err(io::Error::other)?;
+        // SAFETY: kill only sends a signal, to one process: the pid is positive.
+        if unsafe { libc::kill(signalled, libc::SIGTERM) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("can't signal the weave Host (pid {pid})"),
+        ))
+    }
+}
+
+/// The process listening on `socket`, whatever it speaks.
+async fn listener_pid(socket: &Path) -> io::Result<u32> {
+    let stream = UnixStream::connect(socket).await?;
+    stream
+        .peer_cred()?
+        .pid()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| io::Error::other("the socket doesn't say which process listens on it"))
+}
+
 pub(crate) fn transport(stream: UnixStream) -> Transport {
     let (read, write) = stream.into_split();
     ByteStreams::new(write.compat_write(), read.compat())
@@ -121,5 +154,14 @@ mod tests {
         drop(first);
         // Once the first has gone, its socket is replaced.
         assert!(listen(&paths).is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_socket_names_the_process_listening_on_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonPaths::in_dir(dir.path().join("daemon"));
+        let _listening = listen(&paths).expect("listens");
+        let pid = listener_pid(&paths.socket).await.expect("a pid");
+        assert_eq!(pid, std::process::id());
     }
 }
