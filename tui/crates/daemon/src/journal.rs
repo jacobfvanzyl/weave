@@ -7,6 +7,7 @@
 //! doesn't end that way belonged to a daemon that stopped, and can be recovered.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
@@ -101,6 +102,8 @@ pub(crate) struct Journal {
     entries: Vec<Entry>,
     /// Where entries are appended, unless the journal only lives in memory.
     file: Option<File>,
+    /// The file's path, unless the journal only lives in memory.
+    path: Option<PathBuf>,
 }
 
 impl Journal {
@@ -109,16 +112,19 @@ impl Journal {
         Self {
             entries: vec![header],
             file: None,
+            path: None,
         }
     }
 
     /// A new journal for a session in `dir`, replacing any earlier one of the same session.
     pub(crate) fn create(dir: &Path, session_id: &SessionId, header: Entry) -> io::Result<Self> {
         create_private_dir(dir)?;
-        let file = private_file(&path_for(dir, session_id), true)?;
+        let path = path_for(dir, session_id);
+        let file = private_file(&path, true)?;
         let mut journal = Self {
             entries: Vec::new(),
             file: Some(file),
+            path: Some(path),
         };
         journal.append(header);
         Ok(journal)
@@ -129,7 +135,18 @@ impl Journal {
         Ok(Self {
             entries,
             file: Some(private_file(path, false)?),
+            path: Some(path.to_path_buf()),
         })
+    }
+
+    /// Remove the journal from disk: its session has nothing worth keeping.
+    pub(crate) fn discard(&mut self) {
+        self.file = None;
+        if let Some(path) = self.path.take()
+            && let Err(error) = std::fs::remove_file(&path)
+        {
+            tracing::warn!(%error, path = %path.display(), "couldn't remove a journal");
+        }
     }
 
     pub(crate) fn append(&mut self, entry: Entry) {
@@ -272,17 +289,22 @@ pub(crate) fn open_turns(entries: &[Entry]) -> Vec<SessionId> {
 }
 
 /// Remove journals untouched for `age`: closed sessions, and ones left by a daemon that
-/// stopped and never taken up again.
-pub(crate) fn prune(dir: &Path, age: Duration) {
+/// stopped and never taken up again. The `live` sessions' journals stay, however quiet.
+pub(crate) fn prune(dir: &Path, age: Duration, live: &[SessionId]) {
     let Ok(listing) = std::fs::read_dir(dir) else {
         return;
     };
     let cutoff = SystemTime::now().checked_sub(age).unwrap_or(UNIX_EPOCH);
+    let live: HashSet<PathBuf> = live
+        .iter()
+        .map(|session_id| path_for(dir, session_id))
+        .collect();
     for entry in listing.flatten() {
         let path = entry.path();
         let stale = path
             .extension()
             .is_some_and(|extension| extension == "jsonl")
+            && !live.contains(&path)
             && entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
@@ -408,5 +430,41 @@ mod tests {
         };
         assert_eq!(mode(&sessions), 0o700);
         assert_eq!(mode(&path_for(&sessions, &"s1".into())), 0o600);
+    }
+
+    #[test]
+    fn pruning_removes_old_journals_but_not_live_sessions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let retention = Duration::from_secs(14 * 24 * 60 * 60);
+        let long_ago = SystemTime::now() - retention * 2;
+        for id in ["live", "stale", "recent"] {
+            Journal::create(dir.path(), &id.into(), header(id)).expect("create");
+        }
+        for id in ["live", "stale"] {
+            File::options()
+                .write(true)
+                .open(path_for(dir.path(), &id.into()))
+                .and_then(|file| file.set_modified(long_ago))
+                .expect("backdate");
+        }
+        prune(dir.path(), retention, &["live".into()]);
+        let kept = |id: &str| path_for(dir.path(), &SessionId::new(id.to_owned())).exists();
+        assert!(kept("live"));
+        assert!(!kept("stale"));
+        assert!(kept("recent"));
+    }
+
+    #[test]
+    fn a_discarded_journal_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut journal = Journal::create(dir.path(), &"s1".into(), header("s1")).expect("create");
+        journal.discard();
+        assert!(!path_for(dir.path(), &"s1".into()).exists());
+        // Anything appended later stays in memory.
+        journal.append(Entry::Closed {
+            reason: "closed".into(),
+            at_ms: 1,
+        });
+        assert!(!path_for(dir.path(), &"s1".into()).exists());
     }
 }

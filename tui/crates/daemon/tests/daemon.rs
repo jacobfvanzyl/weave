@@ -72,11 +72,27 @@ impl World {
     }
 
     fn daemon(&self, journals: bool, idle_grace: Duration) -> Daemon {
+        self.daemon_with(journals, idle_grace, Duration::from_secs(60))
+    }
+
+    /// A daemon whose blank sessions close `blank_grace` after nothing needs them.
+    fn daemon_with(&self, journals: bool, idle_grace: Duration, blank_grace: Duration) -> Daemon {
         Daemon::new(DaemonConfig {
-            journals: journals.then(|| self.dir.path().join("sessions")),
+            journals: journals.then(|| self.journals()),
             idle_grace,
+            blank_grace,
             launcher: fake_agents(self.dir.path().join("agent-state.json"), false),
         })
+    }
+
+    fn journals(&self) -> PathBuf {
+        self.dir.path().join("sessions")
+    }
+
+    /// Whether the daemon keeps a journal of `session_id`. The fake agent's ids need no
+    /// escaping in a file name.
+    fn has_journal(&self, session_id: &SessionId) -> bool {
+        self.journals().join(format!("{session_id}.jsonl")).exists()
     }
 
     fn cwd(&self) -> PathBuf {
@@ -157,6 +173,18 @@ impl TestClient {
             .await
             .expect("session/new")
             .session_id
+    }
+
+    /// The sessions `session/list` gives for the world's directory, in order.
+    async fn list(&self, world: &World) -> Vec<SessionId> {
+        self.connection
+            .list_sessions(Some(world.cwd()), None)
+            .await
+            .expect("session/list")
+            .sessions
+            .into_iter()
+            .map(|info| info.session_id)
+            .collect()
     }
 
     fn prompt(&self, session_id: &SessionId, text: &str) {
@@ -474,12 +502,14 @@ async fn a_restarted_daemon_takes_sessions_up_from_their_journals() {
 async fn idle_sessions_close_after_their_grace_and_reopen_in_the_agent() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_millis(100));
-    let client = world.client(&daemon).await;
+    let mut client = world.client(&daemon).await;
     let session_id = client.new_session(&world).await;
+    client.prompt(&session_id, "first");
+    client.until_turn_ends(&mut Seen::default(), None).await;
     client.connection.shutdown().await;
     wait_for(|| daemon.status().sessions.is_empty()).await;
 
-    // No longer live, it's loaded from the agent like any other session.
+    // No longer live, it's loaded from the agent like any other session, which replays it.
     let mut client = world.client(&daemon).await;
     client
         .connection
@@ -489,7 +519,131 @@ async fn idle_sessions_close_after_their_grace_and_reopen_in_the_agent() {
     client.prompt(&session_id, "back");
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
-    assert_eq!(seen.agent, "You said: back");
+    assert_eq!(seen.agent, "You said: firstYou said: back");
+}
+
+#[tokio::test]
+async fn blank_sessions_are_left_out_of_the_list_until_prompted() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.new_session(&world).await;
+    // A blank session offers nothing a new one doesn't, so it isn't listed even by an agent
+    // that saved it, as the fake agent does.
+    assert_eq!(client.list(&world).await, Vec::<SessionId>::new());
+    client.prompt(&session_id, "hello");
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    assert_eq!(client.list(&world).await, [session_id]);
+}
+
+#[tokio::test]
+async fn a_client_reattaching_to_a_blank_session_is_told_it_is_blank() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.new_session(&world).await;
+    let blank = async |session_id: &SessionId| {
+        let loaded = world
+            .client(&daemon)
+            .await
+            .connection
+            .load_session(session_id.clone(), &world.setup())
+            .await
+            .expect("session/load");
+        daemon_protocol::read_meta::<daemon_protocol::OpenedSession>(loaded.meta.as_ref())
+            .map(|opened| opened.blank)
+    };
+    // As after a reload, which reattaches by id.
+    assert_eq!(blank(&session_id).await, Some(true));
+    client.prompt(&session_id, "hello");
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    assert_eq!(blank(&session_id).await, Some(false));
+}
+
+#[tokio::test]
+async fn a_blank_session_closes_soon_after_it_is_left_and_keeps_no_journal() {
+    let world = World::new();
+    let daemon = world.daemon_with(true, Duration::from_secs(60), Duration::from_millis(100));
+    let mut used = world.client(&daemon).await;
+    let prompted = used.new_session(&world).await;
+    used.prompt(&prompted, "hello");
+    used.until_turn_ends(&mut Seen::default(), None).await;
+    used.connection.shutdown().await;
+    let left = world.client(&daemon).await;
+    let blank = left.new_session(&world).await;
+    assert!(world.has_journal(&blank));
+    left.connection.shutdown().await;
+
+    wait_for(|| daemon.status().sessions.len() == 1).await;
+    // The prompted session waits out the idle grace and keeps its journal.
+    assert_eq!(daemon.status().sessions[0].session_id, prompted);
+    assert!(world.has_journal(&prompted));
+    assert!(!world.has_journal(&blank));
+}
+
+#[tokio::test]
+async fn a_stopping_daemon_closes_blank_sessions_instead_of_leaving_them_open() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let prompted = client.new_session(&world).await;
+    client.prompt(&prompted, "hello");
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    let blank = client.new_session(&world).await;
+    daemon.shutdown().await;
+    // The prompted session is left for a later daemon to take up; the blank one is gone.
+    assert!(world.has_journal(&prompted));
+    assert!(!world.has_journal(&blank));
+}
+
+#[tokio::test]
+async fn sessions_a_stopped_daemon_left_open_stop_leading_the_list_after_the_idle_grace() {
+    let world = World::new();
+    let (left_open, closed) = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let left_open = client.new_session(&world).await;
+        client.prompt(&left_open, "first");
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        // Used later but closed, so the agent lists it first.
+        let closed = client.new_session(&world).await;
+        client.prompt(&closed, "later");
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        client
+            .connection
+            .close_session(closed.clone())
+            .await
+            .expect("session/close");
+        daemon.shutdown().await;
+        (left_open, closed)
+    };
+    // Within the grace, it leads the list, as an open session would.
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let client = world.client(&daemon).await;
+    assert_eq!(
+        client.list(&world).await,
+        [left_open.clone(), closed.clone()]
+    );
+
+    // After it, it's where the agent lists it, as if it had closed by itself...
+    let grace = Duration::from_millis(200);
+    tokio::time::sleep(grace + Duration::from_millis(100)).await;
+    let daemon = world.daemon(true, grace);
+    let mut client = world.client(&daemon).await;
+    assert_eq!(
+        client.list(&world).await,
+        [closed.clone(), left_open.clone()]
+    );
+    // ...but it still reopens from its journal.
+    client
+        .connection
+        .load_session(left_open.clone(), &world.setup())
+        .await
+        .expect("session/load recovers");
+    let mut seen = Seen::default();
+    client.prompt(&left_open, "again");
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.user, "first");
 }
 
 #[tokio::test]
@@ -521,8 +675,10 @@ async fn command_output_reaches_clients_and_is_replayed() {
 async fn sessions_list_with_their_activity_and_close_when_left() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
-    let client = world.client(&daemon).await;
+    let mut client = world.client(&daemon).await;
     let session_id = client.new_session(&world).await;
+    client.prompt(&session_id, "hello");
+    client.until_turn_ends(&mut Seen::default(), None).await;
     let listed = client
         .connection
         .list_sessions(Some(world.cwd()), None)
@@ -551,6 +707,7 @@ async fn a_client_signs_in_through_its_own_agent_and_retries() {
     let daemon = Daemon::new(DaemonConfig {
         journals: None,
         idle_grace: Duration::from_secs(60),
+        blank_grace: Duration::from_secs(60),
         launcher: fake_agents(world.dir.path().join("agent-state.json"), true),
     });
     let client = world.client(&daemon).await;

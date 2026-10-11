@@ -79,7 +79,13 @@ the task that owns a live session: its agent, its journal (`journal`, JSONL unde
 `~/.local/state/weave/daemon/sessions`, 0600), the clients attached to it, its turns, and
 the requests waiting on a person. Everything a session's clients are sent is journaled, so
 `session/load` of a live session replays the journal and then streams live, and a restarted
-daemon resumes sessions it left open. Prompts are forwarded; the other attached clients get
+daemon resumes sessions it left open. A session `session/new` opened is blank until it's
+prompted (`SessionHandle::is_blank`): it isn't listed, closes `blank_grace` (a minute) rather
+than `idle_grace` after nothing needs it, and closes rather than suspends when the daemon
+stops, its journal removed. Load and resume answers say it's blank in `_meta.weave`, so a
+reloaded TUI treats it as new; the TUI closes a blank session when it quits and opens a new
+one when it reconnects. Journals untouched for 14 days are pruned at startup and hourly,
+never a live session's. Prompts are forwarded; the other attached clients get
 the prompt as `user_message_chunk` and the turn as `_weave/turn`. Permission requests and
 elicitations go to every attached client until one answers; a `cancelled` permission
 answer only means that client won't answer (the TUI cancels what's pending when it leaves a
@@ -139,8 +145,8 @@ Agents and MCP servers come from `~/.config/weave/tui.toml` (see `crates/cli/src
 `--resume <id>` reopens a session with the agent and directory its journal records,
 overriding `--agent` and `--cwd` (`start::choose`); the daemon refuses to attach a client of
 another agent. `session/list` through the daemon leads with its sessions of that agent in
-the directory, open ones and then ones a stopped daemon left open (its index of journals,
-`Registry::known`), and marks them in `_meta.weave` (activity, clients, headless), which the
+the directory, open ones and then ones a stopped daemon left open within the idle grace of
+their last activity (its index of journals, `Registry::known`), and marks them in `_meta.weave` (activity, clients, headless), which the
 TUI's picker shows as badges and `--continue` uses to pass over headless runs. Load and
 resume answers carry the session's directory, which the TUI adopts.
 

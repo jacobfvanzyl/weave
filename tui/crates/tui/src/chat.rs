@@ -621,6 +621,14 @@ impl ChatWidget {
         self.active_session.as_ref().filter(|_| self.resumable)
     }
 
+    /// The active session while it's blank: new, with nothing sent in it yet. There's nothing
+    /// in it to come back to, so the weave daemon doesn't keep it.
+    pub fn blank_session(&self) -> Option<&SessionId> {
+        self.active_session
+            .as_ref()
+            .filter(|_| !self.resumable && !self.opening)
+    }
+
     /// The weave daemon went away, and the client waits for it to come back: like a
     /// disconnection, but the draft and the session are kept for when it does.
     pub fn daemon_lost(&mut self) {
@@ -636,9 +644,18 @@ impl ChatWidget {
 
     /// Connected to the weave daemon again: reattach to the session shown, which it takes up
     /// again from its journal. The transcript here already has everything it would replay.
+    /// A blank session didn't outlast the daemon it was in, so a new one takes its place.
     pub fn reconnected(&mut self) -> Vec<AppCommand> {
         self.disconnected = false;
         self.reconnecting = false;
+        if self.blank_session().is_some() {
+            self.reconnected_note = true;
+            return vec![AppCommand::OpenSession {
+                target: SessionTarget::New,
+                title: None,
+                cwd: None,
+            }];
+        }
         match self.active_session.clone() {
             Some(session_id) => vec![AppCommand::Reattach(session_id)],
             None => {
@@ -3519,6 +3536,42 @@ mod tests {
         );
         // The kept draft goes out once it's back.
         assert_eq!(submit(&mut chat, ""), [AppCommand::Prompt("later".into())]);
+    }
+
+    #[test]
+    fn a_session_is_blank_until_something_is_sent_in_it() {
+        let mut chat = chat();
+        assert_eq!(chat.blank_session(), Some(&SessionId::from("s1")));
+        submit(&mut chat, "do it");
+        assert_eq!(chat.blank_session(), None);
+        // A reopened session isn't blank: the agent kept its conversation.
+        let mut reopened = chat_with(Vec::new());
+        reopened.begin_session("s2".into(), Some("Earlier work"));
+        assert_eq!(reopened.blank_session(), None, "still opening");
+        reopened.session_ready(OpenedSession {
+            session_id: "s2".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Loaded),
+            cwd: None,
+            notice: None,
+        });
+        assert_eq!(reopened.blank_session(), None);
+    }
+
+    #[test]
+    fn reconnecting_from_a_blank_session_starts_a_new_one() {
+        // The daemon closes blank sessions when it stops, so there's nothing to reattach to.
+        let mut chat = chat();
+        chat.daemon_lost();
+        assert_eq!(
+            chat.reconnected(),
+            [AppCommand::OpenSession {
+                target: SessionTarget::New,
+                title: None,
+                cwd: None,
+            }]
+        );
     }
 
     #[test]

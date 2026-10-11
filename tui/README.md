@@ -55,7 +55,9 @@ turn if it's still running, and any question the agent is waiting on. A session 
 daemon left open is taken up again, its transcript from the daemon's journal. Any other is
 reopened from the agent's own history. In the list (`--resume`, Ctrl+R), sessions open in
 the daemon wear a badge: `● running`, `● waiting on you`, or `● open` when idle, with how
-many TUIs are attached, and `headless` for `weave run`s.
+many TUIs are attached, and `headless` for `weave run`s. Sessions a stopped daemon left
+open lead the list for 30 minutes after they were last used, as if it had stayed up, and
+then take their place among the rest.
 
 **Leaving.**
 
@@ -67,7 +69,13 @@ many TUIs are attached, and `headless` for `weave run`s.
 | `weave sessions close <id>` | ends | closes for everyone |
 | `weave daemon stop` or `restart` | is lost | reopens with its transcript when next attached |
 
-The daemon itself exits 10 minutes after its last session and client are gone.
+A blank session, one nothing has been sent in yet, has nothing to come back to, so it
+isn't kept: quitting closes it at once (a minute later if the TUI was killed instead),
+`weave daemon stop` closes it too, and a TUI that reconnects starts a new one. It's never
+listed, so `--continue` passes over it; `/reload` still comes back to it.
+
+The daemon itself exits 10 minutes after its last session and client are gone. Journals of
+sessions untouched for 14 days are removed.
 
 When the daemon restarts under an open TUI, the TUI reconnects by itself and carries on in
 the same session, its transcript and draft as they were; a turn the old daemon was running

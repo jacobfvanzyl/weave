@@ -9,6 +9,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -175,6 +177,7 @@ pub(crate) struct SessionHandle {
     /// Where the agent's protocol is traced, for each attached client that asked.
     pub(crate) traces: Arc<Traces>,
     pub(crate) summary: Arc<Mutex<LiveSession>>,
+    blank: Arc<AtomicBool>,
 }
 
 impl SessionHandle {
@@ -211,6 +214,12 @@ impl SessionHandle {
     pub(crate) fn summary(&self) -> LiveSession {
         lock(&self.summary).clone()
     }
+
+    /// Whether the session is blank: `session/new` opened it, and nothing has been sent in it.
+    /// There's nothing in it to come back to.
+    pub(crate) fn is_blank(&self) -> bool {
+        self.blank.load(Ordering::Relaxed)
+    }
 }
 
 fn ended() -> Error {
@@ -227,6 +236,8 @@ pub(crate) struct Opened {
     pub(crate) cwd: PathBuf,
     pub(crate) agent: String,
     pub(crate) choice: Option<AgentChoice>,
+    /// Opened by `session/new`, so blank until it's prompted.
+    pub(crate) blank: bool,
 }
 
 /// Start the task that owns a session, and register it with the daemon.
@@ -240,7 +251,9 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         cwd,
         agent,
         choice,
+        blank,
     } = opened;
+    let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
     let now = now_ms();
     let summary = Arc::new(Mutex::new(LiveSession {
@@ -267,6 +280,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         key,
         traces,
         summary: Arc::clone(&summary),
+        blank: Arc::clone(&blank),
     };
     {
         let mut registry = shared.registry();
@@ -301,6 +315,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         tool_kinds: ToolKinds::default(),
         snapshot,
         summary,
+        blank,
         idle_since: None,
         stopping: None,
         waiting: Vec::new(),
@@ -399,6 +414,8 @@ struct Actor {
     tool_kinds: ToolKinds,
     snapshot: Snapshot,
     summary: Arc<Mutex<LiveSession>>,
+    /// Whether the session is blank; see [`SessionHandle::is_blank`].
+    blank: Arc<AtomicBool>,
     /// When nothing last needed the session; it closes once that's the idle grace ago.
     idle_since: Option<Instant>,
     stopping: Option<Ending>,
@@ -408,8 +425,13 @@ struct Actor {
 
 impl Actor {
     async fn run(mut self) {
-        let grace = self.shared.config.idle_grace;
         loop {
+            // A blank session has nothing to come back to, so it doesn't wait long.
+            let grace = if self.blank.load(Ordering::Relaxed) {
+                self.shared.config.blank_grace
+            } else {
+                self.shared.config.idle_grace
+            };
             let deadline = self.idle_since.map(|since| since + grace);
             tokio::select! {
                 command = self.commands.recv() => match command {
@@ -573,6 +595,7 @@ impl Actor {
             reply.fail(error);
             return;
         }
+        self.blank.store(false, Ordering::Relaxed);
         // Agents don't echo prompts, so this is how the other clients and the journal see it.
         // The agent's events come after: this task reads them next.
         for block in prompt {
@@ -839,6 +862,12 @@ impl Actor {
     }
 
     async fn finish(mut self, ending: Ending) {
+        // A blank session isn't worth leaving for a later daemon, or keeping a journal of.
+        let blank = self.blank.load(Ordering::Relaxed);
+        let ending = match ending {
+            Ending::Suspended if blank => Ending::Closed("the daemon stopped".to_owned()),
+            ending => ending,
+        };
         let suspended = matches!(ending, Ending::Suspended);
         let reason = match &ending {
             Ending::Closed(reason) | Ending::AgentGone(reason) => reason.clone(),
@@ -853,7 +882,9 @@ impl Actor {
                 registry.children.remove(child);
             }
             // Left open for a later daemon when this one stops; closed otherwise.
-            if let Some(known) = registry.known.get_mut(&self.root) {
+            if blank {
+                registry.known.remove(&self.root);
+            } else if let Some(known) = registry.known.get_mut(&self.root) {
                 known.closed = !suspended;
                 known.last_activity_ms = last_activity_ms;
             }
@@ -906,7 +937,9 @@ impl Actor {
                 tracing::debug!(%error, "the agent didn't close the session");
             }
         }
-        if !suspended {
+        if blank {
+            self.journal.discard();
+        } else if !suspended {
             self.journal.append(Entry::Closed {
                 reason,
                 at_ms: now_ms(),

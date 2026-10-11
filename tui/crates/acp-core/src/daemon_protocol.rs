@@ -254,6 +254,9 @@ pub struct ListedSession {
 #[serde(rename_all = "camelCase")]
 pub struct OpenedSession {
     pub cwd: PathBuf,
+    /// The session is blank: `session/new` opened it, and nothing has been sent in it yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blank: bool,
 }
 
 /// `_weave/shutdown`: close every session and exit.

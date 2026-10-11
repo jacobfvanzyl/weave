@@ -44,6 +44,8 @@ use crate::tui::Tui;
 const RECONNECT_WINDOW: Duration = Duration::from_secs(15);
 /// How often to look for it meanwhile.
 const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
+/// How long quitting waits for a blank session to close; the daemon closes it later anyway.
+const CLOSE_ON_QUIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Connects to the weave daemon again after it went away, without starting one, so a
 /// restarted daemon is picked up and a stopped one stays stopped.
@@ -202,6 +204,16 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     chat.push_header(agent_version.as_deref(), &notices);
     let result = app.run(&mut tui, &mut chat, events, startup).await;
     tui.exit();
+    // A blank session has nothing to come back to, so it closes now and its agent stops,
+    // rather than when the daemon's grace for it ends. A reload reattaches to it instead.
+    if !app.reload
+        && let Some(session_id) = chat.blank_session().cloned()
+    {
+        let close = app.handle.close_session(session_id);
+        if let Ok(Err(error)) = tokio::time::timeout(CLOSE_ON_QUIT_TIMEOUT, close).await {
+            tracing::debug!(%error, "couldn't close the blank session");
+        }
+    }
     app.connection.shutdown().await;
     result.map(|()| Exit {
         resumable_session: chat.resumable_session().cloned(),

@@ -58,8 +58,13 @@ use crate::session::lock;
 
 /// How long a session nothing needs stays open: no client attached, no turn running.
 pub const DEFAULT_IDLE_GRACE: Duration = Duration::from_secs(30 * 60);
-/// Journals untouched for this long are removed when a daemon starts.
+/// How long a blank session (new, never prompted) nothing needs stays open: long enough for
+/// a client's `/reload` or reconnect to reattach.
+pub const DEFAULT_BLANK_GRACE: Duration = Duration::from_secs(60);
+/// Journals untouched for this long are removed when a daemon starts, and while it runs.
 const JOURNAL_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+/// How often a running daemon prunes journals.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// How long stopping waits for each session's agent.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -68,6 +73,8 @@ pub struct DaemonConfig {
     pub journals: Option<PathBuf>,
     /// How long a session nothing needs stays open.
     pub idle_grace: Duration,
+    /// How long a blank session nothing needs stays open.
+    pub blank_grace: Duration,
     pub launcher: Launcher,
 }
 
@@ -77,6 +84,7 @@ impl DaemonConfig {
         Self {
             journals: None,
             idle_grace: DEFAULT_IDLE_GRACE,
+            blank_grace: DEFAULT_BLANK_GRACE,
             launcher: process_launcher(),
         }
     }
@@ -136,7 +144,7 @@ impl Daemon {
     pub fn new(config: DaemonConfig) -> Self {
         let known = match &config.journals {
             Some(journals) => {
-                journal::prune(journals, JOURNAL_RETENTION);
+                journal::prune(journals, JOURNAL_RETENTION, &[]);
                 journal::index(journals)
             }
             None => HashMap::new(),
@@ -181,6 +189,9 @@ impl Daemon {
     pub async fn serve(&self, listener: UnixListener, idle_exit: Option<Duration>) {
         let mut stop = self.shared.stop.subscribe();
         let mut checks = tokio::time::interval(Duration::from_secs(1));
+        // Starting pruned already.
+        let mut prunes =
+            tokio::time::interval_at(tokio::time::Instant::now() + PRUNE_INTERVAL, PRUNE_INTERVAL);
         let mut idle_since: Option<Instant> = None;
         loop {
             tokio::select! {
@@ -200,6 +211,7 @@ impl Daemon {
                         break;
                     }
                 }
+                _ = prunes.tick() => self.prune(),
                 _ = checks.tick(), if idle_exit.is_some() => {
                     let quiet = {
                         let registry = self.shared.registry();
@@ -217,6 +229,20 @@ impl Daemon {
             }
         }
         self.shutdown().await;
+    }
+
+    /// Remove journals untouched for the retention period, except live sessions', and forget
+    /// the sessions they recorded.
+    fn prune(&self) {
+        let Some(journals) = &self.shared.config.journals else {
+            return;
+        };
+        let live: Vec<SessionId> = self.shared.registry().sessions.keys().cloned().collect();
+        journal::prune(journals, JOURNAL_RETENTION, &live);
+        self.shared
+            .registry()
+            .known
+            .retain(|session_id, _| journal::path_for(journals, session_id).exists());
     }
 
     /// Ask [`Self::serve`] to stop.

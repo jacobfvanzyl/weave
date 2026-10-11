@@ -27,7 +27,8 @@ pub struct OpenedSession {
     pub session_id: SessionId,
     pub modes: Option<SessionModeState>,
     pub config_options: Vec<SessionConfigOption>,
-    /// How an existing session was reopened.
+    /// How an existing session was reopened: `None` for a new one, and for one the weave
+    /// daemon says is still blank, with nothing sent in it to reopen.
     pub reopened: Option<Reopened>,
     /// The directory it works in, when the weave daemon says: the client works there too.
     pub cwd: Option<PathBuf>,
@@ -38,6 +39,14 @@ pub struct OpenedSession {
 /// The directory the weave daemon says a reopened session works in.
 fn daemon_cwd(meta: Option<&Meta>) -> Option<PathBuf> {
     daemon_protocol::read_meta::<daemon_protocol::OpenedSession>(meta).map(|opened| opened.cwd)
+}
+
+/// How a session the weave daemon answered for in `meta` was reopened: as `how`, unless it's
+/// blank, when it's as good as new.
+fn reopened(meta: Option<&Meta>, how: Reopened) -> Option<Reopened> {
+    let blank = daemon_protocol::read_meta::<daemon_protocol::OpenedSession>(meta)
+        .is_some_and(|opened| opened.blank);
+    (!blank).then_some(how)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,9 +110,9 @@ pub async fn open_session(
                 Ok(OpenedSession {
                     session_id,
                     cwd: daemon_cwd(response.meta.as_ref()),
+                    reopened: reopened(response.meta.as_ref(), Reopened::Loaded),
                     modes: response.modes,
                     config_options: response.config_options.unwrap_or_default(),
-                    reopened: Some(Reopened::Loaded),
                     notice: None,
                 })
             } else {
@@ -111,9 +120,9 @@ pub async fn open_session(
                 Ok(OpenedSession {
                     session_id,
                     cwd: daemon_cwd(response.meta.as_ref()),
+                    reopened: reopened(response.meta.as_ref(), Reopened::Resumed),
                     modes: response.modes,
                     config_options: response.config_options.unwrap_or_default(),
-                    reopened: Some(Reopened::Resumed),
                     notice: None,
                 })
             }
@@ -149,4 +158,28 @@ async fn start_in_mode(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn a_session_the_daemon_says_is_blank_reopens_as_new() {
+        let meta = |blank| {
+            daemon_protocol::meta(&daemon_protocol::OpenedSession {
+                cwd: PathBuf::from("/repo"),
+                blank,
+            })
+        };
+        assert_eq!(
+            reopened(Some(&meta(false)), Reopened::Loaded),
+            Some(Reopened::Loaded)
+        );
+        assert_eq!(reopened(Some(&meta(true)), Reopened::Loaded), None);
+        // An agent answering directly says nothing about it.
+        assert_eq!(reopened(None, Reopened::Resumed), Some(Reopened::Resumed));
+    }
 }

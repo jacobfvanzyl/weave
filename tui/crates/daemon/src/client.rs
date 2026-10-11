@@ -88,6 +88,7 @@ use crate::journal;
 use crate::journal::Entry;
 use crate::journal::Journal;
 use crate::journal::Recorded;
+use crate::journal::now_ms;
 use crate::session;
 use crate::session::ClientId;
 use crate::session::Command;
@@ -218,11 +219,11 @@ async fn handlers(
                     let result = connection
                         .open_existing(client, request.session_id, setup, true)
                         .await
-                        .map(|(snapshot, cwd)| {
+                        .map(|(snapshot, opened)| {
                             LoadSessionResponse::new()
                                 .modes(snapshot.modes)
                                 .config_options(config_options(snapshot.config_options))
-                                .meta(daemon_protocol::meta(&OpenedSession { cwd }))
+                                .meta(daemon_protocol::meta(&opened))
                         });
                     responder.respond_with_result(result)
                 })
@@ -242,11 +243,11 @@ async fn handlers(
                     let result = connection
                         .open_existing(client, request.session_id, setup, false)
                         .await
-                        .map(|(snapshot, cwd)| {
+                        .map(|(snapshot, opened)| {
                             ResumeSessionResponse::new()
                                 .modes(snapshot.modes)
                                 .config_options(config_options(snapshot.config_options))
-                                .meta(daemon_protocol::meta(&OpenedSession { cwd }))
+                                .meta(daemon_protocol::meta(&opened))
                         });
                     responder.respond_with_result(result)
                 })
@@ -546,21 +547,22 @@ impl Connection {
             setup.cwd,
             options.policy,
             snapshot,
-            None,
+            Origin::New,
         )?;
         self.attach(&session, cx, false).await?;
         Ok(response)
     }
 
     /// Load or resume a session: attach to it if it's live, otherwise open it in an agent
-    /// (from its journal, if a stopped daemon left it live).
+    /// (from its journal, if a stopped daemon left it live). Answers with what the session is
+    /// like now, and the `_meta` the answer carries.
     async fn open_existing(
         &self,
         cx: ConnectionTo<Client>,
         session_id: SessionId,
         setup: SessionSetup,
         replay: bool,
-    ) -> Result<(Snapshot, PathBuf), Error> {
+    ) -> Result<(Snapshot, OpenedSession), Error> {
         let hello = self.hello()?;
         let (live, known) = {
             let registry = self.shared.registry();
@@ -584,8 +586,8 @@ impl Connection {
             )));
         }
         if let Some(session) = live {
-            let cwd = session.summary().cwd;
-            return Ok((self.attach(&session, cx, replay).await?, cwd));
+            let snapshot = self.attach(&session, cx, replay).await?;
+            return Ok((snapshot, opened(&session)));
         }
         let instance = self.take_spare().await?;
         match reopen(
@@ -602,8 +604,8 @@ impl Connection {
             // A recovered session's history comes from its journal; an agent's replay is
             // already queued and reaches the client as the session's first events.
             Ok((session, recovered)) => {
-                let cwd = session.summary().cwd;
-                Ok((self.attach(&session, cx, recovered && replay).await?, cwd))
+                let snapshot = self.attach(&session, cx, recovered && replay).await?;
+                Ok((snapshot, opened(&session)))
             }
             Err((error, instance)) => {
                 if let Some(instance) = instance {
@@ -634,15 +636,29 @@ impl Connection {
             .list_sessions(request.cwd.clone(), request.cursor.clone())
             .await?;
         let in_scope = |cwd: &PathBuf| request.cwd.as_ref().is_none_or(|listed| listed == cwd);
-        let (mut live, known) = {
+        // Blank sessions offer nothing a new one doesn't, so they aren't listed at all, even
+        // by an agent that saved them.
+        let (mut live, blank, known) = {
             let registry = self.shared.registry();
-            let live: Vec<LiveSession> = registry
+            let (blank, live): (Vec<&SessionHandle>, Vec<&SessionHandle>) = registry
                 .sessions
                 .values()
-                .map(SessionHandle::summary)
+                .partition(|session| session.is_blank());
+            let blank: HashSet<SessionId> = blank
+                .into_iter()
+                .map(|session| session.summary().session_id)
                 .collect();
-            (live, registry.known.clone())
+            let live: Vec<LiveSession> = live.into_iter().map(SessionHandle::summary).collect();
+            (live, blank, registry.known.clone())
         };
+        response
+            .sessions
+            .retain(|info| !blank.contains(&info.session_id));
+        // A session a stopped daemon left open counts as open for as long as it would have
+        // stayed open had the daemon kept running with nobody attached.
+        let grace_ms = u64::try_from(self.shared.config.idle_grace.as_millis()).unwrap_or(u64::MAX);
+        let still_open =
+            |recorded: &Recorded| now_ms().saturating_sub(recorded.last_activity_ms) < grace_ms;
         live.sort_by_key(|session| std::cmp::Reverse(session.last_activity_ms));
         // This agent's sessions the daemon has in the listed directory lead the first page,
         // whatever order the agent keeps: open ones, then ones a stopped daemon left open, the
@@ -674,8 +690,10 @@ impl Connection {
             .iter()
             .filter(|(session_id, recorded)| {
                 !recorded.closed
+                    && still_open(recorded)
                     && in_scope(&recorded.cwd)
                     && same_agent(recorded, &hello.launch)
+                    && !blank.contains(*session_id)
                     && !live
                         .iter()
                         .any(|session| session.session_id == **session_id)
@@ -895,7 +913,7 @@ pub(crate) async fn run(
                 setup.cwd,
                 policy,
                 snapshot,
-                None,
+                Origin::New,
             )?
         }
     };
@@ -1007,7 +1025,14 @@ async fn reopen(
     };
     let was_recovered = journal.is_some();
     match open(
-        shared, session_id, instance, launch, setup.cwd, policy, snapshot, journal,
+        shared,
+        session_id,
+        instance,
+        launch,
+        setup.cwd,
+        policy,
+        snapshot,
+        Origin::Reopened(journal),
     ) {
         Ok(session) => Ok((session, was_recovered)),
         Err(error) => Err((error, None)),
@@ -1021,6 +1046,22 @@ fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<
     (!entries.is_empty() && !journal::is_closed(&entries)).then_some((path, entries))
 }
 
+/// What a load or resume answer tells the client about `session`, in `_meta.weave`.
+fn opened(session: &SessionHandle) -> OpenedSession {
+    OpenedSession {
+        cwd: session.summary().cwd,
+        blank: session.is_blank(),
+    }
+}
+
+/// Where a session [`open`] starts came from.
+enum Origin {
+    /// `session/new`: the session is blank until it's prompted.
+    New,
+    /// The agent's session reopened, with the journal a stopped daemon left, if there is one.
+    Reopened(Option<Journal>),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn open(
     shared: &Arc<Shared>,
@@ -1030,8 +1071,12 @@ fn open(
     cwd: PathBuf,
     policy: PermissionPolicy,
     snapshot: Snapshot,
-    journal: Option<Journal>,
+    origin: Origin,
 ) -> Result<SessionHandle, Error> {
+    let (journal, blank) = match origin {
+        Origin::New => (None, true),
+        Origin::Reopened(journal) => (journal, false),
+    };
     let journal = match journal {
         Some(journal) => journal,
         None => {
@@ -1060,6 +1105,7 @@ fn open(
             cwd,
             agent: launch.spec.display_command(),
             choice: launch.choice.clone(),
+            blank,
         },
     ))
 }
