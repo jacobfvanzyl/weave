@@ -102,7 +102,8 @@ ending them when it exits.
 
 | Key | Does |
 | --- | --- |
-| Enter / Shift+Enter | Send / new line (messages sent mid-turn are queued) |
+| Enter / Shift+Enter | Send / new line. Mid-turn, Enter steers the running turn: the message joins it, with agents that take steering (Claude, Codex). Otherwise it's queued for after the turn, as the agent's slash commands always are |
+| Tab | Mid-turn, queue the message for after the turn instead of steering it |
 | Esc, Ctrl+C | Stop the running turn; Ctrl+C twice when idle quits |
 | Ctrl+D | Quit, on an empty composer; a running turn carries on in the daemon |
 | `/` | Complete the agent's slash commands |

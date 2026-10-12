@@ -197,6 +197,8 @@ async fn run_turn(
                 terminal_id,
                 status,
             }) => out.event(format_args!("{terminal_id} exited {}", wire(&status))),
+            // Smoke sends one prompt and never steers it.
+            Some(AgentEvent::Steered { .. }) => {}
             Some(AgentEvent::TurnEnded { result, .. }) => {
                 let response = result.context("session/prompt")?;
                 out.event(format_args!("turn ended: {}", wire(&response.stop_reason)));

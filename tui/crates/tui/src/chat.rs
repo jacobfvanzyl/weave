@@ -56,6 +56,8 @@ use weave_acp_core::schema::ToolCallStatus;
 
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
+use weave_host_protocol::turns::SteerOutcome;
+use weave_host_protocol::turns::SteerTurnResponse;
 
 use crate::attachments::Attachment;
 use crate::clipboard;
@@ -129,6 +131,9 @@ const COPIED_NOTE: Duration = Duration::from_secs(2);
 #[derive(Debug, PartialEq)]
 pub enum AppCommand {
     Prompt(String),
+    /// A message for the running turn (`turn/steer`); the Host's answer comes back through
+    /// [`ChatWidget::steer_answered`].
+    Steer(String),
     Cancel,
     /// `session/cancel` for a subagent's current work, which it lets the client stop.
     CancelSubagent(SessionId),
@@ -256,6 +261,9 @@ pub struct ChatWidget {
     permissions: VecDeque<PendingPermission>,
     composer: Composer,
     queued: VecDeque<String>,
+    /// Whether messages sent during a turn steer it: the Host and the agent can. Otherwise,
+    /// and with Tab, they're queued for after it.
+    steerable: bool,
     modes: Option<SessionModeState>,
     config_options: Vec<SessionConfigOption>,
     settings: Option<SettingsPicker>,
@@ -368,6 +376,7 @@ impl ChatWidget {
             permissions: VecDeque::new(),
             composer: Composer::default(),
             queued: VecDeque::new(),
+            steerable: false,
             modes: None,
             config_options: Vec::new(),
             settings: None,
@@ -426,6 +435,11 @@ impl ChatWidget {
     pub fn with_detach(mut self, detachable: bool) -> Self {
         self.detachable = detachable;
         self
+    }
+
+    /// Whether the active session's turns can be steered; see [`AppCommand::Steer`].
+    pub fn set_steerable(&mut self, steerable: bool) {
+        self.steerable = steerable;
     }
 
     /// Draw the transcript in the widget (fullscreen) instead of handing it to scrollback.
@@ -893,6 +907,17 @@ impl ChatWidget {
                 self.resumable = true;
                 if !replayed {
                     self.turn_running_elsewhere(elapsed);
+                }
+                Vec::new()
+            }
+            ChatEvent::TurnSteered { session_id, prompt } => {
+                if !self.is_active(&session_id) {
+                    return Vec::new();
+                }
+                // It joins the turn here, after what the agent said before taking it.
+                self.finish_live_cells();
+                for block in prompt {
+                    self.handle_update(SessionUpdate::UserMessageChunk(ContentChunk::new(block)));
                 }
                 Vec::new()
             }
@@ -1412,6 +1437,28 @@ impl ChatWidget {
     pub fn prompt_failed(&mut self, error: &Error) {
         self.turn = None;
         self.push_error(&format!("Prompt failed: {error}"));
+    }
+
+    /// The Host's answer to [`AppCommand::Steer`]. A message that joined the turn shows as
+    /// its `turnSteered` event. One that came after the turn ended starts the next turn, or
+    /// waits for it, as does one the agent couldn't take.
+    pub fn steer_answered(
+        &mut self,
+        session_id: &SessionId,
+        text: String,
+        result: Result<SteerTurnResponse, Error>,
+    ) -> Vec<AppCommand> {
+        match result {
+            Ok(response) if response.outcome == SteerOutcome::Steered => return Vec::new(),
+            Ok(_) => {}
+            Err(error) => self.push_error(&format!("Couldn't steer the turn: {error}")),
+        }
+        // Meant for a session left meanwhile: back to the draft rather than into this one.
+        if !self.is_active(session_id) {
+            self.composer.insert_str(&text);
+            return Vec::new();
+        }
+        self.submit(ComposerAction::Submit(text), false)
     }
 
     fn handle_update(&mut self, update: SessionUpdate) {
@@ -1995,9 +2042,22 @@ impl ChatWidget {
         if key.code == KeyCode::Esc && !self.composer.is_vim() {
             return self.cancel_turn();
         }
+        // During a turn, Tab queues the draft for after it rather than steering it, as in
+        // Codex. The Vim composer and shell mode keep Tab for themselves.
+        if key.code == KeyCode::Tab
+            && key.modifiers.is_empty()
+            && self.turn.is_some()
+            && !self.composer.is_empty()
+            && !self.composer.is_vim()
+            && !self.composer.is_shell()
+        {
+            let action = self.composer.submit_draft();
+            self.sync_popup();
+            return self.submit(action, false);
+        }
         let action = self.composer.handle_key(key);
         self.sync_popup();
-        self.submit(action)
+        self.submit(action, true)
     }
 
     /// Keys for subagents, once there are any: Alt+Left and Alt+Right watch the previous and
@@ -2235,7 +2295,7 @@ impl ChatWidget {
                 self.composer.insert_str(&format!("/{}", command.name));
                 let action = self.composer.submit_draft();
                 self.sync_popup();
-                Some(self.submit(action))
+                Some(self.submit(action, true))
             }
             _ => None,
         }
@@ -2250,7 +2310,9 @@ impl ChatWidget {
         self.popup.sync(&text, count);
     }
 
-    fn submit(&mut self, action: ComposerAction) -> Vec<AppCommand> {
+    /// Send what the composer gave: during a turn, steering it when `steer` allows and it
+    /// can be steered, otherwise queued for after it.
+    fn submit(&mut self, action: ComposerAction, steer: bool) -> Vec<AppCommand> {
         if let ComposerAction::Submit(text) = &action {
             if text.trim() == format!("/{}", subagents::COMMAND) && !self.subagents.is_empty() {
                 self.open_subagent_picker();
@@ -2286,6 +2348,9 @@ impl ChatWidget {
                 Vec::new()
             }
             ComposerAction::Submit(text) if self.turn.is_some() || self.opening => {
+                if steer && self.can_steer(&text) {
+                    return vec![AppCommand::Steer(text)];
+                }
                 self.queued.push_back(text);
                 Vec::new()
             }
@@ -2293,6 +2358,19 @@ impl ChatWidget {
             ComposerAction::Shell(command) => self.start_shell(command),
             ComposerAction::None => Vec::new(),
         }
+    }
+
+    /// Whether `text`, sent now, would steer the running turn rather than wait for it. The
+    /// agent's own commands are turns of their own, so they wait.
+    fn can_steer(&self, text: &str) -> bool {
+        let command = text
+            .strip_prefix('/')
+            .and_then(|rest| rest.split_whitespace().next())
+            .is_some_and(|name| self.commands.iter().any(|command| command.name == name));
+        self.steerable
+            && !self.opening
+            && self.turn.as_ref().is_some_and(|turn| !turn.cancelling)
+            && !command
     }
 
     /// Ctrl-C: stop the turn if one runs, else clear the draft, else arm (then confirm) quitting.
@@ -2722,6 +2800,7 @@ impl ChatWidget {
             FooterMode::Contextual {
                 composer_empty: self.composer.is_empty(),
                 working: self.turn.is_some(),
+                steer: self.can_steer(self.composer.text()),
             }
         };
         let values = self.status_values();
@@ -2796,7 +2875,13 @@ impl ChatWidget {
         }
         let shortcuts = if self.shortcuts_open {
             u16::try_from(
-                footer::shortcut_lines(usize::from(width), self.vim, self.detachable).len(),
+                footer::shortcut_lines(
+                    usize::from(width),
+                    self.vim,
+                    self.detachable,
+                    self.steerable,
+                )
+                .len(),
             )
             .unwrap_or(u16::MAX)
         } else {
@@ -3049,8 +3134,12 @@ impl ChatWidget {
         } else {
             let mut composer_area = input_area;
             if self.shortcuts_open {
-                let lines =
-                    footer::shortcut_lines(usize::from(area.width), self.vim, self.detachable);
+                let lines = footer::shortcut_lines(
+                    usize::from(area.width),
+                    self.vim,
+                    self.detachable,
+                    self.steerable,
+                );
                 let height = u16::try_from(lines.len())
                     .unwrap_or(u16::MAX)
                     .min(input_area.height.saturating_sub(1));
@@ -3672,6 +3761,124 @@ mod tests {
             history(&mut chat).last().map(String::as_str),
             Some("• Turn cancelled")
         );
+    }
+
+    #[test]
+    fn enter_steers_a_running_turn_and_tab_queues_for_after_it() {
+        let mut chat = chat();
+        chat.set_steerable(true);
+        submit(&mut chat, "first");
+        assert_eq!(
+            submit(&mut chat, "use main instead"),
+            [AppCommand::Steer("use main instead".into())]
+        );
+        chat.handle_paste("then run the tests");
+        assert!(
+            rows(&chat, 60)
+                .iter()
+                .any(|row| row == "  enter to steer · tab to queue")
+        );
+        assert!(chat.handle_key(key(KeyCode::Tab)).is_empty());
+        assert!(chat.composer.is_empty());
+
+        // The steered message shows where it joins the turn; the queued one waits for its end.
+        chat.handle_agent_event(text_chunk("Looking."));
+        chat.handle_agent_event(ChatEvent::TurnSteered {
+            session_id: "s1".into(),
+            prompt: vec!["use main instead".into()],
+        });
+        chat.handle_agent_event(text_chunk("Switching to main."));
+        assert_eq!(
+            chat.handle_agent_event(turn_ended(StopReason::EndTurn)),
+            [AppCommand::Prompt("then run the tests".into())]
+        );
+        let history = history(&mut chat);
+        let at = |line: &str| {
+            history
+                .iter()
+                .position(|row| row == line)
+                .unwrap_or_else(|| panic!("{line:?} in {history:?}"))
+        };
+        assert!(at("• Looking.") < at("› use main instead"), "{history:?}");
+        assert!(
+            at("› use main instead") < at("• Switching to main."),
+            "{history:?}"
+        );
+    }
+
+    #[test]
+    fn agent_commands_and_turns_being_cancelled_are_not_steered() {
+        let mut chat = chat();
+        chat.set_steerable(true);
+        chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![AvailableCommand::new("review", "Review")]),
+        )));
+        submit(&mut chat, "first");
+        // A command is a turn of its own; a path that looks like one isn't.
+        assert!(submit(&mut chat, "/review").is_empty());
+        assert_eq!(
+            submit(&mut chat, "/repo is the wrong place"),
+            [AppCommand::Steer("/repo is the wrong place".into())]
+        );
+        assert_eq!(chat.handle_key(key(KeyCode::Esc)), [AppCommand::Cancel]);
+        chat.composer.clear();
+        assert!(submit(&mut chat, "after all").is_empty());
+        assert_eq!(chat.queued.len(), 1);
+    }
+
+    #[test]
+    fn a_message_too_late_to_steer_starts_the_next_turn_or_waits_for_it() {
+        let not_running = || {
+            Ok(SteerTurnResponse {
+                outcome: SteerOutcome::NotRunning,
+                seq: None,
+            })
+        };
+        let mut chat = chat();
+        chat.set_steerable(true);
+        submit(&mut chat, "first");
+        submit(&mut chat, "late");
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        assert_eq!(
+            chat.steer_answered(&"s1".into(), "late".into(), not_running()),
+            [AppCommand::Prompt("late".into())]
+        );
+
+        // Another turn started meanwhile: it waits for that one.
+        assert!(
+            chat.steer_answered(&"s1".into(), "later".into(), not_running())
+                .is_empty()
+        );
+        // So does one the agent couldn't take, saying why.
+        let failed = Err(Error::internal_error().data("the agent couldn't take the message"));
+        assert!(
+            chat.steer_answered(&"s1".into(), "again".into(), failed)
+                .is_empty()
+        );
+        assert!(
+            history(&mut chat)
+                .iter()
+                .any(|line| line.contains("Couldn't steer the turn")),
+        );
+        assert_eq!(
+            chat.handle_agent_event(turn_ended(StopReason::EndTurn)),
+            [AppCommand::Prompt("later".into())]
+        );
+        assert_eq!(chat.queued, ["again"]);
+    }
+
+    #[test]
+    fn without_steering_enter_queues_as_before() {
+        let mut chat = chat();
+        submit(&mut chat, "first");
+        chat.handle_paste("second");
+        assert!(
+            rows(&chat, 60)
+                .iter()
+                .any(|row| row == "  enter to queue message")
+        );
+        assert!(chat.handle_key(key(KeyCode::Enter)).is_empty());
+        assert_eq!(chat.queued, ["second"]);
     }
 
     #[test]

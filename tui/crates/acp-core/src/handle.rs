@@ -47,6 +47,8 @@ use tokio::sync::mpsc;
 
 use crate::AgentEvent;
 use crate::ClientOptions;
+use crate::steering::SteerRequest;
+use crate::supports_steering;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitializeError {
@@ -262,6 +264,34 @@ impl AgentHandle {
             // received before the response is already queued ahead of it.
             .on_receiving_result(async move |result| {
                 let _ = events.send(AgentEvent::TurnEnded { session_id, result });
+                Ok(())
+            })
+    }
+
+    /// Steer `session_id`'s running turn with `prompt`, through the steering extension (see
+    /// [`crate::supports_steering`]). The agent's answer arrives as [`AgentEvent::Steered`]
+    /// with `tag`, after every update it sent first, so the message's place among the turn's
+    /// updates is known.
+    pub fn steer(
+        &self,
+        session_id: SessionId,
+        prompt: Vec<ContentBlock>,
+        tag: u64,
+    ) -> Result<(), Error> {
+        require(
+            self.agent().is_some_and(supports_steering),
+            "_meta.steering",
+        )?;
+        let events = self.shared.events.clone();
+        self.cx()
+            .send_request(SteerRequest::new(session_id.clone(), prompt))
+            .on_receiving_result(async move |result| {
+                let result = result.map(|response| response.outcome);
+                let _ = events.send(AgentEvent::Steered {
+                    session_id,
+                    tag,
+                    result,
+                });
                 Ok(())
             })
     }

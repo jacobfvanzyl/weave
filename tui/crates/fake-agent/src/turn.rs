@@ -81,8 +81,23 @@ use crate::state::State;
 use crate::state::now;
 use crate::state::supports_compaction;
 use crate::state::supports_subagents;
+use crate::steering::Steering;
 
 static TOOL_CALLS: AtomicU64 = AtomicU64::new(1);
+
+/// A prompt's text blocks, joined.
+pub(crate) fn prompt_text(prompt: &[ContentBlock]) -> String {
+    prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_owned()
+}
 
 fn next_tool_call_id() -> String {
     format!("call-{}", TOOL_CALLS.fetch_add(1, Ordering::Relaxed))
@@ -92,6 +107,7 @@ pub(crate) struct Turn {
     pub session_id: SessionId,
     pub client: ClientCapabilities,
     pub cancel: Arc<Cancellation>,
+    pub steering: Arc<Steering>,
     pub mcp_servers: Vec<McpServer>,
     pub state: Arc<Mutex<State>>,
 }
@@ -102,16 +118,7 @@ impl Turn {
         cx: &ConnectionTo<Client>,
         request: PromptRequest,
     ) -> Result<PromptResponse, Error> {
-        let text = request
-            .prompt
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text(text) => Some(text.text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        let text = text.trim().to_owned();
+        let text = prompt_text(&request.prompt);
         self.record(SessionUpdate::UserMessageChunk(ContentChunk::new(
             ContentBlock::from(text.clone()),
         )));
@@ -151,6 +158,15 @@ impl Turn {
                 let attachments = describe_attachments(&request.prompt);
                 self.say(cx, &format!("You said: {text}{attachments}"))
                     .await?;
+            }
+        }
+        // Messages steered into the turn are answered before it ends, as the adapters do.
+        while let Some(steered) = self.steering.next_or_finish() {
+            if !self.cancel.is_cancelled() {
+                self.record(SessionUpdate::UserMessageChunk(ContentChunk::new(
+                    ContentBlock::from(steered.clone()),
+                )));
+                self.say(cx, &format!("You steered: {steered}")).await?;
             }
         }
 
@@ -462,7 +478,8 @@ impl Turn {
 
     async fn slow(&self, cx: &ConnectionTo<Client>, chunks: u32) -> Result<(), Error> {
         for chunk in 1..=chunks {
-            if self.cancel.is_cancelled() {
+            // A steered message takes over from the chunks left.
+            if self.cancel.is_cancelled() || self.steering.waiting() {
                 return Ok(());
             }
             let text = ContentBlock::from(format!("Chunk {chunk} of {chunks}.\n"));

@@ -1,0 +1,16 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&SteerTurnRequest\n{ session_id: \"s-1\".into(), prompt: vec![text(\"use the other branch\")], })"
+---
+{
+  "method": "turn/steer",
+  "params": {
+    "sessionId": "s-1",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "use the other branch"
+      }
+    ]
+  }
+}

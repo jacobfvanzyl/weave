@@ -25,6 +25,7 @@ use weave_acp_core::AgentHandle;
 use weave_acp_core::ElicitationRequest;
 use weave_acp_core::PermissionRequest;
 use weave_acp_core::RequestKey;
+use weave_acp_core::SteerOutcome;
 use weave_acp_core::Traces;
 use weave_acp_core::schema::CompleteElicitationNotification;
 use weave_acp_core::schema::ContentBlock;
@@ -62,6 +63,7 @@ use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::turns::SteerTurnResponse;
 
 use crate::Shared;
 use crate::instance::Instance;
@@ -182,6 +184,8 @@ pub(crate) enum Command {
         /// The position of the turn's `turnStarted`, once it has started.
         reply: oneshot::Sender<Result<u64, Error>>,
     },
+    /// A message for the running turn; see [`Steer`].
+    Steer(Steer),
     Cancel {
         session_id: SessionId,
     },
@@ -210,6 +214,14 @@ pub(crate) enum Command {
     Suspend {
         done: oneshot::Sender<()>,
     },
+}
+
+/// `turn/steer`: a message for a running turn, waiting for the agent to take it.
+pub(crate) struct Steer {
+    pub(crate) origin: TurnOrigin,
+    pub(crate) session_id: SessionId,
+    pub(crate) prompt: Vec<ContentBlock>,
+    pub(crate) reply: oneshot::Sender<Result<SteerTurnResponse, Error>>,
 }
 
 /// What a session is, for listings and status.
@@ -368,6 +380,8 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         turns: HashMap::new(),
         pending: Vec::new(),
         next_pending: 1,
+        steers: HashMap::new(),
+        next_steer: 1,
         policy,
         tool_kinds: ToolKinds::default(),
         snapshot,
@@ -477,6 +491,9 @@ struct Actor {
     turns: HashMap<SessionId, Turn>,
     pending: Vec<Pending>,
     next_pending: u64,
+    /// Messages steered into turns, by tag, until the agent answers.
+    steers: HashMap<u64, Steer>,
+    next_steer: u64,
     policy: PermissionPolicy,
     /// Each tool call's kind, as reported, for the policy.
     tool_kinds: ToolKinds,
@@ -562,6 +579,7 @@ impl Actor {
             } => {
                 let _ = reply.send(self.prompt(origin, session_id, prompt));
             }
+            Command::Steer(steer) => self.steer(steer),
             Command::Cancel { session_id } => self.cancel(&session_id),
             Command::Changed { notification } => {
                 if notification.session_id == self.root {
@@ -703,6 +721,63 @@ impl Actor {
         Ok(seq)
     }
 
+    /// `turn/steer`: pass the message to the agent, whose answer comes back as
+    /// [`AgentEvent::Steered`], in order with the turn's updates.
+    fn steer(&mut self, steer: Steer) {
+        // Only a turn the Host started is steered, so a turn ends only where the Host sees it.
+        if !self.turns.contains_key(&steer.session_id) {
+            let _ = steer.reply.send(Ok(not_running()));
+            return;
+        }
+        let tag = self.next_steer;
+        self.next_steer += 1;
+        match self
+            .handle
+            .steer(steer.session_id.clone(), steer.prompt.clone(), tag)
+        {
+            Ok(()) => {
+                self.steers.insert(tag, steer);
+            }
+            Err(error) => {
+                let _ = steer.reply.send(Err(error));
+            }
+        }
+    }
+
+    /// The agent answered a steered message: one it took is journaled where it joined the
+    /// turn, after the updates the agent sent first.
+    fn steered(&mut self, tag: u64, result: Result<SteerOutcome, Error>) {
+        let Some(steer) = self.steers.remove(&tag) else {
+            return;
+        };
+        let answer = match result {
+            Ok(outcome @ (SteerOutcome::Injected | SteerOutcome::StartedNewTurn)) => {
+                if outcome == SteerOutcome::StartedNewTurn {
+                    tracing::warn!(
+                        session = %self.root,
+                        "the agent started a turn of its own with a steered message; \
+                         the Host won't see it end"
+                    );
+                }
+                let (seq, _) = self.record(Entry::TurnSteered {
+                    session_id: steer.session_id,
+                    prompt: steer.prompt,
+                    origin: steer.origin,
+                });
+                Ok(SteerTurnResponse {
+                    outcome: weave_host_protocol::turns::SteerOutcome::Steered,
+                    seq: Some(seq),
+                })
+            }
+            Ok(SteerOutcome::PromptRequired) => Ok(not_running()),
+            Ok(SteerOutcome::Failed | SteerOutcome::Unknown) => {
+                Err(Error::internal_error().data("the agent couldn't take the message"))
+            }
+            Err(error) => Err(error),
+        };
+        let _ = steer.reply.send(answer);
+    }
+
     /// `turn/cancel`. The protocol has the client answer every pending permission request
     /// as cancelled; the Host is that client.
     fn cancel(&mut self, session_id: &SessionId) {
@@ -784,6 +859,7 @@ impl Actor {
                 }
             }
             AgentEvent::TurnEnded { session_id, result } => self.turn_ended(session_id, result),
+            AgentEvent::Steered { tag, result, .. } => self.steered(tag, result),
             AgentEvent::TerminalOutput { terminal_id, text } => {
                 self.record(Entry::TerminalOutput {
                     terminal_id,
@@ -1036,6 +1112,14 @@ impl Actor {
         for waiting in self.waiting {
             let _ = waiting.send(());
         }
+    }
+}
+
+/// No turn was running to steer, so nothing was sent.
+fn not_running() -> SteerTurnResponse {
+    SteerTurnResponse {
+        outcome: weave_host_protocol::turns::SteerOutcome::NotRunning,
+        seq: None,
     }
 }
 

@@ -27,9 +27,12 @@
 //!
 //! It supports the whole v1 session lifecycle (new, load with replay, resume, list with
 //! pagination, close, delete), config options and modes, `agent` and `terminal` sign-in, and
-//! logout. With a state file, sessions and sign-in survive across processes.
+//! logout, and the steering extension (`_session/steering`, see `steering`): a turn answers
+//! messages steered into it before it ends, and `slow` stops its chunks for them. With a
+//! state file, sessions and sign-in survive across processes.
 
 mod state;
+mod steering;
 mod turn;
 
 use std::path::PathBuf;
@@ -96,8 +99,11 @@ use crate::state::StoredSession;
 pub use crate::state::interactive_login;
 use crate::state::new_session_id;
 use crate::state::now;
+use crate::steering::SteerRequest;
+use crate::steering::SteerResponse;
 use crate::turn::Turn;
 use crate::turn::notify;
+use crate::turn::prompt_text;
 
 /// How a fake agent instance behaves.
 #[derive(Clone, Debug)]
@@ -162,6 +168,7 @@ pub async fn serve_with(
     let on_mode = Arc::clone(&state);
     let on_config = Arc::clone(&state);
     let on_prompt = Arc::clone(&state);
+    let on_steer = Arc::clone(&state);
     let on_cancel = state;
     Agent
         .builder()
@@ -208,6 +215,7 @@ pub async fn serve_with(
                                 ),
                         )
                 };
+                let meta = (!state.config.minimal).then(steering::capability);
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(capabilities)
@@ -215,7 +223,8 @@ pub async fn serve_with(
                         .agent_info(
                             Implementation::new("weave-fake-agent", env!("CARGO_PKG_VERSION"))
                                 .title("Fake Agent"),
-                        ),
+                        )
+                        .meta(meta),
                 )
             },
             agent_client_protocol::on_receive_request!(),
@@ -445,18 +454,48 @@ pub async fn serve_with(
                         );
                     };
                     session.cancel.reset();
+                    session.steering.start();
                     Turn {
                         session_id: request.session_id.clone(),
                         client: state.client.clone(),
                         cancel: Arc::clone(&session.cancel),
+                        steering: Arc::clone(&session.steering),
                         mcp_servers: session.mcp_servers.clone(),
                         state: Arc::clone(&on_prompt),
                     }
                 };
                 let script_cx = cx.clone();
                 cx.spawn(async move {
-                    responder.respond_with_result(turn.run(&script_cx, request).await)
+                    let steering = Arc::clone(&turn.steering);
+                    let result = turn.run(&script_cx, request).await;
+                    steering.stop();
+                    responder.respond_with_result(result)
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: SteerRequest, responder, _cx| {
+                let state = lock(&on_steer);
+                let Some(session) = state.live.get(&request.session_id) else {
+                    return responder
+                        .respond_with_error(Error::invalid_params().data("session is not active"));
+                };
+                let prompt_required = request.prompt_required();
+                session
+                    .steering
+                    .offer(prompt_text(&request.prompt), |running| {
+                        let outcome = if running {
+                            "injected"
+                        } else if prompt_required {
+                            "promptRequired"
+                        } else {
+                            "failed"
+                        };
+                        responder.respond(SteerResponse {
+                            outcome: outcome.to_owned(),
+                        })
+                    })
             },
             agent_client_protocol::on_receive_request!(),
         )

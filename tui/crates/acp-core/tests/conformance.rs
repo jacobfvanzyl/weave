@@ -535,6 +535,8 @@ async fn unadvertised_methods_are_refused_without_touching_the_wire() {
         connection.logout().await,
         connection.new_session(&http).await.map(drop),
         connection.new_session(&extra_root).await.map(drop),
+        // The steering extension, which the minimal agent doesn't advertise.
+        connection.steer(session.clone(), vec![ContentBlock::from("hi")], 1),
     ];
     assert!(refusals.iter().all(Result::is_err), "{refusals:?}");
 

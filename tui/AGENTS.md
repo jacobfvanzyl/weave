@@ -61,6 +61,8 @@ rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the ter
 colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
 two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
 (after Codex's composer Vim mode) editing the same text in the opt-in Vim composer;
+during a turn Enter steers it when the Host and the agent can (`ChatWidget::can_steer`; not the
+agent's slash commands) and queues otherwise, and Tab always queues, as in Codex;
 `/new`, `/reload` and `/subagents` are the TUI's own slash commands, offered with the agent's
 and handled locally (`/reload` ends the TUI and the CLI execs its own binary again with
 `--resume`). The app follows the active session's journal position (`app.rs`): an attach's
@@ -80,7 +82,13 @@ stripped.
 `acp-core` also declares and handles the terminal output extension
 (`_meta.terminal_output_delta`, Zed's convention that codex-acp and claude-agent-acp use for
 commands they run themselves): `terminal_meta.rs` turns its chunks and exits into the same
-terminal events as client terminals, including in replayed sessions.
+terminal events as client terminals, including in replayed sessions. It handles the
+steering extension too (WVE-86; `steering.rs`): agents that advertise `_meta.steering.supported` take
+`_session/steering`, a steer for the running turn. `AgentHandle::steer` asks with
+`idleBehavior: "promptRequired"`, so an agent whose turn ended hands it back rather than
+starting a turn of its own, and its answer arrives as `AgentEvent::Steered`, in order with the
+turn's updates. The fake agent takes it too: a turn answers its steers before ending, and
+`slow` stops its chunks for them.
 
 In `daemon`, `client` is one client's connection (`host/hello` first, then requests across
 any agents and sessions) and `session` the task that owns an open session: its agent, its
@@ -95,7 +103,9 @@ the Host stops, its journal removed; the TUI detaches from a blank session with 
 when it quits or switches away, and opens a new one when it reconnects to a Host that
 dropped it. Journals untouched for 14 days are pruned at startup and hourly, never an open
 session's. A prompt is journaled with its turn (`turnStarted`, with the client's origin);
-turns end in `turnEnded` for every client. Permission requests and elicitations are pending
+turns end in `turnEnded` for every client. `turn/steer` (a `features` entry) passes a steer to
+the agent only while a turn the Host started runs, journals it as `turnSteered` where the
+agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Permission requests and elicitations are pending
 requests (`pending/added`) every attached client sees, and later attachers in their state;
 the first `pending/answer` counts, and `turn/cancel` cancels them. Host-run terminals reach
 clients as `terminalOutput`/`terminalExit` events; the Host strips agents' `_meta` terminal

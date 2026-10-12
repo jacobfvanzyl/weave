@@ -70,7 +70,11 @@ use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
+use weave_host_protocol::turns::SteerOutcome;
+use weave_host_protocol::turns::SteerTurnRequest;
+use weave_host_protocol::turns::SteerTurnResponse;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -183,6 +187,10 @@ struct Seen {
     agent: String,
     terminal: String,
     started: usize,
+    /// Messages steered into turns, with how much of the agent's text came before each.
+    steered: Vec<(String, usize)>,
+    /// Their positions.
+    steered_seqs: Vec<u64>,
     ended: Option<StopReason>,
     closed: Option<String>,
 }
@@ -283,6 +291,16 @@ impl TestClient {
             .seq
     }
 
+    async fn steer(&self, session_id: &SessionId, text: &str) -> SteerTurnResponse {
+        self.connection
+            .send(SteerTurnRequest {
+                session_id: session_id.clone(),
+                prompt: vec![ContentBlock::from(text.to_owned())],
+            })
+            .await
+            .expect("turn/steer")
+    }
+
     async fn next(&mut self) -> HostEvent {
         tokio::time::timeout(WAIT, self.events.recv())
             .await
@@ -312,6 +330,9 @@ impl TestClient {
                         .unwrap_or_default(),
                     seq: event.seq,
                 });
+                if matches!(event.event, SessionEvent::TurnSteered { .. }) {
+                    seen.steered_seqs.push(event.seq);
+                }
                 return seen.note(event.event);
             }
             HostEvent::PendingAdded(added) => {
@@ -376,6 +397,10 @@ impl Seen {
                 for block in &prompt {
                     self.user.push_str(&text(block));
                 }
+            }
+            SessionEvent::TurnSteered { prompt, .. } => {
+                let text = prompt.iter().map(text).collect();
+                self.steered.push((text, self.agent.len()));
             }
             SessionEvent::TerminalOutput { data, .. } => self.terminal.push_str(&data),
             SessionEvent::TurnEnded {
@@ -451,6 +476,82 @@ async fn a_client_reattaches_mid_turn_and_sees_the_whole_transcript() {
         "Chunk 1 of 4.\nChunk 2 of 4.\nChunk 3 of 4.\nChunk 4 of 4.\n"
     );
     assert_eq!(seen.ended, Some(StopReason::EndTurn));
+}
+
+#[tokio::test]
+async fn a_steered_message_joins_the_running_turn_for_every_client() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut first = world.client(&daemon).await;
+    assert!(
+        first
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == STEER_FEATURE)
+    );
+    let session_id = first.create(&world).await;
+    let mut second = world.client(&daemon).await;
+    second.attach(&session_id).await;
+    first.prompt(&session_id, "slow 50").await;
+    let mut seen = Seen::default();
+    while !seen.agent.contains("Chunk 1 of 50") {
+        let event = first.next().await;
+        first.note(event, &mut seen, None).await;
+    }
+
+    let answer = first.steer(&session_id, "say hi instead").await;
+    assert_eq!(answer.outcome, SteerOutcome::Steered);
+    first.until_turn_ends(&mut seen, None).await;
+    let mut other = Seen::default();
+    second.until_turn_ends(&mut other, None).await;
+    for seen in [&seen, &other] {
+        let [(steered, at)] = seen.steered.as_slice() else {
+            panic!("one steered message: {seen:?}");
+        };
+        assert_eq!(steered, "say hi instead");
+        // It joined the turn before the agent answered it, and the turn ended once.
+        assert!(
+            seen.agent[*at..].starts_with("You steered: say hi instead"),
+            "{seen:?}"
+        );
+        assert!(!seen.agent.contains("Chunk 50 of 50"), "{seen:?}");
+        assert_eq!(seen.ended, Some(StopReason::EndTurn));
+    }
+
+    // A client attaching later replays it in place.
+    let mut later = world.client(&daemon).await;
+    later.attach(&session_id).await;
+    let mut replayed = Seen::default();
+    later.until_turn_ends(&mut replayed, None).await;
+    assert_eq!(replayed.steered, other.steered);
+    assert_eq!(
+        replayed.steered_seqs,
+        answer.seq.into_iter().collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn steering_with_no_turn_running_sends_nothing() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    let not_running = SteerTurnResponse {
+        outcome: SteerOutcome::NotRunning,
+        seq: None,
+    };
+    assert_eq!(client.steer(&session_id, "hi").await, not_running);
+
+    client.prompt(&session_id, "hello").await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    assert_eq!(client.steer(&session_id, "too late").await, not_running);
+    let attached = client.attach(&session_id).await;
+    assert!(attached.state.turns.is_empty());
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(seen.steered.is_empty(), "{seen:?}");
 }
 
 #[tokio::test]

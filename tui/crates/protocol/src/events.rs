@@ -49,6 +49,12 @@ pub enum SessionEvent {
         prompt: Vec<ContentBlock>,
         origin: TurnOrigin,
     },
+    /// A message joined the running turn (`turn/steer`).
+    TurnSteered {
+        session_id: SessionId,
+        prompt: Vec<ContentBlock>,
+        origin: TurnOrigin,
+    },
     /// A turn ended: how, as the agent answered the prompt, or why it failed.
     TurnEnded {
         session_id: SessionId,

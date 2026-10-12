@@ -27,6 +27,7 @@ use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::FakeAgentConfig;
+use crate::steering::Steering;
 
 const MODES: [(&str, &str); 2] = [("ask", "Ask"), ("code", "Code")];
 
@@ -63,6 +64,7 @@ pub(crate) struct StoredSession {
 pub(crate) struct LiveSession {
     pub settings: Settings,
     pub cancel: Arc<Cancellation>,
+    pub steering: Arc<Steering>,
     pub mcp_servers: Vec<McpServer>,
 }
 
@@ -166,6 +168,7 @@ impl State {
             LiveSession {
                 settings,
                 cancel: Arc::new(Cancellation::default()),
+                steering: Arc::new(Steering::default()),
                 mcp_servers,
             },
         );

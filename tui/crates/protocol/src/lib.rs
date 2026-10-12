@@ -10,7 +10,7 @@
 //! - [`agents`]: the agents the Host can run, and signing in to them.
 //! - [`sessions`]: listing, creating, attaching to and closing sessions.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
-//! - [`turns`]: starting and cancelling turns.
+//! - [`turns`]: starting, steering and cancelling turns.
 //! - [`pending`]: permission requests and elicitations waiting on a person.
 //! - [`host`]: the Host's status, and stopping it.
 

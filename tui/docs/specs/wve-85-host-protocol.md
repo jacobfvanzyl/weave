@@ -114,7 +114,7 @@ request with `unauthenticated`.
   "protocol": 2,
   "clientId": "c7",
   "host": {"version": "0.1.0", "pid": 4242, "startedAt": 1760180000000},
-  "features": [],
+  "features": ["turn/steer"],
   "acp": {"protocolVersion": 1, "unstable": ["session_compaction", "subagents"]}
 }}
 ```
@@ -132,7 +132,8 @@ request with `unauthenticated`.
 - `clientId` names this connection in other messages (who answered a pending request,
   who started a turn). It means nothing after the connection ends.
 - `features` lists optional parts of the protocol this Host supports. Version 2 defines
-  none.
+  `turn/steer` ([WVE-86](https://linear.app/jacobfvanzyl/issue/WVE-86/steer-a-running-turn-from-the-tui-through-the-weave-host)),
+  which brings the `turnSteered` event with it.
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -385,6 +386,7 @@ the session, as when a closed session is opened again. A client that remembers
 | --- | --- | --- |
 | `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this session or a subagent session; `notification.sessionId` says which), or a client changes a mode or config option |
 | `turnStarted` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin` | a turn starts |
+| `turnSteered` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin` | a steer joins the running turn (`turn/steer`) |
 | `turnEnded` | `sessionId`, `response?`: ACP `PromptResponse`, `error?`: JSON-RPC error | a turn ends |
 | `terminalOutput` | `terminalId`, `data` | a command the Host runs for the agent writes output |
 | `terminalExit` | `terminalId`, `status`: ACP `TerminalExitStatus` | that command exits |
@@ -423,6 +425,30 @@ Sends the prompt to the agent and answers once the turn has started, with the po
 its `turnStarted` event. The session must be open, but the client needn't be attached.
 `sessionId` may be a subagent session's. The turn's end reaches attached clients as
 `turnEnded`, whoever started it. Fails with `session_not_open` or `turn_running`.
+
+**`turn/steer`** `{sessionId, prompt: ContentBlock[]}` →
+`{outcome: "steered", seq} | {outcome: "notRunning"}`
+
+Feature `turn/steer`. Sends a steer: a message for the session's running turn, which joins
+it instead of starting another. The agent must take steering: claude-agent-acp and codex-acp
+advertise `_meta.steering.supported` in their `initialize` response, which clients read from
+`SessionState.agent`, and take `_session/steering`, an extension of theirs rather than an
+ACP RFD. With an agent that doesn't, a steer for a running turn fails with method not
+found.
+
+- `steered`: the agent took it. It's journaled as `turnSteered` at `seq`, after the updates
+  the agent sent before taking it, so every client and every replay shows it where it joined
+  the turn. The client that sent it shows it then too. The turn ends as usual, once the agent
+  has answered it.
+- `notRunning`: no turn the Host started was running by the time the agent was asked, so
+  nothing was sent. The client starts a turn with it instead, or queues it behind one that
+  started meanwhile.
+
+The Host asks the agent with `_meta.steering.idleBehavior: "promptRequired"`, so that an
+agent whose turn just ended hands the steer back rather than starting a turn the Host can't
+see end. codex-acp ignores that: a steer that reaches it as its turn ends starts a turn of its
+own, whose output reaches clients but whose end never does. The Host journals that steer as
+`steered` and logs it. When the agent can't take a steer, the request fails with its error.
 
 **`turn/cancel`** `{sessionId}` → `{}`
 

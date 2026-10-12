@@ -114,6 +114,13 @@ pub(crate) enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<TurnOrigin>,
     },
+    /// A message joined the running turn (`turn/steer`).
+    #[serde(rename_all = "camelCase")]
+    TurnSteered {
+        session_id: SessionId,
+        prompt: Vec<ContentBlock>,
+        origin: TurnOrigin,
+    },
     /// A turn ended: the agent's answer, or why it failed. Journals from before answers were
     /// kept recorded only the stop reason.
     #[serde(rename_all = "camelCase")]
@@ -192,6 +199,15 @@ impl Entry {
                 session_id: session_id.clone(),
                 prompt: prompt.clone(),
                 origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
+            },
+            Self::TurnSteered {
+                session_id,
+                prompt,
+                origin,
+            } => SessionEvent::TurnSteered {
+                session_id: session_id.clone(),
+                prompt: prompt.clone(),
+                origin: origin.clone(),
             },
             Self::TurnEnded {
                 session_id,

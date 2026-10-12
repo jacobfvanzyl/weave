@@ -504,6 +504,16 @@ fn turn_running_with_a_queued_message() {
 }
 
 #[test]
+fn turn_running_with_a_message_to_steer_it() {
+    let mut chat = chat();
+    chat.set_steerable(true);
+    chat.handle_paste("first");
+    chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.handle_paste("use main instead");
+    insta::assert_snapshot!(screen(&mut chat));
+}
+
+#[test]
 fn disconnected() {
     let mut chat = chat();
     chat.handle_agent_event(ChatEvent::Disconnected(None));

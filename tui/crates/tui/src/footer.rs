@@ -162,6 +162,8 @@ pub enum FooterMode {
     Contextual {
         composer_empty: bool,
         working: bool,
+        /// Enter would steer the running turn, rather than queue the draft for after it.
+        steer: bool,
     },
 }
 
@@ -192,11 +194,18 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
         FooterMode::Contextual {
             composer_empty,
             working,
+            steer,
         } => {
             if props.vim {
                 // The Vim composer shows its own mode, and Enter there starts a new line
                 // rather than queueing.
                 status_line(props.items, props.values, width.saturating_sub(2 * INDENT))
+            } else if working && !composer_empty && steer {
+                [
+                    key_hint("enter", " to steer · "),
+                    key_hint("tab", " to queue"),
+                ]
+                .concat()
             } else if working && !composer_empty {
                 key_hint("enter", " to queue message")
             } else if !props.items.is_empty() {
@@ -403,27 +412,32 @@ pub fn truncate(text: &str, width: usize) -> String {
 }
 
 /// A titled column of keys and what they do.
-type ShortcutColumn = (&'static str, &'static [(&'static str, &'static str)]);
+type ShortcutColumn = (&'static str, Vec<(&'static str, &'static str)>);
 
-/// The composer's keys; with the Vim composer, a new line moves there.
-const COMPOSE: &[(&str, &str)] = &[
-    ("/", "Commands"),
-    ("@", "Attach a file"),
-    ("!", "Shell command"),
-    ("⌃v", "Paste image"),
-    ("⇧enter", "New line"),
-    ("enter", "Send or queue"),
-];
-const COMPOSE_WITH_VIM: &[(&str, &str)] = &[
-    ("/", "Commands"),
-    ("@", "Attach a file"),
-    ("!", "Shell command"),
-    ("⌃v", "Paste image"),
-    ("⇧enter", "New line, in Vim"),
-    ("enter", "Send or queue"),
-    ("⌃g", "Vim composer"),
-    ("⌃↵", "Send from Vim"),
-];
+/// The composer's keys; with the Vim composer, a new line moves there. During a turn, Enter
+/// steers it when it can be steered and queues otherwise; Tab always queues.
+fn compose_keys(vim: bool, steer: bool) -> Vec<(&'static str, &'static str)> {
+    let mut keys = vec![
+        ("/", "Commands"),
+        ("@", "Attach a file"),
+        ("!", "Shell command"),
+        ("⌃v", "Paste image"),
+        ("⇧enter", if vim { "New line, in Vim" } else { "New line" }),
+        (
+            "enter",
+            if steer {
+                "Send or steer"
+            } else {
+                "Send or queue"
+            },
+        ),
+        ("tab", "Queue while working"),
+    ];
+    if vim {
+        keys.extend([("⌃g", "Vim composer"), ("⌃↵", "Send from Vim")]);
+    }
+    keys
+}
 
 const SESSION: &[(&str, &str)] = &[
     ("⇧tab", "Next mode"),
@@ -444,21 +458,28 @@ const SESSION_IN_DAEMON: &[(&str, &str)] = &[
 ];
 
 /// The `?` panel: weave's keys in three columns, as Codex lays out its shortcuts.
-/// `detachable` when sessions outlive the TUI, in the weave Host.
-pub fn shortcut_lines(width: usize, vim: bool, detachable: bool) -> Vec<Line<'static>> {
+/// `detachable` when sessions outlive the TUI, in the weave Host; `steer` when Enter steers a
+/// running turn.
+pub fn shortcut_lines(
+    width: usize,
+    vim: bool,
+    detachable: bool,
+    steer: bool,
+) -> Vec<Line<'static>> {
     let columns: [ShortcutColumn; 3] = [
-        ("Compose", if vim { COMPOSE_WITH_VIM } else { COMPOSE }),
+        ("Compose", compose_keys(vim, steer)),
         (
             "Session",
             if detachable {
                 SESSION_IN_DAEMON
             } else {
                 SESSION
-            },
+            }
+            .to_vec(),
         ),
         (
             "Transcript",
-            &[
+            vec![
                 ("⌃t", "Full transcript"),
                 ("f3", "Find text"),
                 ("pgup / pgdn", "Scroll"),
@@ -503,10 +524,10 @@ pub fn shortcut_lines(width: usize, vim: bool, detachable: bool) -> Vec<Line<'st
         for row in 0..=rows {
             let mut spans = vec![Span::raw(" ".repeat(INDENT))];
             for column in &group {
-                let (title, entries) = **column;
+                let (title, entries) = &**column;
                 let width = column_width(column);
                 let cell: Vec<Span<'static>> = if row == 0 {
-                    vec![Span::styled(title.to_owned(), secondary())]
+                    vec![Span::styled((*title).to_owned(), secondary())]
                 } else if let Some((key, label)) = entries.get(row - 1) {
                     vec![
                         Span::raw(format!("{key:<width$}  ", width = key_width(entries))),
@@ -560,6 +581,7 @@ mod tests {
     const IDLE: FooterMode = FooterMode::Contextual {
         composer_empty: true,
         working: false,
+        steer: false,
     };
 
     #[test]
@@ -621,8 +643,18 @@ mod tests {
         let drafting = FooterMode::Contextual {
             composer_empty: false,
             working: true,
+            steer: false,
         };
         assert!(render(drafting, &StatusItem::DEFAULT, 80).starts_with("  enter to queue message"));
+        let steering = FooterMode::Contextual {
+            composer_empty: false,
+            working: true,
+            steer: true,
+        };
+        assert!(
+            render(steering, &StatusItem::DEFAULT, 80)
+                .starts_with("  enter to steer · tab to queue")
+        );
         assert_eq!(
             render(FooterMode::QuitReminder, &[], 80),
             "  ⌃c again to quit"
@@ -673,17 +705,17 @@ mod tests {
 
     #[test]
     fn shortcuts_stack_on_narrow_screens() {
-        let wide = shortcut_lines(100, false, false);
+        let wide = shortcut_lines(100, false, false, false);
         assert!(wide[3].to_string().contains("Commands"));
         assert!(wide[3].to_string().contains("Next mode"));
-        let narrow = shortcut_lines(30, false, false);
-        let vim = shortcut_lines(100, true, false);
+        let narrow = shortcut_lines(30, false, false, false);
+        let vim = shortcut_lines(100, true, false, false);
         assert!(
             vim.iter()
                 .any(|line| line.to_string().contains("Vim composer"))
         );
         assert!(narrow.len() > wide.len());
-        let detachable = shortcut_lines(100, false, true);
+        let detachable = shortcut_lines(100, false, true, false);
         assert!(
             detachable
                 .iter()
@@ -694,5 +726,17 @@ mod tests {
                 .iter()
                 .any(|line| line.to_string().contains("Leave it running"))
         );
+    }
+
+    #[test]
+    fn shortcuts_say_whether_enter_steers_a_running_turn() {
+        let says = |steer: bool, text: &str| {
+            shortcut_lines(100, false, false, steer)
+                .iter()
+                .any(|line| line.to_string().contains(text))
+        };
+        assert!(says(true, "Send or steer"));
+        assert!(says(false, "Send or queue"));
+        assert!(says(false, "Queue while working"));
     }
 }

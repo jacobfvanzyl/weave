@@ -53,6 +53,7 @@ use crate::ElicitationRequest;
 use crate::PermissionRequest;
 use crate::ProtocolTrace;
 use crate::RequestKey;
+use crate::SteerOutcome;
 use crate::Traces;
 use crate::fs;
 use crate::subagent_compat;
@@ -77,6 +78,13 @@ pub enum AgentEvent {
     TurnEnded {
         session_id: SessionId,
         result: Result<PromptResponse, Error>,
+    },
+    /// The answer to a message sent with [`AgentHandle::steer`], with its `tag`. Updates the
+    /// agent sent before answering are always delivered first.
+    Steered {
+        session_id: SessionId,
+        tag: u64,
+        result: Result<SteerOutcome, Error>,
     },
     /// New output from a command the agent started with `terminal/create`, or from one it
     /// runs itself and reports through the terminal output extension (see `terminal_meta`).

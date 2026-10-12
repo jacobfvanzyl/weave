@@ -79,8 +79,11 @@ use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::StartTurnResponse;
+use weave_host_protocol::turns::SteerTurnRequest;
+use weave_host_protocol::turns::SteerTurnResponse;
 
 use crate::Agent;
 use crate::Shared;
@@ -101,6 +104,7 @@ use crate::session::Opened;
 use crate::session::ReplayFrom;
 use crate::session::SessionHandle;
 use crate::session::Snapshot;
+use crate::session::Steer;
 use crate::session::lock;
 
 /// What a client said at `host/hello`.
@@ -294,6 +298,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, steer_turn),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, cancel_turn),
             agent_client_protocol::on_receive_request!(),
         )
@@ -422,7 +430,7 @@ impl Connection {
                 pid: status.pid,
                 started_at: status.started_at,
             },
-            features: Vec::new(),
+            features: vec![STEER_FEATURE.to_owned()],
             acp: AcpInfo {
                 protocol_version: 1,
                 unstable: vec!["session_compaction".to_owned(), "subagents".to_owned()],
@@ -1033,6 +1041,22 @@ impl Connection {
         })?;
         let seq = started.await.map_err(|_| session::ended())??;
         Ok(StartTurnResponse { seq })
+    }
+
+    async fn steer_turn(&self, request: SteerTurnRequest) -> Result<SteerTurnResponse, Error> {
+        let hello = self.hello_info()?;
+        let session = self.live(&request.session_id)?;
+        let (reply, answered) = oneshot::channel();
+        session.send(Command::Steer(Steer {
+            origin: TurnOrigin::Client {
+                name: hello.client.name,
+                id: self.client_id(),
+            },
+            session_id: request.session_id,
+            prompt: request.prompt,
+            reply,
+        }))?;
+        answered.await.map_err(|_| session::ended())?
     }
 
     async fn cancel_turn(&self, request: CancelTurnRequest) -> Result<Empty, Error> {

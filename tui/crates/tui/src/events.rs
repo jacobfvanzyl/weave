@@ -54,6 +54,11 @@ pub enum ChatEvent {
         /// From the journal, before this client was there: history, not news.
         replayed: bool,
     },
+    /// A message joined the running turn: this client's, another's, or one in the replay.
+    TurnSteered {
+        session_id: SessionId,
+        prompt: Vec<ContentBlock>,
+    },
     TurnEnded {
         session_id: SessionId,
         result: Result<PromptResponse, Error>,

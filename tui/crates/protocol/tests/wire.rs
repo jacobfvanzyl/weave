@@ -101,6 +101,9 @@ use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::StartTurnResponse;
+use weave_host_protocol::turns::SteerOutcome;
+use weave_host_protocol::turns::SteerTurnRequest;
+use weave_host_protocol::turns::SteerTurnResponse;
 
 /// A request or notification as sent: its method and params, after a round trip.
 fn message<M: JsonRpcMessage + Serialize + DeserializeOwned>(message: &M) -> Value {
@@ -451,6 +454,27 @@ fn turns() {
             session_id: "s-1".into(),
         })
     );
+    insta::assert_json_snapshot!(
+        "steer_turn_request",
+        message(&SteerTurnRequest {
+            session_id: "s-1".into(),
+            prompt: vec![text("use the other branch")],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "steer_turn_response",
+        round_trip(&SteerTurnResponse {
+            outcome: SteerOutcome::Steered,
+            seq: Some(43),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "steer_turn_response_not_running",
+        round_trip(&SteerTurnResponse {
+            outcome: SteerOutcome::NotRunning,
+            seq: None,
+        })
+    );
 }
 
 #[test]
@@ -535,6 +559,20 @@ fn events() {
             47,
             SessionEvent::Closed {
                 reason: "idle".to_owned(),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_turn_steered",
+        message(&event(
+            48,
+            SessionEvent::TurnSteered {
+                session_id: "s-1".into(),
+                prompt: vec![text("use the other branch")],
+                origin: TurnOrigin::Client {
+                    name: "weave-tui".to_owned(),
+                    id: "c7".to_owned(),
+                },
             },
         ))
     );

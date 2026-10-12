@@ -58,8 +58,16 @@ What a person sends an agent to start a turn.
 _Avoid_: message, query
 
 **Turn**:
-One prompt and everything the agent does until it answers it.
+One prompt, any steers that join it, and everything the agent does until it answers them.
 _Avoid_: run, request, exchange
+
+**Steer**:
+What a person sends an agent while its turn runs, which joins that turn instead of starting another.
+_Avoid_: interjection, injection, interrupt
+
+**Queued prompt**:
+A prompt a client holds while a turn runs, to start the next turn once that one ends.
+_Avoid_: follow-up, pending message
 
 **Pending request**:
 A permission request or elicitation from an agent that waits for a person. Any attached client may answer it, and the first answer counts.

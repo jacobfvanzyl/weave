@@ -13,6 +13,7 @@ use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::SessionSetup;
+use weave_acp_core::SteerOutcome;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::CreateElicitationRequest;
 use weave_acp_core::schema::ElicitationContentValue;
@@ -49,6 +50,7 @@ pub struct TurnLog {
     pub elicitations: Vec<CreateElicitationRequest>,
     pub completions: Vec<ElicitationId>,
     pub withdrawals: usize,
+    pub steers: Vec<SteerOutcome>,
     pub stop_reason: Option<StopReason>,
 }
 
@@ -155,6 +157,9 @@ impl Harness {
                 }
                 AgentEvent::TerminalOutput { text, .. } => log.terminal_output.push_str(&text),
                 AgentEvent::TerminalExited { status, .. } => log.exits.push(status),
+                AgentEvent::Steered { result, .. } => {
+                    log.steers.push(result.expect("steering answer"));
+                }
                 AgentEvent::TurnEnded { result, .. } => {
                     log.stop_reason = Some(result.expect("prompt response").stop_reason);
                     return log;

@@ -25,6 +25,7 @@ use weave_acp_core::schema::PromptCapabilities;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::TerminalExitStatus;
+use weave_acp_core::supports_steering;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::HostHandle;
@@ -47,7 +48,10 @@ use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
+use weave_host_protocol::turns::SteerTurnRequest;
+use weave_host_protocol::turns::SteerTurnResponse;
 
 use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
@@ -149,6 +153,12 @@ enum AppEvent {
     SessionsListed(Result<ListSessionsResponse, Error>, bool),
     SessionDeleted(SessionId, Result<(), Error>),
     PromptFailed(Error),
+    /// The Host's answer to a message steered into a session's turn.
+    Steered {
+        session_id: SessionId,
+        text: String,
+        result: Result<SteerTurnResponse, Error>,
+    },
     /// The clipboard's image, saved for attaching, or why there wasn't one.
     ImagePasted(Result<PathBuf, String>),
     /// Output from a shell-mode command, then how it ended.
@@ -453,6 +463,10 @@ impl App {
                     replayed,
                 }
             }
+            // Shown as it joins the turn, this client's own messages too.
+            SessionEvent::TurnSteered {
+                session_id, prompt, ..
+            } => ChatEvent::TurnSteered { session_id, prompt },
             SessionEvent::TurnEnded {
                 session_id,
                 response,
@@ -520,6 +534,7 @@ impl App {
                     return self.session_opened(chat, &opened);
                 }
                 self.track(chat, &opened);
+                chat.set_steerable(self.steerable(&opened.state));
                 chat.reattached(OpenedSession::from_state(
                     &opened.state,
                     opened.replay.as_ref(),
@@ -541,12 +556,24 @@ impl App {
     ) -> Vec<AppCommand> {
         self.cwd.clone_from(&opened.state.cwd);
         chat.set_cwd(opened.state.cwd.clone());
+        chat.set_steerable(self.steerable(&opened.state));
         chat.session_ready(OpenedSession::from_state(
             &opened.state,
             opened.replay.as_ref(),
         ));
         self.track(chat, opened);
         self.show_state(chat, &opened.state)
+    }
+
+    /// Whether the session's turns can be steered: the Host takes `turn/steer`, and the
+    /// agent takes steering.
+    fn steerable(&self, state: &SessionState) -> bool {
+        self.handle
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == STEER_FEATURE)
+            && supports_steering(&state.agent.initialize)
     }
 
     /// Follow the session's journal from where `opened`'s replay starts.
@@ -645,6 +672,11 @@ impl App {
                 chat.prompt_failed(&error);
                 Vec::new()
             }
+            AppEvent::Steered {
+                session_id,
+                text,
+                result,
+            } => chat.steer_answered(&session_id, text, result),
             AppEvent::ImagePasted(Ok(path)) => {
                 chat.attach_image(path);
                 Vec::new()
@@ -685,6 +717,29 @@ impl App {
                             .await
                             .err()
                             .map(AppEvent::PromptFailed)
+                    });
+                }
+                AppCommand::Steer(text) => {
+                    let Some(session_id) = chat.active_session().cloned() else {
+                        continue;
+                    };
+                    // What it attaches shows in the message once it joins the turn.
+                    let images = chat.prompt_images(&text);
+                    let (prompt, _) =
+                        prompt_blocks(&text, &self.cwd, &self.prompt_capabilities, &images);
+                    let handle = self.handle.clone();
+                    self.spawn(async move {
+                        let result = handle
+                            .send(SteerTurnRequest {
+                                session_id: session_id.clone(),
+                                prompt,
+                            })
+                            .await;
+                        AppEvent::Steered {
+                            session_id,
+                            text,
+                            result,
+                        }
                     });
                 }
                 AppCommand::Cancel => {
