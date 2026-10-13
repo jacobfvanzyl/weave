@@ -3,7 +3,8 @@
 //! Adapted from openai/codex `codex-rs/tui/src/terminal_palette.rs`, `color.rs` and
 //! `terminal_probe.rs` (Apache-2.0). At startup weave asks the terminal for its default
 //! foreground and background (OSC 10 and 11), so shaded surfaces such as the composer can be
-//! blended from the real background. When the terminal doesn't say, they stay unstyled.
+//! blended from the real background. When the terminal doesn't say, they stay unstyled. The
+//! same probe carries other questions for the terminal, such as whether it draws images.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -48,11 +49,11 @@ impl Palette {
         level: ColorLevel::Unknown,
     };
 
-    /// Probe the terminal (which must be in raw mode) and read its color depth from the
+    /// The palette in the terminal's `replies` to [`probe`], with its color depth from the
     /// environment.
-    pub fn detect() -> Self {
+    pub fn from_replies(replies: &[u8]) -> Self {
         let level = color_level_from_env(|name| std::env::var(name).ok());
-        let colors = probe_default_colors(PROBE_TIMEOUT);
+        let colors = parse_osc_color(replies, 10).zip(parse_osc_color(replies, 11));
         Self {
             fg: colors.map(|(fg, _)| fg),
             bg: colors.map(|(_, bg)| bg),
@@ -200,16 +201,26 @@ fn lab((r, g, b): Rgb) -> (f32, f32, f32) {
 /// even when they ignore color queries, which ends the wait early.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Ask the terminal for its default foreground and background colors.
+/// Ask the terminal (which must be in raw mode) for its default foreground and background
+/// colors, and `questions` besides, and return its replies.
+pub fn probe(questions: &[u8]) -> Vec<u8> {
+    probe_terminal(questions, PROBE_TIMEOUT)
+}
+
 #[cfg(unix)]
-fn probe_default_colors(timeout: Duration) -> Option<(Rgb, Rgb)> {
+fn probe_terminal(questions: &[u8], timeout: Duration) -> Vec<u8> {
     use std::io::Write;
     use std::time::Instant;
 
     let mut out = std::io::stdout();
-    out.write_all(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c")
-        .ok()?;
-    out.flush().ok()?;
+    let asked = out
+        .write_all(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\")
+        .and_then(|()| out.write_all(questions))
+        .and_then(|()| out.write_all(b"\x1b[c"))
+        .and_then(|()| out.flush());
+    if asked.is_err() {
+        return Vec::new();
+    }
     let deadline = Instant::now() + timeout;
     let mut buffer = Vec::new();
     while !has_device_attributes(&buffer) && buffer.len() < 4096 {
@@ -234,12 +245,12 @@ fn probe_default_colors(timeout: Duration) -> Option<(Rgb, Rgb)> {
         }
         buffer.extend_from_slice(&chunk[..count]);
     }
-    Some((parse_osc_color(&buffer, 10)?, parse_osc_color(&buffer, 11)?))
+    buffer
 }
 
 #[cfg(not(unix))]
-fn probe_default_colors(_timeout: Duration) -> Option<(Rgb, Rgb)> {
-    None
+fn probe_terminal(_questions: &[u8], _timeout: Duration) -> Vec<u8> {
+    Vec::new()
 }
 
 #[cfg(unix)]
@@ -310,6 +321,14 @@ mod tests {
         assert!(has_device_attributes(reply));
         assert!(!has_device_attributes(b"\x1b]11;rgb:1e/1e/2e\x07"));
         assert_eq!(parse_osc_color(b"\x1b]11;hsl:1/2/3\x07", 11), None);
+        // Answers to the probe's other questions sit among them.
+        let mixed = b"\x1b]10;rgb:cdcd/d6d6/f4f4\x1b\\\x1b]11;rgb:1e/1e/2e\x07\x1b_Gi=31;OK\x1b\\\x1b[6;42;19t\x1b[?62;22c";
+        let palette = Palette::from_replies(mixed);
+        assert_eq!(
+            (palette.fg, palette.bg),
+            (Some((205, 214, 244)), Some((30, 30, 46)))
+        );
+        assert_eq!(Palette::from_replies(b"\x1b]10;rgb:1/2/3\x07").bg, None);
     }
 
     #[test]

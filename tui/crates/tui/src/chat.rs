@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -17,6 +18,7 @@ use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -84,6 +86,7 @@ use crate::footer::FooterMode;
 use crate::footer::FooterProps;
 use crate::footer::StatusItem;
 use crate::footer::StatusValues;
+use crate::graphics::Placement;
 use crate::history_cell::dim;
 use crate::history_cell::home_relative;
 use crate::permission::Decision;
@@ -106,6 +109,9 @@ use crate::streaming::render_compact;
 use crate::style;
 use crate::subagents;
 use crate::subagents::Subagent;
+use crate::thumbnails;
+use crate::thumbnails::Strip;
+use crate::thumbnails::Thumbnail;
 use crate::tool_call::ExploreGroup;
 use crate::tool_call::RenderContext;
 use crate::tool_call::ToolCallCell;
@@ -127,6 +133,8 @@ const RELOAD_COMMAND: &str = "reload";
 
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
+/// How many times taller than wide a cell is, until the terminal says.
+const CELL_ASPECT: f64 = 2.0;
 
 #[derive(Debug, PartialEq)]
 pub enum AppCommand {
@@ -167,6 +175,12 @@ pub enum AppCommand {
     /// Ctrl+V: attach the clipboard's image; it comes back through
     /// [`ChatWidget::attach_image`].
     PasteImage,
+    /// Make a thumbnail of pasted image `number`; it comes back through
+    /// [`ChatWidget::thumbnail_loaded`].
+    LoadThumbnail {
+        number: usize,
+        path: PathBuf,
+    },
     /// Something needs the user, such as a finished turn or an approval; the app raises a
     /// desktop notification when the terminal isn't focused.
     Notify(String),
@@ -290,7 +304,11 @@ pub struct ChatWidget {
     /// Shell commands run so far, for naming the next.
     shell_runs: usize,
     /// Images pasted into prompts, `[image 1]` first.
-    images: Vec<PathBuf>,
+    images: Vec<PastedImage>,
+    /// Show the draft's images above the composer: the terminal draws images.
+    thumbnails: bool,
+    /// How many times taller than wide the terminal's cells are, for shaping thumbnails.
+    cell_aspect: f64,
     /// The session directory's files, for the `@` picker.
     files: FileIndex,
     file_popup: FilePopup,
@@ -312,6 +330,12 @@ pub struct ChatWidget {
     messages: Vec<SessionMessageEntry>,
     /// In a subagent's own chat: what its parent is called.
     parent_label: Option<String>,
+}
+
+/// An image pasted into a prompt, and its thumbnail once made.
+struct PastedImage {
+    path: PathBuf,
+    thumbnail: Option<Arc<Thumbnail>>,
 }
 
 /// A message between sessions as this chat shows it.
@@ -395,6 +419,8 @@ impl ChatWidget {
             last_reply: None,
             shell_runs: 0,
             images: Vec::new(),
+            thumbnails: false,
+            cell_aspect: CELL_ASPECT,
             files,
             file_popup: FilePopup::default(),
             shortcuts_open: false,
@@ -429,6 +455,21 @@ impl ChatWidget {
             self.files = FileIndex::new(cwd.clone());
             self.cwd = cwd;
         }
+    }
+
+    /// Show thumbnails of the draft's images above the composer, as the terminal draws images.
+    pub fn with_thumbnails(mut self, enabled: bool) -> Self {
+        self.thumbnails = enabled;
+        self
+    }
+
+    /// The terminal's cell size in pixels, for shaping thumbnails; `None` when unknown.
+    pub fn set_cell_size(&mut self, cell: Option<Size>) {
+        self.cell_aspect = cell
+            .filter(|cell| cell.width > 0)
+            .map_or(CELL_ASPECT, |cell| {
+                f64::from(cell.height) / f64::from(cell.width)
+            });
     }
 
     /// Sessions outlive the TUI, in the weave Host, so leaving needn't stop a turn.
@@ -1743,41 +1784,61 @@ impl ChatWidget {
         }
     }
 
-    pub fn handle_paste(&mut self, text: &str) {
+    pub fn handle_paste(&mut self, text: &str) -> Vec<AppCommand> {
         if self
             .viewed_mut()
             .is_some_and(|(view, live)| view.find_paste(text, &live))
         {
-            return;
+            return Vec::new();
         }
         if let Some(pending) = self.elicitations.front_mut() {
             pending.view.handle_paste(text);
-            return;
+            return Vec::new();
         }
         if self.permissions.is_empty() && self.settings.is_none() && self.session_picker.is_none() {
             // A dragged-in image file pastes as its path; attach it instead, as Codex does.
             if !self.composer.is_shell()
                 && let Some(path) = clipboard::pasted_image_path(text, &self.cwd)
             {
-                self.attach_image(path);
-                return;
+                return self.attach_image(path);
             }
             self.composer.insert_str(text);
             self.sync_popup();
         }
+        Vec::new()
     }
 
-    /// Attach an image to the draft, shown there as `[image N]` as Codex shows them.
-    pub fn attach_image(&mut self, path: PathBuf) {
-        self.images.push(path);
+    /// Attach an image to the draft, shown there as `[image N]` as Codex shows them, and
+    /// above the composer once its thumbnail is made.
+    pub fn attach_image(&mut self, path: PathBuf) -> Vec<AppCommand> {
+        self.images.push(PastedImage {
+            path: path.clone(),
+            thumbnail: None,
+        });
+        let number = self.images.len();
         let space = self
             .composer
             .char_before_cursor()
             .is_some_and(|ch| !ch.is_whitespace());
         let lead = if space { " " } else { "" };
         self.composer
-            .insert_str(&format!("{lead}[image {}] ", self.images.len()));
+            .insert_str(&format!("{lead}[image {number}] "));
         self.sync_popup();
+        if self.thumbnails {
+            vec![AppCommand::LoadThumbnail { number, path }]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Pasted image `number`'s thumbnail, made.
+    pub fn thumbnail_loaded(&mut self, number: usize, thumbnail: Thumbnail) {
+        if let Some(image) = number
+            .checked_sub(1)
+            .and_then(|index| self.images.get_mut(index))
+        {
+            image.thumbnail = Some(Arc::new(thumbnail));
+        }
     }
 
     /// The images a prompt's text still refers to, with their labels.
@@ -1785,10 +1846,36 @@ impl ChatWidget {
         self.images
             .iter()
             .enumerate()
-            .map(|(index, path)| (format!("image {}", index + 1), path))
+            .map(|(index, image)| (format!("image {}", index + 1), &image.path))
             .filter(|(label, _)| text.contains(&format!("[{label}]")))
             .map(|(label, path)| (label, path.clone()))
             .collect()
+    }
+
+    /// The strip of thumbnails above the composer at `width`: the draft's images that have
+    /// one, if the terminal draws images.
+    fn thumbnail_strip(&self, width: u16) -> Option<Strip> {
+        if !self.thumbnails {
+            return None;
+        }
+        let text = self.composer.text();
+        let images: Vec<(usize, Arc<Thumbnail>)> = self
+            .images
+            .iter()
+            .enumerate()
+            .filter_map(|(index, image)| Some((index + 1, image.thumbnail.clone()?)))
+            .filter(|(number, _)| text.contains(&format!("[image {number}]")))
+            .collect();
+        let strip = Strip::new(images, width, self.cell_aspect);
+        (!strip.is_empty()).then_some(strip)
+    }
+
+    /// The images the terminal should hold for the screen at `width`: the thumbnails shown
+    /// above the composer, which stay while a prompt or picker covers it.
+    pub fn terminal_images(&self, width: u16) -> Vec<Placement> {
+        self.thumbnail_strip(width)
+            .map(|strip| strip.placements())
+            .unwrap_or_default()
     }
 
     /// Show a note from outside the conversation.
@@ -2887,7 +2974,12 @@ impl ChatWidget {
         } else {
             0
         };
-        shortcuts + self.composer.box_height(width)
+        let strip = if self.thumbnail_strip(width).is_some() {
+            thumbnails::HEIGHT
+        } else {
+            0
+        };
+        shortcuts + strip + self.composer.box_height(width)
     }
 
     /// Rows under the input: the slash command popup, which replaces the footer as in Codex,
@@ -3148,6 +3240,15 @@ impl ChatWidget {
                 }
                 composer_area.y += height;
                 composer_area.height -= height;
+            }
+            // Thumbnails sit right above the composer box, while there's room for both.
+            if let Some(strip) = self.thumbnail_strip(area.width)
+                && composer_area.height >= thumbnails::HEIGHT + self.composer.box_height(area.width)
+            {
+                let strip_area = Rect::new(area.x, composer_area.y, area.width, thumbnails::HEIGHT);
+                strip.render(strip_area, buf);
+                composer_area.y += thumbnails::HEIGHT;
+                composer_area.height -= thumbnails::HEIGHT;
             }
             Some(
                 self.composer
@@ -5021,6 +5122,101 @@ mod tests {
             chat.prompt_images("what is [image 2]"),
             [("image 2".to_owned(), PathBuf::from("/tmp/b.png"))]
         );
+    }
+
+    /// Rows as drawn, with thumbnails' placeholder cells shown as `#`.
+    fn with_placeholders(rows: Vec<String>) -> Vec<String> {
+        rows.into_iter()
+            .map(|row| {
+                row.chars()
+                    .filter(|ch| !('\u{300}'..='\u{36F}').contains(ch))
+                    .map(|ch| if ch == '\u{10EEEE}' { '#' } else { ch })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn wide_thumbnail() -> Thumbnail {
+        Thumbnail {
+            png: Arc::from(&b"png"[..]),
+            width: 1600,
+            height: 900,
+        }
+    }
+
+    #[test]
+    fn pasted_images_show_above_the_composer_while_the_draft_refers_to_them() {
+        let mut chat = chat().with_thumbnails(true);
+        chat.handle_paste("what is");
+        let path = PathBuf::from("/tmp/a.png");
+        assert_eq!(
+            chat.attach_image(path.clone()),
+            [AppCommand::LoadThumbnail { number: 1, path }]
+        );
+        // Nothing shows until the thumbnail is made.
+        let before = rows(&chat, 60);
+        assert!(chat.terminal_images(60).is_empty());
+
+        chat.thumbnail_loaded(1, wide_thumbnail());
+        let shown = with_placeholders(rows(&chat, 60));
+        assert_eq!(
+            shown.len(),
+            before.len() + usize::from(thumbnails::HEIGHT),
+            "{shown:?}"
+        );
+        assert_eq!(
+            shown[1..8],
+            [
+                "  ##############",
+                "  ##############",
+                "  ##############",
+                "  ##############",
+                "  [image 1]",
+                "",
+                "› what is [image 1]",
+            ]
+        );
+        assert_eq!(
+            chat.terminal_images(60)
+                .iter()
+                .map(|image| (image.id, image.columns, image.rows))
+                .collect::<Vec<_>>(),
+            [(crate::graphics::image_id(1), 14, 4)]
+        );
+
+        // Deleting the token takes the thumbnail away, here and from the terminal.
+        chat.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(rows(&chat, 60).len(), before.len());
+        assert!(chat.terminal_images(60).is_empty());
+    }
+
+    #[test]
+    fn thumbnails_show_in_fullscreen_and_give_way_to_a_permission_prompt() {
+        let mut chat = fullscreen_chat().with_thumbnails(true);
+        let _ = chat.attach_image(PathBuf::from("/tmp/a.png"));
+        chat.thumbnail_loaded(1, wide_thumbnail());
+        let shown = with_placeholders(screen_rows(&chat, 40, 20));
+        let image_rows = shown
+            .iter()
+            .filter(|row| *row == "  ##############")
+            .count();
+        assert_eq!(image_rows, 4, "{shown:?}");
+        assert!(shown.iter().any(|row| row == "  [image 1]"), "{shown:?}");
+
+        // The prompt takes the composer's place and the thumbnails' with it; the terminal
+        // keeps the image for when it's answered.
+        chat.handle_agent_event(permission("p1"));
+        let covered = with_placeholders(screen_rows(&chat, 40, 20));
+        assert!(!covered.iter().any(|row| row.contains('#')), "{covered:?}");
+        assert_eq!(chat.terminal_images(40).len(), 1);
+    }
+
+    #[test]
+    fn without_terminal_images_no_thumbnails_are_made() {
+        let mut chat = chat();
+        assert_eq!(chat.attach_image(PathBuf::from("/tmp/a.png")), []);
+        chat.thumbnail_loaded(1, wide_thumbnail());
+        assert!(chat.terminal_images(60).is_empty());
     }
 
     #[test]

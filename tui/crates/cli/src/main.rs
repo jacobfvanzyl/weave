@@ -241,6 +241,7 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             notifications: launch.config.tui.notifications.unwrap_or(true),
             terminal_title: launch.config.tui.terminal_title.unwrap_or(true),
             vim: launch.config.tui.vim.unwrap_or(false),
+            images: launch.config.tui.images != config::Images::Never,
             detachable: host.is_shared(),
             reconnect: host.reconnector(),
         },

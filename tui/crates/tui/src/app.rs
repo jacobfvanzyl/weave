@@ -66,6 +66,7 @@ use crate::input::Input;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
 use crate::settings::SettingChange;
+use crate::thumbnails::Thumbnail;
 use crate::tui::ScreenMode;
 use crate::tui::Tui;
 
@@ -126,6 +127,8 @@ pub struct UiOptions {
     pub terminal_title: bool,
     /// The Vim composer, for new blank threads and multi-line drafts.
     pub vim: bool,
+    /// Show pasted images above the composer, where the terminal draws images.
+    pub images: bool,
     /// Sessions outlive the TUI, in the weave Host: leaving with Ctrl+D keeps a turn running.
     pub detachable: bool,
     /// How to reach the weave Host again when it goes away; none for one in this process.
@@ -161,6 +164,8 @@ enum AppEvent {
     },
     /// The clipboard's image, saved for attaching, or why there wasn't one.
     ImagePasted(Result<PathBuf, String>),
+    /// A pasted image's thumbnail, by its number, or why there isn't one.
+    ThumbnailLoaded(usize, Result<Thumbnail, String>),
     /// Output from a shell-mode command, then how it ended.
     ShellOutput(String, String),
     ShellExited(String, TerminalExitStatus),
@@ -188,6 +193,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         notifications,
         terminal_title,
         vim,
+        images,
         detachable,
         reconnect,
     } = ui;
@@ -213,7 +219,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
             .delete
             .is_some(),
     };
-    let mut tui = Tui::init(screen)?;
+    let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
     // The session works where the Host says, and so does this client.
     let cwd = opened
@@ -222,7 +228,8 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     let mut chat = ChatWidget::new(agent_name, cwd.clone(), abilities, size.width)
         .with_status_line(status_line)
         .with_vim(vim)
-        .with_detach(detachable);
+        .with_detach(detachable)
+        .with_thumbnails(tui.shows_images());
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
         chat = chat.fullscreen();
@@ -677,12 +684,18 @@ impl App {
                 text,
                 result,
             } => chat.steer_answered(&session_id, text, result),
-            AppEvent::ImagePasted(Ok(path)) => {
-                chat.attach_image(path);
-                Vec::new()
-            }
+            AppEvent::ImagePasted(Ok(path)) => chat.attach_image(path),
             AppEvent::ImagePasted(Err(reason)) => {
                 chat.report_info(&format!("Couldn't paste an image: {reason}"));
+                Vec::new()
+            }
+            AppEvent::ThumbnailLoaded(number, Ok(thumbnail)) => {
+                chat.thumbnail_loaded(number, thumbnail);
+                Vec::new()
+            }
+            // The image is still attached; it just isn't shown.
+            AppEvent::ThumbnailLoaded(number, Err(error)) => {
+                tracing::debug!(number, %error, "couldn't make a thumbnail");
                 Vec::new()
             }
             AppEvent::ShellOutput(id, text) => {
@@ -808,6 +821,16 @@ impl App {
                     self.spawn(async {
                         let saved = tokio::task::spawn_blocking(clipboard::save_image).await;
                         AppEvent::ImagePasted(saved.unwrap_or_else(|error| Err(error.to_string())))
+                    });
+                }
+                AppCommand::LoadThumbnail { number, path } => {
+                    self.spawn(async move {
+                        let loaded =
+                            tokio::task::spawn_blocking(move || Thumbnail::load(&path)).await;
+                        AppEvent::ThumbnailLoaded(
+                            number,
+                            loaded.unwrap_or_else(|error| Err(error.to_string())),
+                        )
                     });
                 }
                 AppCommand::KillShell(id) => {
@@ -1128,10 +1151,7 @@ fn handle_terminal_event(chat: &mut ChatWidget, event: Event) -> Vec<AppCommand>
         Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
             chat.handle_key(key)
         }
-        Event::Paste(text) => {
-            chat.handle_paste(&text);
-            Vec::new()
-        }
+        Event::Paste(text) => chat.handle_paste(&text),
         Event::Mouse(event) => chat.handle_mouse(event),
         Event::Resize(width, height) => {
             chat.set_size(width, height);
@@ -1152,6 +1172,11 @@ fn draw(tui: &mut Tui, chat: &mut ChatWidget) -> std::io::Result<()> {
     }
     if tui.overlay_open() {
         tui.leave_overlay()?;
+    }
+    if tui.shows_images() {
+        let width = tui.size()?.width;
+        chat.set_cell_size(tui.cell_size());
+        tui.set_images(chat.terminal_images(width));
     }
     if tui.mode() == ScreenMode::Fullscreen {
         return tui.draw_screen(|frame| {

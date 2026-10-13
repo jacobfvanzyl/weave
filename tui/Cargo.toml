@@ -32,6 +32,8 @@ flate2 = "1"
 futures = "0.3"
 # Codex's file search: ripgrep's walker and nucleo's fuzzy matcher.
 ignore = "0.4.23"
+# Decoding pasted images for the composer's thumbnails, as Codex decodes its pets' frames.
+image = { version = "0.25", default-features = false }
 insta = "1.46.3"
 nucleo-matcher = "0.3"
 libc = "0.2"

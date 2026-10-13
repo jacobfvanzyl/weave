@@ -17,6 +17,7 @@ mod events;
 mod file_popup;
 mod find;
 mod footer;
+mod graphics;
 mod highlight;
 mod history_cell;
 mod input;
@@ -36,6 +37,7 @@ mod style;
 mod subagents;
 #[cfg(test)]
 mod test_backend;
+mod thumbnails;
 mod tool_call;
 mod tool_output;
 mod transcript;

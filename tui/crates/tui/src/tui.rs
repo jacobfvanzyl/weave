@@ -42,6 +42,9 @@ use ratatui::text::Line;
 
 use crate::custom_terminal::Frame;
 use crate::custom_terminal::Terminal;
+use crate::graphics::Graphics;
+use crate::graphics::Images;
+use crate::graphics::Placement;
 use crate::highlight;
 use crate::insert_history::insert_history_lines;
 use crate::insert_history::make_room_above;
@@ -87,16 +90,26 @@ pub struct Tui {
     title: Option<String>,
     /// The cursor shape last set, while weave has changed it from the terminal's own.
     cursor_shape: Option<CursorShape>,
+    /// The terminal draws images, as it said at startup.
+    graphics: Option<Graphics>,
+    /// The images weave holds in the terminal, and the ones it should from the next frame.
+    images: Images,
+    wanted_images: Vec<Placement>,
 }
 
 impl Tui {
-    pub fn init(mode: ScreenMode) -> io::Result<Self> {
+    /// Set up the terminal; with `images`, find out whether it draws them.
+    pub fn init(mode: ScreenMode, images: bool) -> io::Result<Self> {
         enable_raw_mode()?;
         install_panic_hook(mode);
-        // Ask for the terminal's colors before anything else reads input.
-        let palette = Palette::detect();
+        // Ask the terminal about itself before anything else reads input.
+        let ask = images && Graphics::worth_asking(|name| std::env::var(name).ok());
+        let replies = palette::probe(if ask { crate::graphics::QUERY } else { b"" });
+        let palette = Palette::from_replies(&replies);
         tracing::info!(?palette, "terminal palette");
         palette::set(palette);
+        let graphics = ask.then(|| Graphics::from_replies(&replies)).flatten();
+        tracing::info!(?graphics, "terminal graphics");
         highlight::warm_up();
         if mode == ScreenMode::Fullscreen {
             // Entered before the keyboard flags are pushed: some terminals keep a separate
@@ -124,7 +137,41 @@ impl Tui {
             notify: NotifyMethod::detect(),
             title: None,
             cursor_shape: None,
+            graphics,
+            images: Images::default(),
+            wanted_images: Vec::new(),
         })
+    }
+
+    /// Whether the terminal draws images.
+    pub fn shows_images(&self) -> bool {
+        self.graphics.is_some()
+    }
+
+    /// The size of a cell in pixels, when the terminal draws images and says.
+    pub fn cell_size(&self) -> Option<Size> {
+        let graphics = self.graphics?;
+        crossterm::terminal::window_size()
+            .ok()
+            .filter(|window| window.columns > 0 && window.rows > 0)
+            .map(|window| Size::new(window.width / window.columns, window.height / window.rows))
+            .filter(|cell| cell.width > 0 && cell.height > 0)
+            .or(graphics.cell)
+    }
+
+    /// Hold `wanted` in the terminal from the next frame on, for placeholders to show.
+    pub fn set_images(&mut self, wanted: Vec<Placement>) {
+        self.wanted_images = wanted;
+    }
+
+    /// Send, place and delete images so the terminal holds the ones wanted. Inline mode's
+    /// overlay is on the alternate screen, which keeps images of its own, so they wait.
+    fn sync_images(&mut self) -> io::Result<()> {
+        if self.graphics.is_none() || self.overlay_from.is_some() {
+            return Ok(());
+        }
+        let sequences = self.images.sync(&self.wanted_images);
+        self.terminal.backend_mut().write_all(sequences.as_bytes())
     }
 
     /// Inline mode: open a full-screen overlay on the alternate screen, as Codex opens its
@@ -214,8 +261,8 @@ impl Tui {
         let screen = self.terminal.size()?;
         let area = Rect::new(0, 0, screen.width, screen.height);
         queue!(self.terminal.backend_mut(), BeginSynchronizedUpdate)?;
-        let mut result = Ok(());
-        if area != self.terminal.viewport_area {
+        let mut result = self.sync_images();
+        if result.is_ok() && area != self.terminal.viewport_area {
             result = self.terminal.replace_viewport_area(area);
         }
         if result.is_ok() {
@@ -264,7 +311,9 @@ impl Tui {
     {
         let screen = self.terminal.size()?;
         queue!(self.terminal.backend_mut(), BeginSynchronizedUpdate)?;
-        let result = self.update_and_draw(screen, history, height, render);
+        let result = self
+            .sync_images()
+            .and_then(|()| self.update_and_draw(screen, history, height, render));
         queue!(self.terminal.backend_mut(), EndSynchronizedUpdate)?;
         self.terminal.backend_mut().flush()?;
         self.last_screen = screen;
@@ -323,6 +372,9 @@ impl Tui {
         if self.overlay_from.take().is_some() {
             let _ = execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen);
         }
+        // Back on the screen that holds them: inline mode's would keep them after weave leaves.
+        let images = self.images.clear();
+        self.write_raw(&images);
         if self.mode == ScreenMode::Inline {
             let top = self.terminal.viewport_area.y;
             let _ = queue!(

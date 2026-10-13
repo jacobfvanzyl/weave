@@ -60,7 +60,11 @@ Codex's cells (exec, explored, patch, MCP), `history_cell`, `markdown` and `stre
 rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the terminal's
 colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
 two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
-(after Codex's composer Vim mode) editing the same text in the opt-in Vim composer;
+(after Codex's composer Vim mode) editing the same text in the opt-in Vim composer, and
+`thumbnails` the draft's pasted images above it, drawn through `graphics` (the Kitty graphics
+protocol's Unicode placeholders: each image is sent once, and its cells are text, so they
+diff and move like any other; the startup probe asks only Ghostty and kitty, outside tmux and
+Zellij, whether they draw them);
 during a turn Enter steers it when the Host and the agent can (`ChatWidget::can_steer`; not the
 agent's slash commands) and queues otherwise, and Tab always queues, as in Codex;
 `/new`, `/reload` and `/subagents` are the TUI's own slash commands, offered with the agent's

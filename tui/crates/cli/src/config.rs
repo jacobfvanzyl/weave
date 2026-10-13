@@ -41,6 +41,19 @@ pub struct TuiConfig {
     /// The Vim composer, with relative line numbers, for new blank threads and multi-line
     /// drafts; Ctrl+G switches to and from it (default false).
     pub vim: Option<bool>,
+    /// Thumbnails of pasted images above the composer, in terminals that draw images.
+    #[serde(default)]
+    pub images: Images,
+}
+
+/// Whether to show images, in terminals that draw them with Kitty graphics placeholders.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Images {
+    /// Where the terminal is known to draw them and says it does.
+    #[default]
+    Auto,
+    Never,
 }
 
 /// Whether to run fullscreen on the alternate screen, as Codex's `tui.alternate_screen`.
@@ -85,9 +98,13 @@ mod tests {
             toml::from_str("[tui]\nalternate_screen = \"sometimes\"").expect("the Host's view");
         assert!(section::<TuiConfig>(&config.tui, "tui").is_err());
         let config: weave_agents::Config =
-            toml::from_str("[tui]\nvim = true\n[daemon]\nenabled = false").expect("valid");
+            toml::from_str("[tui]\nvim = true\nimages = \"never\"\n[daemon]\nenabled = false")
+                .expect("valid");
         let tui: TuiConfig = section(&config.tui, "tui").expect("tui");
         let daemon: DaemonSettings = section(&config.daemon, "daemon").expect("daemon");
-        assert_eq!((tui.vim, daemon.enabled), (Some(true), Some(false)));
+        assert_eq!(
+            (tui.vim, tui.images, daemon.enabled),
+            (Some(true), Images::Never, Some(false))
+        );
     }
 }
