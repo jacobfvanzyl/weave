@@ -5,6 +5,8 @@
 //! viewport. Fullscreen keeps the whole message live and commits it as one transcript cell
 //! when it ends, so it reflows with the screen.
 
+use std::sync::Arc;
+
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -16,6 +18,9 @@ use crate::history_cell;
 use crate::history_cell::dim;
 use crate::markdown::commit_boundary;
 use crate::markdown::render_markdown;
+use crate::style;
+use crate::thumbnails;
+use crate::thumbnails::Slot;
 use crate::tool_call::TRANSCRIPT_HINT;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::plain_lines;
@@ -35,6 +40,8 @@ pub struct MessageStream {
     /// Fixed for the message's lifetime so committed and live lines always agree.
     width: usize,
     source: String,
+    /// The images the message carries, shown under its text in the fullscreen transcript.
+    images: Vec<Arc<Slot>>,
     /// Rendered lines already committed to scrollback.
     committed: usize,
 }
@@ -46,6 +53,7 @@ impl MessageStream {
             message_id,
             width,
             source: String::new(),
+            images: Vec::new(),
             committed: 0,
         }
     }
@@ -60,6 +68,10 @@ impl MessageStream {
 
     pub fn push(&mut self, text: &str) {
         self.source.push_str(text);
+    }
+
+    pub fn push_image(&mut self, image: Arc<Slot>) {
+        self.images.push(image);
     }
 
     /// Lines for every complete source line that has not been committed yet (holding back a
@@ -107,11 +119,12 @@ impl MessageStream {
     }
 
     pub fn render_all(&self, width: usize) -> Vec<DisplayLine> {
-        render_message(self.kind, &self.source, width)
+        render_with_images(self.kind, &self.source, &self.images, width)
     }
 
-    pub fn into_source(self) -> String {
-        self.source
+    /// The message's source and images.
+    pub fn into_parts(self) -> (String, Vec<Arc<Slot>>) {
+        (self.source, self.images)
     }
 }
 
@@ -138,6 +151,34 @@ pub fn render_message(kind: StreamKind, source: &str, width: usize) -> Vec<Displ
             row.prefixed(&[Span::styled(prefix, marker)])
         })
         .collect()
+}
+
+/// [`render_message`], with thumbnails of `images` under the text: inside a sent prompt's
+/// block, or after anything else.
+pub fn render_with_images(
+    kind: StreamKind,
+    source: &str,
+    images: &[Arc<Slot>],
+    width: usize,
+) -> Vec<DisplayLine> {
+    let mut lines = render_message(kind, source, width);
+    let rows = thumbnails::transcript_rows(images, width);
+    if rows.is_empty() {
+        return lines;
+    }
+    if kind == StreamKind::User {
+        // Above the blank row that closes the block, in its fill.
+        let close = lines.pop();
+        let fill = style::sent_prompt();
+        lines.extend(rows.into_iter().map(|mut row| {
+            row.line.style = fill;
+            row
+        }));
+        lines.extend(close);
+    } else {
+        lines.extend(rows);
+    }
+    lines
 }
 
 /// Rows of a thought the compact transcript shows. Codex shows short reasoning summaries in

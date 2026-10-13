@@ -41,7 +41,8 @@ pub struct TuiConfig {
     /// The Vim composer, with relative line numbers, for new blank threads and multi-line
     /// drafts; Ctrl+G switches to and from it (default false).
     pub vim: Option<bool>,
-    /// Thumbnails of pasted images above the composer, in terminals that draw images.
+    /// Thumbnails of images, above the composer and in the fullscreen transcript, in terminals
+    /// that draw images.
     #[serde(default)]
     pub images: Images,
 }

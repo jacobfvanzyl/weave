@@ -15,6 +15,7 @@ use std::time::Instant;
 use crossterm::event::Event;
 use crossterm::event::KeyEventKind;
 use futures::future::BoxFuture;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
@@ -66,6 +67,7 @@ use crate::input::Input;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
 use crate::settings::SettingChange;
+use crate::thumbnails;
 use crate::thumbnails::Thumbnail;
 use crate::tui::ScreenMode;
 use crate::tui::Tui;
@@ -164,8 +166,8 @@ enum AppEvent {
     },
     /// The clipboard's image, saved for attaching, or why there wasn't one.
     ImagePasted(Result<PathBuf, String>),
-    /// A pasted image's thumbnail, by its number, or why there isn't one.
-    ThumbnailLoaded(usize, Result<Thumbnail, String>),
+    /// An image's thumbnail, by its id, or why there isn't one.
+    ThumbnailLoaded(u32, Result<Thumbnail, String>),
     /// Output from a shell-mode command, then how it ended.
     ShellOutput(String, String),
     ShellExited(String, TerminalExitStatus),
@@ -253,6 +255,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         next_tag: 1,
         position: None,
         replay_until: None,
+        decoding: Arc::new(Semaphore::new(1)),
     };
     let startup = match opened {
         Some(opened) => {
@@ -313,6 +316,8 @@ struct App {
     position: Option<JournalPosition>,
     /// The last position the active session's replay covers, while it arrives.
     replay_until: Option<u64>,
+    /// Thumbnails of images messages carry are decoded one at a time.
+    decoding: Arc<Semaphore>,
 }
 
 impl App {
@@ -689,13 +694,14 @@ impl App {
                 chat.report_info(&format!("Couldn't paste an image: {reason}"));
                 Vec::new()
             }
-            AppEvent::ThumbnailLoaded(number, Ok(thumbnail)) => {
-                chat.thumbnail_loaded(number, thumbnail);
+            AppEvent::ThumbnailLoaded(id, Ok(thumbnail)) => {
+                chat.thumbnail_loaded(id, Some(thumbnail));
                 Vec::new()
             }
-            // The image is still attached; it just isn't shown.
-            AppEvent::ThumbnailLoaded(number, Err(error)) => {
-                tracing::debug!(number, %error, "couldn't make a thumbnail");
+            // The image is still attached or carried; it just isn't shown.
+            AppEvent::ThumbnailLoaded(id, Err(error)) => {
+                tracing::debug!(id, %error, "couldn't make a thumbnail");
+                chat.thumbnail_loaded(id, None);
                 Vec::new()
             }
             AppEvent::ShellOutput(id, text) => {
@@ -823,13 +829,27 @@ impl App {
                         AppEvent::ImagePasted(saved.unwrap_or_else(|error| Err(error.to_string())))
                     });
                 }
-                AppCommand::LoadThumbnail { number, path } => {
+                AppCommand::LoadThumbnail { id, path } => {
                     self.spawn(async move {
                         let loaded =
                             tokio::task::spawn_blocking(move || Thumbnail::load(&path)).await;
                         AppEvent::ThumbnailLoaded(
-                            number,
+                            id,
                             loaded.unwrap_or_else(|error| Err(error.to_string())),
+                        )
+                    });
+                }
+                AppCommand::DecodeThumbnail { id, data } => {
+                    let queue = Arc::clone(&self.decoding);
+                    self.spawn(async move {
+                        // One at a time, so a replay's images don't all decode at once.
+                        let _turn = queue.acquire_owned().await;
+                        let decoded =
+                            tokio::task::spawn_blocking(move || Thumbnail::from_base64(&data))
+                                .await;
+                        AppEvent::ThumbnailLoaded(
+                            id,
+                            decoded.unwrap_or_else(|error| Err(error.to_string())),
                         )
                     });
                 }
@@ -1175,7 +1195,7 @@ fn draw(tui: &mut Tui, chat: &mut ChatWidget) -> std::io::Result<()> {
     }
     if tui.shows_images() {
         let width = tui.size()?.width;
-        chat.set_cell_size(tui.cell_size());
+        thumbnails::set_cell_size(tui.cell_size());
         tui.set_images(chat.terminal_images(width));
     }
     if tui.mode() == ScreenMode::Fullscreen {

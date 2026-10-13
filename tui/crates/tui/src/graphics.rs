@@ -14,17 +14,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use base64::Engine;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Color;
+use ratatui::style::Style;
+use ratatui::text::Span;
 
 /// Asks whether the terminal takes images, with a 1×1 RGB image it only checks, and for its
 /// cell size in pixels (`CSI 16 t`). Sent with the palette's probe, ahead of its DA1.
 pub const QUERY: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[16t";
-
-/// The most rows or columns a placeholder can name.
-pub const MAX_CELLS: u16 = DIACRITICS.len() as u16;
 
 /// The character a placeholder cell shows.
 const PLACEHOLDER: char = '\u{10EEEE}';
@@ -63,10 +60,10 @@ impl Graphics {
     }
 }
 
-/// The id pasted image `number` has in the terminal.
-pub fn image_id(number: usize) -> u32 {
+/// The id of the `n`th image weave shows, from 1.
+pub fn image_id(n: usize) -> u32 {
     // Numbers wrap long before they could reach past 24 bits.
-    FIRST_ID + u32::try_from(number % 0x1_0000).unwrap_or_default()
+    FIRST_ID + u32::try_from(n % 0x1_0000).unwrap_or_default()
 }
 
 /// An image to keep in the terminal: its id, its PNG, and the cells it's placed in.
@@ -119,22 +116,18 @@ impl Images {
     }
 }
 
-/// Show image `id` in `area`, one placeholder per cell, each naming its row and column.
-pub fn draw_placeholders(id: u32, area: Rect, buf: &mut Buffer) {
-    let color = id_color(id);
-    let mut symbol = String::new();
-    for row in 0..area.height {
-        for column in 0..area.width {
-            let (Some(row_mark), Some(column_mark)) = (diacritic(row), diacritic(column)) else {
-                continue;
-            };
-            symbol.clear();
-            symbol.extend([PLACEHOLDER, row_mark, column_mark]);
-            if let Some(cell) = buf.cell_mut((area.x + column, area.y + row)) {
-                cell.set_symbol(&symbol).set_fg(color);
+/// Row `row` of image `id`, `columns` cells wide: placeholders, each naming its row and
+/// column, in the image's color.
+pub fn placeholders(id: u32, row: u16, columns: u16) -> Span<'static> {
+    let mut text = String::new();
+    if let Some(row_mark) = diacritic(row) {
+        for column in 0..columns {
+            if let Some(column_mark) = diacritic(column) {
+                text.extend([PLACEHOLDER, row_mark, column_mark]);
             }
         }
     }
+    Span::styled(text, Style::default().fg(id_color(id)))
 }
 
 /// Send `png` as image `id`, quietly, in chunks.
@@ -232,6 +225,8 @@ const DIACRITICS: [u32; 297] = [
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use unicode_width::UnicodeWidthStr;
 
     use super::*;
@@ -338,17 +333,22 @@ mod tests {
 
     #[test]
     fn placeholders_name_each_cell_in_the_image_color() {
-        let area = Rect::new(0, 0, 4, 3);
-        let mut buf = Buffer::empty(area);
         let id = image_id(1);
-        draw_placeholders(id, Rect::new(1, 1, 2, 2), &mut buf);
-        assert_eq!(buf[(0, 0)].symbol(), " ");
-        assert_eq!(buf[(1, 1)].symbol(), "\u{10EEEE}\u{305}\u{305}");
-        assert_eq!(buf[(2, 1)].symbol(), "\u{10EEEE}\u{305}\u{30D}");
-        assert_eq!(buf[(1, 2)].symbol(), "\u{10EEEE}\u{30D}\u{305}");
-        assert_eq!(buf[(2, 2)].fg, id_color(id));
+        let row = placeholders(id, 1, 3);
+        assert_eq!(
+            row.content,
+            "\u{10EEEE}\u{30D}\u{305}\u{10EEEE}\u{30D}\u{30D}\u{10EEEE}\u{30D}\u{30E}"
+        );
+        assert_eq!(row.style.fg, Some(id_color(id)));
         assert_eq!(id_color(0x57_0001), id_color(id));
-        // One column wide, so the frame diff keeps the cells after it aligned.
-        assert_eq!(buf[(1, 1)].symbol().width(), 1);
+        // Drawn, each placeholder is one cell, so the frame diff keeps the cells after it
+        // aligned.
+        let area = Rect::new(0, 0, 4, 1);
+        let mut buf = Buffer::empty(area);
+        buf.set_span(0, 0, &row, 4);
+        assert_eq!(buf[(0, 0)].symbol(), "\u{10EEEE}\u{30D}\u{305}");
+        assert_eq!(buf[(2, 0)].symbol(), "\u{10EEEE}\u{30D}\u{30E}");
+        assert_eq!(buf[(3, 0)].symbol(), " ");
+        assert_eq!(buf[(0, 0)].symbol().width(), 1);
     }
 }

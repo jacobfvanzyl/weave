@@ -18,7 +18,6 @@ use crossterm::event::MouseEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
-use ratatui::layout::Size;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -36,6 +35,7 @@ use weave_acp_core::schema::ElicitationId;
 use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationScope;
 use weave_acp_core::schema::Error;
+use weave_acp_core::schema::ImageContent;
 use weave_acp_core::schema::MessageId;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::RequestPermissionOutcome;
@@ -86,6 +86,7 @@ use crate::footer::FooterMode;
 use crate::footer::FooterProps;
 use crate::footer::StatusItem;
 use crate::footer::StatusValues;
+use crate::graphics;
 use crate::graphics::Placement;
 use crate::history_cell::dim;
 use crate::history_cell::home_relative;
@@ -110,7 +111,9 @@ use crate::style;
 use crate::subagents;
 use crate::subagents::Subagent;
 use crate::thumbnails;
+use crate::thumbnails::Slot;
 use crate::thumbnails::Strip;
+use crate::thumbnails::StripImage;
 use crate::thumbnails::Thumbnail;
 use crate::tool_call::ExploreGroup;
 use crate::tool_call::RenderContext;
@@ -133,8 +136,8 @@ const RELOAD_COMMAND: &str = "reload";
 
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
-/// How many times taller than wide a cell is, until the terminal says.
-const CELL_ASPECT: f64 = 2.0;
+/// Images the fullscreen transcript shows at most; older ones show as their text.
+const MAX_TRANSCRIPT_IMAGES: usize = 64;
 
 #[derive(Debug, PartialEq)]
 pub enum AppCommand {
@@ -175,11 +178,17 @@ pub enum AppCommand {
     /// Ctrl+V: attach the clipboard's image; it comes back through
     /// [`ChatWidget::attach_image`].
     PasteImage,
-    /// Make a thumbnail of pasted image `number`; it comes back through
+    /// Make a thumbnail of the image at `path` for image `id`; it comes back through
     /// [`ChatWidget::thumbnail_loaded`].
     LoadThumbnail {
-        number: usize,
+        id: u32,
         path: PathBuf,
+    },
+    /// Make a thumbnail of an image a message carries, from its base64 `data`, for image `id`;
+    /// it comes back through [`ChatWidget::thumbnail_loaded`].
+    DecodeThumbnail {
+        id: u32,
+        data: String,
     },
     /// Something needs the user, such as a finished turn or an approval; the app raises a
     /// desktop notification when the terminal isn't focused.
@@ -220,8 +229,9 @@ struct Turn {
 
 struct Stashed {
     session_id: SessionId,
-    /// Its fullscreen transcript.
+    /// Its fullscreen transcript, and the images it shows.
     cells: Vec<TranscriptCell>,
+    images: Vec<Arc<Slot>>,
     resumable: bool,
 }
 
@@ -305,10 +315,14 @@ pub struct ChatWidget {
     shell_runs: usize,
     /// Images pasted into prompts, `[image 1]` first.
     images: Vec<PastedImage>,
-    /// Show the draft's images above the composer: the terminal draws images.
+    /// Show thumbnails of images: the terminal draws images.
     thumbnails: bool,
-    /// How many times taller than wide the terminal's cells are, for shaping thumbnails.
-    cell_aspect: f64,
+    /// Images shown so far, for numbering the next one's id.
+    image_count: usize,
+    /// The images the fullscreen transcript shows, oldest first.
+    transcript_images: Vec<Arc<Slot>>,
+    /// Thumbnails to make for images messages carry, for the app.
+    decodes: Vec<AppCommand>,
     /// The session directory's files, for the `@` picker.
     files: FileIndex,
     file_popup: FilePopup,
@@ -332,10 +346,10 @@ pub struct ChatWidget {
     parent_label: Option<String>,
 }
 
-/// An image pasted into a prompt, and its thumbnail once made.
+/// An image pasted into a prompt, and where its thumbnail goes.
 struct PastedImage {
     path: PathBuf,
-    thumbnail: Option<Arc<Thumbnail>>,
+    slot: Arc<Slot>,
 }
 
 /// A message between sessions as this chat shows it.
@@ -420,7 +434,9 @@ impl ChatWidget {
             shell_runs: 0,
             images: Vec::new(),
             thumbnails: false,
-            cell_aspect: CELL_ASPECT,
+            image_count: 0,
+            transcript_images: Vec::new(),
+            decodes: Vec::new(),
             files,
             file_popup: FilePopup::default(),
             shortcuts_open: false,
@@ -457,19 +473,11 @@ impl ChatWidget {
         }
     }
 
-    /// Show thumbnails of the draft's images above the composer, as the terminal draws images.
+    /// Show thumbnails of images, as the terminal draws them: the draft's above the composer,
+    /// and in the fullscreen transcript, each message's under its text.
     pub fn with_thumbnails(mut self, enabled: bool) -> Self {
         self.thumbnails = enabled;
         self
-    }
-
-    /// The terminal's cell size in pixels, for shaping thumbnails; `None` when unknown.
-    pub fn set_cell_size(&mut self, cell: Option<Size>) {
-        self.cell_aspect = cell
-            .filter(|cell| cell.width > 0)
-            .map_or(CELL_ASPECT, |cell| {
-                f64::from(cell.height) / f64::from(cell.width)
-            });
     }
 
     /// Sessions outlive the TUI, in the weave Host, so leaving needn't stop a turn.
@@ -530,9 +538,11 @@ impl ChatWidget {
             .as_mut()
             .map(TranscriptView::take_session)
             .unwrap_or_default();
+        let images = std::mem::take(&mut self.transcript_images);
         self.stashed = self.active_session.take().map(|session_id| Stashed {
             session_id,
             cells,
+            images,
             resumable: self.resumable,
         });
         self.resumable = false;
@@ -623,6 +633,7 @@ impl ChatWidget {
             && previous.as_ref() == Some(&stashed.session_id)
         {
             self.resumable = stashed.resumable;
+            self.transcript_images = stashed.images;
             if let Some(view) = &mut self.transcript {
                 view.restore_session(stashed.cells);
             }
@@ -873,7 +884,7 @@ impl ChatWidget {
                     self.chat_at_mut(&path).handle_update(notification.update);
                     self.note_activity();
                 }
-                Vec::new()
+                self.take_decodes()
             }
             ChatEvent::PermissionRequested(request) => {
                 if self.is_active(&request.request.session_id) {
@@ -949,7 +960,7 @@ impl ChatWidget {
                 if !replayed {
                     self.turn_running_elsewhere(elapsed);
                 }
-                Vec::new()
+                self.take_decodes()
             }
             ChatEvent::TurnSteered { session_id, prompt } => {
                 if !self.is_active(&session_id) {
@@ -960,7 +971,7 @@ impl ChatWidget {
                 for block in prompt {
                     self.handle_update(SessionUpdate::UserMessageChunk(ContentChunk::new(block)));
                 }
-                Vec::new()
+                self.take_decodes()
             }
             ChatEvent::TurnEnded {
                 session_id,
@@ -1811,9 +1822,11 @@ impl ChatWidget {
     /// Attach an image to the draft, shown there as `[image N]` as Codex shows them, and
     /// above the composer once its thumbnail is made.
     pub fn attach_image(&mut self, path: PathBuf) -> Vec<AppCommand> {
+        let slot = self.new_slot();
+        let id = slot.id();
         self.images.push(PastedImage {
             path: path.clone(),
-            thumbnail: None,
+            slot,
         });
         let number = self.images.len();
         let space = self
@@ -1825,20 +1838,84 @@ impl ChatWidget {
             .insert_str(&format!("{lead}[image {number}] "));
         self.sync_popup();
         if self.thumbnails {
-            vec![AppCommand::LoadThumbnail { number, path }]
+            vec![AppCommand::LoadThumbnail { id, path }]
         } else {
             Vec::new()
         }
     }
 
-    /// Pasted image `number`'s thumbnail, made.
-    pub fn thumbnail_loaded(&mut self, number: usize, thumbnail: Thumbnail) {
-        if let Some(image) = number
-            .checked_sub(1)
-            .and_then(|index| self.images.get_mut(index))
+    /// Image `id`'s thumbnail, made, or `None` if it couldn't be.
+    pub fn thumbnail_loaded(&mut self, id: u32, thumbnail: Option<Thumbnail>) {
+        if let Some(slot) = self
+            .images
+            .iter()
+            .map(|image| &image.slot)
+            .chain(&self.transcript_images)
+            // A session left for another comes back if opening that one fails.
+            .chain(self.stashed.iter().flat_map(|stashed| &stashed.images))
+            .find(|slot| slot.id() == id)
         {
-            image.thumbnail = Some(Arc::new(thumbnail));
+            slot.finish(thumbnail);
         }
+    }
+
+    fn new_slot(&mut self) -> Arc<Slot> {
+        self.image_count += 1;
+        Slot::new(graphics::image_id(self.image_count))
+    }
+
+    /// Whether messages' images show in the transcript: fullscreen, where the terminal draws
+    /// images. Inline mode's scrollback would outlive them.
+    fn shows_transcript_images(&self) -> bool {
+        self.thumbnails && self.transcript.is_some()
+    }
+
+    /// Show `slot` in the transcript, letting go of the oldest image past the limit.
+    fn show_in_transcript(&mut self, slot: &Arc<Slot>) {
+        if self
+            .transcript_images
+            .iter()
+            .any(|shown| shown.id() == slot.id())
+        {
+            return;
+        }
+        self.transcript_images.push(Arc::clone(slot));
+        if self.transcript_images.len() > MAX_TRANSCRIPT_IMAGES {
+            self.transcript_images.remove(0).release();
+        }
+    }
+
+    /// The slot for an image a message carries: this client's pasted image it was read from,
+    /// or a new one, whose thumbnail the app makes from the message's data.
+    fn message_image(&mut self, image: &ImageContent) -> Arc<Slot> {
+        let pasted = image.uri.as_deref().and_then(|uri| {
+            self.images.iter().find(|pasted| {
+                url::Url::from_file_path(&pasted.path).is_ok_and(|url| url.as_str() == uri)
+            })
+        });
+        let slot = match pasted {
+            Some(pasted) => Arc::clone(&pasted.slot),
+            None => {
+                let slot = self.new_slot();
+                self.decodes.push(AppCommand::DecodeThumbnail {
+                    id: slot.id(),
+                    data: image.data.clone(),
+                });
+                slot
+            }
+        };
+        self.show_in_transcript(&slot);
+        slot
+    }
+
+    /// The pasted images `text` refers to.
+    fn referenced_images(&self, text: &str) -> Vec<(usize, &Arc<Slot>)> {
+        self.images
+            .iter()
+            .enumerate()
+            .map(|(index, image)| (index + 1, &image.slot))
+            .filter(|(number, _)| text.contains(&format!("[image {number}]")))
+            .collect()
     }
 
     /// The images a prompt's text still refers to, with their labels.
@@ -1858,24 +1935,45 @@ impl ChatWidget {
         if !self.thumbnails {
             return None;
         }
-        let text = self.composer.text();
-        let images: Vec<(usize, Arc<Thumbnail>)> = self
-            .images
-            .iter()
-            .enumerate()
-            .filter_map(|(index, image)| Some((index + 1, image.thumbnail.clone()?)))
-            .filter(|(number, _)| text.contains(&format!("[image {number}]")))
+        let images: Vec<StripImage> = self
+            .referenced_images(self.composer.text())
+            .into_iter()
+            .filter_map(|(number, slot)| {
+                Some(StripImage {
+                    id: slot.id(),
+                    thumbnail: slot.thumbnail()?,
+                    label: Some(format!("[image {number}]")),
+                })
+            })
             .collect();
-        let strip = Strip::new(images, width, self.cell_aspect);
+        let strip = Strip::new(images, width, thumbnails::cell_aspect());
         (!strip.is_empty()).then_some(strip)
     }
 
-    /// The images the terminal should hold for the screen at `width`: the thumbnails shown
-    /// above the composer, which stay while a prompt or picker covers it.
+    /// The images the terminal should hold for the screen at `width`: the thumbnails above
+    /// the composer, which stay while a prompt or picker covers it, and the transcript's.
     pub fn terminal_images(&self, width: u16) -> Vec<Placement> {
-        self.thumbnail_strip(width)
+        let mut images = self
+            .thumbnail_strip(width)
             .map(|strip| strip.placements())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if self.shows_transcript_images() {
+            for placement in self
+                .transcript_images
+                .iter()
+                .filter_map(|slot| slot.placement())
+            {
+                if !images.iter().any(|image| image.id == placement.id) {
+                    images.push(placement);
+                }
+            }
+        }
+        images
+    }
+
+    /// Thumbnails for the app to make, of images messages carry.
+    fn take_decodes(&mut self) -> Vec<AppCommand> {
+        std::mem::take(&mut self.decodes)
     }
 
     /// Show a note from outside the conversation.
@@ -2496,7 +2594,19 @@ impl ChatWidget {
         // Anything still live belongs to what came before, such as a replay the agent sent
         // after answering `session/load`; the new turn's output must not join it.
         self.finish_live_cells();
-        self.push_cell(TranscriptCell::user(&text));
+        // The draft's images show in the prompt sent, from the thumbnails already made.
+        let images: Vec<Arc<Slot>> = if self.shows_transcript_images() {
+            self.referenced_images(&text)
+                .into_iter()
+                .map(|(_, slot)| Arc::clone(slot))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for image in &images {
+            self.show_in_transcript(image);
+        }
+        self.push_cell(TranscriptCell::user(&text, images));
         self.resumable = true;
         self.last_reply = None;
         // Sending a message returns to the newest output, where its reply will appear.
@@ -2566,6 +2676,12 @@ impl ChatWidget {
         if new_message {
             self.end_stream();
         }
+        let image = match &chunk.content {
+            ContentBlock::Image(image) if self.shows_transcript_images() => {
+                Some(self.message_image(image))
+            }
+            _ => None,
+        };
         let width = self.content_width();
         let message_id = chunk.message_id.clone();
         let stream = self
@@ -2573,6 +2689,9 @@ impl ChatWidget {
             .get_or_insert_with(|| MessageStream::new(kind, width, message_id));
         let first = !stream.has_committed();
         stream.push(&content_text(&chunk.content));
+        if let Some(image) = image {
+            stream.push_image(image);
+        }
         if kind == StreamKind::Thought
             && let Some(heading) = thought_heading(stream.source())
             && let Some(turn) = &mut self.turn
@@ -2603,9 +2722,9 @@ impl ChatWidget {
         }
         if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
             let kind = stream.kind();
-            let source = stream.into_source();
+            let (source, images) = stream.into_parts();
             if !source.trim().is_empty() {
-                self.push_cell(TranscriptCell::message(kind, source));
+                self.push_cell(TranscriptCell::message(kind, source, images));
             }
             return;
         }
@@ -2617,7 +2736,7 @@ impl ChatWidget {
         if let Some(pager) = &mut self.pager
             && !source.trim().is_empty()
         {
-            pager.push(TranscriptCell::message(kind, source));
+            pager.push(TranscriptCell::message(kind, source, Vec::new()));
         }
     }
 
@@ -2787,7 +2906,8 @@ impl ChatWidget {
         }
         if let Some(stream) = &self.stream {
             if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
-                let message = if detail {
+                // Only thoughts look different compactly; anything else shows its images.
+                let message = if detail || stream.kind() != StreamKind::Thought {
                     stream.render_all(width)
                 } else {
                     render_compact(stream.kind(), stream.source(), width)
@@ -2974,11 +3094,9 @@ impl ChatWidget {
         } else {
             0
         };
-        let strip = if self.thumbnail_strip(width).is_some() {
-            thumbnails::HEIGHT
-        } else {
-            0
-        };
+        let strip = self
+            .thumbnail_strip(width)
+            .map_or(0, |strip| strip.height());
         shortcuts + strip + self.composer.box_height(width)
     }
 
@@ -3243,12 +3361,13 @@ impl ChatWidget {
             }
             // Thumbnails sit right above the composer box, while there's room for both.
             if let Some(strip) = self.thumbnail_strip(area.width)
-                && composer_area.height >= thumbnails::HEIGHT + self.composer.box_height(area.width)
+                && composer_area.height >= strip.height() + self.composer.box_height(area.width)
             {
-                let strip_area = Rect::new(area.x, composer_area.y, area.width, thumbnails::HEIGHT);
-                strip.render(strip_area, buf);
-                composer_area.y += thumbnails::HEIGHT;
-                composer_area.height -= thumbnails::HEIGHT;
+                for (y, row) in (composer_area.y..).zip(strip.lines()) {
+                    buf.set_line(area.x, y, &row.line, area.width);
+                }
+                composer_area.y += strip.height();
+                composer_area.height -= strip.height();
             }
             Some(
                 self.composer
@@ -3369,6 +3488,7 @@ mod tests {
     use weave_acp_core::schema::SessionNotification;
     use weave_acp_core::schema::Terminal;
     use weave_acp_core::schema::TerminalExitStatus;
+    use weave_acp_core::schema::TextContent;
     use weave_acp_core::schema::ToolCall;
     use weave_acp_core::schema::ToolCallContent;
     use weave_acp_core::schema::ToolCallStatus;
@@ -5149,21 +5269,19 @@ mod tests {
         let mut chat = chat().with_thumbnails(true);
         chat.handle_paste("what is");
         let path = PathBuf::from("/tmp/a.png");
+        let id = graphics::image_id(1);
         assert_eq!(
             chat.attach_image(path.clone()),
-            [AppCommand::LoadThumbnail { number: 1, path }]
+            [AppCommand::LoadThumbnail { id, path }]
         );
         // Nothing shows until the thumbnail is made.
         let before = rows(&chat, 60);
         assert!(chat.terminal_images(60).is_empty());
 
-        chat.thumbnail_loaded(1, wide_thumbnail());
+        chat.thumbnail_loaded(id, Some(wide_thumbnail()));
         let shown = with_placeholders(rows(&chat, 60));
-        assert_eq!(
-            shown.len(),
-            before.len() + usize::from(thumbnails::HEIGHT),
-            "{shown:?}"
-        );
+        // Four rows of image and one of labels.
+        assert_eq!(shown.len(), before.len() + 5, "{shown:?}");
         assert_eq!(
             shown[1..8],
             [
@@ -5181,7 +5299,7 @@ mod tests {
                 .iter()
                 .map(|image| (image.id, image.columns, image.rows))
                 .collect::<Vec<_>>(),
-            [(crate::graphics::image_id(1), 14, 4)]
+            [(id, 14, 4)]
         );
 
         // Deleting the token takes the thumbnail away, here and from the terminal.
@@ -5194,7 +5312,7 @@ mod tests {
     fn thumbnails_show_in_fullscreen_and_give_way_to_a_permission_prompt() {
         let mut chat = fullscreen_chat().with_thumbnails(true);
         let _ = chat.attach_image(PathBuf::from("/tmp/a.png"));
-        chat.thumbnail_loaded(1, wide_thumbnail());
+        chat.thumbnail_loaded(graphics::image_id(1), Some(wide_thumbnail()));
         let shown = with_placeholders(screen_rows(&chat, 40, 20));
         let image_rows = shown
             .iter()
@@ -5215,7 +5333,159 @@ mod tests {
     fn without_terminal_images_no_thumbnails_are_made() {
         let mut chat = chat();
         assert_eq!(chat.attach_image(PathBuf::from("/tmp/a.png")), []);
-        chat.thumbnail_loaded(1, wide_thumbnail());
+        chat.thumbnail_loaded(graphics::image_id(1), Some(wide_thumbnail()));
+        assert!(chat.terminal_images(60).is_empty());
+    }
+
+    /// `prompt` turned into a replayed turn's start.
+    fn replayed_turn(prompt: Vec<ContentBlock>) -> ChatEvent {
+        ChatEvent::TurnStarted {
+            session_id: "s1".into(),
+            prompt,
+            elapsed: Duration::ZERO,
+            replayed: true,
+        }
+    }
+
+    fn image_block(data: &str) -> ContentBlock {
+        ContentBlock::Image(ImageContent::new(data, "image/png"))
+    }
+
+    /// The transcript's image rows, as `#`s.
+    fn image_rows(rows: &[String]) -> usize {
+        rows.iter().filter(|row| row.contains("####")).count()
+    }
+
+    #[test]
+    fn a_sent_prompt_keeps_its_draft_images_in_the_transcript() {
+        let mut chat = fullscreen_chat().with_thumbnails(true);
+        chat.handle_paste("what is");
+        let _ = chat.attach_image(PathBuf::from("/tmp/a.png"));
+        let id = graphics::image_id(1);
+        chat.thumbnail_loaded(id, Some(wide_thumbnail()));
+
+        // Sending makes nothing new: the transcript shows the thumbnail the draft had.
+        let sent = chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(sent, [AppCommand::Prompt("what is [image 1] ".into())]);
+        let shown = with_placeholders(screen_rows(&chat, 40, 20));
+        let prompt = shown
+            .iter()
+            .position(|row| row == "› what is [image 1]")
+            .expect("the prompt");
+        assert_eq!(shown[prompt + 1..prompt + 5], ["  ##############"; 4]);
+        assert!(
+            !shown
+                .iter()
+                .any(|row| row.contains("[image 1]") && row.starts_with("  ["))
+        );
+        // The terminal keeps the same image, once.
+        let held: Vec<u32> = chat
+            .terminal_images(40)
+            .iter()
+            .map(|image| image.id)
+            .collect();
+        assert_eq!(held, [id]);
+    }
+
+    #[test]
+    fn images_in_replayed_prompts_are_decoded_then_shown() {
+        let mut chat = fullscreen_chat().with_thumbnails(true);
+        let commands = chat.handle_agent_event(replayed_turn(vec![
+            ContentBlock::Text(TextContent::new("look ")),
+            image_block("aW1hZ2U="),
+        ]));
+        let id = graphics::image_id(1);
+        assert_eq!(
+            commands,
+            [AppCommand::DecodeThumbnail {
+                id,
+                data: "aW1hZ2U=".into()
+            }]
+        );
+        // Nothing shows, and the terminal holds nothing, until the thumbnail is made.
+        assert_eq!(
+            image_rows(&with_placeholders(screen_rows(&chat, 40, 20))),
+            0
+        );
+        assert!(chat.terminal_images(40).is_empty());
+
+        chat.thumbnail_loaded(id, Some(wide_thumbnail()));
+        assert_eq!(
+            image_rows(&with_placeholders(screen_rows(&chat, 40, 20))),
+            4
+        );
+        assert_eq!(chat.terminal_images(40).len(), 1);
+        // Once the message ends it stays, as a transcript cell.
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        chat.handle_agent_event(text_chunk("noted"));
+        assert_eq!(
+            image_rows(&with_placeholders(screen_rows(&chat, 40, 20))),
+            4
+        );
+    }
+
+    #[test]
+    fn a_steered_message_reuses_the_pasted_image_it_carries() {
+        let mut chat = fullscreen_chat().with_thumbnails(true);
+        let path = PathBuf::from("/tmp/a.png");
+        let _ = chat.attach_image(path.clone());
+        chat.thumbnail_loaded(graphics::image_id(1), Some(wide_thumbnail()));
+        // Steered from the draft, which empties.
+        chat.composer.clear();
+        let uri = url::Url::from_file_path(&path).expect("uri").to_string();
+        let image = ImageContent::new("aW1hZ2U=", "image/png").uri(uri);
+        let commands = chat.handle_agent_event(ChatEvent::TurnSteered {
+            session_id: "s1".into(),
+            prompt: vec![
+                ContentBlock::Text(TextContent::new("and [image 1]")),
+                ContentBlock::Image(image),
+            ],
+        });
+        assert_eq!(commands, []);
+        assert_eq!(
+            image_rows(&with_placeholders(screen_rows(&chat, 40, 20))),
+            4
+        );
+    }
+
+    #[test]
+    fn the_transcript_holds_its_newest_images_and_only_its_sessions() {
+        let mut chat = fullscreen_chat().with_thumbnails(true);
+        for _ in 0..=MAX_TRANSCRIPT_IMAGES {
+            chat.handle_agent_event(replayed_turn(vec![image_block("aW1hZ2U=")]));
+        }
+        for n in 1..=MAX_TRANSCRIPT_IMAGES + 1 {
+            chat.thumbnail_loaded(graphics::image_id(n), Some(wide_thumbnail()));
+        }
+        let held: Vec<u32> = chat
+            .terminal_images(40)
+            .iter()
+            .map(|image| image.id)
+            .collect();
+        assert_eq!(held.len(), MAX_TRANSCRIPT_IMAGES);
+        assert!(!held.contains(&graphics::image_id(1)), "the oldest went");
+
+        // Another session's transcript lets go of these.
+        chat.begin_session("s2".into(), None);
+        assert!(chat.terminal_images(40).is_empty());
+    }
+
+    #[test]
+    fn inline_transcripts_keep_images_as_text() {
+        let mut chat = chat().with_thumbnails(true);
+        let commands = chat.handle_agent_event(replayed_turn(vec![
+            ContentBlock::Text(TextContent::new("look ")),
+            image_block("aW1hZ2U="),
+        ]));
+        assert_eq!(commands, []);
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        chat.handle_agent_event(text_chunk("noted\n"));
+        assert!(
+            history(&mut chat)
+                .iter()
+                .any(|row| row.contains("look [image]")),
+            "the image stays a label"
+        );
         assert!(chat.terminal_images(60).is_empty());
     }
 

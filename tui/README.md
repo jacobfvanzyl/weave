@@ -123,7 +123,7 @@ ending them when it exits.
 | F3 | Find text in the full transcript: newest match first, ↑/↓ (or Ctrl+P/Ctrl+N) between matches, Enter to keep reading, Esc to close. In the inline pager, `/` then `n`/`N` |
 | `?` | Keyboard shortcuts (on an empty composer) |
 | Ctrl+G | Switch between the basic and Vim composers, keeping the draft (with `vim = true`) |
-| Ctrl+V | Paste an image from the clipboard as `[image N]` (dragging an image file in works too); in Ghostty and kitty its thumbnail shows above the composer |
+| Ctrl+V | Paste an image from the clipboard as `[image N]` (dragging an image file in works too); in Ghostty and kitty its thumbnail shows above the composer, and fullscreen, in the prompt once sent |
 | `!` | Shell mode: run a command in the session directory (shown here, not sent to the agent) |
 
 ### Vim composer
@@ -186,7 +186,7 @@ status_line = ["agent", "model", "mode", "context", "session", "cost"]  # the de
 notifications = true   # desktop notification when a turn ends or needs you, while unfocused
 terminal_title = true  # window title: activity spinner, session title, project
 vim = true             # the Vim composer for new threads and multi-line drafts (off by default)
-images = "never"       # no thumbnails of pasted images; "auto" (default) shows them where the
+images = "never"       # no image thumbnails; "auto" (default) shows them where the
                        # terminal draws Kitty graphics placeholders (Ghostty, kitty; not in tmux)
 
 [daemon]

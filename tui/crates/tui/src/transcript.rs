@@ -30,7 +30,9 @@ use crate::find;
 use crate::history_cell;
 use crate::streaming::StreamKind;
 use crate::streaming::render_compact;
-use crate::streaming::render_message;
+use crate::streaming::render_with_images;
+use crate::thumbnails;
+use crate::thumbnails::Slot;
 use crate::tool_call::ExploreGroup;
 use crate::tool_call::RenderContext;
 use crate::tool_call::ToolCallCell;
@@ -43,13 +45,24 @@ const WHEEL_ROWS: isize = 3;
 
 type Render = dyn Fn(usize, bool) -> Vec<DisplayLine> + Send + Sync;
 
-/// A cell's rows at one width.
-type CachedLayout = (usize, Arc<Vec<DisplayLine>>);
+/// A cell's rows at one width and state of its images.
+type CachedLayout = (Shape, Arc<Vec<DisplayLine>>);
+
+/// What a cell's rows depend on: the width, and for a cell showing images, their thumbnails
+/// and the shape of the cells they're sized by.
+#[derive(Clone, Copy, PartialEq)]
+struct Shape {
+    width: usize,
+    changes: u64,
+    cell_aspect: f64,
+}
 
 /// One committed transcript entry, renderable at any width, compactly or in full detail.
 pub struct TranscriptCell {
     render: Box<Render>,
-    /// The latest layout for each of the compact and detailed views, with its width.
+    /// The images the cell shows.
+    images: Vec<Arc<Slot>>,
+    /// The latest layout for each of the compact and detailed views, with its shape.
     cache: Mutex<[Option<CachedLayout>; 2]>,
 }
 
@@ -65,25 +78,58 @@ impl TranscriptCell {
     ) -> Self {
         Self {
             render: Box::new(render),
+            images: Vec::new(),
             cache: Mutex::new([None, None]),
         }
     }
 
-    /// The cell's lines at `width`, rendered once per width and view.
+    /// A cell showing `images`, whose rows render again as their thumbnails change.
+    fn with_images(
+        images: Vec<Arc<Slot>>,
+        render: impl Fn(usize, bool) -> Vec<DisplayLine> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            images,
+            ..Self::with_detail(render)
+        }
+    }
+
+    /// The cell's lines at `width`, rendered once per width and view, and again when its
+    /// images change.
     pub fn lines(&self, width: usize, detail: bool) -> Arc<Vec<DisplayLine>> {
+        let shape = self.shape(width);
         let mut cache = self
             .cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = &mut cache[usize::from(detail)];
-        if let Some((cached_width, lines)) = slot.as_ref()
-            && *cached_width == width
+        if let Some((cached, lines)) = slot.as_ref()
+            && *cached == shape
         {
             return Arc::clone(lines);
         }
         let lines = Arc::new((self.render)(width, detail));
-        *slot = Some((width, Arc::clone(&lines)));
+        *slot = Some((shape, Arc::clone(&lines)));
         lines
+    }
+
+    fn shape(&self, width: usize) -> Shape {
+        if self.images.is_empty() {
+            return Shape {
+                width,
+                changes: 0,
+                cell_aspect: 0.0,
+            };
+        }
+        Shape {
+            width,
+            changes: self
+                .images
+                .iter()
+                .map(|image| image.changes())
+                .fold(0, u64::wrapping_add),
+            cell_aspect: thumbnails::cell_aspect(),
+        }
     }
 
     pub fn info(text: &str) -> Self {
@@ -96,20 +142,26 @@ impl TranscriptCell {
         Self::new(move |width| history_cell::error(&text, width))
     }
 
-    pub fn user(text: &str) -> Self {
+    /// A sent prompt, with its images.
+    pub fn user(text: &str, images: Vec<Arc<Slot>>) -> Self {
         let text = text.to_owned();
-        Self::new(move |width| history_cell::user_message(&text, width))
+        let shown = images.clone();
+        Self::with_images(images, move |width, _| {
+            render_with_images(StreamKind::User, &text, &shown, width)
+        })
     }
 
     pub fn plan(plan: Plan) -> Self {
         Self::new(move |width| history_cell::plan(&plan, width))
     }
 
-    /// An agent message or thought; thoughts are cut to a preview in the compact view.
-    pub fn message(kind: StreamKind, source: String) -> Self {
-        Self::with_detail(move |width, detail| {
-            if detail {
-                render_message(kind, &source, width)
+    /// An agent message or thought, with its images; thoughts are cut to a preview in the
+    /// compact view.
+    pub fn message(kind: StreamKind, source: String, images: Vec<Arc<Slot>>) -> Self {
+        let shown = images.clone();
+        Self::with_images(images, move |width, detail| {
+            if detail || kind != StreamKind::Thought {
+                render_with_images(kind, &source, &shown, width)
             } else {
                 render_compact(kind, &source, width)
             }
@@ -1258,6 +1310,7 @@ mod tests {
         view.push(TranscriptCell::message(
             StreamKind::Agent,
             "The quick brown fox jumps over the lazy dog.\n\n- first item\n- second".to_owned(),
+            Vec::new(),
         ));
         // At 20 columns: "• The quick brown", "  fox jumps over the", "  lazy dog.", "",
         // "  - first item", "  - second".
@@ -1278,6 +1331,46 @@ mod tests {
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 10, 1), &[]);
         let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 10, 1), &[]);
         assert_eq!(copied.as_deref(), Some("jumps"));
+    }
+
+    #[test]
+    fn cells_render_again_when_their_images_change_and_copy_them_as_blank_lines() {
+        let slot = Slot::new(crate::graphics::image_id(1));
+        let cell = TranscriptCell::user("look", vec![Arc::clone(&slot)]);
+        let note = TranscriptCell::info("note");
+        let before = cell.lines(20, false);
+        let noted = note.lines(20, false);
+        assert!(Arc::ptr_eq(&before, &cell.lines(20, false)), "cached");
+
+        slot.finish(Some(thumbnails::Thumbnail {
+            png: Arc::from(&b"png"[..]),
+            width: 1600,
+            height: 900,
+        }));
+        let after = cell.lines(20, false);
+        assert_eq!(after.len(), before.len() + 4);
+        assert!(
+            Arc::ptr_eq(&noted, &note.lines(20, false)),
+            "others stay cached"
+        );
+
+        let mut view = TranscriptView::new();
+        view.push(cell);
+        let rows = draw(&view, 7);
+        assert_eq!(rows[1], "› look");
+        assert!(rows[2].starts_with("  \u{10EEEE}"), "{rows:?}");
+        let left = MouseButton::Left;
+        view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 0), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 6), &[]);
+        let copied = view
+            .handle_mouse(mouse(MouseEventKind::Up(left), 19, 6), &[])
+            .unwrap_or_default();
+        assert!(!copied.contains('\u{10EEEE}'), "{copied:?}");
+        assert_eq!(copied.trim(), "look");
+
+        // Let go of, the image's rows go.
+        slot.release();
+        assert_eq!(view.cells[0].lines(20, false).len(), before.len());
     }
 
     #[test]

@@ -61,10 +61,13 @@ rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the ter
 colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
 two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
 (after Codex's composer Vim mode) editing the same text in the opt-in Vim composer, and
-`thumbnails` the draft's pasted images above it, drawn through `graphics` (the Kitty graphics
-protocol's Unicode placeholders: each image is sent once, and its cells are text, so they
-diff and move like any other; the startup probe asks only Ghostty and kitty, outside tmux and
-Zellij, whether they draw them);
+`thumbnails` the draft's pasted images above it and, in the fullscreen transcript, each
+message's under its text, drawn through `graphics` (the Kitty graphics protocol's Unicode
+placeholders: each image is sent once, and its cells are text, so they diff, move and reflow
+like any other; the startup probe asks only Ghostty and kitty, outside tmux and Zellij,
+whether they draw them). An image's `Slot` (its id and thumbnail) is shared by the draft and
+the transcript, so a sent image is neither decoded nor sent again; images from the journal
+are decoded one at a time off the UI thread, and the transcript holds the newest 64;
 during a turn Enter steers it when the Host and the agent can (`ChatWidget::can_steer`; not the
 agent's slash commands) and queues otherwise, and Tab always queues, as in Codex;
 `/new`, `/reload` and `/subagents` are the TUI's own slash commands, offered with the agent's
@@ -202,6 +205,12 @@ after changing your shell's. Set `WEAVE_DAEMON_DIR` to run a dev Host (socket, l
 journals and traces) beside the installed one; its log is `daemon.log` there, and with
 `XDG_CONFIG_HOME` it reads a config of its own. Builds without debug info
 (`CARGO_PROFILE_DEV_DEBUG=0`) keep `target/` small on a full disk.
+
+Keep only the latest debug build in `target/`, which otherwise grows with every rebuild and
+can fill the disk: remove `target/release` after a one-off release build, clear
+`target/debug/incremental` (old incremental sessions pile up there, gigabytes at a time) when
+done building, and when `target/debug` still holds artifacts of earlier dependency or profile
+settings, `cargo clean` and build again.
 
 The fake agent reads `WEAVE_FAKE_AGENT_STATE` (persist sessions and sign-in to this JSON
 file, which its processes share and merge as an agent's own storage would),
