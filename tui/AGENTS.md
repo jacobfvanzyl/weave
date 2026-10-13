@@ -206,11 +206,13 @@ journals and traces) beside the installed one; its log is `daemon.log` there, an
 `XDG_CONFIG_HOME` it reads a config of its own. Builds without debug info
 (`CARGO_PROFILE_DEV_DEBUG=0`) keep `target/` small on a full disk.
 
-Keep only the latest debug build in `target/`, which otherwise grows with every rebuild and
-can fill the disk: remove `target/release` after a one-off release build, clear
-`target/debug/incremental` (old incremental sessions pile up there, gigabytes at a time) when
-done building, and when `target/debug` still holds artifacts of earlier dependency or profile
-settings, `cargo clean` and build again.
+Keep only the latest debug build in `target/debug`, which otherwise grows with every rebuild
+and can fill the disk: clear `target/debug/incremental` (old incremental sessions pile up
+there, gigabytes at a time) when done building, and when it still holds artifacts of earlier
+dependency or profile settings, `cargo clean --profile dev` and build again. Never remove
+`target/release`: an installed `weave` (`~/.local/bin/weave`) may be a symlink to
+`target/release/weave`, so rebuild it with `cargo build --release` instead, and plain
+`cargo clean` removes it too.
 
 The fake agent reads `WEAVE_FAKE_AGENT_STATE` (persist sessions and sign-in to this JSON
 file, which its processes share and merge as an agent's own storage would),
