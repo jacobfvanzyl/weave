@@ -49,9 +49,18 @@ use weave_host_protocol::agents::ListAgentsResponse;
 use weave_host_protocol::agents::LogoutAgentRequest;
 use weave_host_protocol::agents::TerminalSignInRequest;
 use weave_host_protocol::agents::TerminalSignInResponse;
+use weave_host_protocol::devices::DEVICES_FEATURE;
+use weave_host_protocol::devices::DeviceInfo;
+use weave_host_protocol::devices::ListDevicesRequest;
+use weave_host_protocol::devices::ListDevicesResponse;
+use weave_host_protocol::devices::OfferDeviceRequest;
+use weave_host_protocol::devices::OfferDeviceResponse;
+use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::AcpInfo;
 use weave_host_protocol::hello::Auth;
+use weave_host_protocol::hello::ChallengeRequest;
+use weave_host_protocol::hello::ChallengeResponse;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::hello::HelloRequest;
@@ -84,9 +93,12 @@ use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::StartTurnResponse;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::SteerTurnResponse;
+use weave_host_protocol::websocket::CLOSE_REVOKED;
+use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 
 use crate::Agent;
 use crate::Shared;
+use crate::devices::Closer;
 use crate::instance::Instance;
 use crate::journal;
 use crate::journal::Entry;
@@ -106,6 +118,7 @@ use crate::session::SessionHandle;
 use crate::session::Snapshot;
 use crate::session::Steer;
 use crate::session::lock;
+use crate::websocket::Link;
 
 /// What a client said at `host/hello`.
 #[derive(Clone)]
@@ -114,10 +127,21 @@ struct Hello {
     capabilities: ClientCapabilities,
 }
 
+/// Where a connection comes from.
+enum Peer {
+    /// The Unix socket, whose peers are checked when they connect, or the same process.
+    Local,
+    /// The WebSocket: a remote client, which proves a paired device at hello.
+    Remote(Arc<Link>),
+}
+
 struct Connection {
     id: ClientId,
     shared: Arc<Shared>,
+    peer: Peer,
     hello: Mutex<Option<Hello>>,
+    /// The paired device a remote client proved at hello.
+    device: Mutex<Option<DeviceInfo>>,
     /// Open sessions this client is attached to.
     attached: Mutex<HashSet<SessionId>>,
 }
@@ -129,20 +153,42 @@ struct Ready {
     trace: Option<PathBuf>,
 }
 
-/// Serve one client until it disconnects, then detach it from its sessions.
+/// Serve one local client until it disconnects, then detach it from its sessions.
 pub(crate) async fn serve(
     shared: Arc<Shared>,
     transport: impl ConnectTo<Host> + 'static,
 ) -> Result<(), Error> {
+    serve_as(shared, transport, Peer::Local).await
+}
+
+/// Serve one WebSocket client, which has to prove a paired device at hello.
+pub(crate) async fn serve_remote(
+    shared: Arc<Shared>,
+    transport: impl ConnectTo<Host> + 'static,
+    link: Arc<Link>,
+) -> Result<(), Error> {
+    serve_as(shared, transport, Peer::Remote(link)).await
+}
+
+async fn serve_as(
+    shared: Arc<Shared>,
+    transport: impl ConnectTo<Host> + 'static,
+    peer: Peer,
+) -> Result<(), Error> {
     let connection = Arc::new(Connection {
         id: shared.next_client.fetch_add(1, Ordering::Relaxed),
         shared: Arc::clone(&shared),
+        peer,
         hello: Mutex::new(None),
+        device: Mutex::new(None),
         attached: Mutex::new(HashSet::new()),
     });
     shared.registry().clients += 1;
     let result = handlers(&connection, transport).await;
     shared.registry().clients -= 1;
+    if let Some(device) = lock(&connection.device).take() {
+        shared.devices.disconnected(&device.id, connection.id);
+    }
     let attached: Vec<SessionId> = lock(&connection.attached).drain().collect();
     for session_id in attached {
         if let Some(session) = shared.registry().live(&session_id) {
@@ -175,6 +221,10 @@ async fn handlers(
     transport: impl ConnectTo<Host> + 'static,
 ) -> Result<(), Error> {
     let on_hello = Arc::clone(connection);
+    let on_challenge = Arc::clone(connection);
+    let on_offer = Arc::clone(connection);
+    let on_devices = Arc::clone(connection);
+    let on_revoke = Arc::clone(connection);
     let on_status = Arc::clone(connection);
     let on_shutdown = Arc::clone(connection);
     let on_create = Arc::clone(connection);
@@ -188,6 +238,40 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |_request: ChallengeRequest, responder, _cx| {
+                responder.respond_with_result(on_challenge.challenge())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: OfferDeviceRequest, responder, cx: ConnectionTo<HostClient>| {
+                responder.respond_with_result(on_offer.offer_device(request, cx))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: ListDevicesRequest, responder, _cx| {
+                responder.respond_with_result(on_devices.local_hello().map(|_| {
+                    ListDevicesResponse {
+                        devices: on_devices.shared.devices.list(),
+                    }
+                }))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: RevokeDeviceRequest, responder, _cx| {
+                responder.respond_with_result(on_revoke.local_hello().and_then(|_| {
+                    on_revoke
+                        .shared
+                        .devices
+                        .revoke(&request.device_id, CLOSE_REVOKED)
+                        .map(|()| Empty {})
+                }))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |_request: StatusRequest, responder, _cx| {
                 responder
                     .respond_with_result(on_status.hello_info().map(|_| on_status.shared.status()))
@@ -196,7 +280,9 @@ async fn handlers(
         )
         .on_receive_request(
             async move |_request: ShutdownRequest, responder, _cx| {
-                on_shutdown.hello_info()?;
+                if let Err(error) = on_shutdown.local_hello() {
+                    return responder.respond_with_error(error);
+                }
                 responder.respond(Empty {})?;
                 let _ = on_shutdown.shared.stop.send(true);
                 Ok(())
@@ -401,41 +487,122 @@ impl Connection {
             .ok_or_else(|| errors::unauthenticated("say host/hello first"))
     }
 
+    /// The client's hello, if it's local: remote clients may not administer the Host.
+    fn local_hello(&self) -> Result<Hello, Error> {
+        let hello = self.hello_info()?;
+        match self.peer {
+            Peer::Local => Ok(hello),
+            Peer::Remote(_) => Err(errors::forbidden()),
+        }
+    }
+
+    /// The name of the device a remote client proved, for its turns' origins.
+    fn device_name(&self) -> Option<String> {
+        lock(&self.device)
+            .as_ref()
+            .map(|device| device.name.clone())
+    }
+
     fn hello(&self, request: HelloRequest) -> Result<HelloResponse, Error> {
         let supported = VersionRange::supported();
         let protocol = request
             .protocol
             .highest_common(supported)
             .ok_or_else(|| errors::incompatible_protocol(supported))?;
-        // Every transport there is now is local: the Unix socket, whose peers are checked
-        // when they connect, or a channel in the same process.
-        match request.auth {
-            Auth::Local => {}
-            Auth::Token { .. } => {
-                return Err(errors::unauthenticated(
-                    "tokens are for network connections, which this Host doesn't accept yet",
-                ));
+        let device = self.identify(request.auth)?;
+        let mut capabilities = request.capabilities;
+        if let (Some(device), Peer::Remote(link)) = (&device, &self.peer) {
+            // Only local clients may run a sign-in command on the Host's computer.
+            capabilities.terminal_sign_in = false;
+            let mut current = lock(&self.device);
+            if let Some(previous) = current.take() {
+                self.shared.devices.disconnected(&previous.id, self.id);
             }
+            link.proved();
+            let closer: Arc<dyn Closer> = Arc::clone(link) as Arc<dyn Closer>;
+            self.shared.devices.connected(&device.id, self.id, closer);
+            *current = Some(device.clone());
         }
         *lock(&self.hello) = Some(Hello {
             client: request.client,
-            capabilities: request.capabilities,
+            capabilities,
         });
         let status = self.shared.status();
         Ok(HelloResponse {
             protocol,
             client_id: self.client_id(),
             host: HostInfo {
+                id: self.shared.devices.host_id(),
                 version: status.version,
                 pid: status.pid,
                 started_at: status.started_at,
             },
-            features: vec![STEER_FEATURE.to_owned()],
+            features: vec![STEER_FEATURE.to_owned(), DEVICES_FEATURE.to_owned()],
             acp: AcpInfo {
                 protocol_version: 1,
                 unstable: vec!["session_compaction".to_owned(), "subagents".to_owned()],
             },
+            device,
         })
+    }
+
+    /// Who the connection is, by where it comes from and what it says: nobody in particular
+    /// for a local client, and the device it proves for a remote one. A remote client that
+    /// proves none is closed after the error.
+    fn identify(&self, auth: Auth) -> Result<Option<DeviceInfo>, Error> {
+        let Peer::Remote(link) = &self.peer else {
+            return match auth {
+                Auth::Local => Ok(None),
+                Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
+                Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
+                    "devices connect over the Host's WebSocket",
+                )),
+            };
+        };
+        let device = match auth {
+            Auth::Device {
+                device_id,
+                signature,
+            } => link
+                .take_challenge()
+                .and_then(|nonce| self.shared.devices.verify(&device_id, &nonce, &signature)),
+            Auth::Pair { code, device } => self.shared.devices.pair(&code, device),
+            Auth::Local | Auth::Token { .. } => None,
+        };
+        if device.is_none() {
+            tracing::info!("refused a remote client's hello");
+            link.close_after_next(CLOSE_UNAUTHENTICATED);
+            return Err(errors::unauthenticated(
+                "this device couldn't be authenticated",
+            ));
+        }
+        Ok(device)
+    }
+
+    /// `host/challenge`, for a remote client to sign at hello.
+    fn challenge(&self) -> Result<ChallengeResponse, Error> {
+        let Peer::Remote(link) = &self.peer else {
+            return Err(errors::unauthenticated(
+                "challenges are for the Host's WebSocket",
+            ));
+        };
+        let (nonce, expires_at) = link.challenge();
+        Ok(ChallengeResponse {
+            host_id: self.shared.devices.host_id(),
+            nonce,
+            expires_at,
+        })
+    }
+
+    /// `devices/offer`: a code `weave pair` shows, and this connection is told who takes it.
+    fn offer_device(
+        &self,
+        request: OfferDeviceRequest,
+        cx: ConnectionTo<HostClient>,
+    ) -> Result<OfferDeviceResponse, Error> {
+        self.local_hello()?;
+        let (code, expires_at) = self.shared.devices.offer(request.name, Some(cx));
+        Ok(OfferDeviceResponse { code, expires_at })
     }
 
     async fn list_agents(&self, request: ListAgentsRequest) -> Result<ListAgentsResponse, Error> {
@@ -525,7 +692,7 @@ impl Connection {
     }
 
     async fn authenticate(&self, request: AuthenticateAgentRequest) -> Result<Empty, Error> {
-        self.hello_info()?;
+        self.local_hello()?;
         let agent = self.shared.resolve(&request.agent_id).await?;
         let handles = self.sign_in_handles(&agent).await?;
         for handle in handles {
@@ -546,7 +713,7 @@ impl Connection {
         &self,
         request: TerminalSignInRequest,
     ) -> Result<TerminalSignInResponse, Error> {
-        let hello = self.hello_info()?;
+        let hello = self.local_hello()?;
         if !hello.capabilities.terminal_sign_in {
             return Err(errors::requires_terminal());
         }
@@ -581,7 +748,7 @@ impl Connection {
     }
 
     async fn logout(&self, request: LogoutAgentRequest) -> Result<Empty, Error> {
-        self.hello_info()?;
+        self.local_hello()?;
         let agent = self.shared.resolve(&request.agent_id).await?;
         for handle in self.sign_in_handles(&agent).await? {
             handle.logout().await?;
@@ -1034,6 +1201,7 @@ impl Connection {
             origin: TurnOrigin::Client {
                 name: hello.client.name,
                 id: self.client_id(),
+                device: self.device_name(),
             },
             session_id: request.session_id,
             prompt: request.prompt,
@@ -1051,6 +1219,7 @@ impl Connection {
             origin: TurnOrigin::Client {
                 name: hello.client.name,
                 id: self.client_id(),
+                device: self.device_name(),
             },
             session_id: request.session_id,
             prompt: request.prompt,

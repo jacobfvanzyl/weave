@@ -88,10 +88,12 @@ Messages are JSON-RPC 2.0, UTF-8. Batches aren't used.
 | --- | --- | --- |
 | Unix socket | One message per line (newline-delimited JSON) | `local` |
 | In-process channel (`--no-daemon`, tests) | One message per item | `local` |
-| WebSocket (later) | One message per text frame | `token` |
+| WebSocket, on loopback behind Tailscale Serve | One message per text frame | `device`, or `pair` once |
 
 The socket and its directory stay where they are (`DaemonPaths`): mode 0600, in a 0700
-directory, with one Host per directory guarded by `daemon.lock`.
+directory, with one Host per directory guarded by `daemon.lock`. The WebSocket is for remote
+clients on the person's other devices and has a spec of its own,
+[`wve-90-remote-clients.md`](wve-90-remote-clients.md) (ADR 0010).
 
 ## Connections
 
@@ -124,16 +126,19 @@ request with `unauthenticated`.
   the Host's own range. See [Versioning](#versioning).
 - `auth` is checked against the transport. `local` succeeds only on the Unix socket or
   in-process, and only when the socket's peer has the Host's own user id (`getpeereid`,
-  checked when it connects), on top of the socket's file mode. `token` is reserved for the
-  WebSocket and fails with `unauthenticated` until that exists. A client that hasn't said a
-  successful hello gets `unauthenticated` for everything else.
+  checked when it connects), on top of the socket's file mode. On the WebSocket, `device`
+  (after `host/challenge`) and `pair` prove a paired device, as WVE-90 specifies; the
+  answer then names it in `device`. `token` stays reserved and refused everywhere. A client
+  that hasn't said a successful hello gets `unauthenticated` for everything else.
 - `capabilities.terminalSignIn` says the client can run an agent's sign-in command in a
   terminal on the Host's computer. Only `local` clients may claim it.
 - `clientId` names this connection in other messages (who answered a pending request,
   who started a turn). It means nothing after the connection ends.
+- `host.id` is the Host's own id, the same across restarts, so clients tell Hosts apart.
 - `features` lists optional parts of the protocol this Host supports. Version 2 defines
   `turn/steer` ([WVE-86](https://linear.app/jacobfvanzyl/issue/WVE-86/steer-a-running-turn-from-the-tui-through-the-weave-host)),
-  which brings the `turnSteered` event with it.
+  which brings the `turnSteered` event with it, and `devices` (WVE-90), the `devices/*`
+  methods.
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -393,7 +398,8 @@ the session, as when a closed session is opened again. A client that remembers
 | `closed` | `reason` | the session closes |
 
 `origin` is `{"client": {"name": "weave-tui", "id": "c7"}}` for a client's prompt, with the
-connection's `clientId` so a client recognizes its own, or `{"run": {}}` for a headless run. Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
+connection's `clientId` so a client recognizes its own (a remote client's adds its paired
+device's name as `device`), or `{"run": {}}` for a headless run. Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
 updates. Terminal output an agent reports in `_meta` (`terminal_output_delta`) becomes
 `terminalOutput` and `terminalExit` events and is stripped from the update, so each chunk
 arrives once.
@@ -413,9 +419,9 @@ These aren't journaled. They go to the session's attached clients.
 
 ### Slow clients
 
-A client that falls behind is buffered for: the ACP SDK's channels are unbounded. Once
-remote clients exist, the Host should instead disconnect a client whose unsent messages
-pass a limit, and let it reconnect and catch up from its position (see Later).
+A local client that falls behind is buffered for: the ACP SDK's channels are unbounded. A
+WebSocket client whose unsent messages pass 8 MiB is closed instead, and reconnects and
+catches up from its position (WVE-90).
 
 ## Turns
 
@@ -496,9 +502,10 @@ doesn't resolve anything: the request waits for another client, or for one to at
 ## Host management
 
 **`host/status`** `{}` →
-`{protocol, version, pid, startedAt, service: "launchd" | "onDemand" | "inProcess", environment: "loginShell" | "process", sessions: SessionListing[]}`
+`{protocol, version, pid, startedAt, service: "launchd" | "onDemand" | "inProcess", environment: "loginShell" | "process", sessions: SessionListing[], remote?: string}`
 
-`sessions` lists the open sessions.
+`sessions` lists the open sessions. `remote` is the WebSocket's loopback address while the
+Host serves one.
 
 **`host/shutdown`** `{}` → `{}`
 
@@ -544,6 +551,7 @@ returns the agent's error unchanged.
 | -32066 | `already_resolved` | the pending request was answered, cancelled or withdrawn |
 | -32067 | `wrong_agent` | the session belongs to another agent |
 | -32068 | `requires_terminal` | the sign-in method needs a terminal on the Host's computer |
+| -32069 | `forbidden` | a remote client asked to administer the Host |
 
 ## Versioning
 
@@ -579,9 +587,10 @@ as it does now.
   clients that claimed `terminalSignIn` get it.
 - Journals and traces stay 0600. The agent environment is never written or sent.
 
-Before a WebSocket listener exists, its issue must settle: binding to loopback unless
-configured otherwise, checking `Origin`, TLS or a tunnel for other computers, issuing and
-revoking tokens (pairing), and which directories remote clients may open sessions in.
+Remote clients follow ADR 0010 and [`wve-90-remote-clients.md`](wve-90-remote-clients.md):
+the WebSocket binds loopback only and Tailscale Serve is the way in; every connection proves
+a paired device by signing a challenge; a paired device may do what a local client can,
+except `host/shutdown`, `devices/*` and agent sign-in and sign-out, which answer `forbidden`.
 
 ## Clients
 
@@ -684,7 +693,6 @@ into the new binary.
 
 ## Later
 
-- WebSocket listener with tokens, pairing and the questions in [Security](#security).
 - Host methods for clients on other computers: file search for `@` mentions, file reads
   for attachments, shell commands.
 - A Host-wide feed of session changes (`sessions/watch`).
@@ -692,4 +700,4 @@ into the new binary.
   Capacitor app.
 - `--continue` choosing the latest session in the directory across agents, since the Host
   now knows them.
-- Disconnecting clients that fall behind, for remote clients on slow links.
+- Disconnecting local clients that fall behind, as WebSocket clients are.

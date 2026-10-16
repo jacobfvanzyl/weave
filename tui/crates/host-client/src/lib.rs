@@ -5,6 +5,11 @@
 //! [`HostHandle::open`] answers on that channel too, ahead of the events that follow the
 //! answer on the wire, so a client knows whether to reset its transcript before the replay
 //! arrives.
+//!
+//! Local clients use the Unix socket; remote ones, the Host's WebSocket and a paired device
+//! ([`remote`]).
+
+pub mod remote;
 
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
@@ -18,11 +23,15 @@ use tokio::task::JoinHandle;
 use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::VersionRange;
+use weave_host_protocol::devices::DevicePairedNotification;
+use weave_host_protocol::devices::NewDevice;
+use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::SessionChangedNotification;
 use weave_host_protocol::events::SessionEventNotification;
 use weave_host_protocol::hello::Auth;
+use weave_host_protocol::hello::ChallengeRequest;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientId;
 use weave_host_protocol::hello::ClientInfo;
@@ -35,6 +44,8 @@ use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::SessionState;
 
+pub use crate::remote::Credentials;
+
 /// Everything the Host sends, in order.
 #[derive(Debug)]
 pub enum HostEvent {
@@ -44,6 +55,8 @@ pub enum HostEvent {
     PendingAdded(Box<PendingAddedNotification>),
     PendingResolved(PendingResolvedNotification),
     ElicitationCompleted(ElicitationCompletedNotification),
+    /// A device took the offer this client made (`devices/offer`).
+    DevicePaired(DevicePairedNotification),
     /// The answer to [`HostHandle::open`], ahead of the events that follow it.
     Opened {
         tag: u64,
@@ -77,6 +90,9 @@ pub enum ConnectError {
     Incompatible(String),
     #[error("the weave Host refused the connection: {0}")]
     Refused(Error),
+    /// The Host isn't the one the device paired with.
+    #[error("this isn't the weave Host this device paired with")]
+    WrongHost,
 }
 
 /// One connection to the Host. Dereferences to its [`HostHandle`].
@@ -109,12 +125,24 @@ impl HostConnection {
         client: ClientInfo,
         capabilities: ClientCapabilities,
     ) -> Result<(Self, mpsc::UnboundedReceiver<HostEvent>), ConnectError> {
+        Self::connect_with(transport, client, capabilities, Credentials::Local).await
+    }
+
+    /// Connect over `transport` and say hello as `client` with `credentials`: a paired
+    /// device answers the Host's challenge first.
+    pub async fn connect_with(
+        transport: impl ConnectTo<HostClient> + 'static,
+        client: ClientInfo,
+        capabilities: ClientCapabilities,
+        credentials: Credentials,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<HostEvent>), ConnectError> {
         let (events, mut event_rx) = mpsc::unbounded_channel();
         let on_event = events.clone();
         let on_changed = events.clone();
         let on_added = events.clone();
         let on_resolved = events.clone();
         let on_completed = events.clone();
+        let on_paired = events.clone();
         // Handlers run inside the dispatch loop, in the order messages arrived; each only
         // passes its message on.
         let builder = HostClient
@@ -154,6 +182,13 @@ impl HostConnection {
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: DevicePairedNotification, _cx| {
+                    let _ = on_paired.send(HostEvent::DevicePaired(notification));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
             );
 
         let (cx_tx, cx_rx) = oneshot::channel();
@@ -180,18 +215,12 @@ impl HostConnection {
             };
             return Err(ConnectError::Connection(error));
         };
-        let request = HelloRequest {
-            protocol: VersionRange::supported(),
-            client,
-            auth: Auth::Local,
-            capabilities,
-        };
-        let hello = match cx.send_request(request).block_task().await {
+        let hello = match say_hello(&cx, client, capabilities, credentials).await {
             Ok(hello) => hello,
             Err(error) => {
                 let _ = shutdown.send(());
                 let _ = driver.await;
-                return Err(hello_failed(error));
+                return Err(error);
             }
         };
         Ok((
@@ -213,6 +242,54 @@ impl HostConnection {
         let _ = self.shutdown.send(());
         let _ = self.driver.await;
     }
+}
+
+/// `host/hello` with `credentials`, after the challenge a paired device signs.
+async fn say_hello(
+    cx: &ConnectionTo<Host>,
+    client: ClientInfo,
+    capabilities: ClientCapabilities,
+    credentials: Credentials,
+) -> Result<HelloResponse, ConnectError> {
+    let auth = match credentials {
+        Credentials::Local => Auth::Local,
+        Credentials::Pair { code, name, key } => Auth::Pair {
+            code,
+            device: NewDevice {
+                name,
+                public_key: key.jwk(),
+            },
+        },
+        Credentials::Device {
+            device_id,
+            key,
+            host_id,
+        } => {
+            let challenge = cx
+                .send_request(ChallengeRequest {})
+                .block_task()
+                .await
+                .map_err(hello_failed)?;
+            if host_id.is_some_and(|expected| expected != challenge.host_id) {
+                return Err(ConnectError::WrongHost);
+            }
+            let message = auth_message(&challenge.host_id, &device_id, &challenge.nonce);
+            Auth::Device {
+                device_id,
+                signature: key.sign(&message),
+            }
+        }
+    };
+    let request = HelloRequest {
+        protocol: VersionRange::supported(),
+        client,
+        auth,
+        capabilities,
+    };
+    cx.send_request(request)
+        .block_task()
+        .await
+        .map_err(hello_failed)
 }
 
 /// Why `host/hello` failed, as the client should explain it.

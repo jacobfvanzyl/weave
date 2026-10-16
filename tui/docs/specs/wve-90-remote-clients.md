@@ -1,6 +1,8 @@
 # WVE-90: Remote clients of the weave Host
 
-Status: draft. The decisions are recorded in [ADR 0010](../../../docs/adr/0010-remote-clients-through-the-tailnet-with-device-keys.md).
+Status: implemented, and checked live through Tailscale Serve from the Host's own Mac on
+2026-10-16; a run from another computer on the tailnet is still to do. The decisions are
+recorded in [ADR 0010](../../../docs/adr/0010-remote-clients-through-the-tailnet-with-device-keys.md).
 
 ## Purpose
 
@@ -86,6 +88,7 @@ An HTTPS port of its own leaves the computer's other Serve entries alone.
   included.
 - A message is at most 32 MiB; a larger one closes the connection.
 - The Host pings every 20 seconds and closes a connection that hasn't answered 20 seconds later.
+- A connection that hasn't proved a paired device within 30 seconds is closed (4002).
 - **Falling behind.** A WebSocket connection whose unsent messages pass 8 MiB is closed. The
   client reconnects and attaches after its position, so it misses nothing. The Unix socket keeps
   buffering, as now.
@@ -211,14 +214,21 @@ paired device. Other accounts on the Host's computer can reach the loopback port
 socket's file mode keeps them away from, but they can't get past `host/hello` without a
 device's key. TLS ends at Tailscale on the Host's computer; the last hop is loopback.
 
+Removing the Serve entry stops new connections but leaves connected clients connected, so
+revoking a device, not turning Serve off, is what cuts one off.
+
 ## Crates
 
 | Crate | Adds |
 | --- | --- |
 | `protocol` | `device` and `pair` auth, `host/challenge`, `devices/*`, `host.id`, the hello's `device`, the turn origin's `device`, `forbidden`, the close codes; golden fixtures for each |
 | `daemon` | The WebSocket listener (`tokio-tungstenite`, as Codex uses), `devices.json`, challenges and signature checks (RustCrypto `p256`), what remote clients may call, pings and the 8 MiB limit |
-| `host-client` | A WebSocket transport with a key it's given, for tests and the live check |
-| `cli` | `[remote]`, `weave pair` with a QR code in the terminal, `weave devices` |
+| `host-client` | A WebSocket transport (`remote::connect_websocket`), device credentials and a software key (`remote::DeviceKey`), for tests and the live check's client (`examples/remote.rs`) |
+| `cli` | `[remote]`, `weave pair` with a QR code in the terminal, `weave devices`, and reading Tailscale Serve's status (`tailscale.rs`) |
+
+`host/status` says where the WebSocket listens (`remote`), so `weave pair` can tell a Host
+started before `[remote]` was added to restart. The ping interval and the 8 MiB limit are
+the Host's defaults; tests shorten them through `RemoteConfig`.
 
 ## Acceptance
 

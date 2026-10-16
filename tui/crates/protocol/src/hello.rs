@@ -8,6 +8,9 @@ use serde::Serialize;
 
 use crate::Timestamp;
 use crate::VersionRange;
+use crate::devices::DeviceId;
+use crate::devices::DeviceInfo;
+use crate::devices::NewDevice;
 
 /// The Host's name for a connection, in messages about who did what. It means nothing once
 /// the connection ends.
@@ -39,8 +42,19 @@ pub struct ClientInfo {
 pub enum Auth {
     /// The socket's peer is the Host's own user. Only on the Unix socket and in-process.
     Local,
-    /// A token the Host issued. Reserved for the WebSocket; refused until it exists.
+    /// Reserved, and refused everywhere; the next major version removes it.
     Token { token: String },
+    /// A paired device, on the WebSocket: its signature of the connection's challenge
+    /// ([`ChallengeRequest`]), as [`crate::devices::auth_message`] spells it.
+    #[serde(rename_all = "camelCase")]
+    Device {
+        device_id: DeviceId,
+        /// The DER-encoded ECDSA P-256 SHA-256 signature, in unpadded base64url.
+        signature: String,
+    },
+    /// A device pairing, on the WebSocket, with the code `weave pair` showed. The
+    /// connection is that device's from then on.
+    Pair { code: String, device: NewDevice },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,11 +77,17 @@ pub struct HelloResponse {
     #[serde(default)]
     pub features: Vec<String>,
     pub acp: AcpInfo,
+    /// The paired device a remote client connected as; none for a local client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<DeviceInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostInfo {
+    /// The Host's own id, which stays the same across restarts, so clients tell Hosts apart.
+    #[serde(default)]
+    pub id: String,
     pub version: String,
     pub pid: u32,
     pub started_at: Timestamp,
@@ -82,4 +102,20 @@ pub struct AcpInfo {
     /// Unstable ACP features the Host may pass through, such as `subagents`.
     #[serde(default)]
     pub unstable: Vec<String>,
+}
+
+/// `host/challenge`: what a paired device signs in its `host/hello`. Only on the WebSocket,
+/// before hello.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[request(method = "host/challenge", response = ChallengeResponse)]
+pub struct ChallengeRequest {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct ChallengeResponse {
+    /// The Host's id, which the device checks is the Host it paired with.
+    pub host_id: String,
+    /// 32 random bytes, in unpadded base64url, good for one hello on this connection.
+    pub nonce: String,
+    pub expires_at: Timestamp,
 }

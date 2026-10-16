@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use weave_agents::environment::CAPTURE_TIMEOUT;
 use weave_agents::environment::Environment;
 use weave_daemon::DaemonConfig;
 use weave_daemon::DaemonPaths;
+use weave_daemon::RemoteConfig;
 use weave_daemon::Withheld;
 use weave_daemon::socket;
 use weave_host_client::ConnectError;
@@ -163,7 +165,7 @@ impl Host {
     }
 }
 
-fn client_info(name: &str) -> ClientInfo {
+pub(crate) fn client_info(name: &str) -> ClientInfo {
     ClientInfo {
         name: name.to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -171,7 +173,7 @@ fn client_info(name: &str) -> ClientInfo {
 }
 
 /// This client runs on the Host's computer, so it can run sign-in commands in its terminal.
-fn capabilities() -> ClientCapabilities {
+pub(crate) fn capabilities() -> ClientCapabilities {
     ClientCapabilities {
         terminal_sign_in: true,
     }
@@ -195,7 +197,7 @@ pub(crate) fn paths() -> anyhow::Result<DaemonPaths> {
 }
 
 /// A connection to the per-user Host, starting it if it isn't running.
-async fn open(paths: &DaemonPaths) -> anyhow::Result<socket::Transport> {
+pub(crate) async fn open(paths: &DaemonPaths) -> anyhow::Result<socket::Transport> {
     match socket::connect(&paths.socket).await {
         Ok(transport) => return Ok(transport),
         Err(error) if not_running(&error) => {}
@@ -371,6 +373,7 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     } else {
         Service::OnDemand
     };
+    let remote = remote_listener(run.config.as_deref()).await;
     let mut config = DaemonConfig::persistent(paths, service, environment);
     config.config_file = run.config;
     let daemon = weave_daemon::Daemon::new(config);
@@ -385,16 +388,59 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
         version = env!("CARGO_PKG_VERSION"),
         "weave Host serving"
     );
-    // launchd keeps it running; one started on demand goes when it's no longer used.
-    let idle_exit = if run.launchd {
+    // launchd keeps it running; one started on demand goes when it's no longer used, unless
+    // it serves remote clients, which can't start it again.
+    let idle_exit = if run.launchd || remote.is_some() {
         None
     } else {
         run.idle_exit.map(Duration::from_secs)
     };
+    let serving_remote = remote.map(|(listener, config)| {
+        let daemon = daemon.clone();
+        tokio::spawn(async move { daemon.serve_remote(listener, config).await })
+    });
     daemon.serve(listening.listener, idle_exit).await;
+    if let Some(serving) = serving_remote {
+        serving.abort();
+    }
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("weave Host stopped");
     Ok(())
+}
+
+/// The WebSocket for remote clients, when the config has a `[remote]`. A `[remote]` that
+/// can't be used is logged, and the Host serves local clients only.
+async fn remote_listener(config: Option<&Path>) -> Option<(tokio::net::TcpListener, RemoteConfig)> {
+    let settings = match crate::config::Config::load(config) {
+        Ok(config) => config.remote?,
+        Err(error) => {
+            tracing::error!(error = %format!("{error:#}"), "no remote clients: the config can't be read");
+            return None;
+        }
+    };
+    let address = match settings.listen() {
+        Ok(address) => address,
+        Err(error) => {
+            tracing::error!(error = %format!("{error:#}"), "no remote clients");
+            return None;
+        }
+    };
+    match tokio::net::TcpListener::bind(address).await {
+        Ok(listener) => {
+            tracing::info!(%address, "serving remote clients");
+            Some((
+                listener,
+                RemoteConfig {
+                    origins: settings.origins,
+                    ..RemoteConfig::default()
+                },
+            ))
+        }
+        Err(error) => {
+            tracing::error!(%error, %address, "no remote clients: can't listen");
+            None
+        }
+    }
 }
 
 /// SIGTERM or SIGINT. A closing terminal's SIGHUP is ignored.
@@ -523,8 +569,13 @@ fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
             "its own (the login shell's couldn't be read)"
         }
     };
+    let remote = status
+        .remote
+        .as_ref()
+        .map(|address| format!("  remote   {address}, for paired devices (`weave devices`)\n"))
+        .unwrap_or_default();
     format!(
-        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n  agents get {environment} environment\n\n{sessions}\n",
+        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n{remote}  agents get {environment} environment\n\n{sessions}\n",
         status.version,
         status.pid,
         ago(now_ms, status.started_at),
@@ -573,6 +624,7 @@ mod tests {
             service: Service::OnDemand,
             environment: EnvironmentSource::LoginShell,
             sessions: Vec::new(),
+            remote: None,
         };
         assert!(describe(&status, &paths, 90_000).ends_with("No sessions open.\n"));
         status.sessions.push(SessionListing {
@@ -590,6 +642,11 @@ mod tests {
              /state/weave/daemon/daemon.sock\n  journals /state/weave/daemon/sessions\n  agents \
              get your login shell's environment\n\n1 session open, at work; `weave sessions` \
              lists it.\n"
+        );
+        status.remote = Some("127.0.0.1:7341".to_owned());
+        assert!(
+            describe(&status, &paths, 7_230_000)
+                .contains("\n  remote   127.0.0.1:7341, for paired devices (`weave devices`)\n")
         );
     }
 }

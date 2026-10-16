@@ -1,20 +1,25 @@
 //! The weave Host protocol: what clients and the Host say to each other.
 //!
-//! JSON-RPC 2.0, one message per line on the Host's Unix socket and one per item in-process.
+//! JSON-RPC 2.0, one message per line on the Host's Unix socket, one per text frame on its
+//! WebSocket ([`websocket`]) and one per item in-process.
 //! Clients send requests; the Host answers them and sends notifications, never requests.
 //! Whatever an agent produced or consumes travels as ACP's own JSON, from
 //! [`agent_client_protocol::schema::v1`]; the messages around it are this crate's. The
 //! specification is `tui/docs/specs/wve-85-host-protocol.md`.
 //!
 //! - [`hello`]: the first request on every connection: version, authentication, client.
+//! - [`devices`]: pairing the person's other devices, whose remote clients use the WebSocket.
 //! - [`agents`]: the agents the Host can run, and signing in to them.
 //! - [`sessions`]: listing, creating, attaching to and closing sessions.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns.
 //! - [`pending`]: permission requests and elicitations waiting on a person.
 //! - [`host`]: the Host's status, and stopping it.
+//!
+//! Remote clients follow `tui/docs/specs/wve-90-remote-clients.md`.
 
 pub mod agents;
+pub mod devices;
 pub mod errors;
 pub mod events;
 pub mod hello;
@@ -41,6 +46,20 @@ pub const OLDEST_SUPPORTED_VERSION: u32 = 2;
 
 /// Milliseconds since the Unix epoch.
 pub type Timestamp = u64;
+
+/// The WebSocket remote clients connect over, through Tailscale Serve.
+pub mod websocket {
+    /// The subprotocol an upgrade must ask for.
+    pub const SUBPROTOCOL: &str = "weave-host";
+    /// The largest message either end sends: room for a prompt's screenshots.
+    pub const MAX_MESSAGE: usize = 32 * 1024 * 1024;
+    /// The device was revoked.
+    pub const CLOSE_REVOKED: u16 = 4000;
+    /// The client fell behind; it reconnects and attaches after its position.
+    pub const CLOSE_BEHIND: u16 = 4001;
+    /// `host/hello` failed, after its error.
+    pub const CLOSE_UNAUTHENTICATED: u16 = 4002;
+}
 
 /// A response with nothing in it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]

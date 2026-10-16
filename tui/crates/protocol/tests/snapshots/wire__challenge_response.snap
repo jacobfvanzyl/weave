@@ -1,0 +1,9 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "round_trip(&ChallengeResponse\n{\n    host_id: \"8ZpX3kqW1m0aLr9TQv2cYw\".to_owned(), nonce:\n    \"q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c\".to_owned(), expires_at:\n    1_760_180_030_000,\n})"
+---
+{
+  "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",
+  "nonce": "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c",
+  "expiresAt": 1760180030000
+}

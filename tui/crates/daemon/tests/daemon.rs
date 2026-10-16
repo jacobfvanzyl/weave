@@ -137,6 +137,7 @@ impl World {
             environment: Environment::default(),
             service: Service::InProcess,
             traces: self.dir.path().join("traces"),
+            devices: Some(self.dir.path().join("devices.json")),
         })
     }
 

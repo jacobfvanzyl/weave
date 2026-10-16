@@ -21,6 +21,8 @@ pub const ALREADY_RESOLVED: i32 = -32066;
 pub const WRONG_AGENT: i32 = -32067;
 /// The sign-in method needs a terminal on the Host's computer.
 pub const REQUIRES_TERMINAL: i32 = -32068;
+/// Only local clients may ask this: it administers the Host.
+pub const FORBIDDEN: i32 = -32069;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -77,6 +79,13 @@ pub fn requires_terminal() -> Error {
     Error::new(
         REQUIRES_TERMINAL,
         "this sign-in method runs in a terminal on the Host's computer: run `weave login` there",
+    )
+}
+
+pub fn forbidden() -> Error {
+    Error::new(
+        FORBIDDEN,
+        "only a client on the Host's computer may do this",
     )
 }
 

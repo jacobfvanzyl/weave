@@ -17,15 +17,18 @@
 //! without anyone.
 //!
 //! A Host serves a Unix socket ([`socket`]), or, without one, a single client in the same
-//! process ([`Daemon::connect_in_process`]).
+//! process ([`Daemon::connect_in_process`]). Remote clients, on the person's other devices,
+//! reach it through a loopback WebSocket ([`Daemon::serve_remote`]) and prove a paired device.
 
 mod client;
+mod devices;
 mod instance;
 mod journal;
 mod modes;
 pub mod paths;
 mod session;
 pub mod socket;
+mod websocket;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -70,6 +73,7 @@ pub use crate::paths::DaemonPaths;
 use crate::session::Command;
 use crate::session::SessionHandle;
 use crate::session::lock;
+pub use crate::websocket::RemoteConfig;
 
 /// How long a session nothing needs stays open: no client attached, no turn running.
 pub const DEFAULT_IDLE_GRACE: Duration = Duration::from_secs(30 * 60);
@@ -107,6 +111,8 @@ pub struct DaemonConfig {
     pub service: Service,
     /// Where protocol traces are written.
     pub traces: PathBuf,
+    /// The record of paired devices and the Host's id; none keeps them in memory only.
+    pub devices: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,6 +137,7 @@ impl DaemonConfig {
             environment: Environment::process(),
             service: Service::InProcess,
             traces: std::env::temp_dir().join("weave-traces"),
+            devices: None,
         }
     }
 
@@ -141,6 +148,7 @@ impl DaemonConfig {
             environment,
             service,
             traces: paths.dir.join("traces"),
+            devices: Some(paths.devices()),
             ..Self::in_process(None)
         }
     }
@@ -165,6 +173,9 @@ pub(crate) struct Agent {
 pub(crate) struct Shared {
     pub(crate) config: DaemonConfig,
     registry: Mutex<Registry>,
+    pub(crate) devices: devices::Devices,
+    /// The WebSocket's address, while it's served.
+    remote: Mutex<Option<String>>,
     started_ms: u64,
     pub(crate) next_client: AtomicU64,
     pub(crate) stop: watch::Sender<bool>,
@@ -401,6 +412,7 @@ impl Shared {
                 weave_agents::environment::Source::Process => EnvironmentSource::Process,
             },
             sessions: sessions.iter().map(session::Summary::listing).collect(),
+            remote: lock(&self.remote).clone(),
         }
     }
 }
@@ -453,8 +465,11 @@ impl Daemon {
             None => HashMap::new(),
         };
         let (stop, _) = watch::channel(false);
+        let devices = devices::Devices::load(config.devices.clone());
         Self {
             shared: Arc::new(Shared {
+                devices,
+                remote: Mutex::new(None),
                 config,
                 registry: Mutex::new(Registry {
                     known,
@@ -545,6 +560,17 @@ impl Daemon {
             }
         }
         self.shutdown().await;
+    }
+
+    /// Accept remote clients on `listener`, a loopback address Tailscale Serve forwards to,
+    /// until the Host stops. Each has to prove a paired device at hello.
+    pub async fn serve_remote(&self, listener: tokio::net::TcpListener, config: RemoteConfig) {
+        *lock(&self.shared.remote) = listener
+            .local_addr()
+            .ok()
+            .map(|address| address.to_string());
+        websocket::serve(Arc::clone(&self.shared), listener, config).await;
+        *lock(&self.shared.remote) = None;
     }
 
     /// Remove journals untouched for the retention period, except open sessions', and forget

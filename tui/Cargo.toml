@@ -30,19 +30,27 @@ crossterm = "0.29.0"
 diffy = "0.4.2"
 flate2 = "1"
 futures = "0.3"
+# Random challenges, pairing codes and ids for paired devices.
+getrandom = "0.3"
 # Codex's file search: ripgrep's walker and nucleo's fuzzy matcher.
 ignore = "0.4.23"
 # Decoding pasted images for the composer's thumbnails, as Codex decodes its pets' frames.
 image = { version = "0.25", default-features = false }
 insta = "1.46.3"
 nucleo-matcher = "0.3"
+# Paired devices' keys: P-256, the curve the Secure Enclave makes keys on.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 libc = "0.2"
 pretty_assertions = "1"
 pulldown-cmark = { version = "0.10", default-features = false }
+# `weave pair`'s QR code, drawn in the terminal.
+qrcode = { version = "0.14", default-features = false }
 regex-lite = "0.1"
 # Fetching the ACP agent registry and its agents' archives.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
+# TLS for a remote client's WebSocket, with the crypto reqwest already uses.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
@@ -52,6 +60,8 @@ tar = "0.4.46"
 tempfile = "3"
 thiserror = "2"
 tokio = "1"
+# The Host's WebSocket for remote clients, and a client's end of it, as Codex uses.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The daemon's Unix socket, as byte streams for the ACP SDK.
 tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"

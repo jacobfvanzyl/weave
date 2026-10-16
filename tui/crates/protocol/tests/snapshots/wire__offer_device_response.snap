@@ -1,0 +1,8 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "round_trip(&OfferDeviceResponse\n{\n    code: \"4F1N2K7Q9R3T5V8W0X6Y2Z4A1B\".to_owned(), expires_at:\n    1_760_180_300_000,\n})"
+---
+{
+  "code": "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B",
+  "expiresAt": 1760180300000
+}

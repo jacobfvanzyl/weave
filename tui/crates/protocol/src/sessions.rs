@@ -84,8 +84,14 @@ pub struct SessionAgent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TurnOrigin {
-    /// A client's prompt: its name, and its connection, so it knows its own prompts.
-    Client { name: String, id: ClientId },
+    /// A client's prompt: its name, and its connection, so it knows its own prompts. A
+    /// remote client's names its device too.
+    Client {
+        name: String,
+        id: ClientId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+    },
     /// A headless run.
     Run {},
 }

@@ -1,0 +1,10 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&OfferDeviceRequest { name: Some(\"Jaco's iPad\".to_owned()), })"
+---
+{
+  "method": "devices/offer",
+  "params": {
+    "name": "Jaco's iPad"
+  }
+}

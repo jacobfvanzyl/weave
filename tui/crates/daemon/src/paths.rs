@@ -72,6 +72,11 @@ impl DaemonPaths {
     pub fn journals(&self) -> PathBuf {
         self.dir.join("sessions")
     }
+
+    /// The Host's id and the devices it accepts remote clients from.
+    pub fn devices(&self) -> PathBuf {
+        self.dir.join("devices.json")
+    }
 }
 
 fn home() -> Option<PathBuf> {

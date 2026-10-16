@@ -1,6 +1,6 @@
 //! `~/.config/weave/config.toml`, owned by section: the Host reads `default_agent`,
-//! `[agents.*]` and `[[mcp_servers]]`, parsed here; clients read `[tui]` and `[daemon]`, which
-//! this keeps as tables for them to parse.
+//! `[agents.*]` and `[[mcp_servers]]`, parsed here; clients read `[tui]` and `[daemon]`, and
+//! the CLI that runs the Host reads `[remote]`, which this keeps as tables for them to parse.
 //!
 //! ```toml
 //! default_agent = "claude"
@@ -14,6 +14,10 @@
 //!
 //! [daemon]
 //! enabled = false            # run agents inside each weave, not the shared Host (`--no-daemon`)
+//!
+//! [remote]                   # let paired devices connect, through Tailscale Serve
+//! listen = "127.0.0.1:7341"  # the default; loopback only
+//! url = "https://mac.example.ts.net:7341" # what `weave pair` gives devices; found when absent
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
@@ -77,6 +81,9 @@ pub struct Config {
     /// The daemon section clients read, for them to parse.
     #[serde(default)]
     pub daemon: toml::Table,
+    /// Remote clients, for the CLI to parse; absent, the Host takes none.
+    #[serde(default)]
+    pub remote: Option<toml::Table>,
 }
 
 #[derive(Debug, Default, Deserialize)]

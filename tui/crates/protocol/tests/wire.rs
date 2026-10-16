@@ -52,12 +52,25 @@ use weave_host_protocol::agents::ListAgentsResponse;
 use weave_host_protocol::agents::LogoutAgentRequest;
 use weave_host_protocol::agents::TerminalSignInRequest;
 use weave_host_protocol::agents::TerminalSignInResponse;
+use weave_host_protocol::devices::DEVICES_FEATURE;
+use weave_host_protocol::devices::Device;
+use weave_host_protocol::devices::DeviceInfo;
+use weave_host_protocol::devices::DevicePairedNotification;
+use weave_host_protocol::devices::Jwk;
+use weave_host_protocol::devices::ListDevicesRequest;
+use weave_host_protocol::devices::ListDevicesResponse;
+use weave_host_protocol::devices::NewDevice;
+use weave_host_protocol::devices::OfferDeviceRequest;
+use weave_host_protocol::devices::OfferDeviceResponse;
+use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::SessionChangedNotification;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::events::SessionEventNotification;
 use weave_host_protocol::hello::AcpInfo;
 use weave_host_protocol::hello::Auth;
+use weave_host_protocol::hello::ChallengeRequest;
+use weave_host_protocol::hello::ChallengeResponse;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::hello::HelloRequest;
@@ -200,6 +213,7 @@ fn state() -> SessionState {
             origin: TurnOrigin::Client {
                 name: "weave-tui".to_owned(),
                 id: "c7".to_owned(),
+                device: None,
             },
         }],
         pending: vec![pending()],
@@ -210,6 +224,41 @@ fn state() -> SessionState {
         },
         notices: vec!["The agent doesn't support MCP server docs over SSE; skipped".to_owned()],
         trace: None,
+    }
+}
+
+fn host_info() -> HostInfo {
+    HostInfo {
+        id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+        version: "0.1.0".to_owned(),
+        pid: 4242,
+        started_at: 1_760_180_000_000,
+    }
+}
+
+fn acp_info() -> AcpInfo {
+    AcpInfo {
+        protocol_version: 1,
+        unstable: vec!["session_compaction".to_owned(), "subagents".to_owned()],
+    }
+}
+
+fn jwk() -> Jwk {
+    Jwk {
+        kty: "EC".to_owned(),
+        crv: "P-256".to_owned(),
+        x: "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU".to_owned(),
+        y: "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0".to_owned(),
+    }
+}
+
+fn device() -> Device {
+    Device {
+        id: "d-3q8Hf0aZ".to_owned(),
+        name: "Jaco's iPad".to_owned(),
+        paired_at: 1_760_180_000_000,
+        last_seen_at: Some(1_760_180_005_000),
+        connections: 1,
     }
 }
 
@@ -246,22 +295,106 @@ fn hello() {
         round_trip(&HelloResponse {
             protocol: 2,
             client_id: "c7".to_owned(),
-            host: HostInfo {
-                version: "0.1.0".to_owned(),
-                pid: 4242,
-                started_at: 1_760_180_000_000,
-            },
+            host: host_info(),
             features: Vec::new(),
-            acp: AcpInfo {
-                protocol_version: 1,
-                unstable: vec!["session_compaction".to_owned(), "subagents".to_owned()],
+            acp: acp_info(),
+            device: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "hello_response_remote",
+        round_trip(&HelloResponse {
+            protocol: 2,
+            client_id: "c9".to_owned(),
+            host: host_info(),
+            features: vec![DEVICES_FEATURE.to_owned()],
+            acp: acp_info(),
+            device: Some(DeviceInfo {
+                id: "d-3q8Hf0aZ".to_owned(),
+                name: "Jaco's iPad".to_owned(),
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "hello_request_device",
+        message(&HelloRequest {
+            protocol: VersionRange::supported(),
+            client: ClientInfo {
+                name: "weave-ios".to_owned(),
+                version: "0.1.0".to_owned(),
             },
+            auth: Auth::Device {
+                device_id: "d-3q8Hf0aZ".to_owned(),
+                signature: "MEUCIQDsig".to_owned(),
+            },
+            capabilities: ClientCapabilities::default(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "hello_request_pair",
+        message(&HelloRequest {
+            protocol: VersionRange::supported(),
+            client: ClientInfo {
+                name: "weave-ios".to_owned(),
+                version: "0.1.0".to_owned(),
+            },
+            auth: Auth::Pair {
+                code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
+                device: NewDevice {
+                    name: "Jaco's iPad".to_owned(),
+                    public_key: jwk(),
+                },
+            },
+            capabilities: ClientCapabilities::default(),
+        })
+    );
+    insta::assert_json_snapshot!("challenge_request", message(&ChallengeRequest {}));
+    insta::assert_json_snapshot!(
+        "challenge_response",
+        round_trip(&ChallengeResponse {
+            host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+            nonce: "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c".to_owned(),
+            expires_at: 1_760_180_030_000,
         })
     );
     insta::assert_json_snapshot!(
         "auth",
         round_trip(&Auth::Token {
             token: "secret".to_owned()
+        })
+    );
+}
+
+#[test]
+fn devices() {
+    insta::assert_json_snapshot!(
+        "offer_device_request",
+        message(&OfferDeviceRequest {
+            name: Some("Jaco's iPad".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "offer_device_response",
+        round_trip(&OfferDeviceResponse {
+            code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
+            expires_at: 1_760_180_300_000,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "device_paired_notification",
+        message(&DevicePairedNotification { device: device() })
+    );
+    insta::assert_json_snapshot!("list_devices_request", message(&ListDevicesRequest {}));
+    insta::assert_json_snapshot!(
+        "list_devices_response",
+        round_trip(&ListDevicesResponse {
+            devices: vec![device()],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "revoke_device_request",
+        message(&RevokeDeviceRequest {
+            device_id: "d-3q8Hf0aZ".to_owned(),
         })
     );
 }
@@ -495,6 +628,22 @@ fn events() {
                 origin: TurnOrigin::Client {
                     name: "weave-tui".to_owned(),
                     id: "c7".to_owned(),
+                    device: None,
+                },
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_turn_started_remote",
+        message(&event(
+            41,
+            SessionEvent::TurnStarted {
+                session_id: "s-1".into(),
+                prompt: vec![text("hello")],
+                origin: TurnOrigin::Client {
+                    name: "weave-ios".to_owned(),
+                    id: "c9".to_owned(),
+                    device: Some("Jaco's iPad".to_owned()),
                 },
             },
         ))
@@ -572,6 +721,7 @@ fn events() {
                 origin: TurnOrigin::Client {
                     name: "weave-tui".to_owned(),
                     id: "c7".to_owned(),
+                    device: None,
                 },
             },
         ))
@@ -666,6 +816,7 @@ fn host() {
             service: Service::OnDemand,
             environment: EnvironmentSource::LoginShell,
             sessions: vec![listing()],
+            remote: Some("127.0.0.1:7341".to_owned()),
         })
     );
     insta::assert_json_snapshot!("shutdown_request", message(&ShutdownRequest {}));

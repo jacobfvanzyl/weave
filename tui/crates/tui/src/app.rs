@@ -416,7 +416,8 @@ impl App {
                 commands.shrink_to_fit();
                 commands
             }
-            HostEvent::Changed(_) => Vec::new(),
+            // The TUI makes no pairing offers.
+            HostEvent::Changed(_) | HostEvent::DevicePaired(_) => Vec::new(),
             HostEvent::PendingAdded(added) => {
                 if chat.active_session() != Some(&added.session_id) {
                     return Vec::new();

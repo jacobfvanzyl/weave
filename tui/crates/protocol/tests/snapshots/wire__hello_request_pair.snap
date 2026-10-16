@@ -1,0 +1,33 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&HelloRequest\n{\n    protocol: VersionRange::supported(), client: ClientInfo\n    { name: \"weave-ios\".to_owned(), version: \"0.1.0\".to_owned(), }, auth:\n    Auth::Pair\n    {\n        code: \"4F1N2K7Q9R3T5V8W0X6Y2Z4A1B\".to_owned(), device: NewDevice\n        { name: \"Jaco's iPad\".to_owned(), public_key: jwk(), },\n    }, capabilities: ClientCapabilities::default(),\n})"
+---
+{
+  "method": "host/hello",
+  "params": {
+    "protocol": {
+      "min": 2,
+      "max": 2
+    },
+    "client": {
+      "name": "weave-ios",
+      "version": "0.1.0"
+    },
+    "auth": {
+      "method": "pair",
+      "code": "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B",
+      "device": {
+        "name": "Jaco's iPad",
+        "publicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+          "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+        }
+      }
+    },
+    "capabilities": {
+      "terminalSignIn": false
+    }
+  }
+}

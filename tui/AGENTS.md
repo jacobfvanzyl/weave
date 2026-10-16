@@ -43,8 +43,8 @@ crate, pinned exactly because 3.x is new.
 | `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace. No UI. |
 | `crates/protocol` | The Host protocol's wire types, roles, error codes and versions, with golden snapshots, and the permission policy. No I/O. |
 | `crates/agents` | Which agents there are and how to launch them: config, presets, the ACP registry, the login shell's environment. |
-| `crates/daemon` | The weave Host: client connections, open sessions and their agents, journals, permission policies, headless runs. No UI. |
-| `crates/host-client` | A client of the Host: hello, typed requests, the Host's messages in order, opening sessions. |
+| `crates/daemon` | The weave Host: client connections, open sessions and their agents, journals, permission policies, headless runs, and the WebSocket and paired devices of remote clients. No UI. |
+| `crates/host-client` | A client of the Host: hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials. |
 | `crates/tui` | The interactive client: fullscreen transcript or inline viewport, chat state, composer. |
 | `crates/cli` | The `weave` binary and its subcommands, Host autostart and launchd service included. |
 | `crates/fake-agent` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. |
@@ -126,6 +126,18 @@ the protocol version, so it reloads into the current weave. Host tests
 (`crates/daemon/tests/daemon.rs`) run in-process with fake agents sharing one state file,
 named in a test config.
 
+Remote clients (WVE-90, ADR 0010, spec `docs/specs/wve-90-remote-clients.md`) reach the Host
+over a WebSocket (`websocket.rs`) that listens on loopback only, with Tailscale Serve the way
+in from the tailnet. Loopback counts for nothing: every WebSocket connection proves a paired
+device at hello, signing its `host/challenge` with a P-256 key, or pairs with a code
+`weave pair` offered (`devices.rs`, which keeps the Host's id and the devices' public keys in
+`devices.json`, 0600, and offers in memory). A remote client can do what a local one can,
+except `host/shutdown`, `devices/*` and agent sign-in and sign-out (`forbidden`). The Host
+pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent, which
+attaches again after its position. Remote tests (`crates/daemon/tests/remote.rs`) use a real
+loopback WebSocket; `crates/host-client/examples/remote.rs` is the client for trying it by
+hand.
+
 Subagents follow the current draft of the Subagent Sessions RFD (`subagent_update`,
 session-directed messages, `running`/`idle` states). claude-agent-acp and codex-acp still
 send the earlier draft (`subagent_spawned`, `subagent_state_update`), which the pinned schema
@@ -168,7 +180,8 @@ signs in through the Host (`agents/authenticate`, or `agents/terminalSignIn` and
 run in this terminal), then retries.
 Agents and MCP servers come from `~/.config/weave/config.toml` (read from `tui.toml` while only
 that exists; see `crates/agents/src/config.rs`), whose `[tui]` and `[daemon]` are the CLI's
-(`crates/cli/src/config.rs`).
+(`crates/cli/src/config.rs`), as is `[remote]`, which `weave daemon run` reads to serve
+remote clients (a restart picks up a change).
 
 ```bash
 ./target/debug/weave run --approve read,edit "fix the tests" --agent <id>   # headless, in the Host
@@ -176,6 +189,8 @@ that exists; see `crates/agents/src/config.rs`), whose `[tui]` and `[daemon]` ar
 ./target/debug/weave run --continue "…"   # or --resume <id>, as the TUI names sessions
 ./target/debug/weave sessions             # open in the Host; also cancel <id>, close <id>
 ./target/debug/weave daemon status        # also start, stop, restart, run (foreground), install, uninstall
+./target/debug/weave pair                 # a QR code and code another device pairs with
+./target/debug/weave devices              # paired devices; also revoke <id>
 ```
 
 `--resume <id>` reopens a session with the agent and directory its journal records,

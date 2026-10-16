@@ -45,6 +45,7 @@ async fn a_client_reaches_a_hosts_handlers() {
                             .unwrap_or_default(),
                         client_id: "c1".to_owned(),
                         host: HostInfo {
+                            id: "h1".to_owned(),
                             version: "test".to_owned(),
                             pid: 1,
                             started_at: 0,
@@ -54,6 +55,7 @@ async fn a_client_reaches_a_hosts_handlers() {
                             protocol_version: 1,
                             unstable: Vec::new(),
                         },
+                        device: None,
                     })
                 },
                 agent_client_protocol::on_receive_request!(),

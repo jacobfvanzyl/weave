@@ -1,0 +1,16 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: "message(&DevicePairedNotification { device: device() })"
+---
+{
+  "method": "devices/paired",
+  "params": {
+    "device": {
+      "id": "d-3q8Hf0aZ",
+      "name": "Jaco's iPad",
+      "pairedAt": 1760180000000,
+      "lastSeenAt": 1760180005000,
+      "connections": 1
+    }
+  }
+}

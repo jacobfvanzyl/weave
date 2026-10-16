@@ -576,7 +576,7 @@ pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
     builder.create(dir)
 }
 
-fn private_file(path: &Path, truncate: bool) -> io::Result<File> {
+pub(crate) fn private_file(path: &Path, truncate: bool) -> io::Result<File> {
     let mut options = OpenOptions::new();
     if truncate {
         options.write(true).create(true).truncate(true);

@@ -1,12 +1,14 @@
 mod args;
 mod config;
 mod daemon;
+mod devices;
 mod recent;
 mod run;
 mod service;
 mod sessions;
 mod smoke;
 mod start;
+mod tailscale;
 
 use std::fs::File;
 use std::io::IsTerminal;
@@ -70,6 +72,10 @@ enum Command {
     Sessions(sessions::SessionsArgs),
     /// Manage the weave Host, which runs agents so their sessions outlive the TUI.
     Daemon(daemon::DaemonArgs),
+    /// Pair another of your devices with the weave Host, to reach it over your tailnet.
+    Pair(devices::PairArgs),
+    /// Devices paired with the weave Host: list them, or revoke one.
+    Devices(devices::DevicesArgs),
     /// Run one prompt headlessly and print every ACP event the agent sends.
     Smoke(smoke::SmokeArgs),
     /// Sign in to the agent with one of the methods it offers.
@@ -123,6 +129,14 @@ async fn main() -> anyhow::Result<ExitCode> {
             // A Host's stderr is its log, agents' stderr included, as `--log-file` has it.
             log_to_stderr("info,agent_stderr=debug");
             daemon::command(args).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Pair(args)) => {
+            log_to_stderr("warn");
+            devices::pair(args).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Devices(args)) => {
+            log_to_stderr("warn");
+            devices::devices(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Smoke(args)) => {
             log_to_stderr("warn");

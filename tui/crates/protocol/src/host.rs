@@ -25,6 +25,9 @@ pub struct HostStatus {
     pub environment: EnvironmentSource,
     /// The open sessions.
     pub sessions: Vec<SessionListing>,
+    /// The loopback address of the WebSocket remote clients reach, when the Host serves one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 /// How the Host runs.
