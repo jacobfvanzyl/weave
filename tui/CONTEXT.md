@@ -18,6 +18,10 @@ _Avoid_: frontend, UI, consumer
 An ACP agent program the Host can launch, known by an id: a preset, one defined in the Host's configuration, or one from the ACP registry.
 _Avoid_: adapter, provider, model
 
+**Client tool**:
+A tool the Host offers a session's agent that an attached client runs on its own device, such as putting text on that device's clipboard.
+_Avoid_: client-side MCP server, frontend tool, local tool
+
 ### Sessions
 
 **Session**:
@@ -70,7 +74,7 @@ A prompt a client holds while a turn runs, to start the next turn once that one 
 _Avoid_: follow-up, pending message
 
 **Pending request**:
-A permission request or elicitation from an agent that waits for a person. Any attached client may answer it, and the first answer counts.
+A permission request, elicitation or client tool call from an agent that waits on a client. A client tool call is for one client; any attached client may answer the others, and the first answer counts.
 _Avoid_: question, dialog, prompt
 
 **Permission policy**:
