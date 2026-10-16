@@ -14,6 +14,14 @@ _Avoid_: server, Portal, Host Daemon
 A program connected to the Host on someone's behalf, such as the TUI, `weave run`, or a later iPad app.
 _Avoid_: frontend, UI, consumer
 
+**Remote client**:
+A client on another computer than the Host's, which reaches it through the tailnet on behalf of a paired device.
+_Avoid_: network client, mobile client
+
+**Paired device**:
+A device of the person's that the Host has paired with and accepts remote clients from until it's revoked.
+_Avoid_: credential, principal, token
+
 **Agent**:
 An ACP agent program the Host can launch, known by an id: a preset, one defined in the Host's configuration, or one from the ACP registry.
 _Avoid_: adapter, provider, model
