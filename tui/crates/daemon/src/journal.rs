@@ -32,13 +32,17 @@ use serde::Serialize;
 use weave_acp_core::AgentSpec;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::PromptResponse;
+use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
+use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::TerminalId;
+use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::TurnOrigin;
 
 const VERSION: u32 = 1;
@@ -133,6 +137,19 @@ pub(crate) enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<Error>,
     },
+    /// The session's agent was started again (`session/reopen`).
+    #[serde(rename_all = "camelCase")]
+    AgentReopened {
+        agent: Box<SessionAgent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous: Option<AgentRelease>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        modes: Option<SessionModeState>,
+        #[serde(default)]
+        config_options: Vec<SessionConfigOption>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failed: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     Closed { reason: String, at_ms: u64 },
 }
@@ -220,6 +237,19 @@ impl Entry {
                     .clone()
                     .or_else(|| stop_reason.map(PromptResponse::new)),
                 error: error.clone(),
+            },
+            Self::AgentReopened {
+                agent,
+                previous,
+                modes,
+                config_options,
+                failed,
+            } => SessionEvent::AgentReopened {
+                agent: agent.clone(),
+                previous: previous.clone(),
+                modes: modes.clone(),
+                config_options: config_options.clone(),
+                failed: failed.clone(),
             },
             Self::Closed { reason, .. } => SessionEvent::Closed {
                 reason: reason.clone(),

@@ -1,16 +1,18 @@
 //! Which agents there are and how to launch them: the configuration's agents, the presets
-//! and the ACP registry, with the configuration's settings applied; and the environment they
-//! start in. The Host resolves agents with this, as do `weave smoke`, `login` and `logout`,
-//! which talk to agents directly.
+//! and the ACP registry, with the configuration's settings applied; the environment they
+//! start in; and moving them to newer releases ([`update`]). The Host resolves agents with
+//! this, as do `weave smoke`, `login` and `logout`, which talk to agents directly.
 
 pub mod config;
 pub mod environment;
 pub mod lock;
 pub mod npm;
 pub mod registry;
+pub mod update;
 
 use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
+use weave_acp_core::Preset;
 
 pub use crate::config::Config;
 
@@ -32,8 +34,11 @@ pub struct Resolved {
     /// The registry's name for it, else its id.
     pub name: String,
     pub source: Source,
-    /// The registry's version, for registry agents.
+    /// The version launched: a preset's, the newer of its built-in and locked one, or the
+    /// registry's. None for agents the configuration gives a command.
     pub version: Option<String>,
+    /// A preset's npm package.
+    pub package: Option<String>,
     pub spec: AgentSpec,
     /// The client services to offer it, from the configuration.
     pub options: ClientOptions,
@@ -55,6 +60,7 @@ pub async fn resolve(
         .is_some_and(|agent| agent.command.is_some());
     if let Some(spec) = config.local_agent(id) {
         let (spec, options) = config.configure(id, spec);
+        let preset = Preset::find(id).filter(|_| !defined);
         return Ok(Some(Resolved {
             id: id.to_owned(),
             name: id.to_owned(),
@@ -63,7 +69,8 @@ pub async fn resolve(
             } else {
                 Source::Preset
             },
-            version: None,
+            version: preset.map(|preset| config.lock.version_of(preset)),
+            package: preset.map(|preset| preset.package.to_owned()),
             spec,
             options,
             warning: None,
@@ -80,6 +87,7 @@ pub async fn resolve(
         name: agent.name.clone(),
         source: Source::Registry,
         version: Some(agent.version.clone()),
+        package: None,
         spec,
         options,
         warning: loaded.warning,
@@ -120,6 +128,9 @@ mod tests {
             .expect("preset");
         assert_eq!(claude.source, Source::Preset);
         assert!(!claude.options.terminals);
+        let preset = Preset::find("claude").expect("claude");
+        assert_eq!(claude.version.as_deref(), Some(preset.version));
+        assert_eq!(claude.package.as_deref(), Some(preset.package));
         let local = resolve(&config, "local", &cache)
             .await
             .expect("resolves")
@@ -128,5 +139,6 @@ mod tests {
             (local.source, local.spec.command.as_str()),
             (Source::Config, "my-agent")
         );
+        assert_eq!((local.version, local.package), (None, None));
     }
 }

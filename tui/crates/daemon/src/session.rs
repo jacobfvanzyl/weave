@@ -2,7 +2,12 @@
 //! its turns, and the requests waiting on a person. One task owns all of it, so every client
 //! sees the session's events in the same order, and an attaching client gets a consistent
 //! cut: its answer, the journal after the position it asked from, then everything after.
+//!
+//! `session/reopen` swaps the agent process for one of the version the agent's new sessions
+//! get, once no turn runs and no request waits, taking the session up again through ACP; the
+//! journal goes on, marked where the version changed.
 
+use std::cmp::Ordering as Order;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,8 +27,10 @@ use tokio::sync::oneshot;
 use weave_acp_core::AgentConnection;
 use weave_acp_core::AgentEvent;
 use weave_acp_core::AgentHandle;
+use weave_acp_core::ClientOptions;
 use weave_acp_core::ElicitationRequest;
 use weave_acp_core::PermissionRequest;
+use weave_acp_core::ProtocolVersion;
 use weave_acp_core::RequestKey;
 use weave_acp_core::SteerOutcome;
 use weave_acp_core::Traces;
@@ -32,6 +39,7 @@ use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::CreateElicitationResponse;
 use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationScope;
+use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::RequestPermissionResponse;
 use weave_acp_core::schema::SessionConfigOption;
@@ -41,7 +49,11 @@ use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::strip_terminal_events;
+use weave_agents::lock::compare;
 use weave_host_protocol::HostClient;
+use weave_host_protocol::agents::AgentRelease;
+use weave_host_protocol::agents::AgentUpdate;
+use weave_host_protocol::agents::UpdateAvailableNotification;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::SessionChangedNotification;
@@ -56,6 +68,7 @@ use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::RunningTurn;
 use weave_host_protocol::sessions::SessionAgent;
@@ -65,6 +78,7 @@ use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::turns::SteerTurnResponse;
 
+use crate::Agent;
 use crate::Shared;
 use crate::instance::Instance;
 use crate::instance::LaunchKey;
@@ -73,6 +87,8 @@ use crate::journal::Journal;
 use crate::journal::Recorded;
 use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
+use crate::updates::Feed;
+use crate::updates::describe;
 
 /// How long closing the agent's session may take before its process is stopped anyway.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -214,6 +230,16 @@ pub(crate) enum Command {
     Suspend {
         done: oneshot::Sender<()>,
     },
+    /// The newest version of the session's agent; clients hear of it if it's newer than the
+    /// one the session runs.
+    UpdateAvailable {
+        latest: String,
+    },
+    /// `session/reopen`: once nothing runs or waits, take the session up in a new process of
+    /// the agent's current version.
+    Reopen {
+        reply: oneshot::Sender<Result<ReopenSessionResponse, Error>>,
+    },
 }
 
 /// `turn/steer`: a message for a running turn, waiting for the agent to take it.
@@ -263,6 +289,8 @@ pub(crate) struct SessionHandle {
     /// Where the agent's protocol is traced, for each attached client that asked.
     pub(crate) traces: Arc<Traces>,
     pub(crate) summary: Arc<Mutex<Summary>>,
+    /// Where newer versions of its agent are looked for.
+    pub(crate) feed: Option<Feed>,
     blank: Arc<AtomicBool>,
 }
 
@@ -301,6 +329,8 @@ pub(crate) struct Opened {
     pub(crate) session_id: SessionId,
     pub(crate) instance: Instance,
     pub(crate) agent: SessionAgent,
+    /// The agent as the Host resolved it, to start again if the session is reopened.
+    pub(crate) resolved: Agent,
     pub(crate) journal: Journal,
     pub(crate) policy: PermissionPolicy,
     pub(crate) snapshot: Snapshot,
@@ -316,6 +346,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         session_id,
         instance,
         agent,
+        resolved,
         journal,
         policy,
         snapshot,
@@ -343,13 +374,15 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         key,
         traces,
     } = instance;
+    let options = key.options();
     let handle = SessionHandle {
         commands: commands_tx,
         agent: connection.handle(),
         key,
         agent_id: agent.id.clone(),
-        traces,
+        traces: Arc::clone(&traces),
         summary: Arc::clone(&summary),
+        feed: resolved.feed(),
         blank: Arc::clone(&blank),
     };
     {
@@ -386,6 +419,11 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         tool_kinds: ToolKinds::default(),
         snapshot,
         agent,
+        resolved,
+        options,
+        traces,
+        update: None,
+        reopens: Vec::new(),
         cwd,
         additional_directories,
         summary,
@@ -499,6 +537,15 @@ struct Actor {
     tool_kinds: ToolKinds,
     snapshot: Snapshot,
     agent: SessionAgent,
+    /// The agent as the Host resolved it when its process started.
+    resolved: Agent,
+    /// The client services its process is offered.
+    options: ClientOptions,
+    traces: Arc<Traces>,
+    /// A newer version of the agent, once one is known.
+    update: Option<AgentUpdate>,
+    /// `session/reopen`s waiting for the turn and requests to end.
+    reopens: Vec<oneshot::Sender<Result<ReopenSessionResponse, Error>>>,
     cwd: PathBuf,
     additional_directories: Vec<PathBuf>,
     summary: Arc<Mutex<Summary>>,
@@ -534,6 +581,13 @@ impl Actor {
                 () = sleep_until(deadline), if deadline.is_some() => {
                     self.stop(Ending::Closed("idle".to_owned()));
                 }
+            }
+            if self.stopping.is_none()
+                && !self.reopens.is_empty()
+                && self.turns.is_empty()
+                && self.pending.is_empty()
+            {
+                self.reopen().await;
             }
             if let Some(ending) = self.stopping.take() {
                 self.finish(ending).await;
@@ -612,7 +666,37 @@ impl Actor {
                 self.waiting.push(done);
                 self.stop(Ending::Suspended);
             }
+            Command::UpdateAvailable { latest } => self.update_available(latest),
+            Command::Reopen { reply } => self.reopens.push(reply),
         }
+    }
+
+    /// The newest version of the agent is `latest`: tell attached clients, once, if it's
+    /// newer than the one running.
+    fn update_available(&mut self, latest: String) {
+        let Some(release) = &self.agent.release else {
+            return;
+        };
+        let newer = compare(&latest, &release.version) == Order::Greater;
+        if !newer
+            || self
+                .update
+                .as_ref()
+                .is_some_and(|update| update.latest == latest)
+        {
+            return;
+        }
+        let update = AgentUpdate {
+            agent_id: self.agent.id.clone(),
+            name: release.name.clone(),
+            running: release.version.clone(),
+            latest,
+        };
+        self.update = Some(update.clone());
+        self.broadcast(&UpdateAvailableNotification {
+            session_id: self.root.clone(),
+            update,
+        });
     }
 
     fn attach(
@@ -691,6 +775,7 @@ impl Actor {
             },
             notices,
             trace,
+            update: self.update.clone(),
         }
     }
 
@@ -1086,19 +1171,8 @@ impl Actor {
                 at_ms: now_ms(),
             });
         }
-        if matches!(ending, Ending::Closed(_))
-            && self.handle.agent().is_some_and(|agent| {
-                agent
-                    .agent_capabilities
-                    .session_capabilities
-                    .close
-                    .is_some()
-            })
-        {
-            let close = self.handle.close_session(self.root.clone());
-            if let Ok(Err(error)) = tokio::time::timeout(CLOSE_TIMEOUT, close).await {
-                tracing::debug!(%error, "the agent didn't close the session");
-            }
+        if matches!(ending, Ending::Closed(_)) {
+            self.close_in_agent().await;
         }
         if blank {
             self.journal.discard();
@@ -1113,6 +1187,232 @@ impl Actor {
             let _ = waiting.send(());
         }
     }
+}
+
+impl Actor {
+    /// `session/reopen`, now that nothing runs or waits: answer everyone who asked.
+    async fn reopen(&mut self) {
+        let replies = std::mem::take(&mut self.reopens);
+        let result = self.swap_agent().await;
+        for reply in replies {
+            let _ = reply.send(result.clone());
+        }
+    }
+
+    /// Start the agent's current version and take the session up in it, in place of the
+    /// process running it. A version that doesn't start leaves the session as it was; one that
+    /// can't take the session up gives way to the version that ran it.
+    async fn swap_agent(&mut self) -> Result<ReopenSessionResponse, Error> {
+        // What the running process sent last goes into the journal first.
+        while let Ok(event) = self.events.try_recv() {
+            self.agent_event(event);
+        }
+        if self.stopping.is_some() {
+            return Err(ended());
+        }
+        let cant = || {
+            Error::method_not_found().data(
+                "the agent can't resume or load sessions, so this one can't move to another \
+                 process; new sessions start the agent's current version",
+            )
+        };
+        if !self.handle.agent().is_some_and(takes_sessions_up) {
+            return Err(cant());
+        }
+        let agent = self.shared.resolve(&self.resolved.id).await?;
+        let wanted = agent
+            .release()
+            .map_or_else(|| agent.id.clone(), |release| release.version);
+        let mut fresh = self.start(&agent).await.map_err(|error| {
+            Error::internal_error().data(format!(
+                "{wanted} doesn't start, so the session stays as it was: {}",
+                describe(&error)
+            ))
+        })?;
+        if !fresh.init().is_some_and(takes_sessions_up) {
+            fresh.connection.shutdown().await;
+            return Err(cant());
+        }
+        let previous = self.agent.release.clone();
+        self.let_go().await;
+        let error = match self.take_up(&mut fresh, &agent).await {
+            Ok(snapshot) => return Ok(self.carry_on_with(fresh, agent, snapshot, previous, None)),
+            Err(error) => error,
+        };
+        fresh.connection.shutdown().await;
+        let failed = format!("{wanted} couldn't resume the session: {}", describe(&error));
+        tracing::warn!(session = %self.root, "{failed}; reopening it on the version it ran");
+        let old = self.resolved.clone();
+        let restarted = match self.start(&old).await {
+            Ok(mut instance) => match self.take_up(&mut instance, &old).await {
+                Ok(snapshot) => Ok((instance, snapshot)),
+                Err(error) => {
+                    instance.connection.shutdown().await;
+                    Err(error)
+                }
+            },
+            Err(error) => Err(error),
+        };
+        match restarted {
+            Ok((instance, snapshot)) => {
+                Ok(self.carry_on_with(instance, old, snapshot, previous, Some(failed)))
+            }
+            Err(error) => {
+                let reason = format!(
+                    "{failed}, and the version it ran couldn't take it up again: {}",
+                    describe(&error)
+                );
+                self.stop(Ending::AgentGone(reason.clone()));
+                Err(Error::internal_error().data(reason))
+            }
+        }
+    }
+
+    /// A process of `agent` for this session, traced for the clients that asked. (These take
+    /// `&mut self`: the actor isn't `Sync`, so its futures can't hold `&Actor`.)
+    async fn start(&mut self, agent: &Agent) -> Result<Instance, Error> {
+        let launch = self.shared.launch(agent, &self.cwd);
+        Instance::start_traced(
+            &self.shared.config.launcher,
+            &launch,
+            self.options,
+            Arc::clone(&self.traces),
+        )
+        .await
+    }
+
+    /// Close the session in the running process, and stop it.
+    async fn let_go(&mut self) {
+        self.close_in_agent().await;
+        if let Some(connection) = self.connection.take() {
+            connection.shutdown().await;
+        }
+    }
+
+    /// Close the session in its agent, if the agent closes sessions.
+    async fn close_in_agent(&mut self) {
+        let closes = self.handle.agent().is_some_and(|agent| {
+            agent
+                .agent_capabilities
+                .session_capabilities
+                .close
+                .is_some()
+        });
+        if closes {
+            let close = self.handle.close_session(self.root.clone());
+            if let Ok(Err(error)) = tokio::time::timeout(CLOSE_TIMEOUT, close).await {
+                tracing::debug!(%error, "the agent didn't close the session");
+            }
+        }
+    }
+
+    /// Take the session up in `instance`: resumed, or loaded with its replay dropped, which
+    /// the journal has already.
+    async fn take_up(&mut self, instance: &mut Instance, agent: &Agent) -> Result<Snapshot, Error> {
+        let (setup, _) = crate::client::setup(
+            agent,
+            instance,
+            self.cwd.clone(),
+            self.additional_directories.clone(),
+        );
+        let resumes = instance.init().is_some_and(|init| {
+            init.agent_capabilities
+                .session_capabilities
+                .resume
+                .is_some()
+        });
+        let (modes, config_options) = if resumes {
+            instance
+                .connection
+                .resume_session(self.root.clone(), &setup)
+                .await
+                .map(|response| (response.modes, response.config_options))?
+        } else {
+            let loaded = instance
+                .connection
+                .load_session(self.root.clone(), &setup)
+                .await
+                .map(|response| (response.modes, response.config_options));
+            instance.discard_queued_events();
+            loaded?
+        };
+        Ok(Snapshot {
+            modes,
+            config_options: config_options.unwrap_or_default(),
+        })
+    }
+
+    /// Carry on with `instance` as the session's agent, and journal the change.
+    fn carry_on_with(
+        &mut self,
+        instance: Instance,
+        agent: Agent,
+        snapshot: Snapshot,
+        previous: Option<AgentRelease>,
+        failed: Option<String>,
+    ) -> ReopenSessionResponse {
+        let initialize = instance
+            .init()
+            .cloned()
+            .unwrap_or_else(|| InitializeResponse::new(ProtocolVersion::V1));
+        let Instance {
+            connection,
+            events,
+            key,
+            ..
+        } = instance;
+        // The old process won't answer a steer now.
+        for (_, steer) in self.steers.drain() {
+            let _ = steer.reply.send(Ok(not_running()));
+        }
+        self.agent = agent.session_agent(initialize);
+        self.handle = connection.handle();
+        self.connection = Some(connection);
+        self.events = events;
+        self.snapshot = snapshot;
+        // An update the new version caught up with isn't one any more.
+        let running = self
+            .agent
+            .release
+            .as_ref()
+            .map(|release| release.version.clone());
+        self.update = self.update.take().and_then(|mut update| {
+            let running = running.clone()?;
+            (compare(&update.latest, &running) == Order::Greater).then(|| {
+                update.running = running;
+                update
+            })
+        });
+        {
+            let mut registry = self.shared.registry();
+            if let Some(handle) = registry.sessions.get_mut(&self.root) {
+                handle.agent = self.handle.clone();
+                handle.key = key.clone();
+                handle.feed = agent.feed();
+            }
+            if let Some(known) = registry.known.get_mut(&self.root) {
+                known.agent = key.spec().clone();
+            }
+        }
+        self.resolved = agent;
+        self.record(Entry::AgentReopened {
+            agent: Box::new(self.agent.clone()),
+            previous,
+            modes: self.snapshot.modes.clone(),
+            config_options: self.snapshot.config_options.clone(),
+            failed,
+        });
+        ReopenSessionResponse { version: running }
+    }
+}
+
+/// Whether the agent takes sessions up again, by resuming or loading them.
+fn takes_sessions_up(init: &InitializeResponse) -> bool {
+    init.agent_capabilities
+        .session_capabilities
+        .resume
+        .is_some()
+        || init.agent_capabilities.load_session
 }
 
 /// No turn was running to steer, so nothing was sent.

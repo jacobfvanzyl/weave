@@ -7,7 +7,9 @@ use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::schema::v1::CompleteElicitationNotification;
 use agent_client_protocol::schema::v1::ContentBlock;
 use agent_client_protocol::schema::v1::PromptResponse;
+use agent_client_protocol::schema::v1::SessionConfigOption;
 use agent_client_protocol::schema::v1::SessionId;
+use agent_client_protocol::schema::v1::SessionModeState;
 use agent_client_protocol::schema::v1::SessionNotification;
 use agent_client_protocol::schema::v1::TerminalExitStatus;
 use agent_client_protocol::schema::v1::TerminalId;
@@ -15,7 +17,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Timestamp;
+use crate::agents::AgentRelease;
 use crate::sessions::Activity;
+use crate::sessions::SessionAgent;
 use crate::sessions::TurnOrigin;
 
 /// `session/event`: one journaled event, in order.
@@ -72,6 +76,22 @@ pub enum SessionEvent {
     TerminalExit {
         terminal_id: TerminalId,
         status: TerminalExitStatus,
+    },
+    /// The session's agent was started again and took the session up (`session/reopen`).
+    /// What it says about itself, its modes and its config options are the new process's.
+    AgentReopened {
+        agent: Box<SessionAgent>,
+        /// The version it ran before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous: Option<AgentRelease>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        modes: Option<SessionModeState>,
+        #[serde(default)]
+        config_options: Vec<SessionConfigOption>,
+        /// Why it runs the version it ran before: the one it was reopened for couldn't take
+        /// the session up.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failed: Option<String>,
     },
     /// The session closed.
     Closed { reason: String },

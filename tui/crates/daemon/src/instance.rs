@@ -69,6 +69,10 @@ impl LaunchKey {
         &self.spec
     }
 
+    pub(crate) fn options(&self) -> ClientOptions {
+        self.options
+    }
+
     pub(crate) fn new(launch: &Launch, options: ClientOptions) -> Self {
         Self {
             spec: launch.spec.clone(),
@@ -95,7 +99,17 @@ impl Instance {
         launch: &Launch,
         options: ClientOptions,
     ) -> Result<Self, Error> {
-        let traces = Arc::new(Traces::default());
+        Self::start_traced(launcher, launch, options, Arc::new(Traces::default())).await
+    }
+
+    /// [`Self::start`], tracing into `traces`: a reopened session's, for the clients that
+    /// asked.
+    pub(crate) async fn start_traced(
+        launcher: &Launcher,
+        launch: &Launch,
+        options: ClientOptions,
+        traces: Arc<Traces>,
+    ) -> Result<Self, Error> {
         let (connection, events) = launcher(launch, options, Arc::clone(&traces)).await?;
         if let Err(error) = connection.initialize().await {
             connection.shutdown().await;

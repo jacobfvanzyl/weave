@@ -9,8 +9,8 @@
 //!
 //! - [`hello`]: the first request on every connection: version, authentication, client.
 //! - [`devices`]: pairing the person's other devices, whose remote clients use the WebSocket.
-//! - [`agents`]: the agents the Host can run, and signing in to them.
-//! - [`sessions`]: listing, creating, attaching to and closing sessions.
+//! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
+//! - [`sessions`]: listing, creating, attaching to, reopening and closing sessions.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns.
 //! - [`pending`]: permission requests and elicitations waiting on a person.

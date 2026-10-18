@@ -70,9 +70,10 @@ the transcript, so a sent image is neither decoded nor sent again; images from t
 are decoded one at a time off the UI thread, and the transcript holds the newest 64;
 during a turn Enter steers it when the Host and the agent can (`ChatWidget::can_steer`; not the
 agent's slash commands) and queues otherwise, and Tab always queues, as in Codex;
-`/new`, `/reload` and `/subagents` are the TUI's own slash commands, offered with the agent's
-and handled locally (`/reload` ends the TUI and the CLI execs its own binary again with
-`--resume`). The app follows the active session's journal position (`app.rs`): an attach's
+`/new`, `/reload`, `/subagents` and `/update` are the TUI's own slash commands, offered with
+the agent's and handled locally (`/reload` ends the TUI and the CLI execs its own binary again
+with `--resume`; `/update`, in `updates.rs`, runs `agents/update` and then `session/reopen`,
+and `/update dismiss` hides a version's notice, kept in `$XDG_STATE_HOME/weave/updates.json`). The app follows the active session's journal position (`app.rs`): an attach's
 answer arrives in order ahead of its replay, events up to the journal head it gave are
 replayed history (no notifications, no turn state), and the TUI's own prompts are known by
 their turn origin's `clientId`. When the Host goes away, the app reconnects through the
@@ -121,7 +122,15 @@ agents by id (`crates/agents`) and starts them in the session's directory with i
 environment over the login shell's (`instance.rs`); an agent started for no session (to
 answer `agents/get`, sign-in or listing) is a spare the next session for that agent and
 directory takes, stopped after a minute unused. New sessions start in the agent's configured
-`mode` (`modes.rs`). An ACP `initialize` from a client of the old protocol is answered with
+`mode` (`modes.rs`). When a session of a preset or registry agent opens, `updates.rs` looks for
+a newer version in the background, one lookup an hour per package (or for the registry's
+catalog) with the version source swappable (`DaemonConfig.upstream`), and tells the agent's
+sessions of an older one, which tell their clients (`agents/updateAvailable`,
+`SessionState.update`). `agents/update` is `weave update <agent>` checked with the Host's own
+launcher; `session/reopen` has the session's task swap its agent process for one of the
+current version once no turn runs or request waits, taking the session up through ACP resume
+or load, journaling `agentReopened`, and going back to the old version when the new one
+can't (`crates/daemon/tests/updates.rs`). An ACP `initialize` from a client of the old protocol is answered with
 the protocol version, so it reloads into the current weave. Host tests
 (`crates/daemon/tests/daemon.rs`) run in-process with fake agents sharing one state file,
 named in a test config.
@@ -132,7 +141,8 @@ in from the tailnet. Loopback counts for nothing: every WebSocket connection pro
 device at hello, signing its `host/challenge` with a P-256 key, or pairs with a code
 `weave pair` offered (`devices.rs`, which keeps the Host's id and the devices' public keys in
 `devices.json`, 0600, and offers in memory). A remote client can do what a local one can,
-except `host/shutdown`, `devices/*` and agent sign-in and sign-out (`forbidden`). The Host
+except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`
+(`forbidden`). The Host
 pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent, which
 attaches again after its position. Remote tests (`crates/daemon/tests/remote.rs`) use a real
 loopback WebSocket; `crates/host-client/examples/remote.rs` is the client for trying it by
@@ -267,7 +277,8 @@ agent output, so keep them out of the repository.
 
 - Clippy denies `unwrap`/`expect` outside tests. Use one `use` line per item.
 - Agent presets pin adapter versions. Bump them deliberately and re-run the
-  smoke check against each one. `weave update` (WVE-92, `cli/src/update.rs`) moves past the
+  smoke check against each one. `weave update` (WVE-92; `agents/src/update.rs`, which the
+  Host's `agents/update` shares, with `cli/src/update.rs` its command line) moves past the
   pins without a rebuild: it writes newer versions to `agents.lock` beside the config
   (`agents/src/lock.rs`), after each answers ACP `initialize`, and every launch takes the newer
   of the built-in and locked version. Adapters run the CLI they bundle unless the agent's

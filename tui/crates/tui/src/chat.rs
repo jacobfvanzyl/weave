@@ -4,6 +4,7 @@
 //! Shaped after Codex's `ChatWidget`. It performs no I/O: finished lines queue up for
 //! [`ChatWidget::take_history`], and protocol actions come back as [`AppCommand`]s.
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -56,6 +57,8 @@ use weave_acp_core::schema::TerminalId;
 use weave_acp_core::schema::ToolCallId;
 use weave_acp_core::schema::ToolCallStatus;
 
+use weave_host_protocol::agents::AgentRelease;
+use weave_host_protocol::agents::AgentUpdate;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
 use weave_host_protocol::turns::SteerOutcome;
@@ -123,6 +126,8 @@ use crate::transcript::FindStatus;
 use crate::transcript::Reading;
 use crate::transcript::TranscriptCell;
 use crate::transcript::TranscriptView;
+use crate::updates;
+use crate::updates::Stage;
 use crate::vim::CursorShape;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::plain_lines;
@@ -208,6 +213,17 @@ pub enum AppCommand {
     AnswerElicitation {
         id: PendingId,
         response: CreateElicitationResponse,
+    },
+    /// `agents/update` for the session's agent: `/update`. The answer comes back through
+    /// [`ChatWidget::agent_updated`].
+    UpdateAgent,
+    /// `session/reopen`, moving the session to the version just updated to; the answer comes
+    /// back through [`ChatWidget::session_reopened`].
+    ReopenSession(SessionId),
+    /// Keep the notice of `version` hidden from now on.
+    DismissUpdate {
+        agent_id: String,
+        version: String,
     },
 }
 
@@ -344,6 +360,16 @@ pub struct ChatWidget {
     messages: Vec<SessionMessageEntry>,
     /// In a subagent's own chat: what its parent is called.
     parent_label: Option<String>,
+    /// Whether the Host updates agents (`agents/updates`), so `/update` is offered.
+    updatable: bool,
+    /// The version of the agent the active session runs.
+    release: Option<AgentRelease>,
+    /// A newer one, once the Host has found it.
+    available: Option<AgentUpdate>,
+    /// Versions the user dismissed, by agent id.
+    dismissed: BTreeMap<String, String>,
+    /// `/update` while it runs.
+    update_task: Option<updates::Task>,
 }
 
 /// An image pasted into a prompt, and where its thumbnail goes.
@@ -448,7 +474,21 @@ impl ChatWidget {
             subagent_picker: None,
             messages: Vec::new(),
             parent_label: None,
+            updatable: false,
+            release: None,
+            available: None,
+            dismissed: BTreeMap::new(),
+            update_task: None,
         }
+    }
+
+    /// The Host updates agents, so offer `/update`; `dismissed` are the versions whose notice
+    /// the user hid, by agent id.
+    pub fn with_updates(mut self, updatable: bool, dismissed: BTreeMap<String, String>) -> Self {
+        self.updatable = updatable;
+        self.dismissed = dismissed;
+        self.offer_own_commands();
+        self
     }
 
     /// Show `items` in the footer's status line; none shows `? for shortcuts` instead.
@@ -566,6 +606,9 @@ impl ChatWidget {
         self.title = title.map(str::to_owned);
         self.session_picker = None;
         self.settings = None;
+        self.release = None;
+        self.available = None;
+        self.update_task = None;
         self.active_session = Some(session_id);
         self.opening = true;
         if let Some(title) = title {
@@ -778,6 +821,173 @@ impl ChatWidget {
         self.push_error("The weave Host didn't come back; /reload starts it again");
     }
 
+    /// The version of the agent the active session runs, as the Host says.
+    pub fn set_release(&mut self, release: Option<AgentRelease>) {
+        self.release = release;
+    }
+
+    /// The Host found a newer version of the active session's agent: say so, once a
+    /// version, unless the user dismissed it.
+    pub fn update_available(&mut self, update: AgentUpdate) {
+        let dismissed = self.dismissed.get(&update.agent_id) == Some(&update.latest);
+        let noted = self
+            .available
+            .as_ref()
+            .is_some_and(|available| available.latest == update.latest);
+        let current = self
+            .release
+            .as_ref()
+            .is_some_and(|release| release.version == update.latest);
+        if noted || current {
+            return;
+        }
+        self.available = Some(update.clone());
+        if !dismissed {
+            self.push_cell(TranscriptCell::new(move |width| {
+                updates::notice_lines(&update, width)
+            }));
+        }
+    }
+
+    /// `/update`, or `/update dismiss`.
+    fn slash_update(&mut self, argument: &str) -> Vec<AppCommand> {
+        if argument == updates::DISMISS {
+            let Some(update) = self.available.clone() else {
+                self.report_info("No newer version of the agent is out to dismiss");
+                return Vec::new();
+            };
+            self.dismissed
+                .insert(update.agent_id.clone(), update.latest.clone());
+            self.report_info(&format!(
+                "Hiding {} {}; you'll hear of the next version",
+                updates::short_name(&update.name),
+                update.latest
+            ));
+            return vec![AppCommand::DismissUpdate {
+                agent_id: update.agent_id,
+                version: update.latest,
+            }];
+        }
+        if !argument.is_empty() {
+            self.report_info("/update takes nothing, or `dismiss` to hide the notice");
+            return Vec::new();
+        }
+        if self.update_task.is_some() {
+            self.report_info("/update is already running");
+            return Vec::new();
+        }
+        let Some(session_id) = self.active_session.clone().filter(|_| !self.disconnected) else {
+            return Vec::new();
+        };
+        let name = self
+            .available
+            .as_ref()
+            .map(|update| update.name.clone())
+            .or_else(|| self.release.as_ref().map(|release| release.name.clone()))
+            .unwrap_or_else(|| self.agent_name.clone());
+        self.update_task = Some(updates::Task {
+            session_id,
+            stage: Stage::Checking,
+            started: Instant::now(),
+            name: updates::short_name(&name).to_owned(),
+        });
+        vec![AppCommand::UpdateAgent]
+    }
+
+    /// The Host answered `/update`'s `agents/update`: move the session over if it runs
+    /// another version.
+    pub fn agent_updated(&mut self, result: Result<String, Error>) -> Vec<AppCommand> {
+        let Some(task) = self.update_task.take() else {
+            return Vec::new();
+        };
+        let version = match result {
+            Ok(version) => version,
+            Err(error) => {
+                self.push_error(&format!("Couldn't update {}: {error}", task.name));
+                return Vec::new();
+            }
+        };
+        if self
+            .release
+            .as_ref()
+            .is_some_and(|release| release.version == version)
+        {
+            self.report_info(&format!(
+                "{} {version} is the newest, and this session runs it",
+                task.name
+            ));
+            return Vec::new();
+        }
+        let when = if self.turn.is_some() {
+            " once this turn ends"
+        } else {
+            ""
+        };
+        self.report_info(&format!(
+            "{} {version} starts. Moving this session to it{when}: background commands and \
+             running subagents end with the old process, and the mode is whatever the agent \
+             restores",
+            task.name
+        ));
+        let session_id = task.session_id.clone();
+        self.update_task = Some(updates::Task {
+            stage: Stage::Moving(version),
+            started: Instant::now(),
+            ..task
+        });
+        vec![AppCommand::ReopenSession(session_id)]
+    }
+
+    /// The Host answered `session/reopen`. The journal's `agentReopened` says how it went;
+    /// only a failure that changed nothing is said here.
+    pub fn session_reopened(&mut self, session_id: &SessionId, result: Result<(), Error>) {
+        if self
+            .update_task
+            .as_ref()
+            .is_some_and(|task| task.session_id == *session_id)
+        {
+            self.update_task = None;
+        }
+        if let Err(error) = result
+            && self.is_active(session_id)
+        {
+            self.push_error(&format!("Couldn't move the session: {error}"));
+        }
+    }
+
+    /// The session's agent was started again, on a new version or, when that failed, its old
+    /// one.
+    fn agent_reopened(
+        &mut self,
+        release: Option<AgentRelease>,
+        previous: Option<&AgentRelease>,
+        modes: Option<SessionModeState>,
+        config_options: Vec<SessionConfigOption>,
+        failed: Option<&str>,
+        replayed: bool,
+    ) {
+        let text = updates::reopened_text(release.as_ref(), previous, failed);
+        if failed.is_some() {
+            self.push_error(&text);
+        } else {
+            self.push_cell(TranscriptCell::info(&text));
+        }
+        if replayed {
+            return;
+        }
+        let caught_up = self.available.as_ref().is_some_and(|available| {
+            release
+                .as_ref()
+                .is_some_and(|release| release.version == available.latest)
+        });
+        if caught_up {
+            self.available = None;
+        }
+        self.release = release;
+        self.modes = modes;
+        self.config_options = config_options;
+    }
+
     /// Whether a turn is running in the active session.
     pub fn turn_running(&self) -> bool {
         self.turn.is_some()
@@ -792,7 +1002,7 @@ impl ChatWidget {
     pub fn is_animating(&self) -> bool {
         // While the picker waits for the index, frames keep coming to show it when ready.
         let indexing = self.files.is_indexing() && self.mention_query().is_some();
-        self.turn.is_some() || self.copied.is_some() || indexing
+        self.turn.is_some() || self.copied.is_some() || indexing || self.update_task.is_some()
     }
 
     /// The window title, as Codex sets it: activity, the session's title, and the project.
@@ -997,6 +1207,24 @@ impl ChatWidget {
                 }
                 Vec::new()
             }
+            ChatEvent::AgentReopened {
+                agent,
+                previous,
+                modes,
+                config_options,
+                failed,
+                replayed,
+            } => {
+                self.agent_reopened(
+                    agent.release,
+                    previous.as_ref(),
+                    modes,
+                    config_options,
+                    failed.as_deref(),
+                    replayed,
+                );
+                Vec::new()
+            }
             ChatEvent::SessionEnded { session_id, reason } => {
                 if self.active_session.as_ref() == Some(&session_id) {
                     self.finish_live_cells();
@@ -1193,17 +1421,20 @@ impl ChatWidget {
         count(self)
     }
 
-    /// Offer `/new` and `/reload`, which this client handles rather than sending them: first
+    /// Offer `/new`, `/reload` and `/update`, which this client handles rather than sending them: first
     /// in the list, and in place of any of the agent's commands with those names, as Codex's
     /// built-ins are.
     fn offer_own_commands(&mut self) {
-        let own = [
+        let mut own = vec![
             (NEW_COMMAND, "Start a new session in this directory"),
             (
                 RELOAD_COMMAND,
                 "Restart this TUI, picking up a rebuilt weave, and reattach",
             ),
         ];
+        if self.updatable {
+            own.push((updates::COMMAND, updates::COMMAND_DESCRIPTION));
+        }
         self.commands
             .retain(|command| !own.iter().any(|(name, _)| command.name == *name));
         for (index, (name, description)) in own.into_iter().enumerate() {
@@ -2515,6 +2746,15 @@ impl ChatWidget {
                 }
                 return vec![AppCommand::Reload];
             }
+            if self.updatable
+                && let Some(argument) = text
+                    .trim()
+                    .strip_prefix('/')
+                    .and_then(|rest| rest.strip_prefix(updates::COMMAND))
+                    .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+            {
+                return self.slash_update(argument.trim());
+            }
             // A new session here, as the picker's `n` opens; a turn still running in the one
             // left carries on in the weave Host.
             if text.trim() == format!("/{NEW_COMMAND}") && !self.disconnected {
@@ -2966,6 +3206,16 @@ impl ChatWidget {
                 label_since: since,
                 started: turn.started,
                 hint,
+            };
+            lines.push(status_line(&status, now));
+        }
+        if let Some(task) = &self.update_task {
+            let label = task.label();
+            let status = Status {
+                label: &label,
+                label_since: task.started,
+                started: task.started,
+                hint: task.hint(self.turn.is_some()),
             };
             lines.push(status_line(&status, now));
         }
@@ -5519,5 +5769,175 @@ mod tests {
         chat.handle_paste("@READ");
         chat.handle_key(key(KeyCode::Esc));
         assert!(!rows(&chat, 60).iter().any(|row| row.contains("README.md")));
+    }
+
+    /// What the transcript says, its wrapped lines joined again.
+    fn said(chat: &mut ChatWidget) -> String {
+        history(chat)
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn release(version: &str) -> AgentRelease {
+        AgentRelease {
+            name: "@agentclientprotocol/claude-agent-acp".into(),
+            version: version.into(),
+        }
+    }
+
+    fn agent_update(running: &str, latest: &str) -> AgentUpdate {
+        AgentUpdate {
+            agent_id: "claude".into(),
+            name: "@agentclientprotocol/claude-agent-acp".into(),
+            running: running.into(),
+            latest: latest.into(),
+        }
+    }
+
+    /// A chat on a Host that updates agents, its session on 0.86.0.
+    fn updatable(dismissed: &[(&str, &str)]) -> ChatWidget {
+        let dismissed = dismissed
+            .iter()
+            .map(|(agent, version)| ((*agent).to_owned(), (*version).to_owned()))
+            .collect();
+        let mut chat = chat().with_updates(true, dismissed);
+        chat.set_release(Some(release("0.86.0")));
+        chat
+    }
+
+    fn reopened(version: &str, failed: Option<&str>, replayed: bool) -> ChatEvent {
+        ChatEvent::AgentReopened {
+            agent: Box::new(weave_host_protocol::sessions::SessionAgent {
+                id: "claude".into(),
+                name: "Claude".into(),
+                initialize: weave_acp_core::schema::InitializeResponse::new(
+                    weave_acp_core::ProtocolVersion::V1,
+                ),
+                release: Some(release(version)),
+            }),
+            previous: Some(release("0.86.0")),
+            modes: None,
+            config_options: Vec::new(),
+            failed: failed.map(str::to_owned),
+            replayed,
+        }
+    }
+
+    #[test]
+    fn an_update_notice_shows_once_a_version_and_dismissing_hides_that_version() {
+        let mut chat = updatable(&[]);
+        assert!(
+            chat.commands.iter().any(|command| command.name == "update"),
+            "offered"
+        );
+        chat.update_available(agent_update("0.86.0", "0.93.0"));
+        chat.update_available(agent_update("0.86.0", "0.93.0"));
+        let shown = said(&mut chat);
+        assert_eq!(shown.matches("is out").count(), 1, "{shown}");
+        assert!(
+            shown.contains("claude-agent-acp 0.93.0 is out; this session runs 0.86.0."),
+            "{shown}"
+        );
+        assert_eq!(
+            submit(&mut chat, "/update dismiss"),
+            [AppCommand::DismissUpdate {
+                agent_id: "claude".into(),
+                version: "0.93.0".into(),
+            }]
+        );
+        // Next session: 0.93.0 stays quiet, and the next version doesn't.
+        let mut chat = updatable(&[("claude", "0.93.0")]);
+        chat.update_available(agent_update("0.86.0", "0.93.0"));
+        assert!(!said(&mut chat).contains("is out"));
+        chat.update_available(agent_update("0.86.0", "0.94.0"));
+        assert!(said(&mut chat).contains("0.94.0 is out"));
+        // A Host that doesn't update agents offers no /update.
+        assert!(
+            !chat_with(Vec::new())
+                .commands
+                .iter()
+                .any(|command| command.name == "update")
+        );
+    }
+
+    #[test]
+    fn slash_update_checks_the_newest_then_moves_the_session_to_it() {
+        let mut chat = updatable(&[]);
+        chat.update_available(agent_update("0.86.0", "0.93.0"));
+        assert_eq!(submit(&mut chat, "/update"), [AppCommand::UpdateAgent]);
+        assert!(chat.is_animating(), "it shows progress");
+        let status = rows(&chat, 60).join("\n");
+        assert!(status.contains("Updating claude-agent-acp"), "{status}");
+        assert!(submit(&mut chat, "/update").is_empty(), "one at a time");
+        assert_eq!(
+            chat.agent_updated(Ok("0.93.0".into())),
+            [AppCommand::ReopenSession("s1".into())]
+        );
+        let status = rows(&chat, 60).join("\n");
+        assert!(status.contains("Moving this session to 0.93.0"), "{status}");
+        assert!(
+            said(&mut chat)
+                .contains("background commands and running subagents end with the old process"),
+        );
+        chat.session_reopened(&"s1".into(), Ok(()));
+        chat.handle_agent_event(reopened("0.93.0", None, false));
+        assert!(!chat.is_animating());
+        let shown = said(&mut chat);
+        assert!(
+            shown.contains("Moved this session to claude-agent-acp 0.93.0, from 0.86.0"),
+            "{shown}"
+        );
+        // On the newest, a notice of it is no news.
+        chat.update_available(agent_update("0.86.0", "0.93.0"));
+        assert!(!said(&mut chat).contains("is out"));
+    }
+
+    #[test]
+    fn slash_update_says_when_there_is_nothing_to_move_or_it_failed() {
+        let mut chat = updatable(&[]);
+        submit(&mut chat, "/update");
+        assert!(chat.agent_updated(Ok("0.86.0".into())).is_empty());
+        assert!(said(&mut chat).contains("0.86.0 is the newest, and this session runs it"));
+        submit(&mut chat, "/update");
+        assert!(
+            chat.agent_updated(Err(Error::internal_error().data("no network")))
+                .is_empty()
+        );
+        assert!(said(&mut chat).contains("Couldn't update"));
+        submit(&mut chat, "/update");
+        chat.agent_updated(Ok("0.93.0".into()));
+        chat.session_reopened(
+            &"s1".into(),
+            Err(Error::method_not_found().data("the agent can't resume or load sessions")),
+        );
+        assert!(said(&mut chat).contains("Couldn't move the session"));
+        assert!(!chat.is_animating());
+    }
+
+    #[test]
+    fn a_reopen_shows_in_replayed_transcripts_and_a_failed_one_says_why() {
+        let mut chat = updatable(&[]);
+        chat.handle_agent_event(reopened("0.93.0", None, true));
+        chat.handle_agent_event(reopened(
+            "0.86.0",
+            Some("0.94.0 couldn't resume the session: unknown session"),
+            true,
+        ));
+        let shown = said(&mut chat);
+        assert!(
+            shown.contains("Moved this session to claude-agent-acp 0.93.0"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(
+                "0.94.0 couldn't resume the session: unknown session; it runs claude-agent-acp \
+                 0.86.0 again"
+            ),
+            "{shown}"
+        );
+        // Replayed, it changes nothing about what runs now.
+        assert_eq!(chat.release, Some(release("0.86.0")));
     }
 }

@@ -1,34 +1,24 @@
 //! `weave update`: move the presets' adapters to their newest releases and refresh the ACP
 //! registry's catalog for the registry agents in use, after checking that each new version
 //! starts. Newer preset versions go in `agents.lock` beside the config, which every launch
-//! reads, so the next session uses them (WVE-92).
+//! reads, so the next session uses them (WVE-92). The work is `weave_agents::update`'s, which
+//! the Host's `agents/update` shares; this is its command line and report.
 //!
 //! It's made for update scripts: it never prompts, `--dry-run` writes nothing, `--json` prints
 //! the report as JSON, and the exit status is 1 when a lookup or a check failed.
 
-use std::cmp::Ordering;
-use std::future::Future;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
-use serde::Serialize;
-use weave_acp_core::AgentConnection;
-use weave_acp_core::AgentSpec;
-use weave_acp_core::ClientOptions;
-use weave_acp_core::Preset;
 use weave_agents::Config;
-use weave_agents::lock::Lock;
-use weave_agents::lock::compare;
-use weave_agents::registry;
 use weave_agents::registry::Cache;
-use weave_agents::registry::Fetched;
-
-/// How long a new version gets to download and answer `initialize`.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+use weave_agents::update::Network;
+use weave_agents::update::Outcome;
+use weave_agents::update::Report;
+use weave_agents::update::Request;
+use weave_agents::update::Starts;
 
 #[derive(Args)]
 pub struct UpdateArgs {
@@ -52,109 +42,26 @@ pub struct UpdateArgs {
     config: Option<PathBuf>,
 }
 
-/// Where new versions come from.
-pub(crate) trait Upstream {
-    /// The version npm's `latest` tag names for `package`.
-    fn latest(&self, package: &str) -> impl Future<Output = anyhow::Result<String>>;
-    /// The ACP registry's catalog as it is now.
-    fn catalog(&self) -> impl Future<Output = anyhow::Result<Fetched>>;
-}
-
-/// Whether a new version starts.
-pub(crate) trait Check {
-    fn check(
-        &self,
-        spec: &AgentSpec,
-        options: &ClientOptions,
-    ) -> impl Future<Output = anyhow::Result<()>>;
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Report {
-    pub agents: Vec<Entry>,
-    /// The registry's catalog, when a registry agent was in scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub catalog: Option<CatalogEntry>,
-    pub dry_run: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Entry {
-    pub agent: String,
-    pub source: Source,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
-    /// The version launched before.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
-    /// The version launched after, or that would be.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub to: Option<String>,
-    pub outcome: Outcome,
-    /// Why it was skipped or failed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-    /// The CLI the adapter runs in a session: `bundled`, or the installed one its variable
-    /// names. Only for presets that bundle one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cli: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum Source {
-    Preset,
-    Registry,
-    Config,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum Outcome {
-    Current,
-    WouldUpdate,
-    Updated,
-    WouldReset,
-    Reset,
-    Skipped,
-    Failed,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CatalogEntry {
-    pub outcome: Outcome,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
-impl Report {
-    pub(crate) fn failed(&self) -> bool {
-        self.agents
-            .iter()
-            .map(|entry| entry.outcome)
-            .chain(self.catalog.iter().map(|catalog| catalog.outcome))
-            .any(|outcome| outcome == Outcome::Failed)
-    }
-}
-
-/// What `weave update` covers.
-enum Target {
-    Preset(&'static Preset),
-    Registry(String),
-    /// The config gives its command, so it's the user's to update.
-    Configured(String),
-}
-
 pub async fn command(args: UpdateArgs) -> anyhow::Result<ExitCode> {
     let loaded = Config::load(args.config.as_deref())?;
     let lock_path = loaded
         .lock_path
         .context("no config directory to keep agents.lock in: set HOME or XDG_CONFIG_HOME")?;
     let cache = Cache::default_location()?;
-    let report = update(&args, &loaded.config, &lock_path, &cache, &Network, &Starts).await?;
+    let request = Request {
+        agents: args.agents.clone(),
+        dry_run: args.dry_run,
+        reset: args.reset,
+    };
+    let report = weave_agents::update::update(
+        &request,
+        &loaded.config,
+        &lock_path,
+        &cache,
+        &Network,
+        &Starts,
+    )
+    .await?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -165,273 +72,6 @@ pub async fn command(args: UpdateArgs) -> anyhow::Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     })
-}
-
-fn targets(config: &Config, named: &[String]) -> Vec<Target> {
-    let target = |id: &str| {
-        let configured = config
-            .agents
-            .get(id)
-            .is_some_and(|agent| agent.command.is_some());
-        match Preset::find(id) {
-            _ if configured => Target::Configured(id.to_owned()),
-            Some(preset) => Target::Preset(preset),
-            None => Target::Registry(id.to_owned()),
-        }
-    };
-    if !named.is_empty() {
-        return named.iter().map(|id| target(id)).collect();
-    }
-    let mut ids: Vec<String> = weave_acp_core::preset_ids().map(str::to_owned).collect();
-    let in_use = config
-        .agents
-        .keys()
-        .cloned()
-        .chain(config.default_agent.clone());
-    for id in in_use {
-        if !ids.contains(&id) {
-            ids.push(id);
-        }
-    }
-    // Agents the config gives a command are reported only when named.
-    ids.iter()
-        .map(|id| target(id))
-        .filter(|target| !matches!(target, Target::Configured(_)))
-        .collect()
-}
-
-pub(crate) async fn update(
-    args: &UpdateArgs,
-    config: &Config,
-    lock_path: &Path,
-    cache: &Cache,
-    upstream: &impl Upstream,
-    check: &impl Check,
-) -> anyhow::Result<Report> {
-    let targets = targets(config, &args.agents);
-    let mut lock = config.lock.clone();
-    let mut entries = Vec::new();
-    let mut registry_ids = Vec::new();
-    for target in targets {
-        match target {
-            Target::Configured(agent) => entries.push(Entry {
-                agent,
-                source: Source::Config,
-                package: None,
-                from: None,
-                to: None,
-                outcome: Outcome::Skipped,
-                note: Some("the config gives its command".to_owned()),
-                cli: None,
-            }),
-            Target::Preset(preset) if args.reset => {
-                entries.push(reset(preset, &mut lock, args.dry_run));
-            }
-            Target::Preset(preset) => {
-                entries.push(
-                    update_preset(preset, config, &mut lock, lock_path, args, upstream, check)
-                        .await?,
-                );
-            }
-            Target::Registry(id) if !args.reset => registry_ids.push(id),
-            Target::Registry(_) => {}
-        }
-    }
-    if args.reset && !args.dry_run {
-        lock.write(lock_path)?;
-    }
-    let catalog = if registry_ids.is_empty() {
-        None
-    } else {
-        Some(
-            update_registry(
-                &registry_ids,
-                config,
-                cache,
-                args.dry_run,
-                upstream,
-                check,
-                &mut entries,
-            )
-            .await,
-        )
-    };
-    Ok(Report {
-        agents: entries,
-        catalog,
-        dry_run: args.dry_run,
-    })
-}
-
-fn reset(preset: &'static Preset, lock: &mut Lock, dry_run: bool) -> Entry {
-    let from = lock.version_of(preset);
-    let locked = lock.agents.contains_key(preset.id);
-    if locked && !dry_run {
-        lock.agents.remove(preset.id);
-    }
-    Entry {
-        agent: preset.id.to_owned(),
-        source: Source::Preset,
-        package: Some(preset.package.to_owned()),
-        to: Some(preset.version.to_owned()),
-        outcome: match (locked, dry_run) {
-            (false, _) => Outcome::Current,
-            (true, true) => Outcome::WouldReset,
-            (true, false) => Outcome::Reset,
-        },
-        from: Some(from),
-        note: None,
-        cli: None,
-    }
-}
-
-async fn update_preset(
-    preset: &'static Preset,
-    config: &Config,
-    lock: &mut Lock,
-    lock_path: &Path,
-    args: &UpdateArgs,
-    upstream: &impl Upstream,
-    check: &impl Check,
-) -> anyhow::Result<Entry> {
-    let from = lock.version_of(preset);
-    let mut entry = Entry {
-        agent: preset.id.to_owned(),
-        source: Source::Preset,
-        package: Some(preset.package.to_owned()),
-        from: Some(from.clone()),
-        to: None,
-        outcome: Outcome::Current,
-        note: None,
-        cli: cli(config, preset),
-    };
-    let latest = match upstream.latest(preset.package).await {
-        Ok(latest) => latest,
-        Err(error) => {
-            entry.outcome = Outcome::Failed;
-            entry.note = Some(format!("{error:#}"));
-            return Ok(entry);
-        }
-    };
-    if compare(&latest, &from) != Ordering::Greater {
-        return Ok(entry);
-    }
-    entry.to = Some(latest.clone());
-    if args.dry_run {
-        entry.outcome = Outcome::WouldUpdate;
-        return Ok(entry);
-    }
-    let (spec, options) = config.configure(preset.id, preset.spec_at(&latest));
-    match check.check(&spec, &options).await {
-        Ok(()) => {
-            lock.set(preset, &latest);
-            lock.write(lock_path)?;
-            entry.outcome = Outcome::Updated;
-        }
-        Err(error) => {
-            entry.outcome = Outcome::Failed;
-            entry.note = Some(format!(
-                "{latest} doesn't start, so {from} stays: {error:#}"
-            ));
-        }
-    }
-    Ok(entry)
-}
-
-/// The CLI `preset`'s adapter runs: the installed one its variable names, in the config's
-/// `env` for it or this environment, else the one it bundles.
-fn cli(config: &Config, preset: &Preset) -> Option<String> {
-    let variable = preset.binary_variable?;
-    let configured = config
-        .agents
-        .get(preset.id)
-        .and_then(|agent| agent.env.get(variable).cloned());
-    let installed =
-        configured.or_else(|| std::env::var(variable).ok().filter(|path| !path.is_empty()));
-    Some(installed.unwrap_or_else(|| "bundled".to_owned()))
-}
-
-async fn update_registry(
-    ids: &[String],
-    config: &Config,
-    cache: &Cache,
-    dry_run: bool,
-    upstream: &impl Upstream,
-    check: &impl Check,
-    entries: &mut Vec<Entry>,
-) -> CatalogEntry {
-    let entry = |agent: &str, from: Option<String>, to: Option<String>, outcome, note| Entry {
-        agent: agent.to_owned(),
-        source: Source::Registry,
-        package: None,
-        from,
-        to,
-        outcome,
-        note,
-        cli: None,
-    };
-    let fetched = match upstream.catalog().await {
-        Ok(fetched) => fetched,
-        Err(error) => {
-            let note = format!("{error:#}");
-            for id in ids {
-                entries.push(entry(id, None, None, Outcome::Failed, Some(note.clone())));
-            }
-            return CatalogEntry {
-                outcome: Outcome::Failed,
-                note: Some(note),
-            };
-        }
-    };
-    let cached = registry::cached(cache);
-    for id in ids {
-        let from = cached
-            .as_ref()
-            .and_then(|registry| registry.find(id))
-            .map(|agent| agent.version.clone());
-        let Some(agent) = fetched.registry.find(id) else {
-            let note = "not a preset, or in the ACP registry".to_owned();
-            entries.push(entry(id, from, None, Outcome::Failed, Some(note)));
-            continue;
-        };
-        let to = Some(agent.version.clone());
-        if from == to {
-            entries.push(entry(id, from, None, Outcome::Current, None));
-            continue;
-        }
-        if dry_run {
-            entries.push(entry(id, from, to, Outcome::WouldUpdate, None));
-            continue;
-        }
-        let checked = async {
-            let spec = registry::agent_spec(cache, agent).await?;
-            let (spec, options) = config.configure(id, spec);
-            check.check(&spec, &options).await
-        };
-        match checked.await {
-            Ok(()) => entries.push(entry(id, from, to, Outcome::Updated, None)),
-            Err(error) => {
-                let note = format!("doesn't start: {error:#}");
-                entries.push(entry(id, from, to, Outcome::Failed, Some(note)));
-            }
-        }
-    }
-    if dry_run {
-        return CatalogEntry {
-            outcome: Outcome::WouldUpdate,
-            note: None,
-        };
-    }
-    match registry::store(cache, &fetched) {
-        Ok(()) => CatalogEntry {
-            outcome: Outcome::Updated,
-            note: None,
-        },
-        Err(error) => CatalogEntry {
-            outcome: Outcome::Failed,
-            note: Some(format!("{error:#}")),
-        },
-    }
 }
 
 /// The report as `weave update` prints it.
@@ -501,428 +141,70 @@ fn describe(report: &Report) -> String {
     if report.dry_run {
         out.push_str("Dry run: nothing changed.\n");
     } else if changed {
-        out.push_str("New sessions use these. Open sessions keep theirs until they close.\n");
+        out.push_str("New sessions use these. Open sessions keep theirs until they close, or /update moves them.\n");
     }
     out
 }
 
-/// The npm and ACP registries.
-struct Network;
-
-impl Upstream for Network {
-    async fn latest(&self, package: &str) -> anyhow::Result<String> {
-        weave_agents::npm::latest(package).await
-    }
-
-    async fn catalog(&self) -> anyhow::Result<Fetched> {
-        registry::fetch_catalog().await
-    }
-}
-
-/// Start the agent and wait for its `initialize` answer: that downloads a new version and
-/// shows it speaks ACP, without a session, a prompt or a sign-in.
-struct Starts;
-
-impl Check for Starts {
-    async fn check(&self, spec: &AgentSpec, options: &ClientOptions) -> anyhow::Result<()> {
-        let started = tokio::time::timeout(CHECK_TIMEOUT, async {
-            let (connection, _events) = AgentConnection::spawn(spec, None, *options).await?;
-            let initialized = connection.initialize().await;
-            connection.shutdown().await;
-            initialized.map(|_| ()).map_err(anyhow::Error::from)
-        })
-        .await;
-        match started {
-            Ok(result) => result,
-            Err(_) => anyhow::bail!(
-                "it didn't answer initialize within {} minutes",
-                CHECK_TIMEOUT.as_secs() / 60
-            ),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::Mutex;
-
     use pretty_assertions::assert_eq;
+    use weave_agents::update::CatalogEntry;
+    use weave_agents::update::Entry;
+    use weave_agents::update::Source;
 
     use super::*;
 
-    /// npm and the registry as a test has them.
-    struct Stub {
-        latest: BTreeMap<&'static str, Result<&'static str, &'static str>>,
-        catalog: Option<&'static str>,
-    }
-
-    impl Upstream for Stub {
-        async fn latest(&self, package: &str) -> anyhow::Result<String> {
-            match self.latest.get(package) {
-                Some(Ok(version)) => Ok((*version).to_owned()),
-                Some(Err(why)) => anyhow::bail!("{why}"),
-                None => anyhow::bail!("no such package"),
-            }
-        }
-
-        async fn catalog(&self) -> anyhow::Result<Fetched> {
-            let json = self.catalog.context("the registry is down")?;
-            Fetched::parse(json.as_bytes().to_vec())
+    fn entry(agent: &str, from: &str, to: Option<&str>, outcome: Outcome) -> Entry {
+        Entry {
+            agent: agent.to_owned(),
+            source: Source::Preset,
+            package: Some(format!("@acp/{agent}-acp")),
+            from: Some(from.to_owned()),
+            to: to.map(str::to_owned),
+            outcome,
+            note: None,
+            cli: None,
         }
     }
 
-    /// Starts every agent but those whose command line contains one of `failing`, noting
-    /// what it was asked to start.
-    #[derive(Default)]
-    struct Checks {
-        failing: Vec<&'static str>,
-        started: Mutex<Vec<String>>,
-    }
-
-    impl Check for Checks {
-        async fn check(&self, spec: &AgentSpec, _options: &ClientOptions) -> anyhow::Result<()> {
-            let command = spec.display_command();
-            if let Ok(mut started) = self.started.lock() {
-                started.push(command.clone());
-            }
-            if self.failing.iter().any(|failing| command.contains(failing)) {
-                anyhow::bail!("it exited");
-            }
-            Ok(())
-        }
-    }
-
-    fn args(dry_run: bool, reset: bool, agents: &[&str]) -> UpdateArgs {
-        UpdateArgs {
-            agents: agents.iter().map(|id| (*id).to_owned()).collect(),
-            dry_run,
-            reset,
-            json: false,
-            config: None,
-        }
-    }
-
-    fn npm() -> Stub {
-        Stub {
-            latest: BTreeMap::from([
-                ("@agentclientprotocol/claude-agent-acp", Ok("9.0.0")),
-                ("@agentclientprotocol/codex-acp", Ok("9.0.0")),
-                ("@google/gemini-cli", Ok("0.0.1")),
-            ]),
+    #[test]
+    fn the_report_lines_up_and_says_what_changed() {
+        let mut codex = entry("codex", "2.1.1", Some("2.2.2"), Outcome::Failed);
+        codex.cli = Some("/opt/codex".to_owned());
+        codex.note = Some("2.2.2 doesn't start, so 2.1.1 stays: it exited".to_owned());
+        let mut claude = entry("claude", "0.86.0", Some("0.93.0"), Outcome::Updated);
+        claude.cli = Some("bundled".to_owned());
+        let report = Report {
+            agents: vec![
+                claude,
+                codex,
+                entry("gemini", "0.63.0", None, Outcome::Current),
+            ],
+            catalog: Some(CatalogEntry {
+                outcome: Outcome::Updated,
+                note: None,
+            }),
+            dry_run: false,
+        };
+        assert_eq!(
+            describe(&report),
+            "claude  @acp/claude-acp  0.86.0 → 0.93.0   updated · runs its bundled CLI\n\
+             codex   @acp/codex-acp   2.1.1 → 2.2.2     failed · runs /opt/codex: 2.2.2 doesn't start, so 2.1.1 stays: it exited\n\
+             gemini  @acp/gemini-acp  0.63.0            up to date\n\
+             ACP registry catalog: refreshed\n\
+             New sessions use these. Open sessions keep theirs until they close, or /update moves them.\n"
+        );
+        let dry = Report {
+            agents: vec![entry(
+                "claude",
+                "0.86.0",
+                Some("0.93.0"),
+                Outcome::WouldUpdate,
+            )],
             catalog: None,
-        }
-    }
-
-    struct World {
-        dir: tempfile::TempDir,
-    }
-
-    impl World {
-        fn new() -> Self {
-            Self {
-                dir: tempfile::tempdir().expect("tempdir"),
-            }
-        }
-
-        fn config(&self, text: &str) -> Config {
-            let path = self.dir.path().join("config.toml");
-            std::fs::write(&path, text).expect("config");
-            Config::load(Some(&path)).expect("loads").config
-        }
-
-        fn lock_path(&self) -> PathBuf {
-            self.dir.path().join("agents.lock")
-        }
-
-        fn lock(&self) -> Lock {
-            Lock::read(&self.lock_path()).expect("readable")
-        }
-
-        fn cache(&self) -> Cache {
-            Cache::new(self.dir.path().join("cache"))
-        }
-    }
-
-    fn outcomes(report: &Report) -> Vec<(String, Outcome)> {
-        report
-            .agents
-            .iter()
-            .map(|entry| (entry.agent.clone(), entry.outcome))
-            .collect()
-    }
-
-    #[tokio::test]
-    async fn a_dry_run_says_what_would_change_and_writes_nothing() {
-        let world = World::new();
-        let config = world.config("");
-        let checks = Checks::default();
-        let report = update(
-            &args(true, false, &[]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &npm(),
-            &checks,
-        )
-        .await
-        .expect("report");
-        assert_eq!(
-            outcomes(&report),
-            [
-                ("claude".to_owned(), Outcome::WouldUpdate),
-                ("codex".to_owned(), Outcome::WouldUpdate),
-                ("gemini".to_owned(), Outcome::Current),
-            ]
-        );
-        assert!(!world.lock_path().exists());
-        assert!(
-            checks.started.lock().expect("lock").is_empty(),
-            "nothing started"
-        );
-        assert!(describe(&report).ends_with("Dry run: nothing changed.\n"));
-        assert!(!report.failed());
-    }
-
-    #[tokio::test]
-    async fn a_new_version_counts_only_once_it_starts() {
-        let world = World::new();
-        let config = world.config("[agents.codex]\nenv = { CODEX_PATH = \"/opt/codex\" }\n");
-        let checks = Checks {
-            failing: vec!["codex-acp"],
-            ..Checks::default()
+            dry_run: true,
         };
-        let report = update(
-            &args(false, false, &[]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &npm(),
-            &checks,
-        )
-        .await
-        .expect("report");
-        assert_eq!(report.agents[0].outcome, Outcome::Updated);
-        assert_eq!(report.agents[1].outcome, Outcome::Failed);
-        assert!(report.failed(), "the script hears of it");
-        let lock = world.lock();
-        let claude = Preset::find("claude").expect("claude");
-        let codex = Preset::find("codex").expect("codex");
-        assert_eq!(lock.version_of(claude), "9.0.0");
-        assert_eq!(lock.version_of(codex), codex.version, "the old one stays");
-        assert_eq!(
-            *checks.started.lock().expect("lock"),
-            [
-                "npx -y @agentclientprotocol/claude-agent-acp@9.0.0",
-                "npx -y @agentclientprotocol/codex-acp@9.0.0",
-            ]
-        );
-        let claude_cli = std::env::var("CLAUDE_CODE_EXECUTABLE")
-            .ok()
-            .filter(|path| !path.is_empty())
-            .unwrap_or_else(|| "bundled".to_owned());
-        assert_eq!(report.agents[0].cli.as_deref(), Some(claude_cli.as_str()));
-        assert_eq!(report.agents[1].cli.as_deref(), Some("/opt/codex"));
-        assert_eq!(report.agents[2].cli, None, "gemini bundles no CLI");
-        let text = describe(&report);
-        assert!(
-            text.contains("claude") && text.contains("updated · runs"),
-            "{text}"
-        );
-        assert!(
-            text.contains("failed · runs /opt/codex: 9.0.0 doesn't start"),
-            "{text}"
-        );
-
-        // Run again: claude is current now.
-        let config = world.config("");
-        let again = update(
-            &args(false, false, &["claude"]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &npm(),
-            &Checks::default(),
-        )
-        .await
-        .expect("report");
-        assert_eq!(outcomes(&again), [("claude".to_owned(), Outcome::Current)]);
-    }
-
-    #[tokio::test]
-    async fn a_failed_lookup_fails_and_configured_agents_are_skipped() {
-        let world = World::new();
-        let config = world.config("[agents.claude]\ncommand = \"my-claude\"\n");
-        let mut upstream = npm();
-        upstream
-            .latest
-            .insert("@agentclientprotocol/codex-acp", Err("npm is down"));
-        let report = update(
-            &args(false, false, &["claude", "codex"]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &upstream,
-            &Checks::default(),
-        )
-        .await
-        .expect("report");
-        assert_eq!(
-            outcomes(&report),
-            [
-                ("claude".to_owned(), Outcome::Skipped),
-                ("codex".to_owned(), Outcome::Failed),
-            ]
-        );
-        assert_eq!(report.agents[1].note.as_deref(), Some("npm is down"));
-        assert!(report.failed());
-    }
-
-    #[tokio::test]
-    async fn resetting_goes_back_to_the_built_in_versions() {
-        let world = World::new();
-        let mut lock = Lock::default();
-        lock.set(Preset::find("claude").expect("claude"), "9.0.0");
-        lock.write(&world.lock_path()).expect("lock");
-        let config = world.config("");
-        let dry = update(
-            &args(true, true, &[]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &npm(),
-            &Checks::default(),
-        )
-        .await
-        .expect("report");
-        assert_eq!(dry.agents[0].outcome, Outcome::WouldReset);
-        assert!(world.lock_path().exists(), "a dry run keeps it");
-        let report = update(
-            &args(false, true, &[]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &npm(),
-            &Checks::default(),
-        )
-        .await
-        .expect("report");
-        assert_eq!(
-            outcomes(&report),
-            [
-                ("claude".to_owned(), Outcome::Reset),
-                ("codex".to_owned(), Outcome::Current),
-                ("gemini".to_owned(), Outcome::Current),
-            ]
-        );
-        assert!(!world.lock_path().exists());
-    }
-
-    const CATALOG: &str = r#"{"agents": [{"id": "some-acp", "name": "Some", "version": "2.0.0",
-        "distribution": {"npx": {"package": "some-acp@2.0.0"}}}]}"#;
-
-    #[tokio::test]
-    async fn registry_agents_in_use_follow_a_refreshed_catalog() {
-        let world = World::new();
-        let config = world.config("default_agent = \"some-acp\"\n");
-        let upstream = Stub {
-            catalog: Some(CATALOG),
-            ..npm()
-        };
-        let dry = update(
-            &args(true, false, &[]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &upstream,
-            &Checks::default(),
-        )
-        .await
-        .expect("report");
-        let some = dry.agents.last().expect("the registry agent");
-        assert_eq!(
-            (some.agent.as_str(), some.outcome),
-            ("some-acp", Outcome::WouldUpdate)
-        );
-        assert!(
-            registry::cached(&world.cache()).is_none(),
-            "a dry run caches nothing"
-        );
-
-        let checks = Checks::default();
-        let report = update(
-            &args(false, false, &["some-acp"]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &upstream,
-            &checks,
-        )
-        .await
-        .expect("report");
-        assert_eq!(
-            outcomes(&report),
-            [("some-acp".to_owned(), Outcome::Updated)]
-        );
-        assert_eq!(
-            report.catalog.as_ref().map(|catalog| catalog.outcome),
-            Some(Outcome::Updated)
-        );
-        assert!(
-            registry::cached(&world.cache())
-                .is_some_and(|registry| registry.find("some-acp").is_some())
-        );
-        assert_eq!(
-            *checks.started.lock().expect("lock"),
-            ["npx -y some-acp@2.0.0"]
-        );
-
-        let down = Stub {
-            catalog: None,
-            ..npm()
-        };
-        let failed = update(
-            &args(false, false, &["some-acp"]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &down,
-            &Checks::default(),
-        )
-        .await
-        .expect("report");
-        assert!(failed.failed());
-    }
-
-    #[tokio::test]
-    async fn the_json_report_names_each_agent_and_what_happened() {
-        let world = World::new();
-        let config = world.config("");
-        let report = update(
-            &args(true, false, &["claude"]),
-            &config,
-            &world.lock_path(),
-            &world.cache(),
-            &npm(),
-            &Checks::default(),
-        )
-        .await
-        .expect("report");
-        let json = serde_json::to_value(&report).expect("json");
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "agents": [{
-                    "agent": "claude",
-                    "source": "preset",
-                    "package": "@agentclientprotocol/claude-agent-acp",
-                    "from": Preset::find("claude").expect("claude").version,
-                    "to": "9.0.0",
-                    "outcome": "wouldUpdate",
-                    "cli": "bundled",
-                }],
-                "dryRun": true,
-            })
-        );
+        assert!(describe(&dry).ends_with("would update\nDry run: nothing changed.\n"));
     }
 }

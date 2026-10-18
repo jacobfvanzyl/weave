@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::VersionRange;
+use weave_host_protocol::agents::UpdateAvailableNotification;
 use weave_host_protocol::devices::DevicePairedNotification;
 use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::auth_message;
@@ -57,6 +58,8 @@ pub enum HostEvent {
     ElicitationCompleted(ElicitationCompletedNotification),
     /// A device took the offer this client made (`devices/offer`).
     DevicePaired(DevicePairedNotification),
+    /// A newer version of an attached session's agent is out.
+    UpdateAvailable(UpdateAvailableNotification),
     /// The answer to [`HostHandle::open`], ahead of the events that follow it.
     Opened {
         tag: u64,
@@ -143,6 +146,7 @@ impl HostConnection {
         let on_resolved = events.clone();
         let on_completed = events.clone();
         let on_paired = events.clone();
+        let on_update = events.clone();
         // Handlers run inside the dispatch loop, in the order messages arrived; each only
         // passes its message on.
         let builder = HostClient
@@ -186,6 +190,13 @@ impl HostConnection {
             .on_receive_notification(
                 async move |notification: DevicePairedNotification, _cx| {
                     let _ = on_paired.send(HostEvent::DevicePaired(notification));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: UpdateAvailableNotification, _cx| {
+                    let _ = on_update.send(HostEvent::UpdateAvailable(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),

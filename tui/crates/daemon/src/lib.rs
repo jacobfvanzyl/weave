@@ -16,6 +16,10 @@
 //! [`PermissionPolicy`](weave_host_protocol::policy::PermissionPolicy) answers what it can
 //! without anyone.
 //!
+//! When a session opens, the Host looks for a newer version of its agent in the background
+//! and tells the session's clients of one; `agents/update` moves the agent's new sessions to
+//! it, and `session/reopen` an open session, which keeps its id and journal (`updates`).
+//!
 //! A Host serves a Unix socket ([`socket`]), or, without one, a single client in the same
 //! process ([`Daemon::connect_in_process`]). Remote clients, on the person's other devices,
 //! reach it through a loopback WebSocket ([`Daemon::serve_remote`]) and prove a paired device.
@@ -28,6 +32,7 @@ mod modes;
 pub mod paths;
 mod session;
 pub mod socket;
+mod updates;
 mod websocket;
 
 use std::collections::BTreeMap;
@@ -52,14 +57,17 @@ use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::SessionId;
 use weave_agents::environment::Environment;
+use weave_agents::update::Upstream;
 use weave_host_protocol::Host;
 use weave_host_protocol::PROTOCOL_VERSION;
+use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentSource;
 use weave_host_protocol::errors;
 use weave_host_protocol::host::EnvironmentSource;
 use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::sessions::RunRequest;
+use weave_host_protocol::sessions::SessionAgent;
 
 use crate::instance::Instance;
 pub use crate::instance::Launch;
@@ -113,6 +121,8 @@ pub struct DaemonConfig {
     pub traces: PathBuf,
     /// The record of paired devices and the Host's id; none keeps them in memory only.
     pub devices: Option<PathBuf>,
+    /// Where newer versions of agents come from: npm and the ACP registry, or a test's.
+    pub upstream: Arc<dyn Upstream>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -138,6 +148,7 @@ impl DaemonConfig {
             service: Service::InProcess,
             traces: std::env::temp_dir().join("weave-traces"),
             devices: None,
+            upstream: Arc::new(weave_agents::update::Network),
         }
     }
 
@@ -160,8 +171,10 @@ pub(crate) struct Agent {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) source: AgentSource,
-    /// The registry's version, for registry agents.
+    /// The version launched, for presets and registry agents.
     pub(crate) version: Option<String>,
+    /// A preset's npm package.
+    pub(crate) package: Option<String>,
     pub(crate) spec: AgentSpec,
     pub(crate) options: ClientOptions,
     /// The mode its new sessions start in.
@@ -170,10 +183,47 @@ pub(crate) struct Agent {
     pub(crate) config: Arc<weave_agents::Config>,
 }
 
+impl Agent {
+    /// The version launched, as clients see it; none for agents the configuration gives a
+    /// command.
+    pub(crate) fn release(&self) -> Option<AgentRelease> {
+        let name = match self.source {
+            AgentSource::Preset => self.package.clone()?,
+            AgentSource::Registry => self.name.clone(),
+            AgentSource::Config => return None,
+        };
+        Some(AgentRelease {
+            name,
+            version: self.version.clone()?,
+        })
+    }
+
+    /// Where newer versions of it are looked for.
+    pub(crate) fn feed(&self) -> Option<updates::Feed> {
+        self.version.as_ref()?;
+        updates::Feed::of(self.source, &self.id, self.package.as_deref())
+    }
+
+    /// The agent as a session's clients see it, once it answered `initialize`.
+    pub(crate) fn session_agent(&self, initialize: InitializeResponse) -> SessionAgent {
+        let name = initialize.agent_info.as_ref().map_or_else(
+            || self.name.clone(),
+            |info| info.title.clone().unwrap_or_else(|| info.name.clone()),
+        );
+        SessionAgent {
+            id: self.id.clone(),
+            name,
+            initialize,
+            release: self.release(),
+        }
+    }
+}
+
 pub(crate) struct Shared {
     pub(crate) config: DaemonConfig,
     registry: Mutex<Registry>,
     pub(crate) devices: devices::Devices,
+    pub(crate) updates: updates::Updates,
     /// The WebSocket's address, while it's served.
     remote: Mutex<Option<String>>,
     started_ms: u64,
@@ -206,37 +256,40 @@ impl Shared {
     pub(crate) async fn resolve(&self, agent_id: &str) -> Result<Agent, Error> {
         let config = self.load_config()?;
         let mode = config.mode(agent_id).map(str::to_owned);
-        let (name, source, version, spec, mut options) = match self.config.agents.get(agent_id) {
-            Some(spec) => (
-                agent_id.to_owned(),
-                AgentSource::Config,
-                None,
-                spec.clone(),
-                ClientOptions::default(),
-            ),
-            None => {
-                let cache = self.registry_cache()?;
-                let resolved = weave_agents::resolve(&config, agent_id, &cache)
-                    .await
-                    .map_err(|error| Error::internal_error().data(format!("{error:#}")))?
-                    .ok_or_else(|| errors::unknown_agent(agent_id))?;
-                if let Some(warning) = &resolved.warning {
-                    tracing::warn!("{warning}");
+        let (name, source, version, package, spec, mut options) =
+            match self.config.agents.get(agent_id) {
+                Some(spec) => (
+                    agent_id.to_owned(),
+                    AgentSource::Config,
+                    None,
+                    None,
+                    spec.clone(),
+                    ClientOptions::default(),
+                ),
+                None => {
+                    let cache = self.registry_cache()?;
+                    let resolved = weave_agents::resolve(&config, agent_id, &cache)
+                        .await
+                        .map_err(|error| Error::internal_error().data(format!("{error:#}")))?
+                        .ok_or_else(|| errors::unknown_agent(agent_id))?;
+                    if let Some(warning) = &resolved.warning {
+                        tracing::warn!("{warning}");
+                    }
+                    let source = match resolved.source {
+                        weave_agents::Source::Config => AgentSource::Config,
+                        weave_agents::Source::Preset => AgentSource::Preset,
+                        weave_agents::Source::Registry => AgentSource::Registry,
+                    };
+                    (
+                        resolved.name,
+                        source,
+                        resolved.version,
+                        resolved.package,
+                        resolved.spec,
+                        resolved.options,
+                    )
                 }
-                let source = match resolved.source {
-                    weave_agents::Source::Config => AgentSource::Config,
-                    weave_agents::Source::Preset => AgentSource::Preset,
-                    weave_agents::Source::Registry => AgentSource::Registry,
-                };
-                (
-                    resolved.name,
-                    source,
-                    resolved.version,
-                    resolved.spec,
-                    resolved.options,
-                )
-            }
-        };
+            };
         if self.config.withheld.fs {
             options.read_files = false;
             options.write_files = false;
@@ -249,6 +302,7 @@ impl Shared {
             name,
             source,
             version,
+            package,
             spec,
             options,
             mode,
@@ -469,6 +523,7 @@ impl Daemon {
         Self {
             shared: Arc::new(Shared {
                 devices,
+                updates: updates::Updates::default(),
                 remote: Mutex::new(None),
                 config,
                 registry: Mutex::new(Registry {

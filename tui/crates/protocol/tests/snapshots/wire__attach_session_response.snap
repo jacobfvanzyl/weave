@@ -28,6 +28,10 @@ expression: "round_trip(&AttachSessionResponse\n{ state: state(), replay: Replay
         "name": "claude-agent-acp",
         "version": "0.31.0"
       }
+    },
+    "release": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.31.0"
     }
   },
   "cwd": "/repo",
@@ -105,6 +109,12 @@ expression: "round_trip(&AttachSessionResponse\n{ state: state(), replay: Replay
   "notices": [
     "The agent doesn't support MCP server docs over SSE; skipped"
   ],
+  "update": {
+    "agentId": "claude",
+    "name": "@agentclientprotocol/claude-agent-acp",
+    "running": "0.31.0",
+    "latest": "0.32.0"
+  },
   "replay": {
     "from": 41,
     "reset": false

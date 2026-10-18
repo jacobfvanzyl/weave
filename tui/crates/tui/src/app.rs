@@ -31,6 +31,8 @@ use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::HostHandle;
 use weave_host_client::Open;
+use weave_host_protocol::agents::UPDATES_FEATURE;
+use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::pending::AnswerPendingRequest;
@@ -44,6 +46,8 @@ use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::ReopenSessionRequest;
+use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
@@ -71,6 +75,7 @@ use crate::thumbnails;
 use crate::thumbnails::Thumbnail;
 use crate::tui::ScreenMode;
 use crate::tui::Tui;
+use crate::updates::Dismissed;
 
 /// How long to wait for the weave Host to come back after it went away.
 const RECONNECT_WINDOW: Duration = Duration::from_secs(15);
@@ -135,6 +140,9 @@ pub struct UiOptions {
     pub detachable: bool,
     /// How to reach the weave Host again when it goes away; none for one in this process.
     pub reconnect: Option<Reconnector>,
+    /// Where the versions whose update notice the user dismissed are kept; none keeps them
+    /// for this run only.
+    pub dismissed_updates: Option<PathBuf>,
 }
 
 /// How the client ended.
@@ -177,6 +185,10 @@ enum AppEvent {
     HostIncompatible(String),
     /// No Host came back in time.
     ReconnectGaveUp,
+    /// The Host's answer to `/update`'s `agents/update`: the version new sessions get.
+    AgentUpdated(Result<String, Error>),
+    /// The Host's answer to `session/reopen`.
+    SessionReopened(SessionId, Result<(), Error>),
 }
 
 /// Why a session is being opened, for when the Host answers.
@@ -198,6 +210,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         images,
         detachable,
         reconnect,
+        dismissed_updates,
     } = ui;
     let Session {
         connection,
@@ -221,6 +234,12 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
             .delete
             .is_some(),
     };
+    let dismissed = Dismissed::load(dismissed_updates);
+    let updatable = connection
+        .hello()
+        .features
+        .iter()
+        .any(|feature| feature == UPDATES_FEATURE);
     let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
     // The session works where the Host says, and so does this client.
@@ -231,6 +250,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .with_status_line(status_line)
         .with_vim(vim)
         .with_detach(detachable)
+        .with_updates(updatable, dismissed.versions().clone())
         .with_thumbnails(tui.shows_images());
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
@@ -256,6 +276,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         position: None,
         replay_until: None,
         decoding: Arc::new(Semaphore::new(1)),
+        dismissed,
     };
     let startup = match opened {
         Some(opened) => {
@@ -318,6 +339,8 @@ struct App {
     replay_until: Option<u64>,
     /// Thumbnails of images messages carry are decoded one at a time.
     decoding: Arc<Semaphore>,
+    /// The versions whose update notice the user dismissed.
+    dismissed: Dismissed,
 }
 
 impl App {
@@ -418,6 +441,12 @@ impl App {
             }
             // The TUI makes no pairing offers.
             HostEvent::Changed(_) | HostEvent::DevicePaired(_) => Vec::new(),
+            HostEvent::UpdateAvailable(notification) => {
+                if chat.active_session() == Some(&notification.session_id) {
+                    chat.update_available(notification.update);
+                }
+                Vec::new()
+            }
             HostEvent::PendingAdded(added) => {
                 if chat.active_session() != Some(&added.session_id) {
                     return Vec::new();
@@ -450,7 +479,7 @@ impl App {
 
     /// A journaled event of the active session.
     fn session_event(
-        &self,
+        &mut self,
         chat: &mut ChatWidget,
         root: SessionId,
         event: SessionEvent,
@@ -504,6 +533,27 @@ impl App {
                 terminal_id,
                 status,
             },
+            SessionEvent::AgentReopened {
+                agent,
+                previous,
+                modes,
+                config_options,
+                failed,
+            } => {
+                // The new process says what prompts may carry now, and whether it steers. A
+                // replay's is history: the session's state said what runs now.
+                if !replayed {
+                    self.agent_changed(chat, &agent);
+                }
+                ChatEvent::AgentReopened {
+                    agent,
+                    previous,
+                    modes,
+                    config_options,
+                    failed,
+                    replayed,
+                }
+            }
             SessionEvent::Closed { reason } if !replayed => ChatEvent::SessionEnded {
                 session_id: root,
                 reason,
@@ -547,11 +597,15 @@ impl App {
                     return self.session_opened(chat, &opened);
                 }
                 self.track(chat, &opened);
-                chat.set_steerable(self.steerable(&opened.state));
+                self.agent_changed(chat, &opened.state.agent);
                 chat.reattached(OpenedSession::from_state(
                     &opened.state,
                     opened.replay.as_ref(),
                 ));
+                chat.set_release(opened.state.agent.release.clone());
+                if let Some(update) = opened.state.update.clone() {
+                    chat.update_available(update);
+                }
                 self.show_state(chat, &opened.state)
             }
             (OpenKind::Reattach, Err(error)) => {
@@ -569,24 +623,36 @@ impl App {
     ) -> Vec<AppCommand> {
         self.cwd.clone_from(&opened.state.cwd);
         chat.set_cwd(opened.state.cwd.clone());
-        chat.set_steerable(self.steerable(&opened.state));
+        self.agent_changed(chat, &opened.state.agent);
         chat.session_ready(OpenedSession::from_state(
             &opened.state,
             opened.replay.as_ref(),
         ));
+        chat.set_release(opened.state.agent.release.clone());
+        if let Some(update) = opened.state.update.clone() {
+            chat.update_available(update);
+        }
         self.track(chat, opened);
         self.show_state(chat, &opened.state)
     }
 
-    /// Whether the session's turns can be steered: the Host takes `turn/steer`, and the
-    /// agent takes steering.
-    fn steerable(&self, state: &SessionState) -> bool {
-        self.handle
+    /// Follow what the session's agent says about itself: what prompts may carry, and
+    /// whether its turns can be steered (the Host takes `turn/steer`, and the agent takes
+    /// steering).
+    fn agent_changed(&mut self, chat: &mut ChatWidget, agent: &SessionAgent) {
+        self.prompt_capabilities = agent
+            .initialize
+            .agent_capabilities
+            .prompt_capabilities
+            .clone();
+        let steerable = self
+            .handle
             .hello()
             .features
             .iter()
             .any(|feature| feature == STEER_FEATURE)
-            && supports_steering(&state.agent.initialize)
+            && supports_steering(&agent.initialize);
+        chat.set_steerable(steerable);
     }
 
     /// Follow the session's journal from where `opened`'s replay starts.
@@ -712,6 +778,11 @@ impl App {
             AppEvent::ShellExited(id, status) => {
                 self.shells.remove(&id);
                 chat.shell_exited(&id, status);
+                Vec::new()
+            }
+            AppEvent::AgentUpdated(result) => chat.agent_updated(result),
+            AppEvent::SessionReopened(session_id, result) => {
+                chat.session_reopened(&session_id, result);
                 Vec::new()
             }
         }
@@ -870,6 +941,31 @@ impl App {
                 AppCommand::Reload => {
                     self.reload = true;
                     return true;
+                }
+                AppCommand::UpdateAgent => {
+                    let handle = self.handle.clone();
+                    let request = UpdateAgentRequest {
+                        agent_id: self.agent_id.clone(),
+                    };
+                    self.spawn(async move {
+                        let result = handle.send(request).await;
+                        AppEvent::AgentUpdated(result.map(|response| response.version))
+                    });
+                }
+                AppCommand::ReopenSession(session_id) => {
+                    let handle = self.handle.clone();
+                    self.spawn(async move {
+                        let result = handle
+                            .send(ReopenSessionRequest {
+                                session_id: session_id.clone(),
+                            })
+                            .await
+                            .map(drop);
+                        AppEvent::SessionReopened(session_id, result)
+                    });
+                }
+                AppCommand::DismissUpdate { agent_id, version } => {
+                    self.dismissed.dismiss(&agent_id, &version);
                 }
                 AppCommand::Reattach(session_id) => {
                     let request = AttachSessionRequest {

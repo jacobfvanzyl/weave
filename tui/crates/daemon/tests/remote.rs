@@ -41,6 +41,7 @@ use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::VersionRange;
 use weave_host_protocol::agents::LogoutAgentRequest;
+use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::devices::DeviceInfo;
 use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::devices::OfferDeviceRequest;
@@ -108,6 +109,7 @@ impl World {
             service: Service::InProcess,
             traces: self.dir.path().join("traces"),
             devices: Some(self.dir.path().join("devices.json")),
+            upstream: Arc::new(weave_agents::update::Offline),
         })
     }
 }
@@ -423,6 +425,12 @@ async fn remote_clients_do_everything_but_administer_the_host() {
         remote
             .send(LogoutAgentRequest {
                 agent_id: "fake".to_owned(),
+            })
+            .await
+            .map(|_| ()),
+        remote
+            .send(UpdateAgentRequest {
+                agent_id: "claude".to_owned(),
             })
             .await
             .map(|_| ()),

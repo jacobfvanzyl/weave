@@ -9,12 +9,16 @@ use weave_acp_core::schema::ElicitationId;
 use weave_acp_core::schema::Error;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::RequestPermissionRequest;
+use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
+use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::TerminalId;
+use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
+use weave_host_protocol::sessions::SessionAgent;
 
 /// A permission request waiting on a person, as the Host keeps it.
 #[derive(Clone, Debug)]
@@ -76,6 +80,16 @@ pub enum ChatEvent {
     TerminalExited {
         terminal_id: TerminalId,
         status: TerminalExitStatus,
+    },
+    /// The session's agent was started again (`session/reopen`): on a new version, or on the
+    /// one it ran when that one `failed` to take the session up.
+    AgentReopened {
+        agent: Box<SessionAgent>,
+        previous: Option<AgentRelease>,
+        modes: Option<SessionModeState>,
+        config_options: Vec<SessionConfigOption>,
+        failed: Option<String>,
+        replayed: bool,
     },
     /// The session closed: its agent exited, or it was closed for everyone.
     SessionEnded {

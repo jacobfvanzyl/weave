@@ -138,6 +138,7 @@ impl World {
             service: Service::InProcess,
             traces: self.dir.path().join("traces"),
             devices: Some(self.dir.path().join("devices.json")),
+            upstream: Arc::new(weave_agents::update::Offline),
         })
     }
 

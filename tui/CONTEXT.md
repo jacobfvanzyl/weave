@@ -26,6 +26,10 @@ _Avoid_: credential, principal, token
 An ACP agent program the Host can launch, known by an id: a preset, one defined in the Host's configuration, or one from the ACP registry.
 _Avoid_: adapter, provider, model
 
+**Agent update**:
+A newer version of a preset's or registry agent's program than the one a session's process runs, which the Host looks for when the session opens.
+_Avoid_: upgrade, new release
+
 **Client tool**:
 A tool the Host offers a session's agent that an attached client runs on its own device, such as putting text on that device's clipboard.
 _Avoid_: client-side MCP server, frontend tool, local tool
@@ -62,6 +66,10 @@ _Avoid_: child thread
 **Attach**:
 A client's relationship with an open session: it receives the session's events and pending requests, and keeps the session open while it lasts.
 _Avoid_: subscribe, join, connect
+
+**Reopen**:
+Moving an open session to a new process of its agent, on the version the agent's new sessions get, keeping the session's id and journal.
+_Avoid_: restart, reload (the TUI's own restart)
 
 ### Turns
 

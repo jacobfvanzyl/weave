@@ -42,6 +42,7 @@ mod tool_call;
 mod tool_output;
 mod transcript;
 mod tui;
+mod updates;
 mod vim;
 mod wrapping;
 
@@ -53,3 +54,8 @@ pub use app::UiOptions;
 pub use app::run;
 pub use footer::StatusItem;
 pub use tui::ScreenMode;
+
+/// Where the versions whose update notice the user dismissed are kept.
+pub fn dismissed_updates_file() -> Option<std::path::PathBuf> {
+    updates::Dismissed::default_location()
+}

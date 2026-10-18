@@ -73,6 +73,7 @@ mod tests {
                 id: "fake".into(),
                 name: "Fake".into(),
                 initialize: InitializeResponse::new(weave_acp_core::ProtocolVersion::V1),
+                release: None,
             },
             cwd: "/repo".into(),
             additional_directories: Vec::new(),
@@ -93,6 +94,7 @@ mod tests {
             },
             notices: Vec::new(),
             trace: None,
+            update: None,
         }
     }
 

@@ -24,6 +24,8 @@ use serde::Serialize;
 use crate::Empty;
 use crate::Timestamp;
 use crate::agents::AgentId;
+use crate::agents::AgentRelease;
+use crate::agents::AgentUpdate;
 use crate::hello::ClientId;
 use crate::pending::PendingRequest;
 use crate::policy::PermissionPolicy;
@@ -78,6 +80,9 @@ pub struct SessionAgent {
     pub name: String,
     /// What the agent said about itself: capabilities, prompt capabilities, sign-in.
     pub initialize: InitializeResponse,
+    /// The version the Host launched, for presets and registry agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<AgentRelease>,
 }
 
 /// Who started a turn.
@@ -142,6 +147,9 @@ pub struct SessionState {
     /// Where the Host writes this session's protocol trace, when asked to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<PathBuf>,
+    /// A newer version of the agent than the session runs, once the Host has found one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<AgentUpdate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -301,6 +309,27 @@ pub struct SetConfigOptionRequest {
     pub config_id: SessionConfigId,
     #[serde(flatten)]
     pub value: SessionConfigOptionValue,
+}
+
+/// `session/reopen`: stop the session's agent and take the session up again in a new process
+/// of the version the agent's new sessions get, through ACP `session/resume` or
+/// `session/load`. The session keeps its id and journal, where an `agentReopened` event marks
+/// the change. While a turn runs or a request waits, it waits for them. When the new version
+/// can't take the session up, the old one does again, and the event says why. Anything that
+/// lived only in the old process, such as its background commands, ends with it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[request(method = "session/reopen", response = ReopenSessionResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct ReopenSessionRequest {
+    pub session_id: SessionId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct ReopenSessionResponse {
+    /// The version the session's agent runs now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// `session/run`: open a session (this one, or a new one) and start a turn in it, without

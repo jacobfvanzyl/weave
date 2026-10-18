@@ -49,6 +49,9 @@ use weave_host_protocol::agents::ListAgentsResponse;
 use weave_host_protocol::agents::LogoutAgentRequest;
 use weave_host_protocol::agents::TerminalSignInRequest;
 use weave_host_protocol::agents::TerminalSignInResponse;
+use weave_host_protocol::agents::UPDATES_FEATURE;
+use weave_host_protocol::agents::UpdateAgentRequest;
+use weave_host_protocol::agents::UpdateAgentResponse;
 use weave_host_protocol::devices::DEVICES_FEATURE;
 use weave_host_protocol::devices::DeviceInfo;
 use weave_host_protocol::devices::ListDevicesRequest;
@@ -78,9 +81,10 @@ use weave_host_protocol::sessions::DeleteSessionRequest;
 use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::ReopenSessionRequest;
+use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
@@ -118,6 +122,7 @@ use crate::session::SessionHandle;
 use crate::session::Snapshot;
 use crate::session::Steer;
 use crate::session::lock;
+use crate::updates;
 use crate::websocket::Link;
 
 /// What a client said at `host/hello`.
@@ -310,6 +315,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, update_agent),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, list_sessions),
             agent_client_protocol::on_receive_request!(),
         )
@@ -365,6 +374,10 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, close),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, reopen_session),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -452,7 +465,7 @@ fn headless(options: ClientOptions) -> ClientOptions {
 }
 
 /// Where agents asked things outside any session start.
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map_or_else(|| PathBuf::from("/"), PathBuf::from)
@@ -537,7 +550,11 @@ impl Connection {
                 pid: status.pid,
                 started_at: status.started_at,
             },
-            features: vec![STEER_FEATURE.to_owned(), DEVICES_FEATURE.to_owned()],
+            features: vec![
+                STEER_FEATURE.to_owned(),
+                DEVICES_FEATURE.to_owned(),
+                UPDATES_FEATURE.to_owned(),
+            ],
             acp: AcpInfo {
                 protocol_version: 1,
                 unstable: vec!["session_compaction".to_owned(), "subagents".to_owned()],
@@ -628,12 +645,12 @@ impl Connection {
                 .agents
                 .get(&id)
                 .is_some_and(|agent| agent.command.is_some());
-            let source = if defined {
-                AgentSource::Config
-            } else {
-                AgentSource::Preset
-            };
-            agents.push(local(&id, source));
+            let mut summary = local(&id, AgentSource::Config);
+            if let Some(preset) = weave_acp_core::Preset::find(&id).filter(|_| !defined) {
+                summary.source = AgentSource::Preset;
+                summary.version = Some(config.lock.version_of(preset));
+            }
+            agents.push(summary);
         }
         if request.include_registry {
             let cache = self.shared.registry_cache()?;
@@ -745,6 +762,16 @@ impl Connection {
             args: login.args,
             env: login.env,
         })
+    }
+
+    /// `agents/update`: local clients only, as it changes what the Host launches.
+    async fn update_agent(
+        &self,
+        request: UpdateAgentRequest,
+    ) -> Result<UpdateAgentResponse, Error> {
+        self.local_hello()?;
+        let version = updates::update(&self.shared, &request.agent_id).await?;
+        Ok(UpdateAgentResponse { version })
     }
 
     async fn logout(&self, request: LogoutAgentRequest) -> Result<Empty, Error> {
@@ -956,6 +983,7 @@ impl Connection {
             Origin::New,
         )?;
         let trace = self.trace(&session, request.trace)?;
+        updates::look_for_update(&self.shared, &session);
         Ok(Ready {
             session,
             notices,
@@ -994,6 +1022,7 @@ impl Connection {
         }
         if let Some(session) = live {
             let trace = self.trace(&session, request.trace)?;
+            updates::look_for_update(&self.shared, &session);
             return Ok(Ready {
                 session,
                 notices: Vec::new(),
@@ -1027,6 +1056,7 @@ impl Connection {
         {
             Ok(session) => {
                 let trace = self.trace(&session, request.trace)?;
+                updates::look_for_update(&self.shared, &session);
                 Ok(Ready {
                     session,
                     notices,
@@ -1113,6 +1143,18 @@ impl Connection {
             })
             .await?;
         Ok(Empty {})
+    }
+
+    /// `session/reopen`: answered once the session runs in its new process, after any turn.
+    async fn reopen_session(
+        &self,
+        request: ReopenSessionRequest,
+    ) -> Result<ReopenSessionResponse, Error> {
+        self.hello_info()?;
+        let session = self.live(&request.session_id)?;
+        let (reply, reopened) = oneshot::channel();
+        session.send(Command::Reopen { reply })?;
+        reopened.await.map_err(|_| session::ended())?
     }
 
     async fn delete(&self, request: DeleteSessionRequest) -> Result<Empty, Error> {
@@ -1297,7 +1339,7 @@ fn dormant(session_id: &SessionId, agent_id: &str, recorded: &Recorded) -> Sessi
 
 /// How a session in `cwd` is set up for `instance`'s agent: the configured MCP servers it
 /// accepts, and `additional_directories` if it accepts those; with a notice for each left out.
-fn setup(
+pub(crate) fn setup(
     agent: &Agent,
     instance: &Instance,
     cwd: PathBuf,
@@ -1585,17 +1627,13 @@ fn open(
         .init()
         .cloned()
         .unwrap_or_else(|| InitializeResponse::new(ProtocolVersion::V1));
-    let session_agent = SessionAgent {
-        name: summary(agent, Some(&initialize)).name,
-        id: agent.id.clone(),
-        initialize,
-    };
     Ok(session::start(
         shared,
         Opened {
             session_id,
             instance,
-            agent: session_agent,
+            agent: agent.session_agent(initialize),
+            resolved: agent.clone(),
             journal,
             policy,
             snapshot,

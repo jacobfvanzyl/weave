@@ -137,8 +137,10 @@ request with `unauthenticated`.
 - `host.id` is the Host's own id, the same across restarts, so clients tell Hosts apart.
 - `features` lists optional parts of the protocol this Host supports. Version 2 defines
   `turn/steer` ([WVE-86](https://linear.app/jacobfvanzyl/issue/WVE-86/steer-a-running-turn-from-the-tui-through-the-weave-host)),
-  which brings the `turnSteered` event with it, and `devices` (WVE-90), the `devices/*`
-  methods.
+  which brings the `turnSteered` event with it, `devices` (WVE-90), the `devices/*`
+  methods, and `agents/updates` (WVE-93): `agents/updateAvailable`, `SessionState.update`,
+  `agents/update`, `session/reopen` and the `agentReopened` event (see
+  [Updates](#updates)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -210,7 +212,7 @@ type AgentSummary = {
   id: string;
   name: string;            // the agent's title when known, else the id
   source: "preset" | "config" | "registry";
-  version?: string;        // pinned preset or registry version
+  version?: string;        // the preset's version launched (built-in or locked), or the registry's
   installed: boolean;      // false for a registry agent not yet downloaded
   description?: string;
 };
@@ -235,9 +237,39 @@ signed in. Other clients get `requires_terminal`, and should tell the person to 
 
 **`agents/logout`** `{agentId}` → `{}`
 
+**`agents/update`** `{agentId}` → `{version}`
+
+Feature `agents/updates`. What `weave update <agent>` does (WVE-92), through the same code:
+for a preset, npm's `latest` for its package, written to `agents.lock` beside the config;
+for a registry agent, a refreshed ACP registry catalog. Only once the new version starts and
+answers `initialize`, launched as the Host launches agents; one that doesn't fails the
+request and changes nothing. `version` is what the agent's new sessions launch now: the
+newest, or the one already there. The Host's spare processes of the agent stop, and its open
+sessions of an older version are told (`agents/updateAvailable`); they keep their process
+until `session/reopen` moves them. Agents the configuration gives a command fail with
+invalid params: updating them is the user's to do. Local clients only; remote clients get
+`forbidden`.
+
 When any request needs an agent that requires sign-in, it fails with ACP's
 `auth_required` error (code -32000), passed through from the agent, and the client
 signs in and retries.
+
+### Updates
+
+When a session opens for a preset or registry agent (`session/create`, or `session/attach`
+whether it was open or not), the Host looks for a newer version in the background: npm's
+`latest` for the preset's package, the ACP registry's catalog for a registry agent. The
+session never waits for it. A lookup serves every session for an hour, so sessions opened
+together make one request; one that failed serves the hour too, and shows nothing. When the
+newest version is newer than the one a session runs, its attached clients get
+
+- `agents/updateAvailable` `{sessionId, agentId, name, running, latest}`, once a version, and
+- `SessionState.update` `{agentId, name, running, latest}` carries it to clients that attach
+  later.
+
+`name` is what's updated, as people know it: the preset's package or the registry agent's
+name. `SessionState.agent.release` `{name, version}` is the version the session's process
+runs. Configured agents have neither and aren't looked up.
 
 ### Agent processes
 
@@ -273,7 +305,10 @@ What attaching answers with, and what a client keeps up to date from notificatio
 ```ts
 type SessionState = {
   sessionId: string;
-  agent: { id: string; name: string; initialize: InitializeResponse };
+  agent: {
+    id: string; name: string; initialize: InitializeResponse;
+    release?: { name: string; version: string };   // presets and registry agents
+  };
   cwd: string;
   additionalDirectories: string[];
   title?: string;
@@ -290,6 +325,7 @@ type SessionState = {
   journal: { id: string; head: number };       // the position of the last event written
   notices: string[];                           // e.g. skipped MCP servers
   trace?: string;                              // where the Host writes this session's trace
+  update?: { agentId: string; name: string; running: string; latest: string };  // see Updates
 };
 ```
 
@@ -357,6 +393,24 @@ else needs it, as the TUI does when it leaves a blank session.
 Closes the session for everyone: its turn ends, its pending requests are cancelled, its
 agent's session is closed (ACP `session/close`, when supported) and its process stops.
 
+**`session/reopen`** `{sessionId}` → `{version?}`
+
+Feature `agents/updates`. Moves an open session to the version its agent's new sessions
+launch, as after `agents/update`. The Host starts that version; one that doesn't start fails
+the request with the session as it was. Then it closes the session in the old process (ACP
+`session/close`, when supported), stops it, and takes the session up in the new one with
+ACP `session/resume`, or `session/load` with the agent's replay discarded, as after a Host
+restart. The session keeps its id and journal, where an `agentReopened` event marks the
+change for every client; its mode and config options are whatever the new process restores.
+Anything that lived only in the old process ends with it, such as its background commands
+and running subagents. While a turn runs or a request waits, the reopen waits for them, and
+the answer with it.
+
+When the new version can't take the session up, the old one does again, and `agentReopened`
+says why in `failed`. When that fails too, the session closes. An agent that can't resume or
+load sessions fails the request with method not found, and its process stays; new sessions
+get the new version. `version` is what the session runs now.
+
 **`session/delete`** `{sessionId, agentId?}` → `{}`
 
 Closes the session if it's open, deletes it in the agent (ACP `session/delete`), and
@@ -395,6 +449,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `turnEnded` | `sessionId`, `response?`: ACP `PromptResponse`, `error?`: JSON-RPC error | a turn ends |
 | `terminalOutput` | `terminalId`, `data` | a command the Host runs for the agent writes output |
 | `terminalExit` | `terminalId`, `status`: ACP `TerminalExitStatus` | that command exits |
+| `agentReopened` | `agent`: `SessionState.agent`, `previous?`: `{name, version}`, `modes?`, `configOptions`, `failed?` | the session's agent was started again (`session/reopen`); `failed` says why it runs `previous` again |
 | `closed` | `reason` | the session closes |
 
 `origin` is `{"client": {"name": "weave-tui", "id": "c7"}}` for a client's prompt, with the
@@ -416,6 +471,8 @@ These aren't journaled. They go to the session's attached clients.
 - `pending/resolved` `{sessionId, pendingId, outcome: "answered" | "cancelled" | "withdrawn", by?: clientId}`
 - `session/elicitationCompleted` `{sessionId, notification: CompleteElicitationNotification}`:
   an accepted URL elicitation's external step finished.
+- `agents/updateAvailable` `{sessionId, agentId, name, running, latest}`: a newer version of
+  the session's agent is out (see [Updates](#updates)).
 
 ### Slow clients
 
@@ -590,7 +647,8 @@ as it does now.
 Remote clients follow ADR 0010 and [`wve-90-remote-clients.md`](wve-90-remote-clients.md):
 the WebSocket binds loopback only and Tailscale Serve is the way in; every connection proves
 a paired device by signing a challenge; a paired device may do what a local client can,
-except `host/shutdown`, `devices/*` and agent sign-in and sign-out, which answer `forbidden`.
+except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`, which
+answer `forbidden`.
 
 ## Clients
 
@@ -612,6 +670,10 @@ except `host/shutdown`, `devices/*` and agent sign-in and sign-out, which answer
 - Shell mode (`!`), `@` file search, attachments and pasted images stay local. That is
   right only because the TUI runs on the Host's computer; a TUI elsewhere needs the Host
   methods listed as later work.
+- A notice says when a newer version of the session's agent is out; `/update dismiss` hides
+  that version (kept in `$XDG_STATE_HOME/weave/updates.json`). `/update` runs
+  `agents/update`, then `session/reopen`, showing progress in the status line, and the
+  `agentReopened` event shows in the transcript, replayed ones too (WVE-93).
 - Custom commands (`weave -- <command>`) can't be sent to a Host. Define the agent in the
   config, as `[agents.fake] command = "…/weave-fake-agent"`, and use `--agent fake`. With
   `--no-daemon`, `-- <command>` still works, as a config agent the in-process Host is given

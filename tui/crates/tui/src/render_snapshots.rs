@@ -592,3 +592,89 @@ fn fullscreen_reading_earlier_output_as_more_arrives() {
     );
     insta::assert_snapshot!(full_screen(&chat, 16));
 }
+
+fn release(version: &str) -> weave_host_protocol::agents::AgentRelease {
+    weave_host_protocol::agents::AgentRelease {
+        name: "@agentclientprotocol/claude-agent-acp".into(),
+        version: version.into(),
+    }
+}
+
+/// A chat on a Host that updates agents, its session on 0.86.0, with 0.93.0 out.
+fn with_update(mut chat: ChatWidget) -> ChatWidget {
+    chat = chat.with_updates(true, Default::default());
+    chat.set_release(Some(release("0.86.0")));
+    chat.update_available(weave_host_protocol::agents::AgentUpdate {
+        agent_id: "claude".into(),
+        name: "@agentclientprotocol/claude-agent-acp".into(),
+        running: "0.86.0".into(),
+        latest: "0.93.0".into(),
+    });
+    chat
+}
+
+fn reopened(version: &str, failed: Option<&str>) -> ChatEvent {
+    ChatEvent::AgentReopened {
+        agent: Box::new(weave_host_protocol::sessions::SessionAgent {
+            id: "claude".into(),
+            name: "Claude".into(),
+            initialize: weave_acp_core::schema::InitializeResponse::new(
+                weave_acp_core::ProtocolVersion::V1,
+            ),
+            release: Some(release(version)),
+        }),
+        previous: Some(release("0.86.0")),
+        modes: None,
+        config_options: Vec::new(),
+        failed: failed.map(str::to_owned),
+        replayed: false,
+    }
+}
+
+/// `/update` run, its check passed, moving the session; then the journal's word on how the
+/// move went, and on one that went back to the old version.
+fn updated(mut chat: ChatWidget) -> ChatWidget {
+    chat.handle_paste("/update");
+    chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.agent_updated(Ok("0.93.0".into()));
+    chat.session_reopened(&"s1".into(), Ok(()));
+    chat.handle_agent_event(reopened("0.93.0", None));
+    chat.handle_agent_event(reopened(
+        "0.93.0",
+        Some("0.94.0 couldn't resume the session: unknown session"),
+    ));
+    chat
+}
+
+#[test]
+fn update_available_notice() {
+    let mut chat = with_update(chat());
+    insta::assert_snapshot!(screen(&mut chat));
+}
+
+#[test]
+fn update_available_notice_fullscreen() {
+    let chat = with_update(fullscreen_chat());
+    insta::assert_snapshot!(full_screen(&chat, 10));
+}
+
+#[test]
+fn update_moving_the_session() {
+    let mut chat = with_update(chat());
+    chat.handle_paste("/update");
+    chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    chat.agent_updated(Ok("0.93.0".into()));
+    insta::assert_snapshot!(screen(&mut chat));
+}
+
+#[test]
+fn update_moved() {
+    let mut chat = updated(with_update(chat()));
+    insta::assert_snapshot!(screen(&mut chat));
+}
+
+#[test]
+fn update_moved_fullscreen() {
+    let chat = updated(with_update(fullscreen_chat()));
+    insta::assert_snapshot!(full_screen(&chat, 18));
+}

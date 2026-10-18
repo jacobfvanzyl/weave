@@ -42,8 +42,10 @@ use serde_json::Value;
 use serde_json::json;
 use weave_host_protocol::Empty;
 use weave_host_protocol::VersionRange;
+use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentSource;
 use weave_host_protocol::agents::AgentSummary;
+use weave_host_protocol::agents::AgentUpdate;
 use weave_host_protocol::agents::AuthenticateAgentRequest;
 use weave_host_protocol::agents::GetAgentRequest;
 use weave_host_protocol::agents::GetAgentResponse;
@@ -52,6 +54,10 @@ use weave_host_protocol::agents::ListAgentsResponse;
 use weave_host_protocol::agents::LogoutAgentRequest;
 use weave_host_protocol::agents::TerminalSignInRequest;
 use weave_host_protocol::agents::TerminalSignInResponse;
+use weave_host_protocol::agents::UPDATES_FEATURE;
+use weave_host_protocol::agents::UpdateAgentRequest;
+use weave_host_protocol::agents::UpdateAgentResponse;
+use weave_host_protocol::agents::UpdateAvailableNotification;
 use weave_host_protocol::devices::DEVICES_FEATURE;
 use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::DeviceInfo;
@@ -100,6 +106,8 @@ use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::ReopenSessionRequest;
+use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
@@ -183,14 +191,35 @@ fn pending() -> PendingRequest {
     }
 }
 
+fn release(version: &str) -> AgentRelease {
+    AgentRelease {
+        name: "@agentclientprotocol/claude-agent-acp".to_owned(),
+        version: version.to_owned(),
+    }
+}
+
+fn update() -> AgentUpdate {
+    AgentUpdate {
+        agent_id: "claude".to_owned(),
+        name: "@agentclientprotocol/claude-agent-acp".to_owned(),
+        running: "0.31.0".to_owned(),
+        latest: "0.32.0".to_owned(),
+    }
+}
+
+fn session_agent(version: &str) -> SessionAgent {
+    SessionAgent {
+        id: "claude".to_owned(),
+        name: "Claude".to_owned(),
+        initialize: initialize(),
+        release: Some(release(version)),
+    }
+}
+
 fn state() -> SessionState {
     SessionState {
         session_id: "s-1".into(),
-        agent: SessionAgent {
-            id: "claude".to_owned(),
-            name: "Claude".to_owned(),
-            initialize: initialize(),
-        },
+        agent: session_agent("0.31.0"),
         cwd: "/repo".into(),
         additional_directories: vec!["/docs".into()],
         title: Some("Fix the parser".to_owned()),
@@ -224,6 +253,7 @@ fn state() -> SessionState {
         },
         notices: vec!["The agent doesn't support MCP server docs over SSE; skipped".to_owned()],
         trace: None,
+        update: Some(update()),
     }
 }
 
@@ -741,6 +771,72 @@ fn events() {
         message(&ElicitationCompletedNotification {
             session_id: "s-1".into(),
             notification: CompleteElicitationNotification::new("connect-1"),
+        })
+    );
+}
+
+#[test]
+fn updates() {
+    assert_eq!(UPDATES_FEATURE, "agents/updates");
+    insta::assert_json_snapshot!(
+        "update_available_notification",
+        message(&UpdateAvailableNotification {
+            session_id: "s-1".into(),
+            update: update(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "update_agent_request",
+        message(&UpdateAgentRequest {
+            agent_id: "claude".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "update_agent_response",
+        round_trip(&UpdateAgentResponse {
+            version: "0.32.0".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "reopen_session_request",
+        message(&ReopenSessionRequest {
+            session_id: "s-1".into(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "reopen_session_response",
+        round_trip(&ReopenSessionResponse {
+            version: Some("0.32.0".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "event_agent_reopened",
+        message(&SessionEventNotification {
+            session_id: "s-1".into(),
+            seq: 49,
+            at: 1_760_180_009_000,
+            event: SessionEvent::AgentReopened {
+                agent: Box::new(session_agent("0.32.0")),
+                previous: Some(release("0.31.0")),
+                modes: None,
+                config_options: Vec::new(),
+                failed: None,
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "event_agent_reopened_on_the_old_version",
+        message(&SessionEventNotification {
+            session_id: "s-1".into(),
+            seq: 49,
+            at: 1_760_180_009_000,
+            event: SessionEvent::AgentReopened {
+                agent: Box::new(session_agent("0.31.0")),
+                previous: Some(release("0.31.0")),
+                modes: None,
+                config_options: Vec::new(),
+                failed: Some("0.32.0 couldn't resume the session: unknown session".to_owned()),
+            },
         })
     );
 }

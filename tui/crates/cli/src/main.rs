@@ -265,6 +265,7 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             images: launch.config.tui.images != config::Images::Never,
             detachable: host.is_shared(),
             reconnect: host.reconnector(),
+            dismissed_updates: weave_tui::dismissed_updates_file(),
         },
     )
     .await;

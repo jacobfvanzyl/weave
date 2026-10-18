@@ -27,6 +27,7 @@ nucleo-matcher = { workspace = true }
 pulldown-cmark = { workspace = true }
 ratatui = { workspace = true, features = ["unstable-backend-writer"] }
 regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 syntect = { workspace = true }
 tokio = { workspace = true, features = ["macros", "process", "rt", "sync", "time"] }

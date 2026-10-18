@@ -28,6 +28,10 @@ expression: round_trip(&state())
         "name": "claude-agent-acp",
         "version": "0.31.0"
       }
+    },
+    "release": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.31.0"
     }
   },
   "cwd": "/repo",
@@ -104,5 +108,11 @@ expression: round_trip(&state())
   },
   "notices": [
     "The agent doesn't support MCP server docs over SSE; skipped"
-  ]
+  ],
+  "update": {
+    "agentId": "claude",
+    "name": "@agentclientprotocol/claude-agent-acp",
+    "running": "0.31.0",
+    "latest": "0.32.0"
+  }
 }
