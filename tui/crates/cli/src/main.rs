@@ -9,6 +9,7 @@ mod sessions;
 mod smoke;
 mod start;
 mod tailscale;
+mod update;
 
 use std::fs::File;
 use std::io::IsTerminal;
@@ -76,6 +77,8 @@ enum Command {
     Pair(devices::PairArgs),
     /// Devices paired with the weave Host: list them, or revoke one.
     Devices(devices::DevicesArgs),
+    /// Move the agents weave launches to their newest releases, after checking each starts.
+    Update(update::UpdateArgs),
     /// Run one prompt headlessly and print every ACP event the agent sends.
     Smoke(smoke::SmokeArgs),
     /// Sign in to the agent with one of the methods it offers.
@@ -137,6 +140,10 @@ async fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Devices(args)) => {
             log_to_stderr("warn");
             devices::devices(args).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Update(args)) => {
+            log_to_stderr("warn");
+            update::command(args).await
         }
         Some(Command::Smoke(args)) => {
             log_to_stderr("warn");

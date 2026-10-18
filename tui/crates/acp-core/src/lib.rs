@@ -15,7 +15,9 @@ mod terminals;
 mod trace;
 
 pub use agent::AgentSpec;
+pub use agent::Preset;
 pub use agent::preset_ids;
+pub use agent::presets;
 pub use connection::AgentConnection;
 pub use connection::AgentEvent;
 pub use connection::ClientOptions;

@@ -3,28 +3,73 @@ use std::collections::BTreeMap;
 use agent_client_protocol::AcpAgentConfig;
 use agent_client_protocol::schema::v1::AuthMethodTerminal;
 
-/// Agent presets, pinned so a session is reproducible until a preset is deliberately bumped.
-const PRESETS: &[(&str, &str, &[&str])] = &[
-    (
-        "claude",
-        "npx",
-        &["-y", "@agentclientprotocol/claude-agent-acp@0.86.0"],
-    ),
-    (
-        "codex",
-        "npx",
-        &["-y", "@agentclientprotocol/codex-acp@2.1.1"],
-    ),
-    (
-        "gemini",
-        "npx",
-        &["-y", "@google/gemini-cli@0.63.0", "--acp"],
-    ),
+/// An agent weave knows how to launch: an npm package run through `npx`, at a version pinned
+/// so a session is reproducible until the preset is deliberately bumped. `weave update` can
+/// launch newer versions than these without a rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Preset {
+    pub id: &'static str,
+    /// The npm package.
+    pub package: &'static str,
+    /// The version weave was tested with.
+    pub version: &'static str,
+    /// Arguments after the package.
+    pub args: &'static [&'static str],
+    /// The environment variable that makes the adapter run an installed CLI rather than the
+    /// one it bundles, when it has one.
+    pub binary_variable: Option<&'static str>,
+}
+
+const PRESETS: &[Preset] = &[
+    Preset {
+        id: "claude",
+        package: "@agentclientprotocol/claude-agent-acp",
+        version: "0.86.0",
+        args: &[],
+        binary_variable: Some("CLAUDE_CODE_EXECUTABLE"),
+    },
+    Preset {
+        id: "codex",
+        package: "@agentclientprotocol/codex-acp",
+        version: "2.1.1",
+        args: &[],
+        binary_variable: Some("CODEX_PATH"),
+    },
+    Preset {
+        id: "gemini",
+        package: "@google/gemini-cli",
+        version: "0.63.0",
+        args: &["--acp"],
+        binary_variable: None,
+    },
 ];
+
+/// Every preset.
+pub fn presets() -> &'static [Preset] {
+    PRESETS
+}
 
 /// Identifiers accepted by [`AgentSpec::preset`].
 pub fn preset_ids() -> impl Iterator<Item = &'static str> {
-    PRESETS.iter().map(|(id, _, _)| *id)
+    PRESETS.iter().map(|preset| preset.id)
+}
+
+impl Preset {
+    /// The preset named `id`.
+    pub fn find(id: &str) -> Option<&'static Self> {
+        PRESETS.iter().find(|preset| preset.id == id)
+    }
+
+    /// How to launch this preset's package at `version`.
+    pub fn spec_at(&self, version: &str) -> AgentSpec {
+        let package = format!("{}@{version}", self.package);
+        AgentSpec::new(
+            "npx",
+            ["-y", package.as_str()]
+                .into_iter()
+                .chain(self.args.iter().copied()),
+        )
+    }
 }
 
 /// How to launch one ACP agent process.
@@ -49,12 +94,10 @@ impl AgentSpec {
         }
     }
 
-    /// A built-in launch command for a well-known agent, if `id` names one.
+    /// A built-in launch command for a well-known agent, at its built-in version, if `id`
+    /// names one.
     pub fn preset(id: &str) -> Option<Self> {
-        PRESETS
-            .iter()
-            .find(|(preset_id, _, _)| *preset_id == id)
-            .map(|(_, command, args)| Self::new(*command, args.iter().copied()))
+        Preset::find(id).map(|preset| preset.spec_at(preset.version))
     }
 
     /// The full command line, for display.
@@ -110,6 +153,19 @@ mod tests {
         let login = spec.for_terminal_sign_in(&method);
         assert_eq!(login.args, ["--acp", "--login"]);
         assert_eq!(login.env.get("MODE").map(String::as_str), Some("login"));
+    }
+
+    #[test]
+    fn presets_launch_their_package_at_a_version() {
+        let gemini = Preset::find("gemini").expect("gemini");
+        assert_eq!(
+            gemini.spec_at("1.2.3").display_command(),
+            "npx -y @google/gemini-cli@1.2.3 --acp"
+        );
+        assert_eq!(
+            AgentSpec::preset("claude").map(|spec| spec.display_command()),
+            Some("npx -y @agentclientprotocol/claude-agent-acp@0.86.0".to_owned())
+        );
     }
 
     #[test]

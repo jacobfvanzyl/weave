@@ -191,6 +191,7 @@ remote clients (a restart picks up a change).
 ./target/debug/weave daemon status        # also start, stop, restart, run (foreground), install, uninstall
 ./target/debug/weave pair                 # a QR code and code another device pairs with
 ./target/debug/weave devices              # paired devices; also revoke <id>
+./target/debug/weave update --dry-run     # newer agent adapters; without --dry-run, check and use them
 ```
 
 `--resume <id>` reopens a session with the agent and directory its journal records,
@@ -266,7 +267,11 @@ agent output, so keep them out of the repository.
 
 - Clippy denies `unwrap`/`expect` outside tests. Use one `use` line per item.
 - Agent presets pin adapter versions. Bump them deliberately and re-run the
-  smoke check against each one. Registry agents (`agents/src/registry.rs`) launch exactly as
+  smoke check against each one. `weave update` (WVE-92, `cli/src/update.rs`) moves past the
+  pins without a rebuild: it writes newer versions to `agents.lock` beside the config
+  (`agents/src/lock.rs`), after each answers ACP `initialize`, and every launch takes the newer
+  of the built-in and locked version. Adapters run the CLI they bundle unless the agent's
+  `env` sets `CLAUDE_CODE_EXECUTABLE` or `CODEX_PATH`. Registry agents (`agents/src/registry.rs`) launch exactly as
   the ACP registry describes them, with the version it lists; never add per-agent fixes
   there.
 - Advertise only client capabilities that are fully implemented, and gate every optional

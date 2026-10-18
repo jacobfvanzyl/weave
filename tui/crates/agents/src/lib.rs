@@ -5,6 +5,8 @@
 
 pub mod config;
 pub mod environment;
+pub mod lock;
+pub mod npm;
 pub mod registry;
 
 use weave_acp_core::AgentSpec;

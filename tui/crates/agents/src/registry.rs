@@ -230,6 +230,40 @@ pub async fn load(cache: &Cache, refresh: bool) -> anyhow::Result<Loaded> {
     }
 }
 
+/// The catalog as the registry has it now, not yet cached.
+pub struct Fetched {
+    pub registry: Registry,
+    bytes: Vec<u8>,
+}
+
+impl Fetched {
+    /// A catalog from its bytes, as the registry serves it.
+    pub fn parse(bytes: Vec<u8>) -> anyhow::Result<Self> {
+        Ok(Self {
+            registry: Registry::parse(&bytes)?,
+            bytes,
+        })
+    }
+}
+
+/// Fetch the catalog without caching it, as a dry run looks.
+pub async fn fetch_catalog() -> anyhow::Result<Fetched> {
+    let bytes = fetch(REGISTRY_URL)
+        .await
+        .context("fetching the ACP agent registry")?;
+    Fetched::parse(bytes)
+}
+
+/// Cache `fetched` as the catalog agents launch from.
+pub fn store(cache: &Cache, fetched: &Fetched) -> anyhow::Result<()> {
+    write_atomically(&cache.catalog(), &fetched.bytes)
+}
+
+/// The cached catalog, whatever its age.
+pub fn cached(cache: &Cache) -> Option<Registry> {
+    read_catalog(&cache.catalog()).ok()
+}
+
 fn read_catalog(path: &Path) -> anyhow::Result<Registry> {
     Registry::parse(&std::fs::read(path)?)
 }
@@ -263,7 +297,7 @@ fn client() -> anyhow::Result<reqwest::Client> {
         .context("creating an HTTP client")
 }
 
-async fn fetch(url: &str) -> anyhow::Result<Vec<u8>> {
+pub(crate) async fn fetch(url: &str) -> anyhow::Result<Vec<u8>> {
     let response = client()?
         .get(url)
         .timeout(Duration::from_secs(30))

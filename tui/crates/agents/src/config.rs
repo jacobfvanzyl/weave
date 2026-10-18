@@ -54,6 +54,7 @@ use anyhow::bail;
 use serde::Deserialize;
 use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
+use weave_acp_core::Preset;
 use weave_acp_core::schema::EnvVariable;
 use weave_acp_core::schema::HttpHeader;
 use weave_acp_core::schema::McpCapabilities;
@@ -61,6 +62,8 @@ use weave_acp_core::schema::McpServer;
 use weave_acp_core::schema::McpServerHttp;
 use weave_acp_core::schema::McpServerSse;
 use weave_acp_core::schema::McpServerStdio;
+
+use crate::lock::Lock;
 
 /// The file's name in the config directory.
 const FILE: &str = "config.toml";
@@ -84,6 +87,9 @@ pub struct Config {
     /// Remote clients, for the CLI to parse; absent, the Host takes none.
     #[serde(default)]
     pub remote: Option<toml::Table>,
+    /// The presets' versions `weave update` locked beside the file (`agents.lock`).
+    #[serde(skip)]
+    pub lock: Lock,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -134,6 +140,9 @@ pub struct Loaded {
     pub config: Config,
     /// Set when the file read was `tui.toml`, which should be renamed.
     pub notice: Option<String>,
+    /// Where the presets' locked versions are kept, beside the file; none without a config
+    /// directory.
+    pub lock_path: Option<PathBuf>,
 }
 
 impl Config {
@@ -173,11 +182,12 @@ impl Config {
                     return Ok(Loaded {
                         config: Self::default(),
                         notice: None,
+                        lock_path: None,
                     });
                 }
             },
         };
-        let config = match std::fs::read_to_string(&path) {
+        let mut config: Self = match std::fs::read_to_string(&path) {
             Ok(text) => {
                 toml::from_str(&text).with_context(|| format!("reading {}", path.display()))?
             }
@@ -188,7 +198,18 @@ impl Config {
                 return Err(error).with_context(|| format!("reading {}", path.display()));
             }
         };
-        Ok(Loaded { config, notice })
+        let lock_path = Lock::beside(&path);
+        // An unreadable lock leaves the built-in versions, which are tested; it shouldn't
+        // stop agents starting.
+        config.lock = Lock::read(&lock_path).unwrap_or_else(|error| {
+            tracing::warn!(error = %format!("{error:#}"), "the agents' lock is unreadable; using the built-in versions");
+            Lock::default()
+        });
+        Ok(Loaded {
+            config,
+            notice,
+            lock_path: Some(lock_path),
+        })
     }
 
     /// How to launch the agent named `id` when the config or a preset defines it. Registry
@@ -202,7 +223,7 @@ impl Config {
                     .map(|agent| agent.args.clone())
                     .unwrap_or_default(),
             )),
-            None => AgentSpec::preset(id),
+            None => Preset::find(id).map(|preset| preset.spec_at(&self.lock.version_of(preset))),
         }
     }
 
@@ -317,6 +338,38 @@ mod tests {
 
     fn parse(text: &str) -> Config {
         toml::from_str(text).expect("valid config")
+    }
+
+    #[test]
+    fn presets_launch_at_the_version_locked_beside_the_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[agents.codex]\ncommand = \"my-codex\"\n").expect("config");
+        let mut lock = Lock::default();
+        for id in ["claude", "codex"] {
+            lock.set(Preset::find(id).expect("preset"), "99.0.0");
+        }
+        lock.write(&Lock::beside(&path)).expect("lock");
+        let loaded = Config::load(Some(&path)).expect("loads");
+        assert_eq!(loaded.lock_path, Some(dir.path().join("agents.lock")));
+        let launch = |id| {
+            loaded
+                .config
+                .local_agent(id)
+                .map(|spec| spec.display_command())
+        };
+        assert_eq!(
+            launch("claude").as_deref(),
+            Some("npx -y @agentclientprotocol/claude-agent-acp@99.0.0")
+        );
+        assert_eq!(
+            launch("codex").as_deref(),
+            Some("my-codex"),
+            "the config's command wins"
+        );
+        std::fs::write(Lock::beside(&path), "not toml [").expect("a broken lock");
+        let broken = Config::load(Some(&path)).expect("still loads");
+        assert_eq!(broken.config.lock, Lock::default());
     }
 
     #[test]
