@@ -1,27 +1,16 @@
 # Weave
 
-The supported application is the newer Alpha, Host Daemon, and shared product protocol. Install from the repository root with Bun 1.3.14. The older central server and app shells have been retired.
+This repository holds the weave Host and its terminal client, and an independent trackpad project. Earlier iterations (Portal, Alpha, the product protocol and their experiments) were retired in ADR 0014 and are recoverable from Git at commit `e30f6e93`.
 
 | Path | Ownership |
 | --- | --- |
-| `product/alpha/` | React Alpha client, native libghostty terminal, platform shells |
-| `product/portal/` | Host authority, ACP processes, credentials, Threads, filesystem, terminals |
-| `product/protocol/` | Validated shared Host contracts |
-| `product/deferred/` | Inactive filetree, Editor, and Browser reference snapshots; never a build input |
-| `.agents/tools/linear/` | Deliberately isolated, pinned tracker CLI |
-| `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81 |
-| `tui/` | Independent Rust ACP agent client TUI (`weave` binary); WVE-82 |
-
-Run `bun install --frozen-lockfile`, `bun run dev:alpha`, and `bun run check` at the root. Focused checks/builds are root scripts or package-local Bun scripts. The Host uses Bun and the macOS desktop uses Electron. Capacitor is for iPad. Native libghostty is the only terminal renderer; Electron and iPad builds prepare it automatically. Follow-up acceptance and restoration work is tracked in WVE-72.
-
-The separate `trackpad/` project uses native Swift/UIKit/AppKit and owns its own
-build and acceptance workflow. It is not a Bun workspace or an Alpha/Host runtime
-dependency. Read `trackpad/AGENTS.md` before working in it.
-
-The separate `tui/` project is a Rust Cargo workspace that follows Codex CLI's
-TUI stack. It is not a Bun workspace, does not depend on `product/`, and is not
-part of `bun run check`. Read `tui/AGENTS.md` before working in it.
+| `tui/` | The weave Host (`weave daemon`) and the `weave` TUI: a Rust Cargo workspace for ACP agents, sessions, journals and the Host protocol. Read `tui/AGENTS.md` before working in it. |
+| `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
+| `docs/adr/` | Decisions, from ADR 0008 on. |
+| `docs/research/` | Dated research: evidence, not implementation requirements. |
+| `docs/agents/` | Tracker and domain guidance. |
+| `.agents/tools/linear/` | Deliberately isolated, pinned tracker CLI. |
 
 Preserve credentials, Host state, unrelated dirty work, and remote deployments. Do not commit secrets or edit installed dependencies directly. Repository cleanup is not remote deployment teardown. Before Docker work, check memory and verify the preferred explicit context; do not assume local Docker.
 
-Issues use Personal Linear workspace `jacobfvanzyl`, team WVE, and the pinned CLI in `docs/agents/issue-tracker.md`. Follow `docs/agents/triage-labels.md` and use the canonical tracker state for task titles. Tracked implementation needs an issue association. Domain vocabulary lives in `CONTEXT.md`; read `docs/agents/domain.md` and relevant ADRs before changing it.
+Issues use Personal Linear workspace `jacobfvanzyl`, team WVE, and the pinned CLI in `docs/agents/issue-tracker.md`; install it with Bun 1.3.14 (`bun install --cwd .agents/tools/linear --frozen-lockfile`). Follow `docs/agents/triage-labels.md` and use the canonical tracker state for task titles. Tracked implementation needs an issue association. Domain vocabulary lives in `tui/CONTEXT.md`; read `docs/agents/domain.md` and relevant ADRs before changing it.

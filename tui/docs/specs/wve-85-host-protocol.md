@@ -22,8 +22,9 @@ side with a protocol of our own:
 - connections authenticate, and versions are negotiated.
 
 ACP stays where the adapters need it, between the Host and its agents, and ACP's content
-types are the payload of this protocol. Portal, `product/protocol` and ADR 0001 are
-reference material only (ADR 0008); nothing here depends on them.
+types are the payload of this protocol. Portal, `product/protocol` and ADR 0001 were
+reference material only (ADR 0008); nothing here depends on them, and they were retired
+in ADR 0014.
 
 ## Scope
 

@@ -16,5 +16,5 @@ Mastra and Pi Durable were both considered as the foundation of a persistent age
 ## Consequences
 
 - No framework can checkpoint inside a Claude Code or Codex turn. Their durability is whatever the Host provides around their processes.
-- Triggers are not a revival of the retired Automation engine (ADR 0003). There is no workflow engine; WVE-64's rule of one durable record per accepted occurrence is reused.
+- Triggers are not a revival of the Automation engine that WVE-67 retired. There is no workflow engine; WVE-64's rule of one durable record per accepted occurrence is reused.
 - A loop weave owns costs API usage, so it fits headless, triggered and custom-tool work, not replacing interactive coding.

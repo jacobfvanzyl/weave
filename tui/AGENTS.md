@@ -1,9 +1,9 @@
 # TUI project
 
 This directory owns `weave`, a standalone terminal client for ACP agents
-(Claude, Codex, Gemini or any ACP command), tracked by WVE-82. Read the live
-issue before implementation and use the repository's pinned Linear CLI and
-tracker conventions from `../docs/agents/issue-tracker.md`.
+(Claude, Codex, Gemini or any ACP command), and the weave Host it connects to. Work is
+tracked in WVE issues: read the live issue before implementation and use the repository's
+pinned Linear CLI and tracker conventions from `../docs/agents/issue-tracker.md`.
 
 ## Boundaries
 
@@ -12,8 +12,7 @@ tracker conventions from `../docs/agents/issue-tracker.md`.
   `unstable_session_compaction`, `compaction = false`) and subagent sessions (draft;
   `unstable_subagents`, `subagents = false`). The v2 draft and other unstable RFDs stay out
   of scope unless the issue changes.
-- It launches agents locally. It has no dependency on `product/` (Portal or its
-  protocol), and it is not a root Bun workspace.
+- It launches agents locally.
 - Agents run in the weave Host (WVE-83, WVE-85; `weave daemon`), a per-user process the CLI
   starts on first use or launchd keeps running, so sessions outlive the TUI: quitting,
   crashing or rebuilding it and reattaching (`--resume`, `--continue`) finds the session,

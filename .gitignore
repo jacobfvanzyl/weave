@@ -1,32 +1,10 @@
 node_modules/
 dist/
-release/
 target/
-*.tsbuildinfo
 .agents/tmp/
 .env
 .env.*
 !.env.example
 *.db
 *.db-*
-*.duckdb
-*.duckdb.*
 .DS_Store
-.mastra/
-.weave-perf/
-.weave-evals/
-
-# Bun executable compilation intermediates
-*.bun-build
-
-# Electron staging and packaged desktop output
-product/alpha/.electron/
-product/alpha/release/
-
-product/alpha/.ipad-build/
-
-# Locally prepared pinned native terminal libraries
-product/alpha/native/.build/
-
-# Prepared upstream CEF and LibVNC build cache
-product/portal/native/.build/
