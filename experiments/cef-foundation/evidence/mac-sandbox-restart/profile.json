@@ -1,9 +1,0 @@
-{
-  "result": {
-    "type": "object",
-    "value": {
-      "url": "http://127.0.0.1:19380/fixture.html",
-      "profile": "persistent"
-    }
-  }
-}
