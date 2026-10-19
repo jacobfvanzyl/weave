@@ -34,6 +34,14 @@ _Avoid_: upgrade, new release
 A tool the Host offers a session's agent that an attached client runs on its own device, such as putting text on that device's clipboard.
 _Avoid_: client-side MCP server, frontend tool, local tool
 
+**Host MCP server**:
+The one MCP server, `weave`, that the Host offers every session's agent, carrying client tools, the Host's own tools and the tools of upstream servers.
+_Avoid_: weave MCP, bridge, proxy, gateway
+
+**Upstream server**:
+An MCP server in the Host's configuration that the Host connects to itself and offers through the Host MCP server.
+_Avoid_: proxied server, backend server
+
 ### Sessions
 
 **Session**:
@@ -58,6 +66,10 @@ _Avoid_: empty session, draft
 **Headless session**:
 A session whose permission requests a permission policy answers, so it can run with nobody attached.
 _Avoid_: background session, run
+
+**Trigger**:
+A schedule or webhook that starts a headless session's turn in the Host with no client involved.
+_Avoid_: automation, job, cron
 
 **Subagent session**:
 A session an agent starts under another one. It shares its parent's journal and attached clients.
@@ -106,3 +118,13 @@ _Avoid_: history, log
 **Transcript**:
 A client's rendering of a session's journal.
 _Avoid_: history, scrollback
+
+### Views
+
+**View**:
+The interactive page a tool names for one of its calls, which each client that can show it renders on its own device.
+_Avoid_: widget, MCP App, embed, artifact
+
+**Visual**:
+A page or picture an agent made that the Host keeps with its own revisions, outliving the turn that made it.
+_Avoid_: artifact, custom visual, render
