@@ -277,17 +277,23 @@ impl Tui {
     /// Put `text` on the clipboard: through `pbcopy` on a local Mac, otherwise by asking the
     /// terminal with OSC 52 (wrapped for tmux), which also reaches the client over SSH.
     pub fn copy(&mut self, text: &str) {
+        if let Err(error) = self.try_copy(text) {
+            tracing::warn!("{error}");
+        }
+    }
+
+    /// [`Self::copy`], saying why it couldn't.
+    pub fn try_copy(&mut self, text: &str) -> Result<(), String> {
         let remote =
             std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
         if cfg!(target_os = "macos") && !remote && copy_with_pbcopy(text).is_ok() {
-            return;
+            return Ok(());
         }
         if text.len() > OSC52_MAX_BYTES {
-            tracing::warn!(
-                bytes = text.len(),
-                "selection too large to copy through OSC 52"
-            );
-            return;
+            return Err(format!(
+                "{} bytes is too much to copy through the terminal (OSC 52 takes {OSC52_MAX_BYTES})",
+                text.len()
+            ));
         }
         let encoded = base64::engine::general_purpose::STANDARD.encode(text);
         let sequence = if std::env::var_os("TMUX").is_some() {
@@ -296,12 +302,10 @@ impl Tui {
             format!("\x1b]52;c;{encoded}\x07")
         };
         let backend = self.terminal.backend_mut();
-        if let Err(error) = backend
+        backend
             .write_all(sequence.as_bytes())
             .and_then(|()| backend.flush())
-        {
-            tracing::warn!(%error, "failed to copy through OSC 52");
-        }
+            .map_err(|error| format!("failed to copy through OSC 52: {error}"))
     }
 
     /// Write `history` into scrollback, fit the viewport to `height`, and draw it.

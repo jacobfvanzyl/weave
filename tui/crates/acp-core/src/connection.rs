@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -29,6 +30,10 @@ use agent_client_protocol::schema::v1::ElicitationMode;
 use agent_client_protocol::schema::v1::ElicitationUrlCapabilities;
 use agent_client_protocol::schema::v1::FileSystemCapabilities;
 use agent_client_protocol::schema::v1::KillTerminalRequest;
+use agent_client_protocol::schema::v1::McpError;
+use agent_client_protocol::schema::v1::MessageMcpNotification;
+use agent_client_protocol::schema::v1::MessageMcpRequest;
+use agent_client_protocol::schema::v1::MessageMcpResponse;
 use agent_client_protocol::schema::v1::Meta;
 use agent_client_protocol::schema::v1::PromptResponse;
 use agent_client_protocol::schema::v1::ReadTextFileRequest;
@@ -56,6 +61,10 @@ use crate::RequestKey;
 use crate::SteerOutcome;
 use crate::Traces;
 use crate::fs;
+use crate::mcp::McpCall;
+use crate::mcp::McpNotifier;
+use crate::mcp::McpOutcome;
+use crate::mcp::McpProvider;
 use crate::subagent_compat;
 use crate::terminal_meta;
 use crate::terminals::Terminals;
@@ -268,6 +277,8 @@ impl AgentConnection {
         let wait = Arc::clone(&terminals);
         let kill = Arc::clone(&terminals);
         let release = terminals;
+        let providers: Arc<OnceLock<Arc<dyn McpProvider>>> = Arc::new(OnceLock::new());
+        let mcp = Arc::clone(&providers);
         let builder = Client
             .builder()
             .name("weave")
@@ -442,6 +453,57 @@ impl AgentConnection {
                     responder.respond_with_result(release.release(&request))
                 },
                 agent_client_protocol::on_receive_request!(),
+            )
+            // MCP-over-ACP: a request for an MCP server this client declared with `"type":
+            // "acp"`, answered by the provider the connection's owner installed.
+            .on_receive_request(
+                async move |request: MessageMcpRequest, responder, cx| {
+                    let Some(provider) = mcp.get().cloned() else {
+                        return responder.respond(MessageMcpResponse::error(McpError::new(
+                            -32601,
+                            "this client provides no MCP servers",
+                        )));
+                    };
+                    let MessageMcpRequest {
+                        server_id,
+                        request_id,
+                        method,
+                        params,
+                        ..
+                    } = request;
+                    let call = McpCall {
+                        server: server_id.0.to_string(),
+                        request: request_id.0.to_string().into(),
+                        method,
+                        params,
+                    };
+                    let agent = cx.clone();
+                    let notifier = McpNotifier::new(move |method, params| {
+                        let notification = MessageMcpNotification::new(
+                            server_id.clone(),
+                            request_id.clone(),
+                            method,
+                        )
+                        .params(params);
+                        let _ = agent.send_notification(notification);
+                    });
+                    let cancellation = responder.cancellation();
+                    let cancelled = Box::pin(async move { cancellation.cancelled().await });
+                    cx.spawn(async move {
+                        match provider.call(call, notifier, cancelled).await {
+                            McpOutcome::Result(result) => {
+                                responder.respond(MessageMcpResponse::success(result))
+                            }
+                            McpOutcome::Error(error) => {
+                                responder.respond(MessageMcpResponse::error(error))
+                            }
+                            McpOutcome::Cancelled => {
+                                responder.respond_with_error(Error::request_cancelled())
+                            }
+                        }
+                    })
+                },
+                agent_client_protocol::on_receive_request!(),
             );
 
         let (cx_tx, cx_rx) = oneshot::channel();
@@ -465,7 +527,7 @@ impl AgentConnection {
         match cx_rx.await {
             Ok(cx) => Ok((
                 Self {
-                    handle: AgentHandle::new(cx, options, events, session_dirs),
+                    handle: AgentHandle::new(cx, options, events, session_dirs, providers),
                     shutdown,
                     driver,
                 },

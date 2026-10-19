@@ -91,6 +91,9 @@ use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
+use weave_host_protocol::tools::ClientTool;
+use weave_host_protocol::tools::catalog;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
@@ -109,6 +112,7 @@ use crate::journal::Entry;
 use crate::journal::Journal;
 use crate::journal::Recorded;
 use crate::journal::now_ms;
+use crate::mcp::Binding;
 use crate::modes;
 use crate::session;
 use crate::session::Answer;
@@ -494,6 +498,14 @@ impl Connection {
         format!("c{}", self.id)
     }
 
+    /// The client tools the client said at hello that it runs.
+    fn client_tools(&self) -> Arc<[String]> {
+        lock(&self.hello).as_ref().map_or_else(
+            || Arc::from(Vec::new()),
+            |hello| Arc::from(hello.capabilities.client_tools.as_slice()),
+        )
+    }
+
     fn hello_info(&self) -> Result<Hello, Error> {
         lock(&self.hello)
             .clone()
@@ -554,6 +566,7 @@ impl Connection {
                 STEER_FEATURE.to_owned(),
                 DEVICES_FEATURE.to_owned(),
                 UPDATES_FEATURE.to_owned(),
+                CLIENT_TOOLS_FEATURE.to_owned(),
             ],
             acp: AcpInfo {
                 protocol_version: 1,
@@ -946,7 +959,8 @@ impl Connection {
             .shared
             .instance(&agent, &request.cwd, interactive(agent.options))
             .await?;
-        let (setup, mut notices) = setup(
+        let (setup, mut notices, binding) = setup(
+            &self.shared,
             &agent,
             &instance,
             request.cwd.clone(),
@@ -981,6 +995,7 @@ impl Connection {
             request.policy.unwrap_or_default(),
             snapshot,
             Origin::New,
+            binding,
         )?;
         let trace = self.trace(&session, request.trace)?;
         updates::look_for_update(&self.shared, &session);
@@ -1042,12 +1057,13 @@ impl Connection {
             .shared
             .instance(&agent, &cwd, interactive(agent.options))
             .await?;
-        let (setup, notices) = setup(&agent, &instance, cwd, Vec::new());
+        let (setup, notices, binding) = setup(&self.shared, &agent, &instance, cwd, Vec::new());
         match reopen(
             &self.shared,
             instance,
             session_id.clone(),
             setup,
+            binding,
             &agent,
             PermissionPolicy::ask(),
             true,
@@ -1100,7 +1116,10 @@ impl Connection {
         lock(&self.attached).insert(session_id);
         let command = Command::Attach {
             client: self.id,
-            link: ClientLink { cx },
+            link: ClientLink {
+                cx,
+                client_tools: self.client_tools(),
+            },
             from,
             notices: ready.notices,
             trace: ready.trace,
@@ -1282,12 +1301,14 @@ impl Connection {
     async fn answer_pending(&self, request: AnswerPendingRequest) -> Result<Empty, Error> {
         self.hello_info()?;
         let session = self.live(&request.session_id)?;
-        let answer = match (request.permission, request.elicitation) {
-            (Some(permission), None) => Answer::Permission(permission),
-            (None, Some(elicitation)) => Answer::Elicitation(elicitation),
+        let answer = match (request.permission, request.elicitation, request.client_tool) {
+            (Some(permission), None, None) => Answer::Permission(permission),
+            (None, Some(elicitation), None) => Answer::Elicitation(elicitation),
+            (None, None, Some(result)) => Answer::ClientTool(result),
             _ => {
-                return Err(Error::invalid_params()
-                    .data("answer with exactly one of `permission` and `elicitation`"));
+                return Err(Error::invalid_params().data(
+                    "answer with exactly one of `permission`, `elicitation` and `clientTool`",
+                ));
             }
         };
         let (reply, answered) = oneshot::channel();
@@ -1307,7 +1328,10 @@ impl Connection {
         cx: ConnectionTo<HostClient>,
     ) -> Result<RunResponse, Error> {
         self.hello_info()?;
-        let link = request.attach.then(|| (self.id, ClientLink { cx }));
+        let link = request.attach.then(|| {
+            let client_tools = self.client_tools();
+            (self.id, ClientLink { cx, client_tools })
+        });
         let attaching = link.is_some();
         let (session_id, state) = run(&self.shared, request, link).await?;
         if attaching {
@@ -1338,18 +1362,34 @@ fn dormant(session_id: &SessionId, agent_id: &str, recorded: &Recorded) -> Sessi
 }
 
 /// How a session in `cwd` is set up for `instance`'s agent: the configured MCP servers it
-/// accepts, and `additional_directories` if it accepts those; with a notice for each left out.
+/// accepts, the Host MCP server, and `additional_directories` if it accepts those; with a
+/// notice for each left out, and the Host MCP server's declaration for the session to keep.
 pub(crate) fn setup(
+    shared: &Arc<Shared>,
     agent: &Agent,
     instance: &Instance,
     cwd: PathBuf,
     mut additional_directories: Vec<PathBuf>,
-) -> (SessionSetup, Vec<String>) {
+) -> (SessionSetup, Vec<String>, Option<Binding>) {
     let capabilities = instance
         .init()
         .map(|init| init.agent_capabilities.clone())
         .unwrap_or_default();
-    let (mcp_servers, mut notices) = agent.config.mcp_servers(&capabilities.mcp_capabilities);
+    let (mut mcp_servers, mut notices) = agent.config.mcp_servers(&capabilities.mcp_capabilities);
+    let binding = match shared.mcp.declare(
+        client_tools(agent),
+        &capabilities.mcp_capabilities,
+        &shared.config.mcp_bridge,
+    ) {
+        Ok((server, binding)) => {
+            mcp_servers.push(server);
+            Some(binding)
+        }
+        Err(why) => {
+            notices.push(format!("weave's client tools are unavailable: {why}"));
+            None
+        }
+    };
     if !additional_directories.is_empty()
         && capabilities
             .session_capabilities
@@ -1367,7 +1407,17 @@ pub(crate) fn setup(
             mcp_servers,
         },
         notices,
+        binding,
     )
+}
+
+/// The client tools `agent` is offered: the catalog, less what its configuration leaves out.
+fn client_tools(agent: &Agent) -> Vec<ClientTool> {
+    let chosen = agent.config.client_tools(&agent.id);
+    catalog()
+        .into_iter()
+        .filter(|tool| chosen.is_none_or(|names| names.contains(&tool.name)))
+        .collect()
 }
 
 /// Open `request`'s session and start its turn; see [`crate::Daemon::run`]. `link` is the
@@ -1398,9 +1448,14 @@ pub(crate) async fn run(
         (Some(session), _) => session,
         (None, Some(session_id)) => {
             let instance = shared.instance(&agent, &cwd, options).await?;
-            let (setup, more) = setup(&agent, &instance, cwd, additional_directories);
+            let (setup, more, binding) =
+                setup(shared, &agent, &instance, cwd, additional_directories);
             notices = more;
-            match reopen(shared, instance, session_id, setup, &agent, policy, false).await {
+            match reopen(
+                shared, instance, session_id, setup, binding, &agent, policy, false,
+            )
+            .await
+            {
                 Ok(session) => session,
                 Err((error, instance)) => {
                     if let Some(instance) = instance {
@@ -1412,7 +1467,8 @@ pub(crate) async fn run(
         }
         (None, None) => {
             let instance = shared.instance(&agent, &cwd, options).await?;
-            let (setup, more) = setup(&agent, &instance, cwd, additional_directories);
+            let (setup, more, binding) =
+                setup(shared, &agent, &instance, cwd, additional_directories);
             notices = more;
             let response = match instance.connection.new_session(&setup).await {
                 Ok(response) => response,
@@ -1435,6 +1491,7 @@ pub(crate) async fn run(
                 policy,
                 snapshot,
                 Origin::New,
+                binding,
             )?
         }
     };
@@ -1484,11 +1541,13 @@ pub(crate) async fn run(
 /// stopped Host left, or reopen it in the agent, loading it when `replay` asks for its
 /// history and there's no journal to show instead. On failure the agent comes back, unless
 /// it's gone.
+#[allow(clippy::too_many_arguments)]
 async fn reopen(
     shared: &Arc<Shared>,
     mut instance: Instance,
     session_id: SessionId,
     setup: SessionSetup,
+    binding: Option<Binding>,
     agent: &Agent,
     policy: PermissionPolicy,
     replay: bool,
@@ -1569,6 +1628,7 @@ async fn reopen(
         policy,
         snapshot,
         Origin::Reopened(journal),
+        binding,
     ) {
         Ok(session) => Ok(session),
         Err(error) => Err((error, None)),
@@ -1601,6 +1661,7 @@ fn open(
     policy: PermissionPolicy,
     snapshot: Snapshot,
     origin: Origin,
+    binding: Option<Binding>,
 ) -> Result<SessionHandle, Error> {
     let (journal, blank) = match origin {
         Origin::New => (None, true),
@@ -1640,6 +1701,7 @@ fn open(
             cwd,
             additional_directories,
             blank,
+            binding,
         },
     ))
 }

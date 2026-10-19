@@ -23,6 +23,8 @@ pub const WRONG_AGENT: i32 = -32067;
 pub const REQUIRES_TERMINAL: i32 = -32068;
 /// Only local clients may ask this: it administers the Host.
 pub const FORBIDDEN: i32 = -32069;
+/// The pending request is a client tool call for another client.
+pub const NOT_TARGET: i32 = -32070;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -86,6 +88,13 @@ pub fn forbidden() -> Error {
     Error::new(
         FORBIDDEN,
         "only a client on the Host's computer may do this",
+    )
+}
+
+pub fn not_target() -> Error {
+    Error::new(
+        NOT_TARGET,
+        "this tool call is for the client that sent the turn",
     )
 }
 

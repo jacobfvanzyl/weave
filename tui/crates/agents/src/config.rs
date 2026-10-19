@@ -33,6 +33,9 @@
 //! args = ["--acp"]
 //! env = { LOG = "debug" }
 //!
+//! client_tools = ["clipboard_write"] # the client tools agents are offered; all when absent,
+//!                                     # [] for none; `[agents.<id>] client_tools` overrides it
+//!
 //! [[mcp_servers]]            # stdio
 //! name = "files"
 //! command = "mcp-server-filesystem"
@@ -78,6 +81,8 @@ pub struct Config {
     pub agents: BTreeMap<String, AgentConfig>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// The client tools the Host MCP server offers agents, by name: all of them when absent.
+    pub client_tools: Option<Vec<String>>,
     /// The TUI's section, for it to parse.
     #[serde(default)]
     pub tui: toml::Table,
@@ -115,6 +120,8 @@ pub struct AgentConfig {
     /// to headless `weave run` sessions. Codex's adapter restores no mode, so for those set
     /// its own `INITIAL_AGENT_MODE` in `env` too.
     pub mode: Option<String>,
+    /// The client tools this agent is offered, instead of the top-level `client_tools`.
+    pub client_tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,6 +254,15 @@ impl Config {
         self.agents.get(id)?.mode.as_deref()
     }
 
+    /// The client tools agent `id` is offered, by name: its own setting, else the top-level
+    /// one; `None` for all of them.
+    pub fn client_tools(&self, id: &str) -> Option<&[String]> {
+        self.agents
+            .get(id)
+            .and_then(|agent| agent.client_tools.as_deref())
+            .or(self.client_tools.as_deref())
+    }
+
     /// The agent names the config and presets know, for error messages.
     pub fn known_agents(&self) -> Vec<String> {
         weave_acp_core::preset_ids()
@@ -370,6 +386,24 @@ mod tests {
         std::fs::write(Lock::beside(&path), "not toml [").expect("a broken lock");
         let broken = Config::load(Some(&path)).expect("still loads");
         assert_eq!(broken.config.lock, Lock::default());
+    }
+
+    #[test]
+    fn client_tools_are_all_unless_set_and_an_agent_overrides_them() {
+        assert_eq!(parse("").client_tools("claude"), None);
+        let config = parse(
+            r#"
+            client_tools = []
+
+            [agents.codex]
+            client_tools = ["clipboard_write"]
+            "#,
+        );
+        assert_eq!(config.client_tools("claude"), Some(&[][..]));
+        assert_eq!(
+            config.client_tools("codex"),
+            Some(&["clipboard_write".to_owned()][..])
+        );
     }
 
     #[test]

@@ -22,6 +22,8 @@ use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::Responder;
+use serde_json::Map;
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use weave_acp_core::AgentConnection;
@@ -76,6 +78,7 @@ use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::SteerTurnResponse;
 
 use crate::Agent;
@@ -87,6 +90,7 @@ use crate::journal::Journal;
 use crate::journal::Recorded;
 use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
+use crate::mcp::Binding;
 use crate::updates::Feed;
 use crate::updates::describe;
 
@@ -96,10 +100,16 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// One connection to the Host.
 pub(crate) type ClientId = u64;
 
-/// An attached client: how to reach it.
+/// An attached client: how to reach it, and the client tools it runs.
 #[derive(Clone)]
 pub(crate) struct ClientLink {
     pub(crate) cx: ConnectionTo<HostClient>,
+    pub(crate) client_tools: Arc<[String]>,
+}
+
+/// A connection's `clientId`.
+pub(crate) fn client_id(client: ClientId) -> String {
+    format!("c{client}")
 }
 
 /// What a session's agent says about it now: its modes and config options.
@@ -177,6 +187,17 @@ impl AttachReply {
 pub(crate) enum Answer {
     Permission(RequestPermissionResponse),
     Elicitation(CreateElicitationResponse),
+    ClientTool(ClientToolResult),
+}
+
+/// The agent called a client tool on the Host MCP server: a pending request for the client
+/// that sent the running turn's latest prompt or steer.
+pub(crate) struct ClientToolCall {
+    /// Which call it is, should the agent cancel it.
+    pub(crate) call: u64,
+    pub(crate) tool: String,
+    pub(crate) arguments: Map<String, Value>,
+    pub(crate) reply: oneshot::Sender<ClientToolResult>,
 }
 
 pub(crate) enum Command {
@@ -239,6 +260,15 @@ pub(crate) enum Command {
     /// the agent's current version.
     Reopen {
         reply: oneshot::Sender<Result<ReopenSessionResponse, Error>>,
+    },
+    ClientTool(ClientToolCall),
+    /// The agent cancelled a client tool call.
+    WithdrawClientTool {
+        call: u64,
+    },
+    /// Tell the session's clients something, in the journal.
+    Notice {
+        text: String,
     },
 }
 
@@ -338,6 +368,8 @@ pub(crate) struct Opened {
     pub(crate) additional_directories: Vec<PathBuf>,
     /// Opened by `session/create`, so blank until it's prompted.
     pub(crate) blank: bool,
+    /// The Host MCP server's declaration for the session, when it has one.
+    pub(crate) binding: Option<Binding>,
 }
 
 /// Start the task that owns a session, and register it with the Host.
@@ -353,6 +385,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         cwd,
         additional_directories,
         blank,
+        binding,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
@@ -400,8 +433,12 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
             },
         );
     }
+    if let Some(binding) = &binding {
+        binding.bind(&session_id);
+    }
     let actor = Actor {
         root: session_id,
+        binding,
         shared: Arc::clone(shared),
         handle: connection.handle(),
         connection: Some(connection),
@@ -440,11 +477,17 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
 struct Turn {
     started_ms: u64,
     origin: TurnOrigin,
+    /// Who sent its latest prompt or steer, which client tool calls go to.
+    latest: TurnOrigin,
 }
 
 enum PendingRequest {
     Permission(PermissionRequest),
     Elicitation(ElicitationRequest),
+    ClientTool {
+        call: ClientToolCall,
+        target: ClientId,
+    },
 }
 
 /// A request waiting on a person.
@@ -456,11 +499,22 @@ struct Pending {
 }
 
 impl Pending {
-    fn key(&self) -> RequestKey {
+    /// The agent's request, for one it sent over ACP.
+    fn key(&self) -> Option<RequestKey> {
         match &self.request {
-            PendingRequest::Permission(request) => request.key,
-            PendingRequest::Elicitation(request) => request.key,
+            PendingRequest::Permission(request) => Some(request.key),
+            PendingRequest::Elicitation(request) => Some(request.key),
+            PendingRequest::ClientTool { .. } => None,
         }
+    }
+
+    /// The client tool call `call`, or the client tool calls for `client`.
+    fn is_call(&self, which: u64) -> bool {
+        matches!(&self.request, PendingRequest::ClientTool { call, .. } if call.call == which)
+    }
+
+    fn is_for(&self, client: ClientId) -> bool {
+        matches!(&self.request, PendingRequest::ClientTool { target, .. } if *target == client)
     }
 
     /// As clients see it.
@@ -476,14 +530,28 @@ impl Pending {
                 PendingRequest::Elicitation(request) => PendingKind::Elicitation {
                     request: request.request.clone(),
                 },
+                PendingRequest::ClientTool { call, target } => PendingKind::ClientTool {
+                    tool: call.tool.clone(),
+                    arguments: call.arguments.clone(),
+                    target: client_id(*target),
+                },
             },
         }
     }
 
     fn cancel(self) {
+        self.cancel_with("The tool call was cancelled before the client answered.");
+    }
+
+    /// Cancel it; a client tool call's agent is told `why`.
+    fn cancel_with(self, why: &str) {
         let _ = match self.request {
             PendingRequest::Permission(request) => request.cancel(),
             PendingRequest::Elicitation(request) => request.cancel(),
+            PendingRequest::ClientTool { call, .. } => {
+                let _ = call.reply.send(ClientToolResult::error(why));
+                Ok(())
+            }
         };
     }
 
@@ -491,6 +559,8 @@ impl Pending {
         let _ = match self.request {
             PendingRequest::Permission(request) => request.withdrawn(),
             PendingRequest::Elicitation(request) => request.withdrawn(),
+            // Its caller has gone.
+            PendingRequest::ClientTool { .. } => Ok(()),
         };
     }
 }
@@ -516,6 +586,8 @@ struct Reported {
 
 struct Actor {
     root: SessionId,
+    /// The Host MCP server's declaration for the agent's process, which goes with it.
+    binding: Option<Binding>,
     shared: Arc<Shared>,
     handle: AgentHandle,
     connection: Option<AgentConnection>,
@@ -624,6 +696,7 @@ impl Actor {
             } => self.attach(client, link, from, notices, trace, reply),
             Command::Detach { client } => {
                 self.clients.remove(&client);
+                self.client_left(client);
             }
             Command::Prompt {
                 origin,
@@ -651,6 +724,7 @@ impl Actor {
             }
             Command::Close { client, done } => {
                 self.clients.remove(&client);
+                self.client_left(client);
                 if self.is_idle() {
                     self.waiting.push(done);
                     self.stop(Ending::Closed("closed".to_owned()));
@@ -668,6 +742,70 @@ impl Actor {
             }
             Command::UpdateAvailable { latest } => self.update_available(latest),
             Command::Reopen { reply } => self.reopens.push(reply),
+            Command::ClientTool(call) => self.client_tool(call),
+            Command::WithdrawClientTool { call } => {
+                if let Some(index) = self.pending.iter().position(|p| p.is_call(call)) {
+                    let pending = self.pending.remove(index);
+                    self.resolved(&pending.id, Resolution::Withdrawn, None);
+                    pending.withdrawn();
+                }
+            }
+            Command::Notice { text } => {
+                self.record(Entry::Notice { text });
+            }
+        }
+    }
+
+    /// A client tool call goes to the client that sent the running turn's latest prompt or
+    /// steer, if it's attached and runs the tool; otherwise the agent learns why not at once.
+    fn client_tool(&mut self, call: ClientToolCall) {
+        let target = match self.turns.get(&self.root).map(|turn| &turn.latest) {
+            None => Err("No turn is running, so nobody's device can run it.".to_owned()),
+            Some(TurnOrigin::Run {}) => Err(
+                "This turn came from a headless run, so no person's device is attached.".to_owned(),
+            ),
+            Some(TurnOrigin::Client { id, .. }) => self
+                .clients
+                .iter()
+                .find(|(client, _)| client_id(**client) == *id)
+                .ok_or_else(|| {
+                    "The device of the person who sent this turn isn't connected.".to_owned()
+                })
+                .and_then(|(client, link)| {
+                    if link.client_tools.contains(&call.tool) {
+                        Ok(*client)
+                    } else {
+                        Err(format!(
+                            "The device of the person who sent this turn can't run {}.",
+                            call.tool
+                        ))
+                    }
+                }),
+        };
+        match target {
+            Ok(target) => {
+                let session_id = Some(self.root.clone());
+                self.ask(session_id, PendingRequest::ClientTool { call, target });
+            }
+            Err(why) => {
+                let _ = call.reply.send(ClientToolResult::error(why));
+            }
+        }
+    }
+
+    /// `client` left: the client tool calls only it could answer fail, as ones that may have
+    /// run.
+    fn client_left(&mut self, client: ClientId) {
+        let (left, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|pending| pending.is_for(client));
+        self.pending = kept;
+        for pending in left {
+            self.resolved(&pending.id, Resolution::Cancelled, None);
+            pending.cancel_with(
+                "The device that was to run the tool went away before it answered; the tool \
+                 may have run.",
+            );
         }
     }
 
@@ -800,6 +938,7 @@ impl Actor {
             session_id,
             Turn {
                 started_ms: at,
+                latest: origin.clone(),
                 origin,
             },
         );
@@ -843,6 +982,9 @@ impl Actor {
                         "the agent started a turn of its own with a steered message; \
                          the Host won't see it end"
                     );
+                }
+                if let Some(turn) = self.turns.get_mut(&steer.session_id) {
+                    turn.latest = steer.origin.clone();
                 }
                 let (seq, _) = self.record(Entry::TurnSteered {
                     session_id: steer.session_id,
@@ -937,7 +1079,7 @@ impl Actor {
                 });
             }
             AgentEvent::RequestWithdrawn(key) => {
-                if let Some(index) = self.pending.iter().position(|p| p.key() == key) {
+                if let Some(index) = self.pending.iter().position(|p| p.key() == Some(key)) {
                     let pending = self.pending.remove(index);
                     self.resolved(&pending.id, Resolution::Withdrawn, None);
                     pending.withdrawn();
@@ -1007,9 +1149,15 @@ impl Actor {
             (&self.pending[index].request, &answer),
             (PendingRequest::Permission(_), Answer::Permission(_))
                 | (PendingRequest::Elicitation(_), Answer::Elicitation(_))
+                | (PendingRequest::ClientTool { .. }, Answer::ClientTool(_))
         );
         if !matches {
             return Err(Error::invalid_params().data("that answer is for another kind of request"));
+        }
+        if let PendingRequest::ClientTool { target, .. } = &self.pending[index].request
+            && client_id(*target) != by
+        {
+            return Err(errors::not_target());
         }
         let pending = self.pending.remove(index);
         self.resolved(&pending.id, Resolution::Answered, Some(by));
@@ -1019,6 +1167,10 @@ impl Actor {
             }
             (PendingRequest::Elicitation(request), Answer::Elicitation(response)) => {
                 request.respond_with(response)
+            }
+            (PendingRequest::ClientTool { call, .. }, Answer::ClientTool(result)) => {
+                let _ = call.reply.send(result);
+                Ok(())
             }
             _ => Ok(()),
         };
@@ -1272,13 +1424,15 @@ impl Actor {
     /// `&mut self`: the actor isn't `Sync`, so its futures can't hold `&Actor`.)
     async fn start(&mut self, agent: &Agent) -> Result<Instance, Error> {
         let launch = self.shared.launch(agent, &self.cwd);
-        Instance::start_traced(
+        let instance = Instance::start_traced(
             &self.shared.config.launcher,
             &launch,
             self.options,
             Arc::clone(&self.traces),
         )
-        .await
+        .await?;
+        self.shared.provide_mcp(&instance);
+        Ok(instance)
     }
 
     /// Close the session in the running process, and stop it.
@@ -1309,7 +1463,8 @@ impl Actor {
     /// Take the session up in `instance`: resumed, or loaded with its replay dropped, which
     /// the journal has already.
     async fn take_up(&mut self, instance: &mut Instance, agent: &Agent) -> Result<Snapshot, Error> {
-        let (setup, _) = crate::client::setup(
+        let (setup, _, binding) = crate::client::setup(
+            &self.shared,
             agent,
             instance,
             self.cwd.clone(),
@@ -1336,6 +1491,11 @@ impl Actor {
             instance.discard_queued_events();
             loaded?
         };
+        // The new process's declaration replaces the last one's.
+        if let Some(binding) = &binding {
+            binding.bind(&self.root);
+        }
+        self.binding = binding;
         Ok(Snapshot {
             modes,
             config_options: config_options.unwrap_or_default(),

@@ -35,7 +35,10 @@ use weave_daemon::DaemonConfig;
 use weave_daemon::Launch;
 use weave_daemon::Launcher;
 use weave_daemon::Withheld;
+use weave_daemon::mcp;
 use weave_fake_agent::FakeAgentConfig;
+use weave_fake_agent::StdioMcp;
+use weave_fake_agent::StdioPipes;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_protocol::Host;
@@ -69,6 +72,8 @@ use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::tools::CLIPBOARD_WRITE;
+use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
@@ -78,12 +83,21 @@ use weave_host_protocol::turns::SteerTurnResponse;
 
 const WAIT: Duration = Duration::from_secs(10);
 
-/// Fake agents in-process, sharing `state` so sessions outlive any one of them.
+/// Fake agents in-process, sharing `state` so sessions outlive any one of them. The stdio
+/// MCP servers they're given are the Host's bridge, which they run in-process too: the same
+/// relay `weave mcp-bridge` runs, to the Host's MCP socket.
 fn fake_agents(state: PathBuf, require_auth: bool) -> Launcher {
+    fake_agents_with(state, require_auth, false)
+}
+
+/// [`fake_agents`], advertising MCP servers over ACP when `mcp_over_acp`.
+fn fake_agents_with(state: PathBuf, require_auth: bool, mcp_over_acp: bool) -> Launcher {
     Arc::new(move |_launch: &Launch, options: ClientOptions, _traces| {
         let config = FakeAgentConfig {
             state_path: Some(state.clone()),
             require_auth,
+            mcp_over_acp,
+            stdio_mcp: in_process_bridge(),
             ..FakeAgentConfig::default()
         };
         Box::pin(async move {
@@ -92,6 +106,32 @@ fn fake_agents(state: PathBuf, require_auth: bool) -> Launcher {
             AgentConnection::connect(client, options)
                 .await
                 .map_err(|error| Error::internal_error().data(error.to_string()))
+        })
+    })
+}
+
+/// Runs a stdio MCP server's bridge in-process, with the socket and token it was given.
+fn in_process_bridge() -> StdioMcp {
+    StdioMcp::new(|server| {
+        Box::pin(async move {
+            let var = |name: &str| {
+                server
+                    .env
+                    .iter()
+                    .find(|var| var.name == name)
+                    .map(|var| var.value.clone())
+                    .ok_or_else(|| std::io::Error::other(format!("no {name}")))
+            };
+            let socket = PathBuf::from(var(mcp::SOCKET_VARIABLE)?);
+            let token = var(mcp::TOKEN_VARIABLE)?;
+            let (agent, bridge) = tokio::io::duplex(1 << 16);
+            let (from_agent, to_agent) = tokio::io::split(bridge);
+            tokio::spawn(async move {
+                let _ = mcp::relay(&socket, &token, from_agent, to_agent).await;
+            });
+            let (read, write) = tokio::io::split(agent);
+            let pipes: StdioPipes = (Box::new(read), Box::new(write));
+            Ok(pipes)
         })
     })
 }
@@ -125,7 +165,29 @@ impl World {
         blank_grace: Duration,
         require_auth: bool,
     ) -> Daemon {
-        Daemon::new(DaemonConfig {
+        Daemon::new(self.config(journals, idle_grace, blank_grace, require_auth))
+    }
+
+    /// A Host whose agents take MCP servers over ACP.
+    fn daemon_over_acp(&self) -> Daemon {
+        let mut config = self.config(
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.launcher = fake_agents_with(self.dir.path().join("agent-state.json"), false, true);
+        Daemon::new(config)
+    }
+
+    fn config(
+        &self,
+        journals: bool,
+        idle_grace: Duration,
+        blank_grace: Duration,
+        require_auth: bool,
+    ) -> DaemonConfig {
+        DaemonConfig {
             journals: journals.then(|| self.journals()),
             idle_grace,
             blank_grace,
@@ -139,7 +201,9 @@ impl World {
             traces: self.dir.path().join("traces"),
             devices: Some(self.dir.path().join("devices.json")),
             upstream: Arc::new(weave_agents::update::Offline),
-        })
+            mcp_socket: None,
+            mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
+        }
     }
 
     fn journals(&self) -> PathBuf {
@@ -157,13 +221,27 @@ impl World {
     }
 
     async fn client(&self, daemon: &Daemon) -> TestClient {
+        self.client_with(daemon, ClientCapabilities::default())
+            .await
+    }
+
+    /// A client that runs client tools, as the TUI does.
+    async fn tool_client(&self, daemon: &Daemon) -> TestClient {
+        let capabilities = ClientCapabilities {
+            client_tools: vec![CLIPBOARD_WRITE.to_owned()],
+            ..ClientCapabilities::default()
+        };
+        self.client_with(daemon, capabilities).await
+    }
+
+    async fn client_with(&self, daemon: &Daemon, capabilities: ClientCapabilities) -> TestClient {
         let (connection, events) = HostConnection::connect(
             daemon.connect_in_process(),
             ClientInfo {
                 name: "test".to_owned(),
                 version: "0".to_owned(),
             },
-            ClientCapabilities::default(),
+            capabilities,
         )
         .await
         .expect("connect");
@@ -195,6 +273,7 @@ struct Seen {
     steered_seqs: Vec<u64>,
     ended: Option<StopReason>,
     closed: Option<String>,
+    notices: Vec<String>,
 }
 
 fn text(block: &ContentBlock) -> String {
@@ -365,6 +444,42 @@ impl TestClient {
                     )),
                 )),
                 elicitation: None,
+                client_tool: None,
+            })
+            .await
+            .map(drop)
+    }
+
+    /// Wait for a pending client tool call.
+    async fn tool_call(&mut self, seen: &mut Seen) -> (SessionId, PendingRequest) {
+        loop {
+            match self.next().await {
+                HostEvent::PendingAdded(added)
+                    if matches!(added.pending.request, PendingKind::ClientTool { .. }) =>
+                {
+                    return (added.session_id, added.pending);
+                }
+                event => {
+                    self.note(event, seen, None).await;
+                }
+            }
+        }
+    }
+
+    /// Answer a client tool call with `result`.
+    async fn run_tool(
+        &self,
+        session_id: &SessionId,
+        call: &PendingRequest,
+        result: ClientToolResult,
+    ) -> Result<(), Error> {
+        self.connection
+            .send(AnswerPendingRequest {
+                session_id: session_id.clone(),
+                pending_id: call.id.clone(),
+                permission: None,
+                elicitation: None,
+                client_tool: Some(result),
             })
             .await
             .map(drop)
@@ -416,6 +531,7 @@ impl Seen {
                 return true;
             }
             SessionEvent::Closed { reason } => self.closed = Some(reason),
+            SessionEvent::Notice { text } => self.notices.push(text),
             _ => {}
         }
         false
@@ -1364,4 +1480,256 @@ async fn a_client_from_before_this_protocol_is_told_the_version() {
         .and_then(serde_json::Value::as_u64);
     assert_eq!(protocol, Some(2));
     driver.abort();
+}
+
+/// The fake agent's script for a client tool call.
+const COPY: &str = r#"tool clipboard_write {"text": "cargo test"}"#;
+
+#[tokio::test]
+async fn a_client_tool_call_goes_to_the_client_that_sent_the_turn() {
+    client_tools_reach_the_turns_client(false).await;
+}
+
+#[tokio::test]
+async fn client_tools_reach_agents_that_take_mcp_over_acp() {
+    client_tools_reach_the_turns_client(true).await;
+}
+
+/// The call is a pending request every attached client sees, which only the client that sent
+/// the turn may answer, through the stdio bridge or over ACP.
+async fn client_tools_reach_the_turns_client(over_acp: bool) {
+    let world = World::new();
+    let daemon = if over_acp {
+        world.daemon_over_acp()
+    } else {
+        world.daemon(false, Duration::from_secs(60))
+    };
+    let mut runner = world.tool_client(&daemon).await;
+    let session_id = runner.create(&world).await;
+    let mut other = world.tool_client(&daemon).await;
+    other.attach(&session_id).await;
+
+    runner.prompt(&session_id, COPY).await;
+    let mut seen = Seen::default();
+    let (_, call) = runner.tool_call(&mut seen).await;
+    assert_eq!(
+        call.request,
+        PendingKind::ClientTool {
+            tool: CLIPBOARD_WRITE.to_owned(),
+            arguments: serde_json::json!({"text": "cargo test"})
+                .as_object()
+                .cloned()
+                .expect("an object"),
+            target: runner.connection.client_id().clone(),
+        }
+    );
+    let (_, seen_by_other) = other.tool_call(&mut Seen::default()).await;
+    assert_eq!(seen_by_other.id, call.id);
+    let refused = other
+        .run_tool(&session_id, &call, ClientToolResult::text("not mine"))
+        .await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|error| errors::is(error, errors::NOT_TARGET)),
+        "{refused:?}"
+    );
+
+    runner
+        .run_tool(&session_id, &call, ClientToolResult::text("Copied."))
+        .await
+        .expect("the target answers");
+    runner.until_turn_ends(&mut seen, None).await;
+    assert!(
+        seen.agent.contains("clipboard_write answered: Copied."),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_client_tool_call_fails_at_once_without_a_client_that_runs_it() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    // This client runs no client tools.
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, COPY).await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(
+        seen.agent.contains(
+            "clipboard_write failed: The device of the person who sent this turn can't run \
+             clipboard_write."
+        ),
+        "{seen:?}"
+    );
+
+    // Nor has a headless run anyone's device.
+    let mut request = run_request(&world, &world.cwd().join("unused"), Vec::new());
+    request.prompt = vec![ContentBlock::from(COPY.to_owned())];
+    request.attach = true;
+    client.connection.send(request).await.expect("session/run");
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(seen.agent.contains("came from a headless run"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_client_tool_call_fails_as_one_that_may_have_run_when_its_client_leaves() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut runner = world.tool_client(&daemon).await;
+    let session_id = runner.create(&world).await;
+    let mut watcher = world.client(&daemon).await;
+    watcher.attach(&session_id).await;
+
+    runner.prompt(&session_id, COPY).await;
+    let (_, call) = runner.tool_call(&mut Seen::default()).await;
+    runner.connection.shutdown().await;
+
+    let mut seen = Seen::default();
+    let mut resolved = None;
+    loop {
+        let event = watcher.next().await;
+        if let HostEvent::PendingResolved(event) = &event {
+            resolved = Some((event.pending_id.clone(), event.outcome));
+        }
+        if watcher.note(event, &mut seen, None).await {
+            break;
+        }
+    }
+    assert_eq!(resolved, Some((call.id, Resolution::Cancelled)));
+    assert!(seen.agent.contains("the tool may have run"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn cancelling_the_turn_cancels_its_client_tool_call() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut runner = world.tool_client(&daemon).await;
+    let session_id = runner.create(&world).await;
+    runner.prompt(&session_id, COPY).await;
+    let (_, call) = runner.tool_call(&mut Seen::default()).await;
+    runner
+        .connection
+        .send(CancelTurnRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("turn/cancel");
+    loop {
+        if let HostEvent::PendingResolved(resolved) = runner.next().await {
+            assert_eq!(resolved.pending_id, call.id);
+            assert_eq!(resolved.outcome, Resolution::Cancelled);
+            break;
+        }
+    }
+    let late = runner
+        .run_tool(&session_id, &call, ClientToolResult::text("too late"))
+        .await;
+    assert!(
+        late.as_ref()
+            .is_err_and(|error| errors::is(error, errors::ALREADY_RESOLVED)),
+        "{late:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_configuration_decides_which_client_tools_agents_are_offered() {
+    let world = World::new();
+    std::fs::write(
+        world.dir.path().join("config.toml"),
+        "client_tools = []\n\n[agents.fake]\ncommand = \"fake-agent\"\n",
+    )
+    .expect("config");
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut runner = world.tool_client(&daemon).await;
+    let session_id = runner.create(&world).await;
+    runner.prompt(&session_id, COPY).await;
+    let mut seen = Seen::default();
+    runner.until_turn_ends(&mut seen, None).await;
+    assert!(
+        seen.agent.contains("unknown tool: clipboard_write"),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_on_an_older_mcp_is_refused_and_its_clients_told() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "mcp-legacy").await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(seen.agent.contains("weave refused initialize"), "{seen:?}");
+    assert!(seen.agent.contains("-32022"), "{seen:?}");
+    // The notice may come after the turn's end.
+    while seen.notices.is_empty() {
+        let event = client.next().await;
+        client.note(event, &mut seen, None).await;
+    }
+    assert_eq!(seen.notices.len(), 1);
+    assert!(
+        seen.notices[0].contains("predates MCP 2026-07-28"),
+        "{seen:?}"
+    );
+
+    // Later clients see it in the journal.
+    let mut later = world.client(&daemon).await;
+    later.attach_after(&session_id, None).await.expect("attach");
+    let mut replayed = Seen::default();
+    while replayed.notices.is_empty() {
+        let event = later.next().await;
+        later.note(event, &mut replayed, None).await;
+    }
+}
+
+#[tokio::test]
+async fn the_mcp_socket_is_private_and_refuses_an_unknown_token() {
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+
+    let world = World::new();
+    let socket = world.dir.path().join("mcp.sock");
+    let mut config = world.config(
+        false,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        false,
+    );
+    config.mcp_socket = Some(socket.clone());
+    let daemon = Daemon::new(config);
+    let mut client = world.client(&daemon).await;
+    // Declaring the server for a session starts the socket.
+    client.create(&world).await;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&socket)
+            .expect("the socket")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    let (agent, bridge) = tokio::io::duplex(4096);
+    let (from_agent, to_agent) = tokio::io::split(bridge);
+    tokio::spawn(async move {
+        let _ = mcp::relay(&socket, "not-a-token", from_agent, to_agent).await;
+    });
+    let (mut read, mut write) = tokio::io::split(agent);
+    let discover = r#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+    write
+        .write_all(format!("{discover}\n").as_bytes())
+        .await
+        .expect("written");
+    // The Host closes the connection without answering.
+    let mut answer = String::new();
+    tokio::time::timeout(WAIT, read.read_to_string(&mut answer))
+        .await
+        .expect("closed in time")
+        .expect("read");
+    assert_eq!(answer, "");
 }

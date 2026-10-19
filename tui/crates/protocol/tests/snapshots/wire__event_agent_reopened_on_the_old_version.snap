@@ -24,7 +24,8 @@ expression: "message(&SessionEventNotification\n{\n    session_id: \"s-1\".into(
             },
             "mcpCapabilities": {
               "http": false,
-              "sse": false
+              "sse": false,
+              "acp": false
             },
             "sessionCapabilities": {},
             "auth": {}

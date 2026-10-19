@@ -37,6 +37,7 @@ use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::sessions::Activity;
+use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_tui::Reconnection;
 use weave_tui::Reconnector;
 
@@ -124,14 +125,18 @@ impl Host {
     ) -> anyhow::Result<(HostConnection, UnboundedReceiver<HostEvent>)> {
         let connected = match self {
             Self::Shared(paths) => {
-                HostConnection::connect(open(paths).await?, client_info(client), capabilities())
-                    .await
+                HostConnection::connect(
+                    open(paths).await?,
+                    client_info(client),
+                    capabilities(client),
+                )
+                .await
             }
             Self::InProcess(daemon) => {
                 HostConnection::connect(
                     daemon.connect_in_process(),
                     client_info(client),
-                    capabilities(),
+                    capabilities(client),
                 )
                 .await
             }
@@ -173,18 +178,27 @@ pub(crate) fn client_info(name: &str) -> ClientInfo {
 }
 
 /// This client runs on the Host's computer, so it can run sign-in commands in its terminal.
-pub(crate) fn capabilities() -> ClientCapabilities {
+/// The TUI also runs client tools: it puts text on its terminal's clipboard.
+pub(crate) fn capabilities(client: &str) -> ClientCapabilities {
     ClientCapabilities {
         terminal_sign_in: true,
+        client_tools: if client == TUI {
+            vec![CLIPBOARD_WRITE.to_owned()]
+        } else {
+            Vec::new()
+        },
     }
 }
+
+/// The TUI's client name.
+pub(crate) const TUI: &str = "weave-tui";
 
 /// One attempt to reach a running Host again.
 async fn reconnect(paths: &DaemonPaths) -> Reconnection {
     let Ok(transport) = socket::connect(&paths.socket).await else {
         return Reconnection::NotYet;
     };
-    match HostConnection::connect(transport, client_info("weave-tui"), capabilities()).await {
+    match HostConnection::connect(transport, client_info(TUI), capabilities(TUI)).await {
         Ok((connection, events)) => Reconnection::Connected(Box::new(connection), events),
         Err(ConnectError::Incompatible(why)) => Reconnection::Incompatible(why),
         // Still starting up, say.
@@ -298,8 +312,12 @@ pub(crate) async fn control(paths: &DaemonPaths) -> anyhow::Result<Option<HostCo
             return Err(error).with_context(|| format!("connecting to {}", paths.socket.display()));
         }
     };
-    let (connection, _events) =
-        HostConnection::connect(transport, client_info("weave-cli"), capabilities()).await?;
+    let (connection, _events) = HostConnection::connect(
+        transport,
+        client_info("weave-cli"),
+        capabilities("weave-cli"),
+    )
+    .await?;
     Ok(Some(connection))
 }
 

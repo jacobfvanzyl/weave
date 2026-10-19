@@ -7,6 +7,7 @@ mod agent;
 mod connection;
 mod fs;
 mod handle;
+pub mod mcp;
 mod requests;
 mod steering;
 mod subagent_compat;

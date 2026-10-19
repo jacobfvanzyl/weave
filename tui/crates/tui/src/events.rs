@@ -98,4 +98,7 @@ pub enum ChatEvent {
     },
     /// The connection to the Host ended. Carries the reason unless it closed cleanly.
     Disconnected(Option<Error>),
+    /// Something the Host tells the session's clients, such as why its agent can't use client
+    /// tools.
+    Notice(String),
 }

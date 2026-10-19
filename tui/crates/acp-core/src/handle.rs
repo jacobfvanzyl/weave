@@ -47,6 +47,7 @@ use tokio::sync::mpsc;
 
 use crate::AgentEvent;
 use crate::ClientOptions;
+use crate::mcp::McpProvider;
 use crate::steering::SteerRequest;
 use crate::supports_steering;
 
@@ -74,6 +75,8 @@ pub(crate) struct Shared {
     pub(crate) events: mpsc::UnboundedSender<AgentEvent>,
     pub(crate) session_dirs: Arc<Mutex<HashMap<SessionId, PathBuf>>>,
     agent: OnceLock<InitializeResponse>,
+    /// What answers `mcp/message` for the MCP servers this client declares over ACP.
+    mcp: Arc<OnceLock<Arc<dyn McpProvider>>>,
 }
 
 /// A cloneable handle for everything the client asks of the agent.
@@ -88,6 +91,7 @@ impl AgentHandle {
         options: ClientOptions,
         events: mpsc::UnboundedSender<AgentEvent>,
         session_dirs: Arc<Mutex<HashMap<SessionId, PathBuf>>>,
+        mcp: Arc<OnceLock<Arc<dyn McpProvider>>>,
     ) -> Self {
         Self {
             shared: Arc::new(Shared {
@@ -96,8 +100,15 @@ impl AgentHandle {
                 events,
                 session_dirs,
                 agent: OnceLock::new(),
+                mcp,
             }),
         }
+    }
+
+    /// Answer the agent's `mcp/message` requests with `provider`, for MCP servers declared
+    /// with `"type": "acp"`. The first provider installed stays.
+    pub fn provide_mcp(&self, provider: Arc<dyn McpProvider>) {
+        let _ = self.shared.mcp.set(provider);
     }
 
     fn cx(&self) -> &ConnectionTo<Agent> {
@@ -353,6 +364,13 @@ impl AgentHandle {
                 McpServer::Sse(server) if !capabilities.mcp_capabilities.sse => {
                     return Err(unsupported(&format!(
                         "mcpCapabilities.sse (MCP server {})",
+                        server.name
+                    )));
+                }
+                // claude-agent-acp would otherwise drop it without a word.
+                McpServer::Acp(server) if !capabilities.mcp_capabilities.acp => {
+                    return Err(unsupported(&format!(
+                        "mcpCapabilities.acp (MCP server {})",
                         server.name
                     )));
                 }

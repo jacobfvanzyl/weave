@@ -152,6 +152,8 @@ pub(crate) enum Entry {
     },
     #[serde(rename_all = "camelCase")]
     Closed { reason: String, at_ms: u64 },
+    /// Something the Host told the session's clients.
+    Notice { text: String },
 }
 
 impl Entry {
@@ -254,6 +256,7 @@ impl Entry {
             Self::Closed { reason, .. } => SessionEvent::Closed {
                 reason: reason.clone(),
             },
+            Self::Notice { text } => SessionEvent::Notice { text: text.clone() },
         })
     }
 }

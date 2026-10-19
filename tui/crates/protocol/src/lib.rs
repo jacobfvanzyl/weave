@@ -13,7 +13,9 @@
 //! - [`sessions`]: listing, creating, attaching to, reopening and closing sessions.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns.
-//! - [`pending`]: permission requests and elicitations waiting on a person.
+//! - [`pending`]: permission requests and elicitations waiting on a person, and client tool
+//!   calls waiting on a client.
+//! - [`tools`]: client tools, which an attached client runs for the agent.
 //! - [`host`]: the Host's status, and stopping it.
 //!
 //! Remote clients follow `tui/docs/specs/wve-90-remote-clients.md`.
@@ -28,6 +30,7 @@ pub mod pending;
 pub mod policy;
 mod role;
 pub mod sessions;
+pub mod tools;
 pub mod turns;
 
 use agent_client_protocol::JsonRpcResponse;

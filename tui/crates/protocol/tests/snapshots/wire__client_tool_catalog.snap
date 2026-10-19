@@ -1,0 +1,24 @@
+---
+source: crates/protocol/tests/wire.rs
+expression: round_trip(&catalog())
+---
+[
+  {
+    "name": "clipboard_write",
+    "title": "Copy to clipboard",
+    "description": "Put text on the clipboard of the person's device: the device of the person who sent the current turn. It fails when nobody is connected, as in a headless run, so don't retry it then.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text to put on the clipboard."
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

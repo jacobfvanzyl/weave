@@ -21,7 +21,8 @@ expression: "round_trip(&GetAgentResponse { agent: agent(), initialize: initiali
       },
       "mcpCapabilities": {
         "http": false,
-        "sse": false
+        "sse": false,
+        "acp": false
       },
       "sessionCapabilities": {},
       "auth": {}

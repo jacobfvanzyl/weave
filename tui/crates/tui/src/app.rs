@@ -52,6 +52,8 @@ use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::tools::CLIPBOARD_WRITE;
+use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
@@ -451,7 +453,7 @@ impl App {
                 if chat.active_session() != Some(&added.session_id) {
                     return Vec::new();
                 }
-                chat.handle_agent_event(pending_event(added.pending.clone()))
+                self.pending(chat, &added.session_id, added.pending.clone())
             }
             HostEvent::PendingResolved(resolved) => {
                 let elsewhere = resolved
@@ -558,6 +560,7 @@ impl App {
                 session_id: root,
                 reason,
             },
+            SessionEvent::Notice { text } => ChatEvent::Notice(text),
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
         };
         chat.handle_agent_event(event)
@@ -680,7 +683,7 @@ impl App {
             }));
         }
         for pending in &state.pending {
-            commands.extend(chat.handle_agent_event(pending_event(pending.clone())));
+            commands.extend(self.pending(chat, &state.session_id, pending.clone()));
         }
         commands
     }
@@ -931,6 +934,15 @@ impl App {
                     }
                 }
                 AppCommand::Copy(text) => tui.copy(&text),
+                AppCommand::RunClientTool {
+                    session_id,
+                    pending_id,
+                    tool,
+                    arguments,
+                } => {
+                    let result = run_client_tool(tui, &tool, &arguments);
+                    self.answer_client_tool(session_id, pending_id, result);
+                }
                 // As Codex, only while the terminal isn't in front of the user.
                 AppCommand::Notify(message) => {
                     if self.notifications && !self.focused {
@@ -1049,6 +1061,57 @@ impl App {
         });
     }
 
+    /// A pending request of the active session: one to show, or a client tool call to run
+    /// when it's for this client. Other clients' calls are theirs to run.
+    fn pending(
+        &self,
+        chat: &mut ChatWidget,
+        session_id: &SessionId,
+        pending: PendingRequest,
+    ) -> Vec<AppCommand> {
+        if let PendingKind::ClientTool {
+            tool,
+            arguments,
+            target,
+        } = pending.request
+        {
+            if target != *self.handle.client_id() {
+                return Vec::new();
+            }
+            return vec![AppCommand::RunClientTool {
+                session_id: session_id.clone(),
+                pending_id: pending.id,
+                tool,
+                arguments,
+            }];
+        }
+        pending_event(pending).map_or_else(Vec::new, |event| chat.handle_agent_event(event))
+    }
+
+    /// Answer a client tool call with what running it here gave.
+    fn answer_client_tool(
+        &self,
+        session_id: SessionId,
+        pending_id: String,
+        result: ClientToolResult,
+    ) {
+        let handle = self.handle.clone();
+        tokio::spawn(async move {
+            let request = AnswerPendingRequest {
+                session_id,
+                pending_id,
+                permission: None,
+                elicitation: None,
+                client_tool: Some(result),
+            };
+            if let Err(error) = handle.send(request).await
+                && !errors::is(&error, errors::ALREADY_RESOLVED)
+            {
+                tracing::warn!(%error, "couldn't answer the agent's client tool call");
+            }
+        });
+    }
+
     /// Answer a pending request of the active session. Another client may have answered it
     /// first, which is no failure.
     fn answer(
@@ -1065,6 +1128,7 @@ impl App {
             pending_id,
             permission: None,
             elicitation: None,
+            client_tool: None,
         });
         let handle = self.handle.clone();
         tokio::spawn(async move {
@@ -1121,17 +1185,40 @@ impl App {
     }
 }
 
-/// A pending request, as the chat shows it.
-fn pending_event(pending: PendingRequest) -> ChatEvent {
+/// A pending request, as the chat shows it; client tool calls it doesn't.
+fn pending_event(pending: PendingRequest) -> Option<ChatEvent> {
     match pending.request {
-        PendingKind::Permission { request } => ChatEvent::PermissionRequested(PermissionAsk {
-            id: pending.id,
-            request,
-        }),
-        PendingKind::Elicitation { request } => ChatEvent::ElicitationRequested(ElicitationAsk {
-            id: pending.id,
-            request,
-        }),
+        PendingKind::Permission { request } => {
+            Some(ChatEvent::PermissionRequested(PermissionAsk {
+                id: pending.id,
+                request,
+            }))
+        }
+        PendingKind::Elicitation { request } => {
+            Some(ChatEvent::ElicitationRequested(ElicitationAsk {
+                id: pending.id,
+                request,
+            }))
+        }
+        PendingKind::ClientTool { .. } => None,
+    }
+}
+
+/// Run a client tool here, for the agent.
+fn run_client_tool(
+    tui: &mut Tui,
+    tool: &str,
+    arguments: &serde_json::Map<String, serde_json::Value>,
+) -> ClientToolResult {
+    match tool {
+        CLIPBOARD_WRITE => match arguments.get("text").and_then(serde_json::Value::as_str) {
+            Some(text) => match tui.try_copy(text) {
+                Ok(()) => ClientToolResult::text("Copied to the clipboard."),
+                Err(why) => ClientToolResult::error(why),
+            },
+            None => ClientToolResult::error("clipboard_write needs `text`, a string."),
+        },
+        _ => ClientToolResult::error(format!("This client doesn't run {tool}.")),
     }
 }
 

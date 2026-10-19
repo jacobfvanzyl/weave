@@ -95,6 +95,9 @@ pub enum SessionEvent {
     },
     /// The session closed.
     Closed { reason: String },
+    /// Something the Host tells the session's clients, such as why its agent can't use client
+    /// tools.
+    Notice { text: String },
     /// A kind this build doesn't know, from a newer Host. Its position still counts.
     #[serde(other)]
     Unknown,

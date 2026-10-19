@@ -133,6 +133,8 @@ request with `unauthenticated`.
   that hasn't said a successful hello gets `unauthenticated` for everything else.
 - `capabilities.terminalSignIn` says the client can run an agent's sign-in command in a
   terminal on the Host's computer. Only `local` clients may claim it.
+- `capabilities.clientTools` lists the client tools the client runs on its device, such as
+  `clipboard_write` (see [Client tools](#client-tools)).
 - `clientId` names this connection in other messages (who answered a pending request,
   who started a turn). It means nothing after the connection ends.
 - `host.id` is the Host's own id, the same across restarts, so clients tell Hosts apart.
@@ -141,7 +143,8 @@ request with `unauthenticated`.
   which brings the `turnSteered` event with it, `devices` (WVE-90), the `devices/*`
   methods, and `agents/updates` (WVE-93): `agents/updateAvailable`, `SessionState.update`,
   `agents/update`, `session/reopen` and the `agentReopened` event (see
-  [Updates](#updates)).
+  [Updates](#updates)), and `clientTools` (WVE-89): `capabilities.clientTools`, the
+  `clientTool` pending request and its answer (see [Client tools](#client-tools)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -182,7 +185,8 @@ in-process Host uses the same file. When a client runs on another computer, the 
 sections of that computer's file do nothing.
 
 MCP servers come from the config only. When a session opens, the Host passes the ones the
-agent's `mcpCapabilities` accept and reports the others in the session's `notices`.
+agent's `mcpCapabilities` accept and reports the others in the session's `notices`. Every
+session also gets the Host MCP server, `weave` (see [Client tools](#client-tools)).
 
 ### Environment
 
@@ -452,6 +456,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `terminalExit` | `terminalId`, `status`: ACP `TerminalExitStatus` | that command exits |
 | `agentReopened` | `agent`: `SessionState.agent`, `previous?`: `{name, version}`, `modes?`, `configOptions`, `failed?` | the session's agent was started again (`session/reopen`); `failed` says why it runs `previous` again |
 | `closed` | `reason` | the session closes |
+| `notice` | `text` | the Host tells the session's clients something, such as that its agent can't use client tools |
 
 `origin` is `{"client": {"name": "weave-tui", "id": "c7"}}` for a client's prompt, with the
 connection's `clientId` so a client recognizes its own (a remote client's adds its paired
@@ -538,6 +543,7 @@ type PendingRequest = {
 } & (
   | { kind: "permission"; request: RequestPermissionRequest }
   | { kind: "elicitation"; request: CreateElicitationRequest }
+  | { kind: "clientTool"; tool: string; arguments: object; target: string } // a clientId
 );
 ```
 
@@ -546,8 +552,8 @@ rejects what it doesn't approve dismisses elicitations. Every other permission r
 elicitation becomes a pending request: in `SessionState.pending` for clients that attach
 later, and announced with `pending/added` to clients attached now.
 
-**`pending/answer`** `{sessionId, pendingId, permission?: RequestPermissionResponse, elicitation?: CreateElicitationResponse}` →
-`{}`
+**`pending/answer`** `{sessionId, pendingId, permission?: RequestPermissionResponse, elicitation?: CreateElicitationResponse, clientTool?: CallToolResult}` →
+`{}`, with exactly one of the three
 
 The first answer goes to the agent and every attached client gets `pending/resolved` with
 `answered`. Later answers fail with `already_resolved`. Declining or cancelling an
@@ -555,7 +561,32 @@ elicitation is an answer like any other.
 
 A pending request also resolves when its turn is cancelled or ends (`cancelled`), or when
 the agent withdraws it (`withdrawn`, from ACP `$/cancel_request`). A client detaching
-doesn't resolve anything: the request waits for another client, or for one to attach.
+doesn't resolve anything: the request waits for another client, or for one to attach. A
+client tool call is the exception on both counts: only its `target` answers it (anyone
+else gets `not_target`), and it resolves `cancelled` when its target detaches.
+
+## Client tools
+
+Client tools ([ADR 0009](../../../docs/adr/0009-client-tools-through-a-host-owned-mcp-server.md))
+run on a client's device for an agent, such as `clipboard_write {text}`, which puts text on
+the clipboard. The Host defines them (`crates/protocol`, `tools`) and offers them through
+one MCP server it owns, `weave`, which every session's agent gets whoever is attached; the
+config's `client_tools` (all when absent, `[]` for none) and an agent's own `client_tools`
+choose which. The server speaks MCP 2026-07-28 only. Agents that advertise
+`mcpCapabilities.acp` get it over ACP (`"type": "acp"`, from the draft MCP-over-ACP RFD);
+the rest get a stdio server, `weave mcp-bridge`, which relays MCP between the agent and the
+Host's MCP socket beside its own, after a token naming the session's declaration. Each
+session setup declares the server under a new `serverId` or token. An agent that opens it
+with `initialize`, from an MCP revision before 2026-07-28, is refused, and the session's
+clients get a `notice` event saying it can't use client tools.
+
+A call goes to the client that sent the running turn's latest prompt or steer, if it's
+attached and lists the tool in `capabilities.clientTools`: it becomes a `clientTool`
+pending request every attached client sees, and its target answers with the tool's MCP
+`CallToolResult`. Otherwise (no turn, a headless run's turn, a client not attached or not
+running the tool) the agent gets a tool error saying why, at once, and nothing is pending.
+When the target detaches, the agent gets an error saying the tool may have run, and no
+other client runs it. The agent cancelling the call withdraws it.
 
 ## Host management
 
@@ -610,6 +641,7 @@ returns the agent's error unchanged.
 | -32067 | `wrong_agent` | the session belongs to another agent |
 | -32068 | `requires_terminal` | the sign-in method needs a terminal on the Host's computer |
 | -32069 | `forbidden` | a remote client asked to administer the Host |
+| -32070 | `not_target` | the client tool call is for another client |
 
 ## Versioning
 
@@ -661,6 +693,9 @@ answer `forbidden`.
 - Permission and elicitation prompts answer with `pending/answer` and close on
   `pending/resolved`, whoever answered. The TUI no longer cancels pending requests when it
   leaves a session.
+- The TUI lists `clipboard_write` in `capabilities.clientTools`, runs the calls targeted at
+  it (pbcopy on a local Mac, OSC 52 otherwise) and answers them; `notice` events show in
+  the transcript.
 - The TUI remembers its journal position. When the Host goes away, it reconnects (never
   starting a Host), attaches again from that position and gets only what it missed. The
   Host now resumes or loads the session in its agent itself.

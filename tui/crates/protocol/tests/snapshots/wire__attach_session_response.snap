@@ -18,7 +18,8 @@ expression: "round_trip(&AttachSessionResponse\n{ state: state(), replay: Replay
         },
         "mcpCapabilities": {
           "http": false,
-          "sse": false
+          "sse": false,
+          "acp": false
         },
         "sessionCapabilities": {},
         "auth": {}

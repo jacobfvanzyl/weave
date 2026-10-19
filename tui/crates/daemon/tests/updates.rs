@@ -167,6 +167,8 @@ impl World {
             traces: self.dir.path().join("traces"),
             devices: None,
             upstream: Arc::clone(&self.npm) as Arc<dyn Upstream>,
+            mcp_socket: None,
+            mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
         })
     }
 

@@ -18,6 +18,8 @@ pub struct Preset {
     /// The environment variable that makes the adapter run an installed CLI rather than the
     /// one it bundles, when it has one.
     pub binary_variable: Option<&'static str>,
+    /// Environment it's launched with, under the configuration's.
+    pub env: &'static [(&'static str, &'static str)],
 }
 
 const PRESETS: &[Preset] = &[
@@ -27,6 +29,12 @@ const PRESETS: &[Preset] = &[
         version: "0.86.0",
         args: &[],
         binary_variable: Some("CLAUDE_CODE_EXECUTABLE"),
+        // Claude Code speaks MCP 2026-07-28, which the Host MCP server needs, only on its v2
+        // MCP runtime; otherwise flags it fetches choose the runtime (ADR 0013).
+        env: &[
+            ("MCP_SDK_GENERATION", "v2"),
+            ("MCP_PROTOCOL_NEGOTIATION", "auto"),
+        ],
     },
     Preset {
         id: "codex",
@@ -34,6 +42,7 @@ const PRESETS: &[Preset] = &[
         version: "2.1.1",
         args: &[],
         binary_variable: Some("CODEX_PATH"),
+        env: &[],
     },
     Preset {
         id: "gemini",
@@ -41,6 +50,7 @@ const PRESETS: &[Preset] = &[
         version: "0.63.0",
         args: &["--acp"],
         binary_variable: None,
+        env: &[],
     },
 ];
 
@@ -63,12 +73,18 @@ impl Preset {
     /// How to launch this preset's package at `version`.
     pub fn spec_at(&self, version: &str) -> AgentSpec {
         let package = format!("{}@{version}", self.package);
-        AgentSpec::new(
+        let mut spec = AgentSpec::new(
             "npx",
             ["-y", package.as_str()]
                 .into_iter()
                 .chain(self.args.iter().copied()),
-        )
+        );
+        spec.env = self
+            .env
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        spec
     }
 }
 

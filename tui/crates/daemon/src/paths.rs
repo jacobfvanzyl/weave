@@ -77,6 +77,11 @@ impl DaemonPaths {
     pub fn devices(&self) -> PathBuf {
         self.dir.join("devices.json")
     }
+
+    /// The Host MCP server's socket, which `weave mcp-bridge` connects to: beside the Host's.
+    pub fn mcp_socket(&self) -> PathBuf {
+        self.socket.with_file_name("mcp.sock")
+    }
 }
 
 fn home() -> Option<PathBuf> {

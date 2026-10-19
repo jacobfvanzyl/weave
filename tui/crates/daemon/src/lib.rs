@@ -28,6 +28,7 @@ mod client;
 mod devices;
 mod instance;
 mod journal;
+pub mod mcp;
 mod modes;
 pub mod paths;
 mod session;
@@ -123,6 +124,11 @@ pub struct DaemonConfig {
     pub devices: Option<PathBuf>,
     /// Where newer versions of agents come from: npm and the ACP registry, or a test's.
     pub upstream: Arc<dyn Upstream>,
+    /// The socket `weave mcp-bridge` connects to; one in a private temporary directory when
+    /// absent.
+    pub mcp_socket: Option<PathBuf>,
+    /// The command, with its arguments, agents run as the Host MCP server's stdio bridge.
+    pub mcp_bridge: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -149,6 +155,8 @@ impl DaemonConfig {
             traces: std::env::temp_dir().join("weave-traces"),
             devices: None,
             upstream: Arc::new(weave_agents::update::Network),
+            mcp_socket: None,
+            mcp_bridge: bridge_command(),
         }
     }
 
@@ -160,9 +168,17 @@ impl DaemonConfig {
             service,
             traces: paths.dir.join("traces"),
             devices: Some(paths.devices()),
+            mcp_socket: Some(paths.mcp_socket()),
             ..Self::in_process(None)
         }
     }
+}
+
+/// `weave mcp-bridge`, run from this binary.
+fn bridge_command() -> Vec<String> {
+    std::env::current_exe()
+        .map(|exe| vec![exe.display().to_string(), "mcp-bridge".to_owned()])
+        .unwrap_or_default()
 }
 
 /// An agent ready to start, as the Host resolved it.
@@ -221,6 +237,8 @@ impl Agent {
 
 pub(crate) struct Shared {
     pub(crate) config: DaemonConfig,
+    /// The Host MCP server.
+    pub(crate) mcp: Arc<mcp::Mcp>,
     registry: Mutex<Registry>,
     pub(crate) devices: devices::Devices,
     pub(crate) updates: updates::Updates,
@@ -332,10 +350,19 @@ impl Shared {
             return Ok(spare.instance);
         }
         let instance = Instance::start(&self.config.launcher, &launch, options).await?;
+        self.provide_mcp(&instance);
         if let Some(init) = instance.init() {
             self.registry().initialized.insert(key, init.clone());
         }
         Ok(instance)
+    }
+
+    /// Answer the agent's MCP-over-ACP requests with the Host MCP server.
+    pub(crate) fn provide_mcp(&self, instance: &Instance) {
+        instance
+            .connection
+            .handle()
+            .provide_mcp(self.mcp.provider());
     }
 
     /// Keep an agent no session took, as after `auth_required`, for the next request; it
@@ -521,7 +548,8 @@ impl Daemon {
         let (stop, _) = watch::channel(false);
         let devices = devices::Devices::load(config.devices.clone());
         Self {
-            shared: Arc::new(Shared {
+            shared: Arc::new_cyclic(|shared| Shared {
+                mcp: Arc::new(mcp::Mcp::new(shared.clone())),
                 devices,
                 updates: updates::Updates::default(),
                 remote: Mutex::new(None),

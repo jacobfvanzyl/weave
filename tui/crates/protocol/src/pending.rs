@@ -1,5 +1,6 @@
-//! Permission requests and elicitations waiting on a person. Every attached client sees them,
-//! clients that attach later too, and the first answer counts.
+//! Permission requests and elicitations waiting on a person, and client tool calls waiting on
+//! a client. Every attached client sees them, clients that attach later too. The first answer
+//! counts; only its target answers a client tool call.
 
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
@@ -10,10 +11,13 @@ use agent_client_protocol::schema::v1::RequestPermissionResponse;
 use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value;
 
 use crate::Empty;
 use crate::Timestamp;
 use crate::hello::ClientId;
+use crate::tools::ClientToolResult;
 
 pub type PendingId = String;
 
@@ -32,8 +36,19 @@ pub struct PendingRequest {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PendingKind {
-    Permission { request: RequestPermissionRequest },
-    Elicitation { request: CreateElicitationRequest },
+    Permission {
+        request: RequestPermissionRequest,
+    },
+    Elicitation {
+        request: CreateElicitationRequest,
+    },
+    /// A client tool call ([`crate::tools`]) for the client `target`, the only one that may
+    /// answer it.
+    ClientTool {
+        tool: String,
+        arguments: Map<String, Value>,
+        target: ClientId,
+    },
 }
 
 /// `pending/added`: a request now waits in an attached session.
@@ -81,4 +96,8 @@ pub struct AnswerPendingRequest {
     pub permission: Option<RequestPermissionResponse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<CreateElicitationResponse>,
+    /// A client tool call's result, from its target only; anyone else's answer fails with
+    /// [`crate::errors::NOT_TARGET`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_tool: Option<ClientToolResult>,
 }

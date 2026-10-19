@@ -176,6 +176,9 @@ use, and MCP servers passed to every session:
 
 ```toml
 default_agent = "claude"
+# Tools agents may run on the device of whoever sent the turn, through weave's own MCP
+# server: all of them when absent, [] for none; an agent's `client_tools` overrides it.
+client_tools = ["clipboard_write"]
 
 [tui]
 alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen

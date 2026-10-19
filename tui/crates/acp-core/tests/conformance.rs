@@ -24,6 +24,11 @@ use weave_acp_core::AgentEvent;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::SessionSetup;
 use weave_acp_core::is_auth_required;
+use weave_acp_core::mcp::BoxFuture;
+use weave_acp_core::mcp::McpCall;
+use weave_acp_core::mcp::McpNotifier;
+use weave_acp_core::mcp::McpOutcome;
+use weave_acp_core::mcp::McpProvider;
 use weave_acp_core::schema::AGENT_METHOD_NAMES;
 use weave_acp_core::schema::AudioContent;
 use weave_acp_core::schema::CLIENT_METHOD_NAMES;
@@ -33,6 +38,7 @@ use weave_acp_core::schema::EmbeddedResource;
 use weave_acp_core::schema::EmbeddedResourceResource;
 use weave_acp_core::schema::ImageContent;
 use weave_acp_core::schema::McpServer;
+use weave_acp_core::schema::McpServerAcp;
 use weave_acp_core::schema::McpServerHttp;
 use weave_acp_core::schema::McpServerStdio;
 use weave_acp_core::schema::PROTOCOL_LEVEL_METHOD_NAMES;
@@ -235,13 +241,39 @@ async fn turn_with(
     }
 }
 
+/// Answers tool calls on the `weave` server, after a progress notification, so `mcp/message`
+/// crosses the wire both ways.
+struct Echo;
+
+impl McpProvider for Echo {
+    fn call(
+        &self,
+        call: McpCall,
+        notifier: McpNotifier,
+        _cancelled: BoxFuture<()>,
+    ) -> BoxFuture<McpOutcome> {
+        Box::pin(async move {
+            notifier.notify(
+                "notifications/progress",
+                serde_json::json!({"progress": 1}).as_object().cloned(),
+            );
+            McpOutcome::Result(serde_json::json!({
+                "resultType": "complete",
+                "content": [{"type": "text", "text": format!("{} done", call.method)}],
+            }))
+        })
+    }
+}
+
 #[tokio::test]
 async fn every_v1_method_and_update_kind_crosses_the_wire() {
     let config = FakeAgentConfig {
         require_auth: true,
+        mcp_over_acp: true,
         ..FakeAgentConfig::default()
     };
     let (connection, mut events, wire) = connect_tapped(ClientOptions::default(), config).await;
+    connection.provide_mcp(Arc::new(Echo));
     connection.initialize().await.expect("initialize");
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -252,6 +284,8 @@ async fn every_v1_method_and_update_kind_crosses_the_wire() {
         mcp_servers: vec![
             McpServer::Stdio(McpServerStdio::new("tools", "/bin/sh")),
             McpServer::Http(McpServerHttp::new("docs", "https://mcp.example.com")),
+            // MCP-over-ACP, from the draft RFD.
+            McpServer::Acp(McpServerAcp::new("weave", "weave-1")),
         ],
     };
 
@@ -284,6 +318,7 @@ async fn every_v1_method_and_update_kind_crosses_the_wire() {
         ("/connect", "allow", None),
         ("/withdraw", "hold", None),
         ("/extension", "allow", None),
+        ("/tool echo {}", "allow", None),
     ];
     let write = format!("/write {file} hello");
     let read = format!("/read {file}");
@@ -381,14 +416,15 @@ async fn every_v1_method_and_update_kind_crosses_the_wire() {
         .unwrap_or_default();
 
     // Guard against a vacuous pass: ACP v1 stable has 13 agent methods, 11 client methods
-    // and one protocol-level method.
+    // and one protocol-level method, and the draft MCP-over-ACP RFD adds `mcp/message` both
+    // ways.
     assert_eq!(
         (
             names(AGENT_METHOD_NAMES).len(),
             names(CLIENT_METHOD_NAMES).len(),
             names(PROTOCOL_LEVEL_METHOD_NAMES).len()
         ),
-        (13, 11, 1)
+        (14, 12, 1)
     );
 
     let agent_methods = names(AGENT_METHOD_NAMES);
@@ -520,6 +556,10 @@ async fn unadvertised_methods_are_refused_without_touching_the_wire() {
         additional_directories: vec![dir.path().to_owned()],
         ..setup.clone()
     };
+    let acp = SessionSetup {
+        mcp_servers: vec![McpServer::Acp(McpServerAcp::new("weave", "weave-1"))],
+        ..setup.clone()
+    };
     let refusals = [
         connection.list_sessions(None, None).await.map(drop),
         connection
@@ -535,6 +575,7 @@ async fn unadvertised_methods_are_refused_without_touching_the_wire() {
         connection.logout().await,
         connection.new_session(&http).await.map(drop),
         connection.new_session(&extra_root).await.map(drop),
+        connection.new_session(&acp).await.map(drop),
         // The steering extension, which the minimal agent doesn't advertise.
         connection.steer(session.clone(), vec![ContentBlock::from("hi")], 1),
     ];

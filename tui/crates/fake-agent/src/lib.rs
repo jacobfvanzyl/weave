@@ -14,6 +14,8 @@
 //! | `ask` | a form elicitation using every field type |
 //! | `connect` | a URL elicitation, completed shortly after consent |
 //! | `mcp` | lists the MCP servers the session was given |
+//! | `tool <name> <json>` | calls a tool on the session's `weave` MCP server, over ACP (`mcp/message`) or stdio |
+//! | `mcp-legacy` | opens the `weave` MCP server with `initialize`, as a client before MCP 2026-07-28 |
 //! | `think` | thought chunks, then a message |
 //! | `delegate` | two subagents (draft RFD) that report work in their own sessions |
 //! | `delegate-legacy` | the same in the RFD's earlier draft, as some adapters send it |
@@ -31,6 +33,7 @@
 //! messages steered into it before it ends, and `slow` stops its chunks for them. With a
 //! state file, sessions and sign-in survive across processes.
 
+mod mcp;
 mod state;
 mod steering;
 mod turn;
@@ -93,6 +96,8 @@ use agent_client_protocol::schema::v1::SetSessionModeRequest;
 use agent_client_protocol::schema::v1::SetSessionModeResponse;
 use agent_client_protocol::schema::v1::UnstructuredCommandInput;
 
+pub use crate::mcp::StdioMcp;
+pub use crate::mcp::StdioPipes;
 use crate::state::Settings;
 use crate::state::State;
 use crate::state::StoredSession;
@@ -116,6 +121,10 @@ pub struct FakeAgentConfig {
     pub page_size: usize,
     /// Advertise only what every agent must support, to check a client gates the rest.
     pub minimal: bool,
+    /// Advertise MCP servers over ACP (`mcpCapabilities.acp`, from the draft MCP-over-ACP RFD).
+    pub mcp_over_acp: bool,
+    /// How the `tool` script reaches a stdio MCP server.
+    pub stdio_mcp: StdioMcp,
 }
 
 impl Default for FakeAgentConfig {
@@ -125,6 +134,8 @@ impl Default for FakeAgentConfig {
             require_auth: false,
             page_size: 20,
             minimal: false,
+            mcp_over_acp: false,
+            stdio_mcp: StdioMcp::default(),
         }
     }
 }
@@ -142,6 +153,8 @@ impl FakeAgentConfig {
                 .and_then(|size| size.parse().ok())
                 .unwrap_or(defaults.page_size),
             minimal: std::env::var("WEAVE_FAKE_AGENT_MINIMAL").is_ok_and(|value| value == "1"),
+            mcp_over_acp: std::env::var("WEAVE_FAKE_AGENT_MCP_ACP").is_ok_and(|value| value == "1"),
+            stdio_mcp: StdioMcp::default(),
         }
     }
 }
@@ -202,7 +215,11 @@ pub async fn serve_with(
                                 .audio(true)
                                 .embedded_context(true),
                         )
-                        .mcp_capabilities(McpCapabilities::new().http(true))
+                        .mcp_capabilities(
+                            McpCapabilities::new()
+                                .http(true)
+                                .acp(state.config.mcp_over_acp),
+                        )
                         .auth(AgentAuthCapabilities::new().logout(LogoutCapabilities::new()))
                         .session_capabilities(
                             SessionCapabilities::new()

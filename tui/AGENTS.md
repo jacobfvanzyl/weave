@@ -10,8 +10,10 @@ pinned Linear CLI and tracker conventions from `../docs/agents/issue-tracker.md`
 - It speaks ACP v1 stable and implements it completely. Two unstable RFDs are in scope
   too, each advertised by default and withheld per agent: session compaction (Preview;
   `unstable_session_compaction`, `compaction = false`) and subagent sessions (draft;
-  `unstable_subagents`, `subagents = false`). The v2 draft and other unstable RFDs stay out
-  of scope unless the issue changes.
+  `unstable_subagents`, `subagents = false`). A third, MCP-over-ACP (draft;
+  `unstable_mcp_over_acp`), carries the Host MCP server to agents that advertise
+  `mcpCapabilities.acp`. The v2 draft and other unstable RFDs stay out of scope unless the
+  issue changes.
 - It launches agents locally.
 - Agents run in the weave Host (WVE-83, WVE-85; `weave daemon`), a per-user process the CLI
   starts on first use or launchd keeps running, so sessions outlive the TUI: quitting,
@@ -42,7 +44,7 @@ crate, pinned exactly because 3.x is new.
 | `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace. No UI. |
 | `crates/protocol` | The Host protocol's wire types, roles, error codes and versions, with golden snapshots, and the permission policy. No I/O. |
 | `crates/agents` | Which agents there are and how to launch them: config, presets, the ACP registry, the login shell's environment. |
-| `crates/daemon` | The weave Host: client connections, open sessions and their agents, journals, permission policies, headless runs, and the WebSocket and paired devices of remote clients. No UI. |
+| `crates/daemon` | The weave Host: client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, and the WebSocket and paired devices of remote clients. No UI. |
 | `crates/host-client` | A client of the Host: hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials. |
 | `crates/tui` | The interactive client: fullscreen transcript or inline viewport, chat state, composer. |
 | `crates/cli` | The `weave` binary and its subcommands, Host autostart and launchd service included. |
@@ -53,7 +55,7 @@ and are advertised per `ClientOptions`; never advertise one that isn't answered.
 adapters may not call them (Claude's runs its own tools), so the fake agent is what
 exercises them: integration tests connect it in-process over `Channel::duplex`, and its
 prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`, `/compact`,
-`/delegate`) drive the
+`/delegate`, `/tool`) drive the
 real TUI. In `tui`, rendering follows Codex's look: `tool_call` maps ACP tool kinds onto
 Codex's cells (exec, explored, patch, MCP), `history_cell`, `markdown` and `streaming` the
 rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the terminal's
@@ -133,6 +135,29 @@ can't (`crates/daemon/tests/updates.rs`). An ACP `initialize` from a client of t
 the protocol version, so it reloads into the current weave. Host tests
 (`crates/daemon/tests/daemon.rs`) run in-process with fake agents sharing one state file,
 named in a test config.
+
+Client tools (WVE-89, ADR 0009) run on a client's device for an agent: `clipboard_write`,
+whose catalog is `weave_host_protocol::tools`. `mcp.rs` is the Host MCP server, `weave`, which
+`client::setup` declares for every session setup under a new `serverId` or token (a
+`Binding` the session keeps, bound to its id once the agent gives it, so calls that come
+first wait for it), with the tools the config's `client_tools` choose. It speaks MCP
+2026-07-28 only and answers `server/discover`, `tools/list`, `tools/call`, an empty
+`resources/list`, and `subscriptions/listen`, which it acknowledges and holds open (Claude
+Code opens one regardless); `initialize` is refused with `-32022`, and the session journals a
+`notice` that the agent can't use client tools. Agents that advertise `mcpCapabilities.acp`
+reach it over ACP: `acp-core`'s `mcp/message` handler hands calls to the `McpProvider` the
+Host installs on each agent it starts (`AgentHandle::provide_mcp`). The rest get the stdio
+server `weave mcp-bridge` (`DaemonConfig.mcp_bridge`, the Host's own binary), which `relay`s
+bytes to `mcp.sock` beside the Host's socket (same mode and peer check), after its token. A
+`tools/call` becomes `Command::ClientTool` in the session: a `clientTool` pending request for
+the client that sent the running turn's latest prompt or steer, if it's attached and lists the
+tool, which only that client may answer (`not_target`); otherwise a tool error at once. The
+target detaching fails it as one that may have run; the agent cancelling it withdraws it.
+Agents get only text in `content`, since Claude Code gives the model `structuredContent` in
+its place. The TUI lists `clipboard_write` (`daemon::capabilities`) and runs calls targeted at
+it with `Tui::try_copy`. Host tests (`crates/daemon/tests/daemon.rs`) give the fake agents an
+in-process bridge (`StdioMcp`) that runs the same `relay` to the Host's real socket, and a
+Host whose agents take MCP over ACP (`daemon_over_acp`).
 
 Remote clients (WVE-90, ADR 0010, spec `docs/specs/wve-90-remote-clients.md`) reach the Host
 over a WebSocket (`websocket.rs`) that listens on loopback only, with Tailscale Serve the way
@@ -241,8 +266,11 @@ dependency or profile settings, `cargo clean --profile dev` and build again. Nev
 
 The fake agent reads `WEAVE_FAKE_AGENT_STATE` (persist sessions and sign-in to this JSON
 file, which its processes share and merge as an agent's own storage would),
-`WEAVE_FAKE_AGENT_REQUIRE_AUTH=1`, and `WEAVE_FAKE_AGENT_PAGE_SIZE`. Its scripts
-also include `/ask` (form elicitation), `/connect` (URL elicitation) and `/mcp`.
+`WEAVE_FAKE_AGENT_REQUIRE_AUTH=1`, `WEAVE_FAKE_AGENT_PAGE_SIZE`, and
+`WEAVE_FAKE_AGENT_MCP_ACP=1` (advertise `mcpCapabilities.acp`). Its scripts also include
+`/ask` (form elicitation), `/connect` (URL elicitation), `/mcp`, `/tool <name> <json>` (a
+call on the session's `weave` MCP server, over ACP or by starting its stdio command) and
+`/mcp-legacy` (opening `weave` with `initialize`, as a client before MCP 2026-07-28 would).
 
 Both run against a real agent and its existing login. `--log-file <file>` captures the
 TUI's diagnostics; agent stderr goes to the Host's log (to `--log-file` with
@@ -276,7 +304,9 @@ agent output, so keep them out of the repository.
 
 - Clippy denies `unwrap`/`expect` outside tests. Use one `use` line per item.
 - Agent presets pin adapter versions. Bump them deliberately and re-run the
-  smoke check against each one. `weave update` (WVE-92; `agents/src/update.rs`, which the
+  smoke check against each one. A preset may set environment under the config's: Claude's
+  sets `MCP_SDK_GENERATION=v2` and `MCP_PROTOCOL_NEGOTIATION=auto`, since Claude Code speaks
+  MCP 2026-07-28, which the Host MCP server needs, only on that MCP runtime (ADR 0013). `weave update` (WVE-92; `agents/src/update.rs`, which the
   Host's `agents/update` shares, with `cli/src/update.rs` its command line) moves past the
   pins without a rebuild: it writes newer versions to `agents.lock` beside the config
   (`agents/src/lock.rs`), after each answers ACP `initialize`, and every launch takes the newer

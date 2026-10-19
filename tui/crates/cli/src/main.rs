@@ -87,6 +87,10 @@ enum Command {
     Logout(LogoutArgs),
     /// List the agents `--agent` accepts: presets, the config's, and the ACP registry's.
     Agents(AgentsArgs),
+    /// The weave Host's MCP server for an agent: relays MCP on stdio to the Host's MCP socket,
+    /// which the environment names. The Host declares it to agents; it isn't for people.
+    #[command(hide = true)]
+    McpBridge,
 }
 
 #[derive(Args)]
@@ -161,6 +165,11 @@ async fn main() -> anyhow::Result<ExitCode> {
             log_to_stderr("warn");
             agents(args).await.map(|()| ExitCode::SUCCESS)
         }
+        Some(Command::McpBridge) => {
+            // Stdout carries MCP; diagnostics go to stderr, the agent's to keep.
+            log_to_stderr("warn");
+            mcp_bridge().await.map(|()| ExitCode::SUCCESS)
+        }
         None => {
             // The TUI owns the terminal, so diagnostics can only go to a file.
             if let Some(path) = &cli.log_file {
@@ -175,6 +184,18 @@ async fn main() -> anyhow::Result<ExitCode> {
             run_tui(cli).await.map(|()| ExitCode::SUCCESS)
         }
     }
+}
+
+/// `weave mcp-bridge`: relay the agent's MCP between stdio and the Host's MCP socket.
+async fn mcp_bridge() -> anyhow::Result<()> {
+    let socket = std::env::var_os(weave_daemon::mcp::SOCKET_VARIABLE)
+        .map(PathBuf::from)
+        .context("the weave Host starts this for its agents; it has no MCP socket to relay to")?;
+    let token = std::env::var(weave_daemon::mcp::TOKEN_VARIABLE)
+        .context("the weave Host starts this for its agents; it has no token to relay with")?;
+    weave_daemon::mcp::relay(&socket, &token, tokio::io::stdin(), tokio::io::stdout())
+        .await
+        .with_context(|| format!("relaying to {}", socket.display()))
 }
 
 /// Diagnostics (including agent stderr at `RUST_LOG=agent_stderr=debug`) go to stderr.

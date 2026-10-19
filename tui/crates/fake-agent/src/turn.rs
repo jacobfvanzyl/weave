@@ -147,6 +147,8 @@ impl Turn {
             "ask" => self.ask(cx).await?,
             "connect" => self.connect(cx).await?,
             "mcp" => self.list_mcp_servers(cx).await?,
+            "tool" => self.call_tool(cx, rest).await?,
+            "mcp-legacy" => self.mcp_legacy(cx).await?,
             "think" => self.think(cx).await?,
             "compact" => self.compact(cx).await?,
             "delegate" => self.delegate(cx).await?,
@@ -927,6 +929,70 @@ impl Turn {
         }
     }
 
+    /// `tool <name> <json>`: call a tool on the session's `weave` MCP server, shown as an MCP
+    /// tool call.
+    async fn call_tool(&self, cx: &ConnectionTo<Client>, args: &str) -> Result<(), Error> {
+        let (tool, arguments) = args.split_once(char::is_whitespace).unwrap_or((args, "{}"));
+        let Ok(serde_json::Value::Object(arguments)) =
+            serde_json::from_str::<serde_json::Value>(arguments.trim())
+        else {
+            return self.say(cx, "Usage: tool <name> <JSON object>").await;
+        };
+        let id = next_tool_call_id();
+        self.update(
+            cx,
+            SessionUpdate::ToolCall(
+                ToolCall::new(id.clone(), format!("weave.{tool}"))
+                    .kind(ToolKind::Other)
+                    .status(ToolCallStatus::InProgress)
+                    .raw_input(serde_json::Value::Object(arguments.clone())),
+            ),
+        )?;
+        let stdio = lock(&self.state).config.stdio_mcp.clone();
+        match crate::mcp::call_tool(cx, &self.mcp_servers, &stdio, tool, arguments).await {
+            Ok(result) => {
+                let text = crate::mcp::result_text(&result);
+                let failed = result.get("isError") == Some(&serde_json::Value::Bool(true));
+                self.finish_tool(
+                    cx,
+                    &id,
+                    ToolCallUpdateFields::new()
+                        .status(if failed {
+                            ToolCallStatus::Failed
+                        } else {
+                            ToolCallStatus::Completed
+                        })
+                        .content(vec![ContentBlock::from(text.clone()).into()])
+                        .raw_output(result),
+                )?;
+                let how = if failed { "failed" } else { "answered" };
+                self.say(cx, &format!("{tool} {how}: {text}")).await
+            }
+            Err(why) => {
+                self.finish_tool(
+                    cx,
+                    &id,
+                    ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+                )?;
+                self.say(cx, &format!("{tool} couldn't be called: {why}"))
+                    .await
+            }
+        }
+    }
+
+    /// `mcp-legacy`: open the `weave` MCP server with `initialize`, as an MCP client before
+    /// 2026-07-28 would.
+    async fn mcp_legacy(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        let stdio = lock(&self.state).config.stdio_mcp.clone();
+        match crate::mcp::initialize(cx, &self.mcp_servers, &stdio).await {
+            Ok(result) => self.say(cx, &format!("weave initialized: {result}")).await,
+            Err(why) => {
+                self.say(cx, &format!("weave refused initialize: {why}"))
+                    .await
+            }
+        }
+    }
+
     async fn list_mcp_servers(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
         if self.mcp_servers.is_empty() {
             return self.say(cx, "The client sent no MCP servers.").await;
@@ -940,6 +1006,7 @@ impl Turn {
                 }
                 McpServer::Http(server) => format!("{} (http {})", server.name, server.url),
                 McpServer::Sse(server) => format!("{} (sse {})", server.name, server.url),
+                McpServer::Acp(server) => format!("{} (acp {})", server.name, server.server_id.0),
                 _ => "an MCP server of an unknown transport".to_owned(),
             })
             .collect::<Vec<_>>()

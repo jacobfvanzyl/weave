@@ -119,6 +119,10 @@ use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
+use weave_host_protocol::tools::CLIPBOARD_WRITE;
+use weave_host_protocol::tools::ClientToolResult;
+use weave_host_protocol::tools::catalog;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::StartTurnResponse;
@@ -317,7 +321,34 @@ fn hello() {
             auth: Auth::Local,
             capabilities: ClientCapabilities {
                 terminal_sign_in: true,
+                client_tools: Vec::new(),
             },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "hello_request_client_tools",
+        message(&HelloRequest {
+            protocol: VersionRange::supported(),
+            client: ClientInfo {
+                name: "weave-tui".to_owned(),
+                version: "0.1.0".to_owned(),
+            },
+            auth: Auth::Local,
+            capabilities: ClientCapabilities {
+                terminal_sign_in: true,
+                client_tools: vec![CLIPBOARD_WRITE.to_owned()],
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "hello_response_client_tools",
+        round_trip(&HelloResponse {
+            protocol: 2,
+            client_id: "c7".to_owned(),
+            host: host_info(),
+            features: vec![CLIENT_TOOLS_FEATURE.to_owned()],
+            acp: acp_info(),
+            device: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -679,6 +710,15 @@ fn events() {
         ))
     );
     insta::assert_json_snapshot!(
+        "event_notice",
+        message(&event(
+            40,
+            SessionEvent::Notice {
+                text: "This agent can't use client tools.".to_owned(),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
         "event_update",
         message(&event(
             42,
@@ -886,6 +926,7 @@ fn pending_requests() {
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("once")),
             )),
             elicitation: None,
+            client_tool: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -895,7 +936,45 @@ fn pending_requests() {
             pending_id: "p-2".to_owned(),
             permission: None,
             elicitation: Some(CreateElicitationResponse::new(ElicitationAction::Decline)),
+            client_tool: None,
         })
+    );
+    insta::assert_json_snapshot!(
+        "pending_request_client_tool",
+        round_trip(&PendingRequest {
+            id: "p-3".to_owned(),
+            session_id: Some("s-1".into()),
+            created_at: 1_760_180_001_000,
+            request: PendingKind::ClientTool {
+                tool: CLIPBOARD_WRITE.to_owned(),
+                arguments: json!({"text": "cargo test -p weave-daemon"})
+                    .as_object()
+                    .cloned()
+                    .expect("an object"),
+                target: "c7".to_owned(),
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "answer_pending_request_client_tool",
+        message(&AnswerPendingRequest {
+            session_id: "s-1".into(),
+            pending_id: "p-3".to_owned(),
+            permission: None,
+            elicitation: None,
+            client_tool: Some(ClientToolResult::text("Copied to the clipboard.")),
+        })
+    );
+}
+
+#[test]
+fn client_tools() {
+    insta::assert_json_snapshot!("client_tool_catalog", round_trip(&catalog()));
+    insta::assert_json_snapshot!(
+        "client_tool_error",
+        round_trip(&ClientToolResult::error(
+            "The person's device isn't connected."
+        ))
     );
 }
 

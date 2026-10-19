@@ -97,7 +97,7 @@ pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
     let (connection, mut events) = HostConnection::connect(
         transport,
         daemon::client_info("weave-cli"),
-        daemon::capabilities(),
+        daemon::capabilities("weave-cli"),
     )
     .await?;
     let result = offer(&connection, &mut events, &url, args.name).await;
@@ -217,7 +217,7 @@ pub async fn devices(args: DevicesArgs) -> anyhow::Result<()> {
     let (connection, _events) = HostConnection::connect(
         transport,
         daemon::client_info("weave-cli"),
-        daemon::capabilities(),
+        daemon::capabilities("weave-cli"),
     )
     .await?;
     let result = match command {

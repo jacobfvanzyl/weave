@@ -64,6 +64,9 @@ pub struct ClientCapabilities {
     /// Only local clients may say so.
     #[serde(default)]
     pub terminal_sign_in: bool,
+    /// The client tools ([`crate::tools`]) this client runs on its device.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub client_tools: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]

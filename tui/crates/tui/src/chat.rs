@@ -172,6 +172,13 @@ pub enum AppCommand {
     OpenUrl(String),
     /// Put text the user selected on the clipboard.
     Copy(String),
+    /// Run a client tool the agent called on this device, and answer it.
+    RunClientTool {
+        session_id: SessionId,
+        pending_id: String,
+        tool: String,
+        arguments: serde_json::Map<String, serde_json::Value>,
+    },
     /// Run a command from shell mode in the session directory; its output comes back
     /// through [`ChatWidget::shell_output`] and [`ChatWidget::shell_exited`].
     RunShell {
@@ -1257,6 +1264,11 @@ impl ChatWidget {
                     |error| error.to_string(),
                 );
                 self.push_error(&format!("Disconnected: {reason}"));
+                Vec::new()
+            }
+            // Shown as the opening notices are.
+            ChatEvent::Notice(text) => {
+                self.push_cell(TranscriptCell::error(&text));
                 Vec::new()
             }
         }
@@ -5939,5 +5951,21 @@ mod tests {
         );
         // Replayed, it changes nothing about what runs now.
         assert_eq!(chat.release, Some(release("0.86.0")));
+    }
+
+    #[test]
+    fn a_notice_from_the_host_shows_in_the_transcript() {
+        let mut chat = chat_with(Vec::new());
+        let commands = chat.handle_agent_event(ChatEvent::Notice(
+            "This agent can't use weave's client tools.".to_owned(),
+        ));
+        assert!(commands.is_empty());
+        let history = history(&mut chat);
+        assert!(
+            history
+                .iter()
+                .any(|line| line.contains("can't use weave's client tools")),
+            "{history:?}"
+        );
     }
 }
