@@ -1,10 +1,11 @@
 # Weave
 
-This repository holds the weave Host and its terminal client, and an independent trackpad project. Earlier iterations (Portal, Alpha, the product protocol and their experiments) were retired in ADR 0014 and are recoverable from Git at commit `e30f6e93`.
+This repository holds the weave Host, its terminal client, its app for iPad and iPhone, and an independent trackpad project. Earlier iterations (Portal, Alpha, the product protocol and their experiments) were retired in ADR 0014 and are recoverable from Git at commit `e30f6e93`; ADR 0015 brought Alpha back as the app.
 
 | Path | Ownership |
 | --- | --- |
 | `tui/` | The weave Host (`weave daemon`) and the `weave` TUI: a Rust Cargo workspace for ACP agents, sessions, journals and the Host protocol. Read `tui/AGENTS.md` before working in it. |
+| `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |
 | `docs/research/` | Dated research: evidence, not implementation requirements. |

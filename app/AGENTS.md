@@ -1,0 +1,61 @@
+# The weave app
+
+This directory owns the weave app: a client of the weave Host for the iPad and iPhone, built
+with React in a Capacitor shell (ADR 0015, `../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md`).
+It is Alpha, brought back from commit `e30f6e93`, chat-first. Work is tracked under WVE-91; read
+the live issue and the spec, `docs/specs/wve-91-host-client.md`, before implementation, and use
+the repository's pinned Linear CLI and tracker conventions from `../docs/agents/issue-tracker.md`.
+
+## Boundaries
+
+- The app is a remote client of the Host (ADR 0010). It speaks the Host protocol
+  (`../tui/docs/specs/wve-85-host-protocol.md`, `../tui/docs/specs/wve-90-remote-clients.md`)
+  and never ACP or MCP; ACP's content arrives as the Host protocol's payload.
+- Use the glossary's terms (`../tui/CONTEXT.md`): sessions, Hosts, directories, turns, steers,
+  pending requests. Alpha's Threads, Connections, Workspaces and archiving are gone.
+- Portal, terminals, Workspaces, the Host Browser, the Client Browser and Electron stay in
+  history. Bring something back only when an issue asks for it.
+
+## Layout
+
+| Path | Owns |
+| --- | --- |
+| `src/app` | The controller seam (`app-controller.ts`), the session list's rules (`session-list.ts`), read state, the mock controller, and hooks. |
+| `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls, plans, elicitations. |
+| `src/components` | The shell (`app-shell.tsx`), the session list and view, the banner and dialogs; `ui` and `ai-elements` are shadcn and AI Elements components. |
+| `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout) and `DeviceKeyPlugin.swift` (Secure Enclave keys). |
+| `scripts/ios.ts` | Builds, installs and launches the iOS app. |
+
+The UI reads one `AppController`. `useMockController` drives it from fixtures until the Host
+controller lands (WVE-100), and stays for UI work and tests. Keep components free of I/O: they
+take the model and call actions.
+
+## Commands
+
+Run from `app/`, with Bun 1.4.3:
+
+```bash
+bun install
+bun run check                # tests, type check and build
+bun run dev                  # http://localhost:5174/?mock=session&idiom=phone
+bun run cap:sync             # build and copy into the iOS project
+bun run ios:build            # signed build for any iOS device; --unsigned to only compile
+bun run ios:install -- --device <udid>   # install and launch it (`xcrun devicectl list devices`)
+```
+
+`?mock=` picks a fixture scenario (`list`, `session`, `running`, `unreachable`, `banner`,
+`empty`); `?idiom=phone` or `?idiom=pad` stands in for the device in a browser, since the layout
+follows the device, not the window's width. A debug build takes the scenario as a launch argument
+instead: `xcrun simctl launch <device> com.veezee.weave --mock running`.
+
+## Conventions
+
+- Tests run in Vitest with happy-dom and Testing Library; query by role and accessible name.
+- Xcode builds use Xcode's configured DerivedData location. Never pass `-derivedDataPath` or
+  `-resultBundlePath` under `/tmp` or the home directory; an isolated build goes under
+  `/Volumes/External/Build/xcodebuild.noindex/<name>` and is removed afterwards.
+- The bundle id is `com.veezee.weave`. Leave the Alpha installed on devices
+  (`com.veezee.alpha`) and its Portal pairings alone; removing it is a deliberate step.
+- Keep device acceptance separate from unit tests and simulator runs, and record devices and OS
+  versions with it.
+- Never commit signing assets, provisioning profiles, device keys or Xcode user data.

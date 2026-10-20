@@ -1,0 +1,86 @@
+import type { CreateElicitationResponse } from '@agentclientprotocol/sdk';
+import type { AcpTranscript } from '@/chat/acp-transcript';
+
+export type HostStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+
+/** A Host this device has paired with. */
+export type PairedHost = {
+  /** The Host's own id (`host/hello` `host.id`). */
+  id: string;
+  /** The name the person confirmed when pairing: the URL's host name. */
+  name: string;
+  url: string;
+  status: HostStatus;
+  error?: string;
+};
+
+export type SessionActivity = 'idle' | 'running' | 'waiting';
+
+/** One row of the session list: a session on one of the paired Hosts. */
+export type SessionSummary = {
+  /** Unique across Hosts: `${hostId}/${sessionId}`. */
+  key: string;
+  hostId: string;
+  sessionId: string;
+  title?: string;
+  agentId: string;
+  agentName: string;
+  cwd: string;
+  state: 'open' | 'suspended' | 'closed';
+  /** Open sessions only. */
+  activity?: SessionActivity;
+  /** Clients attached now, this one included. */
+  clients: number;
+  headless: boolean;
+  lastActivityAt?: number;
+  /** What the session waits on, for the banner, while its activity is `waiting`. */
+  waitingOn?: string;
+};
+
+export type AgentChoice = { id: string; name: string };
+
+export type QueuedPrompt = { id: string; text: string };
+
+/** The session on screen. */
+export type OpenSession = {
+  key: string;
+  transcript: AcpTranscript;
+  /** Whether Send steers the running turn; otherwise it queues. */
+  canSteer: boolean;
+  queued: QueuedPrompt[];
+};
+
+export type AppModel = {
+  hosts: PairedHost[];
+  sessions: SessionSummary[];
+  /** The agents each Host offers, by Host id. */
+  agents: Record<string, AgentChoice[]>;
+  selectedKey?: string;
+  session?: OpenSession;
+  /** Sessions whose turn ended since the person last looked at them, on this device. */
+  unread: ReadonlySet<string>;
+  error?: string;
+};
+
+export type AppActions = {
+  /** Opens a session, or with no key goes back to the list. */
+  selectSession(key?: string): void;
+  createSession(input: { hostId: string; cwd: string; agentId: string }): Promise<void> | void;
+  closeSession(key: string): Promise<void> | void;
+  deleteSession(key: string): Promise<void> | void;
+  pairHost(input: { url: string; code: string }): Promise<void> | void;
+  forgetHost(hostId: string): Promise<void> | void;
+  reconnectHost(hostId: string): Promise<void> | void;
+  /** Starts a turn, steers the running one, or queues the message, as `OpenSession` allows. */
+  send(text: string): Promise<void> | void;
+  removeQueued(id: string): void;
+  cancelTurn(): Promise<void> | void;
+  respondToPermission(requestId: string, optionId: string): void;
+  respondToElicitation(requestId: string, response: CreateElicitationResponse): void;
+  setMode(modeId: string): Promise<void> | void;
+  setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
+};
+
+export type AppController = { model: AppModel; actions: AppActions };
+
+export const sessionKey = (hostId: string, sessionId: string) => `${hostId}/${sessionId}`;

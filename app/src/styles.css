@@ -1,0 +1,279 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "streamdown/styles.css";
+@source "../node_modules/streamdown/dist/*.js";
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-Medium.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-MediumItalic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-SemiBold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-SemiBoldItalic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Nerd Font";
+  src: url("./assets/fonts/jetbrains-mono-nerd-font/JetBrainsMonoNerdFont-BoldItalic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  color-scheme: dark;
+
+  /* Zed Catppuccin Mocha roles, kept verbatim from the installed theme. */
+  --zed-application-background: #27273b;
+  --zed-editor-background: #1e1e2e;
+  --zed-panel-background: #181825;
+  --zed-rail-background: #11111b;
+  --zed-element-background: #11111b;
+  --zed-element-hover: #313244;
+  --zed-ghost-hover: #45475a4d;
+  --zed-ghost-active: #585b7099;
+  --zed-ghost-selected: #6f728d66;
+  --zed-text: #cdd6f4;
+  --zed-text-muted: #bac2de;
+  --zed-text-placeholder: #585b70;
+  --zed-text-disabled: #45475a;
+  --zed-icon-muted: #7f849c;
+  --zed-accent: #cba6f7;
+  --zed-peach: #fab387;
+  --zed-focus: #b4befe;
+  --rail-height: 2rem;
+  --zed-border: #313244;
+  --zed-info: #94e2d5;
+  --zed-info-background: #9399b233;
+  --zed-warning: #f9e2af;
+  --zed-warning-background: #f9e2af1f;
+  --zed-error: #f38ba8;
+  --zed-error-background: #f38ba81f;
+  --zed-success: #a6e3a1;
+  --zed-success-background: #a6e3a11f;
+  --zed-sidebar-background: color-mix(
+    in srgb,
+    var(--zed-rail-background) 75%,
+    var(--zed-panel-background) 25%
+  );
+
+  /* shadcn semantic roles mapped onto the corresponding Zed roles. */
+  --background: var(--zed-editor-background);
+  --foreground: var(--zed-text);
+  --card: var(--zed-panel-background);
+  --card-foreground: var(--foreground);
+  --popover: var(--zed-panel-background);
+  --popover-foreground: var(--foreground);
+  --primary: var(--zed-accent);
+  --primary-foreground: var(--zed-rail-background);
+  --secondary: var(--zed-element-background);
+  --secondary-foreground: var(--foreground);
+  --muted: var(--zed-element-hover);
+  --muted-foreground: var(--zed-text-muted);
+  --accent: var(--zed-ghost-hover);
+  --accent-foreground: var(--foreground);
+  --selected: var(--zed-ghost-selected);
+  --active: var(--zed-ghost-active);
+  --destructive: var(--zed-error);
+  --destructive-background: var(--zed-error-background);
+  --border: var(--zed-border);
+  --input: var(--border);
+  --input-background: var(--zed-element-background);
+  --chat-background: var(--zed-panel-background);
+  --composer-background: var(--zed-editor-background);
+  --ring: var(--zed-focus);
+  --placeholder: var(--zed-text-placeholder);
+  --disabled: var(--zed-text-disabled);
+  --icon-muted: var(--zed-icon-muted);
+  --info: var(--zed-info);
+  --info-background: var(--zed-info-background);
+  --warning: var(--zed-warning);
+  --warning-background: var(--zed-warning-background);
+  --success: var(--zed-success);
+  --success-background: var(--zed-success-background);
+  --status-active: var(--zed-success);
+  --title-bar: var(--zed-rail-background);
+  --status-bar: var(--zed-rail-background);
+  --chart-1: #cba6f7;
+  --chart-2: #b4befe;
+  --chart-3: #74c7ec;
+  --chart-4: #a6e3a1;
+  --chart-5: #f9e2af;
+  --radius: 0.375rem;
+  --sidebar: var(--zed-sidebar-background);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--zed-ghost-hover);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-active: var(--zed-ghost-active);
+  /* Opaque resolved selection color shared with native terminal strokes. */
+  --sidebar-selected: #38394a;
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "JetBrains Mono Nerd Font", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-mono: "JetBrains Mono Nerd Font", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --color-status-bar: var(--status-bar);
+  --color-title-bar: var(--title-bar);
+  --color-peach: var(--zed-peach);
+  --color-status-active: var(--status-active);
+  --color-success-background: var(--success-background);
+  --color-success: var(--success);
+  --color-warning-background: var(--warning-background);
+  --color-warning: var(--warning);
+  --color-info-background: var(--info-background);
+  --color-info: var(--info);
+  --color-icon-muted: var(--icon-muted);
+  --color-disabled: var(--disabled);
+  --color-placeholder: var(--placeholder);
+  --color-chat-background: var(--chat-background);
+  --color-composer-background: var(--composer-background);
+  --color-input-background: var(--input-background);
+  --color-destructive-background: var(--destructive-background);
+  --color-active: var(--active);
+  --color-selected: var(--selected);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-selected: var(--sidebar-selected);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    min-width: 320px;
+    overflow: hidden;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    @apply fixed inset-0 m-0 bg-background font-sans text-foreground antialiased;
+    overscroll-behavior: none;
+  }
+
+  ::selection {
+    background: #9399b240;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* Touch-sized rows and actions on the phone. */
+html[data-device-idiom="phone"] [data-sidebar="menu-button"],
+html[data-device-idiom="phone"] [role="menuitem"] { min-height: 44px; }
+html[data-device-idiom="phone"] [data-sidebar="group-action"] { min-width: 44px; min-height: 44px; top: 0; }
+
+html[data-device-idiom="phone"] [data-slot="dialog-content"],
+html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {
+  max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 2rem);
+  overflow-y: auto;
+}

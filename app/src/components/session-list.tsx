@@ -1,0 +1,186 @@
+import { useState } from 'react';
+import { HugeiconsIcon } from '@hugeicons/react';
+import { Add01Icon, ComputerIcon, Folder01Icon, Search01Icon, ViewIcon, ViewOffIcon } from '@hugeicons/core-free-icons';
+import type { AppController, PairedHost, SessionSummary } from '@/app/app-controller';
+import { type DirectoryGroup, sessionListView } from '@/app/session-list';
+import { ActivityIndicator } from '@/components/activity-indicator';
+import { HostsDialog } from '@/components/hosts-dialog';
+import { type NewSessionTarget, NewSessionDialog } from '@/components/new-session-dialog';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
+import {
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupAction,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInput,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar';
+import { directoryName } from '@/lib/display-path';
+import { cn } from '@/lib/utils';
+
+export const sinceLabel = (at: number | undefined, now = Date.now()) => {
+  if (at === undefined) return '';
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+};
+
+function SessionRow({ session, host, selected, unread, showDirectory, onOpen }: {
+  session: SessionSummary;
+  host?: PairedHost;
+  selected: boolean;
+  unread: boolean;
+  showDirectory: boolean;
+  onOpen(): void;
+}) {
+  const closed = session.state === 'closed';
+  const unreachable = host !== undefined && host.status !== 'connected';
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        size='lg'
+        isActive={selected}
+        aria-current={selected ? 'page' : undefined}
+        className={cn('h-auto min-h-12 items-start py-2', closed && 'opacity-60')}
+        data-state-session={session.state}
+        onClick={onOpen}
+      >
+        <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
+          <span className='flex min-w-0 items-center gap-2'>
+            <span className='truncate font-medium text-sidebar-foreground'>{session.title || 'New session'}</span>
+            <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(session.lastActivityAt)}</span>
+          </span>
+          <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
+            <ActivityIndicator activity={session.activity} unread={unread} />
+            <span className='shrink-0'>{session.agentName}</span>
+            {showDirectory && <span className='truncate'>· {directoryName(session.cwd)}</span>}
+            {session.headless && <Badge variant='outline'>headless</Badge>}
+            {closed && <span>closed</span>}
+            {unreachable && <span>· Host unreachable</span>}
+          </span>
+        </span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function GroupHeading({ group, onNewSession }: { group: DirectoryGroup; onNewSession(): void }) {
+  return (
+    <>
+      <SidebarGroupLabel title={group.cwd} className='gap-1.5 pr-9'>
+        <HugeiconsIcon icon={Folder01Icon} strokeWidth={2} className='shrink-0' />
+        <span className='max-w-[70%] shrink-0 truncate'>{group.name}</span>
+        {group.hostName && <span className='min-w-0 truncate font-normal text-muted-foreground'>{group.hostName}</span>}
+      </SidebarGroupLabel>
+      <SidebarGroupAction aria-label={`New session in ${group.name}`} title={`New session in ${group.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
+        <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+      </SidebarGroupAction>
+    </>
+  );
+}
+
+/** Every paired Host's sessions: "Needs you" on top, then one group per Host and directory. */
+export function SessionList({ controller, onOpen }: { controller: AppController; onOpen?(): void }) {
+  const { model, actions } = controller;
+  const [query, setQuery] = useState('');
+  const [showClosed, setShowClosed] = useState(false);
+  const [hostsOpen, setHostsOpen] = useState(false);
+  const [newSession, setNewSession] = useState<NewSessionTarget>();
+  const view = sessionListView(model.sessions, model.hosts, { query, showClosed });
+  const host = (id: string) => model.hosts.find((item) => item.id === id);
+  const unreachable = model.hosts.filter(({ status }) => status !== 'connected').length;
+  const open = (key: string) => {
+    actions.selectSession(key);
+    onOpen?.();
+  };
+  const row = (session: SessionSummary, showDirectory: boolean) => (
+    <SessionRow
+      key={session.key}
+      session={session}
+      host={host(session.hostId)}
+      selected={session.key === model.selectedKey}
+      unread={model.unread.has(session.key)}
+      showDirectory={showDirectory}
+      onOpen={() => open(session.key)}
+    />
+  );
+
+  return (
+    <div data-slot='session-list' className='flex h-full min-h-0 w-full flex-col bg-sidebar text-sidebar-foreground'>
+      <SidebarHeader className='shrink-0 gap-2 border-b border-sidebar-border px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2'>
+        <div className='flex items-center gap-2'>
+          <h1 className='flex-1 text-sm font-semibold'>Sessions</h1>
+          <Button size='icon' variant='ghost' aria-label='New session' disabled={!model.hosts.some(({ status }) => status === 'connected')}
+            onClick={() => setNewSession({})}>
+            <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+          </Button>
+        </div>
+        {model.hosts.length > 0 && (
+          <div className='relative'>
+            <HugeiconsIcon icon={Search01Icon} strokeWidth={2}
+              className='pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-icon-muted' />
+            <SidebarInput type='search' aria-label='Filter sessions' placeholder='Filter sessions' className='pl-7'
+              value={query} onChange={(event) => setQuery(event.target.value)} />
+          </div>
+        )}
+      </SidebarHeader>
+
+      <SidebarContent>
+        {model.hosts.length === 0 && (
+          <Empty className='p-6'>
+            <EmptyHeader>
+              <EmptyTitle>No Hosts yet</EmptyTitle>
+              <EmptyDescription>Pair this device with a weave Host to see its sessions.</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button onClick={() => setHostsOpen(true)}>Pair a Host</Button>
+            </EmptyContent>
+          </Empty>
+        )}
+        {view.needsYou.length > 0 && (
+          <SidebarGroup role='group' aria-label='Needs you' className='py-1'>
+            <SidebarGroupLabel className='text-warning'>Needs you</SidebarGroupLabel>
+            <SidebarMenu>{view.needsYou.map((session) => row(session, true))}</SidebarMenu>
+          </SidebarGroup>
+        )}
+        {view.groups.map((group) => (
+          <SidebarGroup key={group.key} role='group' aria-label={group.hostName ? `${group.name} on ${group.hostName}` : group.name} className='py-1'>
+            <GroupHeading group={group} onNewSession={() => setNewSession({ hostId: group.hostId, cwd: group.cwd })} />
+            <SidebarMenu>{group.sessions.map((session) => row(session, false))}</SidebarMenu>
+          </SidebarGroup>
+        ))}
+        {model.hosts.length > 0 && view.groups.length === 0 && (
+          <Empty className='p-6'>
+            <EmptyHeader>
+              <EmptyTitle>{query ? 'No matching sessions' : 'No sessions'}</EmptyTitle>
+              <EmptyDescription>{query ? 'Try another filter.' : 'Start one with New session.'}</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
+      </SidebarContent>
+
+      <SidebarFooter className='shrink-0 flex-row items-center gap-1 border-t border-sidebar-border px-2 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+0.375rem)]'>
+        <Button variant='ghost' size='lg' aria-pressed={showClosed} onClick={() => setShowClosed((value) => !value)}>
+          <HugeiconsIcon icon={showClosed ? ViewOffIcon : ViewIcon} strokeWidth={2} />
+          {showClosed ? 'Hide closed' : 'Show closed'}
+        </Button>
+        <Button variant='ghost' size='lg' className='ml-auto' onClick={() => setHostsOpen(true)}>
+          <HugeiconsIcon icon={ComputerIcon} strokeWidth={2} />
+          Hosts
+          {unreachable > 0 && <Badge variant='destructive' aria-label={`${unreachable} unreachable`}>{unreachable}</Badge>}
+        </Button>
+      </SidebarFooter>
+
+      <HostsDialog controller={controller} open={hostsOpen} onOpenChange={setHostsOpen} />
+      <NewSessionDialog controller={controller} target={newSession} onClose={() => setNewSession(undefined)} />
+    </div>
+  );
+}
