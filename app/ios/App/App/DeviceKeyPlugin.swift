@@ -5,8 +5,9 @@ import Security
 // This device's P-256 keys, one per paired Host, in the Secure Enclave where there is one and
 // otherwise a ThisDeviceOnly Keychain key. Keys never leave the device.
 //
-// It still answers in the formats Portal used: the public key as a raw X9.63 point and signatures
-// as raw r||s, both base64url. The weave Host takes a JWK and DER signatures; WVE-100 moves it.
+// It answers as the weave Host expects (tui/docs/specs/wve-90-remote-clients.md): the public key
+// as a JWK, and signatures of a message's UTF-8 bytes as DER ECDSA P-256 SHA-256, in unpadded
+// base64url.
 @objc(DeviceKeyPlugin)
 final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
     let identifier = "DeviceKeyPlugin"
@@ -69,7 +70,8 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
         return key
     }
 
-    private func publicKey(_ privateKey: SecKey) throws -> String {
+    /// The public key as a JWK. Security gives it as an uncompressed X9.63 point: 04 || x || y.
+    private func publicKey(_ privateKey: SecKey) throws -> [String: String] {
         guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
             throw NSError(domain: "DeviceKey", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not derive the public key."])
         }
@@ -77,39 +79,16 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let data = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
             throw error?.takeRetainedValue() ?? NSError(domain: "DeviceKey", code: 4)
         }
-        return data.base64URLEncodedString()
-    }
-
-    private func rawSignature(_ der: Data) throws -> Data {
-        let bytes = [UInt8](der)
-        var offset = 0
-        func readByte() throws -> UInt8 {
-            guard offset < bytes.count else { throw NSError(domain: "DeviceKey", code: 5) }
-            defer { offset += 1 }
-            return bytes[offset]
+        let point = [UInt8](data)
+        guard point.count == 65, point[0] == 0x04 else {
+            throw NSError(domain: "DeviceKey", code: 5, userInfo: [NSLocalizedDescriptionKey: "The public key isn't an uncompressed P-256 point."])
         }
-        func readLength() throws -> Int {
-            let first = try readByte()
-            if first < 0x80 { return Int(first) }
-            let count = Int(first & 0x7f)
-            guard count > 0 && count <= 2 else { throw NSError(domain: "DeviceKey", code: 6) }
-            var length = 0
-            for _ in 0..<count { length = (length << 8) | Int(try readByte()) }
-            return length
-        }
-        func readInteger() throws -> [UInt8] {
-            guard try readByte() == 0x02 else { throw NSError(domain: "DeviceKey", code: 7) }
-            let length = try readLength()
-            guard offset + length <= bytes.count else { throw NSError(domain: "DeviceKey", code: 8) }
-            var value = Array(bytes[offset..<(offset + length)])
-            offset += length
-            while value.count > 32 && value.first == 0 { value.removeFirst() }
-            guard value.count <= 32 else { throw NSError(domain: "DeviceKey", code: 9) }
-            return Array(repeating: 0, count: 32 - value.count) + value
-        }
-        guard try readByte() == 0x30 else { throw NSError(domain: "DeviceKey", code: 10) }
-        _ = try readLength()
-        return Data(try readInteger() + readInteger())
+        return [
+            "kty": "EC",
+            "crv": "P-256",
+            "x": Data(point[1..<33]).base64URLEncodedString(),
+            "y": Data(point[33..<65]).base64URLEncodedString()
+        ]
     }
 
     @objc func generate(_ call: CAPPluginCall) {
@@ -143,7 +122,7 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
             ) as Data? else {
                 throw error?.takeRetainedValue() ?? NSError(domain: "DeviceKey", code: 12)
             }
-            call.resolve(["signature": try rawSignature(signature).base64URLEncodedString()])
+            call.resolve(["signature": signature.base64URLEncodedString()])
         } catch {
             call.reject("Could not sign the Host challenge.", "SIGNING_FAILED", error)
         }

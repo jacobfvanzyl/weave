@@ -5,7 +5,7 @@ import { Capacitor } from '@capacitor/core';
 import type {
   CreateElicitationResponse,
   SessionConfigOption,
-} from '@agentclientprotocol/sdk';
+} from '@/host/protocol';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
   AiBrainIcon,
@@ -571,6 +571,7 @@ export function ChatPane({
   actions,
   queued = [],
   canSteer = false,
+  readOnly = false,
   focusRequest,
   discardDraftOnUnmount,
   draftKey,
@@ -579,6 +580,7 @@ export function ChatPane({
   actions: ChatPaneActions;
   queued?: QueuedPrompt[];
   canSteer?: boolean;
+  readOnly?: boolean;
   focusRequest?: number;
   discardDraftOnUnmount?: boolean;
   draftKey?: string;
@@ -620,7 +622,7 @@ export function ChatPane({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      <Composer
+      {!readOnly && <Composer
         key={draftKey ?? model.sessionId}
         draftKey={draftKey}
         model={model}
@@ -629,7 +631,7 @@ export function ChatPane({
         canSteer={canSteer}
         focusRequest={focusRequest}
         discardDraftOnUnmount={discardDraftOnUnmount}
-      />
+      />}
     </div>
   );
 }

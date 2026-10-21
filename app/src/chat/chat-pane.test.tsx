@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ElicitationSchema } from '@agentclientprotocol/sdk';
+import type { ElicitationSchema } from '@/host/protocol';
 import { Capacitor } from '@capacitor/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpShowcaseTranscript } from './acp-showcase';
-import { createTranscript } from './acp-transcript';
+import { createTranscript, formElicitation } from './acp-transcript';
 import { ChatPane, type ChatPaneActions } from './chat-pane';
 
 const actions = (): ChatPaneActions => ({
@@ -150,10 +150,9 @@ describe('ChatPane', () => {
     const elicitation = model.entries.find((entry) => (
       entry.kind === 'elicitation' && entry.request.mode === 'form'
     ));
-    if (!elicitation || elicitation.kind !== 'elicitation' || elicitation.request.mode !== 'form') {
-      throw new Error('The showcase form elicitation is missing.');
-    }
-    const schema = elicitation.request.requestedSchema as ElicitationSchema;
+    const request = elicitation?.kind === 'elicitation' ? formElicitation(elicitation.request) : undefined;
+    if (!request) throw new Error('The showcase form elicitation is missing.');
+    const schema = request.requestedSchema as ElicitationSchema;
     schema.properties = {
       ...schema.properties,
       name: { type: 'string', title: 'Name', minLength: 3 },
@@ -190,10 +189,9 @@ describe('ChatPane', () => {
     const elicitation = model.entries.find((entry) => (
       entry.kind === 'elicitation' && entry.request.mode === 'form'
     ));
-    if (!elicitation || elicitation.kind !== 'elicitation' || elicitation.request.mode !== 'form') {
-      throw new Error('The showcase form elicitation is missing.');
-    }
-    const schema = elicitation.request.requestedSchema as ElicitationSchema;
+    const request = elicitation?.kind === 'elicitation' ? formElicitation(elicitation.request) : undefined;
+    if (!request) throw new Error('The showcase form elicitation is missing.');
+    const schema = request.requestedSchema as ElicitationSchema;
     schema.properties = {
       ...schema.properties,
       optionalRetries: {

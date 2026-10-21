@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionUpdate } from '@agentclientprotocol/sdk';
+import type { SessionUpdate } from '@/host/protocol';
 import {
   createTranscript,
   queueOptimisticPrompt,
@@ -260,45 +260,19 @@ describe('ACP transcript structured updates', () => {
     });
   });
 
-  it('replaces stable plans and supports all unstable plan representations', () => {
+  it('replaces the plan as the agent sends it again', () => {
     const updates = [
-      {
-        sessionUpdate: 'plan',
-        entries: [
-          { content: 'Inspect code', priority: 'high', status: 'in_progress' },
-        ],
-      },
-      {
-        sessionUpdate: 'plan_update',
-        plan: {
-          type: 'items',
-          planId: 'items-plan',
-          entries: [{ content: 'Run tests', priority: 'medium', status: 'pending' }],
-        },
-      },
-      {
-        sessionUpdate: 'plan_update',
-        plan: { type: 'markdown', planId: 'markdown-plan', content: '# Plan' },
-      },
-      {
-        sessionUpdate: 'plan_update',
-        plan: { type: 'file', planId: 'file-plan', uri: 'file:///tmp/plan.md' },
-      },
-      { sessionUpdate: 'plan_removed', planId: 'markdown-plan' },
+      { sessionUpdate: 'plan', entries: [{ content: 'Inspect code', priority: 'high', status: 'in_progress' }] },
+      { sessionUpdate: 'plan', entries: [{ content: 'Run tests', priority: 'medium', status: 'pending' }] },
     ] satisfies SessionUpdate[];
 
     const model = updates.reduce(
-      (current, update) => reduceAcpEvent(current, {
-        type: 'session/update',
-        update,
-      }),
+      (current, update) => reduceAcpEvent(current, { type: 'session/update', update }),
       createTranscript('session-1'),
     );
 
     expect(model.entries.filter((entry) => entry.kind === 'plan')).toMatchObject([
-      { planId: 'stable', format: 'entries', entries: [{ content: 'Inspect code' }] },
-      { planId: 'items-plan', format: 'entries', entries: [{ content: 'Run tests' }] },
-      { planId: 'file-plan', format: 'file', uri: 'file:///tmp/plan.md' },
+      { planId: 'stable', format: 'entries', entries: [{ content: 'Run tests' }] },
     ]);
   });
 
@@ -514,7 +488,7 @@ describe('ACP transcript client requests', () => {
         mode: '_vendor_challenge',
         sessionId: 'session-1',
         message: 'Complete custom challenge',
-        challenge: { nonce: 'abc' },
+        _meta: { nonce: 'abc' },
       },
     });
     const accepted = reduceAcpEvent(custom, {
@@ -533,7 +507,7 @@ describe('ACP transcript client requests', () => {
         { requestId: 'elicit-url', request: { mode: 'url' }, status: 'completed' },
         {
           requestId: 'elicit-custom',
-          request: { mode: '_vendor_challenge', challenge: { nonce: 'abc' } },
+          request: { mode: '_vendor_challenge', _meta: { nonce: 'abc' } },
           status: 'pending',
         },
       ]);

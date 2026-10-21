@@ -20,15 +20,19 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
 
 | Path | Owns |
 | --- | --- |
-| `src/app` | The controller seam (`app-controller.ts`), the session list's rules (`session-list.ts`), read state, the mock controller, and hooks. |
+| `src/app` | The controller seam (`app-controller.ts`), the session list's rules (`session-list.ts`), read state, the mock and Host controllers, and hooks. |
+| `src/host` | The Host protocol's generated types (`protocol.ts`, never edited by hand), the connection, device keys, journal following, and the store behind the Host controller (`host-store.ts`). |
 | `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls, plans, elicitations. |
 | `src/components` | The shell (`app-shell.tsx`), the session list and view, the banner and dialogs; `ui` and `ai-elements` are shadcn and AI Elements components. |
 | `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout) and `DeviceKeyPlugin.swift` (Secure Enclave keys). |
 | `scripts/ios.ts` | Builds, installs and launches the iOS app. |
 
-The UI reads one `AppController`. `useMockController` drives it from fixtures until the Host
-controller lands (WVE-100), and stays for UI work and tests. Keep components free of I/O: they
-take the model and call actions.
+The UI reads one `AppController`: `useHostController` from the paired Hosts, or
+`useMockController` from fixtures with `?mock=`. Keep components free of I/O: they take the
+model and call actions.
+
+The Host protocol's types come from the Host's Rust (`../tui/crates/protocol/tests/schema.rs`).
+After a protocol change there, regenerate them, and never edit `src/host/protocol.ts` by hand.
 
 ## Commands
 
@@ -41,7 +45,14 @@ bun run dev                  # http://localhost:5174/?mock=session&idiom=phone
 bun run cap:sync             # build and copy into the iOS project
 bun run ios:build            # signed build for any iOS device; --unsigned to only compile
 bun run ios:install -- --device <udid>   # install and launch it (`xcrun devicectl list devices`)
+bun scripts/protocol-types.ts            # regenerate src/host/protocol.ts from the Host's schema
 ```
+
+The `*.host.test.ts` files run the client against a dev Host (`src/host/testing/dev-host.ts`):
+the debug `weave` and fake agent in a directory of their own, never the installed Host. They
+skip unless those binaries are built: `(cd ../tui && cargo build -p weave-cli -p
+weave-fake-agent)`. They run in Vitest's `node` environment, since happy-dom's WebSocket fails
+the Host's upgrade.
 
 `?mock=` picks a fixture scenario (`list`, `session`, `running`, `unreachable`, `banner`,
 `empty`); `?idiom=phone` or `?idiom=pad` stands in for the device in a browser, since the layout

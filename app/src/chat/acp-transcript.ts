@@ -4,6 +4,8 @@ import type {
   ContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
+  ElicitationFormMode,
+  ElicitationUrlMode,
   PermissionOption,
   PlanEntry as AcpPlanEntry,
   RequestPermissionRequest,
@@ -16,7 +18,7 @@ import type {
   ToolCallLocation,
   ToolCallStatus,
   ToolKind,
-} from '@agentclientprotocol/sdk';
+} from '@/host/protocol';
 
 export type TranscriptMessageChunk = {
   kind: 'message' | 'thought';
@@ -149,7 +151,19 @@ export type AcpTranscriptEvent =
   | { type: 'turn/started' }
   | { type: 'turn/stopped'; stopReason: StopReason }
   | { type: 'turn/failed'; error: string }
-  | { type: 'history/reset'; sessionId?: string };
+  | { type: 'history/reset'; sessionId?: string }
+  /** Something the Host tells the session's clients, such as why the agent can't use client tools. */
+  | { type: 'notice'; severity: 'info' | 'error'; title: string; detail?: string };
+
+/** A form elicitation. A mode this schema doesn't know is a plain string, so `mode` alone can't tell. */
+export type FormElicitation = CreateElicitationRequest & ElicitationFormMode & { mode: 'form' };
+export type UrlElicitation = CreateElicitationRequest & ElicitationUrlMode & { mode: 'url' };
+
+export const formElicitation = (request: CreateElicitationRequest): FormElicitation | undefined =>
+  request.mode === 'form' && 'requestedSchema' in request ? request as FormElicitation : undefined;
+
+export const urlElicitation = (request: CreateElicitationRequest): UrlElicitation | undefined =>
+  request.mode === 'url' && 'elicitationId' in request && 'url' in request ? request as UrlElicitation : undefined;
 
 export const createTranscript = (sessionId: string): AcpTranscript => ({
   sessionId,
@@ -423,35 +437,11 @@ const reduceSessionUpdate = (
         format: 'entries',
         entries: update.entries,
       });
-    case 'plan_update': {
-      switch (update.plan.type) {
-        case 'items':
-          return upsertPlan(model, {
-            planId: update.plan.planId,
-            format: 'entries',
-            entries: update.plan.entries,
-          });
-        case 'markdown':
-          return upsertPlan(model, {
-            planId: update.plan.planId,
-            format: 'markdown',
-            content: update.plan.content,
-          });
-        case 'file':
-          return upsertPlan(model, {
-            planId: update.plan.planId,
-            format: 'file',
-            uri: update.plan.uri,
-          });
-      }
-    }
-    case 'plan_removed':
-      return {
-        ...model,
-        entries: model.entries.filter(
-          (entry) => entry.kind !== 'plan' || entry.planId !== update.planId,
-        ),
-      };
+    case 'subagent_update':
+    case 'session_message':
+    case 'session_message_chunk':
+      // Subagent sessions show from WVE-101.
+      return model;
     case 'available_commands_update':
       return { ...model, availableCommands: update.availableCommands };
     case 'current_mode_update':
@@ -574,8 +564,7 @@ const completeElicitation = (
 ): AcpTranscript => {
   const index = model.entries.findIndex((entry) =>
     entry.kind === 'elicitation'
-    && entry.request.mode === 'url'
-    && entry.request.elicitationId === notification.elicitationId);
+    && urlElicitation(entry.request)?.elicitationId === notification.elicitationId);
   if (index === -1) return model;
   const current = model.entries[index] as TranscriptElicitation;
   return replaceEntry(model, index, { ...current, status: 'completed' });
@@ -615,6 +604,13 @@ export const reduceAcpEvent = (
   switch (event.type) {
     case 'session/update':
       return reduceSessionUpdate(model, event.update);
+    case 'notice':
+      return appendEntry(model, {
+        kind: 'diagnostic',
+        severity: event.severity,
+        title: event.title,
+        ...(event.detail === undefined ? {} : { detail: event.detail }),
+      });
     case 'protocol/unknown':
       return appendEntry(model, {
         kind: 'diagnostic',

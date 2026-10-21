@@ -1,7 +1,7 @@
 # WVE-91: The weave app, a Host client for iPad and iPhone
 
-Status: structure settled 2026-10-20 (WVE-99). The connection to a Host is specified as
-WVE-100 to WVE-105 land.
+Status: structure settled 2026-10-20 (WVE-99); connecting to Hosts, read-only, 2026-10-20
+(WVE-100). The rest is specified as WVE-101 to WVE-105 land.
 
 Decision: [ADR 0015](../../../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md).
 Glossary: [`tui/CONTEXT.md`](../../../tui/CONTEXT.md). Host protocol:
@@ -91,12 +91,66 @@ WVE-100 a mock controller drives it from fixtures: two Hosts, several directorie
 every activity, and Alpha's ACP showcase transcript. WVE-100 adds the controller backed by the
 Host protocol; the mock stays for UI work and tests.
 
+## Connecting to Hosts
+
+### Types
+
+The app's types for the Host protocol, and for the ACP content it carries, come from the Host's
+Rust: `crates/protocol` keeps the protocol as one JSON Schema (`tests/schema.rs`), and
+`scripts/protocol-types.ts` turns it into `src/host/protocol.ts`, with tables of which method
+takes and gives which and the protocol's constants. A test fails when the file is stale. The
+ACP types are the ones the Host's pinned crate defines, unstable features included, so the app
+uses no ACP SDK.
+
+### The connection
+
+`src/host/connection.ts` speaks JSON-RPC over a transport: the web view's WebSocket, offering
+the `weave-host` subprotocol. Requests flow one way. Everything the Host sends reaches one
+ordered stream of events, and the answer to an attach comes ahead of the replay that follows it.
+
+- **A paired device** asks `host/challenge`, checks the Host's id, signs
+  `weave-host-auth/1 <hostId> <deviceId> <nonce>` with its key, and says hello.
+- **Pairing** says hello with the code `weave pair` shows, the device's name and its public key
+  as a JWK. The Host answers with the device's id, which the app keeps with the Host's id and
+  URL (`src/host/storage.ts`, in the app's preferences). The key stays in the Keychain.
+- **The pairing link.** The app registers the `weave` URL scheme, so the Camera opens
+  `weave://pair?url=…&code=…` in it; the Hosts dialog then names the Host to confirm. The URL
+  and code can be entered by hand too.
+- **Origin.** The web view sends `Origin: capacitor://localhost`, which the Host accepts without
+  configuration (ADR 0016).
+- **Turning it on.** Nothing is configured on the Host's computer: `weave pair` turns remote
+  access on, and the Host makes its own Tailscale Serve entry.
+
+### Device keys
+
+`DeviceKeyPlugin.swift` makes one P-256 key per paired Host, in the Secure Enclave where there
+is one and otherwise a `ThisDeviceOnly` Keychain key, and gives the public key as a JWK and
+signatures as DER, unpadded base64url. In a browser, during development, a WebCrypto key in
+memory stands in; it is gone after a reload, and the browser pairs again.
+
+### Following a session
+
+`src/host/host-store.ts` keeps the paired Hosts, one connection each, and their sessions from
+`sessions/list`, listed again when the app comes to the front and when the list is pulled down.
+Opening a session attaches to it after the last journal position this device handled
+(`JournalFollower`), so only what it missed arrives; events up to the journal's head at attach
+are history. Journal events become the transcript's events (`transcriptEvents`): prompts and
+steers as the person's messages, agent updates, turn ends, and the Host's notices. Subagent
+sessions, Host-run terminals and reopened agents show from WVE-101.
+
+Until WVE-102, sessions are read-only: no composer, no session menu, no new sessions.
+
+### Connections that end
+
+A connection that drops is tried again after 1, 2, 5, 10 and then every 30 seconds, and the open
+session catches up after its position. A device the Host revoked (4000) or refuses is not tried
+again: the Hosts dialog says to pair again. WVE-105 does the rest.
+
 ## What came back
 
 Kept from Alpha: the ACP transcript and its views (`src/chat`), the AI Elements and shadcn
 components, the sidebar, the resume and keyboard hooks, read state, and the native shell with
-its Secure Enclave key plugin (`DeviceKeyPlugin.swift`). The plugin still answers in Portal's
-formats, a raw signature and a raw public key; WVE-100 moves it to DER signatures and JWK keys.
+its Secure Enclave key plugin (`DeviceKeyPlugin.swift`).
 
 Left in history: Portal's client and protocol, terminals and libghostty, Workspaces and their
 layouts, the Host Browser, the Client Browser, Electron, the desktop title bar, and Portal's
@@ -113,8 +167,6 @@ acceptance harness and UI tests.
 
 ## Later
 
-- WVE-100: pairing, device authentication, the session list from `sessions/list`, and a
-  read-only transcript.
 - WVE-101: every journal event in the transcript.
 - WVE-102: prompting, steering, queueing, new sessions, photos.
 - WVE-103: pending requests and client tools.

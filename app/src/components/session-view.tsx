@@ -15,6 +15,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -121,8 +122,13 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
             {others}
           </Badge>
         )}
-        {summary && <SessionMenu session={summary} actions={actions} />}
+        {summary && !model.readOnly && <SessionMenu session={summary} actions={actions} />}
       </SessionHeader>
+      {model.error && (
+        <Alert variant='destructive' className='m-2 w-auto'>
+          <AlertDescription>{model.error}</AlertDescription>
+        </Alert>
+      )}
       <ChatPane
         key={session.key}
         draftKey={session.key}
@@ -130,6 +136,7 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
         actions={actions}
         queued={session.queued}
         canSteer={session.canSteer}
+        readOnly={model.readOnly}
       />
     </section>
   );

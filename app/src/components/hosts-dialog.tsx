@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ComputerIcon, Delete02Icon, Link01Icon, RefreshIcon } from '@hugeicons/core-free-icons';
 import type { AppController, PairedHost } from '@/app/app-controller';
@@ -70,24 +70,48 @@ function HostRow({ host, actions }: { host: PairedHost; actions: AppController['
   );
 }
 
+/** What a new pairing calls this device until the person names it. */
+const defaultDeviceName = () => {
+  const idiom = document.documentElement.dataset.deviceIdiom;
+  return idiom === 'phone' ? 'iPhone' : idiom === 'pad' ? 'iPad' : 'Browser';
+};
+
 /** The paired Hosts, and pairing another with the URL and code `weave pair` shows. */
-export function HostsDialog({ controller, open, onOpenChange }: {
+export function HostsDialog({ controller, open, onOpenChange, offer }: {
   controller: AppController;
   open: boolean;
   onOpenChange(open: boolean): void;
+  /** A pairing link's URL and code, to confirm. */
+  offer?: { url: string; code: string };
 }) {
   const { model, actions } = controller;
   const [url, setUrl] = useState('');
   const [code, setCode] = useState('');
+  const [name, setName] = useState(defaultDeviceName);
   const [error, setError] = useState<string>();
   const [pairing, setPairing] = useState(false);
+
+  useEffect(() => {
+    if (!offer) return;
+    setUrl(offer.url);
+    setCode(offer.code);
+    setError(undefined);
+  }, [offer]);
+
+  const offeredHost = (() => {
+    try {
+      return offer ? new URL(offer.url).hostname : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const pair = async (event: FormEvent) => {
     event.preventDefault();
     setError(undefined);
     setPairing(true);
     try {
-      await actions.pairHost({ url: url.trim(), code: code.trim() });
+      await actions.pairHost({ url: url.trim(), code: code.trim(), name: name.trim() });
       setUrl('');
       setCode('');
     } catch (cause) {
@@ -114,10 +138,14 @@ export function HostsDialog({ controller, open, onOpenChange }: {
             <HugeiconsIcon icon={Link01Icon} strokeWidth={2} />
             Pair a Host
           </div>
-          <p className='text-muted-foreground'>
-            Run <code>weave pair</code> on the Host's computer and scan its QR code with the Camera, or enter the URL and
-            code it shows.
-          </p>
+          {offeredHost
+            ? <p>Pair with <strong>{offeredHost}</strong>? Only pair with a Host you just ran <code>weave pair</code> on.</p>
+            : (
+              <p className='text-muted-foreground'>
+                Run <code>weave pair</code> on the Host's computer and scan its QR code with the Camera, or enter the URL and
+                code it shows.
+              </p>
+            )}
           <div className='grid gap-1.5'>
             <Label htmlFor='pair-url'>URL</Label>
             <Input id='pair-url' required inputMode='url' autoCapitalize='off' autoCorrect='off' value={url}
@@ -128,6 +156,10 @@ export function HostsDialog({ controller, open, onOpenChange }: {
             <Input id='pair-code' required autoCapitalize='characters' autoCorrect='off' value={code}
               onChange={(event) => setCode(event.target.value)} />
           </div>
+          <div className='grid gap-1.5'>
+            <Label htmlFor='pair-name'>This device's name</Label>
+            <Input id='pair-name' required value={name} onChange={(event) => setName(event.target.value)} />
+          </div>
           {error && (
             <Alert variant='destructive'>
               <AlertTitle>Couldn't pair</AlertTitle>
@@ -135,7 +167,7 @@ export function HostsDialog({ controller, open, onOpenChange }: {
             </Alert>
           )}
           <DialogFooter>
-            <Button type='submit' disabled={pairing || !url.trim() || !code.trim()}>Pair</Button>
+            <Button type='submit' disabled={pairing || !url.trim() || !code.trim() || !name.trim()}>Pair</Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, SidebarLeftIcon } from '@hugeicons/core-free-icons';
 import type { AppController } from '@/app/app-controller';
 import { waitingCount } from '@/app/session-list';
 import { usePhoneLayout } from '@/app/use-phone-layout';
+import { HostsDialog } from '@/components/hosts-dialog';
 import { SessionList } from '@/components/session-list';
 import { SessionHeader, SessionView } from '@/components/session-view';
 import { WaitingBanner } from '@/components/waiting-banner';
@@ -44,22 +46,22 @@ function SidebarToggle({ controller }: { controller: AppController }) {
   );
 }
 
-function PhoneShell({ controller }: { controller: AppController }) {
+function PhoneShell({ controller, onOpenHosts }: { controller: AppController; onOpenHosts(): void }) {
   const { model, actions } = controller;
-  if (!model.session) return <SessionList controller={controller} />;
+  if (!model.session) return <SessionList controller={controller} onOpenHosts={onOpenHosts} />;
   return (
     <SessionView controller={controller} session={model.session} leading={<BackButton controller={controller} />}
       onSwipeBack={() => actions.selectSession(undefined)} />
   );
 }
 
-function SplitShell({ controller }: { controller: AppController }) {
+function SplitShell({ controller, onOpenHosts }: { controller: AppController; onOpenHosts(): void }) {
   const { model } = controller;
   const { setOpenMobile } = useSidebar();
   return (
     <>
       <Sidebar collapsible='offcanvas'>
-        <SessionList controller={controller} onOpen={() => setOpenMobile(false)} />
+        <SessionList controller={controller} onOpen={() => setOpenMobile(false)} onOpenHosts={onOpenHosts} />
       </Sidebar>
       <SidebarInset className='min-h-0 min-w-0 overflow-hidden'>
         {model.session
@@ -84,12 +86,22 @@ function SplitShell({ controller }: { controller: AppController }) {
  * The app's layout. An iPhone stacks the list and a session; an iPad, or anything wider, shows the
  * list as a sidebar beside one session. Which follows the device, not the window's width.
  */
-export function AppShell({ controller }: { controller: AppController }) {
+export function AppShell({ controller, pairingOffer }: {
+  controller: AppController;
+  /** A `weave pair` link the app was opened with, for the person to confirm. */
+  pairingOffer?: { url: string; code: string };
+}) {
   const phone = usePhoneLayout();
+  const [hostsOpen, setHostsOpen] = useState(false);
+  const openHosts = () => setHostsOpen(true);
+  useEffect(() => {
+    if (pairingOffer) setHostsOpen(true);
+  }, [pairingOffer]);
   return (
     <SidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
-      {phone ? <PhoneShell controller={controller} /> : <SplitShell controller={controller} />}
+      {phone ? <PhoneShell controller={controller} onOpenHosts={openHosts} /> : <SplitShell controller={controller} onOpenHosts={openHosts} />}
       <WaitingBanner controller={controller} />
+      <HostsDialog controller={controller} open={hostsOpen} onOpenChange={setHostsOpen} offer={pairingOffer} />
     </SidebarProvider>
   );
 }

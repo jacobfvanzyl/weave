@@ -1,4 +1,4 @@
-import type { ContentBlock } from '@agentclientprotocol/sdk';
+import type { ContentBlock } from '@/host/protocol';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
   AiAudioIcon,

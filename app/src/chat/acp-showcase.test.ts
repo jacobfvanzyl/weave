@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ContentBlock, SessionUpdate, ToolKind } from '@agentclientprotocol/sdk';
+import type { ContentBlock, SessionUpdate, ToolKind } from '@/host/protocol';
 import {
   ACP_CONTENT_BLOCK_KINDS,
   ACP_SESSION_UPDATE_KINDS,
@@ -11,10 +11,10 @@ describe('ACP renderer coverage catalog', () => {
   it('enumerates every current session update, content block, and tool kind', () => {
     const updateKinds: SessionUpdate['sessionUpdate'][] = [
       'user_message_chunk', 'agent_message_chunk', 'agent_thought_chunk',
-      'tool_call', 'tool_call_update', 'plan', 'plan_update', 'plan_removed',
+      'tool_call', 'tool_call_update', 'plan',
       'available_commands_update', 'current_mode_update', 'config_option_update',
       'session_info_update', 'usage_update', 'compaction_update',
-      'compaction_summary_chunk',
+      'compaction_summary_chunk', 'subagent_update', 'session_message', 'session_message_chunk',
     ];
     const contentKinds: ContentBlock['type'][] = [
       'text', 'image', 'audio', 'resource_link', 'resource',

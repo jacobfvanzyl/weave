@@ -1,10 +1,9 @@
-import { useState } from 'react';
+import { useRef, useState, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, ComputerIcon, Folder01Icon, Search01Icon, ViewIcon, ViewOffIcon } from '@hugeicons/core-free-icons';
 import type { AppController, PairedHost, SessionSummary } from '@/app/app-controller';
 import { type DirectoryGroup, sessionListView } from '@/app/session-list';
 import { ActivityIndicator } from '@/components/activity-indicator';
-import { HostsDialog } from '@/components/hosts-dialog';
 import { type NewSessionTarget, NewSessionDialog } from '@/components/new-session-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -72,7 +71,7 @@ function SessionRow({ session, host, selected, unread, showDirectory, onOpen }: 
   );
 }
 
-function GroupHeading({ group, onNewSession }: { group: DirectoryGroup; onNewSession(): void }) {
+function GroupHeading({ group, onNewSession }: { group: DirectoryGroup; onNewSession?: () => void }) {
   return (
     <>
       <SidebarGroupLabel title={group.cwd} className='gap-1.5 pr-9'>
@@ -80,20 +79,55 @@ function GroupHeading({ group, onNewSession }: { group: DirectoryGroup; onNewSes
         <span className='max-w-[70%] shrink-0 truncate'>{group.name}</span>
         {group.hostName && <span className='min-w-0 truncate font-normal text-muted-foreground'>{group.hostName}</span>}
       </SidebarGroupLabel>
-      <SidebarGroupAction aria-label={`New session in ${group.name}`} title={`New session in ${group.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
-        <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-      </SidebarGroupAction>
+      {onNewSession && (
+        <SidebarGroupAction aria-label={`New session in ${group.name}`} title={`New session in ${group.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
+          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+        </SidebarGroupAction>
+      )}
     </>
   );
 }
 
+/** Pulling the list down from its top, past a threshold, lists the sessions again. */
+function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
+  const start = useRef<number>(undefined);
+  const [state, setState] = useState<'idle' | 'pulled' | 'refreshing'>('idle');
+  if (!onRefresh) return { state, handlers: {} };
+  return {
+    state,
+    handlers: {
+      onTouchStart(event: TouchEvent<HTMLDivElement>) {
+        start.current = event.currentTarget.scrollTop <= 0 ? event.touches[0]?.clientY : undefined;
+      },
+      onTouchMove(event: TouchEvent<HTMLDivElement>) {
+        const y = event.touches[0]?.clientY;
+        if (start.current !== undefined && y !== undefined && y - start.current > 70 && state === 'idle') setState('pulled');
+      },
+      async onTouchEnd() {
+        start.current = undefined;
+        if (state !== 'pulled') return;
+        setState('refreshing');
+        try {
+          await onRefresh();
+        } finally {
+          setState('idle');
+        }
+      },
+    },
+  };
+}
+
 /** Every paired Host's sessions: "Needs you" on top, then one group per Host and directory. */
-export function SessionList({ controller, onOpen }: { controller: AppController; onOpen?(): void }) {
+export function SessionList({ controller, onOpen, onOpenHosts }: {
+  controller: AppController;
+  onOpen?(): void;
+  onOpenHosts(): void;
+}) {
   const { model, actions } = controller;
   const [query, setQuery] = useState('');
   const [showClosed, setShowClosed] = useState(false);
-  const [hostsOpen, setHostsOpen] = useState(false);
   const [newSession, setNewSession] = useState<NewSessionTarget>();
+  const pull = usePullToRefresh(actions.refresh);
   const view = sessionListView(model.sessions, model.hosts, { query, showClosed });
   const host = (id: string) => model.hosts.find((item) => item.id === id);
   const unreachable = model.hosts.filter(({ status }) => status !== 'connected').length;
@@ -118,10 +152,12 @@ export function SessionList({ controller, onOpen }: { controller: AppController;
       <SidebarHeader className='shrink-0 gap-2 border-b border-sidebar-border px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2'>
         <div className='flex items-center gap-2'>
           <h1 className='flex-1 text-sm font-semibold'>Sessions</h1>
-          <Button size='icon' variant='ghost' aria-label='New session' disabled={!model.hosts.some(({ status }) => status === 'connected')}
-            onClick={() => setNewSession({})}>
-            <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-          </Button>
+          {!model.readOnly && (
+            <Button size='icon' variant='ghost' aria-label='New session' disabled={!model.hosts.some(({ status }) => status === 'connected')}
+              onClick={() => setNewSession({})}>
+              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+            </Button>
+          )}
         </div>
         {model.hosts.length > 0 && (
           <div className='relative'>
@@ -133,7 +169,15 @@ export function SessionList({ controller, onOpen }: { controller: AppController;
         )}
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent {...pull.handlers}>
+        {pull.state !== 'idle' && (
+          <p role='status' className='py-2 text-center text-[0.6875rem] text-muted-foreground'>
+            {pull.state === 'pulled' ? 'Release to refresh' : 'Refreshing…'}
+          </p>
+        )}
+        {model.error && (
+          <p role='alert' className='px-3 py-2 text-[0.6875rem] text-destructive'>{model.error}</p>
+        )}
         {model.hosts.length === 0 && (
           <Empty className='p-6'>
             <EmptyHeader>
@@ -141,7 +185,7 @@ export function SessionList({ controller, onOpen }: { controller: AppController;
               <EmptyDescription>Pair this device with a weave Host to see its sessions.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button onClick={() => setHostsOpen(true)}>Pair a Host</Button>
+              <Button onClick={onOpenHosts}>Pair a Host</Button>
             </EmptyContent>
           </Empty>
         )}
@@ -153,7 +197,7 @@ export function SessionList({ controller, onOpen }: { controller: AppController;
         )}
         {view.groups.map((group) => (
           <SidebarGroup key={group.key} role='group' aria-label={group.hostName ? `${group.name} on ${group.hostName}` : group.name} className='py-1'>
-            <GroupHeading group={group} onNewSession={() => setNewSession({ hostId: group.hostId, cwd: group.cwd })} />
+            <GroupHeading group={group} onNewSession={model.readOnly ? undefined : () => setNewSession({ hostId: group.hostId, cwd: group.cwd })} />
             <SidebarMenu>{group.sessions.map((session) => row(session, false))}</SidebarMenu>
           </SidebarGroup>
         ))}
@@ -161,7 +205,9 @@ export function SessionList({ controller, onOpen }: { controller: AppController;
           <Empty className='p-6'>
             <EmptyHeader>
               <EmptyTitle>{query ? 'No matching sessions' : 'No sessions'}</EmptyTitle>
-              <EmptyDescription>{query ? 'Try another filter.' : 'Start one with New session.'}</EmptyDescription>
+              <EmptyDescription>
+                {query ? 'Try another filter.' : model.readOnly ? 'Sessions started on your Hosts show here.' : 'Start one with New session.'}
+              </EmptyDescription>
             </EmptyHeader>
           </Empty>
         )}
@@ -172,14 +218,13 @@ export function SessionList({ controller, onOpen }: { controller: AppController;
           <HugeiconsIcon icon={showClosed ? ViewOffIcon : ViewIcon} strokeWidth={2} />
           {showClosed ? 'Hide closed' : 'Show closed'}
         </Button>
-        <Button variant='ghost' size='lg' className='ml-auto' onClick={() => setHostsOpen(true)}>
+        <Button variant='ghost' size='lg' className='ml-auto' onClick={onOpenHosts}>
           <HugeiconsIcon icon={ComputerIcon} strokeWidth={2} />
           Hosts
           {unreachable > 0 && <Badge variant='destructive' aria-label={`${unreachable} unreachable`}>{unreachable}</Badge>}
         </Button>
       </SidebarFooter>
 
-      <HostsDialog controller={controller} open={hostsOpen} onOpenChange={setHostsOpen} />
       <NewSessionDialog controller={controller} target={newSession} onClose={() => setNewSession(undefined)} />
     </div>
   );

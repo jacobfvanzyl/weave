@@ -2,7 +2,7 @@ import type {
   ContentBlock,
   SessionUpdate,
   ToolKind,
-} from '@agentclientprotocol/sdk';
+} from '@/host/protocol';
 import {
   createTranscript,
   reduceAcpEvent,
@@ -17,8 +17,6 @@ export const ACP_SESSION_UPDATE_KINDS = [
   'tool_call',
   'tool_call_update',
   'plan',
-  'plan_update',
-  'plan_removed',
   'available_commands_update',
   'current_mode_update',
   'config_option_update',
@@ -26,6 +24,9 @@ export const ACP_SESSION_UPDATE_KINDS = [
   'usage_update',
   'compaction_update',
   'compaction_summary_chunk',
+  'subagent_update',
+  'session_message',
+  'session_message_chunk',
 ] as const satisfies readonly SessionUpdate['sessionUpdate'][];
 
 export const ACP_CONTENT_BLOCK_KINDS = [
@@ -296,7 +297,7 @@ const events: AcpTranscriptEvent[] = [
       mode: '_weave_custom',
       sessionId: 'showcase',
       message: 'Unsupported future interaction',
-      payload: { retained: true },
+      _meta: { retained: true },
     },
   },
   {

@@ -1,4 +1,4 @@
-import type { CreateElicitationResponse } from '@agentclientprotocol/sdk';
+import type { CreateElicitationResponse } from '@/host/protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 export type HostStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -59,6 +59,8 @@ export type AppModel = {
   session?: OpenSession;
   /** Sessions whose turn ended since the person last looked at them, on this device. */
   unread: ReadonlySet<string>;
+  /** Sessions can be watched but not prompted, answered, started or closed (until WVE-102). */
+  readOnly?: boolean;
   error?: string;
 };
 
@@ -68,8 +70,11 @@ export type AppActions = {
   createSession(input: { hostId: string; cwd: string; agentId: string }): Promise<void> | void;
   closeSession(key: string): Promise<void> | void;
   deleteSession(key: string): Promise<void> | void;
-  pairHost(input: { url: string; code: string }): Promise<void> | void;
+  /** Pairs with the URL and code `weave pair` shows; `name` is what the Host calls this device. */
+  pairHost(input: { url: string; code: string; name?: string }): Promise<void> | void;
   forgetHost(hostId: string): Promise<void> | void;
+  /** Lists the sessions again, as pulling the list down asks. */
+  refresh?(): Promise<void> | void;
   reconnectHost(hostId: string): Promise<void> | void;
   /** Starts a turn, steers the running one, or queues the message, as `OpenSession` allows. */
   send(text: string): Promise<void> | void;

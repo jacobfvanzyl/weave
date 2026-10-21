@@ -7,10 +7,10 @@ import type {
   ElicitationSchema,
   MultiSelectPropertySchema,
   StringPropertySchema,
-} from '@agentclientprotocol/sdk';
+} from '@/host/protocol';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowUpRight01Icon, InformationCircleIcon } from '@hugeicons/core-free-icons';
-import type { TranscriptElicitation } from './acp-transcript';
+import { type FormElicitation, type TranscriptElicitation, type UrlElicitation, formElicitation, urlElicitation } from './acp-transcript';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -38,32 +38,11 @@ import {
 
 type FormValues = Partial<Record<string, ElicitationContentValue>>;
 type FormErrors = Record<string, string>;
-type FormRequest = CreateElicitationRequest & {
-  mode: 'form';
-  requestedSchema: ElicitationSchema;
-};
-type UrlRequest = CreateElicitationRequest & {
-  mode: 'url';
-  elicitationId: string;
-  url: string;
-};
+type FormRequest = FormElicitation;
+type UrlRequest = UrlElicitation;
 
-const formRequest = (request: CreateElicitationRequest): FormRequest | undefined => {
-  const schema = (request as Record<string, unknown>).requestedSchema;
-  return request.mode === 'form' && typeof schema === 'object' && schema !== null
-    ? request as FormRequest
-    : undefined;
-};
-
-const urlRequest = (request: CreateElicitationRequest): UrlRequest | undefined => {
-  const url = (request as Record<string, unknown>).url;
-  const elicitationId = (request as Record<string, unknown>).elicitationId;
-  return request.mode === 'url'
-    && typeof url === 'string'
-    && typeof elicitationId === 'string'
-    ? request as UrlRequest
-    : undefined;
-};
+const formRequest = formElicitation;
+const urlRequest = urlElicitation;
 
 const enumOptions = (schema: ElicitationPropertySchema) => {
   if (schema.type !== 'string') return [];
