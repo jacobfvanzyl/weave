@@ -15,12 +15,16 @@ A program connected to the Host on someone's behalf, such as the TUI, `weave run
 _Avoid_: frontend, UI, consumer
 
 **Remote client**:
-A client on another computer than the Host's, which reaches it through the tailnet on behalf of a paired device.
+A client on another computer than the Host's, which reaches it through the tailnet on behalf of a paired device or a peer Host.
 _Avoid_: network client, mobile client
 
 **Paired device**:
 A device of the person's that the Host has paired with and accepts remote clients from until it's revoked.
 _Avoid_: credential, principal, token
+
+**Peer Host**:
+One of the person's Hosts paired with another, so that the agents of one can reach the sessions of the other.
+_Avoid_: remote Host, linked Host, federated Host
 
 **Agent**:
 An ACP agent program the Host can launch, known by an id: a preset, one defined in the Host's configuration, or one from the ACP registry.
