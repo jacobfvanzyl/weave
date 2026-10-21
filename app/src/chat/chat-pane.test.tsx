@@ -75,7 +75,7 @@ describe('ChatPane', () => {
     expect(screen.getByText('Checking every content family.')).toBeInTheDocument();
     expect(container.querySelector('[data-slot="message-header"]')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'ACP rich content' })).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'memory://pixel.png' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show pixel.png' })).toBeInTheDocument();
     expect(screen.getByLabelText('Audio content')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'ACP specification' })).toHaveAttribute(
       'href',
@@ -88,7 +88,7 @@ describe('ChatPane', () => {
     expect(screen.getAllByText('/workspace/README.md')).toHaveLength(2);
     expect(screen.getByText('# Old')).toBeInTheDocument();
     expect(screen.getByText('# New')).toBeInTheDocument();
-    expect(screen.getByText('terminal-showcase')).toBeInTheDocument();
+    expect(screen.getByLabelText('Terminal output')).toHaveTextContent(/^ok README updated$/);
 
     expect(screen.getByText('Inspect the protocol')).toBeInTheDocument();
     expect(screen.getByText('Render every block')).toBeInTheDocument();

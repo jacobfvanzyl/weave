@@ -148,6 +148,8 @@ const events: AcpTranscriptEvent[] = [
       ],
     },
   },
+  { type: 'terminal/output', terminalId: 'terminal-showcase', data: '\u001b[32mok\u001b[0m README updated\n' },
+  { type: 'terminal/exit', terminalId: 'terminal-showcase', status: { exitCode: 0 } },
   {
     type: 'session/update',
     update: {
@@ -311,6 +313,56 @@ const events: AcpTranscriptEvent[] = [
       },
     },
   },
+  {
+    type: 'prompt',
+    prompt: [{ type: 'text', text: 'Delegate the file count.' }],
+    origin: "Jaco's iPhone",
+  },
+  {
+    type: 'session/update',
+    update: {
+      sessionUpdate: 'subagent_update',
+      sessionId: 'showcase:robie',
+      title: 'Robie',
+      description: 'Counts the files under src/',
+      state: { state: 'running' },
+    },
+  },
+  {
+    type: 'session/update',
+    update: {
+      sessionUpdate: 'session_message',
+      messageId: 'to-robie',
+      senderSessionId: 'showcase',
+      recipientSessionId: 'showcase:robie',
+      content: [{ type: 'text', text: 'Count the files under src/, please.' }],
+    },
+  },
+  {
+    type: 'session/update',
+    sessionId: 'showcase:robie',
+    update: {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'robie-read',
+      title: 'Read src',
+      kind: 'read',
+      status: 'completed',
+    },
+  },
+  {
+    type: 'session/update',
+    sessionId: 'showcase:robie',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'There are 12 files.' } },
+  },
+  {
+    type: 'session/update',
+    update: {
+      sessionUpdate: 'subagent_update',
+      sessionId: 'showcase:robie',
+      state: { state: 'idle', stopReason: 'end_turn' },
+    },
+  },
+  { type: 'turn/ended', stopReason: 'cancelled' },
 ];
 
 export const createAcpShowcaseTranscript = (): AcpTranscript =>

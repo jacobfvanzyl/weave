@@ -9,7 +9,7 @@ import { useAppResume } from './use-app-resume';
 
 const client = { name: 'weave-app', version: '0.1.0' };
 
-const emptyModel: AppModel = { hosts: [], sessions: [], agents: {}, unread: new Set(), readOnly: true };
+const emptyModel: AppModel = { hosts: [], sessions: [], agents: {}, unread: new Set() };
 
 // A browser, during development, keeps its keys in memory: after a reload it pairs again.
 const browserKeys = new Map<string, DeviceKey>();
@@ -52,6 +52,7 @@ const idleActions: AppController['actions'] = {
   send() {},
   removeQueued() {},
   cancelTurn() {},
+  reopenSession() {},
   respondToPermission() {},
   respondToElicitation() {},
   setMode() {},

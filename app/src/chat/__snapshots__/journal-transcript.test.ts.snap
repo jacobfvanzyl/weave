@@ -1,0 +1,100 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`transcripts from recorded journals > shows the cancel journal the same live and replayed 1`] = `
+"user (from the TUI): /slow 40
+assistant: Chunk 1 of 40.
+Chunk 2 of 40.
+
+info: Turn cancelled"
+`;
+
+exports[`transcripts from recorded journals > shows the close journal the same live and replayed 1`] = `
+"user (from the TUI): hello before closing
+assistant: You said: hello before closing
+info: The session closed — closed by a client"
+`;
+
+exports[`transcripts from recorded journals > shows the compact journal the same live and replayed 1`] = `
+"user (from the TUI): /compact
+compaction completed: "## Kept\\n\\nThe user is trying out compaction."
+assistant: Compacted."
+`;
+
+exports[`transcripts from recorded journals > shows the delegate journal the same live and replayed 1`] = `
+"user (from the TUI): /delegate
+• spawned Robie — Counts the files under src/
+message Main → Robie: Counts the files under src/, please.
+• spawned Ada — Reviews the change
+message Main → Ada: Reviews the change, please.
+• completed Robie — There are 12 files.
+• completed Ada — Nothing to fix.
+assistant: Robie counted 12 files; Ada found nothing to fix.
+subagent Robie (idle):
+  message Main → Robie: Counts the files under src/, please.
+  tool read completed: Read src
+  tool edit completed: Write count.txt
+  assistant: There are 12 files.
+subagent Ada (idle):
+  message Main → Ada: Reviews the change, please.
+  assistant: Nothing to fix."
+`;
+
+exports[`transcripts from recorded journals > shows the image journal the same live and replayed 1`] = `
+"user (from the TUI): What is in this picture?[image]
+assistant: You said: What is in this picture? Attachments: image image/png."
+`;
+
+exports[`transcripts from recorded journals > shows the modes journal the same live and replayed 1`] = `
+"user (from the TUI): /switch-mode
+assistant: I switched to code mode."
+`;
+
+exports[`transcripts from recorded journals > shows the notice journal the same live and replayed 1`] = `
+"user (from the TUI): /mcp-legacy
+info: This agent's MCP client predates MCP 2026-07-28, so it can't use weave's client tools.
+assistant: weave refused initialize: {"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2026-07-28"],"requested":"2025-06-18"}}"
+`;
+
+exports[`transcripts from recorded journals > shows the plan journal the same live and replayed 1`] = `
+"user (from the TUI): /plan
+plan: [completed] Inspect the code; [completed] Make the change; [completed] Verify it
+assistant: All steps are done."
+`;
+
+exports[`transcripts from recorded journals > shows the reopen journal the same live and replayed 1`] = `
+"user (from the TUI): hello before the reopen
+assistant: You said: hello before the reopen
+info: Reopened this session in a new agent process
+user (from the TUI): hello after it
+assistant: You said: hello after it"
+`;
+
+exports[`transcripts from recorded journals > shows the run journal the same live and replayed 1`] = `
+"user (from the TUI): /run printf '\\033[1;32mgreen\\033[0m and plain\\nline two\\r\\nline three\\n'; exit 3
+tool execute failed: Run printf '\\033[1;32mgreen\\033[0m and plain\\nline two\\r\\nline three\\n'; exit 3
+  terminal "green and plain\\nline two\\nline three\\n" {"exitCode":3}
+assistant: The command exited with code 3 after 48 bytes of output."
+`;
+
+exports[`transcripts from recorded journals > shows the steer journal the same live and replayed 1`] = `
+"user (from the TUI): /slow 12
+assistant: Chunk 1 of 12.
+Chunk 2 of 12.
+
+user (steer) (from the TUI): And mention the steer.
+assistant: You steered: And mention the steer."
+`;
+
+exports[`transcripts from recorded journals > shows the think journal the same live and replayed 1`] = `
+"user (from the TUI): /think
+assistant: (thinking) The user wants to see reasoning. I'll think briefly, then answer.
+ Done thinking."
+`;
+
+exports[`transcripts from recorded journals > shows the write journal the same live and replayed 1`] = `
+"user (from the TUI): /write /work/project/notes.txt Hello from the fake agent
+tool edit completed: Write /work/project/notes.txt
+  diff /work/project/notes.txt: (new) → Hello from the fake agent
+
+assistant: Wrote /work/project/notes.txt."
+`;

@@ -152,12 +152,10 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
       <SidebarHeader className='shrink-0 gap-2 border-b border-sidebar-border px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2'>
         <div className='flex items-center gap-2'>
           <h1 className='flex-1 text-sm font-semibold'>Sessions</h1>
-          {!model.readOnly && (
-            <Button size='icon' variant='ghost' aria-label='New session' disabled={!model.hosts.some(({ status }) => status === 'connected')}
-              onClick={() => setNewSession({})}>
-              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-            </Button>
-          )}
+          <Button size='icon' variant='ghost' aria-label='New session' disabled={!model.hosts.some(({ status }) => status === 'connected')}
+            onClick={() => setNewSession({})}>
+            <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+          </Button>
         </div>
         {model.hosts.length > 0 && (
           <div className='relative'>
@@ -197,7 +195,7 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
         )}
         {view.groups.map((group) => (
           <SidebarGroup key={group.key} role='group' aria-label={group.hostName ? `${group.name} on ${group.hostName}` : group.name} className='py-1'>
-            <GroupHeading group={group} onNewSession={model.readOnly ? undefined : () => setNewSession({ hostId: group.hostId, cwd: group.cwd })} />
+            <GroupHeading group={group} onNewSession={() => setNewSession({ hostId: group.hostId, cwd: group.cwd })} />
             <SidebarMenu>{group.sessions.map((session) => row(session, false))}</SidebarMenu>
           </SidebarGroup>
         ))}
@@ -206,7 +204,7 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
             <EmptyHeader>
               <EmptyTitle>{query ? 'No matching sessions' : 'No sessions'}</EmptyTitle>
               <EmptyDescription>
-                {query ? 'Try another filter.' : model.readOnly ? 'Sessions started on your Hosts show here.' : 'Start one with New session.'}
+                {query ? 'Try another filter.' : 'Start one with New session.'}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

@@ -32,8 +32,11 @@ describe('ACP renderer coverage catalog', () => {
   it('builds a transcript containing every renderer family', () => {
     const model = createAcpShowcaseTranscript();
     expect(new Set(model.entries.map((entry) => entry.kind))).toEqual(new Set([
-      'message', 'tool', 'plan', 'compaction', 'elicitation', 'diagnostic',
+      'message', 'tool', 'plan', 'compaction', 'elicitation', 'diagnostic', 'subagent', 'session-message',
     ]));
+    expect(model.subagents.map(({ title, transcript }) => [title, transcript.entries.map(({ kind }) => kind)])).toEqual([
+      ['Robie', ['tool', 'message']],
+    ]);
     expect(model.configOptions.map((option) => option.type)).toEqual([
       'select', 'boolean',
     ]);

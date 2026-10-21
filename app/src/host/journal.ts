@@ -1,6 +1,6 @@
 import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
 import type { OpenedSession } from './connection';
-import type { JournalPosition, SessionEventNotification } from './protocol';
+import type { AgentRelease, JournalPosition, SessionEventNotification, TurnOrigin } from './protocol';
 
 /**
  * Where this client is in one attached session's journal. A client attaches after the last
@@ -43,34 +43,92 @@ export class JournalFollower {
   }
 }
 
+/** How a client reads the journal it follows. */
+export type JournalReading = {
+  /** The event was written before this client attached: it changes no turn state. */
+  history: boolean;
+  /** Whether a prompt is this client's own, sent from this device. */
+  own(origin: TurnOrigin): boolean;
+};
+
+const clientNames: Record<string, string> = { 'weave-tui': 'the TUI', 'weave-app': 'the weave app' };
+
+/** Where another client's prompt came from: its device, its client, or a headless run. */
+export function originLabel(origin: TurnOrigin): string {
+  if ('run' in origin) return 'a headless run';
+  return origin.client.device || clientNames[origin.client.name] || origin.client.name;
+}
+
+/** A package as people say it: `@zed-industries/claude-code-acp` is `claude-code-acp`. */
+const shortName = (name: string) => {
+  if (!name.startsWith('@')) return name;
+  const slash = name.indexOf('/');
+  return slash === -1 ? name : name.slice(slash + 1);
+};
+
+/** What the transcript says when the session's agent was started again, as the TUI says it. */
+export function reopenedText(release?: AgentRelease | null, previous?: AgentRelease | null, failed?: string | null): string {
+  if (failed) {
+    return release ? `${failed}; it runs ${shortName(release.name)} ${release.version} again` : `${failed}; it runs the agent it ran again`;
+  }
+  if (!release) return 'Reopened this session in a new agent process';
+  if (previous && previous.version !== release.version) {
+    return `Moved this session to ${shortName(release.name)} ${release.version}, from ${previous.version}`;
+  }
+  return `Reopened this session on ${shortName(release.name)} ${release.version}`;
+}
+
 /**
- * A journaled event as the transcript's events. Events about subagent sessions, Host-run
- * terminals and reopened agents show from WVE-101; kinds this client doesn't know are skipped.
+ * A journaled event as the transcript's events. Replayed history shows the same as live events
+ * but changes no turn state; kinds this client doesn't know are skipped.
  */
-export function transcriptEvents(notification: SessionEventNotification): AcpTranscriptEvent[] {
+export function transcriptEvents(notification: SessionEventNotification, reading: JournalReading): AcpTranscriptEvent[] {
   const root = notification.sessionId;
   const { event } = notification;
-  const prompt = (sessionId: string, blocks: { type: string }[], seq: number): AcpTranscriptEvent[] =>
-    sessionId !== root ? [] : blocks.map((content) => ({
-      type: 'session/update',
-      update: { sessionUpdate: 'user_message_chunk', content, messageId: `prompt-${seq}` },
-    }) as AcpTranscriptEvent);
+  const live = !reading.history;
   switch (event.kind) {
     case 'update':
-      return event.notification.sessionId === root ? [{ type: 'session/update', update: event.notification.update }] : [];
+      return [{ type: 'session/update', update: event.notification.update, sessionId: event.notification.sessionId }];
     case 'turnStarted':
-      return event.sessionId === root ? [...prompt(event.sessionId, event.prompt, notification.seq), { type: 'turn/started' }] : [];
-    case 'turnSteered':
-      return prompt(event.sessionId, event.prompt, notification.seq);
-    case 'turnEnded':
-      if (event.sessionId !== root) return [];
-      return event.error
-        ? [{ type: 'turn/failed', error: event.error.message }]
-        : [{ type: 'turn/stopped', stopReason: event.response?.stopReason ?? 'end_turn' }];
+    case 'turnSteered': {
+      const own = reading.own(event.origin);
+      const prompt: AcpTranscriptEvent = {
+        type: 'prompt',
+        prompt: event.prompt,
+        sessionId: event.sessionId,
+        ...(event.kind === 'turnSteered' ? { steer: true } : {}),
+        ...(own ? { own } : { origin: originLabel(event.origin) }),
+      };
+      return event.kind === 'turnStarted' && event.sessionId === root && live ? [prompt, { type: 'turn/started' }] : [prompt];
+    }
+    case 'turnEnded': {
+      const error = event.error ? event.error.message : event.response ? undefined : 'The turn ended unexplained';
+      const stopReason = event.response?.stopReason;
+      const ended: AcpTranscriptEvent = {
+        type: 'turn/ended',
+        sessionId: event.sessionId,
+        ...(error === undefined ? {} : { error }),
+        ...(stopReason ? { stopReason } : {}),
+      };
+      if (event.sessionId !== root || !live) return [ended];
+      return [ended, error === undefined ? { type: 'turn/stopped', stopReason: stopReason ?? 'end_turn' } : { type: 'turn/failed', error }];
+    }
+    case 'terminalOutput':
+      return [{ type: 'terminal/output', terminalId: event.terminalId, data: event.data }];
+    case 'terminalExit':
+      return [{ type: 'terminal/exit', terminalId: event.terminalId, status: event.status }];
+    case 'agentReopened':
+      return [{
+        type: 'agent/reopened',
+        text: reopenedText(event.agent.release, event.previous, event.failed),
+        failed: Boolean(event.failed),
+        modes: event.modes,
+        configOptions: event.configOptions,
+      }];
     case 'notice':
       return [{ type: 'notice', severity: 'info', title: event.text }];
     case 'closed':
-      return [{ type: 'notice', severity: 'info', title: 'The session closed', detail: event.reason }];
+      return [{ type: 'session/closed', reason: event.reason }];
     default:
       return [];
   }

@@ -1,6 +1,6 @@
 import { composerDrafts, composerDraftListeners, writeComposerDraft, type ComposerDraft } from './composer-drafts';
-import { useEffect, useRef, useState } from 'react';
-import type { QueuedPrompt } from '@/app/app-controller';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import type { PromptImage, QueuedPrompt } from '@/app/app-controller';
 import { Capacitor } from '@capacitor/core';
 import type {
   CreateElicitationResponse,
@@ -14,6 +14,7 @@ import {
   ArrowRight01Icon,
   Cancel01Icon,
   CheckmarkCircle02Icon,
+  ImageAdd01Icon,
   Loading03Icon,
   SendIcon,
   StopIcon,
@@ -27,7 +28,10 @@ import type {
 import { ContentBlocksView } from './content-block-view';
 import { ElicitationView } from './elicitation-view';
 import { PlanView } from './plan-view';
+import { imagesSize, MAX_PROMPT_IMAGE_BYTES, promptImage } from './prompt-images';
+import { SessionMessageView, SubagentRowView } from './subagent-view';
 import { ToolCallView } from './tool-call-view';
+import { TranscriptContext, type TranscriptContextValue } from './transcript-context';
 import { Badge } from '@/components/ui/badge';
 import {
   PromptInput,
@@ -75,7 +79,7 @@ import { cn } from '@/lib/utils';
 export type ChatPaneActions = {
   setDraftText?(sessionId: string, text: string): void;
   /** Starts a turn, or while one runs, steers it or queues the message. */
-  send(text: string): Promise<void> | void;
+  send(text: string, images?: PromptImage[]): Promise<void> | void;
   removeQueued?(id: string): void;
   cancelTurn(): Promise<void> | void;
   respondToPermission(requestId: string, optionId: string): void;
@@ -92,9 +96,13 @@ function MessageEntryView({
   isStreaming: boolean;
 }) {
   const isUser = message.role === 'user';
+  const note = [message.steer ? 'Steered into the turn' : undefined, message.origin ? `From ${message.origin}` : undefined]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <Message align={isUser ? 'end' : 'start'}>
       <MessageContent>
+        {note && <span className="text-[0.625rem] text-muted-foreground" data-slot="message-origin">{note}</span>}
         <BubbleGroup className={cn(isUser && 'w-full')}>
           {message.chunks.map((chunk, index) => {
             if (chunk.kind === 'thought') {
@@ -153,12 +161,15 @@ function CompactionView({ entry }: { entry: TranscriptCompaction }) {
   );
 }
 
-function EntryView({
+// Entries don't change once written, apart from the one streaming, so each renders only when it does.
+const EntryView = memo(function EntryView({
   entry,
+  transcript,
   actions,
   isStreaming,
 }: {
   entry: TranscriptEntry;
+  transcript: AcpTranscript;
   actions: ChatPaneActions;
   isStreaming: boolean;
 }) {
@@ -179,8 +190,17 @@ function EntryView({
           <MarkerContent>{entry.title}{entry.detail ? ` — ${entry.detail}` : ''}</MarkerContent>
         </Marker>
       );
+    case 'subagent':
+      return <SubagentRowView entry={entry} />;
+    case 'session-message':
+      return <SessionMessageView entry={entry} transcript={transcript} />;
   }
-}
+}, (previous, next) =>
+  previous.entry === next.entry
+  && previous.isStreaming === next.isStreaming
+  && previous.actions === next.actions
+  // Only messages between sessions read the transcript around them, for its subagents' names.
+  && (previous.entry.kind !== 'session-message' || previous.transcript.subagents === next.transcript.subagents));
 
 const selectOptions = (option: Extract<SessionConfigOption, { type: 'select' }>) =>
   option.options.flatMap((item) => 'options' in item ? item.options : [item]);
@@ -383,15 +403,22 @@ function ContextUsage({ usage }: { usage: AcpTranscript['usage'] }) {
   );
 }
 
+const promptSummary = (prompt: QueuedPrompt) => {
+  const photos = prompt.images?.length ?? 0;
+  const attached = photos === 0 ? '' : photos === 1 ? '1 photo' : `${photos} photos`;
+  return [prompt.text, attached].filter(Boolean).join(' · ');
+};
+
 function QueuedPrompts({ queued, onRemove }: { queued: QueuedPrompt[]; onRemove?(id: string): void }) {
   if (queued.length === 0) return null;
   return (
     <ol aria-label="Queued messages" className="flex flex-col gap-1 px-3 pt-2" data-slot="queued-prompts">
       {queued.map((prompt) => (
         <li key={prompt.id} className="flex min-w-0 items-center gap-2 rounded-md bg-muted/50 py-1 pl-2.5 pr-1 text-xs text-muted-foreground">
-          <span className="shrink-0">Queued</span>
-          <span className="min-w-0 flex-1 truncate text-foreground">{prompt.text}</span>
-          {onRemove && (
+          <span className="shrink-0">{prompt.steering ? 'Steering' : 'Queued'}</span>
+          <span className="min-w-0 flex-1 truncate text-foreground">{promptSummary(prompt)}</span>
+          {prompt.steering && <HugeiconsIcon icon={Loading03Icon} strokeWidth={2} className="size-3 animate-spin" />}
+          {onRemove && !prompt.steering && (
             <Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove queued message: ${prompt.text}`} onClick={() => onRemove(prompt.id)}>
               <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
             </Button>
@@ -405,11 +432,66 @@ function QueuedPrompts({ queued, onRemove }: { queued: QueuedPrompt[]; onRemove?
 const sendLabel = (running: boolean, canSteer: boolean) =>
   !running ? 'Send message' : canSteer ? 'Steer the running turn' : 'Queue message';
 
+/** The agent's commands a draft starting with `/` could be: `/pl` offers `/plan`. */
+function commandMatches(model: AcpTranscript, text: string) {
+  const match = /^\/(\S*)$/.exec(text);
+  if (!match) return [];
+  const query = match[1].toLowerCase();
+  const named = model.availableCommands.filter(({ name }) => name.toLowerCase().startsWith(query));
+  const mentioned = model.availableCommands.filter(({ name }) => !name.toLowerCase().startsWith(query) && name.toLowerCase().includes(query));
+  return [...named, ...mentioned];
+}
+
+function CommandSuggestions({ model, text, onPick }: { model: AcpTranscript; text: string; onPick(name: string): void }) {
+  const matches = commandMatches(model, text);
+  if (matches.length === 0) return null;
+  return (
+    <ul aria-label="Agent commands" className="mx-3 mt-2 max-h-48 overflow-y-auto rounded-md border bg-popover py-1 text-xs shadow-sm" data-slot="command-suggestions">
+      {matches.map((command) => (
+        <li key={command.name}>
+          <button
+            type="button"
+            className="flex w-full min-w-0 items-baseline gap-2 px-2.5 py-1.5 text-left hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+            onClick={() => onPick(command.name)}
+          >
+            <span className="shrink-0 font-mono font-medium">/{command.name}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{command.description}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AttachedImages({ images, onRemove }: { images: PromptImage[]; onRemove(index: number): void }) {
+  if (images.length === 0) return null;
+  return (
+    <ul aria-label="Attached photos" className="flex flex-wrap gap-1.5 px-3 pt-2" data-slot="attached-images">
+      {images.map((image, index) => (
+        <li key={`${index}-${image.data.length}`} className="relative size-14 overflow-hidden rounded-md border bg-muted">
+          <img alt={image.name ?? `Photo ${index + 1}`} src={`data:${image.mimeType};base64,${image.data}`} className="size-full object-cover" />
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="secondary"
+            className="absolute top-0.5 right-0.5"
+            aria-label={`Remove ${image.name ?? `photo ${index + 1}`}`}
+            onClick={() => onRemove(index)}
+          >
+            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Composer({
   model,
   actions,
   queued,
   canSteer,
+  canAttachImages,
   focusRequest,
   discardDraftOnUnmount,
   draftKey,
@@ -418,10 +500,14 @@ function Composer({
   actions: ChatPaneActions;
   queued: QueuedPrompt[];
   canSteer: boolean;
+  canAttachImages: boolean;
   focusRequest?: number;
   discardDraftOnUnmount?: boolean;
   draftKey?: string;
 }) {
+  const [images, setImages] = useState<PromptImage[]>([]);
+  const [imageError, setImageError] = useState<string>();
+  const fileRef = useRef<HTMLInputElement>(null);
   const composerKey = draftKey ?? model.sessionId;
   const [draft, setDraft] = useState<ComposerDraft>(
     () => composerDrafts.get(composerKey) ?? { revision: 0, text: '' },
@@ -470,10 +556,29 @@ function Composer({
     writeComposerDraft(composerKey, updated);
     actions.setDraftText?.(composerKey, next);
   };
+  const attach = async (files: FileList | null) => {
+    setImageError(undefined);
+    if (!files || files.length === 0) return;
+    try {
+      const added = await Promise.all([...files].map(promptImage));
+      const next = [...images, ...added];
+      if (imagesSize(next) > MAX_PROMPT_IMAGE_BYTES) {
+        setImageError('Those photos are too large to send in one message. Send fewer at a time.');
+        return;
+      }
+      setImages(next);
+    } catch (cause) {
+      setImageError(cause instanceof Error ? cause.message : "Couldn't add the photo.");
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
   const submit = async () => {
     const prompt = text.trim();
-    if (!prompt) return;
+    const attached = images;
+    if (!prompt && attached.length === 0) return;
     const submittedDraft = draftRef.current;
+    setImages([]);
     const clearedDraft = { revision: submittedDraft.revision + 1, text: '' };
     writeComposerDraft(composerKey, clearedDraft);
     if (
@@ -483,10 +588,11 @@ function Composer({
       textareaRef.current?.blur();
     }
     try {
-      const sending = actions.send(prompt);
+      const sending = attached.length > 0 ? actions.send(prompt, attached) : actions.send(prompt);
       actions.setDraftText?.(composerKey, '');
       await sending;
     } catch {
+      setImages((current) => current.length === 0 ? attached : current);
       const currentDraft = composerDrafts.get(composerKey);
       if (currentDraft?.revision !== clearedDraft.revision) return;
       const restoredDraft = {
@@ -501,6 +607,16 @@ function Composer({
   return (
     <div className="shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)]">
       <QueuedPrompts queued={queued} onRemove={actions.removeQueued} />
+      <CommandSuggestions
+        model={model}
+        text={text}
+        onPick={(name) => {
+          setText(`/${name} `);
+          textareaRef.current?.focus({ preventScroll: true });
+        }}
+      />
+      <AttachedImages images={images} onRemove={(index) => setImages((current) => current.filter((_, at) => at !== index))} />
+      {imageError && <p role="alert" className="px-3 pt-2 text-xs text-destructive">{imageError}</p>}
       <PromptInput
         aria-label="Message composer"
         className="w-full bg-composer-background"
@@ -518,7 +634,7 @@ function Composer({
                 id="composer-message"
                 aria-label="Message agent"
                 className="field-sizing-fixed min-h-0 resize-none overflow-y-auto px-4 pb-1 pt-3 text-xs/relaxed"
-                placeholder="Message agent — @ to include context, / for commands"
+                placeholder={model.availableCommands.length > 0 ? 'Message agent — / for commands' : 'Message agent'}
                 rows={composerRows(text)}
                 variant="frameless"
                 value={text}
@@ -531,6 +647,22 @@ function Composer({
             data-slot="composer-controls"
           >
             <PromptInputTools className="min-w-0 flex-1 flex-wrap">
+              {canAttachImages && (
+                <>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    hidden
+                    aria-label="Photos to attach"
+                    onChange={(event) => void attach(event.target.files)}
+                  />
+                  <Button type="button" size="icon-sm" variant="ghost" aria-label="Attach photos" onClick={() => fileRef.current?.click()}>
+                    <HugeiconsIcon icon={ImageAdd01Icon} strokeWidth={2} />
+                  </Button>
+                </>
+              )}
               <ConfigControls model={model} actions={actions} />
             </PromptInputTools>
             <div
@@ -553,7 +685,7 @@ function Composer({
                 size="icon-sm"
                 type="submit"
                 aria-label={sendLabel(running, canSteer)}
-                disabled={text.trim().length === 0}
+                disabled={text.trim().length === 0 && images.length === 0}
                 variant="send"
               >
                 <HugeiconsIcon data-icon="inline-start" data-symbol="paper-plane" icon={SendIcon} strokeWidth={2} />
@@ -571,7 +703,10 @@ export function ChatPane({
   actions,
   queued = [],
   canSteer = false,
+  canAttachImages = false,
   readOnly = false,
+  root,
+  onOpenSubagent,
   focusRequest,
   discardDraftOnUnmount,
   draftKey,
@@ -580,58 +715,69 @@ export function ChatPane({
   actions: ChatPaneActions;
   queued?: QueuedPrompt[];
   canSteer?: boolean;
+  canAttachImages?: boolean;
+  /** Shows the transcript without a composer, as a subagent's is shown. */
   readOnly?: boolean;
+  /** The session's own transcript, when `model` is one of its subagents'. */
+  root?: AcpTranscript;
+  onOpenSubagent?(sessionId: string): void;
   focusRequest?: number;
   discardDraftOnUnmount?: boolean;
   draftKey?: string;
 }) {
   const running = model.turn.status === 'running';
+  const session = root ?? model;
+  const context = useMemo<TranscriptContextValue>(() => ({ root: session, openSubagent: onOpenSubagent }), [session, onOpenSubagent]);
   return (
-    <div
-      aria-busy={running}
-      className="flex min-h-0 flex-1 flex-col bg-chat-background"
-      data-slot="chat-pane"
-    >
-      {running && (
-        <span className="sr-only" role="status" aria-live="polite">
-          Agent response in progress.
-        </span>
-      )}
-      <MessageScrollerProvider autoScroll>
-        <MessageScroller>
-          <MessageScrollerViewport>
-            <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
-              {model.entries.map((entry) => (
-                <MessageScrollerItem key={entry.id} scrollAnchor={entry.kind === 'message' && entry.role === 'user'}>
-                  <EntryView
-                    entry={entry}
-                    actions={actions}
-                    isStreaming={running && entry.id === model.entries.at(-1)?.id}
-                  />
-                </MessageScrollerItem>
-              ))}
-              {model.entries.length === 0 && (
-                <Empty className="min-h-48 rounded-none p-0">
-                  <EmptyHeader>
-                    <EmptyDescription>Start a conversation with the agent.</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              )}
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerButton />
-        </MessageScroller>
-      </MessageScrollerProvider>
-      {!readOnly && <Composer
-        key={draftKey ?? model.sessionId}
-        draftKey={draftKey}
-        model={model}
-        actions={actions}
-        queued={queued}
-        canSteer={canSteer}
-        focusRequest={focusRequest}
-        discardDraftOnUnmount={discardDraftOnUnmount}
-      />}
-    </div>
+    <TranscriptContext.Provider value={context}>
+      <div
+        aria-busy={running}
+        className="flex min-h-0 flex-1 flex-col bg-chat-background"
+        data-slot="chat-pane"
+      >
+        {running && (
+          <span className="sr-only" role="status" aria-live="polite">
+            Agent response in progress.
+          </span>
+        )}
+        <MessageScrollerProvider autoScroll>
+          <MessageScroller>
+            <MessageScrollerViewport>
+              <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
+                {model.entries.map((entry) => (
+                  <MessageScrollerItem key={entry.id} scrollAnchor={entry.kind === 'message' && entry.role === 'user'}>
+                    <EntryView
+                      entry={entry}
+                      transcript={model}
+                      actions={actions}
+                      isStreaming={running && entry.id === model.entries.at(-1)?.id}
+                    />
+                  </MessageScrollerItem>
+                ))}
+                {model.entries.length === 0 && (
+                  <Empty className="min-h-48 rounded-none p-0">
+                    <EmptyHeader>
+                      <EmptyDescription>Start a conversation with the agent.</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+            <MessageScrollerButton />
+          </MessageScroller>
+        </MessageScrollerProvider>
+        {!readOnly && <Composer
+          key={draftKey ?? model.sessionId}
+          draftKey={draftKey}
+          model={model}
+          actions={actions}
+          queued={queued}
+          canSteer={canSteer}
+          canAttachImages={canAttachImages}
+          focusRequest={focusRequest}
+          discardDraftOnUnmount={discardDraftOnUnmount}
+        />}
+      </div>
+    </TranscriptContext.Provider>
   );
 }

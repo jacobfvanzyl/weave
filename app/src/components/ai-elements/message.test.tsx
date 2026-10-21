@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { MessageResponse } from './message';
 
 describe('MessageResponse', () => {
@@ -42,5 +43,30 @@ describe('MessageResponse', () => {
     expect(screen.queryByRole('link', { name: 'unsafe' })).not.toBeInTheDocument();
     expect(screen.getByText(/unsafe/)).toHaveAttribute('title', expect.stringContaining('Blocked URL'));
     expect(container.querySelector('script')).not.toBeInTheDocument();
+  });
+
+  it('shows raw HTML from an agent as text, never as markup', () => {
+    const { container } = render(<MessageResponse>{'Use <b>bold</b> and <img src=x onerror=alert(1)> here.'}</MessageResponse>);
+    expect(container.querySelector('b')).not.toBeInTheDocument();
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+    expect(container).toHaveTextContent('Use <b>bold</b> and <img src=x onerror=alert(1)> here.');
+  });
+
+  it('opens a link only once the person confirms it, naming its host and the whole URL', async () => {
+    const user = userEvent.setup();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    try {
+      render(<MessageResponse>{'See [the docs](https://docs.example.com/guide?ref=agent).'}</MessageResponse>);
+      await user.click(screen.getByRole('button', { name: 'the docs' }));
+      expect(screen.getByRole('alertdialog', { name: 'Open a link to docs.example.com?' })).toHaveTextContent('https://docs.example.com/guide?ref=agent');
+      expect(screen.getByRole('button', { name: "Don't open" })).toHaveFocus();
+      await user.click(screen.getByRole('button', { name: "Don't open" }));
+      expect(open).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'the docs' }));
+      await user.click(screen.getByRole('button', { name: 'Open' }));
+      expect(open).toHaveBeenCalledWith('https://docs.example.com/guide?ref=agent', '_blank', expect.anything());
+    } finally {
+      open.mockRestore();
+    }
   });
 });

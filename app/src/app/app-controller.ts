@@ -39,7 +39,25 @@ export type SessionSummary = {
 
 export type AgentChoice = { id: string; name: string };
 
-export type QueuedPrompt = { id: string; text: string };
+/** A photo for a prompt, downscaled and base64-encoded. */
+export type PromptImage = { mimeType: string; data: string; name?: string };
+
+/** A message waiting to go: queued behind the running turn, or with `steering` on its way into it. */
+export type QueuedPrompt = { id: string; text: string; images?: PromptImage[]; steering?: boolean };
+
+/** A newer version of a session's agent than the one it runs. */
+export type AgentUpdateNotice = {
+  agentId: string;
+  /** What's updated, as people know it: the preset's package or the registry agent's name. */
+  name: string;
+  running: string;
+  latest: string;
+  /**
+   * The version the Host's new sessions of the agent launch, when it isn't the one this session
+   * runs: the agent was updated on the Host, and Move session takes the session there.
+   */
+  available?: string;
+};
 
 /** The session on screen. */
 export type OpenSession = {
@@ -48,6 +66,12 @@ export type OpenSession = {
   /** Whether Send steers the running turn; otherwise it queues. */
   canSteer: boolean;
   queued: QueuedPrompt[];
+  /** Whether the agent takes images in prompts. */
+  canAttachImages?: boolean;
+  /** A newer version of its agent is out; it is updated on the Host's computer. */
+  update?: AgentUpdateNotice;
+  /** `session/reopen` is moving it to the version its agent's new sessions launch. */
+  reopening?: boolean;
 };
 
 export type AppModel = {
@@ -59,8 +83,6 @@ export type AppModel = {
   session?: OpenSession;
   /** Sessions whose turn ended since the person last looked at them, on this device. */
   unread: ReadonlySet<string>;
-  /** Sessions can be watched but not prompted, answered, started or closed (until WVE-102). */
-  readOnly?: boolean;
   error?: string;
 };
 
@@ -77,9 +99,11 @@ export type AppActions = {
   refresh?(): Promise<void> | void;
   reconnectHost(hostId: string): Promise<void> | void;
   /** Starts a turn, steers the running one, or queues the message, as `OpenSession` allows. */
-  send(text: string): Promise<void> | void;
+  send(text: string, images?: PromptImage[]): Promise<void> | void;
   removeQueued(id: string): void;
   cancelTurn(): Promise<void> | void;
+  /** Moves the open session to the version its agent's new sessions launch (`session/reopen`). */
+  reopenSession(): Promise<void> | void;
   respondToPermission(requestId: string, optionId: string): void;
   respondToElicitation(requestId: string, response: CreateElicitationResponse): void;
   setMode(modeId: string): Promise<void> | void;

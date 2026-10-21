@@ -75,6 +75,27 @@ describe('ACP transcript message reduction', () => {
     ]);
   });
 
+  it('replaces this device\'s optimistic prompt with the journaled one, whatever order its fields come in', () => {
+    const sent = queueOptimisticPrompt(createTranscript('s'), 'local-1', [
+      { type: 'text', text: 'What is this?' },
+      { type: 'image', mimeType: 'image/jpeg', data: '/9j/AA==' },
+    ]);
+    const journaled = reduceAcpEvent(sent, {
+      type: 'prompt',
+      own: true,
+      // As the Host writes it: the image's data before its type.
+      prompt: JSON.parse('[{"type":"text","text":"What is this?"},{"type":"image","data":"/9j/AA==","mimeType":"image/jpeg"}]'),
+    });
+    expect(journaled.entries).toHaveLength(1);
+    expect(journaled.entries[0]).toMatchObject({ kind: 'message', role: 'user', optimistic: false });
+  });
+
+  it('replaces the oldest optimistic prompt when the journaled one reads differently', () => {
+    const sent = queueOptimisticPrompt(createTranscript('s'), 'local-1', [{ type: 'text', text: 'First' }]);
+    const journaled = reduceAcpEvent(sent, { type: 'prompt', own: true, prompt: [{ type: 'text', text: 'First, normalized' }] });
+    expect(journaled.entries.map((entry) => entry.kind === 'message' && entry.optimistic)).toEqual([false]);
+  });
+
   it('deduplicates only a matching optimistic prompt echo', () => {
     const optimistic = queueOptimisticPrompt(
       createTranscript('session-1'),

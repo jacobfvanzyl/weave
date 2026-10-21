@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import { createAcpShowcaseTranscript } from '@/chat/acp-showcase';
 import { type AcpTranscript, type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
+import type { ContentBlock } from '@/host/protocol';
 import {
   type AgentChoice,
   type AppController,
   type AppModel,
   type PairedHost,
+  type PromptImage,
   type QueuedPrompt,
   type SessionSummary,
   sessionKey,
@@ -164,13 +166,18 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     transcripts: { ...current.transcripts, [key]: events.reduce(reduceAcpEvent, transcript(key)) },
   }));
 
-  const userMessage = (text: string): AcpTranscriptEvent => ({
-    type: 'session/update',
-    update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text } },
+  const userMessage = (text: string, images: PromptImage[] = [], steer = false): AcpTranscriptEvent => ({
+    type: 'prompt',
+    own: true,
+    ...(steer ? { steer } : {}),
+    prompt: [
+      ...(text ? [{ type: 'text', text } as ContentBlock] : []),
+      ...images.map(({ mimeType, data }): ContentBlock => ({ type: 'image', mimeType, data })),
+    ],
   });
 
-  const startTurn = (key: string, text: string) => {
-    reduce(key, userMessage(text), { type: 'turn/started' });
+  const startTurn = (key: string, text: string, images?: PromptImage[]) => {
+    reduce(key, userMessage(text, images), { type: 'turn/started' });
     setSession(key, { activity: 'running', lastActivityAt: Date.now() });
     later(turnMs, () => finishTurn(key));
   };
@@ -186,7 +193,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     const [next, ...rest] = state.current.queued[key] ?? [];
     if (!next) return;
     update((current) => ({ ...current, queued: { ...current.queued, [key]: rest } }));
-    startTurn(key, next.text);
+    startTurn(key, next.text, next.images);
   };
 
   useEffect(() => {
@@ -211,6 +218,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         transcript: transcript(selected.key),
         canSteer: steers(selected.agentId),
         queued: state.current.queued[selected.key] ?? [],
+        canAttachImages: true,
       }
     : undefined;
 
@@ -281,20 +289,25 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           },
         }));
       },
-      send(text) {
+      send(text, images) {
         const key = selectedKey();
         if (!key) return;
         const current = state.current.model.sessions.find((item) => item.key === key);
         if (transcript(key).turn.status !== 'running') {
-          startTurn(key, text);
+          startTurn(key, text, images);
         } else if (current && steers(current.agentId)) {
-          reduce(key, userMessage(text));
+          reduce(key, userMessage(text, images, true));
         } else {
           update((latest) => ({
             ...latest,
-            queued: { ...latest.queued, [key]: [...(latest.queued[key] ?? []), { id: localId('queued'), text }] },
+            queued: { ...latest.queued, [key]: [...(latest.queued[key] ?? []), { id: localId('queued'), text, ...(images?.length ? { images } : {}) }] },
           }));
         }
+      },
+      reopenSession() {
+        const key = selectedKey();
+        if (!key) return;
+        reduce(key, { type: 'agent/reopened', text: 'Reopened this session in a new agent process', failed: false });
       },
       removeQueued(id) {
         const key = selectedKey();

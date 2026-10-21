@@ -1,7 +1,8 @@
 /// <reference types="bun" />
 // A dev weave Host for integration tests: the debug `weave` from `tui/`, in a directory of its own
 // (`WEAVE_DAEMON_DIR`), so it never touches an installed Host, with the fake agent as `fake` and
-// its WebSocket on a free loopback port. Build the binaries first:
+// its WebSocket on a free loopback port. `fake-minimal` is the fake agent advertising nothing
+// optional, steering included, and `fake-auth` one that needs signing in. Build the binaries first:
 //
 //   (cd ../tui && cargo build -p weave-cli -p weave-fake-agent)
 import { existsSync } from 'node:fs';
@@ -52,6 +53,14 @@ export async function startDevHost(): Promise<DevHost> {
   await writeFile(config, [
     '[agents.fake]',
     `command = ${JSON.stringify(fakeAgent)}`,
+    '',
+    '[agents.fake-minimal]',
+    `command = ${JSON.stringify(fakeAgent)}`,
+    'env = { WEAVE_FAKE_AGENT_MINIMAL = "1" }',
+    '',
+    '[agents.fake-auth]',
+    `command = ${JSON.stringify(fakeAgent)}`,
+    `env = { WEAVE_FAKE_AGENT_REQUIRE_AUTH = "1", WEAVE_FAKE_AGENT_STATE = ${JSON.stringify(join(root, 'fake-auth.json'))} }`,
     '',
     '[remote]',
     `listen = "127.0.0.1:${port}"`,

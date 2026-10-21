@@ -1,0 +1,454 @@
+{
+  "name": "run",
+  "state": {
+    "sessionId": "fake-18e07dd17f43d088",
+    "agent": {
+      "id": "fake",
+      "name": "Fake Agent",
+      "initialize": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "loadSession": true,
+          "promptCapabilities": {
+            "image": true,
+            "audio": true,
+            "embeddedContext": true
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false,
+            "acp": false
+          },
+          "sessionCapabilities": {
+            "list": {},
+            "delete": {},
+            "additionalDirectories": {},
+            "resume": {},
+            "close": {}
+          },
+          "auth": {
+            "logout": {}
+          }
+        },
+        "authMethods": [
+          {
+            "id": "token",
+            "name": "Token",
+            "description": "Sign in immediately"
+          },
+          {
+            "type": "terminal",
+            "id": "terminal-login",
+            "name": "Terminal login",
+            "description": "Confirm sign-in in a terminal",
+            "args": [
+              "--login"
+            ],
+            "env": {
+              "WEAVE_FAKE_LOGIN": "1"
+            }
+          }
+        ],
+        "agentInfo": {
+          "name": "weave-fake-agent",
+          "title": "Fake Agent",
+          "version": "0.1.0"
+        },
+        "_meta": {
+          "steering": {
+            "supported": true
+          }
+        }
+      }
+    },
+    "cwd": "/work/project",
+    "additionalDirectories": [],
+    "state": "open",
+    "activity": "idle",
+    "clients": 1,
+    "blank": true,
+    "policy": {
+      "approve": [
+        "edit",
+        "execute",
+        "read"
+      ],
+      "otherwise": "ask"
+    },
+    "modes": {
+      "currentModeId": "ask",
+      "availableModes": [
+        {
+          "id": "ask",
+          "name": "Ask"
+        },
+        {
+          "id": "code",
+          "name": "Code"
+        }
+      ]
+    },
+    "configOptions": [
+      {
+        "id": "mode",
+        "name": "Mode",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "ask",
+        "options": [
+          {
+            "value": "ask",
+            "name": "Ask"
+          },
+          {
+            "value": "code",
+            "name": "Code"
+          }
+        ]
+      },
+      {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "small",
+        "options": [
+          {
+            "group": "fast",
+            "name": "Fast",
+            "options": [
+              {
+                "value": "small",
+                "name": "Small"
+              }
+            ]
+          },
+          {
+            "group": "smart",
+            "name": "Smart",
+            "options": [
+              {
+                "value": "large",
+                "name": "Large"
+              },
+              {
+                "value": "huge",
+                "name": "Huge"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "verbose",
+        "name": "Verbose",
+        "type": "boolean",
+        "currentValue": false
+      }
+    ],
+    "turns": [],
+    "pending": [],
+    "subagents": [],
+    "journal": {
+      "id": "1792570990432",
+      "head": 1
+    },
+    "notices": []
+  },
+  "events": [
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 1,
+      "at": 1792570990433,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [
+              {
+                "name": "read",
+                "description": "Read a file through the client",
+                "input": {
+                  "hint": "absolute path"
+                }
+              },
+              {
+                "name": "write",
+                "description": "Write a file through the client",
+                "input": {
+                  "hint": "absolute path, then text"
+                }
+              },
+              {
+                "name": "run",
+                "description": "Run a shell command in a client terminal",
+                "input": {
+                  "hint": "shell command"
+                }
+              },
+              {
+                "name": "kill-after",
+                "description": "Run a command and kill it after a delay",
+                "input": {
+                  "hint": "milliseconds, then command"
+                }
+              },
+              {
+                "name": "plan",
+                "description": "Show a plan that progresses"
+              },
+              {
+                "name": "slow",
+                "description": "Stream chunks slowly",
+                "input": {
+                  "hint": "number of chunks"
+                }
+              },
+              {
+                "name": "ask",
+                "description": "Ask a few questions with a form"
+              },
+              {
+                "name": "connect",
+                "description": "Connect an account through a URL"
+              },
+              {
+                "name": "mcp",
+                "description": "List the MCP servers this session has"
+              },
+              {
+                "name": "think",
+                "description": "Reason out loud, then answer"
+              },
+              {
+                "name": "compact",
+                "description": "Compact the context, keeping a summary"
+              },
+              {
+                "name": "delegate",
+                "description": "Delegate to two subagents"
+              },
+              {
+                "name": "delegate-legacy",
+                "description": "Delegate in the subagent RFD's earlier draft"
+              },
+              {
+                "name": "switch-mode",
+                "description": "Switch modes on the agent's own initiative"
+              },
+              {
+                "name": "withdraw",
+                "description": "Ask permission, then withdraw the request"
+              },
+              {
+                "name": "extension",
+                "description": "Send the client an extension request and notification"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 2,
+      "at": 1792570990454,
+      "event": {
+        "kind": "turnStarted",
+        "sessionId": "fake-18e07dd17f43d088",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "/run printf '\\033[1;32mgreen\\033[0m and plain\\nline two\\r\\nline three\\n'; exit 3"
+          }
+        ],
+        "origin": {
+          "client": {
+            "name": "weave-tui",
+            "id": "c2"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 3,
+      "at": 1792570990457,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "/run printf '\\033[1;32mgreen\\033[0m and ",
+            "updatedAt": "2026-10-21T08:23:10.455109Z"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 4,
+      "at": 1792570990460,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-1",
+            "title": "Run printf '\\033[1;32mgreen\\033[0m and plain\\nline two\\r\\nline three\\n'; exit 3",
+            "kind": "execute",
+            "status": "in_progress",
+            "content": [
+              {
+                "type": "terminal",
+                "terminalId": "term-1"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 5,
+      "at": 1792570990462,
+      "event": {
+        "kind": "terminalOutput",
+        "terminalId": "term-1",
+        "data": "\u001b[1;32mgreen\u001b[0m and plain\nline two\r\nline three\n"
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 6,
+      "at": 1792570990463,
+      "event": {
+        "kind": "terminalExit",
+        "terminalId": "term-1",
+        "status": {
+          "exitCode": 3
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 7,
+      "at": 1792570990465,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call-1",
+            "status": "failed"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 8,
+      "at": 1792570990465,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "The command exited "
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 9,
+      "at": 1792570990465,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "with code 3 "
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 10,
+      "at": 1792570990465,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "after 48 bytes "
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 11,
+      "at": 1792570990465,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "of output."
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 12,
+      "at": 1792570990465,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e07dd17f43d088",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "used": 257,
+            "size": 200000
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e07dd17f43d088",
+      "seq": 13,
+      "at": 1792570990465,
+      "event": {
+        "kind": "turnEnded",
+        "sessionId": "fake-18e07dd17f43d088",
+        "response": {
+          "stopReason": "end_turn"
+        }
+      }
+    }
+  ]
+}

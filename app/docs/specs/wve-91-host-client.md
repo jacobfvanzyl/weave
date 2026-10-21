@@ -1,7 +1,8 @@
 # WVE-91: The weave app, a Host client for iPad and iPhone
 
-Status: structure settled 2026-10-20 (WVE-99); connecting to Hosts, read-only, 2026-10-20
-(WVE-100). The rest is specified as WVE-101 to WVE-105 land.
+Status: structure settled 2026-10-20 (WVE-99); connecting to Hosts 2026-10-20 (WVE-100); the
+whole journal in the transcript (WVE-101) and prompting (WVE-102) 2026-10-21. The rest is
+specified as WVE-103 to WVE-105 land.
 
 Decision: [ADR 0015](../../../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md).
 Glossary: [`tui/CONTEXT.md`](../../../tui/CONTEXT.md). Host protocol:
@@ -50,12 +51,25 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   it; opening it later takes it up in its agent again) and Delete session (confirmed; the agent
   and the Host forget it).
 - **Transcript:** Alpha's ACP transcript and its views (`src/chat`), fed from the session's
-  journal (WVE-100, WVE-101).
+  journal (see [The transcript](#the-transcript)).
+- **Subagents** show as rows in their parent's transcript, as the TUI shows them (`• Spawned
+  Robie`, `• Completed Robie` with its reply, the messages between them). Tapping a subagent's
+  name shows its own transcript in place of the session's, under a bar naming it with a way back
+  to Main; a subagent's transcript has no composer.
+- **Agent updates.** When a newer version of the session's agent is out
+  (`agents/updateAvailable`, or `SessionState.update` on attaching), a notice above the
+  transcript names it and the version the session runs. Remote clients can't update agents, so
+  while the Host's new sessions of the agent launch the version the session runs (`agents/list`'s
+  `version`), the notice says to run `weave update <agent>` on the Host's computer, and offers
+  nothing. The Host tells open sessions again once it has updated, and the app reads its agents
+  again; when they launch another version, the notice offers Move to that version
+  (`session/reopen`), which waits for a running turn.
 - **Composer:** one Send button. With no turn running it starts one. While a turn runs it
   steers the turn when the Host lists `turn/steer` and the agent takes steering, and otherwise
   queues the message. Queued messages show above the composer, can be removed, and go in order
   as turns end. A Stop button beside Send cancels the turn. Modes and config options sit in the
-  composer's footer, as in Alpha. Photos come with WVE-102.
+  composer's footer, as in Alpha. A draft starting with `/` offers the agent's commands, and
+  Attach photos (for an agent that takes images) picks photos from Photos or the camera.
 
 ### Layout
 
@@ -134,11 +148,66 @@ memory stands in; it is gone after a reload, and the browser pairs again.
 `sessions/list`, listed again when the app comes to the front and when the list is pulled down.
 Opening a session attaches to it after the last journal position this device handled
 (`JournalFollower`), so only what it missed arrives; events up to the journal's head at attach
-are history. Journal events become the transcript's events (`transcriptEvents`): prompts and
-steers as the person's messages, agent updates, turn ends, and the Host's notices. Subagent
-sessions, Host-run terminals and reopened agents show from WVE-101.
+are history. Journal events become the transcript's events (`transcriptEvents`), described next.
 
-Until WVE-102, sessions are read-only: no composer, no session menu, no new sessions.
+Changes reach the UI once a frame (`HostStoreOptions.schedule`), so a replay of thousands of
+events renders a frame at a time rather than once an event.
+
+### The transcript
+
+Every `session/event` kind shows, the same whether it arrives live or replayed
+(`src/host/journal.ts`, `src/chat/acp-transcript.ts`):
+
+- `update`: every ACP session update. One for a subagent session (`notification.sessionId`)
+  goes to that subagent's own transcript; kinds the app doesn't know change nothing.
+- `turnStarted` and `turnSteered`: the prompt as the person's message, marked when it was a
+  steer. One from another client or device says where it came from ("From Jaco's iPad", "From
+  the TUI", "From a headless run"); this device's own (its connection, or its paired name)
+  replaces the message it showed while sending.
+- `turnEnded`: nothing for a turn that finished; otherwise why it didn't ("Turn cancelled",
+  "Stopped: the agent reached its token limit", "Turn failed" with the error), as the TUI says.
+- `terminalOutput` and `terminalExit`: the command's output as text in the tool call that
+  embeds its terminal, escape sequences removed and carriage returns applied, and how it
+  exited. A transcript keeps a terminal's last 256 KiB.
+- `agentReopened`: what the session runs now, worded as the TUI words it; `closed` and `notice`
+  as notes.
+- Kinds the app doesn't know are skipped; the position still advances.
+
+Replayed history changes no turn state: whether a turn runs comes from `SessionState.turns` on
+attaching, then from live events. Images in prompts and messages show as thumbnails that open
+whole. Agent text is untrusted: its Markdown renders raw HTML as text, and a link opens only
+after a confirmation naming its host and the whole URL, with not opening the default.
+
+Tests read journals recorded from a dev Host with the fake agent
+(`scripts/record-journals.ts`, into `src/chat/fixtures/journals/`): each must give the same
+transcript live and replayed, and an outline of each is a reviewed snapshot.
+
+### Prompting
+
+`HostStore` speaks for the session on screen (`src/host/host-store.ts`):
+
+- **New sessions** (`session/create`) take a Host, a directory (one its sessions use, or typed)
+  and an agent from `agents/list`, and open at once. A session nobody has prompted isn't listed
+  by the Host, so the app lists it while it's open; leaving it detaches with `ifUnused`, which
+  closes it, as the TUI does.
+- **Send** starts a turn (`turn/start`) and shows the prompt at once. While a turn runs it
+  steers (`turn/steer`) when the Host lists `turn/steer` and the session's agent advertises
+  `_meta.steering.supported`; the steer shows as "Steering" above the composer until the agent
+  takes it, and then where it joined the turn. `notRunning` sends it as a prompt instead, and a
+  turn another client started meanwhile (`turn_running`) queues it. With an agent that can't
+  steer, the message queues, and queued messages go one at a time as turns end, while the
+  session is open in the app.
+- **Photos** go only to an agent whose `promptCapabilities.image` allows them, scaled to 2048
+  pixels on the longest edge and re-encoded as JPEG, up to 12 MiB a message, well under the
+  WebSocket's 32 MiB.
+- **Stop** is `turn/cancel`; modes and config options are `session/setMode` and
+  `session/setConfigOption`, whose changes come back through the journal for every client.
+- **Close and Delete** are `session/close` and `session/delete`.
+- **Sign-in.** An agent that answers `auth_required` gets "… needs signing in. Run `weave login
+  --agent <agent>` on the Host's computer, then try again": remote clients can't sign agents in.
+
+Pending requests (permissions, elicitations, client tools) are WVE-103's; until then the
+transcript shows none.
 
 ### Connections that end
 
@@ -167,9 +236,9 @@ acceptance harness and UI tests.
 
 ## Later
 
-- WVE-101: every journal event in the transcript.
-- WVE-102: prompting, steering, queueing, new sessions, photos.
 - WVE-103: pending requests and client tools.
+- Queued messages for a session that isn't open in the app wait until it is opened again; a
+  feed of every session's changes (WVE-104) could send them sooner.
 - WVE-104: `sessions/watch`, for a live list.
 - WVE-105: reconnecting, several Hosts, and acceptance on devices.
 - WVE-96: views.

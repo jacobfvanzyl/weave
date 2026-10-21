@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ContentBlock } from '@/host/protocol';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
@@ -14,6 +15,7 @@ import {
   AttachmentTitle,
 } from '@/components/ui/attachment';
 import { MessageResponse } from '@/components/ai-elements/message';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
 const fileName = (uri: string) => {
   const tail = uri.split('/').filter(Boolean).at(-1);
@@ -93,6 +95,31 @@ function EmbeddedResourceView({ block }: { block: Extract<ContentBlock, { type: 
   );
 }
 
+/** An image in a prompt or message, as a thumbnail that opens it whole. */
+function ImageThumbnail({ block }: { block: Extract<ContentBlock, { type: 'image' }> }) {
+  const [open, setOpen] = useState(false);
+  const src = `data:${block.mimeType};base64,${block.data}`;
+  const name = block.uri ? fileName(block.uri) : 'Image';
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Show ${name}`}
+        className="size-20 shrink-0 overflow-hidden rounded-md border bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+        onClick={() => setOpen(true)}
+      >
+        <img alt="" src={src} className="size-full object-cover" loading="lazy" decoding="async" />
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="w-[min(48rem,calc(100%-2rem))] max-w-none p-2 sm:max-w-none">
+          <DialogTitle className="sr-only">{name}</DialogTitle>
+          <img alt={name} src={src} className="max-h-[80vh] w-full rounded-md object-contain" />
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 export function ContentBlockView({ block }: { block: ContentBlock }) {
   switch (block.type) {
     case 'text':
@@ -102,20 +129,7 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
         </MessageResponse>
       );
     case 'image':
-      return (
-        <Attachment orientation="vertical" className="w-48">
-          <AttachmentMedia variant="image" className="w-full">
-            <img
-              alt={block.uri || 'Image content'}
-              src={`data:${block.mimeType};base64,${block.data}`}
-            />
-          </AttachmentMedia>
-          <AttachmentContent>
-            <AttachmentTitle>{block.uri ? fileName(block.uri) : 'Image'}</AttachmentTitle>
-            <AttachmentDescription>{block.mimeType}</AttachmentDescription>
-          </AttachmentContent>
-        </Attachment>
-      );
+      return <ImageThumbnail block={block} />;
     case 'audio':
       return (
         <Attachment size="sm" className="w-full max-w-sm">
@@ -142,11 +156,17 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
 
 export function ContentBlocksView({ blocks }: { blocks: ContentBlock[] }) {
   const renderBlocks = coalesceContentBlocks(blocks);
+  const images = renderBlocks.filter((block) => block.type === 'image');
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      {renderBlocks.map((block, index) => (
-        <ContentBlockView key={`${block.type}-${index}`} block={block} />
-      ))}
+      {renderBlocks.map((block, index) => block.type === 'image'
+        ? null
+        : <ContentBlockView key={`${block.type}-${index}`} block={block} />)}
+      {images.length > 0 && (
+        <div className="flex flex-wrap gap-1.5" data-slot="image-thumbnails">
+          {images.map((block, index) => <ContentBlockView key={`image-${index}`} block={block} />)}
+        </div>
+      )}
     </div>
   );
 }

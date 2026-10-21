@@ -2,15 +2,35 @@ import {
   type AcpTranscript,
   type AcpTranscriptEvent,
   createTranscript,
+  queueOptimisticPrompt,
   reduceAcpEvent,
 } from '@/chat/acp-transcript';
-import type { AgentChoice, AppActions, AppModel, HostStatus, PairedHost, SessionSummary } from '@/app/app-controller';
+import type {
+  AgentChoice,
+  AgentUpdateNotice,
+  AppActions,
+  AppModel,
+  HostStatus,
+  PairedHost,
+  PromptImage,
+  QueuedPrompt,
+  SessionSummary,
+} from '@/app/app-controller';
 import { sessionKey } from '@/app/app-controller';
 import { SessionReadState } from '@/app/session-read-state';
-import { ConnectError, type Connector, HostConnection, type HostEvent, type OpenedSession } from './connection';
+import { ConnectError, type Connector, HostConnection, HostError, type HostEvent, type OpenedSession } from './connection';
 import type { DeviceKey } from './device-key';
 import { JournalFollower, transcriptEvents } from './journal';
-import { HOST_PROTOCOL, type AgentSummary, type ClientInfo, type SessionListing } from './protocol';
+import {
+  HOST_PROTOCOL,
+  type AgentSummary,
+  type ClientInfo,
+  type ContentBlock,
+  type SessionEventNotification,
+  type SessionListing,
+  type SessionState,
+  type TurnOrigin,
+} from './protocol';
 import { type HostStorage, type PairedHostRecord, websocketUrl } from './storage';
 
 export type HostStoreOptions = {
@@ -25,6 +45,11 @@ export type HostStoreOptions = {
   deviceName: string;
   /** Delays between reconnecting tries, in milliseconds; the last repeats. */
   backoff?: number[];
+  /**
+   * When to tell subscribers the model changed. Changes made meanwhile are told once, so a
+   * replay of thousands of events renders a frame at a time. Defaults to the next frame.
+   */
+  schedule?(notify: () => void): void;
 };
 
 type HostEntry = {
@@ -40,7 +65,7 @@ type HostEntry = {
   stopped: boolean;
 };
 
-/** A session this client follows: where its journal is up to and what it shows. */
+/** A session this client follows: where its journal is up to, what it shows, and what waits to be sent. */
 type Followed = {
   hostId: string;
   sessionId: string;
@@ -48,24 +73,56 @@ type Followed = {
   transcript: AcpTranscript;
   /** The tag of the attach whose answer it waits for. */
   tag?: number;
+  /** The session as attaching gave it, kept up to date: its agent, whether it's blank, its activity. */
+  state?: SessionState;
+  /** Messages for after the running turn, sent in order as turns end. */
+  queued: QueuedPrompt[];
+  /** Steers on their way, until the agent takes them or the Host says no turn runs. */
+  steering: QueuedPrompt[];
+  /** A newer version is out (`agents/updateAvailable`, or `SessionState.update`). */
+  update?: Omit<AgentUpdateNotice, 'available'>;
+  reopening: boolean;
 };
+
+/** A `session/create` waiting for its answer. */
+type Creating = { hostId: string; agentId: string; resolve(): void; reject(error: Error): void };
+
+/** ACP's error for an agent that needs signing in, passed through by the Host. */
+const AUTH_REQUIRED = -32000;
 
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 
+const nextFrame = (notify: () => void) => {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => notify());
+  else setTimeout(notify, 16);
+};
+
+/** A message as a prompt's content: the text, then any photos. */
+export const promptBlocks = (text: string, images: PromptImage[] = []): ContentBlock[] => [
+  ...(text ? [{ type: 'text' as const, text }] : []),
+  ...images.map(({ mimeType, data }) => ({ type: 'image' as const, mimeType, data })),
+];
+
+const meta = (value: unknown, ...path: string[]): unknown =>
+  path.reduce<unknown>((current, key) => typeof current === 'object' && current !== null ? (current as Record<string, unknown>)[key] : undefined, value);
+
 /**
  * The app's Hosts and the session on screen, kept up to date from their connections, for the
- * app's controller (`use-host-controller.ts`). Until WVE-102 it shows sessions read-only.
+ * app's controller (`use-host-controller.ts`).
  */
 export class HostStore {
   readonly #options: HostStoreOptions;
   readonly #hosts = new Map<string, HostEntry>();
   readonly #followed = new Map<string, Followed>();
+  readonly #creating = new Map<number, Creating>();
   readonly #read = new SessionReadState();
   readonly #listeners = new Set<() => void>();
   #selectedKey?: string;
   #error?: string;
   #nextTag = 1;
+  #nextLocal = 1;
   #snapshot?: AppModel;
+  #notifying = false;
   #stopped = false;
 
   constructor(options: HostStoreOptions) {
@@ -121,22 +178,49 @@ export class HostStore {
       entry.attempt = 0;
       await this.#connect(entry);
     },
-    // Prompting, steering, answering and managing sessions come with WVE-102 and WVE-103; the
-    // model is read-only until then, so the UI offers none of them.
-    createSession: () => this.#readOnly(),
-    closeSession: () => this.#readOnly(),
-    deleteSession: () => this.#readOnly(),
-    send: () => this.#readOnly(),
-    removeQueued: () => {},
-    cancelTurn: () => this.#readOnly(),
+    createSession: (input) => this.#create(input),
+    closeSession: (key) => this.#report(() => this.#close(key)),
+    deleteSession: (key) => this.#report(() => this.#delete(key)),
+    send: (text, images) => this.#send(text, images),
+    removeQueued: (id) => {
+      const followed = this.#selected();
+      if (!followed) return;
+      followed.queued = followed.queued.filter((prompt) => prompt.id !== id);
+      this.#changed();
+    },
+    cancelTurn: () => this.#report(async () => {
+      const followed = this.#selected();
+      if (!followed) return;
+      await this.#connection(followed).request('turn/cancel', { sessionId: followed.sessionId });
+    }),
+    reopenSession: () => this.#report(() => this.#reopen()),
+    // Pending requests are answered from WVE-103; until then the transcript shows none.
     respondToPermission: () => {},
     respondToElicitation: () => {},
-    setMode: () => this.#readOnly(),
-    setConfigOption: () => this.#readOnly(),
+    setMode: (modeId) => this.#report(async () => {
+      const followed = this.#selected();
+      if (!followed) return;
+      await this.#connection(followed).request('session/setMode', { sessionId: followed.sessionId, modeId });
+    }),
+    setConfigOption: (configId, value) => this.#report(async () => {
+      const followed = this.#selected();
+      if (!followed) return;
+      // The change reaches every client, this one too, through the journal.
+      await this.#connection(followed).request('session/setConfigOption', typeof value === 'boolean'
+        ? { sessionId: followed.sessionId, configId, type: 'boolean', value }
+        : { sessionId: followed.sessionId, configId, value });
+    }),
   };
 
-  #readOnly(): never {
-    throw new Error('This app shows sessions read-only for now.');
+  /** Runs an action whose failure the person reads in the model's error, not from a caller. */
+  async #report(action: () => Promise<void>) {
+    this.#error = undefined;
+    try {
+      await action();
+    } catch (error) {
+      this.#error = describe(error);
+      this.#changed();
+    }
   }
 
   #entry(record: PairedHostRecord): HostEntry {
@@ -145,7 +229,12 @@ export class HostStore {
 
   #changed() {
     this.#snapshot = undefined;
-    for (const listener of this.#listeners) listener();
+    if (this.#notifying) return;
+    this.#notifying = true;
+    (this.#options.schedule ?? nextFrame)(() => {
+      this.#notifying = false;
+      for (const listener of this.#listeners) listener();
+    });
   }
 
   async #connect(entry: HostEntry) {
@@ -178,14 +267,10 @@ export class HostStore {
     entry.error = undefined;
     entry.attempt = 0;
     this.#changed();
-    try {
-      entry.agents = (await connection.request('agents/list', {})).agents;
-    } catch {
-      entry.agents = [];
-    }
+    await this.#loadAgents(entry);
     await this.#list(entry);
     // Catch up on the session on screen, after the last event this client handled.
-    const selected = this.#selectedKey ? this.#followed.get(this.#selectedKey) : undefined;
+    const selected = this.#selected();
     if (selected && selected.hostId === entry.record.hostId) this.#attach(selected);
   }
 
@@ -214,6 +299,18 @@ export class HostStore {
     this.#changed();
   }
 
+  /** The Host's agents, and the version each one's new sessions launch. */
+  async #loadAgents(entry: HostEntry) {
+    const connection = entry.connection;
+    if (!connection) return;
+    try {
+      entry.agents = (await connection.request('agents/list', {})).agents;
+    } catch {
+      entry.agents = [];
+    }
+    this.#changed();
+  }
+
   async #list(entry: HostEntry) {
     const connection = entry.connection;
     if (!connection) return;
@@ -239,6 +336,8 @@ export class HostStore {
       case 'disconnected':
         if (entry.connection !== connection) return;
         entry.connection = undefined;
+        // Steers on their way failed with the connection; their senders say so.
+        for (const followed of this.#followed.values()) followed.steering = [];
         if (event.code === HOST_PROTOCOL.websocket.closeRevoked) {
           entry.status = 'disconnected';
           entry.stopped = true;
@@ -251,31 +350,96 @@ export class HostStore {
         this.#retry(entry);
         return;
       case 'notification':
-        if (event.method === 'session/event') {
-          const followed = this.#followed.get(sessionKey(entry.record.hostId, event.params.sessionId));
-          if (!followed || !followed.follower.accept(event.params)) return;
-          this.#apply(followed, transcriptEvents(event.params));
-        } else if (event.method === 'session/changed') {
-          const { sessionId, activity, clients, title } = event.params;
-          const listing = entry.sessions.find(({ info }) => info.sessionId === sessionId);
-          if (!listing) return;
-          if (activity) listing.activity = activity;
-          if (clients !== undefined && clients !== null) listing.clients = clients;
-          if (title) listing.info = { ...listing.info, title };
-          listing.lastActivityAt = Date.now();
-          this.#read.observe(sessionKey(entry.record.hostId, sessionId), listing.activity ?? undefined);
-          this.#changed();
+        switch (event.method) {
+          case 'session/event':
+            this.#journalEvent(entry, event.params);
+            return;
+          case 'session/changed': {
+            const { sessionId, activity, clients, title, blank } = event.params;
+            const followed = this.#followed.get(sessionKey(entry.record.hostId, sessionId));
+            if (followed?.state) {
+              followed.state = {
+                ...followed.state,
+                ...(activity ? { activity } : {}),
+                ...(clients !== undefined && clients !== null ? { clients } : {}),
+                ...(title ? { title } : {}),
+                ...(blank !== undefined && blank !== null ? { blank } : {}),
+              };
+            }
+            const listing = entry.sessions.find(({ info }) => info.sessionId === sessionId);
+            if (listing) {
+              if (activity) listing.activity = activity;
+              if (clients !== undefined && clients !== null) listing.clients = clients;
+              if (title) listing.info = { ...listing.info, title };
+              listing.lastActivityAt = Date.now();
+            } else if (followed?.state && !followed.state.blank) {
+              // A new session's first prompt lists it.
+              void this.#list(entry);
+            }
+            this.#read.observe(sessionKey(entry.record.hostId, sessionId), activity ?? listing?.activity ?? undefined);
+            this.#changed();
+            return;
+          }
+          case 'agents/updateAvailable': {
+            const { sessionId, agentId, name, running, latest } = event.params;
+            const followed = this.#followed.get(sessionKey(entry.record.hostId, sessionId));
+            if (!followed) return;
+            followed.update = { agentId, name, running, latest };
+            this.#changed();
+            // The Host tells open sessions again once the agent is updated on it: what its new
+            // sessions launch may have changed.
+            void this.#loadAgents(entry);
+            return;
+          }
+          default:
+            return;
         }
-        return;
     }
   }
 
-  #select(key?: string) {
-    const previous = this.#selectedKey ? this.#followed.get(this.#selectedKey) : undefined;
-    if (previous && previous !== (key ? this.#followed.get(key) : undefined)) {
-      const connection = this.#hosts.get(previous.hostId)?.connection;
-      void connection?.request('session/detach', { sessionId: previous.sessionId }).catch(() => {});
+  #journalEvent(entry: HostEntry, notification: SessionEventNotification) {
+    const followed = this.#followed.get(sessionKey(entry.record.hostId, notification.sessionId));
+    if (!followed || !followed.follower.accept(notification)) return;
+    const history = followed.follower.isHistory(notification);
+    this.#apply(followed, transcriptEvents(notification, { history, own: (origin) => this.#own(entry, origin) }));
+    if (history) return;
+    const { event } = notification;
+    if (event.kind === 'agentReopened') {
+      // The new process says what prompts may carry now, and whether it steers.
+      if (followed.state) followed.state = { ...followed.state, agent: event.agent };
+      const version = event.agent.release?.version;
+      if (followed.update && version) {
+        followed.update = version === followed.update.latest ? undefined : { ...followed.update, running: version };
+      }
+    } else if (event.kind === 'turnEnded' && event.sessionId === notification.sessionId) {
+      void this.#sendQueued(followed);
     }
+  }
+
+  /** Whether a prompt came from this device: this connection, or an earlier one of it. */
+  #own(entry: HostEntry, origin: TurnOrigin) {
+    if (!('client' in origin)) return false;
+    const connection = entry.connection;
+    if (origin.client.id === connection?.clientId) return true;
+    const device = connection?.hello.device?.name;
+    return Boolean(device) && origin.client.device === device;
+  }
+
+  #selected(): Followed | undefined {
+    return this.#selectedKey ? this.#followed.get(this.#selectedKey) : undefined;
+  }
+
+  /** The connection to a followed session's Host, or why there isn't one. */
+  #connection(followed: Followed): HostConnection {
+    const entry = this.#hosts.get(followed.hostId);
+    const connection = entry?.connection;
+    if (!connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    return connection;
+  }
+
+  #select(key?: string) {
+    const previous = this.#selected();
+    if (previous && previous !== (key ? this.#followed.get(key) : undefined)) this.#leave(previous);
     this.#selectedKey = key;
     this.#read.focus(key);
     this.#error = undefined;
@@ -284,12 +448,32 @@ export class HostStore {
       const sessionId = rest.join('/');
       let followed = this.#followed.get(key);
       if (!followed) {
-        followed = { hostId, sessionId, follower: new JournalFollower(), transcript: createTranscript(sessionId) };
+        followed = this.#follow(hostId, sessionId);
         this.#followed.set(key, followed);
       }
       this.#attach(followed);
     }
     this.#changed();
+  }
+
+  #follow(hostId: string, sessionId: string): Followed {
+    return {
+      hostId,
+      sessionId,
+      follower: new JournalFollower(),
+      transcript: createTranscript(sessionId),
+      queued: [],
+      steering: [],
+      reopening: false,
+    };
+  }
+
+  /** Stops receiving a session. One nobody has prompted closes, as the TUI leaves it. */
+  #leave(followed: Followed) {
+    const connection = this.#hosts.get(followed.hostId)?.connection;
+    const blank = followed.state?.blank ?? false;
+    void connection?.request('session/detach', { sessionId: followed.sessionId, close: blank ? 'ifUnused' : 'never' }).catch(() => {});
+    if (blank) this.#followed.delete(sessionKey(followed.hostId, followed.sessionId));
   }
 
   #attach(followed: Followed) {
@@ -309,11 +493,23 @@ export class HostStore {
   }
 
   #openAnswered(entry: HostEntry, event: Extract<HostEvent, { type: 'opened' | 'openFailed' }>) {
+    const creating = this.#creating.get(event.tag);
+    if (creating) {
+      this.#creating.delete(event.tag);
+      if (event.type === 'openFailed') {
+        creating.reject(this.#explain(event.error, entry, creating.agentId));
+        return;
+      }
+      this.#created(entry, event.session);
+      creating.resolve();
+      return;
+    }
     const followed = [...this.#followed.values()].find(({ hostId, tag }) => hostId === entry.record.hostId && tag === event.tag);
     if (!followed) return;
     followed.tag = undefined;
     if (event.type === 'openFailed') {
-      this.#error = `Couldn't open the session: ${event.error.message}`;
+      const agentId = entry.sessions.find(({ info }) => info.sessionId === followed.sessionId)?.agentId;
+      this.#error = `Couldn't open the session: ${this.#explain(event.error, entry, agentId).message}`;
       this.#changed();
       return;
     }
@@ -325,14 +521,195 @@ export class HostStore {
     const { state } = session;
     const base = reset ? createTranscript(state.sessionId) : followed.transcript;
     const events: AcpTranscriptEvent[] = [{ type: 'session/loaded', modes: state.modes, configOptions: state.configOptions }];
-    followed.transcript = { ...events.reduce(reduceAcpEvent, base), title: state.title ?? base.title };
+    // Replayed history changes no turn state: what runs now is the session's.
+    const running = (state.turns ?? []).some(({ sessionId }) => sessionId === state.sessionId);
+    const loaded = events.reduce(reduceAcpEvent, base);
+    followed.transcript = {
+      ...loaded,
+      title: state.title ?? base.title,
+      turn: running ? { status: 'running' } : loaded.turn.status === 'running' ? { status: 'idle' } : loaded.turn,
+    };
+    followed.state = state;
+    followed.update = state.update
+      ? { agentId: state.update.agentId, name: state.update.name, running: state.update.running, latest: state.update.latest }
+      : undefined;
     this.#changed();
+    if (!running) void this.#sendQueued(followed);
   }
 
   #apply(followed: Followed, events: AcpTranscriptEvent[]) {
     if (events.length === 0) return;
     followed.transcript = events.reduce(reduceAcpEvent, followed.transcript);
     this.#changed();
+  }
+
+  /** Starts a session and opens it; it rejects saying why the Host couldn't. */
+  #create(input: { hostId: string; cwd: string; agentId: string }): Promise<void> {
+    const entry = this.#hosts.get(input.hostId);
+    const connection = entry?.connection;
+    if (!entry || !connection || connection.closed) {
+      return Promise.reject(new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`));
+    }
+    const tag = this.#nextTag++;
+    return new Promise((resolve, reject) => {
+      this.#creating.set(tag, { hostId: input.hostId, agentId: input.agentId, resolve, reject });
+      connection.open({ create: { agentId: input.agentId, cwd: input.cwd } }, tag);
+    });
+  }
+
+  #created(entry: HostEntry, session: OpenedSession) {
+    const key = sessionKey(entry.record.hostId, session.state.sessionId);
+    const previous = this.#selected();
+    if (previous) this.#leave(previous);
+    const followed = this.#follow(entry.record.hostId, session.state.sessionId);
+    this.#followed.set(key, followed);
+    this.#selectedKey = key;
+    this.#read.focus(key);
+    this.#error = undefined;
+    this.#opened(followed, session);
+  }
+
+  async #send(text: string, images: PromptImage[] = []) {
+    this.#error = undefined;
+    const followed = this.#selected();
+    if (!followed) return;
+    const prompt: QueuedPrompt = { id: `prompt-${this.#nextLocal++}`, text, ...(images.length > 0 ? { images } : {}) };
+    try {
+      const connection = this.#connection(followed);
+      if (followed.transcript.turn.status === 'running') {
+        if (!this.#canSteer(followed, connection)) {
+          followed.queued.push(prompt);
+          this.#changed();
+          return;
+        }
+        if (await this.#steer(followed, connection, prompt)) return;
+      }
+      await this.#start(followed, connection, prompt);
+    } catch (error) {
+      const explained = this.#explain(error, this.#hosts.get(followed.hostId), followed.state?.agent.id);
+      this.#error = explained.message;
+      this.#changed();
+      throw explained;
+    }
+  }
+
+  /** Sends a steer; false when no turn was running, so it should start one instead. */
+  async #steer(followed: Followed, connection: HostConnection, prompt: QueuedPrompt): Promise<boolean> {
+    followed.steering.push({ ...prompt, steering: true });
+    this.#changed();
+    try {
+      const answer = await connection.request('turn/steer', { sessionId: followed.sessionId, prompt: promptBlocks(prompt.text, prompt.images) });
+      // A steer the agent took shows where it joined the turn, from the journal.
+      return answer.outcome === 'steered';
+    } finally {
+      followed.steering = followed.steering.filter(({ id }) => id !== prompt.id);
+      this.#changed();
+    }
+  }
+
+  /** Starts a turn with the prompt, shown at once; one already running (another client's) queues it. */
+  async #start(followed: Followed, connection: HostConnection, prompt: QueuedPrompt) {
+    const localId = `${followed.sessionId}:local:${prompt.id}`;
+    const blocks = promptBlocks(prompt.text, prompt.images);
+    const before = followed.transcript.turn;
+    followed.transcript = reduceAcpEvent(queueOptimisticPrompt(followed.transcript, localId, blocks), { type: 'turn/started' });
+    this.#changed();
+    try {
+      await connection.request('turn/start', { sessionId: followed.sessionId, prompt: blocks });
+    } catch (error) {
+      const entries = followed.transcript.entries.filter(({ id }) => id !== localId);
+      if (error instanceof HostError && error.code === HOST_PROTOCOL.errors.turnRunning) {
+        followed.transcript = { ...followed.transcript, entries, turn: { status: 'running' } };
+        followed.queued.unshift(prompt);
+        this.#changed();
+        return;
+      }
+      followed.transcript = { ...followed.transcript, entries, turn: before };
+      this.#changed();
+      throw error;
+    }
+  }
+
+  /** Sends the next queued message, once no turn runs. */
+  async #sendQueued(followed: Followed) {
+    if (followed.transcript.turn.status === 'running') return;
+    const next = followed.queued.shift();
+    if (!next) return;
+    this.#changed();
+    try {
+      await this.#start(followed, this.#connection(followed), next);
+    } catch (error) {
+      followed.queued.unshift(next);
+      this.#error = `Couldn't send the queued message: ${this.#explain(error, this.#hosts.get(followed.hostId), followed.state?.agent.id).message}`;
+      this.#changed();
+    }
+  }
+
+  /** A newer version is out; it's `available` once the Host's new sessions launch another version than the session runs. */
+  #updateNotice(update: NonNullable<Followed['update']>, entry?: HostEntry): AgentUpdateNotice {
+    const launches = entry?.agents.find(({ id }) => id === update.agentId)?.version;
+    return launches && launches !== update.running ? { ...update, available: launches } : update;
+  }
+
+  /** Whether Send steers: the Host takes steers and the session's agent advertises them. */
+  #canSteer(followed: Followed, connection = this.#hosts.get(followed.hostId)?.connection): boolean {
+    if (!connection?.supports(HOST_PROTOCOL.features.steer)) return false;
+    return meta(followed.state?.agent.initialize, '_meta', 'steering', 'supported') === true;
+  }
+
+  async #reopen() {
+    const followed = this.#selected();
+    if (!followed) return;
+    const connection = this.#connection(followed);
+    followed.reopening = true;
+    this.#changed();
+    try {
+      await connection.request('session/reopen', { sessionId: followed.sessionId });
+    } finally {
+      followed.reopening = false;
+      this.#changed();
+    }
+  }
+
+  async #close(key: string) {
+    const followed = this.#followed.get(key);
+    const [hostId, ...rest] = key.split('/');
+    const entry = this.#hosts.get(hostId);
+    const connection = entry?.connection;
+    if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    await connection.request('session/close', { sessionId: rest.join('/') });
+    if (followed) this.#followed.delete(key);
+    if (this.#selectedKey === key) this.#selectedKey = undefined;
+    await this.#list(entry);
+  }
+
+  async #delete(key: string) {
+    const [hostId, ...rest] = key.split('/');
+    const sessionId = rest.join('/');
+    const entry = this.#hosts.get(hostId);
+    const connection = entry?.connection;
+    if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    const agentId = entry.sessions.find(({ info }) => info.sessionId === sessionId)?.agentId ?? this.#followed.get(key)?.state?.agent.id;
+    await connection.request('session/delete', { sessionId, ...(agentId ? { agentId } : {}) });
+    this.#followed.delete(key);
+    this.#read.forget(key);
+    if (this.#selectedKey === key) this.#selectedKey = undefined;
+    entry.sessions = entry.sessions.filter(({ info }) => info.sessionId !== sessionId);
+    this.#changed();
+    await this.#list(entry);
+  }
+
+  /** An error as the person should read it: an agent that needs signing in says how. */
+  #explain(error: unknown, entry?: HostEntry, agentId?: string): Error {
+    if (error instanceof HostError && error.code === AUTH_REQUIRED) {
+      const agent = entry?.agents.find(({ id }) => id === agentId);
+      const name = agent?.name ?? agentId ?? 'The agent';
+      return new Error(`${name} needs signing in. Run \`weave login --agent ${agentId ?? '<agent>'}\` on the Host's computer, then try again.`);
+    }
+    if (error instanceof HostError && error.code === HOST_PROTOCOL.errors.forbidden) {
+      return new Error(`${error.message}. That's done on the Host's computer.`);
+    }
+    return error instanceof Error ? error : new Error(String(error));
   }
 
   async #pair(input: { url: string; code: string; name?: string }) {
@@ -389,19 +766,20 @@ export class HostStore {
     const hosts: PairedHost[] = [];
     const sessions: SessionSummary[] = [];
     const agents: Record<string, AgentChoice[]> = {};
+    const selected = this.#selected();
     for (const entry of this.#hosts.values()) {
       const { record } = entry;
       hosts.push({ id: record.hostId, name: record.name, url: record.url, status: entry.status, ...(entry.error ? { error: entry.error } : {}) });
       agents[record.hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
+      const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
       for (const listing of entry.sessions) {
-        const agentName = entry.agents.find(({ id }) => id === listing.agentId)?.name ?? listing.agentId;
         sessions.push({
           key: sessionKey(record.hostId, listing.info.sessionId),
           hostId: record.hostId,
           sessionId: listing.info.sessionId,
           ...(listing.info.title ? { title: listing.info.title } : {}),
           agentId: listing.agentId,
-          agentName,
+          agentName: agentName(listing.agentId),
           cwd: listing.info.cwd,
           state: listing.state,
           ...(listing.activity ? { activity: listing.activity } : {}),
@@ -410,18 +788,42 @@ export class HostStore {
           lastActivityAt: listing.lastActivityAt ?? (listing.info.updatedAt ? Date.parse(listing.info.updatedAt) : undefined),
         });
       }
+      // A session on screen the list doesn't have yet, such as a new one nobody has prompted.
+      const state = selected?.hostId === record.hostId ? selected.state : undefined;
+      if (state && !entry.sessions.some(({ info }) => info.sessionId === state.sessionId)) {
+        sessions.push({
+          key: sessionKey(record.hostId, state.sessionId),
+          hostId: record.hostId,
+          sessionId: state.sessionId,
+          ...(state.title ? { title: state.title } : {}),
+          agentId: state.agent.id,
+          agentName: state.agent.name,
+          cwd: state.cwd,
+          state: 'open',
+          activity: state.activity,
+          clients: state.clients,
+          headless: false,
+          lastActivityAt: Date.now(),
+        });
+      }
     }
-    const followed = this.#selectedKey ? this.#followed.get(this.#selectedKey) : undefined;
     return {
       hosts,
       sessions,
       agents,
       selectedKey: this.#selectedKey,
-      session: followed && this.#selectedKey
-        ? { key: this.#selectedKey, transcript: followed.transcript, canSteer: false, queued: [] }
+      session: selected && this.#selectedKey
+        ? {
+            key: this.#selectedKey,
+            transcript: selected.transcript,
+            canSteer: this.#canSteer(selected),
+            queued: [...selected.steering, ...selected.queued],
+            canAttachImages: selected.state?.agent.initialize.agentCapabilities?.promptCapabilities?.image === true,
+            ...(selected.update ? { update: this.#updateNotice(selected.update, this.#hosts.get(selected.hostId)) } : {}),
+            ...(selected.reopening ? { reopening: true } : {}),
+          }
         : undefined,
       unread: this.#read.unread(),
-      readOnly: true,
       ...(this.#error ? { error: this.#error } : {}),
     };
   }

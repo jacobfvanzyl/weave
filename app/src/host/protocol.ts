@@ -273,7 +273,7 @@ export type Role = "assistant" | "user";
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CreateElicitationRequest".
  */
-export type CreateElicitationRequest = CreateElicitationRequest1 & {
+export type CreateElicitationRequest = {
   /**
    * A human-readable message describing what input is needed.
    */
@@ -290,15 +290,14 @@ export type CreateElicitationRequest = CreateElicitationRequest1 & {
   _meta?: {
     [k: string]: unknown;
   } | null;
-};
-export type CreateElicitationRequest1 =
+} & (
   | (ElicitationFormMode & {
       mode: "form";
     })
   | (ElicitationUrlMode & {
       mode: "url";
     })
-  | ((ElicitationSessionScope2 | ElicitationRequestScope2) & {
+  | ({
       /**
        * Custom or future elicitation mode.
        *
@@ -307,24 +306,17 @@ export type CreateElicitationRequest1 =
        * future ACP variants.
        */
       mode: string;
-    });
+    } & (ElicitationSessionScope2 | ElicitationRequestScope2))
+);
 /**
  * Form-based elicitation mode where the client renders a form from the provided schema.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ElicitationFormMode".
  */
-export type ElicitationFormMode = ElicitationFormMode1 & {
+export type ElicitationFormMode = {
   requestedSchema: ElicitationSchema;
-};
-export type ElicitationFormMode1 = ElicitationSessionScope | ElicitationRequestScope;
-/**
- * Unique identifier for a tool call within a session.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ToolCallId".
- */
-export type ToolCallId = string;
+} & (ElicitationSessionScope | ElicitationRequestScope);
 /**
  * Type discriminator for elicitation schemas.
  *
@@ -377,12 +369,19 @@ export type ElicitationPropertySchema =
  */
 export type StringFormat = "email" | "uri" | "date" | "date-time";
 /**
+ * Unique identifier for a tool call within a session.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ToolCallId".
+ */
+export type ToolCallId = string;
+/**
  * URL-based elicitation mode where the client directs the user to a URL.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ElicitationUrlMode".
  */
-export type ElicitationUrlMode = ElicitationUrlMode1 & {
+export type ElicitationUrlMode = {
   /**
    * The unique identifier for this elicitation.
    */
@@ -391,8 +390,7 @@ export type ElicitationUrlMode = ElicitationUrlMode1 & {
    * The URL to direct the user to.
    */
   url: string;
-};
-export type ElicitationUrlMode1 = ElicitationSessionScope1 | ElicitationRequestScope1;
+} & (ElicitationSessionScope1 | ElicitationRequestScope1);
 /**
  * Unique identifier for a Session Mode.
  *
@@ -544,7 +542,16 @@ export type ElicitationId = string;
  * via the `definition` "CloseWhen".
  */
 export type CloseWhen = "never" | "ifUnused";
-export type SetConfigOptionRequest =
+/**
+ * `session/setConfigOption`. The change reaches every attached client as an ACP update.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SetConfigOptionRequest".
+ */
+export type SetConfigOptionRequest = {
+  sessionId: SessionId;
+  configId: SessionConfigId;
+} & (
   | {
       /**
        * The boolean value.
@@ -557,7 +564,8 @@ export type SetConfigOptionRequest =
        * The value ID.
        */
       value: string;
-    };
+    }
+);
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SteerOutcome".
@@ -569,7 +577,7 @@ export type SteerOutcome = "steered" | "notRunning";
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CreateElicitationResponse".
  */
-export type CreateElicitationResponse = CreateElicitationResponse1 & {
+export type CreateElicitationResponse = {
   /**
    * The _meta property is reserved by ACP to allow clients and agents to attach additional
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
@@ -582,8 +590,7 @@ export type CreateElicitationResponse = CreateElicitationResponse1 & {
   _meta?: {
     [k: string]: unknown;
   } | null;
-};
-export type CreateElicitationResponse1 =
+} & (
   | (ElicitationAcceptAction & {
       action: "accept";
     })
@@ -603,7 +610,8 @@ export type CreateElicitationResponse1 =
        */
       action: string;
       [k: string]: unknown;
-    };
+    }
+);
 /**
  * Allowed wire representations for [`ElicitationContentValue`].
  *
@@ -2791,37 +2799,6 @@ export interface PermissionOption {
   } | null;
 }
 /**
- * Tied to a session, optionally to a specific tool call within that session.
- */
-export interface ElicitationSessionScope {
-  /**
-   * A unique identifier for a conversation session between a client and agent.
-   *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
-   *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
-   */
-  sessionId: string;
-  /**
-   * Optional tool call within the session.
-   *
-   * Optional. Omitted and `null` are equivalent and mean the elicitation is scoped to the
-   * session without a specific tool call.
-   */
-  toolCallId?: ToolCallId | null;
-}
-/**
- * Tied to a specific JSON-RPC request outside of a session
- * (e.g., during auth/configuration phases before any session is started).
- */
-export interface ElicitationRequestScope {
-  /**
-   * The request this elicitation is tied to.
-   */
-  requestId: null | number | string;
-}
-/**
  * A JSON Schema describing the form fields to present to the user.
  */
 export interface ElicitationSchema {
@@ -3228,6 +3205,37 @@ export interface TitledMultiSelectItems {
   _meta?: {
     [k: string]: unknown;
   } | null;
+}
+/**
+ * Tied to a session, optionally to a specific tool call within that session.
+ */
+export interface ElicitationSessionScope {
+  /**
+   * A unique identifier for a conversation session between a client and agent.
+   *
+   * Sessions maintain their own context, conversation history, and state,
+   * allowing multiple independent interactions with the same agent.
+   *
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   */
+  sessionId: string;
+  /**
+   * Optional tool call within the session.
+   *
+   * Optional. Omitted and `null` are equivalent and mean the elicitation is scoped to the
+   * session without a specific tool call.
+   */
+  toolCallId?: ToolCallId | null;
+}
+/**
+ * Tied to a specific JSON-RPC request outside of a session
+ * (e.g., during auth/configuration phases before any session is started).
+ */
+export interface ElicitationRequestScope {
+  /**
+   * The request this elicitation is tied to.
+   */
+  requestId: null | number | string;
 }
 /**
  * Tied to a session, optionally to a specific tool call within that session.
@@ -3703,10 +3711,6 @@ export interface DeleteSessionRequest {
 export interface SetModeRequest {
   sessionId: SessionId;
   modeId: SessionModeId;
-}
-export interface SetConfigOptionRequest1 {
-  sessionId: SessionId;
-  configId: SessionConfigId;
 }
 /**
  * Response to `session/set_config_option` method.

@@ -83,7 +83,6 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
     await store.actions.pairHost({ url: host.url, code, name: 'Test iPhone' });
     const model = store.snapshot();
     expect(model.hosts).toMatchObject([{ name: '127.0.0.1', status: 'connected' }]);
-    expect(model.readOnly).toBe(true);
     const { devices } = await local.request('devices/list', {});
     expect(devices.map(({ name }) => name)).toContain('Test iPhone');
     const listed = await waitFor(() => store.snapshot().sessions.find((session) => session.sessionId === sessionId), 'the session in the list');

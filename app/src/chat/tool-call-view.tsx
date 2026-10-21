@@ -8,8 +8,11 @@ import {
   ComputerTerminal01Icon,
   FileEditIcon,
 } from '@hugeicons/core-free-icons';
+import { useMemo } from 'react';
 import type { TranscriptToolCall } from './acp-transcript';
 import { ContentBlockView } from './content-block-view';
+import { exitText, terminalText } from './terminal-text';
+import { useTranscriptContext } from './transcript-context';
 import { Badge } from '@/components/ui/badge';
 import {
   Confirmation,
@@ -25,6 +28,30 @@ const statusIcon = {
   completed: CheckmarkCircle02Icon,
   failed: AlertCircleIcon,
 } as const;
+
+/** A command the Host runs for the agent: its output as text, and how it ended. */
+function TerminalOutput({ terminalId, running }: { terminalId: string; running: boolean }) {
+  const { root } = useTranscriptContext();
+  const terminal = root?.terminals[terminalId];
+  const output = terminal?.output;
+  const text = useMemo(() => output ? terminalText(output).replace(/\n$/, '') : '', [output]);
+  const status = terminal?.exit ? exitText(terminal.exit) : running ? 'Running…' : undefined;
+  return (
+    <div className="overflow-hidden rounded-md border bg-input-background" data-slot="terminal-output">
+      <div className="flex items-center gap-2 border-b px-2 py-1 text-[0.625rem] text-muted-foreground">
+        <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={1.75} className="size-3" />
+        <span>Terminal</span>
+        {status && <span className="ml-auto">{status}</span>}
+      </div>
+      {terminal?.truncated && <p className="px-2 pt-1 text-[0.625rem] text-muted-foreground">Earlier output isn't shown.</p>}
+      {text && (
+        <pre aria-label="Terminal output" className="max-h-80 overflow-auto px-2 py-1 font-mono text-xs/relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {text}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
   return (
@@ -58,11 +85,11 @@ function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
           );
         }
         return (
-          <div key={`terminal-${index}`} className="flex items-center gap-2 rounded-md border bg-input-background px-2 py-1.5 text-xs">
-            <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={1.75} />
-            <span className="text-muted-foreground">Terminal</span>
-            <code className="ml-auto">{item.terminalId}</code>
-          </div>
+          <TerminalOutput
+            key={`terminal-${index}`}
+            terminalId={item.terminalId}
+            running={tool.status === 'pending' || tool.status === 'in_progress'}
+          />
         );
       })}
       {(tool.rawInput !== undefined || tool.rawOutput !== undefined) && (
