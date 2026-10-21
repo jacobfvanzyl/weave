@@ -37,6 +37,8 @@ use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::Cell;
+use ratatui::buffer::CellWidth;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
@@ -172,7 +174,8 @@ where
 
         let previous = &self.buffers[1 - self.current];
         let current = &self.buffers[self.current];
-        let updates = previous.diff(current);
+        let mut updates = previous.diff(current);
+        clear_before_wide_cells(&mut updates);
         if let Some(&(x, y, _)) = updates.last() {
             self.last_known_cursor_pos = Position::new(x, y);
         }
@@ -212,5 +215,79 @@ where
         self.backend.set_cursor_position(position)?;
         self.last_known_cursor_pos = position;
         Ok(())
+    }
+}
+
+/// Move each wide cell's update after the updates to the columns it covers.
+///
+/// ratatui's diff follows an emoji with U+FE0F by clearing the column it covers, for
+/// terminals that draw it one column wide. The backend writes that clear where the cursor
+/// already is, but a terminal that draws the emoji two columns wide (Ghostty, kitty) has moved
+/// past that column, so the clear and the rest of its run land a column right. The next diff
+/// takes those cells for drawn and never repaints them. Written first, the clear lands in its
+/// own column on either kind of terminal, and the emoji is drawn over it.
+fn clear_before_wide_cells(updates: &mut [(u16, u16, &Cell)]) {
+    let mut index = 0;
+    while index < updates.len() {
+        let (x, y, cell) = updates[index];
+        let end = x.saturating_add(cell.cell_width());
+        let covered = updates[index + 1..]
+            .iter()
+            .take_while(|&&(column, row, _)| row == y && column < end)
+            .count();
+        updates[index..=index + covered].rotate_left(1);
+        index += covered + 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use ratatui::style::Style;
+
+    use super::*;
+    use crate::test_backend::VT100Backend;
+
+    fn draw_row(terminal: &mut Terminal<VT100Backend>, text: &str) {
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let buffer = frame.buffer_mut();
+                buffer.reset();
+                buffer.set_string(area.x, area.y, text, Style::default());
+            })
+            .expect("draw");
+    }
+
+    fn row(terminal: &Terminal<VT100Backend>) -> String {
+        let screen = terminal.backend().vt100().screen();
+        screen.rows(0, screen.size().1).next().unwrap_or_default()
+    }
+
+    /// An emoji with U+FE0F over a row whose text it replaces: ratatui also clears the column
+    /// the emoji covers, which must not push the rest of the row a column right on a terminal
+    /// that draws the emoji wide, as Ghostty does.
+    #[test]
+    fn a_wide_emoji_keeps_the_rest_of_its_row_in_place() {
+        let mut terminal =
+            Terminal::with_cursor_position(VT100Backend::new(20, 1), Position::ORIGIN);
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 1));
+        draw_row(&mut terminal, "Places belong");
+        draw_row(&mut terminal, "\u{2753}\u{FE0F} (a). A layout");
+
+        assert_eq!(row(&terminal).trim_end(), "\u{2753}\u{FE0F} (a). A layout");
+    }
+
+    /// vt100, like some terminals, draws ➡️ a column wide: the column ratatui counts as the
+    /// emoji's second is still cleared of the text that was there.
+    #[test]
+    fn a_narrow_drawn_emoji_still_clears_the_column_it_covers() {
+        let mut terminal =
+            Terminal::with_cursor_position(VT100Backend::new(20, 1), Position::ORIGIN);
+        terminal.set_viewport_area(Rect::new(0, 0, 20, 1));
+        draw_row(&mut terminal, "Places belong");
+        draw_row(&mut terminal, "\u{27A1}\u{FE0F} (a). A layout");
+
+        assert_eq!(row(&terminal).trim_end(), "\u{27A1}\u{FE0F}  (a). A layout");
     }
 }
