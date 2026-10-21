@@ -1,0 +1,14 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&UpdateAvailableNotification\n{ session_id: \"s-1\".into(), update: update(), })"
+---
+{
+  "method": "agents/updateAvailable",
+  "params": {
+    "sessionId": "s-1",
+    "agentId": "claude",
+    "name": "@agentclientprotocol/claude-agent-acp",
+    "running": "0.31.0",
+    "latest": "0.32.0"
+  }
+}

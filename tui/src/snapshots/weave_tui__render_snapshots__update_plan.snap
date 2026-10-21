@@ -1,0 +1,15 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• Updated Plan
+  └ ✔ Reproduce the failure
+    □ Fix the parser
+    □ Add a regression test
+── viewport ──
+
+
+›
+
+  Agent

@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&CreateSessionRequest\n{\n    agent_id: \"claude\".to_owned(), cwd: \"/repo\".into(),\n    additional_directories: Vec::new(), mode: Some(\"plan\".to_owned()), policy:\n    None, trace: false,\n})"
+---
+{
+  "method": "session/create",
+  "params": {
+    "agentId": "claude",
+    "cwd": "/repo",
+    "mode": "plan"
+  }
+}

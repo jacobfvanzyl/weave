@@ -1,0 +1,17 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+
+── viewport ──
+
+• Exploring
+  └ Search for TODOs
+
+• Editing main.rs
+
+
+›
+
+  Agent

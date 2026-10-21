@@ -1,0 +1,18 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+✨ claude-agent-acp 0.93.0 is out; this session runs 0.86.0.
+   /update moves it over · /update dismiss hides this version
+
+• claude-agent-acp 0.93.0 starts. Moving this session to it: background
+  commands and running subagents end with the old process, and the mode
+  is whatever the agent restores
+── viewport ──
+
+• Moving this session to 0.93.0 (0s • reopening it)
+
+›
+
+  Agent

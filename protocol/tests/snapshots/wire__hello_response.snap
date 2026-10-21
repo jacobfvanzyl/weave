@@ -1,0 +1,22 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&HelloResponse\n{\n    protocol: 2, client_id: \"c7\".to_owned(), host: host_info(), features:\n    Vec::new(), acp: acp_info(), device: None,\n})"
+---
+{
+  "protocol": 2,
+  "clientId": "c7",
+  "host": {
+    "id": "8ZpX3kqW1m0aLr9TQv2cYw",
+    "version": "0.1.0",
+    "pid": 4242,
+    "startedAt": 1760180000000
+  },
+  "features": [],
+  "acp": {
+    "protocolVersion": 1,
+    "unstable": [
+      "session_compaction",
+      "subagents"
+    ]
+  }
+}

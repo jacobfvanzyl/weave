@@ -1,0 +1,25 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&HelloRequest\n{\n    protocol: VersionRange::supported(), client: ClientInfo\n    { name: \"weave-ios\".to_owned(), version: \"0.1.0\".to_owned(), }, auth:\n    Auth::Device\n    {\n        device_id: \"d-3q8Hf0aZ\".to_owned(), signature:\n        \"MEUCIQDsig\".to_owned(),\n    }, capabilities: ClientCapabilities::default(),\n})"
+---
+{
+  "method": "host/hello",
+  "params": {
+    "protocol": {
+      "min": 2,
+      "max": 2
+    },
+    "client": {
+      "name": "weave-ios",
+      "version": "0.1.0"
+    },
+    "auth": {
+      "method": "device",
+      "deviceId": "d-3q8Hf0aZ",
+      "signature": "MEUCIQDsig"
+    },
+    "capabilities": {
+      "terminalSignIn": false
+    }
+  }
+}

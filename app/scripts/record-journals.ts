@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Records journals from a dev Host with the fake agent (`src/host/testing/dev-host.ts`), one
 // session per script, into `src/chat/fixtures/journals/`, for the transcript's tests (WVE-101).
-// Build the debug binaries first: `(cd ../tui && cargo build -p weave-cli -p weave-fake-agent)`.
+// Build the debug binaries first: `(cd .. && cargo build -p weave-cli -p weave-fake-agent)`.
 //
 //   bun scripts/record-journals.ts [name…]
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -129,7 +129,7 @@ async function record(host: DevHost, name: string, script: Script): Promise<Reco
 }
 
 if (!devHostAvailable()) {
-  console.error('Build the debug binaries first: (cd ../tui && cargo build -p weave-cli -p weave-fake-agent)');
+  console.error('Build the debug binaries first: (cd .. && cargo build -p weave-cli -p weave-fake-agent)');
   process.exit(1);
 }
 const wanted = process.argv.slice(2);

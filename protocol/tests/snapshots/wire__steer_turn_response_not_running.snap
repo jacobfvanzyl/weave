@@ -1,0 +1,7 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&SteerTurnResponse\n{ outcome: SteerOutcome::NotRunning, seq: None, })"
+---
+{
+  "outcome": "notRunning"
+}

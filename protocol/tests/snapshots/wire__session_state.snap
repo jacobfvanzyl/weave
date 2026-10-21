@@ -1,0 +1,119 @@
+---
+source: protocol/tests/wire.rs
+expression: round_trip(&state())
+---
+{
+  "sessionId": "s-1",
+  "agent": {
+    "id": "claude",
+    "name": "Claude",
+    "initialize": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": false,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        },
+        "mcpCapabilities": {
+          "http": false,
+          "sse": false,
+          "acp": false
+        },
+        "sessionCapabilities": {},
+        "auth": {}
+      },
+      "authMethods": [],
+      "agentInfo": {
+        "name": "claude-agent-acp",
+        "version": "0.31.0"
+      }
+    },
+    "release": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.31.0"
+    }
+  },
+  "cwd": "/repo",
+  "additionalDirectories": [
+    "/docs"
+  ],
+  "title": "Fix the parser",
+  "state": "open",
+  "activity": "waiting",
+  "clients": 2,
+  "blank": false,
+  "policy": {
+    "otherwise": "ask"
+  },
+  "modes": {
+    "currentModeId": "default",
+    "availableModes": [
+      {
+        "id": "default",
+        "name": "Default"
+      },
+      {
+        "id": "plan",
+        "name": "Plan"
+      }
+    ]
+  },
+  "configOptions": [],
+  "turns": [
+    {
+      "sessionId": "s-1",
+      "startedAt": 1760180000000,
+      "origin": {
+        "client": {
+          "name": "weave-tui",
+          "id": "c7"
+        }
+      }
+    }
+  ],
+  "pending": [
+    {
+      "id": "p-1",
+      "sessionId": "s-1",
+      "createdAt": 1760180001000,
+      "kind": "permission",
+      "request": {
+        "sessionId": "s-1",
+        "toolCall": {
+          "toolCallId": "t-1",
+          "title": "Write a.rs"
+        },
+        "options": [
+          {
+            "optionId": "once",
+            "name": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "no",
+            "name": "Reject",
+            "kind": "reject_once"
+          }
+        ]
+      }
+    }
+  ],
+  "subagents": [
+    "s-1-child"
+  ],
+  "journal": {
+    "id": "j-1760180000000",
+    "head": 41
+  },
+  "notices": [
+    "The agent doesn't support MCP server docs over SSE; skipped"
+  ],
+  "update": {
+    "agentId": "claude",
+    "name": "@agentclientprotocol/claude-agent-acp",
+    "running": "0.31.0",
+    "latest": "0.32.0"
+  }
+}

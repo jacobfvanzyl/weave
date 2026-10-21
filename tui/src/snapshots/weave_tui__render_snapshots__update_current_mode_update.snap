@@ -1,0 +1,12 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• Mode changed to Code
+── viewport ──
+
+
+›
+
+  Agent · Code                                             ⌃o Settings

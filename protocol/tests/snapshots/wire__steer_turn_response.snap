@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&SteerTurnResponse\n{ outcome: SteerOutcome::Steered, seq: Some(43), })"
+---
+{
+  "outcome": "steered",
+  "seq": 43
+}

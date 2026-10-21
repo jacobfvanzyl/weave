@@ -1,0 +1,28 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&HelloResponse\n{\n    protocol: 2, client_id: \"c9\".to_owned(), host: host_info(), features:\n    vec![DEVICES_FEATURE.to_owned()], acp: acp_info(), device:\n    Some(DeviceInfo\n    { id: \"d-3q8Hf0aZ\".to_owned(), name: \"Jaco's iPad\".to_owned(), }),\n})"
+---
+{
+  "protocol": 2,
+  "clientId": "c9",
+  "host": {
+    "id": "8ZpX3kqW1m0aLr9TQv2cYw",
+    "version": "0.1.0",
+    "pid": 4242,
+    "startedAt": 1760180000000
+  },
+  "features": [
+    "devices"
+  ],
+  "acp": {
+    "protocolVersion": 1,
+    "unstable": [
+      "session_compaction",
+      "subagents"
+    ]
+  },
+  "device": {
+    "id": "d-3q8Hf0aZ",
+    "name": "Jaco's iPad"
+  }
+}

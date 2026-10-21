@@ -1,0 +1,15 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ListDevicesResponse { devices: vec![device()], })"
+---
+{
+  "devices": [
+    {
+      "id": "d-3q8Hf0aZ",
+      "name": "Jaco's iPad",
+      "pairedAt": 1760180000000,
+      "lastSeenAt": 1760180005000,
+      "connections": 1
+    }
+  ]
+}

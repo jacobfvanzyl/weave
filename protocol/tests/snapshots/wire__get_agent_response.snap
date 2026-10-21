@@ -1,0 +1,36 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&GetAgentResponse { agent: agent(), initialize: initialize(), })"
+---
+{
+  "agent": {
+    "id": "claude",
+    "name": "Claude",
+    "source": "preset",
+    "version": "0.31.0",
+    "installed": true
+  },
+  "initialize": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "loadSession": false,
+      "promptCapabilities": {
+        "image": false,
+        "audio": false,
+        "embeddedContext": false
+      },
+      "mcpCapabilities": {
+        "http": false,
+        "sse": false,
+        "acp": false
+      },
+      "sessionCapabilities": {},
+      "auth": {}
+    },
+    "authMethods": [],
+    "agentInfo": {
+      "name": "claude-agent-acp",
+      "version": "0.31.0"
+    }
+  }
+}

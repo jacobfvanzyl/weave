@@ -1,144 +1,47 @@
-[workspace]
-members = ["crates/acp-core", "crates/agents", "crates/cli", "crates/daemon", "crates/fake-agent", "crates/host-client", "crates/protocol", "crates/tui"]
-resolver = "3"
+[package]
+name = "weave-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.95"
-publish = false
+[lib]
+name = "weave_tui"
 
-[workspace.dependencies]
-weave-acp-core = { path = "crates/acp-core" }
-weave-agents = { path = "crates/agents" }
-weave-daemon = { path = "crates/daemon" }
-weave-fake-agent = { path = "crates/fake-agent" }
-weave-host-client = { path = "crates/host-client" }
-weave-host-protocol = { path = "crates/protocol" }
-weave-tui = { path = "crates/tui" }
+[lints]
+workspace = true
 
-# Session compaction (Preview) and subagent sessions (draft) are the only unstable ACP
-# features weave uses; see tui/AGENTS.md.
-agent-client-protocol = { version = "=3.0.0", features = ["process", "unstable_mcp_over_acp", "unstable_session_compaction", "unstable_subagents"] }
-anyhow = "1"
-base64 = "0.22"
-# Unpacking ACP registry agents' binary archives, as Codex unpacks its downloads.
-bzip2 = "0.6"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-clap = { version = "4", features = ["derive"] }
-crossterm = "0.29.0"
-diffy = "0.4.2"
-flate2 = "1"
-futures = "0.3"
-# Random challenges, pairing codes and ids for paired devices.
-getrandom = "0.3"
-# Codex's file search: ripgrep's walker and nucleo's fuzzy matcher.
-ignore = "0.4.23"
-# Decoding pasted images for the composer's thumbnails, as Codex decodes its pets' frames.
-image = { version = "0.25", default-features = false }
-insta = "1.46.3"
-nucleo-matcher = "0.3"
-# Paired devices' keys: P-256, the curve the Secure Enclave makes keys on.
-p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
-libc = "0.2"
-pretty_assertions = "1"
-pulldown-cmark = { version = "0.10", default-features = false }
-# `weave pair`'s QR code, drawn in the terminal.
-qrcode = { version = "0.14", default-features = false }
-regex-lite = "0.1"
-# Fetching the ACP agent registry and its agents' archives.
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
-ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
-# TLS for a remote client's WebSocket, with the crypto reqwest already uses.
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
-# JSON Schema of the Host protocol, for clients in other languages (the app's TypeScript).
-schemars = "1.2"
-serde = "1"
-serde_json = "1"
-sha2 = "0.10"
-# Codex's syntax highlighting: syntect with two-face's grammars and themes.
-syntect = { version = "5.3.0", default-features = false, features = ["parsing", "plist-load", "regex-onig"] }
-tar = "0.4.46"
-tempfile = "3"
-thiserror = "2"
-tokio = "1"
-# The Host's WebSocket for remote clients, and a client's end of it, as Codex uses.
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
-# The daemon's Unix socket, as byte streams for the ACP SDK.
-tokio-util = { version = "0.7", features = ["compat"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-two-face = { version = "0.5.1", default-features = false, features = ["syntect-onig"] }
-toml = "0.9"
-unicode-segmentation = "1"
-unicode-width = "0.2"
-url = "2"
-vt100 = "0.16.2"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+[dependencies]
+weave-acp-core = { workspace = true }
+weave-host-client = { workspace = true }
+weave-host-protocol = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
+futures = { workspace = true }
+ignore = { workspace = true }
+image = { workspace = true, features = ["gif", "jpeg", "png", "webp"] }
+diffy = { workspace = true }
+nucleo-matcher = { workspace = true }
+pulldown-cmark = { workspace = true }
+ratatui = { workspace = true, features = ["unstable-backend-writer"] }
+regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+syntect = { workspace = true }
+tokio = { workspace = true, features = ["macros", "process", "rt", "sync", "time"] }
+tracing = { workspace = true }
+two-face = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
+url = { workspace = true }
 
-# A screenshot's thumbnail takes ~0.6 s to make unoptimized and ~30 ms optimized, so dev builds
-# optimize the crates that decode, shrink and encode images.
-[profile.dev.package.image]
-opt-level = 3
-[profile.dev.package.png]
-opt-level = 3
-[profile.dev.package.fdeflate]
-opt-level = 3
-[profile.dev.package.miniz_oxide]
-opt-level = 3
-[profile.dev.package.zune-jpeg]
-opt-level = 3
-[profile.dev.package.zune-core]
-opt-level = 3
-[profile.dev.package.image-webp]
-opt-level = 3
-[profile.dev.package.gif]
-opt-level = 3
-[profile.dev.package.weezl]
-opt-level = 3
-[profile.dev.package.moxcms]
-opt-level = 3
-[profile.dev.package.base64]
-opt-level = 3
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
-[workspace.lints]
-rust = {}
-
-# Mirrors codex-rs/Cargo.toml.
-[workspace.lints.clippy]
-await_holding_invalid_type = "deny"
-await_holding_lock = "deny"
-disallowed_methods = "deny"
-expect_used = "deny"
-identity_op = "deny"
-manual_clamp = "deny"
-manual_filter = "deny"
-manual_find = "deny"
-manual_flatten = "deny"
-manual_map = "deny"
-manual_memcpy = "deny"
-manual_non_exhaustive = "deny"
-manual_ok_or = "deny"
-manual_range_contains = "deny"
-manual_retain = "deny"
-manual_strip = "deny"
-manual_try_fold = "deny"
-manual_unwrap_or = "deny"
-needless_borrow = "deny"
-needless_borrowed_reference = "deny"
-needless_collect = "deny"
-needless_late_init = "deny"
-needless_option_as_deref = "deny"
-needless_question_mark = "deny"
-needless_update = "deny"
-redundant_clone = "deny"
-redundant_closure = "deny"
-redundant_closure_for_method_calls = "deny"
-redundant_static_lifetimes = "deny"
-trivially_copy_pass_by_ref = "deny"
-uninlined_format_args = "deny"
-unnecessary_filter_map = "deny"
-unnecessary_lazy_evaluations = "deny"
-unnecessary_sort_by = "deny"
-unnecessary_to_owned = "deny"
-unwrap_used = "deny"
+[dev-dependencies]
+insta = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+vt100 = { workspace = true }

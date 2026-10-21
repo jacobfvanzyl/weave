@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&event(40, SessionEvent::Notice\n{ text: \"This agent can't use client tools.\".to_owned(), },))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 40,
+    "at": 1760180001234,
+    "event": {
+      "kind": "notice",
+      "text": "This agent can't use client tools."
+    }
+  }
+}

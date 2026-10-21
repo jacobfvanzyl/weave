@@ -1,0 +1,12 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+
+── viewport ──
+
+
+›
+
+  Agent · 24%

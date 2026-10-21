@@ -1,0 +1,14 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AttachSessionRequest\n{\n    session_id: \"s-1\".into(), after:\n    Some(JournalPosition { journal: \"j-1760180000000\".to_owned(), seq: 40, }),\n    agent_id: None, cwd: None, trace: false,\n})"
+---
+{
+  "method": "session/attach",
+  "params": {
+    "sessionId": "s-1",
+    "after": {
+      "journal": "j-1760180000000",
+      "seq": 40
+    }
+  }
+}

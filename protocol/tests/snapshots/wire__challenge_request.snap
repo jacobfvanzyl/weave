@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ChallengeRequest {})"
+---
+{
+  "method": "host/challenge",
+  "params": {}
+}

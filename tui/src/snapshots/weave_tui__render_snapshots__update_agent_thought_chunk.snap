@@ -1,0 +1,14 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• The tests fail because the fixture moved.
+
+• Found it.
+── viewport ──
+
+
+›
+
+  Agent

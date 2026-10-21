@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RevokeDeviceRequest { device_id: \"d-3q8Hf0aZ\".to_owned(), })"
+---
+{
+  "method": "devices/revoke",
+  "params": {
+    "deviceId": "d-3q8Hf0aZ"
+  }
+}

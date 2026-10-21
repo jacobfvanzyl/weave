@@ -1,19 +1,19 @@
 /// <reference types="bun" />
-// A dev weave Host for integration tests: the debug `weave` from `tui/`, in a directory of its own
+// A dev weave Host for integration tests: the repository's debug `weave`, in a directory of its own
 // (`WEAVE_DAEMON_DIR`), so it never touches an installed Host, with the fake agent as `fake` and
 // its WebSocket on a free loopback port. `fake-minimal` is the fake agent advertising nothing
 // optional, steering included, and `fake-auth` one that needs signing in. Build the binaries first:
 //
-//   (cd ../tui && cargo build -p weave-cli -p weave-fake-agent)
+//   (cd .. && cargo build -p weave-cli -p weave-fake-agent)
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Connector } from '../connection';
 
-const tui = resolve(import.meta.dirname, '../../../../tui');
-const weave = join(tui, 'target/debug/weave');
-const fakeAgent = join(tui, 'target/debug/weave-fake-agent');
+const repository = resolve(import.meta.dirname, '../../../..');
+const weave = join(repository, 'target/debug/weave');
+const fakeAgent = join(repository, 'target/debug/weave-fake-agent');
 
 /** Whether the debug binaries are there; the integration tests skip without them. */
 export const devHostAvailable = () => existsSync(weave) && existsSync(fakeAgent);

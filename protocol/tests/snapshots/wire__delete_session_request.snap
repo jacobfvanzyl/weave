@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&DeleteSessionRequest\n{ session_id: \"s-1\".into(), agent_id: Some(\"claude\".to_owned()), })"
+---
+{
+  "method": "session/delete",
+  "params": {
+    "sessionId": "s-1",
+    "agentId": "claude"
+  }
+}

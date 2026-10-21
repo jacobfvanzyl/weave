@@ -5,9 +5,9 @@ whole journal in the transcript (WVE-101) and prompting (WVE-102) 2026-10-21. Th
 specified as WVE-103 to WVE-105 land.
 
 Decision: [ADR 0015](../../../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md).
-Glossary: [`tui/CONTEXT.md`](../../../tui/CONTEXT.md). Host protocol:
-[`wve-85-host-protocol.md`](../../../tui/docs/specs/wve-85-host-protocol.md); remote clients:
-[`wve-90-remote-clients.md`](../../../tui/docs/specs/wve-90-remote-clients.md).
+Glossary: [`CONTEXT.md`](../../../CONTEXT.md). Host protocol:
+[`wve-85-host-protocol.md`](../../../docs/specs/wve-85-host-protocol.md); remote clients:
+[`wve-90-remote-clients.md`](../../../docs/specs/wve-90-remote-clients.md).
 
 ## Purpose
 
@@ -110,7 +110,7 @@ Host protocol; the mock stays for UI work and tests.
 ### Types
 
 The app's types for the Host protocol, and for the ACP content it carries, come from the Host's
-Rust: `crates/protocol` keeps the protocol as one JSON Schema (`tests/schema.rs`), and
+Rust: `protocol/` keeps the protocol as one JSON Schema (`tests/schema.rs`), and
 `scripts/protocol-types.ts` turns it into `src/host/protocol.ts`, with tables of which method
 takes and gives which and the protocol's constants. A test fails when the file is stale. The
 ACP types are the ones the Host's pinned crate defines, unstable features included, so the app

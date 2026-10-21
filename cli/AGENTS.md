@@ -1,0 +1,66 @@
+# cli
+
+The `weave` binary and its subcommands (`weave-cli`), Host autostart and the launchd service
+included. Read the root `AGENTS.md` first; its Commands section builds and runs it.
+
+Clients name agents by id, so `-- <command>` works only with `--no-daemon` (the in-process
+Host is given it as agent `command`); for the shared Host, define the agent under
+`[agents.<id>]`, as `[agents.fake] command = "…/weave-fake-agent"`. Likewise `--no-fs` and
+`--no-terminal` apply in-process; for the shared Host set `fs`/`terminal` under the agent.
+`--resume [ID]` opens a session (or the picker, also on Ctrl+R in the TUI), `--continue` the
+latest one here (of the agent last used here, `cli/src/recent.rs`, unless `--agent` or `--`
+names one), and `--add-dir` adds workspace roots. Ctrl+D on an empty composer leaves the TUI
+with a turn still running in the Host. `weave login` and `weave logout` manage sign-in
+directly; when the agent answers `auth_required` at startup, `weave` offers its methods and
+signs in through the Host (`agents/authenticate`, or `agents/terminalSignIn` and the command
+run in this terminal), then retries.
+Agents and MCP servers come from `~/.config/weave/config.toml` (read from `tui.toml` while only
+that exists; see `../agents/src/config.rs`), whose `[tui]` and `[daemon]` are the CLI's
+(`src/config.rs`), as is `[remote]`, optional overrides for remote access (port, URL,
+other origins) that `weave daemon run` reads (a restart picks up a change).
+
+```bash
+./target/debug/weave run --approve read,edit "fix the tests" --agent <id>   # headless, in the Host
+./target/debug/weave run --detach "…"     # leave it running; prints the session id
+./target/debug/weave run --continue "…"   # or --resume <id>, as the TUI names sessions
+./target/debug/weave sessions             # open in the Host; also cancel <id>, close <id>
+./target/debug/weave daemon status        # also start, stop, restart, run (foreground), install, uninstall
+./target/debug/weave pair                 # a QR code and code another device pairs with
+./target/debug/weave devices              # paired devices; also revoke <id>
+./target/debug/weave update --dry-run     # newer agent adapters; without --dry-run, check and use them
+```
+
+`--resume <id>` reopens a session with the agent and directory its journal records,
+overriding `--agent` and `--cwd` (`start::choose`); the Host refuses to attach a session to
+another agent (`wrong_agent`). `sessions/list` with an agent leads with the Host's sessions
+of that agent in the directory, open ones and then ones a stopped Host left open within the
+idle grace of their last activity (its index of journals, `Registry::known`), each listing
+saying its state, activity, clients and whether it's headless, which the TUI's picker shows
+as badges and `--continue` uses to pass over headless runs; without an agent it lists the
+Host's sessions across agents. Session state carries the session's directory, which the TUI
+adopts.
+
+Commands share their argument groups (`cli/src/args.rs`): `AgentArgs` (which agent, its
+config and trace) everywhere an agent is involved, `WorkspaceArgs` where a session is,
+`SessionArgs` (`--resume`, `--continue`) where one is reopened, and `ApproveArgs`
+(`--approve <kinds>|all`, the rest rejected, through `acp-core`'s `PermissionPolicy`) where a
+turn runs headless. Prompts are positional, before the `--` agent command.
+
+`weave daemon install` runs the Host as a launchd user agent (`cli/src/service.rs`) from
+the binary it's run from, which can't be in `~/Documents`, `~/Desktop` or `~/Downloads`
+(macOS keeps launchd's processes out of them; install a copy such as `~/.local/bin/weave`).
+While it's installed, clients never start a Host and `start`/`stop`/`restart` use
+`launchctl`; `uninstall` removes it. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
+`weave_host_protocol::PROTOCOL_VERSION` is one it speaks); sessions it had open resume when
+reattached. The Host captures the login shell's environment when it starts, so restart it
+after changing your shell's. Set `WEAVE_DAEMON_DIR` to run a dev Host (socket, lock, log,
+journals and traces) beside the installed one; its log is `daemon.log` there, and with
+`XDG_CONFIG_HOME` it reads a config of its own. Builds without debug info
+(`CARGO_PROFILE_DEV_DEBUG=0`) keep `target/` small on a full disk.
+
+Both run against a real agent and its existing login. `--log-file <file>` captures the
+TUI's diagnostics; agent stderr goes to the Host's log (to `--log-file` with
+`--no-daemon`). `--trace <file>` writes every protocol line as JSONL for `smoke`, `login` and `--no-daemon`;
+through the shared Host, `--trace` has the Host write it in its `traces/` and say where. With
+`smoke`, `RUST_LOG=agent_stderr=debug` shows agent stderr. Traces contain prompts and
+agent output, so keep them out of the repository.

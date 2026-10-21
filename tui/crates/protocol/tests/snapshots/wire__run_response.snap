@@ -1,7 +1,0 @@
----
-source: crates/protocol/tests/wire.rs
-expression: "round_trip(&RunResponse { session_id: \"s-2\".into(), state: None, })"
----
-{
-  "sessionId": "s-2"
-}

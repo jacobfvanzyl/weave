@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&Auth::Token { token: \"secret\".to_owned() })"
+---
+{
+  "method": "token",
+  "token": "secret"
+}

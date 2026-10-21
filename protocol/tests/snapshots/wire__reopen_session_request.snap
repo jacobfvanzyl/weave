@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ReopenSessionRequest { session_id: \"s-1\".into(), })"
+---
+{
+  "method": "session/reopen",
+  "params": {
+    "sessionId": "s-1"
+  }
+}

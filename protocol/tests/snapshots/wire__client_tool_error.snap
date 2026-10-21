@@ -1,0 +1,13 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ClientToolResult::error(\"The person's device isn't connected.\"))"
+---
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "The person's device isn't connected."
+    }
+  ],
+  "isError": true
+}

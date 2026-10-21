@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&CloseSessionRequest { session_id: \"s-1\".into(), })"
+---
+{
+  "method": "session/close",
+  "params": {
+    "sessionId": "s-1"
+  }
+}

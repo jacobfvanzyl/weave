@@ -5,7 +5,7 @@ import Security
 // This device's P-256 keys, one per paired Host, in the Secure Enclave where there is one and
 // otherwise a ThisDeviceOnly Keychain key. Keys never leave the device.
 //
-// It answers as the weave Host expects (tui/docs/specs/wve-90-remote-clients.md): the public key
+// It answers as the weave Host expects (docs/specs/wve-90-remote-clients.md): the public key
 // as a JWK, and signatures of a message's UTF-8 bytes as DER ECDSA P-256 SHA-256, in unpadded
 // base64url.
 @objc(DeviceKeyPlugin)

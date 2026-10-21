@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&TerminalSignInRequest\n{ agent_id: \"claude\".to_owned(), method_id: \"login\".into(), })"
+---
+{
+  "method": "agents/terminalSignIn",
+  "params": {
+    "agentId": "claude",
+    "methodId": "login"
+  }
+}

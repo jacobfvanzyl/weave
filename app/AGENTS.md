@@ -9,9 +9,9 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
 ## Boundaries
 
 - The app is a remote client of the Host (ADR 0010). It speaks the Host protocol
-  (`../tui/docs/specs/wve-85-host-protocol.md`, `../tui/docs/specs/wve-90-remote-clients.md`)
+  (`../docs/specs/wve-85-host-protocol.md`, `../docs/specs/wve-90-remote-clients.md`)
   and never ACP or MCP; ACP's content arrives as the Host protocol's payload.
-- Use the glossary's terms (`../tui/CONTEXT.md`): sessions, Hosts, directories, turns, steers,
+- Use the glossary's terms (`../CONTEXT.md`): sessions, Hosts, directories, turns, steers,
   pending requests. Alpha's Threads, Connections, Workspaces and archiving are gone.
 - Portal, terminals, Workspaces, the Host Browser, the Client Browser and Electron stay in
   history. Bring something back only when an issue asks for it.
@@ -31,7 +31,7 @@ The UI reads one `AppController`: `useHostController` from the paired Hosts, or
 `useMockController` from fixtures with `?mock=`. Keep components free of I/O: they take the
 model and call actions.
 
-The Host protocol's types come from the Host's Rust (`../tui/crates/protocol/tests/schema.rs`).
+The Host protocol's types come from the Host's Rust (`../protocol/tests/schema.rs`).
 After a protocol change there, regenerate them, and never edit `src/host/protocol.ts` by hand.
 
 ## Commands
@@ -52,7 +52,7 @@ bun scripts/record-journals.ts [name…]   # record the transcript tests' journa
 The `*.host.test.ts` files run the client against a dev Host (`src/host/testing/dev-host.ts`):
 the debug `weave` and fake agent in a directory of their own, never the installed Host, with the
 fake agent as `fake`, as `fake-minimal` (no steering, no images) and as `fake-auth` (needs
-signing in). They skip unless those binaries are built: `(cd ../tui && cargo build -p weave-cli
+signing in). They skip unless those binaries are built: `(cd .. && cargo build -p weave-cli
 -p weave-fake-agent)`. They run in Vitest's `node` environment, since happy-dom's WebSocket fails
 the Host's upgrade.
 

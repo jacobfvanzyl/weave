@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&SetModeRequest { session_id: \"s-1\".into(), mode_id: \"plan\".into(), })"
+---
+{
+  "method": "session/setMode",
+  "params": {
+    "sessionId": "s-1",
+    "modeId": "plan"
+  }
+}

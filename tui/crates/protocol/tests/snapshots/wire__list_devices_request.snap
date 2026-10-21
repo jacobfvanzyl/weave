@@ -1,8 +1,0 @@
----
-source: crates/protocol/tests/wire.rs
-expression: "message(&ListDevicesRequest {})"
----
-{
-  "method": "devices/list",
-  "params": {}
-}

@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&GetAgentRequest { agent_id: \"claude\".to_owned(), })"
+---
+{
+  "method": "agents/get",
+  "params": {
+    "agentId": "claude"
+  }
+}

@@ -1,0 +1,24 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RunRequest\n{\n    agent_id: \"codex\".to_owned(), cwd: \"/repo\".into(), session_id: None,\n    additional_directories: Vec::new(), prompt: vec![text(\"fix the tests\")],\n    policy: PermissionPolicy::headless(vec![ToolKind::Read, ToolKind::Edit]),\n    attach: false, trace: false,\n})"
+---
+{
+  "method": "session/run",
+  "params": {
+    "agentId": "codex",
+    "cwd": "/repo",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "fix the tests"
+      }
+    ],
+    "policy": {
+      "approve": [
+        "read",
+        "edit"
+      ],
+      "otherwise": "reject"
+    }
+  }
+}
