@@ -11,10 +11,12 @@ use crate::sessions::SessionListing;
 
 /// `host/status`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "host/status", response = HostStatus)]
 pub struct StatusRequest {}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HostStatus {
     pub protocol: u32,
@@ -32,6 +34,7 @@ pub struct HostStatus {
 
 /// How the Host runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum Service {
     /// As a launchd user agent, with no idle exit.
@@ -44,6 +47,7 @@ pub enum Service {
 
 /// Where agents' environment comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum EnvironmentSource {
     /// The user's login shell, over the Host's own.
@@ -54,5 +58,6 @@ pub enum EnvironmentSource {
 
 /// `host/shutdown`: suspend every open session and exit.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "host/shutdown", response = Empty)]
 pub struct ShutdownRequest {}

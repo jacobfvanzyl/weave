@@ -203,6 +203,7 @@ impl World {
             upstream: Arc::new(weave_agents::update::Offline),
             mcp_socket: None,
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
+            remote: None,
         }
     }
 

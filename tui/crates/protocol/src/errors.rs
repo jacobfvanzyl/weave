@@ -25,6 +25,8 @@ pub const REQUIRES_TERMINAL: i32 = -32068;
 pub const FORBIDDEN: i32 = -32069;
 /// The pending request is a client tool call for another client.
 pub const NOT_TARGET: i32 = -32070;
+/// Remote access couldn't be turned on, as when Tailscale Serve can't reach the Host.
+pub const REMOTE_UNAVAILABLE: i32 = -32071;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -89,6 +91,10 @@ pub fn forbidden() -> Error {
         FORBIDDEN,
         "only a client on the Host's computer may do this",
     )
+}
+
+pub fn remote_unavailable(why: impl Into<String>) -> Error {
+    Error::new(REMOTE_UNAVAILABLE, why)
 }
 
 pub fn not_target() -> Error {

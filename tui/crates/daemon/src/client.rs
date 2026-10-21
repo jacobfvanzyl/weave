@@ -254,7 +254,7 @@ async fn handlers(
         )
         .on_receive_request(
             async move |request: OfferDeviceRequest, responder, cx: ConnectionTo<HostClient>| {
-                responder.respond_with_result(on_offer.offer_device(request, cx))
+                responder.respond_with_result(on_offer.offer_device(request, cx).await)
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -270,13 +270,19 @@ async fn handlers(
         )
         .on_receive_request(
             async move |request: RevokeDeviceRequest, responder, _cx| {
-                responder.respond_with_result(on_revoke.local_hello().and_then(|_| {
+                let revoked = on_revoke.local_hello().and_then(|_| {
                     on_revoke
                         .shared
                         .devices
                         .revoke(&request.device_id, CLOSE_REVOKED)
                         .map(|()| Empty {})
-                }))
+                });
+                // The last device gone turns remote access off (ADR 0016).
+                if revoked.is_ok() {
+                    let shared = &on_revoke.shared;
+                    shared.remote.stop_if_unused(shared).await;
+                }
+                responder.respond_with_result(revoked)
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -625,14 +631,40 @@ impl Connection {
     }
 
     /// `devices/offer`: a code `weave pair` shows, and this connection is told who takes it.
-    fn offer_device(
+    /// It turns remote access on (ADR 0016), and back off once the offer expires if no device
+    /// took one.
+    async fn offer_device(
         &self,
         request: OfferDeviceRequest,
         cx: ConnectionTo<HostClient>,
     ) -> Result<OfferDeviceResponse, Error> {
         self.local_hello()?;
-        let (code, expires_at) = self.shared.devices.offer(request.name, Some(cx));
-        Ok(OfferDeviceResponse { code, expires_at })
+        let settings = self.shared.config.remote.as_ref();
+        let url = match settings {
+            Some(_) => Some(self.shared.remote.start(&self.shared).await?),
+            None => None,
+        };
+        let lifetime = settings.map_or(
+            std::time::Duration::from_millis(crate::devices::OFFER_LIFETIME_MS),
+            |settings| settings.offer_lifetime,
+        );
+        let lifetime_ms = u64::try_from(lifetime.as_millis()).unwrap_or(u64::MAX);
+        let (code, expires_at) = self
+            .shared
+            .devices
+            .offer(request.name, Some(cx), lifetime_ms);
+        if settings.is_some() {
+            let shared = Arc::clone(&self.shared);
+            tokio::spawn(async move {
+                tokio::time::sleep(lifetime + std::time::Duration::from_millis(100)).await;
+                shared.remote.stop_if_unused(&shared).await;
+            });
+        }
+        Ok(OfferDeviceResponse {
+            code,
+            expires_at,
+            url,
+        })
     }
 
     async fn list_agents(&self, request: ListAgentsRequest) -> Result<ListAgentsResponse, Error> {

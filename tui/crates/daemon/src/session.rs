@@ -1371,6 +1371,15 @@ impl Actor {
         if !self.handle.agent().is_some_and(takes_sessions_up) {
             return Err(cant());
         }
+        // An agent may keep nothing of a session before its first prompt (Claude Code writes no
+        // transcript until then), so neither version could take a blank one up, and a new
+        // session is all it would be.
+        if self.blank.load(Ordering::Relaxed) {
+            return Err(Error::invalid_request().data(
+                "nothing has been sent in the session, so there's nothing to move and it stays \
+                 as it was; new sessions start the agent's current version",
+            ));
+        }
         let agent = self.shared.resolve(&self.resolved.id).await?;
         let wanted = agent
             .release()

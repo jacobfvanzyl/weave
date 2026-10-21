@@ -65,6 +65,7 @@ use crate::chat::SessionAbilities;
 use crate::elicitation::ElicitationView;
 use crate::permission::PermissionView;
 use crate::session::OpenedSession;
+use crate::session::Reopened;
 use crate::tool_call::ToolCallCell;
 
 const WIDTH: u16 = 72;
@@ -600,10 +601,18 @@ fn release(version: &str) -> weave_host_protocol::agents::AgentRelease {
     }
 }
 
-/// A chat on a Host that updates agents, its session on 0.86.0, with 0.93.0 out.
+/// A chat on a Host that updates agents, its session on 0.86.0 with a conversation to move,
+/// with 0.93.0 out.
 fn with_update(mut chat: ChatWidget) -> ChatWidget {
     chat = chat.with_updates(true, Default::default());
     chat.set_release(Some(release("0.86.0")));
+    chat.session_ready(OpenedSession {
+        session_id: "s1".into(),
+        modes: None,
+        config_options: Vec::new(),
+        reopened: Some(Reopened::Loaded),
+        notices: Vec::new(),
+    });
     chat.update_available(weave_host_protocol::agents::AgentUpdate {
         agent_id: "claude".into(),
         name: "@agentclientprotocol/claude-agent-acp".into(),

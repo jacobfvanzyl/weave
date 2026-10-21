@@ -135,14 +135,16 @@ impl Devices {
         lock(&self.state).host_id.clone()
     }
 
-    /// A new offer, good for [`OFFER_LIFETIME_MS`]. Returns its code and when it expires.
+    /// A new offer, good for `lifetime_ms` ([`OFFER_LIFETIME_MS`] but in tests). Returns its
+    /// code and when it expires.
     pub(crate) fn offer(
         &self,
         name: Option<String>,
         offered_by: Option<ConnectionTo<HostClient>>,
+        lifetime_ms: Timestamp,
     ) -> (String, Timestamp) {
         let code = crockford(&random_bytes::<16>());
-        let expires_at = now_ms() + OFFER_LIFETIME_MS;
+        let expires_at = now_ms() + lifetime_ms;
         let mut state = lock(&self.state);
         let now = now_ms();
         state.offers.retain(|offer| offer.expires_at > now);
@@ -241,6 +243,20 @@ impl Devices {
                 state.live.remove(device_id);
             }
         }
+    }
+
+    /// Whether any device is paired, which keeps remote access on.
+    pub(crate) fn any_paired(&self) -> bool {
+        !lock(&self.state).devices.is_empty()
+    }
+
+    /// Whether an offer is still good, which keeps remote access on while it is.
+    pub(crate) fn offering(&self) -> bool {
+        let now = now_ms();
+        lock(&self.state)
+            .offers
+            .iter()
+            .any(|offer| offer.expires_at > now)
     }
 
     pub(crate) fn list(&self) -> Vec<Device> {
@@ -427,7 +443,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("devices.json");
         let devices = Devices::load(Some(path.clone()));
-        let (code, _) = devices.offer(None, None);
+        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
         let (signing, jwk) = key();
         let paired = devices.pair(&code, new_device(jwk.clone())).expect("pairs");
         assert_eq!(paired.name, "iPad");
@@ -468,7 +484,7 @@ mod tests {
     #[test]
     fn an_offer_names_the_device_and_codes_are_read_forgivingly() {
         let devices = Devices::load(None);
-        let (code, _) = devices.offer(Some("Jaco's iPad".to_owned()), None);
+        let (code, _) = devices.offer(Some("Jaco's iPad".to_owned()), None, OFFER_LIFETIME_MS);
         assert_eq!(code.len(), 26);
         let typed = format!("{}-{}", &code[..13], &code[13..]).to_lowercase();
         let (_, jwk) = key();
@@ -479,7 +495,9 @@ mod tests {
     #[test]
     fn only_the_newest_offers_are_live() {
         let devices = Devices::load(None);
-        let codes: Vec<String> = (0..4).map(|_| devices.offer(None, None).0).collect();
+        let codes: Vec<String> = (0..4)
+            .map(|_| devices.offer(None, None, OFFER_LIFETIME_MS).0)
+            .collect();
         let (_, jwk) = key();
         assert!(devices.pair(&codes[0], new_device(jwk.clone())).is_none());
         assert!(devices.pair(&codes[3], new_device(jwk)).is_some());
@@ -488,7 +506,7 @@ mod tests {
     #[test]
     fn a_key_off_the_curve_is_refused() {
         let devices = Devices::load(None);
-        let (code, _) = devices.offer(None, None);
+        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
         let (_, mut jwk) = key();
         jwk.y = URL_SAFE_NO_PAD.encode([7u8; 32]);
         assert!(devices.pair(&code, new_device(jwk)).is_none());
@@ -505,7 +523,7 @@ mod tests {
     #[test]
     fn revoking_closes_a_devices_connections_and_forgets_it() {
         let devices = Devices::load(None);
-        let (code, _) = devices.offer(None, None);
+        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
         let (signing, jwk) = key();
         let paired = devices.pair(&code, new_device(jwk)).expect("pairs");
         let closer = Arc::new(Recorded(Mutex::new(Vec::new())));

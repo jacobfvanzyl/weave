@@ -22,7 +22,9 @@
 //!
 //! A Host serves a Unix socket ([`socket`]), or, without one, a single client in the same
 //! process ([`Daemon::connect_in_process`]). Remote clients, on the person's other devices,
-//! reach it through a loopback WebSocket ([`Daemon::serve_remote`]) and prove a paired device.
+//! reach it through a loopback WebSocket and prove a paired device. Pairing turns that on
+//! ([`remote`], ADR 0016), with the Host's own Tailscale Serve entry ([`tailscale`]); tests
+//! serve a WebSocket of their own with [`Daemon::serve_remote`].
 
 mod client;
 mod devices;
@@ -31,8 +33,10 @@ mod journal;
 pub mod mcp;
 mod modes;
 pub mod paths;
+pub mod remote;
 mod session;
 pub mod socket;
+pub mod tailscale;
 mod updates;
 mod websocket;
 
@@ -79,6 +83,8 @@ pub use crate::journal::Recorded;
 pub use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 pub use crate::paths::DaemonPaths;
+pub use crate::remote::RemoteSettings;
+pub use crate::remote::Serve;
 use crate::session::Command;
 use crate::session::SessionHandle;
 use crate::session::lock;
@@ -129,6 +135,9 @@ pub struct DaemonConfig {
     pub mcp_socket: Option<PathBuf>,
     /// The command, with its arguments, agents run as the Host MCP server's stdio bridge.
     pub mcp_bridge: Vec<String>,
+    /// How the Host serves remote clients once pairing turns that on; none for a Host that
+    /// doesn't, as one inside a client.
+    pub remote: Option<RemoteSettings>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -157,6 +166,7 @@ impl DaemonConfig {
             upstream: Arc::new(weave_agents::update::Network),
             mcp_socket: None,
             mcp_bridge: bridge_command(),
+            remote: None,
         }
     }
 
@@ -242,8 +252,8 @@ pub(crate) struct Shared {
     registry: Mutex<Registry>,
     pub(crate) devices: devices::Devices,
     pub(crate) updates: updates::Updates,
-    /// The WebSocket's address, while it's served.
-    remote: Mutex<Option<String>>,
+    /// Remote access: the WebSocket and the Serve entry, while pairing has them on.
+    pub(crate) remote: remote::Remote,
     started_ms: u64,
     pub(crate) next_client: AtomicU64,
     pub(crate) stop: watch::Sender<bool>,
@@ -493,7 +503,7 @@ impl Shared {
                 weave_agents::environment::Source::Process => EnvironmentSource::Process,
             },
             sessions: sessions.iter().map(session::Summary::listing).collect(),
-            remote: lock(&self.remote).clone(),
+            remote: self.remote.address(),
         }
     }
 }
@@ -552,7 +562,7 @@ impl Daemon {
                 mcp: Arc::new(mcp::Mcp::new(shared.clone())),
                 devices,
                 updates: updates::Updates::default(),
-                remote: Mutex::new(None),
+                remote: remote::Remote::default(),
                 config,
                 registry: Mutex::new(Registry {
                     known,
@@ -630,7 +640,7 @@ impl Daemon {
                     let quiet = {
                         let registry = self.shared.registry();
                         registry.sessions.is_empty() && registry.clients == 0
-                    };
+                    } && !self.shared.remote.is_on();
                     if !quiet {
                         idle_since = None;
                     } else if let Some(limit) = idle_exit
@@ -648,12 +658,20 @@ impl Daemon {
     /// Accept remote clients on `listener`, a loopback address Tailscale Serve forwards to,
     /// until the Host stops. Each has to prove a paired device at hello.
     pub async fn serve_remote(&self, listener: tokio::net::TcpListener, config: RemoteConfig) {
-        *lock(&self.shared.remote) = listener
-            .local_addr()
-            .ok()
-            .map(|address| address.to_string());
-        websocket::serve(Arc::clone(&self.shared), listener, config).await;
-        *lock(&self.shared.remote) = None;
+        self.shared.remote.serving(
+            listener
+                .local_addr()
+                .ok()
+                .map(|address| address.to_string()),
+        );
+        let forever = tokio_util::sync::CancellationToken::new();
+        websocket::serve(Arc::clone(&self.shared), listener, config, forever).await;
+        self.shared.remote.serving(None);
+    }
+
+    /// At startup, turn remote access back on when a device is paired (ADR 0016).
+    pub async fn resume_remote(&self) {
+        self.shared.remote.resume(&self.shared).await;
     }
 
     /// Remove journals untouched for the retention period, except open sessions', and forget

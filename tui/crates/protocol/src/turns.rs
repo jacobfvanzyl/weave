@@ -13,6 +13,7 @@ use crate::Empty;
 /// `turn/start`: send a prompt. Answered once the turn has started. The session must be
 /// open; it may be a subagent session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "turn/start", response = StartTurnResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct StartTurnRequest {
@@ -21,6 +22,7 @@ pub struct StartTurnRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StartTurnResponse {
     /// The position of the turn's `turnStarted` event.
@@ -35,6 +37,7 @@ pub const STEER_FEATURE: &str = "turn/steer";
 /// order with the turn's updates. It needs an agent that takes steering, as its `initialize`
 /// response says.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "turn/steer", response = SteerTurnResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct SteerTurnRequest {
@@ -43,6 +46,7 @@ pub struct SteerTurnRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SteerTurnResponse {
     pub outcome: SteerOutcome,
@@ -52,6 +56,7 @@ pub struct SteerTurnResponse {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SteerOutcome {
     /// It joined the running turn.
@@ -62,6 +67,7 @@ pub enum SteerOutcome {
 
 /// `turn/cancel`: cancel the session's running turn and its pending requests.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "turn/cancel", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelTurnRequest {

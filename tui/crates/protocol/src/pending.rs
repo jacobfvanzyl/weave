@@ -22,6 +22,7 @@ use crate::tools::ClientToolResult;
 pub type PendingId = String;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PendingRequest {
     pub id: PendingId,
@@ -34,6 +35,7 @@ pub struct PendingRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PendingKind {
     Permission {
@@ -53,6 +55,7 @@ pub enum PendingKind {
 
 /// `pending/added`: a request now waits in an attached session.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "pending/added")]
 #[serde(rename_all = "camelCase")]
 pub struct PendingAddedNotification {
@@ -62,6 +65,7 @@ pub struct PendingAddedNotification {
 
 /// How a pending request stopped waiting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum Resolution {
     Answered,
@@ -73,6 +77,7 @@ pub enum Resolution {
 
 /// `pending/resolved`: a request no longer waits.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "pending/resolved")]
 #[serde(rename_all = "camelCase")]
 pub struct PendingResolvedNotification {
@@ -87,6 +92,7 @@ pub struct PendingResolvedNotification {
 /// `pending/answer`: answer a pending request, with the response for its kind. The first
 /// answer goes to the agent; later ones fail with [`crate::errors::ALREADY_RESOLVED`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "pending/answer", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct AnswerPendingRequest {

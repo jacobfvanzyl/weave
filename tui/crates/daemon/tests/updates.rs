@@ -169,6 +169,7 @@ impl World {
             upstream: Arc::clone(&self.npm) as Arc<dyn Upstream>,
             mcp_socket: None,
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
+            remote: None,
         })
     }
 
@@ -595,6 +596,34 @@ async fn a_version_that_cant_take_the_session_up_gives_way_to_the_old_one() {
     );
     // It carries on, on the old version.
     client.turn(&session_id, "still here").await;
+}
+
+#[tokio::test]
+async fn a_blank_session_stays_as_it_was_with_nothing_to_move() {
+    let world = World::new(Ok("98.0.0"), None);
+    let daemon = world.daemon();
+    let mut client = Client::new(&daemon).await;
+    let session_id = client.create(&world, "claude").await.session_id;
+    client
+        .connection
+        .send(UpdateAgentRequest {
+            agent_id: "claude".to_owned(),
+        })
+        .await
+        .expect("agents/update");
+    let started = world.launched().len();
+    let error = client
+        .connection
+        .send(ReopenSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect_err("nothing to move");
+    assert!(error.to_string().contains("nothing to move"), "{error}");
+    assert_eq!(world.launched().len(), started, "nothing started");
+    // It carries on in the process it had.
+    client.turn(&session_id, "hello").await;
+    assert_eq!(world.launched().len(), started);
 }
 
 #[tokio::test]

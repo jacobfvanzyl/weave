@@ -8,7 +8,6 @@ mod service;
 mod sessions;
 mod smoke;
 mod start;
-mod tailscale;
 mod update;
 
 use std::fs::File;

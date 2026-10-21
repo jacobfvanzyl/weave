@@ -24,7 +24,6 @@ use weave_agents::environment::CAPTURE_TIMEOUT;
 use weave_agents::environment::Environment;
 use weave_daemon::DaemonConfig;
 use weave_daemon::DaemonPaths;
-use weave_daemon::RemoteConfig;
 use weave_daemon::Withheld;
 use weave_daemon::socket;
 use weave_host_client::ConnectError;
@@ -391,8 +390,8 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     } else {
         Service::OnDemand
     };
-    let remote = remote_listener(run.config.as_deref()).await;
     let mut config = DaemonConfig::persistent(paths, service, environment);
+    config.remote = Some(remote_settings(run.config.as_deref()));
     config.config_file = run.config;
     let daemon = weave_daemon::Daemon::new(config);
     let stopper = daemon.clone();
@@ -407,58 +406,43 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
         "weave Host serving"
     );
     // launchd keeps it running; one started on demand goes when it's no longer used, unless
-    // it serves remote clients, which can't start it again.
-    let idle_exit = if run.launchd || remote.is_some() {
+    // paired devices need it, which can't start it again.
+    let idle_exit = if run.launchd {
         None
     } else {
         run.idle_exit.map(Duration::from_secs)
     };
-    let serving_remote = remote.map(|(listener, config)| {
-        let daemon = daemon.clone();
-        tokio::spawn(async move { daemon.serve_remote(listener, config).await })
-    });
+    let resuming = daemon.clone();
+    tokio::spawn(async move { resuming.resume_remote().await });
     daemon.serve(listening.listener, idle_exit).await;
-    if let Some(serving) = serving_remote {
-        serving.abort();
-    }
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("weave Host stopped");
     Ok(())
 }
 
-/// The WebSocket for remote clients, when the config has a `[remote]`. A `[remote]` that
-/// can't be used is logged, and the Host serves local clients only.
-async fn remote_listener(config: Option<&Path>) -> Option<(tokio::net::TcpListener, RemoteConfig)> {
-    let settings = match crate::config::Config::load(config) {
-        Ok(config) => config.remote?,
+/// How the Host serves remote clients once pairing turns that on (ADR 0016): the defaults,
+/// with the config's `[remote]` over them. A `[remote]` that can't be used is logged, and the
+/// defaults stand.
+fn remote_settings(config: Option<&Path>) -> weave_daemon::RemoteSettings {
+    let mut settings =
+        weave_daemon::RemoteSettings::new(Arc::new(weave_daemon::tailscale::TailscaleServe));
+    let configured = match crate::config::Config::load(config) {
+        Ok(config) => config.remote,
         Err(error) => {
-            tracing::error!(error = %format!("{error:#}"), "no remote clients: the config can't be read");
-            return None;
-        }
-    };
-    let address = match settings.listen() {
-        Ok(address) => address,
-        Err(error) => {
-            tracing::error!(error = %format!("{error:#}"), "no remote clients");
-            return None;
-        }
-    };
-    match tokio::net::TcpListener::bind(address).await {
-        Ok(listener) => {
-            tracing::info!(%address, "serving remote clients");
-            Some((
-                listener,
-                RemoteConfig {
-                    origins: settings.origins,
-                    ..RemoteConfig::default()
-                },
-            ))
-        }
-        Err(error) => {
-            tracing::error!(%error, %address, "no remote clients: can't listen");
+            tracing::error!(error = %format!("{error:#}"), "the config can't be read; remote access uses its defaults");
             None
         }
+    };
+    let Some(configured) = configured else {
+        return settings;
+    };
+    match configured.listen() {
+        Ok(address) => settings.listen = address,
+        Err(error) => tracing::error!(error = %format!("{error:#}"), "[remote] listen ignored"),
     }
+    settings.url = configured.url;
+    settings.websocket.origins = configured.origins;
+    settings
 }
 
 /// SIGTERM or SIGINT. A closing terminal's SIGHUP is ignored.

@@ -54,6 +54,9 @@ pub type Timestamp = u64;
 pub mod websocket {
     /// The subprotocol an upgrade must ask for.
     pub const SUBPROTOCOL: &str = "weave-host";
+    /// The `Origin` the app's web view sends, which the Host accepts without configuration
+    /// (ADR 0016); native clients send none.
+    pub const APP_ORIGIN: &str = "capacitor://localhost";
     /// The largest message either end sends: room for a prompt's screenshots.
     pub const MAX_MESSAGE: usize = 32 * 1024 * 1024;
     /// The device was revoked.
@@ -66,10 +69,12 @@ pub mod websocket {
 
 /// A response with nothing in it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Empty {}
 
 /// A range of major versions, both ends included.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct VersionRange {
     pub min: u32,
     pub max: u32,

@@ -414,7 +414,9 @@ the answer with it.
 When the new version can't take the session up, the old one does again, and `agentReopened`
 says why in `failed`. When that fails too, the session closes. An agent that can't resume or
 load sessions fails the request with method not found, and its process stays; new sessions
-get the new version. `version` is what the session runs now.
+get the new version. So does a blank session (one nobody has prompted), with invalid request:
+an agent may keep nothing of a session before its first prompt (claude-agent-acp can't resume
+one), so a new session takes its place. `version` is what the session runs now.
 
 **`session/delete`** `{sessionId, agentId?}` → `{}`
 
@@ -662,6 +664,10 @@ returns the agent's error unchanged.
   ACP version whose payloads old clients can't read is a new major version too.
 - Each message type has a golden JSON fixture, checked in tests, so a change to the wire
   shows up in review.
+- The protocol is also kept as one JSON Schema (`crates/protocol/tests/schema.rs`, behind the
+  crate's `schema` feature): every request, answer and notification, the ACP types they
+  carry, which method takes and gives which, and the protocol's constants. Clients in other
+  languages generate their types from it; the app's TypeScript (WVE-100) is checked against it.
 
 The TUI and the Host ship in one binary, so they normally agree. A TUI that meets an
 incompatible Host after `weave daemon restart` `/reload`s itself into the current binary,
@@ -794,8 +800,6 @@ into the new binary.
 - Host methods for clients on other computers: file search for `@` mentions, file reads
   for attachments, shell commands.
 - A Host-wide feed of session changes (`sessions/watch`).
-- JSON Schema and TypeScript types generated from `weave-host-protocol`, for the
-  Capacitor app.
 - `--continue` choosing the latest session in the directory across agents, since the Host
   now knows them.
 - Disconnecting local clients that fall behind, as WebSocket clients are.

@@ -17,6 +17,7 @@ use crate::devices::NewDevice;
 pub type ClientId = String;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "host/hello", response = HelloResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct HelloRequest {
@@ -29,6 +30,7 @@ pub struct HelloRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
     /// What the client is, such as `weave-tui`.
@@ -38,6 +40,7 @@ pub struct ClientInfo {
 
 /// How a connection authenticates.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "method", rename_all = "camelCase")]
 pub enum Auth {
     /// The socket's peer is the Host's own user. Only on the Unix socket and in-process.
@@ -58,6 +61,7 @@ pub enum Auth {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
     /// The client can run an agent's sign-in command in a terminal on the Host's computer.
@@ -70,6 +74,7 @@ pub struct ClientCapabilities {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HelloResponse {
     /// The version this connection speaks: the highest both ends do.
@@ -86,6 +91,7 @@ pub struct HelloResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HostInfo {
     /// The Host's own id, which stays the same across restarts, so clients tell Hosts apart.
@@ -98,6 +104,7 @@ pub struct HostInfo {
 
 /// Which ACP payloads to expect.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AcpInfo {
     /// The ACP protocol version the Host speaks to agents.
@@ -110,10 +117,12 @@ pub struct AcpInfo {
 /// `host/challenge`: what a paired device signs in its `host/hello`. Only on the WebSocket,
 /// before hello.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "host/challenge", response = ChallengeResponse)]
 pub struct ChallengeRequest {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ChallengeResponse {
     /// The Host's id, which the device checks is the Host it paired with.

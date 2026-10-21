@@ -1,9 +1,9 @@
 //! `weave pair` and `weave devices`: pairing the person's other devices with the weave Host,
 //! listing them, and revoking them. Paired devices' remote clients reach the Host through
-//! Tailscale Serve (`tui/docs/specs/wve-90-remote-clients.md`).
+//! Tailscale Serve, whose entry the Host makes when pairing turns remote access on
+//! (`tui/docs/specs/wve-90-remote-clients.md`, ADR 0016).
 
 use std::io::IsTerminal as _;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -15,24 +15,19 @@ use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::errors;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::StatusRequest;
 
-use crate::config::Config;
 use crate::daemon;
 use crate::daemon::ago;
 use crate::daemon::now_ms;
-use crate::tailscale;
 
 #[derive(Args)]
 pub struct PairArgs {
     /// The name the device gets, instead of the one it gives.
     #[arg(long)]
     name: Option<String>,
-
-    /// Config file. Defaults to ~/.config/weave/config.toml.
-    #[arg(long)]
-    config: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -61,37 +56,9 @@ struct RevokeArgs {
     device_id: String,
 }
 
-/// `weave pair`: show a code a device pairs with, and wait for it.
+/// `weave pair`: show a code a device pairs with, and wait for it. The offer turns the
+/// Host's remote access on, Tailscale Serve entry and all (ADR 0016).
 pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
-    let config = Config::load(args.config.as_deref())?;
-    let Some(remote) = config.remote else {
-        bail!(
-            "remote clients are off: add a [remote] section to the config, then restart the \
-             Host with `weave daemon restart`"
-        );
-    };
-    let listen = remote.listen()?;
-    let serve = match tailscale::serve_status() {
-        Ok(status) => tailscale::entry_for(&status, listen),
-        Err(error) if remote.url.is_some() => {
-            tracing::debug!(error = %format!("{error:#}"), "Tailscale Serve unread");
-            None
-        }
-        Err(error) => return Err(error),
-    };
-    if serve.as_ref().is_some_and(|entry| entry.funnel) {
-        bail!(
-            "Tailscale Funnel puts the Host's WebSocket on the internet; remote clients are for \
-             your tailnet only. Turn Funnel off for it, then pair"
-        );
-    }
-    let Some(url) = remote.url.or(serve.map(|entry| entry.url)) else {
-        bail!(
-            "no Tailscale Serve entry forwards to {listen}; make one with `{}`",
-            tailscale::serve_command(listen)
-        );
-    };
-
     let paths = daemon::paths()?;
     let transport = daemon::open(&paths).await?;
     let (connection, mut events) = HostConnection::connect(
@@ -100,7 +67,7 @@ pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
         daemon::capabilities("weave-cli"),
     )
     .await?;
-    let result = offer(&connection, &mut events, &url, args.name).await;
+    let result = offer(&connection, &mut events, args.name).await;
     connection.shutdown().await;
     result
 }
@@ -108,17 +75,21 @@ pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
 async fn offer(
     connection: &HostConnection,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
-    url: &str,
     name: Option<String>,
 ) -> anyhow::Result<()> {
     let status = connection.send(StatusRequest {}).await?;
-    if status.remote.is_none() {
+    let offer = match connection.send(OfferDeviceRequest { name }).await {
+        Ok(offer) => offer,
+        Err(error) if errors::is(&error, errors::REMOTE_UNAVAILABLE) => bail!("{}", error.message),
+        Err(error) => return Err(error.into()),
+    };
+    let Some(url) = offer.url else {
         bail!(
-            "the weave Host isn't listening for remote clients; restart it to read [remote]: \
-             `weave daemon restart`"
+            "the running weave Host is older than this weave and can't turn remote access on; \
+             restart it with `weave daemon restart`"
         );
-    }
-    let offer = connection.send(OfferDeviceRequest { name }).await?;
+    };
+    let url = url.as_str();
     println!("{}\n", qr_code(&pairing_link(url, &offer.code))?);
     println!(
         "Scan this with the device, or enter:\n  Host  {url}\n  Code  {}\n\nThe code works \

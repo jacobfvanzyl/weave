@@ -16,6 +16,7 @@ pub const CLIPBOARD_WRITE: &str = "clipboard_write";
 
 /// A tool in the Host's catalog, as agents see it in `tools/list`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ClientTool {
     pub name: String,
@@ -47,6 +48,7 @@ pub fn catalog() -> Vec<ClientTool> {
 /// A client's answer to a client tool call: MCP's `CallToolResult`, which the agent gets as it
 /// is.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ClientToolResult {
     /// MCP content blocks, such as `{"type": "text", "text": "…"}`.

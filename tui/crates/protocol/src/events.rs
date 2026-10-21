@@ -24,6 +24,7 @@ use crate::sessions::TurnOrigin;
 
 /// `session/event`: one journaled event, in order.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "session/event")]
 #[serde(rename_all = "camelCase")]
 pub struct SessionEventNotification {
@@ -36,6 +37,7 @@ pub struct SessionEventNotification {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -105,6 +107,7 @@ pub enum SessionEvent {
 
 /// `session/changed`: what changed about the session, as `SessionState` describes it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "session/changed")]
 #[serde(rename_all = "camelCase")]
 pub struct SessionChangedNotification {
@@ -121,6 +124,7 @@ pub struct SessionChangedNotification {
 
 /// `session/elicitationCompleted`: an accepted URL elicitation's external step finished.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "session/elicitationCompleted")]
 #[serde(rename_all = "camelCase")]
 pub struct ElicitationCompletedNotification {

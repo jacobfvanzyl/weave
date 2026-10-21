@@ -4,7 +4,8 @@
 //! in `host/hello` ([`crate::devices`]); `local` is never accepted on it.
 //!
 //! One JSON-RPC message per text frame, through the ACP SDK's [`Lines`]. The upgrade must ask
-//! for the `weave-host` subprotocol and carry no `Origin`, or one the configuration allows.
+//! for the `weave-host` subprotocol and carry no `Origin`, the app's, or one the configuration
+//! allows.
 //! The Host pings every 20 seconds and closes a connection that doesn't answer by the next
 //! ping, one that proves no device within 30 seconds, and one with more than 8 MiB waiting
 //! to be sent, which then reconnects and attaches after its position. See `tui/docs/specs/wve-90-remote-clients.md`.
@@ -25,6 +26,7 @@ use std::time::Duration;
 use agent_client_protocol::Lines;
 use futures::SinkExt as _;
 use futures::StreamExt as _;
+use futures::future::BoxFuture;
 use futures::stream::SplitSink;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -41,6 +43,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use weave_host_protocol::Timestamp;
+use weave_host_protocol::websocket::APP_ORIGIN;
 use weave_host_protocol::websocket::CLOSE_BEHIND;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_host_protocol::websocket::MAX_MESSAGE;
@@ -137,31 +140,42 @@ fn base64_url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Accept WebSocket clients on `listener` until the Host stops.
-pub(crate) async fn serve(shared: Arc<Shared>, listener: TcpListener, config: RemoteConfig) {
-    let config = Arc::new(config);
-    let mut stop = shared.stop.subscribe();
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => {
-                    let shared = Arc::clone(&shared);
-                    let config = Arc::clone(&config);
-                    tokio::spawn(async move { connection(shared, stream, config).await });
-                }
-                Err(error) => tracing::warn!(%error, "accepting a WebSocket client failed"),
-            },
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    break;
+/// Accept remote clients on `listener` until `stop_serving` is cancelled or the Host stops.
+///
+/// Its future is boxed and declared `Send`: a client connection can turn remote access on,
+/// which serves more connections, and the compiler can't infer `Send` around that cycle.
+pub(crate) fn serve(
+    shared: Arc<Shared>,
+    listener: TcpListener,
+    config: RemoteConfig,
+    stop_serving: CancellationToken,
+) -> BoxFuture<'static, ()> {
+    Box::pin(async move {
+        let config = Arc::new(config);
+        let mut stop = shared.stop.subscribe();
+        loop {
+            tokio::select! {
+                () = stop_serving.cancelled() => break,
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _)) => {
+                        let shared = Arc::clone(&shared);
+                        let config = Arc::clone(&config);
+                        tokio::spawn(async move { connection(shared, stream, config).await });
+                    }
+                    Err(error) => tracing::warn!(%error, "accepting a WebSocket client failed"),
+                },
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() {
+                        break;
+                    }
                 }
             }
         }
-    }
+    })
 }
 
 /// Whether an upgrade may go ahead: it asks for the subprotocol, and its `Origin`, if any, is
-/// allowed.
+/// the app's ([`APP_ORIGIN`]) or one the configuration allows.
 fn admit(request: &Request, origins: &[String]) -> Result<(), (StatusCode, &'static str)> {
     let asks = request
         .headers()
@@ -180,7 +194,7 @@ fn admit(request: &Request, origins: &[String]) -> Result<(), (StatusCode, &'sta
         None => Ok(()),
         Some(origin) => {
             let origin = origin.to_str().unwrap_or_default();
-            if origins.iter().any(|allowed| allowed == origin) {
+            if origin == APP_ORIGIN || origins.iter().any(|allowed| allowed == origin) {
                 Ok(())
             } else {
                 Err((

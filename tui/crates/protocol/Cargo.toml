@@ -11,12 +11,21 @@ name = "weave_host_protocol"
 [lints]
 workspace = true
 
+[features]
+# JSON Schema for every type on the wire, the ACP payloads included, for clients in other
+# languages. `tests/schema.rs` keeps it.
+schema = ["dep:schemars", "agent-client-protocol/schemars"]
+
 [dependencies]
 agent-client-protocol = { workspace = true }
+schemars = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The tests check the schema, so they build with it.
+weave-host-protocol = { path = ".", features = ["schema"] }
+schemars = { workspace = true }
 insta = { workspace = true, features = ["json"] }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -26,6 +26,7 @@ pub fn auth_message(host_id: &str, device_id: &str, nonce: &str) -> String {
 /// A P-256 public key as a JWK: `x` and `y` are its coordinates, 32 bytes each, in unpadded
 /// base64url.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Jwk {
     /// `EC`.
     pub kty: String,
@@ -37,6 +38,7 @@ pub struct Jwk {
 
 /// A device pairing, as it introduces itself.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct NewDevice {
     /// What the person calls it, such as "Jaco's iPad". An offer made with a name uses that
@@ -47,6 +49,7 @@ pub struct NewDevice {
 
 /// Which device a connection is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DeviceInfo {
     pub id: DeviceId,
     pub name: String,
@@ -54,6 +57,7 @@ pub struct DeviceInfo {
 
 /// A paired device, as `devices/list` shows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Device {
     pub id: DeviceId,
@@ -68,6 +72,7 @@ pub struct Device {
 
 /// `devices/offer`: a one-time code a device pairs with, good for five minutes.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "devices/offer", response = OfferDeviceResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct OfferDeviceRequest {
@@ -77,15 +82,21 @@ pub struct OfferDeviceRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct OfferDeviceResponse {
     /// 128 random bits in Crockford base32.
     pub code: String,
     pub expires_at: Timestamp,
+    /// What devices connect to: the Host's Tailscale Serve URL, or `[remote] url`. Offering
+    /// turns remote access on, so a Host gives one whenever it serves remote clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// `devices/paired`: a device took the offer this connection made.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "devices/paired")]
 pub struct DevicePairedNotification {
     pub device: Device,
@@ -93,16 +104,19 @@ pub struct DevicePairedNotification {
 
 /// `devices/list`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "devices/list", response = ListDevicesResponse)]
 pub struct ListDevicesRequest {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ListDevicesResponse {
     pub devices: Vec<Device>,
 }
 
 /// `devices/revoke`: forget a device and close its connections. It has to pair again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "devices/revoke", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct RevokeDeviceRequest {

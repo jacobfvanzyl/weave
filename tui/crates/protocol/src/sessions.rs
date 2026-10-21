@@ -36,6 +36,7 @@ pub type JournalId = String;
 
 /// An event's place in a session's journal: where a client catches up after.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct JournalPosition {
     pub journal: JournalId,
@@ -44,6 +45,7 @@ pub struct JournalPosition {
 
 /// Where a session's journal is up to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct JournalHead {
     pub id: JournalId,
@@ -52,6 +54,7 @@ pub struct JournalHead {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SessionStatus {
     /// The Host holds it and its agent runs.
@@ -64,6 +67,7 @@ pub enum SessionStatus {
 
 /// What an open session is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum Activity {
     Idle,
@@ -74,6 +78,7 @@ pub enum Activity {
 
 /// The agent a session runs with.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAgent {
     pub id: AgentId,
@@ -87,6 +92,7 @@ pub struct SessionAgent {
 
 /// Who started a turn.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum TurnOrigin {
     /// A client's prompt: its name, and its connection, so it knows its own prompts. A
@@ -103,6 +109,7 @@ pub enum TurnOrigin {
 
 /// A turn running now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RunningTurn {
     /// The session it runs in: the root or a subagent session.
@@ -113,6 +120,7 @@ pub struct RunningTurn {
 
 /// An open session as a client attached to it sees it; notifications keep it up to date.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SessionState {
     pub session_id: SessionId,
@@ -153,6 +161,7 @@ pub struct SessionState {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SessionListing {
     /// As ACP lists it: id, directory, title, last update.
@@ -175,6 +184,7 @@ pub struct SessionListing {
 /// agents, most recently active first. With one: that agent's, the Host's own in `cwd` first,
 /// then the agent's own listing, paged by its cursor. Blank sessions are never listed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "sessions/list", response = ListSessionsResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct ListSessionsRequest {
@@ -187,6 +197,7 @@ pub struct ListSessionsRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ListSessionsResponse {
     pub sessions: Vec<SessionListing>,
@@ -196,6 +207,7 @@ pub struct ListSessionsResponse {
 
 /// `session/create`: start a session and attach to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/create", response = SessionState)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
@@ -217,6 +229,7 @@ pub struct CreateSessionRequest {
 /// `session/attach`: attach to a session, opening it first if it isn't open. The session's
 /// events after `after` follow the response, then live ones.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/attach", response = AttachSessionResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachSessionRequest {
@@ -235,6 +248,7 @@ pub struct AttachSessionRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AttachSessionResponse {
     #[serde(flatten)]
@@ -244,6 +258,7 @@ pub struct AttachSessionResponse {
 
 /// The events that follow an attach response before live ones.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Replay {
     /// The first position sent.
@@ -254,6 +269,7 @@ pub struct Replay {
 
 /// When detaching closes the session.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum CloseWhen {
     #[default]
@@ -264,6 +280,7 @@ pub enum CloseWhen {
 
 /// `session/detach`: stop receiving the session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/detach", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct DetachSessionRequest {
@@ -274,6 +291,7 @@ pub struct DetachSessionRequest {
 
 /// `session/close`: close the session for everyone, ending its turn and stopping its agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/close", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct CloseSessionRequest {
@@ -282,6 +300,7 @@ pub struct CloseSessionRequest {
 
 /// `session/delete`: close it if open, delete it in the agent, and remove its journal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/delete", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteSessionRequest {
@@ -293,6 +312,7 @@ pub struct DeleteSessionRequest {
 
 /// `session/setMode`. The change reaches every attached client as an ACP update.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/setMode", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct SetModeRequest {
@@ -302,6 +322,7 @@ pub struct SetModeRequest {
 
 /// `session/setConfigOption`. The change reaches every attached client as an ACP update.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/setConfigOption", response = SetSessionConfigOptionResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct SetConfigOptionRequest {
@@ -318,6 +339,7 @@ pub struct SetConfigOptionRequest {
 /// can't take the session up, the old one does again, and the event says why. Anything that
 /// lived only in the old process, such as its background commands, ends with it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/reopen", response = ReopenSessionResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct ReopenSessionRequest {
@@ -325,6 +347,7 @@ pub struct ReopenSessionRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ReopenSessionResponse {
     /// The version the session's agent runs now.
@@ -335,6 +358,7 @@ pub struct ReopenSessionResponse {
 /// `session/run`: open a session (this one, or a new one) and start a turn in it, without
 /// the client having to stay.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "session/run", response = RunResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
@@ -355,6 +379,7 @@ pub struct RunRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RunResponse {
     pub session_id: SessionId,

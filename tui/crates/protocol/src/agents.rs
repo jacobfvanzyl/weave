@@ -18,6 +18,7 @@ use crate::Empty;
 pub type AgentId = String;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSummary {
     pub id: AgentId,
@@ -34,6 +35,7 @@ pub struct AgentSummary {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum AgentSource {
     Preset,
@@ -43,6 +45,7 @@ pub enum AgentSource {
 
 /// `agents/list`: presets and configured agents, and registry agents when asked.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "agents/list", response = ListAgentsResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct ListAgentsRequest {
@@ -54,6 +57,7 @@ pub struct ListAgentsRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ListAgentsResponse {
     pub agents: Vec<AgentSummary>,
@@ -63,6 +67,7 @@ pub struct ListAgentsResponse {
 
 /// `agents/get`: what the agent says about itself, starting it to ask if need be.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "agents/get", response = GetAgentResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAgentRequest {
@@ -70,6 +75,7 @@ pub struct GetAgentRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct GetAgentResponse {
     pub agent: AgentSummary,
@@ -79,6 +85,7 @@ pub struct GetAgentResponse {
 /// `agents/authenticate`: ACP `authenticate` with one of the agent's methods. A terminal
 /// method fails with [`crate::errors::REQUIRES_TERMINAL`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "agents/authenticate", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthenticateAgentRequest {
@@ -90,6 +97,7 @@ pub struct AuthenticateAgentRequest {
 /// terminal sign-in method. The Host stops its idle processes for the agent, so the next
 /// ones start signed in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "agents/terminalSignIn", response = TerminalSignInResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalSignInRequest {
@@ -98,6 +106,7 @@ pub struct TerminalSignInRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalSignInResponse {
     pub command: String,
@@ -110,6 +119,7 @@ pub struct TerminalSignInResponse {
 
 /// `agents/logout`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "agents/logout", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct LogoutAgentRequest {
@@ -124,6 +134,7 @@ pub const UPDATES_FEATURE: &str = "agents/updates";
 /// A version of an agent the Host launches and can update: a preset's npm package, or an ACP
 /// registry agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRelease {
     /// As people know it: the preset's package, or the registry agent's name.
@@ -133,6 +144,7 @@ pub struct AgentRelease {
 
 /// A newer version of a session's agent than the one it runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentUpdate {
     pub agent_id: AgentId,
@@ -146,6 +158,7 @@ pub struct AgentUpdate {
 /// `agents/updateAvailable`: a newer version of an attached session's agent is out. The Host
 /// looks when a session opens, at most once an hour for each agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "agents/updateAvailable")]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAvailableNotification {
@@ -159,6 +172,7 @@ pub struct UpdateAvailableNotification {
 /// move over with `session/reopen`. A version that doesn't start changes nothing. Local
 /// clients only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "agents/update", response = UpdateAgentResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAgentRequest {
@@ -166,6 +180,7 @@ pub struct UpdateAgentRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAgentResponse {
     /// The version the agent's new sessions launch now: the newest, or the one already there.

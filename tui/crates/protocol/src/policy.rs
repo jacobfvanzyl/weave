@@ -16,6 +16,7 @@ use serde::Serialize;
 
 /// How a session's permission requests are answered.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionPolicy {
     /// Tool kinds approved without asking anyone.
@@ -28,6 +29,7 @@ pub struct PermissionPolicy {
 
 /// What happens to permission requests a policy doesn't approve.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Unapproved {
     /// Ask the attached clients, and wait for one if none is attached.

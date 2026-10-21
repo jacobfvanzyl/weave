@@ -42,7 +42,7 @@ crate, pinned exactly because 3.x is new.
 | Crate | Owns |
 | --- | --- |
 | `crates/acp-core` | Agent launch, the ACP connection, client-side handlers, protocol trace. No UI. |
-| `crates/protocol` | The Host protocol's wire types, roles, error codes and versions, with golden snapshots, and the permission policy. No I/O. |
+| `crates/protocol` | The Host protocol's wire types, roles, error codes and versions, with golden snapshots, the JSON Schema the app's TypeScript comes from (`tests/schema.rs`, feature `schema`), and the permission policy. No I/O. |
 | `crates/agents` | Which agents there are and how to launch them: config, presets, the ACP registry, the login shell's environment. |
 | `crates/daemon` | The weave Host: client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, and the WebSocket and paired devices of remote clients. No UI. |
 | `crates/host-client` | A client of the Host: hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials. |
@@ -73,7 +73,8 @@ during a turn Enter steers it when the Host and the agent can (`ChatWidget::can_
 agent's slash commands) and queues otherwise, and Tab always queues, as in Codex;
 `/new`, `/reload`, `/subagents` and `/update` are the TUI's own slash commands, offered with
 the agent's and handled locally (`/reload` ends the TUI and the CLI execs its own binary again
-with `--resume`; `/update`, in `updates.rs`, runs `agents/update` and then `session/reopen`,
+with `--resume`; `/update`, in `updates.rs`, runs `agents/update` and then `session/reopen`, or opens a new
+session in place of a blank one,
 and `/update dismiss` hides a version's notice, kept in `$XDG_STATE_HOME/weave/updates.json`). The app follows the active session's journal position (`app.rs`): an attach's
 answer arrives in order ahead of its replay, events up to the journal head it gave are
 replayed history (no notifications, no turn state), and the TUI's own prompts are known by
@@ -131,7 +132,8 @@ sessions of an older one, which tell their clients (`agents/updateAvailable`,
 launcher; `session/reopen` has the session's task swap its agent process for one of the
 current version once no turn runs or request waits, taking the session up through ACP resume
 or load, journaling `agentReopened`, and going back to the old version when the new one
-can't (`crates/daemon/tests/updates.rs`). An ACP `initialize` from a client of the old protocol is answered with
+can't (`crates/daemon/tests/updates.rs`); a blank session it refuses, since the agent may have
+kept nothing of it to take up. An ACP `initialize` from a client of the old protocol is answered with
 the protocol version, so it reloads into the current weave. Host tests
 (`crates/daemon/tests/daemon.rs`) run in-process with fake agents sharing one state file,
 named in a test config.
@@ -159,12 +161,15 @@ it with `Tui::try_copy`. Host tests (`crates/daemon/tests/daemon.rs`) give the f
 in-process bridge (`StdioMcp`) that runs the same `relay` to the Host's real socket, and a
 Host whose agents take MCP over ACP (`daemon_over_acp`).
 
-Remote clients (WVE-90, ADR 0010, spec `docs/specs/wve-90-remote-clients.md`) reach the Host
-over a WebSocket (`websocket.rs`) that listens on loopback only, with Tailscale Serve the way
-in from the tailnet. Loopback counts for nothing: every WebSocket connection proves a paired
-device at hello, signing its `host/challenge` with a P-256 key, or pairs with a code
-`weave pair` offered (`devices.rs`, which keeps the Host's id and the devices' public keys in
-`devices.json`, 0600, and offers in memory). A remote client can do what a local one can,
+Remote clients (WVE-90, ADRs 0010 and 0016, spec `docs/specs/wve-90-remote-clients.md`) reach
+the Host over a WebSocket (`websocket.rs`) that listens on loopback only, with Tailscale Serve
+the way in from the tailnet. Pairing turns that on (`remote.rs`): a `devices/offer` has the
+Host listen and make its own Serve entry (`tailscale.rs`, through the `tailscale` command), and
+both stay on while any device is paired, across restarts, until the last is revoked. Loopback
+counts for nothing: every WebSocket connection proves a paired device at hello, signing its
+`host/challenge` with a P-256 key, or pairs with a code `weave pair` offered (`devices.rs`,
+which keeps the Host's id and the devices' public keys in `devices.json`, 0600, and offers in
+memory). A remote client can do what a local one can,
 except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`
 (`forbidden`). The Host
 pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent, which
@@ -214,8 +219,8 @@ signs in through the Host (`agents/authenticate`, or `agents/terminalSignIn` and
 run in this terminal), then retries.
 Agents and MCP servers come from `~/.config/weave/config.toml` (read from `tui.toml` while only
 that exists; see `crates/agents/src/config.rs`), whose `[tui]` and `[daemon]` are the CLI's
-(`crates/cli/src/config.rs`), as is `[remote]`, which `weave daemon run` reads to serve
-remote clients (a restart picks up a change).
+(`crates/cli/src/config.rs`), as is `[remote]`, optional overrides for remote access (port, URL,
+other origins) that `weave daemon run` reads (a restart picks up a change).
 
 ```bash
 ./target/debug/weave run --approve read,edit "fix the tests" --agent <id>   # headless, in the Host

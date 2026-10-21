@@ -325,8 +325,8 @@ pub struct ChatWidget {
     disconnected: bool,
     /// Waiting for the weave Host to come back.
     reconnecting: bool,
-    /// Said once the session reopened after reconnecting.
-    reconnected_note: bool,
+    /// Said once the next session opens, as when a new one took the place of one left.
+    opened_note: Option<String>,
     quit_armed_until: Option<Instant>,
     /// The active session has a conversation worth reopening later.
     resumable: bool,
@@ -459,7 +459,7 @@ impl ChatWidget {
             title: None,
             disconnected: false,
             reconnecting: false,
-            reconnected_note: false,
+            opened_note: None,
             quit_armed_until: None,
             resumable: false,
             copied: None,
@@ -652,8 +652,8 @@ impl ChatWidget {
         for notice in &opened.notices {
             self.push_cell(TranscriptCell::error(notice));
         }
-        if std::mem::take(&mut self.reconnected_note) {
-            self.push_cell(TranscriptCell::info("Reconnected to the weave Host"));
+        if let Some(note) = self.opened_note.take() {
+            self.push_cell(TranscriptCell::info(&note));
         }
     }
 
@@ -679,6 +679,7 @@ impl ChatWidget {
         previous: Option<SessionId>,
     ) -> Vec<AppCommand> {
         self.opening = false;
+        self.opened_note = None;
         if let Some(stashed) = self.stashed.take()
             && previous.as_ref() == Some(&stashed.session_id)
         {
@@ -796,7 +797,7 @@ impl ChatWidget {
         self.disconnected = false;
         self.reconnecting = false;
         if self.blank_session().is_some() {
-            self.reconnected_note = true;
+            self.opened_note = Some("Reconnected to the weave Host".to_owned());
             return vec![AppCommand::OpenSession {
                 target: SessionTarget::New,
                 title: None,
@@ -924,6 +925,20 @@ impl ChatWidget {
                 task.name
             ));
             return Vec::new();
+        }
+        // The agent may have kept nothing of a session nothing was sent in, so there's nothing
+        // to move: a new session on the new version takes its place, and it closes.
+        if self.blank_session().is_some() {
+            self.opened_note = Some(format!(
+                "Started a new session on {} {version}: nothing had been sent in the last one, \
+                 so there was nothing to move",
+                task.name
+            ));
+            return vec![AppCommand::OpenSession {
+                target: SessionTarget::New,
+                title: None,
+                cwd: None,
+            }];
         }
         let when = if self.turn.is_some() {
             " once this turn ends"
@@ -5816,6 +5831,14 @@ mod tests {
             .collect();
         let mut chat = chat().with_updates(true, dismissed);
         chat.set_release(Some(release("0.86.0")));
+        // A session with a conversation, which the agent can take up again.
+        chat.session_ready(OpenedSession {
+            session_id: "s1".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Loaded),
+            notices: Vec::new(),
+        });
         chat
     }
 
@@ -5926,6 +5949,34 @@ mod tests {
         );
         assert!(said(&mut chat).contains("Couldn't move the session"));
         assert!(!chat.is_animating());
+    }
+
+    #[test]
+    fn slash_update_starts_a_new_session_in_place_of_a_blank_one() {
+        let mut chat = chat().with_updates(true, BTreeMap::new());
+        chat.set_release(Some(release("0.86.0")));
+        submit(&mut chat, "/update");
+        assert_eq!(
+            chat.agent_updated(Ok("0.93.0".into())),
+            [AppCommand::OpenSession {
+                target: SessionTarget::New,
+                title: None,
+                cwd: None,
+            }]
+        );
+        assert!(!chat.is_animating());
+        chat.session_ready(OpenedSession {
+            session_id: "s2".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: None,
+            notices: Vec::new(),
+        });
+        let shown = said(&mut chat);
+        assert!(
+            shown.contains("Started a new session on claude-agent-acp 0.93.0"),
+            "{shown}"
+        );
     }
 
     #[test]

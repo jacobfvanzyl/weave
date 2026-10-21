@@ -14,6 +14,7 @@ use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::Role as _;
 use futures::StreamExt as _;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_tungstenite::tungstenite::Message;
@@ -28,6 +29,8 @@ use weave_daemon::DaemonConfig;
 use weave_daemon::Launch;
 use weave_daemon::Launcher;
 use weave_daemon::RemoteConfig;
+use weave_daemon::RemoteSettings;
+use weave_daemon::Serve;
 use weave_daemon::Withheld;
 use weave_fake_agent::FakeAgentConfig;
 use weave_host_client::ConnectError;
@@ -60,6 +63,7 @@ use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::turns::StartTurnRequest;
+use weave_host_protocol::websocket::APP_ORIGIN;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_host_protocol::websocket::SUBPROTOCOL;
@@ -82,6 +86,22 @@ impl World {
     }
 
     fn daemon(&self) -> Daemon {
+        Daemon::new(self.config())
+    }
+
+    /// A Host whose remote access pairing turns on, with `serve` for its Serve entry.
+    fn daemon_with_remote(&self, serve: Arc<FakeServe>, offer_lifetime: Duration) -> Daemon {
+        let mut settings = RemoteSettings::new(serve);
+        settings.listen = "127.0.0.1:0".parse().expect("an address");
+        settings.offer_lifetime = offer_lifetime;
+        settings.serve_retry = Duration::from_millis(50);
+        Daemon::new(DaemonConfig {
+            remote: Some(settings),
+            ..self.config()
+        })
+    }
+
+    fn config(&self) -> DaemonConfig {
         let state: PathBuf = self.dir.path().join("agent-state.json");
         let launcher: Launcher = Arc::new(move |_launch: &Launch, options: ClientOptions, _| {
             let config = FakeAgentConfig {
@@ -96,7 +116,7 @@ impl World {
                     .map_err(|error| Error::internal_error().data(error.to_string()))
             })
         });
-        Daemon::new(DaemonConfig {
+        DaemonConfig {
             journals: None,
             idle_grace: Duration::from_secs(60),
             blank_grace: Duration::from_secs(60),
@@ -112,7 +132,66 @@ impl World {
             upstream: Arc::new(weave_agents::update::Offline),
             mcp_socket: None,
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
+            remote: None,
+        }
+    }
+}
+
+/// A Tailscale Serve that records what the Host asks of it, and hands out `ws://` URLs.
+#[derive(Default)]
+struct FakeServe {
+    calls: std::sync::Mutex<Vec<String>>,
+    /// Why `ensure` fails, while it should.
+    refuse: std::sync::Mutex<Option<String>>,
+}
+
+impl FakeServe {
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("calls").clone()
+    }
+
+    fn refuse(&self, why: Option<&str>) {
+        *self.refuse.lock().expect("refuse") = why.map(str::to_owned);
+    }
+}
+
+impl Serve for FakeServe {
+    fn ensure(&self, listen: SocketAddr) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            self.calls.lock().expect("calls").push("ensure".to_owned());
+            match self.refuse.lock().expect("refuse").clone() {
+                Some(why) => Err(why),
+                None => Ok(format!("ws://{listen}")),
+            }
         })
+    }
+
+    fn remove(&self, _listen: SocketAddr) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            self.calls.lock().expect("calls").push("remove".to_owned());
+            Ok(())
+        })
+    }
+}
+
+/// Where the Host's WebSocket listens, as `host/status` says, while remote access is on.
+async fn remote_address(local: &HostConnection) -> Option<String> {
+    local
+        .send(StatusRequest {})
+        .await
+        .expect("host/status")
+        .remote
+}
+
+/// Wait until nothing listens at `address` any more.
+async fn closed(address: &str) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while tokio::net::TcpStream::connect(address).await.is_ok() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{address} still listens"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -536,7 +615,7 @@ async fn upgrades_need_the_subprotocol_and_an_allowed_origin() {
     let url = listen(
         &daemon,
         RemoteConfig {
-            origins: vec!["capacitor://localhost".to_owned()],
+            origins: vec!["https://allowed.example.com".to_owned()],
             ..RemoteConfig::default()
         },
     )
@@ -549,14 +628,20 @@ async fn upgrades_need_the_subprotocol_and_an_allowed_origin() {
         Some(403)
     );
     assert!(upgrade(&url, Some(SUBPROTOCOL), None).await.is_ok());
+    // The app's origin needs no config (ADR 0016); others need listing.
     assert!(
         upgrade(
             &url,
             Some(&format!("other, {SUBPROTOCOL}")),
-            Some("capacitor://localhost")
+            Some(APP_ORIGIN)
         )
         .await
         .is_ok()
+    );
+    assert!(
+        upgrade(&url, Some(SUBPROTOCOL), Some("https://allowed.example.com"))
+            .await
+            .is_ok()
     );
 }
 
@@ -639,4 +724,139 @@ async fn a_client_that_stops_answering_pings_is_closed() {
     .await;
     assert!(ended.is_ok(), "the Host closed it");
     let _ = silent.close(None).await;
+}
+
+#[tokio::test]
+async fn pairing_turns_remote_access_on_and_the_last_revoke_turns_it_off() {
+    let world = World::new();
+    let serve = Arc::new(FakeServe::default());
+    let daemon = world.daemon_with_remote(Arc::clone(&serve), Duration::from_secs(300));
+    let (local, _events) = local(&daemon).await;
+    assert_eq!(
+        remote_address(&local).await,
+        None,
+        "nothing listens before pairing"
+    );
+    assert!(serve.calls().is_empty());
+
+    let offer = local
+        .send(OfferDeviceRequest { name: None })
+        .await
+        .expect("devices/offer");
+    let address = remote_address(&local).await.expect("listening");
+    assert_eq!(offer.url, Some(format!("ws://{address}")));
+    assert_eq!(serve.calls(), ["ensure"]);
+
+    let url = offer.url.expect("a URL");
+    let (connected, _) = remote(
+        &url,
+        Credentials::Pair {
+            code: offer.code,
+            name: "iPad".to_owned(),
+            key: DeviceKey::generate(),
+        },
+    )
+    .await;
+    let (connection, _) = connected.expect("paired");
+    let first = connection.hello().device.clone().expect("a device");
+    connection.shutdown().await;
+    let (second, _) = pair(&local, &url, "iPhone").await;
+    assert_eq!(serve.calls(), ["ensure"], "one entry, made once");
+
+    local
+        .send(RevokeDeviceRequest {
+            device_id: first.id,
+        })
+        .await
+        .expect("revoked");
+    assert!(
+        remote_address(&local).await.is_some(),
+        "a device is still paired"
+    );
+    local
+        .send(RevokeDeviceRequest {
+            device_id: second.id,
+        })
+        .await
+        .expect("revoked");
+    assert_eq!(remote_address(&local).await, None);
+    assert_eq!(serve.calls(), ["ensure", "remove"]);
+    closed(&address).await;
+}
+
+#[tokio::test]
+async fn an_offer_nobody_takes_turns_remote_access_off_again() {
+    let world = World::new();
+    let serve = Arc::new(FakeServe::default());
+    let daemon = world.daemon_with_remote(Arc::clone(&serve), Duration::from_millis(200));
+    let (local, _events) = local(&daemon).await;
+    local
+        .send(OfferDeviceRequest { name: None })
+        .await
+        .expect("devices/offer");
+    let address = remote_address(&local).await.expect("listening");
+    closed(&address).await;
+    assert_eq!(remote_address(&local).await, None);
+    assert_eq!(serve.calls(), ["ensure", "remove"]);
+}
+
+#[tokio::test]
+async fn an_offer_fails_when_serve_cannot_reach_the_host() {
+    let world = World::new();
+    let serve = Arc::new(FakeServe::default());
+    serve.refuse(Some(
+        "Serve is off for your tailnet; turn it on at https://login.tailscale.com/f/serve",
+    ));
+    let daemon = world.daemon_with_remote(Arc::clone(&serve), Duration::from_secs(300));
+    let (local, _events) = local(&daemon).await;
+    let error = local
+        .send(OfferDeviceRequest { name: None })
+        .await
+        .expect_err("no offer");
+    assert!(errors::is(&error, errors::REMOTE_UNAVAILABLE));
+    assert!(
+        error
+            .message
+            .contains("https://login.tailscale.com/f/serve")
+    );
+    assert_eq!(remote_address(&local).await, None, "nothing left listening");
+    assert_eq!(serve.calls(), ["ensure", "remove"]);
+}
+
+#[tokio::test]
+async fn a_host_with_paired_devices_turns_remote_access_back_on() {
+    let world = World::new();
+    let first_serve = Arc::new(FakeServe::default());
+    let first = world.daemon_with_remote(first_serve, Duration::from_secs(300));
+    let (first_local, _events) = local(&first).await;
+    let offer = first_local
+        .send(OfferDeviceRequest { name: None })
+        .await
+        .expect("devices/offer");
+    let (paired, key) = pair(&first_local, &offer.url.expect("a URL"), "iPad").await;
+
+    // A later Host, from the same devices.json, as after a restart, with Serve not ready yet.
+    let serve = Arc::new(FakeServe::default());
+    serve.refuse(Some("Tailscale isn't running"));
+    let daemon = world.daemon_with_remote(Arc::clone(&serve), Duration::from_secs(300));
+    daemon.resume_remote().await;
+    let (local, _events) = local(&daemon).await;
+    let address = remote_address(&local).await.expect("listening again");
+    assert_eq!(serve.calls(), ["ensure"]);
+
+    // It listens meanwhile, and tries the Serve entry again until it's there.
+    let url = format!("ws://{address}");
+    let (connected, _) = remote(&url, device(&paired, &key, None)).await;
+    connected.expect("the device connects").0.shutdown().await;
+    serve.refuse(None);
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while serve.calls().len() < 2 {
+        assert!(tokio::time::Instant::now() < deadline, "tried again");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let offer = local
+        .send(OfferDeviceRequest { name: None })
+        .await
+        .expect("devices/offer");
+    assert_eq!(offer.url, Some(url));
 }

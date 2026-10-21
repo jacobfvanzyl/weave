@@ -439,6 +439,7 @@ fn devices() {
         round_trip(&OfferDeviceResponse {
             code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
             expires_at: 1_760_180_300_000,
+            url: Some("wss://mac.example.ts.net:7341".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
