@@ -1,11 +1,13 @@
 import { useRef, useState, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, ComputerIcon, Folder01Icon, Search01Icon, ViewIcon, ViewOffIcon } from '@hugeicons/core-free-icons';
+import { Add01Icon, ComputerIcon, Delete02Icon, Folder01Icon, Search01Icon, StopIcon, ViewIcon, ViewOffIcon } from '@hugeicons/core-free-icons';
 import type { AppController, PairedHost, SessionSummary } from '@/app/app-controller';
 import { type DirectoryGroup, sessionListView } from '@/app/session-list';
 import { ActivityIndicator } from '@/components/activity-indicator';
+import { DeleteSessionDialog } from '@/components/delete-session-dialog';
 import { type NewSessionTarget, NewSessionDialog } from '@/components/new-session-dialog';
 import { Badge } from '@/components/ui/badge';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { Button } from '@/components/ui/button';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import {
@@ -32,41 +34,64 @@ export const sinceLabel = (at: number | undefined, now = Date.now()) => {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 };
 
-function SessionRow({ session, host, selected, unread, showDirectory, onOpen }: {
+/**
+ * One session in the list. A long press, or a right-click, offers Close for an open session and
+ * Delete for any, so an old one goes without being opened again.
+ */
+function SessionRow({ session, host, selected, unread, showDirectory, onOpen, actions }: {
   session: SessionSummary;
   host?: PairedHost;
   selected: boolean;
   unread: boolean;
   showDirectory: boolean;
   onOpen(): void;
+  actions: AppController['actions'];
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const closed = session.state === 'closed';
   const unreachable = host !== undefined && host.status !== 'connected';
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton
-        size='lg'
-        isActive={selected}
-        aria-current={selected ? 'page' : undefined}
-        className={cn('h-auto min-h-12 items-start py-2', closed && 'opacity-60')}
-        data-state-session={session.state}
-        onClick={onOpen}
-      >
-        <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
-          <span className='flex min-w-0 items-center gap-2'>
-            <span className='truncate font-medium text-sidebar-foreground'>{session.title || 'New session'}</span>
-            <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(session.lastActivityAt)}</span>
-          </span>
-          <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
-            <ActivityIndicator activity={session.activity} unread={unread} />
-            <span className='shrink-0'>{session.agentName}</span>
-            {showDirectory && <span className='truncate'>· {directoryName(session.cwd)}</span>}
-            {session.headless && <Badge variant='outline'>headless</Badge>}
-            {closed && <span>closed</span>}
-            {unreachable && <span>· Host unreachable</span>}
-          </span>
-        </span>
-      </SidebarMenuButton>
+      <ContextMenu>
+        <ContextMenuTrigger className='[-webkit-touch-callout:none]'>
+          <SidebarMenuButton
+            size='lg'
+            isActive={selected}
+            aria-current={selected ? 'page' : undefined}
+            className={cn('h-auto min-h-12 items-start py-2', closed && 'opacity-60')}
+            data-state-session={session.state}
+            onClick={onOpen}
+          >
+            <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
+              <span className='flex min-w-0 items-center gap-2'>
+                <span className='truncate font-medium text-sidebar-foreground'>{session.title || 'New session'}</span>
+                <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(session.lastActivityAt)}</span>
+              </span>
+              <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
+                <ActivityIndicator activity={session.activity} unread={unread} />
+                <span className='shrink-0'>{session.agentName}</span>
+                {showDirectory && <span className='truncate'>· {directoryName(session.cwd)}</span>}
+                {session.headless && <Badge variant='outline'>headless</Badge>}
+                {closed && <span>closed</span>}
+                {unreachable && <span>· Host unreachable</span>}
+              </span>
+            </span>
+          </SidebarMenuButton>
+        </ContextMenuTrigger>
+        <ContextMenuContent aria-label={`${session.title || 'New session'} actions`}>
+          {session.state === 'open' && (
+            <ContextMenuItem disabled={unreachable} onClick={() => void actions.closeSession(session.key)}>
+              <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
+              Close session
+            </ContextMenuItem>
+          )}
+          <ContextMenuItem variant='destructive' disabled={unreachable} onClick={() => setConfirmDelete(true)}>
+            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            Delete session…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <DeleteSessionDialog session={session} actions={actions} open={confirmDelete} onOpenChange={setConfirmDelete} />
     </SidebarMenuItem>
   );
 }
@@ -144,6 +169,7 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
       unread={model.unread.has(session.key)}
       showDirectory={showDirectory}
       onOpen={() => open(session.key)}
+      actions={actions}
     />
   );
 

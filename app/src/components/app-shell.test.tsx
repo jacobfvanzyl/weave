@@ -26,6 +26,28 @@ describe('the session list', () => {
     expect(screen.getAllByRole('img', { name: 'Waiting for you' }).length).toBeGreaterThan(0);
   });
 
+  it('closes or deletes a session from its row, without opening it', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    const row = () => screen.queryByRole('button', { name: /^Steer handling in the TUI/ });
+    await user.pointer({ keys: '[MouseRight]', target: row()! });
+    const menu = await screen.findByRole('menu');
+    await user.click(within(menu).getByRole('menuitem', { name: 'Close session' }));
+    expect(row()).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Steer handling in the TUI' })).not.toBeInTheDocument();
+
+    // Closed, it offers only Delete, confirmed.
+    await user.click(screen.getByRole('button', { name: 'Show closed' }));
+    await user.pointer({ keys: '[MouseRight]', target: row()! });
+    const closedMenu = await screen.findByRole('menu');
+    expect(within(closedMenu).queryByRole('menuitem', { name: 'Close session' })).not.toBeInTheDocument();
+    await user.click(within(closedMenu).getByRole('menuitem', { name: 'Delete session…' }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Delete Steer handling in the TUI?' });
+    await user.click(within(confirm).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(row()).not.toBeInTheDocument());
+  });
+
   it('hides closed sessions until asked', async () => {
     setIdiom('phone');
     const user = userEvent.setup();

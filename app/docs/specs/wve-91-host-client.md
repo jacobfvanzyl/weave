@@ -36,7 +36,12 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   it was last active, and whether it is headless. A session whose turn ended since the person
   last looked at it is marked until they open it; the app keeps that per device.
 - **Closed sessions** are hidden. A "Show closed" filter shows them in their directories,
-  dimmed. Opening one opens it again in its agent.
+  dimmed. Opening one opens it again in its agent. A session a stopped Host left suspended
+  closes once nobody takes it up within the idle grace of the Host starting (WVE-120).
+- **A row's menu.** A long press, or a right-click, on a row offers Close session for an open
+  one and Delete session, confirmed, for any, so an old session goes without being opened (and
+  resumed in its agent) first. The Host forgets a deleted session even when its agent can't
+  delete it.
 - **Filtering.** A field filters the list by title, directory and agent.
 - **New sessions.** A directory's heading starts a session in that directory with a chosen
   agent. "New session" asks for the Host (with more than one), the directory (one of the

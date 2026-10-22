@@ -5,17 +5,8 @@ import type { AgentUpdateNotice, AppController, OpenSession, PairedHost, Session
 import { allSubagents, findSubagent, sessionLabel, waitsForAnswer } from '@/chat/acp-transcript';
 import { ChatPane } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
+import { DeleteSessionDialog } from '@/components/delete-session-dialog';
 import { PathLabel } from '@/components/path-label';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -84,7 +75,6 @@ function RenameDialog({ session, actions, open, onOpenChange }: {
 function SessionMenu({ session, actions, canRename }: { session: SessionSummary; actions: AppController['actions']; canRename?: boolean }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
-  const name = session.title || 'this session';
   return (
     <>
       <DropdownMenu>
@@ -111,20 +101,7 @@ function SessionMenu({ session, actions, canRename }: { session: SessionSummary;
         </DropdownMenuContent>
       </DropdownMenu>
       <RenameDialog session={session} actions={actions} open={renaming} onOpenChange={setRenaming} />
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The agent and the Host forget it, on every device. Its turn stops if one is running.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant='destructive' onClick={() => void actions.deleteSession(session.key)}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteSessionDialog session={session} actions={actions} open={confirmDelete} onOpenChange={setConfirmDelete} />
     </>
   );
 }
