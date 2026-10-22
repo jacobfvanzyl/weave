@@ -4,6 +4,7 @@
 
 #![allow(clippy::expect_used)]
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -196,6 +197,20 @@ impl World {
             false,
         );
         config.launcher = fake_agents_with(self.dir.path().join("agent-state.json"), false, true);
+        Daemon::new(config)
+    }
+
+    /// A Host with journals whose agents advertise nothing optional, deleting sessions included.
+    fn daemon_minimal(&self) -> Daemon {
+        let mut config = self.config(
+            true,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.launcher = fake_agents_tuned(self.dir.path().join("agent-state.json"), |config| {
+            config.minimal = true;
+        });
         Daemon::new(config)
     }
 
@@ -1151,6 +1166,104 @@ async fn sessions_a_stopped_host_left_open_stop_leading_the_list_after_the_idle_
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.user, "first");
+}
+
+#[tokio::test]
+async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_the_grace() {
+    let world = World::new();
+    let (unclaimed, claimed) = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let unclaimed = client.create(&world).await;
+        client.prompt(&unclaimed, "first").await;
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        let claimed = client.create(&world).await;
+        client.prompt(&claimed, "second").await;
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        daemon.shutdown().await;
+        (unclaimed, claimed)
+    };
+    let journal = world.journals().join(format!("{unclaimed}.jsonl"));
+    let age = || {
+        std::fs::metadata(&journal)
+            .and_then(|metadata| metadata.modified())
+            .expect("the journal's age")
+    };
+    let left = age();
+    let host_wide = async |client: &TestClient| {
+        client
+            .connection
+            .send(ListSessionsRequest {
+                agent_id: None,
+                cwd: None,
+                cursor: None,
+            })
+            .await
+            .expect("sessions/list")
+            .sessions
+            .into_iter()
+            .map(|listing| (listing.info.session_id, listing.state))
+            .collect::<HashMap<_, _>>()
+    };
+
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut watcher = world.client(&daemon).await;
+    let listed = watcher.watch().await;
+    assert!(
+        listed
+            .iter()
+            .all(|listing| listing.state == SessionStatus::Suspended)
+    );
+    // A client takes one up within the grace, as the TUI does after a restart...
+    let mut client = world.client(&daemon).await;
+    client.attach(&claimed).await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+
+    // ...and once the grace has passed, the other closes, keeping its age.
+    daemon.close_unclaimed();
+    watcher
+        .changes_until(|change| {
+            matches!(change, Change::Updated(listing)
+                if listing.info.session_id == unclaimed && listing.state == SessionStatus::Closed)
+        })
+        .await;
+    let states = host_wide(&client).await;
+    assert_eq!(states[&unclaimed], SessionStatus::Closed);
+    assert_eq!(states[&claimed], SessionStatus::Open);
+    assert_eq!(age(), left);
+
+    // A later Host finds it closed, and it still opens again, in a new journal.
+    daemon.shutdown().await;
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    assert_eq!(host_wide(&client).await[&unclaimed], SessionStatus::Closed);
+    assert!(client.attach(&unclaimed).await.replay.reset);
+}
+
+#[tokio::test]
+async fn deleting_a_session_its_agent_cant_delete_still_forgets_it_in_the_host() {
+    let world = World::new();
+    let daemon = world.daemon_minimal();
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "hello").await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    let mut watcher = world.client(&daemon).await;
+    watcher.watch().await;
+    assert!(world.has_journal(&session_id));
+
+    client
+        .connection
+        .send(DeleteSessionRequest {
+            session_id: session_id.clone(),
+            agent_id: None,
+        })
+        .await
+        .expect("session/delete");
+    assert!(!world.has_journal(&session_id));
+    watcher
+        .changes_until(|change| *change == Change::Removed(session_id.clone()))
+        .await;
 }
 
 #[tokio::test]

@@ -568,6 +568,32 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
     ))
 }
 
+/// End the journal a stopped Host left open for `session_id` as closed, its session not
+/// running: nobody took it up. It keeps the time it was last written to, which is its
+/// session's last activity and what pruning goes by.
+pub(crate) fn close(dir: &Path, session_id: &SessionId, reason: &str) -> io::Result<()> {
+    let path = path_for(dir, session_id);
+    let modified = std::fs::metadata(&path)?.modified()?;
+    let records = read(&path)?;
+    if is_closed(&records) {
+        return Ok(());
+    }
+    let mut journal = Journal::reopen(&path, records)?;
+    journal.append(Entry::Closed {
+        reason: reason.to_owned(),
+        at_ms: now_ms(),
+    });
+    journal.flush();
+    if journal.failed_at.is_some() {
+        return Err(io::Error::other("the closing record couldn't be written"));
+    }
+    drop(journal);
+    OpenOptions::new()
+        .write(true)
+        .open(&path)?
+        .set_modified(modified)
+}
+
 /// Whether the session the journal records was closed, rather than left by a Host that
 /// stopped.
 pub(crate) fn is_closed(records: &[Record]) -> bool {
@@ -753,6 +779,38 @@ mod tests {
         assert!(recorded.closed);
         let index = index(dir.path());
         assert_eq!(index.get(&SessionId::new("s/1")), Some(&recorded));
+    }
+
+    #[test]
+    fn a_journal_left_open_closes_once_keeping_its_age() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let id = SessionId::new("s1");
+        let mut journal = Journal::create(dir.path(), &id, header("s1")).expect("create");
+        journal.append(Entry::Notice {
+            text: "hello".into(),
+        });
+        drop(journal);
+        let path = path_for(dir.path(), &id);
+        let age = || {
+            std::fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .expect("its age")
+        };
+        let left = SystemTime::now() - Duration::from_secs(3 * 24 * 60 * 60);
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open")
+            .set_modified(left)
+            .expect("age it");
+
+        close(dir.path(), &id, "nobody took it up").expect("close");
+        close(dir.path(), &id, "nobody took it up").expect("closing again changes nothing");
+        let records = read(&path).expect("read");
+        assert_eq!(records.len(), 3);
+        assert!(is_closed(&records));
+        assert_eq!(age(), left);
+        assert!(recorded(dir.path(), &id).expect("recorded").closed);
     }
 
     /// Journals from before records were timed, prompts kept with their turn, and answers

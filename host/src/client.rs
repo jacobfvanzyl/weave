@@ -1270,7 +1270,17 @@ impl Connection {
             .shared
             .agent_handle(&agent, &cwd, interactive(agent.options))
             .await?;
-        handle.delete_session(session_id.clone()).await?;
+        // An agent that can't delete sessions keeps its own history; the Host forgets it anyway.
+        let agent_deletes = handle.agent().is_some_and(|agent| {
+            agent
+                .agent_capabilities
+                .session_capabilities
+                .delete
+                .is_some()
+        });
+        if agent_deletes {
+            handle.delete_session(session_id.clone()).await?;
+        }
         self.shared.registry().known.remove(&session_id);
         if let Some(dir) = &self.shared.config.journals {
             let _ = std::fs::remove_file(journal::path_for(dir, &session_id));
@@ -1651,6 +1661,8 @@ async fn reopen(
     policy: PermissionPolicy,
     replay: bool,
 ) -> Result<SessionHandle, (Error, Option<Instance>)> {
+    // Nothing closes the journal while it's taken up (`Daemon::close_unclaimed`).
+    let _taking_up = TakingUp::new(shared, &session_id);
     let recovered = recoverable(shared, &session_id);
     let capabilities = instance
         .init()
@@ -1745,6 +1757,28 @@ async fn reopen(
 }
 
 /// The journal a stopped Host left for `session_id` while it was open.
+/// A session being taken up from its journal, until dropped.
+struct TakingUp<'a> {
+    shared: &'a Shared,
+    session_id: SessionId,
+}
+
+impl<'a> TakingUp<'a> {
+    fn new(shared: &'a Shared, session_id: &SessionId) -> Self {
+        shared.registry().taking_up.insert(session_id.clone());
+        Self {
+            shared,
+            session_id: session_id.clone(),
+        }
+    }
+}
+
+impl Drop for TakingUp<'_> {
+    fn drop(&mut self) {
+        self.shared.registry().taking_up.remove(&self.session_id);
+    }
+}
+
 fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<journal::Record>)> {
     let path = journal::path_for(shared.config.journals.as_ref()?, session_id);
     let records = journal::read(&path).ok()?;

@@ -43,6 +43,7 @@ mod websocket;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -79,6 +80,7 @@ use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionRemovedNotification;
+use weave_host_protocol::sessions::SessionUpdatedNotification;
 
 use crate::instance::Instance;
 pub use crate::instance::Launch;
@@ -105,6 +107,8 @@ pub const DEFAULT_BLANK_GRACE: Duration = Duration::from_secs(60);
 const SPARE_GRACE: Duration = Duration::from_secs(60);
 /// Journals untouched for this long are removed when a Host starts, and while it runs.
 const JOURNAL_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+/// Why a session a stopped Host left suspended was closed.
+const UNCLAIMED: &str = "nobody took it up after the Host restarted";
 /// How often a running Host prunes journals.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// How long stopping waits for each session's agent.
@@ -591,6 +595,9 @@ pub(crate) struct Registry {
     next_spare: u64,
     /// Clients connected now.
     pub(crate) clients: usize,
+    /// Sessions being taken up from their journals now. Nothing else writes those journals
+    /// meanwhile.
+    pub(crate) taking_up: HashSet<SessionId>,
 }
 
 impl Registry {
@@ -666,6 +673,10 @@ impl Daemon {
         // Starting pruned already.
         let mut prunes =
             tokio::time::interval_at(tokio::time::Instant::now() + PRUNE_INTERVAL, PRUNE_INTERVAL);
+        // Sessions a stopped Host left suspended have the idle grace to be taken up.
+        let unclaimed = tokio::time::sleep(self.shared.config.idle_grace);
+        tokio::pin!(unclaimed);
+        let mut unclaimed_closed = false;
         let mut idle_since: Option<Instant> = None;
         loop {
             tokio::select! {
@@ -697,6 +708,10 @@ impl Daemon {
                     }
                 }
                 _ = prunes.tick() => self.prune(),
+                () = &mut unclaimed, if !unclaimed_closed => {
+                    unclaimed_closed = true;
+                    self.close_unclaimed();
+                }
                 _ = checks.tick(), if idle_exit.is_some() => {
                     let quiet = {
                         let registry = self.shared.registry();
@@ -754,6 +769,47 @@ impl Daemon {
         for session_id in pruned {
             self.shared
                 .tell_watchers(&SessionRemovedNotification { session_id });
+        }
+    }
+
+    /// Close the sessions a stopped Host left suspended that nobody has taken up since this
+    /// one started: [`Self::serve`] does so once the idle grace has passed, as it would have
+    /// closed them had it kept running. Their journals end closed, keeping their age, and
+    /// watchers hear of it. They can still be opened again from their agents' histories.
+    pub fn close_unclaimed(&self) {
+        let Some(journals) = &self.shared.config.journals else {
+            return;
+        };
+        let mut closed = Vec::new();
+        {
+            let mut registry = self.shared.registry();
+            let unclaimed: Vec<SessionId> = registry
+                .known
+                .iter()
+                .filter(|(session_id, recorded)| {
+                    !recorded.closed
+                        && !registry.sessions.contains_key(*session_id)
+                        && !registry.taking_up.contains(*session_id)
+                })
+                .map(|(session_id, _)| session_id.clone())
+                .collect();
+            for session_id in unclaimed {
+                if let Err(error) = journal::close(journals, &session_id, UNCLAIMED) {
+                    tracing::warn!(%error, %session_id, "couldn't close a suspended session");
+                    continue;
+                }
+                if let Some(recorded) = registry.known.get_mut(&session_id) {
+                    recorded.closed = true;
+                    if let Some(agent_id) = recorded.agent_id() {
+                        closed.push(client::dormant(&session_id, agent_id, recorded));
+                    }
+                }
+            }
+        }
+        for session in closed {
+            tracing::info!(session_id = %session.info.session_id, "closed a suspended session nobody took up");
+            self.shared
+                .tell_watchers(&SessionUpdatedNotification { session });
         }
     }
 

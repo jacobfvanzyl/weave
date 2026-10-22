@@ -299,7 +299,7 @@ go into the parent's journal.
 | State | Meaning | Becomes |
 | --- | --- | --- |
 | open | The Host holds it and its agent runs. | closed when nothing needs it for the idle grace (30 minutes; a minute for a blank session), when it's closed, or when its agent exits; suspended when the Host stops |
-| suspended | It was open when its Host stopped. Its journal is still open. | open when a client attaches or runs a turn in it |
+| suspended | It was open when its Host stopped. Its journal is still open. | open when a client attaches or runs a turn in it; closed, its journal ending closed, when nothing takes it up within the idle grace of the next Host starting |
 | closed | The Host no longer holds it. | open again when a client attaches, if the agent can resume or load it |
 
 A session is needed while a client is attached to it, a turn runs in it, or a pending
@@ -442,8 +442,9 @@ one), so a new session takes its place. `version` is what the session runs now.
 
 **`session/delete`** `{sessionId, agentId?}` → `{}`
 
-Closes the session if it's open, deletes it in the agent (ACP `session/delete`), and
-removes its journal. `agentId` is required when the Host has no record of the session.
+Closes the session if it's open, deletes it in the agent (ACP `session/delete`) when the agent
+can, and removes its journal; an agent that can't keeps its own history of it. `agentId` is
+required when the Host has no record of the session.
 
 **`session/setMode`** `{sessionId, modeId}` → `{}`
 
@@ -885,6 +886,8 @@ New, in-process with fake agents:
 - agents run from the config, in the session's directory, with the layered environment;
   environment capture falls back when the shell times out;
 - a suspended session resumes when attached, with its interrupted turn ended as cancelled;
+  one nobody takes up within the idle grace closes, keeping its journal's age, and opens again
+  in a new journal (WVE-120);
 - golden fixtures match for every message type.
 
 TUI: `ChatWidget` tests cover answering pending requests through the Host, requests
