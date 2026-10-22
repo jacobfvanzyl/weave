@@ -101,4 +101,10 @@ pub enum ChatEvent {
     /// Something the Host tells the session's clients, such as why its agent can't use client
     /// tools.
     Notice(String),
+    /// The session was renamed through the Host. `by` says who, to start a sentence: "You",
+    /// "The agent", or another client or its device.
+    Renamed {
+        title: String,
+        by: String,
+    },
 }

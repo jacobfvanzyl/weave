@@ -46,6 +46,8 @@ use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::RENAME_FEATURE;
+use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionRequest;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionState;
@@ -191,6 +193,8 @@ enum AppEvent {
     AgentUpdated(Result<String, Error>),
     /// The Host's answer to `session/reopen`.
     SessionReopened(SessionId, Result<(), Error>),
+    /// `/rename` failed; a rename that worked shows as its `renamed` event.
+    RenameFailed(Error),
 }
 
 /// Why a session is being opened, for when the Host answers.
@@ -242,6 +246,11 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .features
         .iter()
         .any(|feature| feature == UPDATES_FEATURE);
+    let renamable = connection
+        .hello()
+        .features
+        .iter()
+        .any(|feature| feature == RENAME_FEATURE);
     let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
     // The session works where the Host says, and so does this client.
@@ -253,6 +262,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .with_vim(vim)
         .with_detach(detachable)
         .with_updates(updatable, dismissed.versions().clone())
+        .with_rename(renamable)
         .with_thumbnails(tui.shows_images());
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
@@ -441,8 +451,11 @@ impl App {
                 commands.shrink_to_fit();
                 commands
             }
-            // The TUI makes no pairing offers.
-            HostEvent::Changed(_) | HostEvent::DevicePaired(_) => Vec::new(),
+            // The TUI makes no pairing offers, and watches no sessions.
+            HostEvent::Changed(_)
+            | HostEvent::DevicePaired(_)
+            | HostEvent::SessionUpdated(_)
+            | HostEvent::SessionRemoved(_) => Vec::new(),
             HostEvent::UpdateAvailable(notification) => {
                 if chat.active_session() == Some(&notification.session_id) {
                     chat.update_available(notification.update);
@@ -561,6 +574,17 @@ impl App {
                 reason,
             },
             SessionEvent::Notice { text } => ChatEvent::Notice(text),
+            SessionEvent::Renamed { title, by } => ChatEvent::Renamed {
+                title,
+                by: match by {
+                    None => "The agent".to_owned(),
+                    Some(TurnOrigin::Client { id, .. }) if id == *self.handle.client_id() => {
+                        "You".to_owned()
+                    }
+                    Some(TurnOrigin::Client { name, device, .. }) => device.unwrap_or(name),
+                    Some(TurnOrigin::Run {}) => "A headless run".to_owned(),
+                },
+            },
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
         };
         chat.handle_agent_event(event)
@@ -788,6 +812,15 @@ impl App {
                 chat.session_reopened(&session_id, result);
                 Vec::new()
             }
+            AppEvent::RenameFailed(error) => {
+                let why = error
+                    .data
+                    .as_ref()
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| error.message.clone(), str::to_owned);
+                chat.report_info(&format!("Couldn't rename the session: {why}"));
+                Vec::new()
+            }
         }
     }
 
@@ -974,6 +1007,13 @@ impl App {
                             .await
                             .map(drop);
                         AppEvent::SessionReopened(session_id, result)
+                    });
+                }
+                AppCommand::Rename { session_id, title } => {
+                    let handle = self.handle.clone();
+                    self.spawn_unless_ok(async move {
+                        let request = RenameSessionRequest { session_id, title };
+                        handle.send(request).await.err().map(AppEvent::RenameFailed)
                     });
                 }
                 AppCommand::DismissUpdate { agent_id, version } => {

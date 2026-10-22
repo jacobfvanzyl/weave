@@ -138,6 +138,8 @@ const QUIT_WINDOW: Duration = Duration::from_secs(2);
 const NEW_COMMAND: &str = "new";
 /// The slash command that restarts the TUI in place, handled here too.
 const RELOAD_COMMAND: &str = "reload";
+/// The slash command that renames the session through the Host, in place of any the agent has.
+const RENAME_COMMAND: &str = "rename";
 
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
@@ -153,6 +155,11 @@ pub enum AppCommand {
     Cancel,
     /// `session/cancel` for a subagent's current work, which it lets the client stop.
     CancelSubagent(SessionId),
+    /// `session/rename`; it shows as the session's `renamed` event.
+    Rename {
+        session_id: SessionId,
+        title: String,
+    },
     /// Change a session setting; the result comes back through [`ChatWidget::setting_changed`].
     ChangeSetting(SettingChange),
     /// `session/list`; the result comes back through [`ChatWidget::sessions_listed`].
@@ -369,6 +376,8 @@ pub struct ChatWidget {
     parent_label: Option<String>,
     /// Whether the Host updates agents (`agents/updates`), so `/update` is offered.
     updatable: bool,
+    /// The Host renames sessions (`session/rename`), so `/rename` is this client's.
+    renamable: bool,
     /// The version of the agent the active session runs.
     release: Option<AgentRelease>,
     /// A newer one, once the Host has found it.
@@ -482,6 +491,7 @@ impl ChatWidget {
             messages: Vec::new(),
             parent_label: None,
             updatable: false,
+            renamable: false,
             release: None,
             available: None,
             dismissed: BTreeMap::new(),
@@ -491,6 +501,13 @@ impl ChatWidget {
 
     /// The Host updates agents, so offer `/update`; `dismissed` are the versions whose notice
     /// the user hid, by agent id.
+    /// Take `/rename` here, through the Host, when it renames sessions.
+    pub fn with_rename(mut self, renamable: bool) -> Self {
+        self.renamable = renamable;
+        self.offer_own_commands();
+        self
+    }
+
     pub fn with_updates(mut self, updatable: bool, dismissed: BTreeMap<String, String>) -> Self {
         self.updatable = updatable;
         self.dismissed = dismissed;
@@ -858,6 +875,21 @@ impl ChatWidget {
     }
 
     /// `/update`, or `/update dismiss`.
+    /// `/rename <title>`: the session's title for every client, through the Host.
+    fn slash_rename(&mut self, title: &str) -> Vec<AppCommand> {
+        let Some(session_id) = self.active_session.clone() else {
+            return Vec::new();
+        };
+        if title.is_empty() {
+            self.report_info("/rename takes the new title: /rename Fix the parser");
+            return Vec::new();
+        }
+        vec![AppCommand::Rename {
+            session_id,
+            title: title.to_owned(),
+        }]
+    }
+
     fn slash_update(&mut self, argument: &str) -> Vec<AppCommand> {
         if argument == updates::DISMISS {
             let Some(update) = self.available.clone() else {
@@ -1286,6 +1318,13 @@ impl ChatWidget {
                 self.push_cell(TranscriptCell::error(&text));
                 Vec::new()
             }
+            ChatEvent::Renamed { title, by } => {
+                self.push_cell(TranscriptCell::info(&format!(
+                    "{by} renamed this session to “{title}”"
+                )));
+                self.title = Some(title);
+                Vec::new()
+            }
         }
     }
 
@@ -1448,9 +1487,9 @@ impl ChatWidget {
         count(self)
     }
 
-    /// Offer `/new`, `/reload` and `/update`, which this client handles rather than sending them: first
-    /// in the list, and in place of any of the agent's commands with those names, as Codex's
-    /// built-ins are.
+    /// Offer `/new`, `/reload`, `/rename` and `/update`, which this client handles rather than
+    /// sending them: first in the list, and in place of any of the agent's commands with those
+    /// names, as Codex's built-ins are.
     fn offer_own_commands(&mut self) {
         let mut own = vec![
             (NEW_COMMAND, "Start a new session in this directory"),
@@ -1459,6 +1498,12 @@ impl ChatWidget {
                 "Restart this TUI, picking up a rebuilt weave, and reattach",
             ),
         ];
+        if self.renamable {
+            own.push((
+                RENAME_COMMAND,
+                "Rename this session, for every client of the weave Host",
+            ));
+        }
         if self.updatable {
             own.push((updates::COMMAND, updates::COMMAND_DESCRIPTION));
         }
@@ -2781,6 +2826,15 @@ impl ChatWidget {
                     .filter(|rest| rest.is_empty() || rest.starts_with(' '))
             {
                 return self.slash_update(argument.trim());
+            }
+            if self.renamable
+                && let Some(title) = text
+                    .trim()
+                    .strip_prefix('/')
+                    .and_then(|rest| rest.strip_prefix(RENAME_COMMAND))
+                    .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+            {
+                return self.slash_rename(title.trim());
             }
             // A new session here, as the picker's `n` opens; a turn still running in the one
             // left carries on in the weave Host.
@@ -5858,6 +5912,64 @@ mod tests {
             failed: failed.map(str::to_owned),
             replayed,
         }
+    }
+
+    #[test]
+    fn rename_goes_through_the_host_and_the_renamed_event_titles_the_session() {
+        let mut chat = chat().with_rename(true);
+        chat.session_ready(OpenedSession {
+            session_id: "s1".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: None,
+            notices: Vec::new(),
+        });
+        // The agent's own `/rename` gives way to this client's.
+        chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![AvailableCommand::new("rename", "The agent's own")]),
+        )));
+        let renames: Vec<_> = chat
+            .commands
+            .iter()
+            .filter(|command| command.name == "rename")
+            .map(|command| command.description.clone())
+            .collect();
+        assert_eq!(
+            renames,
+            ["Rename this session, for every client of the weave Host"]
+        );
+        assert_eq!(
+            submit(&mut chat, "/rename  Parser fixes "),
+            [AppCommand::Rename {
+                session_id: "s1".into(),
+                title: "Parser fixes".into(),
+            }]
+        );
+        assert!(submit(&mut chat, "/rename").is_empty());
+        assert!(said(&mut chat).contains("/rename takes the new title"));
+
+        chat.handle_agent_event(ChatEvent::Renamed {
+            title: "Parser fixes".into(),
+            by: "The agent".into(),
+        });
+        assert_eq!(chat.title.as_deref(), Some("Parser fixes"));
+        assert!(said(&mut chat).contains("The agent renamed this session to “Parser fixes”"));
+    }
+
+    #[test]
+    fn without_the_hosts_rename_the_agents_rename_goes_to_the_agent() {
+        let mut chat = chat();
+        chat.session_ready(OpenedSession {
+            session_id: "s1".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: None,
+            notices: Vec::new(),
+        });
+        assert_eq!(
+            submit(&mut chat, "/rename Parser fixes"),
+            [AppCommand::Prompt("/rename Parser fixes".into())]
+        );
     }
 
     #[test]

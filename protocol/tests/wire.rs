@@ -73,6 +73,10 @@ use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::SessionChangedNotification;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::files::FileEntry;
+use weave_host_protocol::files::FileKind;
+use weave_host_protocol::files::ListFilesRequest;
+use weave_host_protocol::files::ListFilesResponse;
 use weave_host_protocol::hello::AcpInfo;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::hello::ChallengeRequest;
@@ -106,6 +110,7 @@ use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::Replay;
@@ -114,15 +119,21 @@ use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::RunningTurn;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
+use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::UnwatchSessionsRequest;
+use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::sessions::WatchSessionsResponse;
 use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::catalog;
+use weave_host_protocol::tools::host_catalog;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::StartTurnResponse;
@@ -538,6 +549,27 @@ fn sessions() {
             next_cursor: Some("page-2".to_owned()),
         })
     );
+    insta::assert_json_snapshot!("watch_sessions_request", message(&WatchSessionsRequest {}));
+    insta::assert_json_snapshot!(
+        "watch_sessions_response",
+        round_trip(&WatchSessionsResponse {
+            sessions: vec![listing()],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "unwatch_sessions_request",
+        message(&UnwatchSessionsRequest {})
+    );
+    insta::assert_json_snapshot!(
+        "session_updated_notification",
+        message(&SessionUpdatedNotification { session: listing() })
+    );
+    insta::assert_json_snapshot!(
+        "session_removed_notification",
+        message(&SessionRemovedNotification {
+            session_id: "s-1".into(),
+        })
+    );
     insta::assert_json_snapshot!(
         "create_session_request",
         message(&CreateSessionRequest {
@@ -594,6 +626,13 @@ fn sessions() {
         })
     );
     insta::assert_json_snapshot!(
+        "rename_session_request",
+        message(&RenameSessionRequest {
+            session_id: "s-1".into(),
+            title: "Parser fixes".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
         "set_mode_request",
         message(&SetModeRequest {
             session_id: "s-1".into(),
@@ -626,6 +665,40 @@ fn sessions() {
         round_trip(&RunResponse {
             session_id: "s-2".into(),
             state: None,
+        })
+    );
+}
+
+#[test]
+fn files() {
+    insta::assert_json_snapshot!(
+        "list_files_request",
+        message(&ListFilesRequest {
+            path: Some("/Users/jaco/Projects".into()),
+            hidden: true,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "list_files_response",
+        round_trip(&ListFilesResponse {
+            path: "/Users/jaco/Projects".into(),
+            parent: Some("/Users/jaco".into()),
+            home: "/Users/jaco".into(),
+            entries: vec![
+                FileEntry {
+                    name: "weave".to_owned(),
+                    kind: FileKind::Directory,
+                },
+                FileEntry {
+                    name: "notes.md".to_owned(),
+                    kind: FileKind::File,
+                },
+                FileEntry {
+                    name: "socket".to_owned(),
+                    kind: FileKind::Other,
+                },
+            ],
+            truncated: false,
         })
     );
 }
@@ -707,6 +780,30 @@ fn events() {
                     id: "c9".to_owned(),
                     device: Some("Jaco's iPad".to_owned()),
                 },
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_renamed",
+        message(&event(
+            39,
+            SessionEvent::Renamed {
+                title: "Parser fixes".to_owned(),
+                by: Some(TurnOrigin::Client {
+                    name: "weave-app".to_owned(),
+                    id: "c9".to_owned(),
+                    device: Some("Jaco's iPad".to_owned()),
+                }),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_renamed_by_its_agent",
+        message(&event(
+            39,
+            SessionEvent::Renamed {
+                title: "Parser fixes".to_owned(),
+                by: None,
             },
         ))
     );
@@ -971,6 +1068,7 @@ fn pending_requests() {
 #[test]
 fn client_tools() {
     insta::assert_json_snapshot!("client_tool_catalog", round_trip(&catalog()));
+    insta::assert_json_snapshot!("host_tool_catalog", round_trip(&host_catalog()));
     insta::assert_json_snapshot!(
         "client_tool_error",
         round_trip(&ClientToolResult::error(
@@ -1017,4 +1115,8 @@ fn unknown_event_kinds_and_fields_are_tolerated() {
     }))
     .expect("unknown fields are ignored");
     assert_eq!(hello.capabilities, ClientCapabilities::default());
+
+    let entry: FileEntry = serde_json::from_value(json!({"name": "fifo", "kind": "namedPipe"}))
+        .expect("an unknown kind still parses");
+    assert_eq!(entry.kind, FileKind::Other);
 }

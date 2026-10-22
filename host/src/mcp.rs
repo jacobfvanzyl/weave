@@ -50,12 +50,14 @@ use weave_acp_core::schema::McpServer;
 use weave_acp_core::schema::McpServerAcp;
 use weave_acp_core::schema::McpServerStdio;
 use weave_acp_core::schema::SessionId;
-use weave_host_protocol::tools::ClientTool;
 use weave_host_protocol::tools::ClientToolResult;
+use weave_host_protocol::tools::RENAME_SESSION;
+use weave_host_protocol::tools::Tool;
 
 use crate::Shared;
 use crate::session::ClientToolCall;
 use crate::session::Command;
+use crate::session::SessionHandle;
 use crate::socket::Peer;
 
 /// The bridge's environment: where the Host's MCP socket is.
@@ -77,16 +79,22 @@ const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
 const PARSE_ERROR: i32 = -32700;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
-const INSTRUCTIONS: &str = "Tools that run on the device of the person who sent the current \
-                            turn. They fail when nobody is connected, as in a headless run.";
+const INSTRUCTIONS: &str = "Tools of the weave Host this session runs in. Client tools, such \
+                            as clipboard_write, run on the device of the person who sent the \
+                            current turn, and fail when nobody is connected, as in a headless \
+                            run. Host tools, such as rename_session, act on this session in the \
+                            Host and need nobody connected.";
 
 /// What a client is told when its session's agent can't use the server.
 pub(crate) const REFUSED: &str = "This agent's MCP client predates MCP 2026-07-28, so it can't \
-                                  use weave's client tools.";
+                                  use weave's tools.";
 
 /// One session setup's declaration of the server.
 struct Declared {
-    tools: Vec<ClientTool>,
+    /// What `tools/list` gives: the client tools, then the Host tools.
+    tools: Vec<Tool>,
+    /// Which of them the Host answers itself.
+    host_tools: Vec<String>,
     /// The session's id, once the agent has given it.
     session: watch::Sender<Option<SessionId>>,
     /// The agent spoke an MCP revision before 2026-07-28.
@@ -155,11 +163,13 @@ impl Mcp {
         Arc::new(Provider(Arc::downgrade(self)))
     }
 
-    /// Declare the server for one session setup, with `tools`: over ACP when the agent takes
-    /// that, otherwise as the stdio bridge. `Err` says why it can't be declared.
+    /// Declare the server for one session setup, with `client_tools` and `host_tools`: over ACP
+    /// when the agent takes that, otherwise as the stdio bridge. `Err` says why it can't be
+    /// declared.
     pub(crate) fn declare(
         self: &Arc<Self>,
-        tools: Vec<ClientTool>,
+        client_tools: Vec<Tool>,
+        host_tools: Vec<Tool>,
         capabilities: &McpCapabilities,
         bridge: &[String],
     ) -> Result<(McpServer, Binding), String> {
@@ -182,7 +192,8 @@ impl Mcp {
             )
         };
         let declared = Arc::new(Declared {
-            tools,
+            host_tools: host_tools.iter().map(|tool| tool.name.clone()).collect(),
+            tools: client_tools.into_iter().chain(host_tools).collect(),
             session: watch::Sender::new(None),
             refused: AtomicBool::new(false),
             told: AtomicBool::new(false),
@@ -334,7 +345,8 @@ impl Mcp {
         }
     }
 
-    /// `tools/call`: a pending request for the client that sent the running turn.
+    /// `tools/call`: a Host tool the Host answers, or a client tool, which is a pending request
+    /// for the client that sent the running turn.
     async fn call_tool(
         &self,
         declared: &Declared,
@@ -371,6 +383,9 @@ impl Mcp {
         let Some(session) = session else {
             return tool_result(ClientToolResult::error("The session isn't open."));
         };
+        if declared.host_tools.iter().any(|known| known == tool) {
+            return tool_result(host_tool(&session, tool, &arguments).await);
+        }
         let call = self.next_call.fetch_add(1, Ordering::Relaxed);
         let (reply, answered) = oneshot::channel();
         let sent = session.send(Command::ClientTool(ClientToolCall {
@@ -391,6 +406,39 @@ impl Mcp {
                 McpOutcome::Cancelled
             }
         }
+    }
+}
+
+/// A Host tool's answer for `session`: each does what a Host protocol method does, through the
+/// same code, for the calling session.
+async fn host_tool(
+    session: &SessionHandle,
+    tool: &str,
+    arguments: &Map<String, Value>,
+) -> ClientToolResult {
+    match tool {
+        RENAME_SESSION => {
+            let asked = arguments
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let title = match crate::session::title(asked) {
+                Ok(title) => title,
+                Err(why) => return ClientToolResult::error(format!("Not renamed: {why}.")),
+            };
+            let renamed = session
+                .finish(|done| Command::Rename {
+                    title: title.clone(),
+                    by: None,
+                    done,
+                })
+                .await;
+            match renamed {
+                Ok(()) => ClientToolResult::text(format!("Renamed this session to “{title}”.")),
+                Err(_) => ClientToolResult::error("The session has ended."),
+            }
+        }
+        _ => ClientToolResult::error(format!("The Host doesn't answer {tool}.")),
     }
 }
 

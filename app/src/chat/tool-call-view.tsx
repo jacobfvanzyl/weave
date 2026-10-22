@@ -11,6 +11,7 @@ import {
 import { useMemo } from 'react';
 import type { TranscriptToolCall } from './acp-transcript';
 import { ContentBlockView } from './content-block-view';
+import { requestEndText } from './pending-request';
 import { exitText, terminalText } from './terminal-text';
 import { useTranscriptContext } from './transcript-context';
 import { Badge } from '@/components/ui/badge';
@@ -104,6 +105,14 @@ function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
   );
 }
 
+/** How a permission request stopped waiting, as its tool call says. */
+const permissionOutcome = (permission: NonNullable<TranscriptToolCall['permission']>) => {
+  if (permission.status === 'pending') return undefined;
+  if (permission.status !== 'answered') return requestEndText[permission.status];
+  const chosen = permission.options.find(({ optionId }) => optionId === permission.selectedOptionId);
+  return chosen ? `You chose ${chosen.name}` : 'Answered';
+};
+
 export function ToolCallView({
   tool,
   onPermission,
@@ -139,6 +148,11 @@ export function ToolCallView({
             ))}
           </ConfirmationActions>
         </Confirmation>
+      )}
+      {permission && permission.status !== 'pending' && (
+        <p className="border-t px-3 py-1.5 text-[0.6875rem] text-muted-foreground" data-slot="permission-outcome">
+          {permissionOutcome(permission)}
+        </p>
       )}
     </Tool>
   );

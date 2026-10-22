@@ -35,6 +35,7 @@
 //!
 //! client_tools = ["clipboard_write"] # the client tools agents are offered; all when absent,
 //!                                     # [] for none; `[agents.<id>] client_tools` overrides it
+//! host_tools = ["rename_session"]     # the Host tools agents are offered, likewise
 //!
 //! [[mcp_servers]]            # stdio
 //! name = "files"
@@ -83,6 +84,8 @@ pub struct Config {
     pub mcp_servers: Vec<McpServerConfig>,
     /// The client tools the Host MCP server offers agents, by name: all of them when absent.
     pub client_tools: Option<Vec<String>>,
+    /// The Host tools the Host MCP server offers agents, by name: all of them when absent.
+    pub host_tools: Option<Vec<String>>,
     /// The TUI's section, for it to parse.
     #[serde(default)]
     pub tui: toml::Table,
@@ -122,6 +125,8 @@ pub struct AgentConfig {
     pub mode: Option<String>,
     /// The client tools this agent is offered, instead of the top-level `client_tools`.
     pub client_tools: Option<Vec<String>>,
+    /// The Host tools this agent is offered, instead of the top-level `host_tools`.
+    pub host_tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,6 +266,15 @@ impl Config {
             .get(id)
             .and_then(|agent| agent.client_tools.as_deref())
             .or(self.client_tools.as_deref())
+    }
+
+    /// The Host tools agent `id` is offered, by name: its own setting, else the top-level one;
+    /// `None` for all of them.
+    pub fn host_tools(&self, id: &str) -> Option<&[String]> {
+        self.agents
+            .get(id)
+            .and_then(|agent| agent.host_tools.as_deref())
+            .or(self.host_tools.as_deref())
     }
 
     /// The agent names the config and presets know, for error messages.
@@ -403,6 +417,24 @@ mod tests {
         assert_eq!(
             config.client_tools("codex"),
             Some(&["clipboard_write".to_owned()][..])
+        );
+    }
+
+    #[test]
+    fn host_tools_are_all_unless_set_and_an_agent_overrides_them() {
+        assert_eq!(parse("").host_tools("claude"), None);
+        let config = parse(
+            r#"
+            host_tools = []
+
+            [agents.codex]
+            host_tools = ["rename_session"]
+            "#,
+        );
+        assert_eq!(config.host_tools("claude"), Some(&[][..]));
+        assert_eq!(
+            config.host_tools("codex"),
+            Some(&["rename_session".to_owned()][..])
         );
     }
 

@@ -52,6 +52,7 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::files::ListFilesRequest;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::hello::ChallengeRequest;
 use weave_host_protocol::hello::ClientCapabilities;
@@ -62,6 +63,7 @@ use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::websocket::APP_ORIGIN;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
@@ -520,6 +522,21 @@ async fn remote_clients_do_everything_but_administer_the_host() {
         assert!(errors::is(&error, errors::FORBIDDEN), "{error}");
     }
     remote.send(StatusRequest {}).await.expect("host/status");
+    // Watching the Host's sessions isn't administering it.
+    let watched = remote
+        .send(WatchSessionsRequest {})
+        .await
+        .expect("sessions/watch");
+    assert_eq!(watched.sessions, Vec::new());
+    // Nor is listing a directory.
+    let listed = remote
+        .send(ListFilesRequest {
+            path: Some(world.dir.path().to_path_buf()),
+            hidden: false,
+        })
+        .await
+        .expect("files/list");
+    assert_eq!(listed.path, world.dir.path());
 
     // A session and a turn, whose origin names the device.
     let state = remote
@@ -548,6 +565,13 @@ async fn remote_clients_do_everything_but_administer_the_host() {
                 panic!("a client's turn");
             };
             assert_eq!(device.as_deref(), Some("Jaco's iPad"));
+            break;
+        }
+    }
+    // Prompted, the watched session appears.
+    loop {
+        if let HostEvent::SessionUpdated(updated) = next(&mut events).await {
+            assert_eq!(updated.session.info.session_id, state.session_id);
             break;
         }
     }

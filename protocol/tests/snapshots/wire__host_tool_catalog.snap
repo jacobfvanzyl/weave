@@ -1,0 +1,26 @@
+---
+source: protocol/tests/wire.rs
+expression: round_trip(&host_catalog())
+---
+[
+  {
+    "name": "rename_session",
+    "title": "Rename this session",
+    "description": "Give this session a new title: the name people see for it in their weave session lists, on every device. Use it when the person asks for a name, or when the work has moved on and the title misleads. Keep it short and specific. It doesn't change the title you keep yourself.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The new title, up to 200 characters.",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

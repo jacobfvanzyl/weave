@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RenameSessionRequest\n{ session_id: \"s-1\".into(), title: \"Parser fixes\".to_owned(), })"
+---
+{
+  "method": "session/rename",
+  "params": {
+    "sessionId": "s-1",
+    "title": "Parser fixes"
+  }
+}

@@ -1,8 +1,9 @@
 # WVE-91: The weave app, a Host client for iPad and iPhone
 
 Status: structure settled 2026-10-20 (WVE-99); connecting to Hosts 2026-10-20 (WVE-100); the
-whole journal in the transcript (WVE-101) and prompting (WVE-102) 2026-10-21. The rest is
-specified as WVE-103 to WVE-105 land.
+whole journal in the transcript (WVE-101), prompting (WVE-102), pending requests and client
+tools (WVE-103), the live session list (WVE-104), and browsing for a session's directory
+(WVE-112) 2026-10-21. The rest is specified as WVE-105 lands.
 
 Decision: [ADR 0015](../../../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md).
 Glossary: [`CONTEXT.md`](../../../CONTEXT.md). Host protocol:
@@ -39,7 +40,8 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 - **Filtering.** A field filters the list by title, directory and agent.
 - **New sessions.** A directory's heading starts a session in that directory with a chosen
   agent. "New session" asks for the Host (with more than one), the directory (one of the
-  directories the Host's sessions use, or typed) and the agent.
+  directories the Host's sessions use, typed, or picked by browsing the Host's computer) and
+  the agent.
 - **Hosts.** "Hosts" at the foot of the list opens the paired Hosts, with each one's connection
   state, pairing a Host, and forgetting one. While a Host is unreachable its sessions stay in the
   list, marked as such.
@@ -47,9 +49,11 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 ### A session
 
 - **Header:** the title; the agent, directory and, with more than one Host, the Host; the
-  activity; how many other clients are attached; and a menu with Close session (the Host stops
-  it; opening it later takes it up in its agent again) and Delete session (confirmed; the agent
-  and the Host forget it).
+  activity; and how many other clients are attached. Its menu has:
+  - Rename session, for an open session on a Host that lists `session/rename`. The new title
+    shows on every client, and the agent's own later titles don't replace it.
+  - Close session: the Host stops it, and opening it later takes it up in its agent again.
+  - Delete session, confirmed: the agent and the Host forget it.
 - **Transcript:** Alpha's ACP transcript and its views (`src/chat`), fed from the session's
   journal (see [The transcript](#the-transcript)).
 - **Subagents** show as rows in their parent's transcript, as the TUI shows them (`• Spawned
@@ -88,9 +92,10 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 - A session waiting on the person shows under "Needs you". The iPhone's Back button, and the
   iPad's sidebar button while the sidebar is collapsed, show how many sessions other than the one
   on screen are waiting.
-- When a session that isn't on screen starts waiting, a banner names the session and what it
-  waits on. Tapping it opens the session.
-- Pending requests are answered only inside their session (WVE-103).
+- When a session that isn't on screen starts waiting, a banner names the session. The Host's
+  list doesn't say what a session waits on, so the banner says its agent is waiting. Tapping it
+  opens the session.
+- Pending requests are answered only inside their session (see [Pending requests](#pending-requests)).
 
 ### Names
 
@@ -144,8 +149,13 @@ memory stands in; it is gone after a reload, and the browser pairs again.
 
 ### Following a session
 
-`src/host/host-store.ts` keeps the paired Hosts, one connection each, and their sessions from
-`sessions/list`, listed again when the app comes to the front and when the list is pulled down.
+`src/host/host-store.ts` keeps the paired Hosts, one connection each, and their sessions. A Host
+that lists the `sessions/watch` feature keeps the list live: `sessions/watch` gives the sessions,
+then `sessions/updated` and `sessions/removed` say what changed, in sessions the app isn't
+attached to too, so "Needs you", the waiting count and the banner follow sessions another client
+drives. A watched session closed keeps the title the app last had for it, since the Host lists a
+closed session without one. A Host without the feature is listed once with `sessions/list`.
+Either way the list is asked for again when the app comes to the front and when it's pulled down.
 Opening a session attaches to it after the last journal position this device handled
 (`JournalFollower`), so only what it missed arrives; events up to the journal's head at attach
 are history. Journal events become the transcript's events (`transcriptEvents`), described next.
@@ -171,6 +181,8 @@ Every `session/event` kind shows, the same whether it arrives live or replayed
   exited. A transcript keeps a terminal's last 256 KiB.
 - `agentReopened`: what the session runs now, worded as the TUI words it; `closed` and `notice`
   as notes.
+- `renamed`: the new title, and a note saying who renamed it: "You", "The TUI", "Jaco's iPhone",
+  or "The agent" for the agent's own `rename_session` Host tool.
 - Kinds the app doesn't know are skipped; the position still advances.
 
 Replayed history changes no turn state: whether a turn runs comes from `SessionState.turns` on
@@ -186,8 +198,12 @@ transcript live and replayed, and an outline of each is a reviewed snapshot.
 
 `HostStore` speaks for the session on screen (`src/host/host-store.ts`):
 
-- **New sessions** (`session/create`) take a Host, a directory (one its sessions use, or typed)
-  and an agent from `agents/list`, and open at once. A session nobody has prompted isn't listed
+- **New sessions** (`session/create`) take a Host, a directory (one its sessions use, typed, or
+  browsed for) and an agent from `agents/list`, and open at once. Browse…, for a Host that lists
+  `files/list` (WVE-112), opens a folder picker in the dialog. It starts at the directory chosen
+  so far, or at home when that can't be listed, and shows paths under home as `~/…`. You can go
+  into a directory, up, or home, with hidden directories on request. "Use this directory" fills in
+  the dialog. A session nobody has prompted isn't listed
   by the Host, so the app lists it while it's open; leaving it detaches with `ifUnused`, which
   closes it, as the TUI does.
 - **Send** starts a turn (`turn/start`) and shows the prompt at once. While a turn runs it
@@ -202,12 +218,38 @@ transcript live and replayed, and an outline of each is a reviewed snapshot.
   WebSocket's 32 MiB.
 - **Stop** is `turn/cancel`; modes and config options are `session/setMode` and
   `session/setConfigOption`, whose changes come back through the journal for every client.
-- **Close and Delete** are `session/close` and `session/delete`.
+- **Rename, Close and Delete** are `session/rename` (WVE-114), `session/close` and
+  `session/delete`.
 - **Sign-in.** An agent that answers `auth_required` gets "… needs signing in. Run `weave login
   --agent <agent>` on the Host's computer, then try again": remote clients can't sign agents in.
 
-Pending requests (permissions, elicitations, client tools) are WVE-103's; until then the
-transcript shows none.
+### Pending requests
+
+What an agent waits on comes from `SessionState.pending` on attaching and `pending/added` after,
+and stops waiting with `pending/resolved` (`src/host/host-store.ts`). Requests aren't journaled,
+so one shows once the attach's replay is in, after the history before it; one shown before that
+no longer waits on attaching says "No longer waiting".
+
+- **Permissions** show on their tool call, with the agent's options as buttons
+  (`pending/answer {permission}`).
+- **Form elicitations** render from their requested schema, with Submit, Decline and Cancel;
+  once answered the form stays, read-only.
+- **URL elicitations** follow the rule the TUI does: the card shows the whole URL and its host,
+  and warns of a page that isn't encrypted, a Punycode or bare IP host, or credentials in the
+  URL. Nothing opens until the person taps Open in browser, which hands the URL to iOS (the app
+  never fetches it) and accepts; only `http` and `https` URLs open. Decline and Cancel answer
+  without opening. `session/elicitationCompleted` marks an accepted one finished.
+- **A subagent's request** shows in the subagent's own transcript. While another transcript is
+  on screen, a notice above it says "Robie is waiting for you" (or Main), with Show.
+- **Answering** shows the answer at once. Each card then says how its request ended, as the
+  Host says: "You chose Allow", "Answered on another client", "The agent withdrew its request",
+  or "The turn ended before it was answered". An answer that fails with `already_resolved` isn't
+  tried again; any other failure shows the request again with the error.
+- **Client tools.** The app lists `clipboard_write` in `capabilities.clientTools` and runs calls
+  aimed at its connection: the text goes on the device's clipboard through Capacitor's Clipboard
+  plugin, which needs no tap first, and the agent gets "Copied to the clipboard.", as from the TUI.
+  The agent's own tool call shows the call. One aimed at another client shows as "Waiting for the
+  TUI to run clipboard_write", with nothing to answer, until that client has.
 
 ### Connections that end
 
@@ -236,9 +278,7 @@ acceptance harness and UI tests.
 
 ## Later
 
-- WVE-103: pending requests and client tools.
-- Queued messages for a session that isn't open in the app wait until it is opened again; a
-  feed of every session's changes (WVE-104) could send them sooner.
-- WVE-104: `sessions/watch`, for a live list.
+- Queued messages for a session that isn't open in the app wait until it is opened again; the
+  Host's queue (WVE-107) would send them as turns end.
 - WVE-105: reconnecting, several Hosts, and acceptance on devices.
 - WVE-96: views.

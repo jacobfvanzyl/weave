@@ -28,6 +28,7 @@
 
 mod client;
 mod devices;
+mod files;
 mod instance;
 mod journal;
 pub mod mcp;
@@ -53,7 +54,9 @@ use std::time::Instant;
 
 use agent_client_protocol::Channel;
 use agent_client_protocol::ConnectTo;
+use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
+use agent_client_protocol::JsonRpcNotification;
 use tokio::net::UnixListener;
 use tokio::sync::watch;
 use weave_acp_core::AgentHandle;
@@ -64,6 +67,7 @@ use weave_acp_core::schema::SessionId;
 use weave_agents::environment::Environment;
 use weave_agents::update::Upstream;
 use weave_host_protocol::Host;
+use weave_host_protocol::HostClient;
 use weave_host_protocol::PROTOCOL_VERSION;
 use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentSource;
@@ -73,6 +77,8 @@ use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::SessionAgent;
+use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionRemovedNotification;
 
 use crate::instance::Instance;
 pub use crate::instance::Launch;
@@ -257,6 +263,9 @@ pub(crate) struct Shared {
     started_ms: u64,
     pub(crate) next_client: AtomicU64,
     pub(crate) stop: watch::Sender<bool>,
+    /// Clients watching the Host's sessions (`sessions/watch`), by connection. Taken before
+    /// the registry, never while holding it.
+    watchers: Mutex<BTreeMap<u64, ConnectionTo<HostClient>>>,
 }
 
 impl Shared {
@@ -484,6 +493,57 @@ impl Shared {
         Ok(file.with_extension("jsons"))
     }
 
+    /// The sessions the Host has a journal for, across agents, most recently active first:
+    /// what `sessions/list` gives without an agent, and `sessions/watch` starts from. Blank
+    /// sessions aren't listed.
+    pub(crate) fn listings(&self, cwd: Option<&Path>) -> Vec<SessionListing> {
+        let registry = self.registry();
+        let in_scope = |dir: &Path| cwd.is_none_or(|cwd| cwd == dir);
+        let mut sessions: Vec<SessionListing> = registry
+            .sessions
+            .values()
+            .filter(|session| !session.is_blank())
+            .map(SessionHandle::summary)
+            .filter(|summary| in_scope(&summary.cwd))
+            .map(|summary| summary.listing())
+            .collect();
+        for (session_id, recorded) in &registry.known {
+            if registry.sessions.contains_key(session_id) || !in_scope(&recorded.cwd) {
+                continue;
+            }
+            let Some(agent_id) = recorded.agent_id() else {
+                continue;
+            };
+            sessions.push(client::dormant(session_id, agent_id, recorded));
+        }
+        sessions.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
+        sessions
+    }
+
+    /// `sessions/watch`: `respond` with the Host's sessions as they are, then tell `client` of
+    /// every change from there on. Nothing reaches watchers between the two, so the client
+    /// misses nothing and hears nothing older than its listing.
+    pub(crate) fn watch(
+        &self,
+        client: u64,
+        cx: ConnectionTo<HostClient>,
+        respond: impl FnOnce(Vec<SessionListing>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let mut watchers = lock(&self.watchers);
+        respond(self.listings(None))?;
+        watchers.insert(client, cx);
+        Ok(())
+    }
+
+    pub(crate) fn unwatch(&self, client: u64) {
+        lock(&self.watchers).remove(&client);
+    }
+
+    /// Tell every client watching the Host's sessions, dropping those that have gone.
+    pub(crate) fn tell_watchers<N: JsonRpcNotification + Clone>(&self, notification: &N) {
+        lock(&self.watchers).retain(|_, cx| cx.send_notification(notification.clone()).is_ok());
+    }
+
     pub(crate) fn status(&self) -> HostStatus {
         let mut sessions: Vec<_> = self
             .registry()
@@ -571,6 +631,7 @@ impl Daemon {
                 started_ms: now_ms(),
                 next_client: AtomicU64::new(1),
                 stop,
+                watchers: Mutex::new(BTreeMap::new()),
             }),
         }
     }
@@ -682,10 +743,18 @@ impl Daemon {
         };
         let live: Vec<SessionId> = self.shared.registry().sessions.keys().cloned().collect();
         journal::prune(journals, JOURNAL_RETENTION, &live);
-        self.shared
-            .registry()
-            .known
-            .retain(|session_id, _| journal::path_for(journals, session_id).exists());
+        let mut pruned = Vec::new();
+        self.shared.registry().known.retain(|session_id, _| {
+            let kept = journal::path_for(journals, session_id).exists();
+            if !kept {
+                pruned.push(session_id.clone());
+            }
+            kept
+        });
+        for session_id in pruned {
+            self.shared
+                .tell_watchers(&SessionRemovedNotification { session_id });
+        }
     }
 
     /// Ask [`Self::serve`] to stop.

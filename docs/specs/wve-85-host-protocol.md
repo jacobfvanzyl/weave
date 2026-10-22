@@ -43,7 +43,7 @@ Out of scope, each for a later issue:
 
 - a WebSocket listener, pairing and token issuance;
 - Host methods for clients that aren't on the Host's computer: file search, file reads,
-  shell commands;
+  shell commands (listing a directory came with WVE-112; see [Files](#files));
 - a Host-wide feed of session changes, for session lists that update live;
 - the Capacitor app as a client.
 
@@ -143,8 +143,12 @@ request with `unauthenticated`.
   which brings the `turnSteered` event with it, `devices` (WVE-90), the `devices/*`
   methods, and `agents/updates` (WVE-93): `agents/updateAvailable`, `SessionState.update`,
   `agents/update`, `session/reopen` and the `agentReopened` event (see
-  [Updates](#updates)), and `clientTools` (WVE-89): `capabilities.clientTools`, the
-  `clientTool` pending request and its answer (see [Client tools](#client-tools)).
+  [Updates](#updates)), `clientTools` (WVE-89): `capabilities.clientTools`, the
+  `clientTool` pending request and its answer (see [Client tools](#client-tools)), and
+  `sessions/watch` (WVE-104): `sessions/watch`, `sessions/unwatch`, `sessions/updated` and
+  `sessions/removed`, `files/list` (WVE-112; see [Files](#files)), and `session/rename`
+  (WVE-114): `session/rename`, the `renamed` event and the `rename_session` Host tool (see
+  [Host tools](#host-tools)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -359,6 +363,24 @@ type SessionListing = {
 };
 ```
 
+**`sessions/watch`** `{}` → `{sessions: SessionListing[]}`
+
+Feature `sessions/watch`. Answers with the listing `sessions/list` gives without an agent,
+then sends the client a notification for every change to the Host's sessions, whether it's
+attached to them or not, until the connection ends or it sends `sessions/unwatch` `{}` →
+`{}`. Watching again starts over, with the listing as it is then. Remote clients may watch.
+
+- `sessions/updated` `{session: SessionListing}`: a session appeared or changed, as it lists
+  now. It's sent when a session opens (a blank one at its first prompt), when its
+  `activity`, `clients` or title change, and when it's suspended or closed; no more often than
+  `session/changed`, from the same changes. A closed or suspended session lists with no
+  `activity` and no clients.
+- `sessions/removed` `{sessionId}`: a session went away: deleted, its journal pruned, or closed
+  while blank.
+
+Blank sessions never appear. Nothing reaches a watching client between the answer and the
+notifications after it, so it misses no change and hears none older than its listing.
+
 **`session/create`** `{agentId, cwd, additionalDirectories?, mode?, policy?, trace?}` →
 `SessionState`
 
@@ -430,6 +452,25 @@ removes its journal. `agentId` is required when the Host has no record of the se
 Passed to the agent. The change reaches every attached client, the sender included, as an
 ACP `current_mode_update` or `config_option_update` in the journal.
 
+**`session/rename`** `{sessionId, title}` → `{}`
+
+Feature `session/rename`. Gives an open session a title of the Host's. The title is trimmed and
+must be 1 to 200 characters; the session must be open (`session_not_open`).
+
+- **Journaled.** The rename is journaled as a `renamed` event, so every client sees it, live
+  and replayed. `session/changed`, `sessions/updated` and listings carry the title, and listings
+  prefer it to the agent's.
+- **It holds.** From then on, titles in the agent's `session_info_update`s are left out of the
+  journal and of the session's title. Otherwise a title an agent generates after its first turn
+  would undo a rename made during that turn. Only another rename replaces it.
+- **It outlives the journal.** A suspended session's journal carries the title on; a closed
+  session's new journal begins with it.
+- **The agent's own title doesn't change.** ACP has no way to change it from outside, so the
+  agent's own listing and tools still show its title.
+
+The `rename_session` Host tool does the same for the calling session (see
+[Host tools](#host-tools)).
+
 ## Journal and events
 
 Every session has a journal: the numbered record of everything its attached clients are
@@ -459,6 +500,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `agentReopened` | `agent`: `SessionState.agent`, `previous?`: `{name, version}`, `modes?`, `configOptions`, `failed?` | the session's agent was started again (`session/reopen`); `failed` says why it runs `previous` again |
 | `closed` | `reason` | the session closes |
 | `notice` | `text` | the Host tells the session's clients something, such as that its agent can't use client tools |
+| `renamed` | `title`, `by?`: `origin` | the session was renamed through the Host (`session/rename`); `by` is the renaming client's origin, absent when the session's own agent renamed it (the `rename_session` Host tool) |
 
 `origin` is `{"client": {"name": "weave-tui", "id": "c7"}}` for a client's prompt, with the
 connection's `clientId` so a client recognizes its own (a remote client's adds its paired
@@ -567,20 +609,30 @@ doesn't resolve anything: the request waits for another client, or for one to at
 client tool call is the exception on both counts: only its `target` answers it (anyone
 else gets `not_target`), and it resolves `cancelled` when its target detaches.
 
-## Client tools
+## The Host MCP server
 
-Client tools ([ADR 0009](../adr/0009-client-tools-through-a-host-owned-mcp-server.md))
-run on a client's device for an agent, such as `clipboard_write {text}`, which puts text on
-the clipboard. The Host defines them (`protocol/`, `tools`) and offers them through
-one MCP server it owns, `weave`, which every session's agent gets whoever is attached; the
-config's `client_tools` (all when absent, `[]` for none) and an agent's own `client_tools`
-choose which. The server speaks MCP 2026-07-28 only. Agents that advertise
+The Host offers agents tools through one MCP server it owns, `weave`
+([ADR 0009](../adr/0009-client-tools-through-a-host-owned-mcp-server.md)), which every
+session's agent gets whoever is attached. The tools are of two kinds, both defined by the Host
+(`protocol/`, `tools`):
+
+- **Client tools** run on a client's device.
+- **Host tools** are answered by the Host itself.
+
+The config chooses which an agent is offered. `client_tools` and `host_tools` each mean all
+when absent and none when `[]`, and an agent's own setting overrides the top-level one. The
+server speaks MCP 2026-07-28 only. Agents that advertise
 `mcpCapabilities.acp` get it over ACP (`"type": "acp"`, from the draft MCP-over-ACP RFD);
 the rest get a stdio server, `weave mcp-bridge`, which relays MCP between the agent and the
 Host's MCP socket beside its own, after a token naming the session's declaration. Each
 session setup declares the server under a new `serverId` or token. An agent that opens it
 with `initialize`, from an MCP revision before 2026-07-28, is refused, and the session's
-clients get a `notice` event saying it can't use client tools.
+clients get a `notice` event saying it can't use weave's tools.
+
+## Client tools
+
+Client tools run on a client's device for an agent, such as `clipboard_write {text}`, which
+puts text on the clipboard.
 
 A call goes to the client that sent the running turn's latest prompt or steer, if it's
 attached and lists the tool in `capabilities.clientTools`: it becomes a `clientTool`
@@ -589,6 +641,55 @@ pending request every attached client sees, and its target answers with the tool
 running the tool) the agent gets a tool error saying why, at once, and nothing is pending.
 When the target detaches, the agent gets an error saying the tool may have run, and no
 other client runs it. The agent cancelling the call withdraws it.
+
+## Host tools
+
+Host tools are answered by the Host, for the session whose agent calls them. Each is a Host
+protocol method seen from inside the session, with the same parameters less what the calling
+session supplies, and is answered by the same code as the client request. No Host tool does what
+no client request can, so a new capability lands in the protocol first. They need no client, so
+they work in headless sessions too. WVE-106 adds more in the same model.
+
+- `rename_session {title}`: `session/rename` for the calling session. The `renamed` event it
+  journals has no `by`. A title that `session/rename` would refuse comes back as a tool error
+  saying why.
+
+## Files
+
+Clients that aren't on the Host's computer can't look at its files themselves, so the Host
+answers for them, in one family of methods with shared rules:
+
+- Paths are absolute on the Host's computer.
+- Each method is a `features` entry of its own.
+- Nothing writes.
+- Names come before contents: a listing gives names and kinds, never sizes, times or contents.
+- They reach whatever the Host's user can read. A client that can start an agent in any
+  directory reaches that much already, so remote clients may use them too.
+
+**`files/list`** `{path?, hidden?}` → `{path, parent?, home, entries: {name, kind}[], truncated?}`
+
+Feature `files/list`. What a directory holds, so a client can pick where a session runs. Without
+`path`, it lists the Host user's home directory. The answer gives:
+
+- the directory listed, without `.` or `..` but with symlinks as named, so a session's directory
+  reads as the person chose it;
+- its parent, absent at the root;
+- `home`, so clients can show paths under it as `~`.
+
+`kind` is `directory`, `file` or `other`, following symlinks. Directories come first, then by
+name. Names starting with a dot are left out unless `hidden`, and names that aren't UTF-8 always
+are. At most 2,000 entries are given; `truncated` says there were more. A relative path, a
+missing one or one that isn't a directory fails with invalid params, whose `data` says which.
+
+Later methods join the family:
+
+- `files/search` serves `@` mentions: the session directory's files, matched as the TUI's
+  picker does (`tui/src/file_popup.rs`, `.gitignore` honored).
+- `files/read` serves attachments: a file as the content block the TUI's `@` mentions attach
+  (`tui/src/attachments.rs`).
+
+Shell commands, the other method remote clients need, would be a family of their own, since they
+run things rather than read them.
 
 ## Host management
 
@@ -679,6 +780,7 @@ as it does now.
   authentication. `local` is never accepted on a network transport.
 - Clients can't make the Host run a command, set an agent's environment or write to a path
   of their choosing: the protocol has no field for any of them.
+- `files/*` read only, and only what the Host's user can (see [Files](#files)).
 - `agents/terminalSignIn` is the only response that carries a command, and only `local`
   clients that claimed `terminalSignIn` get it.
 - Journals and traces stay 0600. The agent environment is never written or sent.
@@ -800,9 +902,8 @@ into the new binary.
 
 ## Later
 
-- Host methods for clients on other computers: file search for `@` mentions, file reads
-  for attachments, shell commands.
-- A Host-wide feed of session changes (`sessions/watch`).
+- Host methods for clients on other computers: `files/search` for `@` mentions and
+  `files/read` for attachments (see [Files](#files)), and shell commands.
 - `--continue` choosing the latest session in the directory across agents, since the Host
   now knows them.
 - Disconnecting local clients that fall behind, as WebSocket clients are.

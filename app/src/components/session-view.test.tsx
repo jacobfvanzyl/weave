@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { AppActions, AppController, OpenSession } from '@/app/app-controller';
@@ -8,7 +8,9 @@ import { SessionView } from './session-view';
 const actions = (): AppActions => ({
   selectSession: vi.fn(),
   createSession: vi.fn(),
+  listDirectory: vi.fn(),
   closeSession: vi.fn(),
+  renameSession: vi.fn(),
   deleteSession: vi.fn(),
   pairHost: vi.fn(),
   forgetHost: vi.fn(),
@@ -25,7 +27,7 @@ const actions = (): AppActions => ({
 
 const controller = (session: OpenSession, handlers = actions()): AppController => ({
   model: {
-    hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected' }],
+    hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected', canRename: true }],
     sessions: [{
       key: session.key, hostId: 'h', sessionId: 'main', title: 'Count the files', agentId: 'claude', agentName: 'Claude',
       cwd: '/work/project', state: 'open', activity: 'idle', clients: 1, headless: false,
@@ -88,5 +90,65 @@ describe('SessionView', () => {
     await user.click(screen.getByRole('button', { name: 'Main' }));
     expect(screen.queryByText('Counting now.')).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message agent' })).toBeInTheDocument();
+  });
+
+  it('says when a request waits in a transcript not on screen, and shows it', async () => {
+    const user = userEvent.setup();
+    const ask = (requestId: string, sessionId?: string): AcpTranscriptEvent => ({
+      type: 'permission/requested',
+      requestId,
+      sessionId,
+      request: {
+        sessionId: sessionId ?? 'main',
+        toolCall: { toolCallId: `tool-${requestId}`, title: `Write ${requestId}.txt` },
+        options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+      },
+    });
+    const session: OpenSession = {
+      key: 'h/main',
+      canSteer: true,
+      queued: [],
+      transcript: transcript(
+        { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:robie', title: 'Robie', state: { state: 'requires_action' } } },
+        ask('robie', 'main:robie'),
+      ),
+    };
+    const { rerender } = render(<SessionView controller={controller(session)} session={session} />);
+    expect(screen.getByText('Robie is waiting for you')).toBeInTheDocument();
+    expect(screen.queryByText('Write robie.txt')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show Robie' }));
+    expect(screen.getByText('Write robie.txt')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeInTheDocument();
+    expect(screen.queryByText('Robie is waiting for you')).not.toBeInTheDocument();
+
+    // Main asks while Robie's work shows.
+    const both = { ...session, transcript: reduceAcpEvent(session.transcript, ask('main')) };
+    rerender(<SessionView controller={controller(both)} session={both} />);
+    expect(screen.getByText('Main is waiting for you')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show Main' }));
+    expect(screen.getByText('Write main.txt')).toBeInTheDocument();
+    expect(screen.getByText('Robie is waiting for you')).toBeInTheDocument();
+  });
+
+  it('renames the session through the Host, and says why it couldn\'t', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
+    render(<SessionView controller={controller(session, handlers)} session={session} />);
+    await user.click(screen.getByRole('button', { name: 'Session actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename session…' }));
+    const title = await screen.findByRole('textbox', { name: 'Title' });
+    expect(title).toHaveValue('Count the files');
+    await user.clear(title);
+    await user.type(title, 'Count every file');
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(handlers.renameSession).toHaveBeenCalledWith('h/main', 'Count every file');
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument());
+
+    vi.mocked(handlers.renameSession).mockRejectedValueOnce(new Error("Couldn't rename it: a title is at most 200 characters."));
+    await user.click(screen.getByRole('button', { name: 'Session actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename session…' }));
+    await user.click(await screen.findByRole('button', { name: 'Rename' }));
+    expect(await screen.findByText("Couldn't rename it: a title is at most 200 characters.")).toBeInTheDocument();
   });
 });

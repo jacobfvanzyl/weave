@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListFilesRequest\n{ path: Some(\"/Users/jaco/Projects\".into()), hidden: true, })"
+---
+{
+  "method": "files/list",
+  "params": {
+    "path": "/Users/jaco/Projects",
+    "hidden": true
+  }
+}

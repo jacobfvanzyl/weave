@@ -103,6 +103,13 @@ export type ProtocolVersion = number;
  */
 export type AuthMethodId = string;
 /**
+ * What an entry is, following symlinks.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "FileKind".
+ */
+export type FileKind = ("directory" | "file") | "other";
+/**
  * Categories of tools that can be invoked.
  *
  * Tool kinds help clients choose appropriate icons and optimize how they
@@ -687,6 +694,14 @@ export type SessionEvent =
   | {
       reason: string;
       kind: "closed";
+    }
+  | {
+      title: string;
+      /**
+       * The client that renamed it; absent when its own agent did.
+       */
+      by?: TurnOrigin | null;
+      kind: "renamed";
     }
   | {
       text: string;
@@ -1962,6 +1977,57 @@ export interface RevokeDeviceRequest {
   deviceId: string;
 }
 /**
+ * `files/list`: what a directory on the Host's computer holds, by name and kind.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListFilesRequest".
+ */
+export interface ListFilesRequest {
+  /**
+   * An absolute path; the home directory of the Host's user when absent.
+   */
+  path?: string | null;
+  /**
+   * Entries whose names start with a dot too.
+   */
+  hidden?: boolean;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListFilesResponse".
+ */
+export interface ListFilesResponse {
+  /**
+   * The directory listed, without `.` or `..`. Symlinks stay as named, so a session's
+   * directory reads as the person chose it.
+   */
+  path: string;
+  /**
+   * Its parent; none at the root.
+   */
+  parent?: string | null;
+  /**
+   * The home directory of the Host's user, so clients can show paths under it as `~`.
+   */
+  home: string;
+  /**
+   * Directories first, then by name. Names that aren't UTF-8 are left out.
+   */
+  entries: FileEntry[];
+  /**
+   * The directory holds more than [`MAX_ENTRIES`] entries the request asked for.
+   */
+  truncated?: boolean;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "FileEntry".
+ */
+export interface FileEntry {
+  name: string;
+  kind: FileKind;
+}
+/**
  * `sessions/list`. Without an agent: the sessions the Host has a journal for, across
  * agents, most recently active first. With one: that agent's, the Host's own in `cwd` first,
  * then the agent's own listing, paged by its cursor. Blank sessions are never listed.
@@ -1982,6 +2048,29 @@ export interface ListSessionsResponse {
   sessions: SessionListing[];
   nextCursor?: string | null;
 }
+/**
+ * `sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a
+ * [`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the
+ * connection ends or the client sends `sessions/unwatch`. Blank sessions never appear.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "WatchSessionsRequest".
+ */
+export interface WatchSessionsRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "WatchSessionsResponse".
+ */
+export interface WatchSessionsResponse {
+  sessions: SessionListing[];
+}
+/**
+ * `sessions/unwatch`: stop what `sessions/watch` sends.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UnwatchSessionsRequest".
+ */
+export interface UnwatchSessionsRequest {}
 /**
  * `session/create`: start a session and attach to it.
  *
@@ -3759,6 +3848,19 @@ export interface ReopenSessionResponse {
   version?: string | null;
 }
 /**
+ * `session/rename`: give an open session a title of the Host's, which its clients see, journaled
+ * as a `renamed` event, and which titles the agent sends later don't replace. The title is
+ * trimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the session
+ * keeps its title: ACP has no way to change it from outside.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RenameSessionRequest".
+ */
+export interface RenameSessionRequest {
+  sessionId: SessionId;
+  title: string;
+}
+/**
  * `session/run`: open a session (this one, or a new one) and start a turn in it, without
  * the client having to stay.
  *
@@ -4994,6 +5096,27 @@ export interface SessionChangedNotification {
   blank?: boolean | null;
 }
 /**
+ * `sessions/updated`, to watching clients: a session appeared or changed (opened, suspended,
+ * closed, its activity, its clients, its title, or a blank session's first prompt), as it lists
+ * now.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SessionUpdatedNotification".
+ */
+export interface SessionUpdatedNotification {
+  session: SessionListing;
+}
+/**
+ * `sessions/removed`, to watching clients: a session went away: deleted, its journal pruned,
+ * or closed while blank.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SessionRemovedNotification".
+ */
+export interface SessionRemovedNotification {
+  sessionId: SessionId;
+}
+/**
  * `session/elicitationCompleted`: an accepted URL elicitation's external step finished.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -5114,10 +5237,22 @@ export const HOST_PROTOCOL = {
     "steer": "turn/steer",
     "devices": "devices",
     "agentUpdates": "agents/updates",
-    "clientTools": "clientTools"
+    "clientTools": "clientTools",
+    "watch": "sessions/watch",
+    "listFiles": "files/list",
+    "rename": "session/rename"
+  },
+  "files": {
+    "maxEntries": 2000
+  },
+  "sessions": {
+    "maxTitle": 200
   },
   "clientTools": {
     "clipboardWrite": "clipboard_write"
+  },
+  "hostTools": {
+    "renameSession": "rename_session"
   }
 } as const;
 
@@ -5136,7 +5271,10 @@ export interface HostRequests {
   "devices/offer": { params: OfferDeviceRequest; result: OfferDeviceResponse };
   "devices/list": { params: ListDevicesRequest; result: ListDevicesResponse };
   "devices/revoke": { params: RevokeDeviceRequest; result: Empty };
+  "files/list": { params: ListFilesRequest; result: ListFilesResponse };
   "sessions/list": { params: ListSessionsRequest; result: ListSessionsResponse };
+  "sessions/watch": { params: WatchSessionsRequest; result: WatchSessionsResponse };
+  "sessions/unwatch": { params: UnwatchSessionsRequest; result: Empty };
   "session/create": { params: CreateSessionRequest; result: SessionState };
   "session/attach": { params: AttachSessionRequest; result: AttachSessionResponse };
   "session/detach": { params: DetachSessionRequest; result: Empty };
@@ -5145,6 +5283,7 @@ export interface HostRequests {
   "session/setMode": { params: SetModeRequest; result: Empty };
   "session/setConfigOption": { params: SetConfigOptionRequest; result: SetSessionConfigOptionResponse };
   "session/reopen": { params: ReopenSessionRequest; result: ReopenSessionResponse };
+  "session/rename": { params: RenameSessionRequest; result: Empty };
   "session/run": { params: RunRequest; result: RunResponse };
   "turn/start": { params: StartTurnRequest; result: StartTurnResponse };
   "turn/steer": { params: SteerTurnRequest; result: SteerTurnResponse };
@@ -5156,6 +5295,8 @@ export interface HostRequests {
 export interface HostNotifications {
   "session/event": SessionEventNotification;
   "session/changed": SessionChangedNotification;
+  "sessions/updated": SessionUpdatedNotification;
+  "sessions/removed": SessionRemovedNotification;
   "session/elicitationCompleted": ElicitationCompletedNotification;
   "pending/added": PendingAddedNotification;
   "pending/resolved": PendingResolvedNotification;

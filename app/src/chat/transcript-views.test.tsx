@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PromptImage } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from './acp-transcript';
 import { ChatPane, type ChatPaneActions } from './chat-pane';
+import { urlCheck } from './pending-request';
 import { scaledSize } from './prompt-images';
 import { terminalText } from './terminal-text';
 
@@ -80,6 +81,89 @@ describe('the transcript', () => {
   it('says how a turn ended when it didn\'t finish', () => {
     render(<ChatPane model={transcript({ type: 'turn/ended', stopReason: 'max_tokens' })} actions={actions()} />);
     expect(screen.getByText('Stopped: the agent reached its token limit')).toBeInTheDocument();
+  });
+});
+
+const permission = (toolCallId: string) => ({
+  sessionId: 'main',
+  toolCall: { toolCallId, title: `Write ${toolCallId}.txt` },
+  options: [
+    { optionId: 'allow', name: 'Allow', kind: 'allow_once' as const },
+    { optionId: 'reject', name: 'Reject', kind: 'reject_once' as const },
+  ],
+});
+
+const form = { mode: 'form' as const, sessionId: 'main', message: 'Who are you?', requestedSchema: { type: 'object' as const, required: ['name'], properties: { name: { type: 'string' as const, title: 'Name' } } } };
+
+describe('pending requests', () => {
+  it('says how each permission request ended', () => {
+    render(<ChatPane model={transcript(
+      { type: 'permission/requested', requestId: 'p-1', request: permission('a') },
+      { type: 'permission/resolved', requestId: 'p-1', optionId: 'allow' },
+      { type: 'permission/requested', requestId: 'p-2', request: permission('b') },
+      { type: 'request/resolved', requestId: 'p-2', status: 'elsewhere' },
+      { type: 'permission/requested', requestId: 'p-3', request: permission('c') },
+      { type: 'request/resolved', requestId: 'p-3', status: 'withdrawn' },
+      { type: 'permission/requested', requestId: 'p-4', request: permission('d') },
+      { type: 'request/resolved', requestId: 'p-4', status: 'cancelled' },
+    )} actions={actions()} />);
+    expect(screen.getByText('You chose Allow')).toBeInTheDocument();
+    expect(screen.getByText('Answered on another client')).toBeInTheDocument();
+    expect(screen.getByText('The agent withdrew its request')).toBeInTheDocument();
+    expect(screen.getByText('The turn ended before it was answered')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Allow' })).not.toBeInTheDocument();
+  });
+
+  it('declines or cancels a form, and keeps it read-only once answered', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    const { rerender } = render(<ChatPane model={transcript({ type: 'elicitation/requested', requestId: 'e-1', request: form })} actions={handlers} />);
+    await user.click(screen.getByRole('button', { name: 'Decline' }));
+    expect(handlers.respondToElicitation).toHaveBeenCalledWith('e-1', { action: 'decline' });
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(handlers.respondToElicitation).toHaveBeenCalledWith('e-1', { action: 'cancel' });
+
+    rerender(<ChatPane model={transcript(
+      { type: 'elicitation/requested', requestId: 'e-1', request: form },
+      { type: 'elicitation/resolved', requestId: 'e-1', response: { action: 'accept', content: { name: 'Ada' } } },
+    )} actions={handlers} />);
+    expect(screen.getByText('You sent your answers')).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
+  });
+
+  it('warns about a URL elicitation\'s page, and opens only web pages', () => {
+    expect(urlCheck('https://example.com/a')).toEqual({ host: 'example.com', warnings: [] });
+    expect(urlCheck('http://user:pw@10.0.0.1/a').warnings).toEqual([
+      'Not encrypted: uses http.',
+      'The host is a bare IP address.',
+      'The URL embeds credentials before the host.',
+    ]);
+    expect(urlCheck('https://exаmple.com/').warnings).toEqual(['The host uses Punycode; it may imitate another site.']);
+    expect(urlCheck('javascript:alert(1)')).toEqual({ warnings: ['Only web pages open from here; this uses javascript.'] });
+    expect(urlCheck('not a url')).toEqual({ warnings: ['This is not a valid URL.'] });
+
+    render(<ChatPane model={transcript({
+      type: 'elicitation/requested',
+      requestId: 'e-1',
+      request: { mode: 'url', sessionId: 'main', elicitationId: 'x', url: 'weave://pair?code=1', message: 'Pair' },
+    })} actions={actions()} />);
+    expect(screen.getByText('weave://pair?code=1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open in browser' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Decline' })).toBeInTheDocument();
+  });
+
+  it('shows a client tool call another client runs, with nothing to answer', () => {
+    const { rerender } = render(<ChatPane model={transcript(
+      { type: 'clientTool/requested', requestId: 'c-1', tool: 'clipboard_write', runner: 'the TUI' },
+    )} actions={actions()} />);
+    const row = screen.getByText('Waiting for the TUI to run clipboard_write').parentElement!;
+    expect(within(row).queryByRole('button')).not.toBeInTheDocument();
+    rerender(<ChatPane model={transcript(
+      { type: 'clientTool/requested', requestId: 'c-1', tool: 'clipboard_write', runner: 'the TUI' },
+      { type: 'request/resolved', requestId: 'c-1', status: 'elsewhere' },
+    )} actions={actions()} />);
+    expect(screen.getByText('The TUI ran clipboard_write')).toBeInTheDocument();
   });
 });
 

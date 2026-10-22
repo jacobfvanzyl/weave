@@ -1,8 +1,11 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import { Clipboard } from '@capacitor/clipboard';
 import { Capacitor } from '@capacitor/core';
+import { clipboardWrite } from '@/host/client-tools';
 import { websocketConnector } from '@/host/connection';
 import { type DeviceKey, nativeDeviceKey, webCryptoDeviceKey } from '@/host/device-key';
 import { HostStore } from '@/host/host-store';
+import { HOST_PROTOCOL } from '@/host/protocol';
 import { preferencesStorage } from '@/host/storage';
 import type { AppController, AppModel } from './app-controller';
 import { useAppResume } from './use-app-resume';
@@ -33,6 +36,8 @@ function newStore() {
       return { keyId, key };
     },
     connectorFor: (url) => websocketConnector(url),
+    // The native plugin writes without a tap first, as an agent's call needs.
+    clientTools: { [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite((text) => Clipboard.write({ string: text })) },
     client,
     deviceName: idiom === 'phone' ? 'iPhone' : idiom === 'pad' ? 'iPad' : 'Browser',
   });
@@ -44,7 +49,9 @@ const noSubscription = () => () => {};
 const idleActions: AppController['actions'] = {
   selectSession() {},
   createSession() {},
+  listDirectory: () => Promise.reject(new Error('The app is still starting.')),
   closeSession() {},
+  renameSession() {},
   deleteSession() {},
   pairHost: () => Promise.reject(new Error('The app is still starting.')),
   forgetHost() {},

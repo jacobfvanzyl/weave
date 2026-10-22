@@ -303,6 +303,12 @@ const events: AcpTranscriptEvent[] = [
     },
   },
   {
+    type: 'clientTool/requested',
+    requestId: 'client-tool-showcase',
+    tool: 'clipboard_write',
+    runner: 'the TUI',
+  },
+  {
     type: 'protocol/unknown',
     method: 'session/update',
     payload: {

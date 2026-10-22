@@ -22,7 +22,17 @@ turns end in `turnEnded` for every client. `turn/steer` (a `features` entry) pas
 the agent only while a turn the Host started runs, journals it as `turnSteered` where the
 agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Permission requests and elicitations are pending
 requests (`pending/added`) every attached client sees, and later attachers in their state;
-the first `pending/answer` counts, and `turn/cancel` cancels them. Host-run terminals reach
+the first `pending/answer` counts, and `turn/cancel` cancels them. `sessions/watch` (a
+`features` entry) keeps a client's list of the Host's sessions live without attaching:
+`Shared::watch` answers with `Shared::listings` and registers the connection under the
+watchers' lock, so nothing comes between, and `tell_watchers` sends `sessions/updated` from
+each session task's `update_summary` (the change that sends `session/changed`, unless the
+session is blank) and from `finish` (suspended or closed), and `sessions/removed` when a
+session is deleted, its journal pruned, or closed while blank. Take the watchers' lock before
+the registry, never while holding it. `files/list` (`files.rs`) lists a directory on the Host's computer for clients
+that aren't on it: names and kinds, off the dispatch loop, with paths worked out from their text
+so symlinks stay as named. It's the first of the `files/*` family, which `files/search` and
+`files/read` are to join. Host-run terminals reach
 clients as `terminalOutput`/`terminalExit` events; the Host strips agents' `_meta` terminal
 output after turning it into the same events, so each chunk arrives once. The Host resolves
 agents by id (`../agents`) and starts them in the session's directory with its own
@@ -61,7 +71,13 @@ the client that sent the running turn's latest prompt or steer, if it's attached
 tool, which only that client may answer (`not_target`); otherwise a tool error at once. The
 target detaching fails it as one that may have run; the agent cancelling it withdraws it.
 Agents get only text in `content`, since Claude Code gives the model `structuredContent` in
-its place. The TUI lists `clipboard_write` (`daemon::capabilities`) and runs calls targeted at
+its place. Host tools (`host_catalog`, chosen by the config's `host_tools`) are answered by
+the Host itself, in `mcp.rs`'s `host_tool`, for the bound session: each is a Host protocol method
+seen from inside the session, through the same session command. The first is `rename_session`,
+which sends `Command::Rename` as `session/rename` does. A rename journals `Entry::Renamed`, and
+the session task keeps the title in `renamed`, leaving the agent's later titles out of the
+journal and summary. `journal::kept_title` reads it back for a suspended session, and a closed
+session's new journal header carries it on. The TUI lists `clipboard_write` (`daemon::capabilities`) and runs calls targeted at
 it with `Tui::try_copy`. Host tests (`tests/daemon.rs`) give the fake agents an
 in-process bridge (`StdioMcp`) that runs the same `relay` to the Host's real socket, and a
 Host whose agents take MCP over ACP (`daemon_over_acp`).

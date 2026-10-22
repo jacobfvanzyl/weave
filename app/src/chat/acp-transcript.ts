@@ -56,10 +56,18 @@ export type TranscriptToolCall = {
   permission?: {
     requestId: string;
     options: PermissionOption[];
-    status: 'pending' | 'resolved' | 'cancelled';
+    status: RequestStatus;
+    /** The option this device chose. */
     selectedOptionId?: string;
   };
 };
+
+/**
+ * A pending request waiting, or how it stopped: `answered` here, on another client
+ * (`elsewhere`), `cancelled` with its turn, `withdrawn` by the agent, or `ended` while this device
+ * wasn't following the session.
+ */
+export type RequestStatus = 'pending' | 'answered' | 'elsewhere' | 'cancelled' | 'withdrawn' | 'ended';
 
 export type TranscriptPlan = {
   id: string;
@@ -85,8 +93,21 @@ export type TranscriptElicitation = {
   kind: 'elicitation';
   requestId: string;
   request: CreateElicitationRequest;
-  status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'completed';
+  /** `completed`: an accepted URL elicitation's step outside finished. */
+  status: RequestStatus | 'completed';
+  /** This device's answer. */
   response?: CreateElicitationResponse;
+};
+
+/** A client tool call another client runs for the agent (ADR 0009), which it waits on. */
+export type TranscriptClientTool = {
+  id: string;
+  kind: 'client-tool';
+  requestId: string;
+  tool: string;
+  /** The client running it: "the TUI", "Jaco's iPad". */
+  runner: string;
+  status: RequestStatus;
 };
 
 export type TranscriptDiagnostic = {
@@ -137,6 +158,7 @@ export type TranscriptEntry =
   | TranscriptPlan
   | TranscriptCompaction
   | TranscriptElicitation
+  | TranscriptClientTool
   | TranscriptDiagnostic
   | TranscriptSubagentRow
   | TranscriptSessionMessage;
@@ -147,6 +169,7 @@ type TranscriptEntryInput =
   | Omit<TranscriptPlan, 'id'>
   | Omit<TranscriptCompaction, 'id'>
   | Omit<TranscriptElicitation, 'id'>
+  | Omit<TranscriptClientTool, 'id'>
   | Omit<TranscriptDiagnostic, 'id'>
   | Omit<TranscriptSubagentRow, 'id'>
   | Omit<TranscriptSessionMessage, 'id'>;
@@ -216,6 +239,8 @@ export type AcpTranscriptEvent =
   /** The session's agent was started again (`session/reopen`); `text` says how it went. */
   | { type: 'agent/reopened'; text: string; failed: boolean; modes?: SessionModeState | null; configOptions?: SessionConfigOption[] }
   | { type: 'session/closed'; reason: string }
+  /** The session was renamed through the Host; `by` starts the sentence: "You", "The agent", "The TUI". */
+  | { type: 'session/renamed'; title: string; by: string }
   | {
       type: 'protocol/unknown';
       method: string;
@@ -226,11 +251,20 @@ export type AcpTranscriptEvent =
       modes?: SessionModeState | null;
       configOptions?: SessionConfigOption[] | null;
     }
-  | { type: 'permission/requested'; requestId: string; request: RequestPermissionRequest }
+  /**
+   * A pending request waits, in this session or with `sessionId` one of its subagents. Asking
+   * again for one already shown makes it wait again, as after an answer that failed.
+   */
+  | { type: 'permission/requested'; requestId: string; request: RequestPermissionRequest; sessionId?: string }
+  | { type: 'elicitation/requested'; requestId: string; request: CreateElicitationRequest; sessionId?: string }
+  | { type: 'clientTool/requested'; requestId: string; tool: string; runner: string; sessionId?: string }
+  /** This device answered a pending request. */
   | { type: 'permission/resolved'; requestId: string; optionId?: string }
-  | { type: 'permission/cancelled'; requestId: string }
-  | { type: 'elicitation/requested'; requestId: string; request: CreateElicitationRequest }
   | { type: 'elicitation/resolved'; requestId: string; response: CreateElicitationResponse }
+  /** A pending request stopped waiting, as the Host says (`pending/resolved`). */
+  | { type: 'request/resolved'; requestId: string; status: Exclude<RequestStatus, 'pending'> }
+  /** Only `waiting` still wait: the rest stopped while this device wasn't following the session. */
+  | { type: 'requests/settled'; waiting: string[] }
   | { type: 'elicitation/completed'; notification: CompleteElicitationNotification }
   | { type: 'turn/started' }
   | { type: 'turn/stopped'; stopReason: StopReason }
@@ -818,56 +852,109 @@ const requestPermission = (
   });
 };
 
-const resolvePermission = (
-  model: AcpTranscript,
-  requestId: string,
-  status: 'resolved' | 'cancelled',
-  selectedOptionId?: string,
-): AcpTranscript => {
-  const index = model.entries.findIndex(
-    (entry) => entry.kind === 'tool'
-      && entry.permission?.requestId === requestId,
-  );
-  if (index === -1) return model;
-  const tool = model.entries[index] as TranscriptToolCall;
-  return replaceEntry(model, index, {
-    ...tool,
-    permission: {
-      ...tool.permission!,
-      status,
-      ...(selectedOptionId ? { selectedOptionId } : {}),
-    },
-  });
+/** The pending request `requestId`'s entry, or undefined for another entry. */
+const requestOf = (entry: TranscriptEntry, requestId: string) => {
+  if (entry.kind === 'tool') return entry.permission?.requestId === requestId;
+  return (entry.kind === 'elicitation' || entry.kind === 'client-tool') && entry.requestId === requestId;
 };
 
+const statusOf = (entry: TranscriptEntry): TranscriptElicitation['status'] | undefined => {
+  if (entry.kind === 'tool') return entry.permission?.status;
+  return entry.kind === 'elicitation' || entry.kind === 'client-tool' ? entry.status : undefined;
+};
+
+const withStatus = (entry: TranscriptEntry, status: RequestStatus): TranscriptEntry => {
+  if (entry.kind === 'tool' && entry.permission) return { ...entry, permission: { ...entry.permission, status } };
+  if (entry.kind === 'elicitation' || entry.kind === 'client-tool') return { ...entry, status };
+  return entry;
+};
+
+/** Changes the entry of pending request `requestId`, in this session or whichever subagent's it is. */
+const updateRequest = (
+  model: AcpTranscript,
+  requestId: string,
+  change: (entry: TranscriptEntry) => TranscriptEntry,
+): AcpTranscript => {
+  const index = model.entries.findIndex((entry) => requestOf(entry, requestId));
+  if (index !== -1) {
+    const changed = change(model.entries[index]);
+    return changed === model.entries[index] ? model : replaceEntry(model, index, changed);
+  }
+  for (let at = 0; at < model.subagents.length; at += 1) {
+    const subagent = model.subagents[at];
+    const transcript = updateRequest(subagent.transcript, requestId, change);
+    if (transcript === subagent.transcript) continue;
+    const subagents = [...model.subagents];
+    subagents[at] = { ...subagent, transcript };
+    return { ...model, subagents };
+  }
+  return model;
+};
+
+/** Every entry of a request still pending, in this session and its subagents, changed. */
+const updatePending = (
+  model: AcpTranscript,
+  change: (entry: TranscriptEntry, requestId: string) => TranscriptEntry,
+): AcpTranscript => {
+  let changed = false;
+  const entries = model.entries.map((entry) => {
+    if (statusOf(entry) !== 'pending') return entry;
+    const requestId = entry.kind === 'tool' ? entry.permission!.requestId : (entry as TranscriptElicitation | TranscriptClientTool).requestId;
+    const next = change(entry, requestId);
+    if (next !== entry) changed = true;
+    return next;
+  });
+  const subagents = model.subagents.map((subagent) => {
+    const transcript = updatePending(subagent.transcript, change);
+    if (transcript === subagent.transcript) return subagent;
+    changed = true;
+    return { ...subagent, transcript };
+  });
+  return changed ? { ...model, entries, subagents } : model;
+};
+
+/** Shown again for one already in the transcript, or added. */
 const requestElicitation = (
   model: AcpTranscript,
   requestId: string,
   request: CreateElicitationRequest,
-): AcpTranscript => appendEntry(model, {
-  kind: 'elicitation',
-  requestId,
-  request,
-  status: 'pending',
-});
+): AcpTranscript => {
+  const index = model.entries.findIndex((entry) => entry.kind === 'elicitation' && entry.requestId === requestId);
+  if (index !== -1) {
+    const { response: _answered, ...current } = model.entries[index] as TranscriptElicitation;
+    return replaceEntry(model, index, { ...current, request, status: 'pending' });
+  }
+  return appendEntry(model, { kind: 'elicitation', requestId, request, status: 'pending' });
+};
 
-const resolveElicitation = (
+const requestClientTool = (
+  model: AcpTranscript,
+  event: Extract<AcpTranscriptEvent, { type: 'clientTool/requested' }>,
+): AcpTranscript => {
+  const index = model.entries.findIndex((entry) => entry.kind === 'client-tool' && entry.requestId === event.requestId);
+  const entry = { kind: 'client-tool' as const, requestId: event.requestId, tool: event.tool, runner: event.runner, status: 'pending' as const };
+  return index === -1 ? appendEntry(model, entry) : replaceEntry(model, index, { ...entry, id: model.entries[index].id });
+};
+
+/** How the Host says a request stopped waiting. This device's own answer keeps what it chose. */
+const resolveRequest = (
   model: AcpTranscript,
   requestId: string,
-  response: CreateElicitationResponse,
-): AcpTranscript => {
-  const index = model.entries.findIndex(
-    (entry) => entry.kind === 'elicitation' && entry.requestId === requestId,
-  );
-  if (index === -1) return model;
-  const current = model.entries[index] as TranscriptElicitation;
-  const status = response.action === 'accept'
-    ? 'accepted'
-    : response.action === 'decline'
-    ? 'declined'
-    : 'cancelled';
-  return replaceEntry(model, index, { ...current, response, status });
-};
+  status: Exclude<RequestStatus, 'pending'>,
+): AcpTranscript => updateRequest(model, requestId, (entry) => {
+  const current = statusOf(entry);
+  if (current === status || (status === 'answered' && current !== 'pending')) return entry;
+  return withStatus(entry, status);
+});
+
+/** Answered here: the option chosen, or the response given. */
+const answerPermission = (model: AcpTranscript, requestId: string, optionId?: string): AcpTranscript =>
+  updateRequest(model, requestId, (entry) => entry.kind === 'tool' && entry.permission
+    ? { ...entry, permission: { ...entry.permission, status: 'answered', ...(optionId ? { selectedOptionId: optionId } : {}) } }
+    : entry);
+
+const answerElicitation = (model: AcpTranscript, requestId: string, response: CreateElicitationResponse): AcpTranscript =>
+  updateRequest(model, requestId, (entry) => entry.kind === 'elicitation' ? { ...entry, status: 'answered', response } : entry);
 
 const completeElicitation = (
   model: AcpTranscript,
@@ -876,10 +963,28 @@ const completeElicitation = (
   const index = model.entries.findIndex((entry) =>
     entry.kind === 'elicitation'
     && urlElicitation(entry.request)?.elicitationId === notification.elicitationId);
-  if (index === -1) return model;
+  if (index === -1) {
+    // A subagent's, perhaps.
+    for (let at = 0; at < model.subagents.length; at += 1) {
+      const subagent = model.subagents[at];
+      const transcript = completeElicitation(subagent.transcript, notification);
+      if (transcript === subagent.transcript) continue;
+      const subagents = [...model.subagents];
+      subagents[at] = { ...subagent, transcript };
+      return { ...model, subagents };
+    }
+    return model;
+  }
   const current = model.entries[index] as TranscriptElicitation;
   return replaceEntry(model, index, { ...current, status: 'completed' });
 };
+
+/** A session's subagents, theirs, and so on. */
+export const allSubagents = (model: AcpTranscript): TranscriptSubagent[] =>
+  model.subagents.flatMap((subagent) => [subagent, ...allSubagents(subagent.transcript)]);
+
+/** Whether a request this device can answer waits in this transcript, not counting its subagents'. */
+export const waitsForAnswer = (model: AcpTranscript) => model.entries.some((entry) => statusOf(entry) === 'pending' && entry.kind !== 'client-tool');
 
 export const queueOptimisticPrompt = (
   model: AcpTranscript,
@@ -931,6 +1036,11 @@ export const reduceAcpEvent = (
         ...(event.modes ? { currentModeId: event.modes.currentModeId, availableModes: event.modes.availableModes } : {}),
         ...(event.configOptions ? { configOptions: event.configOptions } : {}),
       };
+    case 'session/renamed':
+      return {
+        ...appendEntry(model, { kind: 'diagnostic', severity: 'info', title: `${event.by} renamed this session to “${event.title}”` }),
+        title: event.title,
+      };
     case 'session/closed':
       return {
         ...settleOptimisticPrompts(appendEntry(model, { kind: 'diagnostic', severity: 'info', title: 'The session closed', detail: event.reason })),
@@ -981,20 +1091,21 @@ export const reduceAcpEvent = (
         turn: { status: 'failed', error: event.error },
       };
     case 'permission/requested':
-      return requestPermission(model, event.requestId, event.request);
-    case 'permission/resolved':
-      return resolvePermission(
-        model,
-        event.requestId,
-        'resolved',
-        event.optionId,
-      );
-    case 'permission/cancelled':
-      return resolvePermission(model, event.requestId, 'cancelled');
+      return inSession(model, event.sessionId, (transcript) => requestPermission(transcript, event.requestId, event.request));
     case 'elicitation/requested':
-      return requestElicitation(model, event.requestId, event.request);
+      return inSession(model, event.sessionId, (transcript) => requestElicitation(transcript, event.requestId, event.request));
+    case 'clientTool/requested':
+      return inSession(model, event.sessionId, (transcript) => requestClientTool(transcript, event));
+    case 'permission/resolved':
+      return answerPermission(model, event.requestId, event.optionId);
     case 'elicitation/resolved':
-      return resolveElicitation(model, event.requestId, event.response);
+      return answerElicitation(model, event.requestId, event.response);
+    case 'request/resolved':
+      return resolveRequest(model, event.requestId, event.status);
+    case 'requests/settled': {
+      const waiting = new Set(event.waiting);
+      return updatePending(model, (entry, requestId) => waiting.has(requestId) ? entry : withStatus(entry, 'ended'));
+    }
     case 'elicitation/completed':
       return completeElicitation(model, event.notification);
   }

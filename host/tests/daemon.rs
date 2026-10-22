@@ -46,6 +46,10 @@ use weave_host_protocol::HostClient;
 use weave_host_protocol::VersionRange;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::files::FileEntry;
+use weave_host_protocol::files::FileKind;
+use weave_host_protocol::files::LIST_FEATURE as LIST_FILES_FEATURE;
+use weave_host_protocol::files::ListFilesRequest;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
@@ -64,14 +68,19 @@ use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::CloseSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::CreateSessionRequest;
+use weave_host_protocol::sessions::DeleteSessionRequest;
 use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::UnwatchSessionsRequest;
+use weave_host_protocol::sessions::WATCH_FEATURE;
+use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::CancelTurnRequest;
@@ -92,14 +101,24 @@ fn fake_agents(state: PathBuf, require_auth: bool) -> Launcher {
 
 /// [`fake_agents`], advertising MCP servers over ACP when `mcp_over_acp`.
 fn fake_agents_with(state: PathBuf, require_auth: bool, mcp_over_acp: bool) -> Launcher {
+    fake_agents_tuned(state, move |config| {
+        config.require_auth = require_auth;
+        config.mcp_over_acp = mcp_over_acp;
+    })
+}
+
+/// [`fake_agents`], with `tune` making changes of its own to each one's configuration.
+fn fake_agents_tuned(
+    state: PathBuf,
+    tune: impl Fn(&mut FakeAgentConfig) + Send + Sync + 'static,
+) -> Launcher {
     Arc::new(move |_launch: &Launch, options: ClientOptions, _traces| {
-        let config = FakeAgentConfig {
+        let mut config = FakeAgentConfig {
             state_path: Some(state.clone()),
-            require_auth,
-            mcp_over_acp,
             stdio_mcp: in_process_bridge(),
             ..FakeAgentConfig::default()
         };
+        tune(&mut config);
         Box::pin(async move {
             let (client, agent) = Channel::duplex();
             tokio::spawn(weave_fake_agent::serve_with(agent, config));
@@ -275,6 +294,8 @@ struct Seen {
     ended: Option<StopReason>,
     closed: Option<String>,
     notices: Vec<String>,
+    /// Titles the session was renamed to through the Host, and by whom.
+    renamed: Vec<(String, Option<TurnOrigin>)>,
 }
 
 fn text(block: &ContentBlock) -> String {
@@ -486,6 +507,48 @@ impl TestClient {
             .map(drop)
     }
 
+    /// Watch the Host's sessions: how they list now.
+    async fn watch(&self) -> Vec<SessionListing> {
+        self.connection
+            .send(WatchSessionsRequest {})
+            .await
+            .expect("sessions/watch")
+            .sessions
+    }
+
+    /// The next change to the Host's sessions this client hears of, passing over the rest.
+    async fn change(&mut self) -> Change {
+        loop {
+            match self.next().await {
+                HostEvent::SessionUpdated(updated) => {
+                    return Change::Updated(Box::new(updated.session));
+                }
+                HostEvent::SessionRemoved(removed) => return Change::Removed(removed.session_id),
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether a change to the Host's sessions comes within a moment.
+    async fn hears_a_change(&mut self) -> bool {
+        tokio::time::timeout(Duration::from_millis(300), self.change())
+            .await
+            .is_ok()
+    }
+
+    /// Changes until one `done` accepts, which is the last.
+    async fn changes_until(&mut self, mut done: impl FnMut(&Change) -> bool) -> Vec<Change> {
+        let mut changes = Vec::new();
+        loop {
+            let change = self.change().await;
+            let last = done(&change);
+            changes.push(change);
+            if last {
+                return changes;
+            }
+        }
+    }
+
     /// Wait for a pending permission request.
     async fn asked(&mut self, seen: &mut Seen) -> (SessionId, PendingRequest) {
         loop {
@@ -533,9 +596,26 @@ impl Seen {
             }
             SessionEvent::Closed { reason } => self.closed = Some(reason),
             SessionEvent::Notice { text } => self.notices.push(text),
+            SessionEvent::Renamed { title, by } => self.renamed.push((title, by)),
             _ => {}
         }
         false
+    }
+}
+
+/// A change to the Host's sessions, as a watching client hears it.
+#[derive(Debug, PartialEq)]
+enum Change {
+    Updated(Box<SessionListing>),
+    Removed(SessionId),
+}
+
+impl Change {
+    fn state(&self) -> Option<(SessionStatus, Option<Activity>)> {
+        match self {
+            Change::Updated(listing) => Some((listing.state, listing.activity)),
+            Change::Removed(_) => None,
+        }
     }
 }
 
@@ -1733,4 +1813,500 @@ async fn the_mcp_socket_is_private_and_refuses_an_unknown_token() {
         .expect("closed in time")
         .expect("read");
     assert_eq!(answer, "");
+}
+
+#[tokio::test]
+async fn a_watcher_hears_of_sessions_it_isnt_attached_to_from_first_prompt_to_deletion() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut watcher = world.client(&daemon).await;
+    assert!(
+        watcher
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == WATCH_FEATURE)
+    );
+    assert_eq!(watcher.watch().await, Vec::new());
+
+    // Blank, it isn't listed, so there's nothing to hear.
+    let mut driver = world.client(&daemon).await;
+    let session_id = driver.create(&world).await;
+    assert!(!watcher.hears_a_change().await);
+
+    // Prompted, it appears, then runs, waits on a person, runs again and goes idle, titled.
+    let path = world.cwd().join("watched.txt");
+    driver
+        .prompt(&session_id, &format!("write {} hello", path.display()))
+        .await;
+    let (asked_in, pending) = driver.asked(&mut Seen::default()).await;
+    driver
+        .allow(&asked_in, &pending, "allow")
+        .await
+        .expect("answer");
+    driver.until_turn_ends(&mut Seen::default(), None).await;
+    let changes = watcher
+        .changes_until(|change| change.state() == Some((SessionStatus::Open, Some(Activity::Idle))))
+        .await;
+    let mut activities: Vec<Activity> = changes
+        .iter()
+        .filter_map(|change| change.state().and_then(|(_, activity)| activity))
+        .collect();
+    activities.dedup();
+    assert_eq!(
+        activities,
+        [
+            Activity::Running,
+            Activity::Waiting,
+            Activity::Running,
+            Activity::Idle
+        ]
+    );
+    let Some(Change::Updated(last)) = changes.last() else {
+        panic!("no update: {changes:?}");
+    };
+    assert_eq!(last.info.session_id, session_id);
+    assert_eq!(last.info.cwd, world.cwd());
+    assert_eq!(last.agent_id, "fake");
+    assert_eq!(last.clients, 1);
+    assert!(last.info.title.is_some(), "the agent titled it: {last:?}");
+
+    // Closed, opened again by attaching, then deleted.
+    driver
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+    let closed = watcher
+        .changes_until(|change| {
+            change
+                .state()
+                .is_some_and(|(state, _)| state == SessionStatus::Closed)
+        })
+        .await;
+    assert_eq!(
+        closed.last().and_then(Change::state),
+        Some((SessionStatus::Closed, None))
+    );
+    let mut other = world.client(&daemon).await;
+    other.attach(&session_id).await;
+    watcher
+        .changes_until(|change| {
+            change
+                .state()
+                .is_some_and(|(state, _)| state == SessionStatus::Open)
+        })
+        .await;
+    driver
+        .connection
+        .send(DeleteSessionRequest {
+            session_id: session_id.clone(),
+            agent_id: None,
+        })
+        .await
+        .expect("session/delete");
+    let gone = watcher
+        .changes_until(|change| matches!(change, Change::Removed(_)))
+        .await;
+    assert_eq!(gone.last(), Some(&Change::Removed(session_id)));
+}
+
+#[tokio::test]
+async fn a_watcher_hears_of_sessions_suspended_when_the_host_stops_and_blank_ones_closed() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut driver = world.client(&daemon).await;
+    let kept = driver.create(&world).await;
+    driver.prompt(&kept, "hello").await;
+    driver.until_turn_ends(&mut Seen::default(), None).await;
+    let mut watcher = world.client(&daemon).await;
+    let listed = watcher.watch().await;
+    assert_eq!(
+        listed
+            .iter()
+            .map(|listing| (
+                listing.info.session_id.clone(),
+                listing.state,
+                listing.activity
+            ))
+            .collect::<Vec<_>>(),
+        [(kept.clone(), SessionStatus::Open, Some(Activity::Idle))]
+    );
+
+    // One nobody prompted goes, closed, with nothing left of it.
+    let blank = driver.create(&world).await;
+    driver
+        .connection
+        .send(CloseSessionRequest {
+            session_id: blank.clone(),
+        })
+        .await
+        .expect("session/close");
+    assert_eq!(watcher.change().await, Change::Removed(blank));
+
+    daemon.shutdown().await;
+    let suspended = watcher
+        .changes_until(|change| {
+            change
+                .state()
+                .is_some_and(|(state, _)| state == SessionStatus::Suspended)
+        })
+        .await;
+    let Some(Change::Updated(listing)) = suspended.last() else {
+        panic!("no update: {suspended:?}");
+    };
+    assert_eq!(listing.info.session_id, kept);
+    assert_eq!((listing.activity, listing.clients), (None, 0));
+}
+
+#[tokio::test]
+async fn a_watcher_that_unwatches_hears_no_more() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut watcher = world.client(&daemon).await;
+    watcher.watch().await;
+    watcher
+        .connection
+        .send(UnwatchSessionsRequest {})
+        .await
+        .expect("sessions/unwatch");
+    let mut driver = world.client(&daemon).await;
+    let session_id = driver.create(&world).await;
+    driver.prompt(&session_id, "hello").await;
+    driver.until_turn_ends(&mut Seen::default(), None).await;
+    assert!(!watcher.hears_a_change().await);
+}
+
+#[tokio::test]
+async fn a_client_lists_directories_on_the_hosts_computer() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let client = world.client(&daemon).await;
+    assert!(
+        client
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == LIST_FILES_FEATURE)
+    );
+    let tree = world.cwd().join("tree");
+    for dir in ["beta", "Alpha", ".hidden"] {
+        std::fs::create_dir_all(tree.join(dir)).expect("directory");
+    }
+    std::fs::write(tree.join("c.txt"), "c").expect("file");
+    std::os::unix::fs::symlink(tree.join("beta"), tree.join("link")).expect("symlink");
+    std::os::unix::fs::symlink(tree.join("nowhere"), tree.join("gone")).expect("symlink");
+    let list = |path: PathBuf, hidden: bool| {
+        client.connection.send(ListFilesRequest {
+            path: Some(path),
+            hidden,
+        })
+    };
+    let entry = |name: &str, kind: FileKind| FileEntry {
+        name: name.to_owned(),
+        kind,
+    };
+
+    // Directories first, a symlink to one among them, then by name; `..` worked out.
+    let listed = list(tree.join("beta/.."), false).await.expect("files/list");
+    assert_eq!(listed.path, tree);
+    assert_eq!(listed.parent.as_deref(), Some(world.cwd().as_path()));
+    assert_eq!(
+        listed.entries,
+        [
+            entry("Alpha", FileKind::Directory),
+            entry("beta", FileKind::Directory),
+            entry("link", FileKind::Directory),
+            entry("c.txt", FileKind::File),
+            entry("gone", FileKind::Other),
+        ]
+    );
+    assert!(!listed.truncated);
+    let hidden = list(tree.clone(), true).await.expect("files/list");
+    assert_eq!(hidden.entries[0], entry(".hidden", FileKind::Directory));
+
+    // Without a path, the home directory.
+    let home = client
+        .connection
+        .send(ListFilesRequest::default())
+        .await
+        .expect("files/list");
+    assert_eq!(home.path, home.home);
+
+    for (path, why) in [
+        (
+            PathBuf::from("tree"),
+            "tree isn't an absolute path".to_owned(),
+        ),
+        (
+            tree.join("missing"),
+            format!("{} doesn't exist", tree.join("missing").display()),
+        ),
+        (
+            tree.join("c.txt"),
+            format!("{} isn't a directory", tree.join("c.txt").display()),
+        ),
+    ] {
+        let error = list(path, false).await.expect_err("refused");
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.as_str()),
+            Some(why.as_str())
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_tool_call_sent_before_the_session_is_set_up_waits_for_it() {
+    let world = World::new();
+    let mut config = world.config(
+        false,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        false,
+    );
+    config.launcher = fake_agents_tuned(world.dir.path().join("agent-state.json"), |config| {
+        config.mcp_over_acp = true;
+        config.call_on_new = Some(CLIPBOARD_WRITE.to_owned());
+    });
+    let daemon = Daemon::new(config);
+    let mut client = world.tool_client(&daemon).await;
+    client.create(&world).await;
+    // The call reached the Host before `session/new` was answered. It waited for the session
+    // rather than failing as one for no session, then found no turn to send it to.
+    let mut seen = Seen::default();
+    while !seen.agent.starts_with("Early ") {
+        let event = client.next().await;
+        client.note(event, &mut seen, None).await;
+    }
+    assert_eq!(
+        seen.agent,
+        "Early clipboard_write: No turn is running, so nobody's device can run it."
+    );
+}
+
+#[tokio::test]
+async fn a_session_opened_again_declares_the_host_mcp_server_anew() {
+    let world = World::new();
+    let daemon = world.daemon_over_acp();
+    let mut client = world.tool_client(&daemon).await;
+    let session_id = client.create(&world).await;
+    let declared = |seen: &Seen| {
+        seen.agent
+            .rsplit("MCP servers: ")
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    client.prompt(&session_id, "mcp").await;
+    let mut before = Seen::default();
+    client.until_turn_ends(&mut before, None).await;
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+
+    let mut again = world.tool_client(&daemon).await;
+    again.attach(&session_id).await;
+    again.prompt(&session_id, "mcp").await;
+    let mut after = Seen::default();
+    while !after.agent.contains("MCP servers: ") || after.ended.is_none() {
+        let event = again.next().await;
+        again.note(event, &mut after, None).await;
+    }
+    assert!(declared(&before).starts_with("weave (acp "), "{before:?}");
+    assert!(declared(&after).starts_with("weave (acp "), "{after:?}");
+    assert_ne!(declared(&before), declared(&after));
+
+    // The new declaration is the one that works.
+    again.prompt(&session_id, COPY).await;
+    let mut seen = Seen::default();
+    let (_, call) = again.tool_call(&mut seen).await;
+    again
+        .run_tool(&session_id, &call, ClientToolResult::text("Copied."))
+        .await
+        .expect("the target answers");
+    again.until_turn_ends(&mut seen, None).await;
+    assert!(
+        seen.agent.contains("clipboard_write answered: Copied."),
+        "{seen:?}"
+    );
+}
+
+fn rename(session_id: &SessionId, title: &str) -> RenameSessionRequest {
+    RenameSessionRequest {
+        session_id: session_id.clone(),
+        title: title.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn a_session_renamed_through_the_host_keeps_its_title() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let mut watcher = world.client(&daemon).await;
+    watcher.watch().await;
+    let session_id = client.create(&world).await;
+
+    for (title, why) in [
+        ("   ".to_owned(), "a title can't be empty"),
+        ("x".repeat(201), "a title is at most 200 characters"),
+    ] {
+        let error = client
+            .connection
+            .send(rename(&session_id, &title))
+            .await
+            .expect_err("refused");
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.as_str()),
+            Some(why)
+        );
+    }
+    client
+        .connection
+        .send(rename(&session_id, "  Parser fixes "))
+        .await
+        .expect("session/rename");
+
+    // The agent titles a session after its first prompt; that doesn't replace the rename.
+    client.prompt(&session_id, "hello").await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(
+        seen.renamed,
+        [(
+            "Parser fixes".to_owned(),
+            Some(TurnOrigin::Client {
+                name: "test".to_owned(),
+                id: client.connection.client_id().clone(),
+                device: None,
+            })
+        )]
+    );
+    let changes = watcher
+        .changes_until(|change| change.state() == Some((SessionStatus::Open, Some(Activity::Idle))))
+        .await;
+    for change in &changes {
+        let Change::Updated(listing) = change else {
+            panic!("{changes:?}");
+        };
+        assert_eq!(listing.info.title.as_deref(), Some("Parser fixes"));
+    }
+    let titles = |listings: Vec<SessionListing>| {
+        listings
+            .into_iter()
+            .map(|listing| listing.info.title)
+            .collect::<Vec<_>>()
+    };
+    let host = client
+        .connection
+        .send(ListSessionsRequest::default())
+        .await
+        .expect("sessions/list");
+    assert_eq!(titles(host.sessions), [Some("Parser fixes".to_owned())]);
+    assert_eq!(
+        titles(client.listing(&world).await),
+        [Some("Parser fixes".to_owned())]
+    );
+
+    // A Host that stopped and started again keeps it.
+    daemon.shutdown().await;
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut later = world.client(&daemon).await;
+    let resumed = later.attach(&session_id).await;
+    assert_eq!(resumed.state.title.as_deref(), Some("Parser fixes"));
+
+    // So does a session closed and opened again, in a new journal.
+    later
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+    let error = later
+        .connection
+        .send(rename(&session_id, "Closed"))
+        .await
+        .expect_err("refused");
+    assert!(errors::is(&error, errors::SESSION_NOT_OPEN), "{error}");
+    let mut again = world.client(&daemon).await;
+    let reopened = again.attach(&session_id).await;
+    assert!(reopened.replay.reset);
+    assert_eq!(reopened.state.title.as_deref(), Some("Parser fixes"));
+}
+
+#[tokio::test]
+async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let run = client
+        .connection
+        .send(RunRequest {
+            agent_id: "fake".to_owned(),
+            cwd: world.cwd(),
+            session_id: None,
+            additional_directories: Vec::new(),
+            prompt: vec![ContentBlock::from(
+                r#"tool rename_session {"title": "Named by its agent"}"#.to_owned(),
+            )],
+            policy: PermissionPolicy {
+                approve: Vec::new(),
+                otherwise: Unapproved::Reject,
+            },
+            attach: true,
+            trace: false,
+        })
+        .await
+        .expect("session/run");
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.renamed, [("Named by its agent".to_owned(), None)]);
+    assert!(
+        seen.agent
+            .contains("rename_session answered: Renamed this session to “Named by its agent”."),
+        "{seen:?}"
+    );
+    assert_eq!(
+        run.state.map(|state| state.session_id),
+        Some(run.session_id.clone())
+    );
+
+    // An empty title is the agent's mistake, told it as a tool error.
+    let session_id = run.session_id;
+    client
+        .prompt(&session_id, r#"tool rename_session {"title": " "}"#)
+        .await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(
+        seen.agent
+            .contains("rename_session failed: Not renamed: a title can't be empty."),
+        "{seen:?}"
+    );
+
+    // Configured off, it isn't offered.
+    let config = world.dir.path().join("config.toml");
+    let text = std::fs::read_to_string(&config).expect("config");
+    std::fs::write(&config, format!("host_tools = []\n{text}")).expect("config");
+    let other = client.create(&world).await;
+    client
+        .prompt(&other, r#"tool rename_session {"title": "Not offered"}"#)
+        .await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(
+        seen.agent.starts_with("rename_session couldn't be called")
+            && seen.agent.contains("unknown tool: rename_session"),
+        "{seen:?}"
+    );
+    assert!(seen.renamed.is_empty());
 }

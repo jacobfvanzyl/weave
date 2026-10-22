@@ -91,6 +91,10 @@ pub(crate) enum Entry {
         cwd: PathBuf,
         policy: PermissionPolicy,
         created_ms: u64,
+        /// The title the Host kept for the session (`session/rename`) when this journal began,
+        /// as one that replaced a closed session's journal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -154,6 +158,12 @@ pub(crate) enum Entry {
     Closed { reason: String, at_ms: u64 },
     /// Something the Host told the session's clients.
     Notice { text: String },
+    /// The session was renamed through the Host: its title from now on.
+    Renamed {
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
 }
 
 impl Entry {
@@ -163,6 +173,7 @@ impl Entry {
         agent_id: &str,
         cwd: PathBuf,
         policy: PermissionPolicy,
+        title: Option<String>,
     ) -> Self {
         Self::Header {
             version: VERSION,
@@ -172,6 +183,7 @@ impl Entry {
             cwd,
             policy,
             created_ms: now_ms(),
+            title,
         }
     }
 
@@ -257,6 +269,10 @@ impl Entry {
                 reason: reason.clone(),
             },
             Self::Notice { text } => SessionEvent::Notice { text: text.clone() },
+            Self::Renamed { title, by } => SessionEvent::Renamed {
+                title: title.clone(),
+                by: by.clone(),
+            },
         })
     }
 }
@@ -478,6 +494,18 @@ impl Recorded {
     }
 }
 
+/// The title the Host keeps for the session `records` journal: the last it was renamed to,
+/// or the one its journal began with.
+pub(crate) fn kept_title(records: &[Record]) -> Option<String> {
+    records
+        .iter()
+        .fold(None, |kept, record| match &record.entry {
+            Entry::Header { title, .. } => title.clone().or(kept),
+            Entry::Renamed { title, .. } => Some(title.clone()),
+            _ => kept,
+        })
+}
+
 /// The record of `session_id`'s journal in `dir`, if it has one.
 pub(crate) fn recorded(dir: &Path, session_id: &SessionId) -> Option<Recorded> {
     record_of(&path_for(dir, session_id)).map(|(_, recorded)| recorded)
@@ -639,7 +667,38 @@ mod tests {
             "agent",
             "/repo".into(),
             PermissionPolicy::ask(),
+            None,
         )
+    }
+
+    #[test]
+    fn the_kept_title_is_the_last_rename_or_the_one_the_journal_began_with() {
+        let record = |entry: Entry| Record { entry, at: 0 };
+        let titled = |title: &str| {
+            let mut header = header("s1");
+            if let Entry::Header { title: kept, .. } = &mut header {
+                *kept = Some(title.to_owned());
+            }
+            header
+        };
+        let renamed = |title: &str| Entry::Renamed {
+            title: title.to_owned(),
+            by: None,
+        };
+        assert_eq!(kept_title(&[record(header("s1"))]), None);
+        assert_eq!(
+            kept_title(&[record(titled("Carried on"))]).as_deref(),
+            Some("Carried on")
+        );
+        assert_eq!(
+            kept_title(&[
+                record(titled("Carried on")),
+                record(renamed("First")),
+                record(renamed("Second")),
+            ])
+            .as_deref(),
+            Some("Second")
+        );
     }
 
     #[test]

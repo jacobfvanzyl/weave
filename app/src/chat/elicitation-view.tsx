@@ -11,7 +11,8 @@ import type {
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowUpRight01Icon, InformationCircleIcon } from '@hugeicons/core-free-icons';
 import { type FormElicitation, type TranscriptElicitation, type UrlElicitation, formElicitation, urlElicitation } from './acp-transcript';
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { elicitationAnswerText, requestEndText, urlCheck } from './pending-request';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -324,6 +325,17 @@ function FormField({
   );
 }
 
+/** How a request stopped waiting, under its card. */
+function Outcome({ entry }: { entry: TranscriptElicitation }) {
+  if (entry.status === 'pending') return null;
+  const text = entry.status === 'completed'
+    ? 'The agent finished the step you opened in the browser'
+    : entry.status === 'answered'
+      ? elicitationAnswerText(entry.response, Boolean(urlRequest(entry.request)))
+      : requestEndText[entry.status];
+  return <p className="text-[0.6875rem] text-muted-foreground" data-slot="elicitation-outcome">{text}</p>;
+}
+
 function ElicitationForm({
   entry,
   onRespond,
@@ -343,6 +355,7 @@ function ElicitationForm({
   ), [properties]);
   const [values, setValues] = useState<FormValues>(defaults);
   const [errors, setErrors] = useState<FormErrors>({});
+  const waiting = entry.status === 'pending';
 
   return (
     <form
@@ -358,88 +371,127 @@ function ElicitationForm({
     >
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium">{form.message}</span>
-        <Badge className="ml-auto" variant="outline">Input requested</Badge>
+        {waiting && <Badge className="ml-auto" variant="outline">Input requested</Badge>}
       </div>
-      <FieldGroup className="gap-3 sm:grid sm:grid-cols-2">
-        {Object.entries(properties).map(([name, schema]) => (
-          <FormField
-            key={name}
-            name={name}
-            schema={schema}
-            value={values[name]}
-            error={errors[name]}
-            onChange={(value) => {
-              setValues((current) => {
-                if (value !== undefined) return { ...current, [name]: value };
-                const { [name]: _removed, ...remaining } = current;
-                return remaining;
-              });
-              setErrors((current) => {
-                if (!(name in current)) return current;
-                const { [name]: _removed, ...remaining } = current;
-                return remaining;
-              });
-            }}
-          />
-        ))}
-      </FieldGroup>
-      {entry.status === 'pending' && (
-        <div className="flex justify-end gap-1.5 border-t pt-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => onRespond(entry.requestId, { action: 'decline' })}
-          >
-            Decline
-          </Button>
-          <Button type="submit">Submit</Button>
-        </div>
-      )}
+      <fieldset disabled={!waiting} className="contents">
+        <FieldGroup className="gap-3 sm:grid sm:grid-cols-2">
+          {Object.entries(properties).map(([name, schema]) => (
+            <FormField
+              key={name}
+              name={name}
+              schema={schema}
+              value={values[name]}
+              error={errors[name]}
+              onChange={(value) => {
+                setValues((current) => {
+                  if (value !== undefined) return { ...current, [name]: value };
+                  const { [name]: _removed, ...remaining } = current;
+                  return remaining;
+                });
+                setErrors((current) => {
+                  if (!(name in current)) return current;
+                  const { [name]: _removed, ...remaining } = current;
+                  return remaining;
+                });
+              }}
+            />
+          ))}
+        </FieldGroup>
+      </fieldset>
+      {waiting
+        ? (
+          <div className="flex justify-end gap-1.5 border-t pt-2">
+            <Button type="button" variant="ghost" onClick={() => onRespond(entry.requestId, { action: 'cancel' })}>
+              Cancel
+            </Button>
+            <Button type="button" variant="outline" onClick={() => onRespond(entry.requestId, { action: 'decline' })}>
+              Decline
+            </Button>
+            <Button type="submit">Submit</Button>
+          </div>
+        )
+        : <Outcome entry={entry} />}
     </form>
   );
 }
 
+/**
+ * A page the agent wants opened, such as a sign-in. The card shows the whole URL and its host,
+ * with what to beware of; it opens only when the person says so, and the app never fetches it.
+ */
+function UrlElicitation({
+  entry,
+  url,
+  onRespond,
+  onOpenUrl,
+}: {
+  entry: TranscriptElicitation;
+  url: UrlRequest;
+  onRespond(requestId: string, response: CreateElicitationResponse): void;
+  onOpenUrl(url: string): void;
+}) {
+  const { host, warnings } = urlCheck(url.url);
+  return (
+    <Alert>
+      <HugeiconsIcon icon={InformationCircleIcon} strokeWidth={1.75} />
+      <AlertTitle>{url.message}</AlertTitle>
+      <AlertDescription className="grid gap-1.5">
+        <span>{host ? <>It wants to open a page on <strong className="text-foreground">{host}</strong> in your browser:</> : 'It wants to open:'}</span>
+        <code className="break-all text-[0.6875rem]" data-slot="elicitation-url">{url.url}</code>
+        {warnings.length > 0 && (
+          <ul className="grid gap-0.5 text-warning">
+            {warnings.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        )}
+        {entry.status === 'pending'
+          ? (
+            <div className="flex flex-wrap justify-end gap-1.5 pt-1">
+              <Button size="sm" variant="ghost" onClick={() => onRespond(entry.requestId, { action: 'cancel' })}>
+                Cancel
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => onRespond(entry.requestId, { action: 'decline' })}>
+                Decline
+              </Button>
+              {host && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    onOpenUrl(url.url);
+                    onRespond(entry.requestId, { action: 'accept' });
+                  }}
+                >
+                  Open in browser
+                  <HugeiconsIcon data-icon="inline-end" icon={ArrowUpRight01Icon} strokeWidth={1.75} />
+                </Button>
+              )}
+            </div>
+          )
+          : <Outcome entry={entry} />}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/** Opens a page in the system browser: Capacitor hands a new window's URL to iOS. */
+const openInBrowser = (url: string) => {
+  window.open(url, '_blank', 'noopener,noreferrer');
+};
+
 export function ElicitationView({
   entry,
   onRespond,
+  onOpenUrl = openInBrowser,
 }: {
   entry: TranscriptElicitation;
   onRespond(requestId: string, response: CreateElicitationResponse): void;
+  onOpenUrl?(url: string): void;
 }) {
   if (formRequest(entry.request)) {
     return <ElicitationForm entry={entry} onRespond={onRespond} />;
   }
   const url = urlRequest(entry.request);
-  if (url) {
-    return (
-      <Alert>
-        <HugeiconsIcon icon={InformationCircleIcon} strokeWidth={1.75} />
-        <AlertTitle>{url.message}</AlertTitle>
-        <AlertDescription className="truncate">{url.url}</AlertDescription>
-        {entry.status === 'pending' && (
-          <AlertAction className="flex gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onRespond(entry.requestId, { action: 'decline' })}
-            >
-              Decline
-            </Button>
-            <Button
-              render={<a href={url.url} rel="noreferrer" target="_blank" />}
-              nativeButton={false}
-              size="sm"
-              variant="outline"
-              onClick={() => onRespond(entry.requestId, { action: 'accept' })}
-            >
-              Open
-              <HugeiconsIcon data-icon="inline-end" icon={ArrowUpRight01Icon} strokeWidth={1.75} />
-            </Button>
-          </AlertAction>
-        )}
-      </Alert>
-    );
-  }
+  if (url) return <UrlElicitation entry={entry} url={url} onRespond={onRespond} onOpenUrl={onOpenUrl} />;
   return (
     <Alert>
       <AlertTitle className="flex items-center gap-2">
@@ -450,16 +502,18 @@ export function ElicitationView({
         <pre className="overflow-x-auto whitespace-pre-wrap">
           {JSON.stringify(entry.request, null, 2)}
         </pre>
-        {entry.status === 'pending' && (
-          <Button
-            className="mt-2"
-            size="sm"
-            variant="ghost"
-            onClick={() => onRespond(entry.requestId, { action: 'cancel' })}
-          >
-            Dismiss
-          </Button>
-        )}
+        {entry.status === 'pending'
+          ? (
+            <Button
+              className="mt-2"
+              size="sm"
+              variant="ghost"
+              onClick={() => onRespond(entry.requestId, { action: 'cancel' })}
+            >
+              Dismiss
+            </Button>
+          )
+          : <Outcome entry={entry} />}
       </AlertDescription>
     </Alert>
   );

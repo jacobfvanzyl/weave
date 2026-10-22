@@ -22,6 +22,7 @@ use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::Responder;
+use agent_client_protocol::schema::MaybeUndefined;
 use serde_json::Map;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -70,13 +71,16 @@ use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::MAX_TITLE;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::RunningTurn;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
+use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::SteerTurnResponse;
@@ -270,6 +274,26 @@ pub(crate) enum Command {
     Notice {
         text: String,
     },
+    /// Give the session a title of the Host's (`session/rename`, or the `rename_session` Host
+    /// tool), checked already with [`title`].
+    Rename {
+        title: String,
+        /// The client that renamed it; none for its own agent.
+        by: Option<TurnOrigin>,
+        done: oneshot::Sender<()>,
+    },
+}
+
+/// A title as `session/rename` takes it: trimmed, and 1 to [`MAX_TITLE`] characters.
+pub(crate) fn title(title: &str) -> Result<String, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("a title can't be empty".to_owned());
+    }
+    if title.chars().count() > MAX_TITLE {
+        return Err(format!("a title is at most {MAX_TITLE} characters"));
+    }
+    Ok(title.to_owned())
 }
 
 /// `turn/steer`: a message for a running turn, waiting for the agent to take it.
@@ -370,6 +394,8 @@ pub(crate) struct Opened {
     pub(crate) blank: bool,
     /// The Host MCP server's declaration for the session, when it has one.
     pub(crate) binding: Option<Binding>,
+    /// The title the Host keeps for it, from its journal.
+    pub(crate) title: Option<String>,
 }
 
 /// Start the task that owns a session, and register it with the Host.
@@ -386,6 +412,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         additional_directories,
         blank,
         binding,
+        title,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
@@ -394,7 +421,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         session_id: session_id.clone(),
         agent_id: agent.id.clone(),
         cwd: cwd.clone(),
-        title: None,
+        title: title.clone(),
         activity: Activity::Idle,
         clients: 0,
         policy: policy.clone(),
@@ -464,6 +491,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         cwd,
         additional_directories,
         summary,
+        renamed: title,
         reported: Reported::default(),
         blank,
         idle_since: None,
@@ -621,6 +649,9 @@ struct Actor {
     cwd: PathBuf,
     additional_directories: Vec<PathBuf>,
     summary: Arc<Mutex<Summary>>,
+    /// The title the session was renamed to through the Host, which the agent's titles don't
+    /// replace.
+    renamed: Option<String>,
     reported: Reported,
     /// Whether the session is blank; see [`SessionHandle::is_blank`].
     blank: Arc<AtomicBool>,
@@ -752,6 +783,12 @@ impl Actor {
             }
             Command::Notice { text } => {
                 self.record(Entry::Notice { text });
+            }
+            Command::Rename { title, by, done } => {
+                lock(&self.summary).title = Some(title.clone());
+                self.renamed = Some(title.clone());
+                self.record(Entry::Renamed { title, by });
+                let _ = done.send(());
             }
         }
     }
@@ -1026,10 +1063,19 @@ impl Actor {
                 self.tool_kinds.observe(&notification.update);
                 if notification.session_id == self.root {
                     self.snapshot.apply(&notification.update);
-                    if let SessionUpdate::SessionInfoUpdate(info) = &notification.update
-                        && let Some(title) = info.title.value()
-                    {
-                        lock(&self.summary).title = Some(title.clone());
+                    if let SessionUpdate::SessionInfoUpdate(info) = &mut notification.update {
+                        if self.renamed.is_some() {
+                            // The title the session was renamed to holds; one the agent
+                            // generates after it doesn't replace it.
+                            if info.title.value().is_some() {
+                                info.title = MaybeUndefined::Undefined;
+                                if info.updated_at.value().is_none() && info.meta.is_none() {
+                                    return;
+                                }
+                            }
+                        } else if let Some(title) = info.title.value() {
+                            lock(&self.summary).title = Some(title.clone());
+                        }
                     }
                 } else {
                     self.adopt(&notification.session_id);
@@ -1271,6 +1317,12 @@ impl Actor {
         };
         self.reported = now;
         self.broadcast(&notification);
+        // A blank session isn't listed, so nobody watching hears of it until its first prompt.
+        if !self.blank.load(Ordering::Relaxed) {
+            let session = lock(&self.summary).listing();
+            self.shared
+                .tell_watchers(&SessionUpdatedNotification { session });
+        }
     }
 
     async fn finish(mut self, ending: Ending) {
@@ -1300,6 +1352,22 @@ impl Actor {
                 known.closed = !suspended;
                 known.last_activity_ms = last_activity_ms;
             }
+        }
+        if blank {
+            self.shared.tell_watchers(&SessionRemovedNotification {
+                session_id: self.root.clone(),
+            });
+        } else {
+            let mut session = lock(&self.summary).listing();
+            session.state = if suspended {
+                SessionStatus::Suspended
+            } else {
+                SessionStatus::Closed
+            };
+            session.activity = None;
+            session.clients = 0;
+            self.shared
+                .tell_watchers(&SessionUpdatedNotification { session });
         }
         let pending_all = |_: &Pending| true;
         if suspended {

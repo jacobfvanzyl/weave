@@ -1,7 +1,12 @@
-//! Client tools: tools the Host offers a session's agent through the Host MCP server, which an
-//! attached client runs on its own device (ADR 0009). A call is a pending request for one
-//! client, the one that sent the running turn's latest prompt or steer; it answers with the
-//! tool's result.
+//! The tools the Host offers a session's agent through the Host MCP server (`weave`), of two
+//! kinds:
+//!
+//! - Client tools, which an attached client runs on its own device (ADR 0009). A call is a
+//!   pending request for one client, the one that sent the running turn's latest prompt or
+//!   steer; it answers with the tool's result.
+//! - Host tools, which the Host answers itself, for the calling session. Each is a Host protocol
+//!   method seen from inside the session, answered by the same code (WVE-106's model): no tool
+//!   does what no client request can. They need no client, so they work in headless sessions.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -14,11 +19,14 @@ pub const CLIENT_TOOLS_FEATURE: &str = "clientTools";
 /// Put text on the clipboard of the device that sent the turn.
 pub const CLIPBOARD_WRITE: &str = "clipboard_write";
 
-/// A tool in the Host's catalog, as agents see it in `tools/list`.
+/// The Host tool that renames the calling session, as `session/rename` does.
+pub const RENAME_SESSION: &str = "rename_session";
+
+/// A tool in one of the Host's catalogs, as agents see it in `tools/list`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct ClientTool {
+pub struct Tool {
     pub name: String,
     pub title: String,
     pub description: String,
@@ -26,8 +34,8 @@ pub struct ClientTool {
 }
 
 /// Every client tool the Host defines, in the order agents see them.
-pub fn catalog() -> Vec<ClientTool> {
-    vec![ClientTool {
+pub fn catalog() -> Vec<Tool> {
+    vec![Tool {
         name: CLIPBOARD_WRITE.to_owned(),
         title: "Copy to clipboard".to_owned(),
         description: "Put text on the clipboard of the person's device: the device of the \
@@ -40,6 +48,32 @@ pub fn catalog() -> Vec<ClientTool> {
                 "text": {"type": "string", "description": "The text to put on the clipboard."}
             },
             "required": ["text"],
+            "additionalProperties": false
+        }),
+    }]
+}
+
+/// Every Host tool the Host defines, in the order agents see them, after the client tools.
+pub fn host_catalog() -> Vec<Tool> {
+    vec![Tool {
+        name: RENAME_SESSION.to_owned(),
+        title: "Rename this session".to_owned(),
+        description: "Give this session a new title: the name people see for it in their \
+                      weave session lists, on every device. Use it when the person asks for a \
+                      name, or when the work has moved on and the title misleads. Keep it \
+                      short and specific. It doesn't change the title you keep yourself."
+            .to_owned(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The new title, up to 200 characters.",
+                    "minLength": 1,
+                    "maxLength": crate::sessions::MAX_TITLE
+                }
+            },
+            "required": ["title"],
             "additionalProperties": false
         }),
     }]

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionUpdate } from '@/host/protocol';
+import type { RequestPermissionRequest, SessionUpdate } from '@/host/protocol';
 import {
+  type AcpTranscriptEvent,
+  allSubagents,
   createTranscript,
+  findSubagent,
   queueOptimisticPrompt,
   reduceAcpEvent,
+  waitsForAnswer,
 } from './acp-transcript';
 
 describe('ACP transcript message reduction', () => {
@@ -460,7 +464,7 @@ describe('ACP transcript client requests', () => {
       status: 'in_progress',
       permission: {
         requestId: 'permission-1',
-        status: 'resolved',
+        status: 'answered',
         selectedOptionId: 'allow',
       },
     });
@@ -524,7 +528,7 @@ describe('ACP transcript client requests', () => {
 
     expect(completed.entries.filter((entry) => entry.kind === 'elicitation'))
       .toMatchObject([
-        { requestId: 'elicit-form', request: { mode: 'form' }, status: 'accepted' },
+        { requestId: 'elicit-form', request: { mode: 'form' }, status: 'answered', response: { action: 'accept' } },
         { requestId: 'elicit-url', request: { mode: 'url' }, status: 'completed' },
         {
           requestId: 'elicit-custom',
@@ -532,5 +536,92 @@ describe('ACP transcript client requests', () => {
           status: 'pending',
         },
       ]);
+  });
+});
+
+const permission = (toolCallId: string, sessionId = 'main'): RequestPermissionRequest => ({
+  sessionId,
+  toolCall: { toolCallId, title: `Write ${toolCallId}` },
+  options: [
+    { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+    { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+  ],
+});
+
+const reduceAll = (...events: AcpTranscriptEvent[]) => events.reduce(reduceAcpEvent, createTranscript('main'));
+
+describe('pending requests in the transcript', () => {
+  it('ends a request as the Host says, keeping what this device chose', () => {
+    const asked = reduceAll(
+      { type: 'permission/requested', requestId: 'p-1', request: permission('t-1') },
+      { type: 'permission/requested', requestId: 'p-2', request: permission('t-2') },
+      { type: 'permission/requested', requestId: 'p-3', request: permission('t-3') },
+      { type: 'permission/resolved', requestId: 'p-1', optionId: 'allow' },
+      // The Host says this device answered: what it chose stays.
+      { type: 'request/resolved', requestId: 'p-1', status: 'answered' },
+      { type: 'request/resolved', requestId: 'p-2', status: 'elsewhere' },
+      { type: 'request/resolved', requestId: 'p-3', status: 'withdrawn' },
+    );
+    expect(asked.entries.map((entry) => entry.kind === 'tool' && entry.permission)).toMatchObject([
+      { status: 'answered', selectedOptionId: 'allow' },
+      { status: 'elsewhere' },
+      { status: 'withdrawn' },
+    ]);
+    expect(waitsForAnswer(asked)).toBe(false);
+  });
+
+  it('lets the Host overrule an answer shown before it was taken', () => {
+    const lost = reduceAll(
+      { type: 'permission/requested', requestId: 'p-1', request: permission('t-1') },
+      { type: 'permission/resolved', requestId: 'p-1', optionId: 'allow' },
+      { type: 'request/resolved', requestId: 'p-1', status: 'elsewhere' },
+    );
+    expect(lost.entries[0]).toMatchObject({ permission: { status: 'elsewhere' } });
+  });
+
+  it('shows a request again, once, after an answer that failed', () => {
+    const again = reduceAll(
+      { type: 'elicitation/requested', requestId: 'e-1', request: { mode: 'form', sessionId: 'main', message: 'Name?', requestedSchema: { type: 'object', properties: {} } } },
+      { type: 'elicitation/resolved', requestId: 'e-1', response: { action: 'decline' } },
+      { type: 'elicitation/requested', requestId: 'e-1', request: { mode: 'form', sessionId: 'main', message: 'Name?', requestedSchema: { type: 'object', properties: {} } } },
+    );
+    expect(again.entries).toHaveLength(1);
+    expect(again.entries[0]).toMatchObject({ kind: 'elicitation', status: 'pending' });
+    expect(again.entries[0]).not.toHaveProperty('response');
+  });
+
+  it('puts a subagent\'s request in its own transcript, and finds it there to answer', () => {
+    const asked = reduceAll(
+      { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:robie', title: 'Robie', state: { state: 'running' } } },
+      { type: 'permission/requested', requestId: 'p-1', request: permission('t-1', 'main:robie'), sessionId: 'main:robie' },
+    );
+    expect(asked.entries.some((entry) => entry.kind === 'tool')).toBe(false);
+    const robie = findSubagent(asked, 'main:robie')!;
+    expect(waitsForAnswer(robie.transcript)).toBe(true);
+    expect(allSubagents(asked).map(({ sessionId }) => sessionId)).toEqual(['main:robie']);
+
+    const answered = reduceAcpEvent(asked, { type: 'permission/resolved', requestId: 'p-1', optionId: 'reject' });
+    expect(findSubagent(answered, 'main:robie')!.transcript.entries[0]).toMatchObject({ permission: { status: 'answered', selectedOptionId: 'reject' } });
+  });
+
+  it('shows another client\'s client tool call until it answers', () => {
+    const waiting = reduceAll({ type: 'clientTool/requested', requestId: 'c-1', tool: 'clipboard_write', runner: 'the TUI' });
+    expect(waiting.entries[0]).toMatchObject({ kind: 'client-tool', tool: 'clipboard_write', runner: 'the TUI', status: 'pending' });
+    // Nothing for this device to answer.
+    expect(waitsForAnswer(waiting)).toBe(false);
+    expect(reduceAcpEvent(waiting, { type: 'request/resolved', requestId: 'c-1', status: 'elsewhere' }).entries[0]).toMatchObject({ status: 'elsewhere' });
+  });
+
+  it('ends what no longer waits when settled on attaching, in subagents too', () => {
+    const asked = reduceAll(
+      { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:robie', title: 'Robie' } },
+      { type: 'permission/requested', requestId: 'p-1', request: permission('t-1') },
+      { type: 'permission/requested', requestId: 'p-2', request: permission('t-2') },
+      { type: 'permission/requested', requestId: 'p-3', request: permission('t-3', 'main:robie'), sessionId: 'main:robie' },
+      { type: 'permission/resolved', requestId: 'p-2', optionId: 'allow' },
+    );
+    const settled = reduceAcpEvent(asked, { type: 'requests/settled', waiting: ['p-1'] });
+    expect(settled.entries.flatMap((entry) => entry.kind === 'tool' ? [entry.permission?.status] : [])).toEqual(['pending', 'answered']);
+    expect(findSubagent(settled, 'main:robie')!.transcript.entries[0]).toMatchObject({ permission: { status: 'ended' } });
   });
 });

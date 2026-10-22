@@ -124,6 +124,45 @@ pub(crate) async fn initialize(
     request(cx, servers, stdio, "initialize", params).await
 }
 
+/// Send a `tools/call` without arguments to the session's `weave` server over ACP now, and
+/// give its answer later; `None` when the server isn't declared over ACP.
+pub(crate) fn send_call(
+    cx: &ConnectionTo<Client>,
+    servers: &[McpServer],
+    tool: &str,
+) -> Option<impl Future<Output = Result<Value, String>> + Send + use<>> {
+    let Some(McpServer::Acp(server)) = servers.iter().find(|server| name(server) == Some(SERVER))
+    else {
+        return None;
+    };
+    let id = REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let params = json!({
+        "name": tool,
+        "arguments": {},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientCapabilities": {},
+        },
+    });
+    let request = MessageMcpRequest::new(
+        server.server_id.clone(),
+        McpRequestId::new(format!("request-{id}")),
+        "tools/call",
+    )
+    .params(params.as_object().cloned().unwrap_or_default());
+    let sent = cx.send_request(request);
+    Some(async move {
+        match sent.block_task().await {
+            Ok(MessageMcpResponse::Result { result, .. }) => Ok(result),
+            Ok(MessageMcpResponse::Error { error, .. }) => {
+                Err(format!("{} ({})", error.message, error.code))
+            }
+            Ok(_) => Err("an answer of an unknown kind".to_owned()),
+            Err(error) => Err(error.to_string()),
+        }
+    })
+}
+
 /// One MCP request to the session's `weave` server.
 async fn request(
     cx: &ConnectionTo<Client>,

@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&SessionRemovedNotification { session_id: \"s-1\".into(), })"
+---
+{
+  "method": "sessions/removed",
+  "params": {
+    "sessionId": "s-1"
+  }
+}

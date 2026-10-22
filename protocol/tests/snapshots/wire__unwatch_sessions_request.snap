@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&UnwatchSessionsRequest {})"
+---
+{
+  "method": "sessions/unwatch",
+  "params": {}
+}

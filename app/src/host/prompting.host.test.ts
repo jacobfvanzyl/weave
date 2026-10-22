@@ -3,6 +3,8 @@
 // Prompting from the app against a real dev Host (`testing/dev-host.ts`), WVE-102: new sessions,
 // prompts, steers, queued prompts, cancelling, modes and an agent that needs signing in. Skipped
 // unless the debug `weave` and fake agent are built.
+import { mkdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppModel, OpenSession } from '@/app/app-controller';
 import { blocksText, type TranscriptEntry } from '@/chat/acp-transcript';
@@ -227,5 +229,38 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
   it('says to sign in on the Host\'s computer when the agent needs it', async () => {
     await expect(store.actions.createSession({ hostId, cwd: host.cwd, agentId: 'fake-auth' }))
       .rejects.toThrow(/needs signing in\. Run `weave login --agent fake-auth` on the Host's computer/);
+  });
+
+  it('lists the Host\'s directories, and starts a session in one picked there', async () => {
+    expect(model().hosts[0].canBrowse).toBe(true);
+    await mkdir(join(host.cwd, 'picked', 'deeper'), { recursive: true });
+    const listed = await store.actions.listDirectory({ hostId, path: join(host.cwd, 'picked', '..') });
+    expect(listed).toMatchObject({ path: host.cwd, directories: ['picked'], truncated: false });
+    expect(listed.parent).toBe(dirname(host.cwd));
+    const home = await store.actions.listDirectory({ hostId });
+    expect(home.path).toBe(home.home);
+    await expect(store.actions.listDirectory({ hostId, path: join(host.cwd, 'missing') }))
+      .rejects.toThrow(`${join(host.cwd, 'missing')} doesn't exist`);
+
+    await store.actions.createSession({ hostId, cwd: join(host.cwd, 'picked'), agentId: 'fake' });
+    expect(model().sessions.find(({ key }) => key === session().key)?.cwd).toBe(join(host.cwd, 'picked'));
+  });
+
+  it('renames a session from the app, and its agent renames it through the Host too', async () => {
+    const { key } = await create('fake');
+    expect(model().hosts[0].canRename).toBe(true);
+    await store.actions.send('hello');
+    await until('the answer', (current) => current.includes('assistant: You said: hello'));
+    const listedTitle = () => model().sessions.find((listed) => listed.key === key)?.title;
+
+    await store.actions.renameSession(key, '  Named here ');
+    await until('the rename', (current) => current.includes('info: You renamed this session to “Named here”'));
+    await waitFor(() => listedTitle() === 'Named here', 'the listed title');
+    await expect(store.actions.renameSession(key, ' ')).rejects.toThrow("Couldn't rename it: a title can't be empty.");
+
+    await store.actions.send('/tool rename_session {"title": "Named by its agent"}');
+    await until('the agent\'s rename', (current) => current.includes('info: The agent renamed this session to “Named by its agent”'));
+    await waitFor(() => listedTitle() === 'Named by its agent', 'the agent\'s title');
+    expect(session().transcript.title).toBe('Named by its agent');
   });
 });

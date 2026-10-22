@@ -9,6 +9,7 @@ import type {
   AgentChoice,
   AgentUpdateNotice,
   AppActions,
+  DirectoryListing,
   AppModel,
   HostStatus,
   PairedHost,
@@ -18,14 +19,19 @@ import type {
 } from '@/app/app-controller';
 import { sessionKey } from '@/app/app-controller';
 import { SessionReadState } from '@/app/session-read-state';
-import { ConnectError, type Connector, HostConnection, HostError, type HostEvent, type OpenedSession } from './connection';
+import { type ClientTool, toolError } from './client-tools';
+import { CONNECTION_CLOSED, ConnectError, type Connector, HostConnection, HostError, type HostEvent, type OpenedSession } from './connection';
 import type { DeviceKey } from './device-key';
-import { JournalFollower, transcriptEvents } from './journal';
+import { JournalFollower, originLabel, transcriptEvents } from './journal';
 import {
   HOST_PROTOCOL,
   type AgentSummary,
+  type AnswerPendingRequest,
+  type ClientCapabilities,
   type ClientInfo,
   type ContentBlock,
+  type PendingRequest,
+  type PendingResolvedNotification,
   type SessionEventNotification,
   type SessionListing,
   type SessionState,
@@ -45,6 +51,8 @@ export type HostStoreOptions = {
   deviceName: string;
   /** Delays between reconnecting tries, in milliseconds; the last repeats. */
   backoff?: number[];
+  /** The client tools this device runs for agents, by name (`capabilities.clientTools`). */
+  clientTools?: Record<string, ClientTool>;
   /**
    * When to tell subscribers the model changed. Changes made meanwhile are told once, so a
    * replay of thousands of events renders a frame at a time. Defaults to the next frame.
@@ -82,7 +90,18 @@ type Followed = {
   /** A newer version is out (`agents/updateAvailable`, or `SessionState.update`). */
   update?: Omit<AgentUpdateNotice, 'available'>;
   reopening: boolean;
+  /** What waits in it now, as the Host says (`SessionState.pending`, then `pending/added` and `pending/resolved`). */
+  pending: PendingRequest[];
+  /**
+   * Whether the transcript shows what's pending. Not while an attach replays history: a request
+   * shows after what came before it.
+   */
+  pendingShown: boolean;
+  /** Clients that prompted it, by client id, for naming who runs a client tool. */
+  clients: Map<string, string>;
 };
+
+type PendingKind<K extends PendingRequest['kind']> = Extract<PendingRequest, { kind: K }>;
 
 /** A `session/create` waiting for its answer. */
 type Creating = { hostId: string; agentId: string; resolve(): void; reject(error: Error): void };
@@ -91,6 +110,8 @@ type Creating = { hostId: string; agentId: string; resolve(): void; reject(error
 const AUTH_REQUIRED = -32000;
 
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+const failedWith = (error: unknown, code: number) => error instanceof HostError && error.code === code;
 
 const nextFrame = (notify: () => void) => {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => notify());
@@ -115,6 +136,8 @@ export class HostStore {
   readonly #hosts = new Map<string, HostEntry>();
   readonly #followed = new Map<string, Followed>();
   readonly #creating = new Map<number, Creating>();
+  /** Client tool calls running on this device, by pending id. */
+  readonly #running = new Set<string>();
   readonly #read = new SessionReadState();
   readonly #listeners = new Set<() => void>();
   #selectedKey?: string;
@@ -158,7 +181,11 @@ export class HostStore {
     }
   }
 
-  /** Lists every connected Host's sessions again, and reconnects to the ones that dropped. */
+  /**
+   * Lists every connected Host's sessions again, and reconnects to the ones that dropped. A Host
+   * that keeps the list live (`sessions/watch`) is asked to start over, so nothing older than
+   * what it last said comes after it.
+   */
   async refresh() {
     await Promise.all([...this.#hosts.values()].map(async (entry) => {
       if (entry.connection && !entry.connection.closed) await this.#list(entry);
@@ -179,7 +206,9 @@ export class HostStore {
       await this.#connect(entry);
     },
     createSession: (input) => this.#create(input),
+    listDirectory: (input) => this.#listDirectory(input),
     closeSession: (key) => this.#report(() => this.#close(key)),
+    renameSession: (key, title) => this.#rename(key, title),
     deleteSession: (key) => this.#report(() => this.#delete(key)),
     send: (text, images) => this.#send(text, images),
     removeQueued: (id) => {
@@ -194,9 +223,16 @@ export class HostStore {
       await this.#connection(followed).request('turn/cancel', { sessionId: followed.sessionId });
     }),
     reopenSession: () => this.#report(() => this.#reopen()),
-    // Pending requests are answered from WVE-103; until then the transcript shows none.
-    respondToPermission: () => {},
-    respondToElicitation: () => {},
+    respondToPermission: (requestId, optionId) => this.#answer(
+      requestId,
+      { permission: { outcome: { outcome: 'selected', optionId } } },
+      { type: 'permission/resolved', requestId, optionId },
+    ),
+    respondToElicitation: (requestId, response) => this.#answer(
+      requestId,
+      { elicitation: response },
+      { type: 'elicitation/resolved', requestId, response },
+    ),
     setMode: (modeId) => this.#report(async () => {
       const followed = this.#selected();
       if (!followed) return;
@@ -223,6 +259,10 @@ export class HostStore {
     }
   }
 
+  #capabilities(): ClientCapabilities {
+    return { clientTools: Object.keys(this.#options.clientTools ?? {}) };
+  }
+
   #entry(record: PairedHostRecord): HostEntry {
     return { record, status: 'connecting', sessions: [], agents: [], attempt: 0, stopped: false };
   }
@@ -247,6 +287,7 @@ export class HostStore {
       const connection = await HostConnection.connect({
         connector: this.#options.connectorFor(record.url),
         client: this.#options.client,
+        capabilities: this.#capabilities(),
         credentials: { method: 'device', deviceId: record.deviceId, key: this.#options.keyFor(record.keyId), hostId: record.hostId },
         onEvent: (event) => this.#event(entry, connection, event),
       });
@@ -311,11 +352,17 @@ export class HostStore {
     this.#changed();
   }
 
+  /**
+   * The Host's sessions: watched, so they stay up to date (`sessions/watch`), or listed once
+   * (`sessions/list`) from a Host that can't.
+   */
   async #list(entry: HostEntry) {
     const connection = entry.connection;
     if (!connection) return;
     try {
-      entry.sessions = (await connection.request('sessions/list', {})).sessions;
+      entry.sessions = connection.supports(HOST_PROTOCOL.features.watch)
+        ? (await connection.request('sessions/watch', {})).sessions
+        : (await connection.request('sessions/list', {})).sessions;
       for (const listing of entry.sessions) {
         this.#read.observe(sessionKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
       }
@@ -324,6 +371,20 @@ export class HostStore {
       this.#error = describe(error);
       this.#changed();
     }
+  }
+
+  /** A watched session appeared or changed. */
+  #listed(entry: HostEntry, listing: SessionListing) {
+    const index = entry.sessions.findIndex(({ info }) => info.sessionId === listing.info.sessionId);
+    if (index === -1) {
+      entry.sessions = [...entry.sessions, listing];
+    } else {
+      // The Host keeps no title for a session it no longer holds; the one it had still names it.
+      const title = listing.info.title ?? entry.sessions[index].info.title;
+      entry.sessions = entry.sessions.map((current, at) => at === index ? { ...listing, info: { ...listing.info, ...(title ? { title } : {}) } } : current);
+    }
+    this.#read.observe(sessionKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
+    this.#changed();
   }
 
   #event(entry: HostEntry, connection: HostConnection, event: HostEvent) {
@@ -372,12 +433,36 @@ export class HostStore {
               if (clients !== undefined && clients !== null) listing.clients = clients;
               if (title) listing.info = { ...listing.info, title };
               listing.lastActivityAt = Date.now();
-            } else if (followed?.state && !followed.state.blank) {
-              // A new session's first prompt lists it.
+            } else if (followed?.state && !followed.state.blank && !connection.supports(HOST_PROTOCOL.features.watch)) {
+              // A new session's first prompt lists it; a watched list hears of it anyway.
               void this.#list(entry);
             }
             this.#read.observe(sessionKey(entry.record.hostId, sessionId), activity ?? listing?.activity ?? undefined);
             this.#changed();
+            return;
+          }
+          case 'sessions/updated':
+            this.#listed(entry, event.params.session);
+            return;
+          case 'sessions/removed': {
+            const { sessionId } = event.params;
+            entry.sessions = entry.sessions.filter(({ info }) => info.sessionId !== sessionId);
+            this.#changed();
+            return;
+          }
+          case 'pending/added': {
+            const followed = this.#followed.get(sessionKey(entry.record.hostId, event.params.sessionId));
+            if (followed) this.#pendingAdded(followed, connection, event.params.pending);
+            return;
+          }
+          case 'pending/resolved': {
+            const followed = this.#followed.get(sessionKey(entry.record.hostId, event.params.sessionId));
+            if (followed) this.#pendingResolved(followed, connection, event.params);
+            return;
+          }
+          case 'session/elicitationCompleted': {
+            const followed = this.#followed.get(sessionKey(entry.record.hostId, event.params.sessionId));
+            if (followed) this.#apply(followed, [{ type: 'elicitation/completed', notification: event.params.notification }]);
             return;
           }
           case 'agents/updateAvailable': {
@@ -401,9 +486,14 @@ export class HostStore {
     const followed = this.#followed.get(sessionKey(entry.record.hostId, notification.sessionId));
     if (!followed || !followed.follower.accept(notification)) return;
     const history = followed.follower.isHistory(notification);
-    this.#apply(followed, transcriptEvents(notification, { history, own: (origin) => this.#own(entry, origin) }));
-    if (history) return;
     const { event } = notification;
+    if ((event.kind === 'turnStarted' || event.kind === 'turnSteered') && 'client' in event.origin) {
+      followed.clients.set(event.origin.client.id, originLabel(event.origin));
+    }
+    this.#apply(followed, transcriptEvents(notification, { history, own: (origin) => this.#own(entry, origin) }));
+    // What waits shows once the history before it has.
+    if (!followed.pendingShown && !followed.follower.replaying) this.#showPending(followed);
+    if (history) return;
     if (event.kind === 'agentReopened') {
       // The new process says what prompts may carry now, and whether it steers.
       if (followed.state) followed.state = { ...followed.state, agent: event.agent };
@@ -465,6 +555,9 @@ export class HostStore {
       queued: [],
       steering: [],
       reopening: false,
+      pending: [],
+      pendingShown: false,
+      clients: new Map(),
     };
   }
 
@@ -533,14 +626,138 @@ export class HostStore {
     followed.update = state.update
       ? { agentId: state.update.agentId, name: state.update.name, running: state.update.running, latest: state.update.latest }
       : undefined;
+    followed.pending = state.pending ?? [];
+    // Requests shown before that no longer wait stopped while this device wasn't attached.
+    if (!reset) followed.transcript = reduceAcpEvent(followed.transcript, { type: 'requests/settled', waiting: followed.pending.map(({ id }) => id) });
+    followed.pendingShown = false;
+    if (!followed.follower.replaying) this.#showPending(followed);
+    for (const pending of followed.pending) {
+      if (pending.kind === 'clientTool') this.#runIfMine(followed, pending);
+    }
     this.#changed();
     if (!running) void this.#sendQueued(followed);
+  }
+
+  /** Shows what waits in a session, once its replay is done. */
+  #showPending(followed: Followed) {
+    followed.pendingShown = true;
+    const connection = this.#hosts.get(followed.hostId)?.connection;
+    this.#apply(followed, followed.pending.flatMap((pending) => this.#pendingEvents(followed, pending, connection)));
+  }
+
+  /** A pending request as the transcript shows it; a client tool call this device runs shows only as the agent's tool call. */
+  #pendingEvents(followed: Followed, pending: PendingRequest, connection?: HostConnection): AcpTranscriptEvent[] {
+    const sessionId = pending.sessionId ?? undefined;
+    switch (pending.kind) {
+      case 'permission':
+        return [{ type: 'permission/requested', requestId: pending.id, request: pending.request, sessionId }];
+      case 'elicitation':
+        return [{ type: 'elicitation/requested', requestId: pending.id, request: pending.request, sessionId }];
+      case 'clientTool':
+        if (pending.target === connection?.clientId) return [];
+        return [{ type: 'clientTool/requested', requestId: pending.id, tool: pending.tool, runner: followed.clients.get(pending.target) ?? 'another client', sessionId }];
+      default:
+        return [];
+    }
+  }
+
+  #pendingAdded(followed: Followed, connection: HostConnection, pending: PendingRequest) {
+    followed.pending = [...followed.pending.filter(({ id }) => id !== pending.id), pending];
+    if (pending.kind === 'clientTool') this.#runIfMine(followed, pending, connection);
+    if (followed.pendingShown) this.#apply(followed, this.#pendingEvents(followed, pending, connection));
+    this.#changed();
+  }
+
+  #pendingResolved(followed: Followed, connection: HostConnection, resolved: PendingResolvedNotification) {
+    followed.pending = followed.pending.filter(({ id }) => id !== resolved.pendingId);
+    const status = resolved.outcome === 'answered'
+      ? resolved.by === connection.clientId ? 'answered' : 'elsewhere'
+      : resolved.outcome;
+    this.#apply(followed, [{ type: 'request/resolved', requestId: resolved.pendingId, status }]);
+    this.#changed();
+  }
+
+  /**
+   * Answers a pending request of the session on screen, showing the answer at once. Another
+   * client's answer, the turn ending or the agent withdrawing it may have come first: the Host
+   * says so with `pending/resolved`, which the card shows, and the answer isn't tried again.
+   */
+  async #answer(requestId: string, answer: Pick<AnswerPendingRequest, 'permission' | 'elicitation'>, shown: AcpTranscriptEvent) {
+    const followed = this.#selected();
+    const pending = followed?.pending.find(({ id }) => id === requestId);
+    // One no longer waiting says why already.
+    if (!followed || !pending) return;
+    this.#error = undefined;
+    this.#apply(followed, [shown]);
+    try {
+      await this.#connection(followed).request('pending/answer', { sessionId: followed.sessionId, pendingId: requestId, ...answer });
+    } catch (error) {
+      const waiting = followed.pending.some(({ id }) => id === requestId);
+      if (failedWith(error, HOST_PROTOCOL.errors.alreadyResolved)) {
+        // Resolved without this device hearing how: it no longer waits, whoever answered.
+        if (waiting) {
+          followed.pending = followed.pending.filter(({ id }) => id !== requestId);
+          this.#apply(followed, [{ type: 'request/resolved', requestId, status: 'ended' }]);
+        }
+        return;
+      }
+      // An answer lost with the connection shows again on attaching, if the request still waits.
+      if (failedWith(error, CONNECTION_CLOSED)) return;
+      if (waiting) this.#apply(followed, this.#pendingEvents(followed, pending));
+      this.#error = failedWith(error, HOST_PROTOCOL.errors.notTarget)
+        ? 'That request is for another client.'
+        : `Couldn't answer: ${describe(error)}`;
+      this.#changed();
+    }
+  }
+
+  /** Runs a client tool call aimed at this connection, and answers it with what it gave. */
+  #runIfMine(followed: Followed, pending: PendingKind<'clientTool'>, connection = this.#hosts.get(followed.hostId)?.connection) {
+    if (!connection || pending.target !== connection.clientId || this.#running.has(pending.id)) return;
+    this.#running.add(pending.id);
+    void (async () => {
+      const tool = this.#options.clientTools?.[pending.tool];
+      const result = tool
+        ? await tool(pending.arguments).catch((error: unknown) => toolError(describe(error)))
+        : toolError(`This client doesn't run ${pending.tool}.`);
+      try {
+        await connection.request('pending/answer', { sessionId: followed.sessionId, pendingId: pending.id, clientTool: result });
+      } catch (error) {
+        // Cancelled meanwhile, or the connection ended, which cancels it too.
+        if (!failedWith(error, HOST_PROTOCOL.errors.alreadyResolved) && !failedWith(error, CONNECTION_CLOSED)) {
+          this.#error = `Couldn't answer the agent's ${pending.tool} call: ${describe(error)}`;
+          this.#changed();
+        }
+      } finally {
+        this.#running.delete(pending.id);
+      }
+    })();
   }
 
   #apply(followed: Followed, events: AcpTranscriptEvent[]) {
     if (events.length === 0) return;
     followed.transcript = events.reduce(reduceAcpEvent, followed.transcript);
     this.#changed();
+  }
+
+  async #listDirectory({ hostId, path, hidden }: { hostId: string; path?: string; hidden?: boolean }): Promise<DirectoryListing> {
+    const entry = this.#hosts.get(hostId);
+    const connection = entry?.connection;
+    if (!entry || !connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    try {
+      const listed = await connection.request('files/list', { ...(path ? { path } : {}), ...(hidden ? { hidden } : {}) });
+      return {
+        path: listed.path,
+        ...(listed.parent ? { parent: listed.parent } : {}),
+        home: listed.home,
+        directories: listed.entries.filter(({ kind }) => kind === 'directory').map(({ name }) => name),
+        truncated: listed.truncated ?? false,
+      };
+    } catch (error) {
+      // The Host says why in the error's data: "/x doesn't exist".
+      if (error instanceof HostError && typeof error.data === 'string') throw new Error(error.data);
+      throw error;
+    }
   }
 
   /** Starts a session and opens it; it rejects saying why the Host couldn't. */
@@ -671,6 +888,20 @@ export class HostStore {
     }
   }
 
+  async #rename(key: string, title: string) {
+    const [hostId, ...rest] = key.split('/');
+    const entry = this.#hosts.get(hostId);
+    const connection = entry?.connection;
+    if (!entry || !connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    try {
+      // The new title comes back to every client: in the journal, and as the session's change.
+      await connection.request('session/rename', { sessionId: rest.join('/'), title });
+    } catch (error) {
+      if (error instanceof HostError && typeof error.data === 'string') throw new Error(`Couldn't rename it: ${error.data}.`);
+      throw error;
+    }
+  }
+
   async #close(key: string) {
     const followed = this.#followed.get(key);
     const [hostId, ...rest] = key.split('/');
@@ -722,6 +953,7 @@ export class HostStore {
       connection = await HostConnection.connect({
         connector: this.#options.connectorFor(url),
         client: this.#options.client,
+        capabilities: this.#capabilities(),
         credentials: { method: 'pair', code: input.code.replaceAll(/[\s-]/g, ''), name: input.name?.trim() || this.#options.deviceName, key },
         onEvent: (event) => { if (entry) this.#event(entry, connection, event); },
       });
@@ -769,7 +1001,15 @@ export class HostStore {
     const selected = this.#selected();
     for (const entry of this.#hosts.values()) {
       const { record } = entry;
-      hosts.push({ id: record.hostId, name: record.name, url: record.url, status: entry.status, ...(entry.error ? { error: entry.error } : {}) });
+      hosts.push({
+        id: record.hostId,
+        name: record.name,
+        url: record.url,
+        status: entry.status,
+        ...(entry.error ? { error: entry.error } : {}),
+        ...(entry.connection?.supports(HOST_PROTOCOL.features.listFiles) ? { canBrowse: true } : {}),
+        ...(entry.connection?.supports(HOST_PROTOCOL.features.rename) ? { canRename: true } : {}),
+      });
       agents[record.hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
       for (const listing of entry.sessions) {

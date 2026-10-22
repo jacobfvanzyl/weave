@@ -10,6 +10,7 @@
 //! - [`hello`]: the first request on every connection: version, authentication, client.
 //! - [`devices`]: pairing the person's other devices, whose remote clients use the WebSocket.
 //! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
+//! - [`files`]: files on the Host's computer, for clients that aren't on it.
 //! - [`sessions`]: listing, creating, attaching to, reopening and closing sessions.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns.
@@ -24,6 +25,7 @@ pub mod agents;
 pub mod devices;
 pub mod errors;
 pub mod events;
+pub mod files;
 pub mod hello;
 pub mod host;
 pub mod pending;

@@ -73,6 +73,8 @@ function outline(transcript: AcpTranscript, root = transcript, depth = 0): strin
         return [`message ${sessionLabel(root, entry.senderSessionId)} → ${sessionLabel(root, entry.recipientSessionId)}: ${blocksText(entry.content)}`];
       case 'elicitation':
         return [`elicitation ${entry.status}`];
+      case 'client-tool':
+        return [`client tool ${entry.tool} on ${entry.runner} ${entry.status}`];
     }
   });
   const nested = transcript.subagents.flatMap((subagent) => [

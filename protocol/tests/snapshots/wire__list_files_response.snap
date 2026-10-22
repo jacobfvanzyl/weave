@@ -1,0 +1,23 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ListFilesResponse\n{\n    path: \"/Users/jaco/Projects\".into(), parent: Some(\"/Users/jaco\".into()),\n    home: \"/Users/jaco\".into(), entries:\n    vec![FileEntry { name: \"weave\".to_owned(), kind: FileKind::Directory, },\n    FileEntry { name: \"notes.md\".to_owned(), kind: FileKind::File, },\n    FileEntry { name: \"socket\".to_owned(), kind: FileKind::Other, },],\n    truncated: false,\n})"
+---
+{
+  "path": "/Users/jaco/Projects",
+  "parent": "/Users/jaco",
+  "home": "/Users/jaco",
+  "entries": [
+    {
+      "name": "weave",
+      "kind": "directory"
+    },
+    {
+      "name": "notes.md",
+      "kind": "file"
+    },
+    {
+      "name": "socket",
+      "kind": "other"
+    }
+  ]
+}

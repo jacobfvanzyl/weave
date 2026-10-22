@@ -12,6 +12,24 @@ export type PairedHost = {
   url: string;
   status: HostStatus;
   error?: string;
+  /** Whether it lists its directories (`files/list`), for picking where a session runs. */
+  canBrowse?: boolean;
+  /** Whether it renames sessions (`session/rename`). */
+  canRename?: boolean;
+};
+
+/** A directory on a Host's computer and the directories in it, as `files/list` gives them. */
+export type DirectoryListing = {
+  /** Absolute on the Host's computer. */
+  path: string;
+  /** None at the root. */
+  parent?: string;
+  /** The Host user's home directory, which paths under it show as `~`. */
+  home: string;
+  /** The names of the directories in it, in the Host's order. */
+  directories: string[];
+  /** The Host listed only so many of its entries. */
+  truncated: boolean;
 };
 
 export type SessionActivity = 'idle' | 'running' | 'waiting';
@@ -90,7 +108,14 @@ export type AppActions = {
   /** Opens a session, or with no key goes back to the list. */
   selectSession(key?: string): void;
   createSession(input: { hostId: string; cwd: string; agentId: string }): Promise<void> | void;
+  /**
+   * The directories in `path` on a Host's computer, or in its user's home without one; rejects
+   * saying why the Host couldn't list it.
+   */
+  listDirectory(input: { hostId: string; path?: string; hidden?: boolean }): Promise<DirectoryListing>;
   closeSession(key: string): Promise<void> | void;
+  /** Gives an open session a title of the Host's, for every client; rejects saying why not. */
+  renameSession(key: string, title: string): Promise<void> | void;
   deleteSession(key: string): Promise<void> | void;
   /** Pairs with the URL and code `weave pair` shows; `name` is what the Host calls this device. */
   pairHost(input: { url: string; code: string; name?: string }): Promise<void> | void;
@@ -104,8 +129,9 @@ export type AppActions = {
   cancelTurn(): Promise<void> | void;
   /** Moves the open session to the version its agent's new sessions launch (`session/reopen`). */
   reopenSession(): Promise<void> | void;
-  respondToPermission(requestId: string, optionId: string): void;
-  respondToElicitation(requestId: string, response: CreateElicitationResponse): void;
+  /** Answers a pending request of the open session, or one of its subagents'. */
+  respondToPermission(requestId: string, optionId: string): Promise<void> | void;
+  respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;
   setMode(modeId: string): Promise<void> | void;
   setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
 };

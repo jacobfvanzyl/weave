@@ -21,12 +21,14 @@ import {
 } from '@hugeicons/core-free-icons';
 import type {
   AcpTranscript,
+  TranscriptClientTool,
   TranscriptCompaction,
   TranscriptEntry,
   TranscriptMessage,
 } from './acp-transcript';
 import { ContentBlocksView } from './content-block-view';
 import { ElicitationView } from './elicitation-view';
+import { requestEndText, sentenceStart } from './pending-request';
 import { PlanView } from './plan-view';
 import { imagesSize, MAX_PROMPT_IMAGE_BYTES, promptImage } from './prompt-images';
 import { SessionMessageView, SubagentRowView } from './subagent-view';
@@ -82,8 +84,8 @@ export type ChatPaneActions = {
   send(text: string, images?: PromptImage[]): Promise<void> | void;
   removeQueued?(id: string): void;
   cancelTurn(): Promise<void> | void;
-  respondToPermission(requestId: string, optionId: string): void;
-  respondToElicitation(requestId: string, response: CreateElicitationResponse): void;
+  respondToPermission(requestId: string, optionId: string): Promise<void> | void;
+  respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;
   setMode(modeId: string): Promise<void> | void;
   setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
 };
@@ -161,6 +163,26 @@ function CompactionView({ entry }: { entry: TranscriptCompaction }) {
   );
 }
 
+/** A client tool call another client runs: the agent waits on it, and nobody answers it here. */
+function ClientToolView({ entry }: { entry: TranscriptClientTool }) {
+  const runner = sentenceStart(entry.runner);
+  const text = entry.status === 'pending'
+    ? `Waiting for ${entry.runner} to run ${entry.tool}`
+    : entry.status === 'answered' || entry.status === 'elsewhere'
+      ? `${runner} ran ${entry.tool}`
+      : entry.status === 'cancelled'
+        ? `${runner} didn't run ${entry.tool}`
+        : requestEndText[entry.status];
+  return (
+    <Marker variant="border" data-slot="client-tool">
+      <MarkerIcon>
+        <HugeiconsIcon icon={entry.status === 'pending' ? Loading03Icon : CheckmarkCircle02Icon} strokeWidth={1.75} />
+      </MarkerIcon>
+      <MarkerContent>{text}</MarkerContent>
+    </Marker>
+  );
+}
+
 // Entries don't change once written, apart from the one streaming, so each renders only when it does.
 const EntryView = memo(function EntryView({
   entry,
@@ -184,6 +206,8 @@ const EntryView = memo(function EntryView({
       return <CompactionView entry={entry} />;
     case 'elicitation':
       return <ElicitationView entry={entry} onRespond={actions.respondToElicitation} />;
+    case 'client-tool':
+      return <ClientToolView entry={entry} />;
     case 'diagnostic':
       return (
         <Marker variant="border" className={cn(entry.severity === 'error' && 'text-destructive')}>

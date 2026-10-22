@@ -60,9 +60,21 @@ expression: schema()
       "params": "RevokeDeviceRequest",
       "result": "Empty"
     },
+    "files/list": {
+      "params": "ListFilesRequest",
+      "result": "ListFilesResponse"
+    },
     "sessions/list": {
       "params": "ListSessionsRequest",
       "result": "ListSessionsResponse"
+    },
+    "sessions/watch": {
+      "params": "WatchSessionsRequest",
+      "result": "WatchSessionsResponse"
+    },
+    "sessions/unwatch": {
+      "params": "UnwatchSessionsRequest",
+      "result": "Empty"
     },
     "session/create": {
       "params": "CreateSessionRequest",
@@ -96,6 +108,10 @@ expression: schema()
       "params": "ReopenSessionRequest",
       "result": "ReopenSessionResponse"
     },
+    "session/rename": {
+      "params": "RenameSessionRequest",
+      "result": "Empty"
+    },
     "session/run": {
       "params": "RunRequest",
       "result": "RunResponse"
@@ -120,6 +136,8 @@ expression: schema()
   "x-weave-notifications": {
     "session/event": "SessionEventNotification",
     "session/changed": "SessionChangedNotification",
+    "sessions/updated": "SessionUpdatedNotification",
+    "sessions/removed": "SessionRemovedNotification",
     "session/elicitationCompleted": "ElicitationCompletedNotification",
     "pending/added": "PendingAddedNotification",
     "pending/resolved": "PendingResolvedNotification",
@@ -157,10 +175,22 @@ expression: schema()
       "steer": "turn/steer",
       "devices": "devices",
       "agentUpdates": "agents/updates",
-      "clientTools": "clientTools"
+      "clientTools": "clientTools",
+      "watch": "sessions/watch",
+      "listFiles": "files/list",
+      "rename": "session/rename"
+    },
+    "files": {
+      "maxEntries": 2000
+    },
+    "sessions": {
+      "maxTitle": 200
     },
     "clientTools": {
       "clipboardWrite": "clipboard_write"
+    },
+    "hostTools": {
+      "renameSession": "rename_session"
     }
   },
   "$defs": {
@@ -1586,6 +1616,91 @@ expression: schema()
       ],
       "description": "`devices/revoke`: forget a device and close its connections. It has to pair again."
     },
+    "ListFilesRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "An absolute path; the home directory of the Host's user when absent."
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Entries whose names start with a dot too."
+        }
+      },
+      "description": "`files/list`: what a directory on the Host's computer holds, by name and kind."
+    },
+    "ListFilesResponse": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The directory listed, without `.` or `..`. Symlinks stay as named, so a session's\ndirectory reads as the person chose it."
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its parent; none at the root."
+        },
+        "home": {
+          "type": "string",
+          "description": "The home directory of the Host's user, so clients can show paths under it as `~`."
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileEntry"
+          },
+          "description": "Directories first, then by name. Names that aren't UTF-8 are left out."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The directory holds more than [`MAX_ENTRIES`] entries the request asked for."
+        }
+      },
+      "required": [
+        "path",
+        "home",
+        "entries"
+      ]
+    },
+    "FileEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FileKind"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "FileKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "directory",
+            "file"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "other",
+          "description": "Anything else: a socket, a device, or a symlink that leads nowhere."
+        }
+      ],
+      "description": "What an entry is, following symlinks."
+    },
     "ListSessionsRequest": {
       "type": "object",
       "properties": {
@@ -1629,6 +1744,28 @@ expression: schema()
       "required": [
         "sessions"
       ]
+    },
+    "WatchSessionsRequest": {
+      "type": "object",
+      "description": "`sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a\n[`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the\nconnection ends or the client sends `sessions/unwatch`. Blank sessions never appear."
+    },
+    "WatchSessionsResponse": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionListing"
+          }
+        }
+      },
+      "required": [
+        "sessions"
+      ]
+    },
+    "UnwatchSessionsRequest": {
+      "type": "object",
+      "description": "`sessions/unwatch`: stop what `sessions/watch` sends."
     },
     "CreateSessionRequest": {
       "type": "object",
@@ -4590,6 +4727,22 @@ expression: schema()
         }
       }
     },
+    "RenameSessionRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "title"
+      ],
+      "description": "`session/rename`: give an open session a title of the Host's, which its clients see, journaled\nas a `renamed` event, and which titles the agent sends later don't replace. The title is\ntrimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the session\nkeeps its title: ACP has no way to change it from outside."
+    },
     "RunRequest": {
       "type": "object",
       "properties": {
@@ -5316,6 +5469,34 @@ expression: schema()
             "reason"
           ],
           "description": "The session closed."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The client that renamed it; absent when its own agent did."
+            },
+            "kind": {
+              "type": "string",
+              "const": "renamed"
+            }
+          },
+          "required": [
+            "kind",
+            "title"
+          ],
+          "description": "The session was renamed through the Host (`session/rename`, or the `rename_session` Host\ntool). Its title is the Host's from then on: titles the agent sends later don't replace\nit."
         },
         {
           "type": "object",
@@ -6801,6 +6982,30 @@ expression: schema()
         "sessionId"
       ],
       "description": "`session/changed`: what changed about the session, as `SessionState` describes it."
+    },
+    "SessionUpdatedNotification": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/SessionListing"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "description": "`sessions/updated`, to watching clients: a session appeared or changed (opened, suspended,\nclosed, its activity, its clients, its title, or a blank session's first prompt), as it lists\nnow."
+    },
+    "SessionRemovedNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "description": "`sessions/removed`, to watching clients: a session went away: deleted, its journal pruned,\nor closed while blank."
     },
     "ElicitationCompletedNotification": {
       "type": "object",

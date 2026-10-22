@@ -41,6 +41,11 @@ export class JournalFollower {
   isHistory(notification: SessionEventNotification): boolean {
     return notification.seq <= this.#historyUntil;
   }
+
+  /** Whether history the attach replays is still to come. */
+  get replaying(): boolean {
+    return this.#journal !== undefined && this.#seq < this.#historyUntil;
+  }
 }
 
 /** How a client reads the journal it follows. */
@@ -129,6 +134,10 @@ export function transcriptEvents(notification: SessionEventNotification, reading
       return [{ type: 'notice', severity: 'info', title: event.text }];
     case 'closed':
       return [{ type: 'session/closed', reason: event.reason }];
+    case 'renamed': {
+      const by = !event.by ? 'The agent' : reading.own(event.by) ? 'You' : originLabel(event.by);
+      return [{ type: 'session/renamed', title: event.title, by: by.charAt(0).toUpperCase() + by.slice(1) }];
+    }
     default:
       return [];
   }

@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::v1::ContentBlock;
@@ -205,6 +206,53 @@ pub struct ListSessionsResponse {
     pub next_cursor: Option<String>,
 }
 
+/// The Host offers [`WatchSessionsRequest`], in `features`.
+pub const WATCH_FEATURE: &str = "sessions/watch";
+
+/// `sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a
+/// [`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the
+/// connection ends or the client sends `sessions/unwatch`. Blank sessions never appear.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "sessions/watch", response = WatchSessionsResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchSessionsRequest {}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct WatchSessionsResponse {
+    pub sessions: Vec<SessionListing>,
+}
+
+/// `sessions/unwatch`: stop what `sessions/watch` sends.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "sessions/unwatch", response = Empty)]
+#[serde(rename_all = "camelCase")]
+pub struct UnwatchSessionsRequest {}
+
+/// `sessions/updated`, to watching clients: a session appeared or changed (opened, suspended,
+/// closed, its activity, its clients, its title, or a blank session's first prompt), as it lists
+/// now.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "sessions/updated")]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUpdatedNotification {
+    pub session: SessionListing,
+}
+
+/// `sessions/removed`, to watching clients: a session went away: deleted, its journal pruned,
+/// or closed while blank.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "sessions/removed")]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRemovedNotification {
+    pub session_id: SessionId,
+}
+
 /// `session/create`: start a session and attach to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -308,6 +356,25 @@ pub struct DeleteSessionRequest {
     /// Required when the Host has no record of the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentId>,
+}
+
+/// The Host offers [`RenameSessionRequest`], in `features`.
+pub const RENAME_FEATURE: &str = "session/rename";
+
+/// The longest title [`RenameSessionRequest`] takes, in characters.
+pub const MAX_TITLE: usize = 200;
+
+/// `session/rename`: give an open session a title of the Host's, which its clients see, journaled
+/// as a `renamed` event, and which titles the agent sends later don't replace. The title is
+/// trimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the session
+/// keeps its title: ACP has no way to change it from outside.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "session/rename", response = Empty)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameSessionRequest {
+    pub session_id: SessionId,
+    pub title: String,
 }
 
 /// `session/setMode`. The change reaches every attached client as an ACP update.

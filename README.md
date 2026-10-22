@@ -109,6 +109,7 @@ ending them when it exits.
 | `/` | Complete the agent's slash commands |
 | `/new` | Start a new session in this directory, as Claude Code and Codex do; one still at work carries on in the daemon |
 | `/reload` | Restart the TUI in place, picking up a rebuilt weave, and reattach to the session; the daemon and the agent carry on, mid-turn too (rebuild the binary you run: `cargo build --release` for `weave` on your PATH). After the daemon went away for good, it starts it again |
+| `/rename <title>` | Rename the session for every client of the weave Host, in place of the agent's own `/rename`; titles the agent sets afterwards don't replace it |
 | `@` | Fuzzy-find a file to attach (tab completes; respects .gitignore): embedded, as an image or audio, or as a link, as the agent allows. Quote paths with spaces: `@"my notes.md"` |
 | Shift+Tab | Next mode |
 | Ctrl+O | Session settings (mode, model, and the agent's other options) |
@@ -179,6 +180,8 @@ default_agent = "claude"
 # Tools agents may run on the device of whoever sent the turn, through weave's own MCP
 # server: all of them when absent, [] for none; an agent's `client_tools` overrides it.
 client_tools = ["clipboard_write"]
+# Tools the weave Host answers for the agent's own session, such as renaming it; the same rules.
+host_tools = ["rename_session"]
 
 [tui]
 alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen

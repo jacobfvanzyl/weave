@@ -38,15 +38,39 @@ const AGENTS: AgentChoice[] = [
 const steers = (agentId: string) => agentId !== 'gemini';
 
 const hosts = (now: number, unreachable: boolean): PairedHost[] => [
-  { id: MAC, name: 'mac.tail1234.ts.net', url: 'https://mac.tail1234.ts.net:7341', status: 'connected' },
+  { id: MAC, name: 'mac.tail1234.ts.net', url: 'https://mac.tail1234.ts.net:7341', status: 'connected', canBrowse: true, canRename: true },
   {
     id: SERVER,
     name: 'build.tail1234.ts.net',
     url: 'https://build.tail1234.ts.net:7341',
     status: unreachable ? 'reconnecting' : 'connected',
+    canBrowse: true,
+    canRename: true,
     ...(unreachable ? { error: `Unreachable since ${new Date(now - 4 * MINUTE).toLocaleTimeString()}` } : {}),
   },
 ];
+
+/** Each Host's directories, for browsing: a path and the directories in it. */
+const DIRECTORIES: Record<string, Record<string, string[]>> = {
+  [MAC]: {
+    '/': ['Applications', 'Users', 'Volumes'],
+    '/Users': ['jaco', 'Shared'],
+    '/Users/jaco': ['.config', 'Desktop', 'Documents', 'Downloads'],
+    '/Users/jaco/Documents': ['Notes', 'VeeZee'],
+    '/Users/jaco/Documents/VeeZee': ['rex', 'weave'],
+    [WEAVE]: ['.git', 'app', 'docs', 'host', 'protocol', 'tui'],
+  },
+  [SERVER]: {
+    '/': ['home', 'srv'],
+    '/home': ['jaco'],
+    '/home/jaco': ['.cache'],
+    '/srv': ['odin'],
+    '/srv/odin': ['uploads'],
+  },
+};
+const HOMES: Record<string, string> = { [MAC]: '/Users/jaco', [SERVER]: '/home/jaco' };
+
+const parentOf = (path: string) => path === '/' ? undefined : path.slice(0, path.lastIndexOf('/')) || '/';
 
 const summary = (
   hostId: string,
@@ -238,6 +262,24 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           transcripts: { ...current.transcripts, [created.key]: createTranscript(sessionId) },
           model: { ...current.model, sessions: [created, ...current.model.sessions], selectedKey: created.key },
         }));
+      },
+      async listDirectory({ hostId, path, hidden }) {
+        const home = HOMES[hostId] ?? '/';
+        const listed = path ?? home;
+        const directories = DIRECTORIES[hostId]?.[listed] ?? (listed.startsWith('/') ? [] : undefined);
+        if (!directories) throw new Error(`${listed} isn't an absolute path`);
+        const parent = parentOf(listed);
+        return {
+          path: listed,
+          ...(parent ? { parent } : {}),
+          home,
+          directories: directories.filter((name) => hidden || !name.startsWith('.')),
+          truncated: false,
+        };
+      },
+      renameSession(key, title) {
+        setSession(key, { title });
+        reduce(key, { type: 'session/renamed', title, by: 'You' });
       },
       closeSession(key) {
         setSession(key, { state: 'closed', activity: undefined, waitingOn: undefined });

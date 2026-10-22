@@ -125,6 +125,10 @@ pub struct FakeAgentConfig {
     pub mcp_over_acp: bool,
     /// How the `tool` script reaches a stdio MCP server.
     pub stdio_mcp: StdioMcp,
+    /// A tool of the `weave` server to call over ACP while setting a session up, before
+    /// answering `session/new`, as an agent loading its tools early may. Its answer is said
+    /// in the session as "Early <tool>: …".
+    pub call_on_new: Option<String>,
 }
 
 impl Default for FakeAgentConfig {
@@ -136,6 +140,7 @@ impl Default for FakeAgentConfig {
             minimal: false,
             mcp_over_acp: false,
             stdio_mcp: StdioMcp::default(),
+            call_on_new: None,
         }
     }
 }
@@ -155,6 +160,7 @@ impl FakeAgentConfig {
             minimal: std::env::var("WEAVE_FAKE_AGENT_MINIMAL").is_ok_and(|value| value == "1"),
             mcp_over_acp: std::env::var("WEAVE_FAKE_AGENT_MCP_ACP").is_ok_and(|value| value == "1"),
             stdio_mcp: StdioMcp::default(),
+            call_on_new: None,
         }
     }
 }
@@ -271,11 +277,16 @@ pub async fn serve_with(
         )
         .on_receive_request(
             async move |request: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
-                let session_id = {
+                let (session_id, early) = {
                     let mut state = lock(&on_new);
                     if let Err(error) = state.require_auth() {
                         return responder.respond_with_error(error);
                     }
+                    // Sent before the answer, so it reaches the client first.
+                    let early = state.config.call_on_new.clone().and_then(|tool| {
+                        mcp::send_call(&cx, &request.mcp_servers, &tool)
+                            .map(|answer| (tool, answer))
+                    });
                     let session_id = new_session_id();
                     state.sessions.push(StoredSession {
                         id: session_id.to_string(),
@@ -291,8 +302,21 @@ pub async fn serve_with(
                             .modes(modes)
                             .config_options(options),
                     )?;
-                    session_id
+                    (session_id, early)
                 };
+                if let Some((tool, answer)) = early {
+                    let said = cx.clone();
+                    let session = session_id.clone();
+                    cx.spawn(async move {
+                        let text = match answer.await {
+                            Ok(result) => mcp::result_text(&result),
+                            Err(why) => why,
+                        };
+                        let chunk =
+                            ContentChunk::new(ContentBlock::from(format!("Early {tool}: {text}")));
+                        turn::notify(&said, &session, SessionUpdate::AgentMessageChunk(chunk))
+                    })?;
+                }
                 advertise_commands(&cx, &session_id)
             },
             agent_client_protocol::on_receive_request!(),

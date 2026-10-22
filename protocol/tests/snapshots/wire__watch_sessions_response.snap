@@ -1,0 +1,21 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&WatchSessionsResponse { sessions: vec![listing()], })"
+---
+{
+  "sessions": [
+    {
+      "info": {
+        "sessionId": "s-1",
+        "cwd": "/repo",
+        "title": "Fix the parser"
+      },
+      "agentId": "claude",
+      "state": "open",
+      "activity": "running",
+      "clients": 1,
+      "headless": false,
+      "lastActivityAt": 1760180001234
+    }
+  ]
+}

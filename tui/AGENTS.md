@@ -24,9 +24,11 @@ the transcript, so a sent image is neither decoded nor sent again; images from t
 are decoded one at a time off the UI thread, and the transcript holds the newest 64;
 during a turn Enter steers it when the Host and the agent can (`ChatWidget::can_steer`; not the
 agent's slash commands) and queues otherwise, and Tab always queues, as in Codex;
-`/new`, `/reload`, `/subagents` and `/update` are the TUI's own slash commands, offered with
-the agent's and handled locally (`/reload` ends the TUI and the CLI execs its own binary again
-with `--resume`; `/update`, in `updates.rs`, runs `agents/update` and then `session/reopen`, or opens a new
+`/new`, `/reload`, `/rename`, `/subagents` and `/update` are the TUI's own slash commands,
+offered with the agent's and handled locally (`/reload` ends the TUI and the CLI execs its own
+binary again with `--resume`; `/rename <title>`, offered when the Host lists `session/rename`,
+sends that in place of the agent's own `/rename`, and the `renamed` event titles the session;
+`/update`, in `updates.rs`, runs `agents/update` and then `session/reopen`, or opens a new
 session in place of a blank one,
 and `/update dismiss` hides a version's notice, kept in `$XDG_STATE_HOME/weave/updates.json`). The app follows the active session's journal position (`app.rs`): an attach's
 answer arrives in order ahead of its replay, events up to the journal head it gave are

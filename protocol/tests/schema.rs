@@ -19,6 +19,7 @@ use weave_host_protocol::agents;
 use weave_host_protocol::devices;
 use weave_host_protocol::errors;
 use weave_host_protocol::events;
+use weave_host_protocol::files;
 use weave_host_protocol::hello;
 use weave_host_protocol::host;
 use weave_host_protocol::pending;
@@ -96,7 +97,10 @@ fn schema() -> Value {
         "devices/offer" => devices::OfferDeviceRequest,
         "devices/list" => devices::ListDevicesRequest,
         "devices/revoke" => devices::RevokeDeviceRequest,
+        "files/list" => files::ListFilesRequest,
         "sessions/list" => sessions::ListSessionsRequest,
+        "sessions/watch" => sessions::WatchSessionsRequest,
+        "sessions/unwatch" => sessions::UnwatchSessionsRequest,
         "session/create" => sessions::CreateSessionRequest,
         "session/attach" => sessions::AttachSessionRequest,
         "session/detach" => sessions::DetachSessionRequest,
@@ -105,6 +109,7 @@ fn schema() -> Value {
         "session/setMode" => sessions::SetModeRequest,
         "session/setConfigOption" => sessions::SetConfigOptionRequest,
         "session/reopen" => sessions::ReopenSessionRequest,
+        "session/rename" => sessions::RenameSessionRequest,
         "session/run" => sessions::RunRequest,
         "turn/start" => turns::StartTurnRequest,
         "turn/steer" => turns::SteerTurnRequest,
@@ -114,6 +119,8 @@ fn schema() -> Value {
     let notifications = notifications! { generator, inlined;
         "session/event" => events::SessionEventNotification,
         "session/changed" => events::SessionChangedNotification,
+        "sessions/updated" => sessions::SessionUpdatedNotification,
+        "sessions/removed" => sessions::SessionRemovedNotification,
         "session/elicitationCompleted" => events::ElicitationCompletedNotification,
         "pending/added" => pending::PendingAddedNotification,
         "pending/resolved" => pending::PendingResolvedNotification,
@@ -167,8 +174,14 @@ fn schema() -> Value {
                 "devices": devices::DEVICES_FEATURE,
                 "agentUpdates": agents::UPDATES_FEATURE,
                 "clientTools": tools::CLIENT_TOOLS_FEATURE,
+                "watch": sessions::WATCH_FEATURE,
+                "listFiles": files::LIST_FEATURE,
+                "rename": sessions::RENAME_FEATURE,
             },
+            "files": {"maxEntries": files::MAX_ENTRIES},
+            "sessions": {"maxTitle": sessions::MAX_TITLE},
             "clientTools": {"clipboardWrite": tools::CLIPBOARD_WRITE},
+            "hostTools": {"renameSession": tools::RENAME_SESSION},
         },
         "$defs": definitions,
     })

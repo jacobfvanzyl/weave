@@ -43,7 +43,9 @@ use weave_host_protocol::pending::PendingResolvedNotification;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::Replay;
+use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionState;
+use weave_host_protocol::sessions::SessionUpdatedNotification;
 
 pub use crate::remote::Credentials;
 
@@ -60,6 +62,10 @@ pub enum HostEvent {
     DevicePaired(DevicePairedNotification),
     /// A newer version of an attached session's agent is out.
     UpdateAvailable(UpdateAvailableNotification),
+    /// A session appeared or changed, while this client watches the Host's sessions.
+    SessionUpdated(Box<SessionUpdatedNotification>),
+    /// A session went away, while this client watches the Host's sessions.
+    SessionRemoved(SessionRemovedNotification),
     /// The answer to [`HostHandle::open`], ahead of the events that follow it.
     Opened {
         tag: u64,
@@ -147,6 +153,8 @@ impl HostConnection {
         let on_completed = events.clone();
         let on_paired = events.clone();
         let on_update = events.clone();
+        let on_session_updated = events.clone();
+        let on_session_removed = events.clone();
         // Handlers run inside the dispatch loop, in the order messages arrived; each only
         // passes its message on.
         let builder = HostClient
@@ -197,6 +205,21 @@ impl HostConnection {
             .on_receive_notification(
                 async move |notification: UpdateAvailableNotification, _cx| {
                     let _ = on_update.send(HostEvent::UpdateAvailable(notification));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: SessionUpdatedNotification, _cx| {
+                    let _ =
+                        on_session_updated.send(HostEvent::SessionUpdated(Box::new(notification)));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: SessionRemovedNotification, _cx| {
+                    let _ = on_session_removed.send(HostEvent::SessionRemoved(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),

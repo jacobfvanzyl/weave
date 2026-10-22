@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowLeft01Icon, Delete02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
+import { ArrowLeft01Icon, Delete02Icon, Edit02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, OpenSession, SessionSummary } from '@/app/app-controller';
-import { findSubagent, sessionLabel } from '@/chat/acp-transcript';
+import { allSubagents, findSubagent, sessionLabel, waitsForAnswer } from '@/chat/acp-transcript';
 import { ChatPane } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { PathLabel } from '@/components/path-label';
@@ -19,7 +19,9 @@ import {
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
 
 /** The bar above a session, and above the empty state when none is open. */
 export function SessionHeader({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
@@ -32,8 +34,56 @@ export function SessionHeader({ leading, children }: { leading?: ReactNode; chil
   );
 }
 
-function SessionMenu({ session, actions }: { session: SessionSummary; actions: AppController['actions'] }) {
+/** Renames an open session through the Host, for every client. */
+function RenameDialog({ session, actions, open, onOpenChange }: {
+  session: SessionSummary;
+  actions: AppController['actions'];
+  open: boolean;
+  onOpenChange(open: boolean): void;
+}) {
+  const [title, setTitle] = useState('');
+  const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setTitle(session.title ?? '');
+    setError(undefined);
+    // Starts from the title it has when it opens.
+  }, [open]);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='w-[min(28rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
+        <DialogHeader>
+          <DialogTitle>Rename session</DialogTitle>
+          <DialogDescription>Every device and the TUI show the new title. The agent keeps its own.</DialogDescription>
+        </DialogHeader>
+        <form aria-label='Rename session' className='grid gap-3' onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          setError(undefined);
+          try {
+            await actions.renameSession(session.key, title);
+            onOpenChange(false);
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+          } finally {
+            setSaving(false);
+          }
+        }}>
+          <Input aria-label='Title' autoFocus maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} />
+          {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
+          <DialogFooter>
+            <Button type='submit' disabled={saving || !title.trim()}>{saving ? 'Renaming…' : 'Rename'}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SessionMenu({ session, actions, canRename }: { session: SessionSummary; actions: AppController['actions']; canRename?: boolean }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const name = session.title || 'this session';
   return (
     <>
@@ -43,6 +93,12 @@ function SessionMenu({ session, actions }: { session: SessionSummary; actions: A
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end'>
           <DropdownMenuGroup>
+            {canRename && (
+              <DropdownMenuItem disabled={session.state !== 'open'} onClick={() => setRenaming(true)}>
+                <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
+                Rename session…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem disabled={session.state === 'closed'} onClick={() => void actions.closeSession(session.key)}>
               <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
               Close session
@@ -54,6 +110,7 @@ function SessionMenu({ session, actions }: { session: SessionSummary; actions: A
           </DropdownMenuGroup>
         </DropdownMenuContent>
       </DropdownMenu>
+      <RenameDialog session={session} actions={actions} open={renaming} onOpenChange={setRenaming} />
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -143,6 +200,13 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
   const subagent = watching ? findSubagent(session.transcript, watching) : undefined;
   const openSubagent = useCallback((sessionId: string) => setWatching(sessionId), []);
   const swipe = useEdgeSwipe(subagent ? () => setWatching(undefined) : onSwipeBack);
+  // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
+  const asking = [
+    ...(subagent && waitsForAnswer(session.transcript) ? [undefined] : []),
+    ...allSubagents(session.transcript)
+      .filter(({ sessionId, transcript }) => sessionId !== subagent?.sessionId && waitsForAnswer(transcript))
+      .map(({ sessionId }) => sessionId),
+  ];
   return (
     <section aria-label={summary?.title || 'New session'} data-slot='session-view' className='flex min-h-0 min-w-0 flex-1 flex-col' {...swipe}>
       <SessionHeader leading={leading}>
@@ -164,7 +228,7 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
             {others}
           </Badge>
         )}
-        {summary && <SessionMenu session={summary} actions={actions} />}
+        {summary && <SessionMenu session={summary} actions={actions} canRename={host?.canRename} />}
       </SessionHeader>
       {model.error && (
         <Alert variant='destructive' className='m-2 w-auto'>
@@ -172,6 +236,17 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
         </Alert>
       )}
       {session.update && <UpdateNotice update={session.update} reopening={session.reopening} onMove={() => void actions.reopenSession()} />}
+      {asking.map((sessionId) => {
+        const label = sessionId ? sessionLabel(session.transcript, sessionId) : 'Main';
+        return (
+          <Alert key={sessionId ?? 'main'} className='m-2 mb-0 w-auto border-warning/40' data-slot='asking-notice'>
+            <AlertTitle>{label} is waiting for you</AlertTitle>
+            <AlertAction>
+              <Button size='sm' variant='outline' aria-label={`Show ${label}`} onClick={() => setWatching(sessionId)}>Show</Button>
+            </AlertAction>
+          </Alert>
+        );
+      })}
       {subagent
         ? (
           <>

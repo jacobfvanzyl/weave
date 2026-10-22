@@ -1,0 +1,22 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&SessionUpdatedNotification { session: listing() })"
+---
+{
+  "method": "sessions/updated",
+  "params": {
+    "session": {
+      "info": {
+        "sessionId": "s-1",
+        "cwd": "/repo",
+        "title": "Fix the parser"
+      },
+      "agentId": "claude",
+      "state": "open",
+      "activity": "running",
+      "clients": 1,
+      "headless": false,
+      "lastActivityAt": 1760180001234
+    }
+  }
+}

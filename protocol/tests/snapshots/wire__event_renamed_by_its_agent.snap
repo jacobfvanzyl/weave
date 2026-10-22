@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&event(39, SessionEvent::Renamed\n{ title: \"Parser fixes\".to_owned(), by: None, },))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 39,
+    "at": 1760180001234,
+    "event": {
+      "kind": "renamed",
+      "title": "Parser fixes"
+    }
+  }
+}

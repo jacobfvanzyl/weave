@@ -97,6 +97,15 @@ pub enum SessionEvent {
     },
     /// The session closed.
     Closed { reason: String },
+    /// The session was renamed through the Host (`session/rename`, or the `rename_session` Host
+    /// tool). Its title is the Host's from then on: titles the agent sends later don't replace
+    /// it.
+    Renamed {
+        title: String,
+        /// The client that renamed it; absent when its own agent did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
     /// Something the Host tells the session's clients, such as why its agent can't use client
     /// tools.
     Notice { text: String },

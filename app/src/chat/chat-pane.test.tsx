@@ -128,19 +128,33 @@ describe('ChatPane', () => {
     );
   });
 
-  it('resolves URL elicitation when the user consents to open the external flow', async () => {
+  it('opens a URL elicitation\'s page only when the person says so, showing the whole URL and its host', async () => {
     const user = userEvent.setup();
     const handlers = actions();
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
     render(<ChatPane model={createAcpShowcaseTranscript()} actions={handlers} />);
 
-    const open = screen.getByRole('button', { name: /Open/ });
-    open.addEventListener('click', (event) => event.preventDefault());
-    await user.click(open);
+    const card = screen.getByText('Authorize in your browser').closest('[data-slot="alert"]') as HTMLElement;
+    expect(within(card).getByText('example.com')).toBeInTheDocument();
+    expect(within(card).getByText('https://example.com/authorize')).toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
 
-    expect(handlers.respondToElicitation).toHaveBeenCalledWith(
-      'url-showcase',
-      { action: 'accept' },
-    );
+    await user.click(within(card).getByRole('button', { name: 'Open in browser' }));
+    expect(open).toHaveBeenCalledWith('https://example.com/authorize', '_blank', 'noopener,noreferrer');
+    expect(handlers.respondToElicitation).toHaveBeenCalledWith('url-showcase', { action: 'accept' });
+    open.mockRestore();
+  });
+
+  it('declines a URL elicitation without opening it', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<ChatPane model={createAcpShowcaseTranscript()} actions={handlers} />);
+    const card = screen.getByText('Authorize in your browser').closest('[data-slot="alert"]') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Decline' }));
+    expect(handlers.respondToElicitation).toHaveBeenCalledWith('url-showcase', { action: 'decline' });
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
   });
 
   it('does not submit form elicitation values that violate the requested ACP schema', async () => {

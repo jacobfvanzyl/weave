@@ -60,6 +60,9 @@ use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::errors;
+use weave_host_protocol::files::LIST_FEATURE as LIST_FILES_FEATURE;
+use weave_host_protocol::files::ListFilesRequest;
+use weave_host_protocol::files::ListFilesResponse;
 use weave_host_protocol::hello::AcpInfo;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::hello::ChallengeRequest;
@@ -81,19 +84,27 @@ use weave_host_protocol::sessions::DeleteSessionRequest;
 use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::RENAME_FEATURE;
+use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::UnwatchSessionsRequest;
+use weave_host_protocol::sessions::WATCH_FEATURE;
+use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::sessions::WatchSessionsResponse;
 use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
-use weave_host_protocol::tools::ClientTool;
+use weave_host_protocol::tools::Tool;
 use weave_host_protocol::tools::catalog;
+use weave_host_protocol::tools::host_catalog;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
@@ -106,6 +117,7 @@ use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use crate::Agent;
 use crate::Shared;
 use crate::devices::Closer;
+use crate::files;
 use crate::instance::Instance;
 use crate::journal;
 use crate::journal::Entry;
@@ -195,6 +207,7 @@ async fn serve_as(
     shared.registry().clients += 1;
     let result = handlers(&connection, transport).await;
     shared.registry().clients -= 1;
+    shared.unwatch(connection.id);
     if let Some(device) = lock(&connection.device).take() {
         shared.devices.disconnected(&device.id, connection.id);
     }
@@ -237,6 +250,8 @@ async fn handlers(
     let on_status = Arc::clone(connection);
     let on_shutdown = Arc::clone(connection);
     let on_create = Arc::clone(connection);
+    let on_watch = Arc::clone(connection);
+    let on_unwatch = Arc::clone(connection);
     let on_attach = Arc::clone(connection);
     Host.builder()
         .name("weave-host")
@@ -333,6 +348,28 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, list_files),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: WatchSessionsRequest, responder, cx: ConnectionTo<HostClient>| {
+                if let Err(error) = on_watch.hello_info() {
+                    return responder.respond_with_error(error);
+                }
+                on_watch.shared.watch(on_watch.id, cx, |sessions| {
+                    responder.respond(WatchSessionsResponse { sessions })
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: UnwatchSessionsRequest, responder, _cx| {
+                on_unwatch.shared.unwatch(on_unwatch.id);
+                responder.respond(Empty {})
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: CreateSessionRequest, responder, cx: ConnectionTo<HostClient>| {
                 let connection = Arc::clone(&on_create);
                 let client = cx.clone();
@@ -396,6 +433,10 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, set_mode),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, rename_session),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -573,6 +614,9 @@ impl Connection {
                 DEVICES_FEATURE.to_owned(),
                 UPDATES_FEATURE.to_owned(),
                 CLIENT_TOOLS_FEATURE.to_owned(),
+                WATCH_FEATURE.to_owned(),
+                LIST_FILES_FEATURE.to_owned(),
+                RENAME_FEATURE.to_owned(),
             ],
             acp: AcpInfo {
                 protocol_version: 1,
@@ -828,6 +872,15 @@ impl Connection {
         Ok(Empty {})
     }
 
+    /// `files/list`, off the dispatch loop's thread: a slow disk shouldn't hold it up.
+    async fn list_files(&self, request: ListFilesRequest) -> Result<ListFilesResponse, Error> {
+        self.hello_info()?;
+        let home = home();
+        tokio::task::spawn_blocking(move || files::list(&request, &home))
+            .await
+            .map_err(|error| Error::internal_error().data(error.to_string()))?
+    }
+
     async fn list_sessions(
         &self,
         request: ListSessionsRequest,
@@ -835,36 +888,11 @@ impl Connection {
         self.hello_info()?;
         match request.agent_id.clone() {
             None => Ok(ListSessionsResponse {
-                sessions: self.host_sessions(request.cwd.as_deref()),
+                sessions: self.shared.listings(request.cwd.as_deref()),
                 next_cursor: None,
             }),
             Some(agent_id) => self.agent_sessions(&agent_id, request).await,
         }
-    }
-
-    /// The sessions the Host has a journal for, across agents, most recently active first.
-    fn host_sessions(&self, cwd: Option<&Path>) -> Vec<SessionListing> {
-        let registry = self.shared.registry();
-        let in_scope = |dir: &Path| cwd.is_none_or(|cwd| cwd == dir);
-        let mut sessions: Vec<SessionListing> = registry
-            .sessions
-            .values()
-            .filter(|session| !session.is_blank())
-            .map(SessionHandle::summary)
-            .filter(|summary| in_scope(&summary.cwd))
-            .map(|summary| summary.listing())
-            .collect();
-        for (session_id, recorded) in &registry.known {
-            if registry.sessions.contains_key(session_id) || !in_scope(&recorded.cwd) {
-                continue;
-            }
-            let Some(agent_id) = recorded.agent_id() else {
-                continue;
-            };
-            sessions.push(dormant(session_id, agent_id, recorded));
-        }
-        sessions.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
-        sessions
     }
 
     /// `agent_id`'s sessions: the Host's own in the directory first, open ones and then ones
@@ -936,7 +964,9 @@ impl Connection {
                     let info = agents_own.remove(index);
                     let title = listing.info.title.take();
                     listing.info = info;
-                    if listing.info.title.is_none() {
+                    // The Host's title: the agent may save its own only once a turn ends, and
+                    // one the session was renamed to is the session's.
+                    if title.is_some() {
                         listing.info.title = title;
                     }
                 }
@@ -1245,6 +1275,8 @@ impl Connection {
         if let Some(dir) = &self.shared.config.journals {
             let _ = std::fs::remove_file(journal::path_for(dir, &session_id));
         }
+        self.shared
+            .tell_watchers(&SessionRemovedNotification { session_id });
         Ok(Empty {})
     }
 
@@ -1253,6 +1285,27 @@ impl Connection {
             .registry()
             .live(session_id)
             .ok_or_else(|| errors::session_not_open(&session_id.to_string()))
+    }
+
+    /// `session/rename`: a title of the Host's, which the session keeps.
+    async fn rename_session(&self, request: RenameSessionRequest) -> Result<Empty, Error> {
+        let hello = self.hello_info()?;
+        let title =
+            session::title(&request.title).map_err(|why| Error::invalid_params().data(why))?;
+        let session = self.live(&request.session_id)?;
+        let by = TurnOrigin::Client {
+            name: hello.client.name,
+            id: self.client_id(),
+            device: self.device_name(),
+        };
+        session
+            .finish(|done| Command::Rename {
+                title,
+                by: Some(by),
+                done,
+            })
+            .await?;
+        Ok(Empty {})
     }
 
     async fn set_mode(&self, request: SetModeRequest) -> Result<Empty, Error> {
@@ -1377,7 +1430,11 @@ impl Connection {
 }
 
 /// A session a stopped Host left, or one closed since, as listings show it.
-fn dormant(session_id: &SessionId, agent_id: &str, recorded: &Recorded) -> SessionListing {
+pub(crate) fn dormant(
+    session_id: &SessionId,
+    agent_id: &str,
+    recorded: &Recorded,
+) -> SessionListing {
     SessionListing {
         info: SessionInfo::new(session_id.clone(), recorded.cwd.clone()),
         agent_id: agent_id.to_owned(),
@@ -1410,6 +1467,7 @@ pub(crate) fn setup(
     let (mut mcp_servers, mut notices) = agent.config.mcp_servers(&capabilities.mcp_capabilities);
     let binding = match shared.mcp.declare(
         client_tools(agent),
+        host_tools(agent),
         &capabilities.mcp_capabilities,
         &shared.config.mcp_bridge,
     ) {
@@ -1418,7 +1476,7 @@ pub(crate) fn setup(
             Some(binding)
         }
         Err(why) => {
-            notices.push(format!("weave's client tools are unavailable: {why}"));
+            notices.push(format!("weave's tools are unavailable: {why}"));
             None
         }
     };
@@ -1444,9 +1502,18 @@ pub(crate) fn setup(
 }
 
 /// The client tools `agent` is offered: the catalog, less what its configuration leaves out.
-fn client_tools(agent: &Agent) -> Vec<ClientTool> {
+fn client_tools(agent: &Agent) -> Vec<Tool> {
     let chosen = agent.config.client_tools(&agent.id);
     catalog()
+        .into_iter()
+        .filter(|tool| chosen.is_none_or(|names| names.contains(&tool.name)))
+        .collect()
+}
+
+/// The Host tools `agent` is offered: their catalog, less what its configuration leaves out.
+fn host_tools(agent: &Agent) -> Vec<Tool> {
+    let chosen = agent.config.host_tools(&agent.id);
+    host_catalog()
         .into_iter()
         .filter(|tool| chosen.is_none_or(|names| names.contains(&tool.name)))
         .collect()
@@ -1623,6 +1690,16 @@ async fn reopen(
         modes,
         config_options: config_options.unwrap_or_default(),
     };
+    // A title the Host kept outlives the journal: a closed session's new one begins with it.
+    let title = match &recovered {
+        Some((_, records)) => journal::kept_title(records),
+        None => shared
+            .config
+            .journals
+            .as_ref()
+            .and_then(|dir| journal::read(&journal::path_for(dir, &session_id)).ok())
+            .and_then(|records| journal::kept_title(&records)),
+    };
     let (journal, policy) = match recovered {
         Some((path, records)) => {
             let policy = records
@@ -1659,7 +1736,7 @@ async fn reopen(
         setup.additional_directories,
         policy,
         snapshot,
-        Origin::Reopened(journal),
+        Origin::Reopened(journal, title),
         binding,
     ) {
         Ok(session) => Ok(session),
@@ -1678,8 +1755,9 @@ fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<
 enum Origin {
     /// `session/create` or a new run: the session is blank until it's prompted.
     New,
-    /// The agent's session reopened, with the journal a stopped Host left, if there is one.
-    Reopened(Option<Journal>),
+    /// The agent's session reopened, with the journal a stopped Host left, if there is one,
+    /// and the title the Host kept for it.
+    Reopened(Option<Journal>, Option<String>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1695,9 +1773,9 @@ fn open(
     origin: Origin,
     binding: Option<Binding>,
 ) -> Result<SessionHandle, Error> {
-    let (journal, blank) = match origin {
-        Origin::New => (None, true),
-        Origin::Reopened(journal) => (journal, false),
+    let (journal, blank, title) = match origin {
+        Origin::New => (None, true, None),
+        Origin::Reopened(journal, title) => (journal, false, title),
     };
     let journal = match journal {
         Some(journal) => journal,
@@ -1708,6 +1786,7 @@ fn open(
                 &agent.id,
                 cwd.clone(),
                 policy.clone(),
+                title.clone(),
             );
             match &shared.config.journals {
                 Some(dir) => Journal::create(dir, &session_id, header)
@@ -1734,6 +1813,7 @@ fn open(
             additional_directories,
             blank,
             binding,
+            title,
         },
     ))
 }
