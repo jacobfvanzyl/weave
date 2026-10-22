@@ -41,7 +41,7 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 - **A row's menu.** A long press, or a right-click, on a row offers Close session for an open
   one and Delete session, confirmed, for any, so an old session goes without being opened (and
   resumed in its agent) first. The Host forgets a deleted session even when its agent can't
-  delete it.
+  delete it, or its directory is gone. A failure says what failed and why.
 - **Filtering.** A field filters the list by title, directory and agent.
 - **New sessions.** A directory's heading starts a session in that directory with a chosen
   agent. "New session" asks for the Host (with more than one), the directory (one of the

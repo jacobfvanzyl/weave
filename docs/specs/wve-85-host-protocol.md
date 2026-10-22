@@ -443,8 +443,10 @@ one), so a new session takes its place. `version` is what the session runs now.
 **`session/delete`** `{sessionId, agentId?}` → `{}`
 
 Closes the session if it's open, deletes it in the agent (ACP `session/delete`) when the agent
-can, and removes its journal; an agent that can't keeps its own history of it. `agentId` is
-required when the Host has no record of the session.
+can, and removes its journal. The agent runs in the session's directory to do so; when that's
+gone, as a removed worktree, it isn't asked. An agent that isn't asked, or can't delete
+sessions, keeps its own history of it. `agentId` is required when the Host has no record of
+the session.
 
 **`session/setMode`** `{sessionId, modeId}` → `{}`
 

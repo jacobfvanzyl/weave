@@ -125,6 +125,10 @@ const describe = (error: unknown) => error instanceof Error ? error.message : St
 
 const failedWith = (error: unknown, code: number) => error instanceof HostError && error.code === code;
 
+/** What failed, and why as the Host says it: its error's text, when it gave one, says more than its message. */
+const failed = (what: string, error: unknown) =>
+  new Error(`${what}: ${error instanceof HostError && typeof error.data === 'string' ? error.data : describe(error)}`);
+
 const nextFrame = (notify: () => void) => {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => notify());
   else setTimeout(notify, 16);
@@ -1032,7 +1036,9 @@ export class HostStore {
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
     if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
-    await connection.request('session/close', { sessionId: rest.join('/') });
+    await connection.request('session/close', { sessionId: rest.join('/') }).catch((error: unknown) => {
+      throw failed("Couldn't close the session", error);
+    });
     if (followed) this.#followed.delete(key);
     if (this.#selectedKey === key) this.#selectedKey = undefined;
     await this.#list(entry);
@@ -1045,7 +1051,9 @@ export class HostStore {
     const connection = entry?.connection;
     if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
     const agentId = entry.sessions.find(({ info }) => info.sessionId === sessionId)?.agentId ?? this.#followed.get(key)?.state?.agent.id;
-    await connection.request('session/delete', { sessionId, ...(agentId ? { agentId } : {}) });
+    await connection.request('session/delete', { sessionId, ...(agentId ? { agentId } : {}) }).catch((error: unknown) => {
+      throw failed("Couldn't delete the session", error);
+    });
     this.#followed.delete(key);
     this.#read.forget(key);
     if (this.#selectedKey === key) this.#selectedKey = undefined;

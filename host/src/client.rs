@@ -1262,24 +1262,15 @@ impl Connection {
                 })
                 .await;
         }
-        let agent = self.shared.resolve(&agent_id).await?;
         let cwd = known
             .as_ref()
             .map_or_else(home, |recorded| recorded.cwd.clone());
-        let handle = self
-            .shared
-            .agent_handle(&agent, &cwd, interactive(agent.options))
-            .await?;
-        // An agent that can't delete sessions keeps its own history; the Host forgets it anyway.
-        let agent_deletes = handle.agent().is_some_and(|agent| {
-            agent
-                .agent_capabilities
-                .session_capabilities
-                .delete
-                .is_some()
-        });
-        if agent_deletes {
-            handle.delete_session(session_id.clone()).await?;
+        // The agent's part runs it in the session's directory. One that's gone, as a removed
+        // worktree, leaves the agent its own history of the session; the Host forgets it anyway.
+        if cwd.is_dir() {
+            self.delete_in_agent(&agent_id, &cwd, &session_id).await?;
+        } else {
+            tracing::info!(%session_id, cwd = %cwd.display(), "deleting a session whose directory is gone; its agent keeps its history");
         }
         self.shared.registry().known.remove(&session_id);
         if let Some(dir) = &self.shared.config.journals {
@@ -1288,6 +1279,32 @@ impl Connection {
         self.shared
             .tell_watchers(&SessionRemovedNotification { session_id });
         Ok(Empty {})
+    }
+
+    /// Delete a session in its agent, run in `cwd`, when the agent can delete sessions; one that
+    /// can't keeps its own history of it.
+    async fn delete_in_agent(
+        &self,
+        agent_id: &str,
+        cwd: &Path,
+        session_id: &SessionId,
+    ) -> Result<(), Error> {
+        let agent = self.shared.resolve(agent_id).await?;
+        let handle = self
+            .shared
+            .agent_handle(&agent, cwd, interactive(agent.options))
+            .await?;
+        let deletes = handle.agent().is_some_and(|agent| {
+            agent
+                .agent_capabilities
+                .session_capabilities
+                .delete
+                .is_some()
+        });
+        if deletes {
+            handle.delete_session(session_id.clone()).await?;
+        }
+        Ok(())
     }
 
     fn live(&self, session_id: &SessionId) -> Result<SessionHandle, Error> {

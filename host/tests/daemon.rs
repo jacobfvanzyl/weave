@@ -1267,6 +1267,61 @@ async fn deleting_a_session_its_agent_cant_delete_still_forgets_it_in_the_host()
 }
 
 #[tokio::test]
+async fn deleting_a_session_whose_directory_is_gone_forgets_it_in_the_host() {
+    let world = World::new();
+    let worktree = world.cwd().join("worktree");
+    std::fs::create_dir(&worktree).expect("the worktree");
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client
+        .connection
+        .send(CreateSessionRequest {
+            cwd: worktree.clone(),
+            ..TestClient::create_request(&world, "fake")
+        })
+        .await
+        .expect("session/create")
+        .session_id;
+    client.prompt(&session_id, "hello").await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+    std::fs::remove_dir_all(&worktree).expect("the worktree removed");
+
+    client
+        .connection
+        .send(DeleteSessionRequest {
+            session_id: session_id.clone(),
+            agent_id: None,
+        })
+        .await
+        .expect("session/delete");
+    assert!(!world.has_journal(&session_id));
+    // The agent, which would have had to run there, keeps its own history of it.
+    let agents_own = client
+        .connection
+        .send(ListSessionsRequest {
+            agent_id: Some("fake".to_owned()),
+            cwd: Some(worktree),
+            cursor: None,
+        })
+        .await
+        .expect("sessions/list")
+        .sessions;
+    assert!(
+        agents_own
+            .iter()
+            .any(|listing| listing.info.session_id == session_id
+                && listing.state == SessionStatus::Closed)
+    );
+}
+
+#[tokio::test]
 async fn command_output_reaches_clients_and_is_replayed() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
