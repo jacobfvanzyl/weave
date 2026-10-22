@@ -93,14 +93,6 @@ function AcpToolContent({ tool }: { tool: TranscriptToolCall }) {
           />
         );
       })}
-      {(tool.rawInput !== undefined || tool.rawOutput !== undefined) && (
-        <details className="text-[0.6875rem] text-muted-foreground">
-          <summary>Raw tool data</summary>
-          <pre className="mt-1 overflow-x-auto rounded-md bg-input-background p-2 text-xs whitespace-pre-wrap">
-            {JSON.stringify({ input: tool.rawInput, output: tool.rawOutput }, null, 2)}
-          </pre>
-        </details>
-      )}
     </div>
   );
 }
@@ -121,8 +113,11 @@ export function ToolCallView({
   onPermission(requestId: string, optionId: string): void;
 }) {
   const permission = tool.permission;
+  // The agent's raw input and output aren't shown; a call with nothing else has nothing to open.
+  const detailed = tool.locations.length > 0 || tool.content.length > 0;
   return (
-    <Tool defaultOpen={tool.status !== 'completed'}>
+    // Closed until tapped, whatever its status, so output doesn't crowd the transcript.
+    <Tool>
       <ToolHeader className="min-h-8 gap-2 px-3 py-1.5 [&_svg]:size-3.5 [&_svg]:text-muted-foreground">
         <HugeiconsIcon data-icon="inline-start" icon={statusIcon[tool.status]} strokeWidth={1.75} />
         <span className="min-w-0 flex-1 truncate text-xs font-medium">{tool.title}</span>
@@ -130,9 +125,11 @@ export function ToolCallView({
           {tool.status.replace('_', ' ')}
         </Badge>
       </ToolHeader>
-      <ToolContent>
-        <AcpToolContent tool={tool} />
-      </ToolContent>
+      {detailed && (
+        <ToolContent>
+          <AcpToolContent tool={tool} />
+        </ToolContent>
+      )}
       {permission?.status === 'pending' && (
         <Confirmation>
           <ConfirmationTitle>Permission required</ConfirmationTitle>

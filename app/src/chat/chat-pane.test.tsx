@@ -84,7 +84,8 @@ describe('ChatPane', () => {
     expect(screen.getByText('# Embedded README')).toBeInTheDocument();
     expect(screen.getByText('archive.bin')).toBeInTheDocument();
 
-    expect(screen.getByText('Update README')).toBeInTheDocument();
+    // Tool calls open when tapped.
+    fireEvent.click(screen.getByRole('button', { name: /Update README/ }));
     expect(screen.getAllByText('/workspace/README.md')).toHaveLength(2);
     expect(screen.getByText('# Old')).toBeInTheDocument();
     expect(screen.getByText('# New')).toBeInTheDocument();

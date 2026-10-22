@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { PromptImage } from '@/app/app-controller';
-import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from './acp-transcript';
+import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent, reduceJournalEvent } from './acp-transcript';
 import { ChatPane, type ChatPaneActions } from './chat-pane';
 import { urlCheck } from './pending-request';
 import { scaledSize } from './prompt-images';
@@ -68,14 +68,25 @@ describe('the transcript', () => {
     expect(screen.queryByRole('textbox', { name: 'Message agent' })).not.toBeInTheDocument();
   });
 
-  it('shows a command\'s output as text in its tool call, and how it ended', () => {
+  it('shows a command\'s output as text in its tool call once opened, and how it ended, but not its raw data', async () => {
+    const user = userEvent.setup();
     render(<ChatPane model={transcript(
-      { type: 'session/update', update: { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run make', kind: 'execute', status: 'in_progress', content: [{ type: 'terminal', terminalId: 'term-1' }] } },
+      {
+        type: 'session/update',
+        update: {
+          sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run make', kind: 'execute', status: 'failed',
+          content: [{ type: 'terminal', terminalId: 'term-1' }], rawInput: { command: 'make' }, rawOutput: { exitCode: 2 },
+        },
+      },
       { type: 'terminal/output', terminalId: 'term-1', data: '\u001b[31merror\u001b[0m: it broke\r\n' },
       { type: 'terminal/exit', terminalId: 'term-1', status: { exitCode: 2 } },
     )} actions={actions()} />);
+    // Closed, even failed, until tapped.
+    expect(screen.queryByLabelText('Terminal output')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Run make/ }));
     expect(screen.getByLabelText('Terminal output')).toHaveTextContent(/^error: it broke$/);
     expect(screen.getByText('Exited with code 2')).toBeInTheDocument();
+    expect(screen.queryByText('Raw tool data')).not.toBeInTheDocument();
   });
 
   it('says how a turn ended when it didn\'t finish', () => {
@@ -95,8 +106,69 @@ const permission = (toolCallId: string) => ({
 
 const form = { mode: 'form' as const, sessionId: 'main', message: 'Who are you?', requestedSchema: { type: 'object' as const, required: ['name'], properties: { name: { type: 'string' as const, title: 'Name' } } } };
 
+describe('runs of work', () => {
+  const call = (toolCallId: string, kind: 'execute' | 'edit' = 'execute', status: 'completed' | 'failed' | 'in_progress' = 'completed'): AcpTranscriptEvent =>
+    ({ type: 'session/update', update: { sessionUpdate: 'tool_call', toolCallId, title: `Step ${toolCallId}`, kind, status } });
+  const said = (text: string): AcpTranscriptEvent =>
+    ({ type: 'session/update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } });
+
+  it('folds tool calls in a row into one row, which opens to them', async () => {
+    const user = userEvent.setup();
+    render(<ChatPane model={transcript(call('a'), call('b', 'execute', 'failed'), call('c', 'edit'), said('All done.'))} actions={actions()} />);
+    const run = screen.getByRole('button', { name: /^Worked/ });
+    expect(run).toHaveTextContent('Worked2 commands, 1 edit1 failed');
+    expect(screen.queryByText('Step a')).not.toBeInTheDocument();
+    expect(screen.getByText('All done.')).toBeInTheDocument();
+    await user.click(run);
+    expect(screen.getAllByText(/^Step [abc]$/).map((step) => step.textContent)).toEqual(['Step a', 'Step b', 'Step c']);
+  });
+
+  it('says how long the work took, from the journal\'s times', () => {
+    const journal: [AcpTranscriptEvent, number][] = [
+      [{ type: 'prompt', prompt: [{ type: 'text', text: 'Go' }] }, 1_000],
+      [call('a'), 4_000],
+      [call('b'), 90_000],
+      [{ type: 'session/update', update: { sessionUpdate: 'tool_call_update', toolCallId: 'b', status: 'completed' } }, 138_000],
+      [said('Done.'), 139_000],
+    ];
+    const model = journal.reduce((transcript, [event, at]) => reduceJournalEvent(transcript, event, at), createTranscript('main'));
+    render(<ChatPane model={model} actions={actions()} />);
+    expect(screen.getByRole('button', { name: /^Worked/ })).toHaveTextContent('Worked for 2m 17s2 commands');
+  });
+
+  it('counts how long it has been working', () => {
+    const model = reduceJournalEvent(
+      reduceJournalEvent(createTranscript('main'), { type: 'prompt', prompt: [{ type: 'text', text: 'Go' }] }, Date.now() - 65_000),
+      { type: 'turn/started' },
+      Date.now() - 65_000,
+    );
+    render(<ChatPane model={model} actions={actions()} />);
+    expect(screen.getByRole('button', { name: /^Working/ })).toHaveTextContent('Working1m 5s');
+  });
+
+  it('is the running turn\'s activity, with the step it\'s on, and never hides a request', async () => {
+    const handlers = actions();
+    const user = userEvent.setup();
+    const { rerender } = render(<ChatPane model={transcript({ type: 'prompt', prompt: [{ type: 'text', text: 'Go' }], own: true }, { type: 'turn/started' })} actions={handlers} />);
+    expect(screen.getByRole('button', { name: /^Working/ })).toBeDisabled();
+
+    rerender(<ChatPane model={transcript(
+      { type: 'prompt', prompt: [{ type: 'text', text: 'Go' }], own: true },
+      { type: 'turn/started' },
+      call('a'),
+      call('b', 'execute', 'in_progress'),
+      { type: 'permission/requested', requestId: 'p-1', request: permission('b') },
+    )} actions={handlers} />);
+    expect(screen.getByRole('button', { name: /^Working/ })).toHaveTextContent('WorkingWrite b.txt');
+    expect(screen.queryByText('Step a')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Allow' }));
+    expect(handlers.respondToPermission).toHaveBeenCalledWith('p-1', 'allow');
+  });
+});
+
 describe('pending requests', () => {
-  it('says how each permission request ended', () => {
+  it('says how each permission request ended', async () => {
+    const user = userEvent.setup();
     render(<ChatPane model={transcript(
       { type: 'permission/requested', requestId: 'p-1', request: permission('a') },
       { type: 'permission/resolved', requestId: 'p-1', optionId: 'allow' },
@@ -107,6 +179,8 @@ describe('pending requests', () => {
       { type: 'permission/requested', requestId: 'p-4', request: permission('d') },
       { type: 'request/resolved', requestId: 'p-4', status: 'cancelled' },
     )} actions={actions()} />);
+    // Four tool calls in a row are one run of work.
+    await user.click(screen.getByRole('button', { name: /^Worked/ }));
     expect(screen.getByText('You chose Allow')).toBeInTheDocument();
     expect(screen.getByText('Answered on another client')).toBeInTheDocument();
     expect(screen.getByText('The agent withdrew its request')).toBeInTheDocument();

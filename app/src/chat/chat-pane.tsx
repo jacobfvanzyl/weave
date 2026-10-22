@@ -1,4 +1,6 @@
 import { composerDrafts, composerDraftListeners, discardComposerDraft, writeComposerDraft, type ComposerDraft } from './composer-drafts';
+import { transcriptItems } from './transcript-runs';
+import { WorkRunView } from './work-run-view';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { PromptImage, QueuedPrompt } from '@/app/app-controller';
 import { Capacitor } from '@capacitor/core';
@@ -750,6 +752,8 @@ export function ChatPane({
   draftKey?: string;
 }) {
   const running = model.turn.status === 'running';
+  const items = useMemo(() => transcriptItems(model.entries, running), [model.entries, running]);
+  const streamingId = running ? model.entries.at(-1)?.id : undefined;
   const session = root ?? model;
   const context = useMemo<TranscriptContextValue>(() => ({ root: session, openSubagent: onOpenSubagent }), [session, onOpenSubagent]);
   return (
@@ -768,16 +772,20 @@ export function ChatPane({
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
-                {model.entries.map((entry) => (
-                  <MessageScrollerItem key={entry.id} scrollAnchor={entry.kind === 'message' && entry.role === 'user'}>
-                    <EntryView
-                      entry={entry}
-                      transcript={model}
-                      actions={actions}
-                      isStreaming={running && entry.id === model.entries.at(-1)?.id}
-                    />
-                  </MessageScrollerItem>
-                ))}
+                {items.map((item) => item.kind === 'entry'
+                  ? (
+                    <MessageScrollerItem key={item.entry.id} scrollAnchor={item.entry.kind === 'message' && item.entry.role === 'user'}>
+                      <EntryView entry={item.entry} transcript={model} actions={actions} isStreaming={item.entry.id === streamingId} />
+                    </MessageScrollerItem>
+                  )
+                  : (
+                    <MessageScrollerItem key={item.id}>
+                      <WorkRunView
+                        run={item}
+                        renderEntry={(entry) => <EntryView entry={entry} transcript={model} actions={actions} isStreaming={entry.id === streamingId} />}
+                      />
+                    </MessageScrollerItem>
+                  ))}
                 {model.entries.length === 0 && (
                   <Empty className="min-h-48 rounded-none p-0">
                     <EmptyHeader>

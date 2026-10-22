@@ -190,7 +190,23 @@ Every `session/event` kind shows, the same whether it arrives live or replayed
 Replayed history changes no turn state: whether a turn runs comes from `SessionState.turns` on
 attaching, then from live events. Images in prompts and messages show as thumbnails that open
 whole. Agent text is untrusted: its Markdown renders raw HTML as text, and a link opens only
-after a confirmation naming its host and the whole URL, with not opening the default.
+after a confirmation naming its host and the whole URL, with not opening the default. Tables read
+as part of the text, as the TUI draws them, with no frame or buttons.
+
+How the work shows (`src/chat/transcript-runs.ts`):
+
+- **Tool calls** start closed, whatever their status, and open when tapped. The agent's raw input
+  and output aren't shown.
+- **Runs of work.** Two or more tool calls in a row, with the thinking between them, fold into
+  one closed row: "Worked for 2m 17s · 9 commands, 2 edits", and "1 failed" when one did.
+  Anything else the agent says ends a run. A tool call waiting on the person shows below the row
+  while it's closed.
+- **While a turn runs,** its latest run is its activity, however short: "Working", how long so
+  far, and the step it's on. So is a prompt the agent hasn't answered yet.
+- **Times** come from the journal: each entry keeps when the events that made it and last changed
+  it happened. A run starts with the prompt or message before it, and ends with its last update.
+- **Every entry is laid out,** on screen or not, so nothing above changes height as the person
+  scrolls back; iOS would move what's on screen with it.
 
 Tests read journals recorded from a dev Host with the fake agent
 (`scripts/record-journals.ts`, into `src/chat/fixtures/journals/`): each must give the same
@@ -311,5 +327,4 @@ acceptance harness and UI tests.
 
 - Queued messages for a session that isn't open in the app wait until it is opened again; the
   Host's queue (WVE-107) would send them as turns end.
-- WVE-105: acceptance on a physical iPhone and iPad.
 - WVE-96: views.

@@ -243,6 +243,21 @@ describe('HostStore', () => {
   });
 });
 
+describe('HostStore journal times', () => {
+  it('dates the transcript\'s entries by when the journal says their events happened', async () => {
+    const host = scriptedHost(() => []);
+    const store = storeFor(host.connector);
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    host.notify('session/event', { ...chunk(1, 'Chunk 1. '), at: 1_000 });
+    host.notify('session/event', { ...chunk(2, 'Chunk 2. '), at: 2_500 });
+    await settle();
+    expect(store.snapshot().session!.transcript.entries).toMatchObject([{ kind: 'message', startedAt: 1_000, updatedAt: 2_500 }]);
+    store.stop();
+  });
+});
+
 describe('HostStore reconnecting', () => {
   it('forgets the pairing when the Host revokes the device (4000), and says to pair again', async () => {
     const host = scriptedHost(() => []);

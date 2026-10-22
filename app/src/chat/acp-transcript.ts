@@ -152,7 +152,15 @@ export type TranscriptSessionMessage = {
   content: ContentBlock[];
 };
 
-export type TranscriptEntry =
+/** When the journal events behind an entry happened, in milliseconds; none for one shown before the Host had it. */
+export type EntryTimes = {
+  /** The event that made it. */
+  startedAt?: number;
+  /** The latest event that changed it. */
+  updatedAt?: number;
+};
+
+export type TranscriptEntry = (
   | TranscriptMessage
   | TranscriptToolCall
   | TranscriptPlan
@@ -161,7 +169,8 @@ export type TranscriptEntry =
   | TranscriptClientTool
   | TranscriptDiagnostic
   | TranscriptSubagentRow
-  | TranscriptSessionMessage;
+  | TranscriptSessionMessage
+) & EntryTimes;
 
 type TranscriptEntryInput =
   | Omit<TranscriptMessage, 'id'>
@@ -1012,6 +1021,37 @@ const settleOptimisticPrompts = (model: AcpTranscript): AcpTranscript => ({
       : entry
   ),
 });
+
+/**
+ * The entries an event made or changed, stamped with when it happened. Entries are appended or
+ * replaced where they stand; the only one an event removes is this device's prompt, as the Host's
+ * copy replaces it.
+ */
+const stampEntries = (before: TranscriptEntry[], after: TranscriptEntry[], at: number): TranscriptEntry[] => {
+  if (after === before) return after;
+  let index = 0;
+  return after.map((entry) => {
+    if (before[index] && before[index].id !== entry.id && before[index + 1]?.id === entry.id) index += 1;
+    const previous = before[index]?.id === entry.id ? before[index++] : undefined;
+    if (previous === entry) return entry;
+    return { ...entry, startedAt: previous?.startedAt ?? at, updatedAt: at };
+  });
+};
+
+const stampTranscript = (before: AcpTranscript | undefined, after: AcpTranscript, at: number): AcpTranscript => {
+  if (after === before) return after;
+  const subagents = after.subagents === before?.subagents
+    ? after.subagents
+    : after.subagents.map((subagent) => {
+        const earlier = before?.subagents.find(({ sessionId }) => sessionId === subagent.sessionId);
+        return earlier?.transcript === subagent.transcript ? subagent : { ...subagent, transcript: stampTranscript(earlier?.transcript, subagent.transcript, at) };
+      });
+  return { ...after, entries: stampEntries(before?.entries ?? [], after.entries, at), subagents };
+};
+
+/** `reduceAcpEvent` for a journal event, recording when it happened on the entries it made or changed. */
+export const reduceJournalEvent = (model: AcpTranscript, event: AcpTranscriptEvent, at: number): AcpTranscript =>
+  stampTranscript(model, reduceAcpEvent(model, event), at);
 
 export const reduceAcpEvent = (
   model: AcpTranscript,

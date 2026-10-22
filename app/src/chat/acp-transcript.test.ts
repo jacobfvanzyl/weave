@@ -7,8 +7,43 @@ import {
   findSubagent,
   queueOptimisticPrompt,
   reduceAcpEvent,
+  reduceJournalEvent,
   waitsForAnswer,
 } from './acp-transcript';
+
+describe('journal times', () => {
+  const tool = (toolCallId: string, status: 'in_progress' | 'completed'): AcpTranscriptEvent =>
+    ({ type: 'session/update', update: { sessionUpdate: 'tool_call_update', toolCallId, title: toolCallId, status } });
+  const times = (transcript: ReturnType<typeof createTranscript>) =>
+    transcript.entries.map(({ startedAt, updatedAt }) => [startedAt, updatedAt]);
+
+  it('dates each entry by the events that made and last changed it', () => {
+    let transcript = createTranscript('main');
+    transcript = reduceJournalEvent(transcript, { type: 'prompt', prompt: [{ type: 'text', text: 'Go' }] }, 100);
+    transcript = reduceJournalEvent(transcript, { type: 'session/update', update: { sessionUpdate: 'tool_call', toolCallId: 'a', title: 'a', status: 'in_progress' } }, 200);
+    transcript = reduceJournalEvent(transcript, { type: 'session/update', update: { sessionUpdate: 'tool_call', toolCallId: 'b', title: 'b', status: 'in_progress' } }, 300);
+    transcript = reduceJournalEvent(transcript, tool('a', 'completed'), 400);
+    expect(times(transcript)).toEqual([[100, 100], [200, 400], [300, 300]]);
+    // Events that come without a time, as the app's own, date nothing.
+    expect(times(reduceAcpEvent(transcript, tool('b', 'completed')))).toEqual([[100, 100], [200, 400], [300, 300]]);
+  });
+
+  it('keeps the dates of what follows this device\'s prompt when the Host\'s copy replaces it', () => {
+    let transcript = createTranscript('main');
+    transcript = queueOptimisticPrompt(transcript, 'local-1', [{ type: 'text', text: 'First' }]);
+    transcript = reduceJournalEvent(transcript, { type: 'session/update', update: { sessionUpdate: 'tool_call', toolCallId: 'a', title: 'a', status: 'in_progress' } }, 200);
+    transcript = reduceJournalEvent(transcript, { type: 'prompt', prompt: [{ type: 'text', text: 'First' }], own: true }, 300);
+    expect(transcript.entries.map(({ kind }) => kind)).toEqual(['tool', 'message']);
+    expect(times(transcript)).toEqual([[200, 200], [300, 300]]);
+  });
+
+  it('dates a subagent\'s entries too', () => {
+    let transcript = createTranscript('main');
+    transcript = reduceJournalEvent(transcript, { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:ada', title: 'Ada' } }, 100);
+    transcript = reduceJournalEvent(transcript, { type: 'session/update', sessionId: 'main:ada', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'On it.' } } }, 250);
+    expect(times(transcript.subagents[0].transcript)).toEqual([[250, 250]]);
+  });
+});
 
 describe('ACP transcript message reduction', () => {
   it('uses protocol message IDs as chunk boundaries', () => {

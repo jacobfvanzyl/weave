@@ -4,6 +4,7 @@ import {
   createTranscript,
   queueOptimisticPrompt,
   reduceAcpEvent,
+  reduceJournalEvent,
 } from '@/chat/acp-transcript';
 import type {
   AgentChoice,
@@ -609,7 +610,7 @@ export class HostStore {
     if ((event.kind === 'turnStarted' || event.kind === 'turnSteered') && 'client' in event.origin) {
       followed.clients.set(event.origin.client.id, originLabel(event.origin));
     }
-    this.#apply(followed, transcriptEvents(notification, { history, own: (origin) => this.#own(entry, origin) }));
+    this.#apply(followed, transcriptEvents(notification, { history, own: (origin) => this.#own(entry, origin) }), notification.at);
     // What waits shows once the history before it has.
     if (!followed.pendingShown && !followed.follower.replaying) this.#showPending(followed);
     if (history) return;
@@ -853,9 +854,13 @@ export class HostStore {
     })();
   }
 
-  #apply(followed: Followed, events: AcpTranscriptEvent[]) {
+  /** Applies events to a followed session's transcript; a journal event's `at` dates the entries it touches. */
+  #apply(followed: Followed, events: AcpTranscriptEvent[], at?: number) {
     if (events.length === 0) return;
-    followed.transcript = events.reduce(reduceAcpEvent, followed.transcript);
+    followed.transcript = events.reduce(
+      (transcript, event) => at === undefined ? reduceAcpEvent(transcript, event) : reduceJournalEvent(transcript, event, at),
+      followed.transcript,
+    );
     this.#changed();
   }
 
