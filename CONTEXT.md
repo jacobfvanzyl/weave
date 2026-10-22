@@ -87,6 +87,16 @@ _Avoid_: subscribe, join, connect
 Moving an open session to a new process of its agent, on the version the agent's new sessions get, keeping the session's id and journal.
 _Avoid_: restart, reload (the TUI's own restart)
 
+### Repositories
+
+**Repository**:
+A git repository on the Host's computer that sessions' directories can be in, known by its primary worktree.
+_Avoid_: project, workspace
+
+**Worktree**:
+One of a repository's working trees, which sessions can run in. It belongs to the person rather than to any session, and outlives the sessions in it.
+_Avoid_: checkout, sandbox, workspace
+
 ### Turns
 
 **Prompt**:
