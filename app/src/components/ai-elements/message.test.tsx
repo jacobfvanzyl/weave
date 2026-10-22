@@ -4,6 +4,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { MessageResponse } from './message';
 
 describe('MessageResponse', () => {
+  it('draws a table as part of the text, with no frame or buttons, keeping its columns\' alignment', () => {
+    render(<MessageResponse>{'| Measured step | Time |\n| --- | ---: |\n| V2 database migration | 2 min 17 sec |'}</MessageResponse>);
+    const table = screen.getByRole('table');
+    expect(screen.getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(['Measured step', 'Time']);
+    expect(screen.getByRole('cell', { name: '2 min 17 sec' })).toHaveStyle({ textAlign: 'right' });
+    expect(table.closest('[data-streamdown="table-wrapper"]')?.querySelector('button')).toBeNull();
+    expect(table.querySelector('thead')).not.toHaveClass('bg-muted/80');
+  });
+
   it('wraps at word boundaries unless an unbroken token would overflow', () => {
     const { container } = render(
       <MessageResponse>A normal user message with readable word boundaries.</MessageResponse>,
