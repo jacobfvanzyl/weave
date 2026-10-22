@@ -73,10 +73,10 @@ function MessageScrollerItem({
     <MessageScrollerPrimitive.Item
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
-      className={cn(
-        "min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]",
-        className
-      )}
+      // Laid out whether on screen or not: with `content-visibility: auto`, an item first drawn
+      // as it scrolls into view changed from its 10rem estimate to its height above the reader,
+      // and on iOS what was on screen jumped with it.
+      className={cn("min-w-0 shrink-0", className)}
       {...props}
     />
   )
