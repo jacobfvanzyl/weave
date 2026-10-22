@@ -1,7 +1,12 @@
 import type { CreateElicitationResponse } from '@/host/protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
-export type HostStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+/**
+ * A paired Host's connection. `disconnected` isn't tried again until the person asks, `revoked`
+ * (the Host revoked this device, which forgot the pairing) has to pair again, and
+ * `incompatible` shares no protocol version with this app.
+ */
+export type HostStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'revoked' | 'incompatible';
 
 /** A Host this device has paired with. */
 export type PairedHost = {
@@ -120,7 +125,7 @@ export type AppActions = {
   /** Pairs with the URL and code `weave pair` shows; `name` is what the Host calls this device. */
   pairHost(input: { url: string; code: string; name?: string }): Promise<void> | void;
   forgetHost(hostId: string): Promise<void> | void;
-  /** Lists the sessions again, as pulling the list down asks. */
+  /** Lists the sessions again, and reconnects at once to Hosts that dropped, as pulling the list down asks. */
   refresh?(): Promise<void> | void;
   reconnectHost(hostId: string): Promise<void> | void;
   /** Starts a turn, steers the running one, or queues the message, as `OpenSession` allows. */

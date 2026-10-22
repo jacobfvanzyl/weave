@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, Delete02Icon, Edit02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
-import type { AgentUpdateNotice, AppController, OpenSession, SessionSummary } from '@/app/app-controller';
+import type { AgentUpdateNotice, AppController, OpenSession, PairedHost, SessionSummary } from '@/app/app-controller';
 import { allSubagents, findSubagent, sessionLabel, waitsForAnswer } from '@/chat/acp-transcript';
 import { ChatPane } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
@@ -183,6 +183,20 @@ function UpdateNotice({ update, reopening, onMove }: { update: AgentUpdateNotice
   );
 }
 
+/** The session's Host isn't connected: the transcript catches up once it is. */
+function ConnectionNotice({ host }: { host: PairedHost }) {
+  const text = host.status === 'connecting'
+    ? `Connecting to ${host.name}…`
+    : host.status === 'reconnecting'
+      ? `Reconnecting to ${host.name}…`
+      : `${host.name} isn't connected.${host.error ? ` ${host.error}` : ''}`;
+  return (
+    <p role='status' data-slot='connection-notice' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
+      {text}
+    </p>
+  );
+}
+
 /** The session on screen: its header, transcript and composer. */
 export function SessionView({ controller, session, leading, onSwipeBack }: {
   controller: AppController;
@@ -230,6 +244,7 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
         )}
         {summary && <SessionMenu session={summary} actions={actions} canRename={host?.canRename} />}
       </SessionHeader>
+      {host && host.status !== 'connected' && <ConnectionNotice host={host} />}
       {model.error && (
         <Alert variant='destructive' className='m-2 w-auto'>
           <AlertDescription>{model.error}</AlertDescription>

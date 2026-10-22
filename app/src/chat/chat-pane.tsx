@@ -1,4 +1,4 @@
-import { composerDrafts, composerDraftListeners, writeComposerDraft, type ComposerDraft } from './composer-drafts';
+import { composerDrafts, composerDraftListeners, discardComposerDraft, writeComposerDraft, type ComposerDraft } from './composer-drafts';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { PromptImage, QueuedPrompt } from '@/app/app-controller';
 import { Capacitor } from '@capacitor/core';
@@ -551,7 +551,7 @@ function Composer({
     return () => {
       listeners.delete(updateDraft);
       if (listeners.size === 0) composerDraftListeners.delete(composerKey);
-      if (discardDraftOnUnmount) composerDrafts.delete(composerKey);
+      if (discardDraftOnUnmount) discardComposerDraft(composerKey);
     };
   }, [discardDraftOnUnmount, composerKey]);
   useEffect(() => {

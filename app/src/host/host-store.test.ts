@@ -2,24 +2,29 @@
 // newer version of an agent being out.
 import { describe, expect, it } from 'vitest';
 import { sessionKey } from '@/app/app-controller';
+import { blocksText } from '@/chat/acp-transcript';
 import type { Connector, TransportEvents } from './connection';
+import { APP_PROTOCOL } from './connection';
 import { HOST_PROTOCOL } from './protocol';
-import { HostStore } from './host-store';
+import { HostStore, type HostStoreOptions } from './host-store';
 import type { AgentSummary, PendingRequest, SessionListing, SessionState } from './protocol';
 import { memoryStorage } from './storage';
 
 const HOST = 'host-1';
 const SESSION = 's-1';
 
-type Answer = { result: unknown } | { error: { code: number; message: string } };
+type Answer = { result: unknown } | { error: { code: number; message: string; data?: unknown } };
 
 /**
  * A Host that answers what the store asks, with the agents `agents` gives at the time; `answers`
- * overrides what it answers a method.
+ * overrides what it answers a method, and one answering `'silent'` answers nothing.
  */
-function scriptedHost(agents: () => AgentSummary[], answers: Record<string, (params: unknown) => Answer> = {}) {
+function scriptedHost(agents: () => AgentSummary[], answers: Record<string, (params: unknown) => Answer | 'silent' | undefined> = {}) {
   let events: TransportEvents | undefined;
   const asked: string[] = [];
+  const params: Record<string, unknown[]> = {};
+  /** Connections opened, and how many tries to leave opening until they're abandoned. */
+  const connects = { opened: 0, hang: 0 };
   const state = {
     sessionId: SESSION,
     agent: { id: 'claude', name: 'Claude', initialize: { protocolVersion: 1 }, release: { name: 'claude-agent-acp', version: '0.86.0' } },
@@ -39,32 +44,50 @@ function scriptedHost(agents: () => AgentSummary[], answers: Record<string, (par
     'sessions/list': () => ({ sessions: [{ info: { sessionId: SESSION, cwd: '/work' }, agentId: 'claude', state: 'open', activity: 'idle', clients: 1, headless: false }] }),
     'session/attach': () => ({ ...state, replay: { from: 1, reset: true } }),
   };
-  const connector: Connector = async (transport) => {
+  const connector: Connector = async (transport, signal) => {
+    if (connects.hang > 0) {
+      connects.hang -= 1;
+      return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)));
+    }
+    connects.opened += 1;
     events = transport;
+    let open = true;
     return {
       send(text) {
-        const { id, method, params } = JSON.parse(text) as { id: number; method: string; params: unknown };
+        const { id, method, params: given } = JSON.parse(text) as { id: number; method: string; params: unknown };
         asked.push(method);
-        const answer = answers[method]?.(params) ?? { result: results[method]?.() ?? {} };
-        queueMicrotask(() => events?.message(JSON.stringify({ jsonrpc: '2.0', id, ...answer })));
+        (params[method] ??= []).push(given);
+        const answer = answers[method]?.(given) ?? { result: results[method]?.() ?? {} };
+        if (answer === 'silent') return;
+        queueMicrotask(() => { if (open) transport.message(JSON.stringify({ jsonrpc: '2.0', id, ...answer })); });
       },
-      close() {},
+      close() { open = false; },
     };
   };
   const notify = (method: string, params: unknown) => events?.message(JSON.stringify({ jsonrpc: '2.0', method, params }));
-  return { connector, asked, notify, state };
+  /** The Host closes the latest connection, with a WebSocket close code. */
+  const close = (code: number, reason = '') => events?.closed({ code, reason });
+  return { connector, asked, params, connects, notify, close, state };
 }
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+const settle = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const storeFor = (connector: Connector) => new HostStore({
-  storage: memoryStorage([{ hostId: HOST, name: 'mac', url: 'wss://mac', deviceId: 'd-1', keyId: 'k' }]),
+const PAIRED = { hostId: HOST, name: 'mac', url: 'wss://mac', deviceId: 'd-1', keyId: 'k' };
+
+const storeFor = (connector: Connector, options: Partial<HostStoreOptions> = {}) => new HostStore({
+  storage: memoryStorage([PAIRED]),
   keyFor: () => ({ publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }), sign: async () => 'signature', forget: async () => {} }),
   newKey: () => Promise.reject(new Error('no pairing here')),
   connectorFor: () => connector,
   client: { name: 'test', version: '0' },
   deviceName: 'iPad',
   schedule: (notify) => queueMicrotask(notify),
+  ...options,
+});
+
+const chunk = (seq: number, text: string) => ({
+  sessionId: SESSION, seq, at: 0,
+  event: { kind: 'update', notification: { sessionId: SESSION, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } },
 });
 
 const write: PendingRequest = {
@@ -80,6 +103,13 @@ const write: PendingRequest = {
 };
 
 const tools = (store: HostStore) => store.snapshot().session!.transcript.entries.filter((entry) => entry.kind === 'tool');
+
+/** What the agent said in the session on screen. */
+const said = (store: HostStore) => store.snapshot().session!.transcript.entries
+  .flatMap((entry) => entry.kind === 'message' && entry.role === 'assistant'
+    ? [blocksText(entry.chunks.filter(({ kind }) => kind === 'message').flatMap(({ content }) => content))]
+    : [])
+  .join('');
 
 describe('HostStore', () => {
   it('offers to move a session to a newer agent only once the Host launches it', async () => {
@@ -210,5 +240,178 @@ describe('HostStore', () => {
     expect(older.asked).toContain('sessions/list');
     expect(older.asked).not.toContain('sessions/watch');
     listed.stop();
+  });
+});
+
+describe('HostStore reconnecting', () => {
+  it('forgets the pairing when the Host revokes the device (4000), and says to pair again', async () => {
+    const host = scriptedHost(() => []);
+    const storage = memoryStorage([PAIRED]);
+    const forgotten: string[] = [];
+    const store = storeFor(host.connector, {
+      storage,
+      keyFor: (keyId) => ({
+        publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }),
+        sign: async () => 'signature',
+        forget: async () => { forgotten.push(keyId); },
+      }),
+      backoff: [5],
+    });
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    expect(store.snapshot().session).toBeDefined();
+
+    host.close(HOST_PROTOCOL.websocket.closeRevoked, 'the device was revoked');
+    await settle(30);
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'revoked', error: expect.stringContaining('Pair it again') }]);
+    expect(store.snapshot().sessions).toEqual([]);
+    expect(store.snapshot().session).toBeUndefined();
+    expect(forgotten).toEqual(['k']);
+    expect(await storage.load()).toEqual([]);
+    // Nothing to connect with: coming to the front, or asking, tries nothing.
+    await store.refresh();
+    await store.actions.reconnectHost(HOST);
+    expect(host.connects.opened).toBe(1);
+    await store.actions.forgetHost(HOST);
+    expect(store.snapshot().hosts).toEqual([]);
+    store.stop();
+  });
+
+  it('reconnects at once when it fell behind (4001), and gets only what it missed', async () => {
+    const host = scriptedHost(() => [], {
+      'session/attach': (given) => {
+        const after = (given as { after?: { seq: number } }).after;
+        return { result: { ...host.state, journal: { id: 'j-1', head: after?.seq ?? 0 }, replay: { from: (after?.seq ?? 0) + 1, reset: !after } } };
+      },
+    });
+    const store = storeFor(host.connector, { backoff: [60_000] });
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    host.notify('session/event', chunk(1, 'Chunk 1. '));
+    host.notify('session/event', chunk(2, 'Chunk 2. '));
+    await settle();
+
+    host.close(HOST_PROTOCOL.websocket.closeBehind, 'fell behind; attach again after your position');
+    await settle();
+    // Not after the minute the backoff would wait.
+    expect(host.connects.opened).toBe(2);
+    expect(store.snapshot().hosts[0].status).toBe('connected');
+    expect(host.params['session/attach']?.at(-1)).toMatchObject({ sessionId: SESSION, after: { journal: 'j-1', seq: 2 } });
+    host.notify('session/event', chunk(2, 'Chunk 2. '));
+    host.notify('session/event', chunk(3, 'Chunk 3. '));
+    await settle();
+    expect(said(store)).toBe('Chunk 1. Chunk 2. Chunk 3. ');
+    store.stop();
+  });
+
+  it("says why the Host refused the device's hello, and doesn't try again (4002)", async () => {
+    const host = scriptedHost(() => [], {
+      'host/hello': () => {
+        setTimeout(() => host.close(HOST_PROTOCOL.websocket.closeUnauthenticated, 'not authenticated'));
+        return { error: { code: HOST_PROTOCOL.errors.unauthenticated, message: "this device couldn't be authenticated" } };
+      },
+    });
+    const store = storeFor(host.connector, { backoff: [5] });
+    await store.start();
+    await settle(30);
+    expect(store.snapshot().hosts).toMatchObject([{
+      status: 'disconnected',
+      error: "The Host refused this device (this device couldn't be authenticated). Pair it again.",
+    }]);
+    await store.refresh();
+    expect(host.connects.opened).toBe(1);
+    store.stop();
+  });
+
+  it('tries again after a close during hello, unless the Host gave up on the hello (4002)', async () => {
+    let code = 1006;
+    const host = scriptedHost(() => [], {
+      'host/hello': () => {
+        setTimeout(() => host.close(code));
+        return 'silent';
+      },
+    });
+    const store = storeFor(host.connector, { backoff: [5] });
+    await store.start();
+    await settle(30);
+    expect(host.connects.opened).toBeGreaterThan(1);
+    expect(store.snapshot().hosts[0].status).toBe('reconnecting');
+
+    code = HOST_PROTOCOL.websocket.closeUnauthenticated;
+    await settle(30);
+    const opened = host.connects.opened;
+    expect(store.snapshot().hosts[0]).toMatchObject({ status: 'disconnected', error: expect.stringContaining('refused this device') });
+    await settle(30);
+    expect(host.connects.opened).toBe(opened);
+    store.stop();
+  });
+
+  it('shows a Host that shares no protocol version as needing another version of the app, with its range', async () => {
+    let range = { min: APP_PROTOCOL.max + 1, max: APP_PROTOCOL.max + 2 };
+    const host = scriptedHost(() => [], {
+      'host/hello': () => ({ error: { code: HOST_PROTOCOL.errors.incompatibleProtocol, message: 'no common version', data: range } }),
+    });
+    const store = storeFor(host.connector, { backoff: [5] });
+    await store.start();
+    const app = APP_PROTOCOL.min === APP_PROTOCOL.max ? `version ${APP_PROTOCOL.min}` : `versions ${APP_PROTOCOL.min} to ${APP_PROTOCOL.max}`;
+    expect(store.snapshot().hosts).toMatchObject([{
+      status: 'incompatible',
+      error: `This Host needs a newer version of the app: it speaks protocol versions ${range.min} to ${range.max}; this app speaks ${app}.`,
+    }]);
+    await settle(30);
+    expect(host.connects.opened).toBe(1);
+
+    range = { min: APP_PROTOCOL.min - 1, max: APP_PROTOCOL.min - 1 };
+    await store.actions.reconnectHost(HOST);
+    expect(store.snapshot().hosts[0].error).toBe(
+      `This Host needs an older version of the app, or a newer weave on its computer: it speaks protocol version ${range.min}; this app speaks ${app}.`,
+    );
+    store.stop();
+  });
+
+  it('replaces a connection that no longer answers when the app comes to the front, and keeps one that does', async () => {
+    let silent = false;
+    const host = scriptedHost(() => [], { 'sessions/list': () => silent ? 'silent' : undefined });
+    const store = storeFor(host.connector, { probeTimeout: 20 });
+    await store.start();
+    await store.refresh();
+    expect(host.connects.opened).toBe(1);
+
+    // Silent, as over a network that's gone.
+    silent = true;
+    const refreshing = store.refresh();
+    silent = false;
+    await refreshing;
+    expect(host.connects.opened).toBe(2);
+    expect(store.snapshot().hosts[0].status).toBe('connected');
+    expect(store.snapshot().error).toBeUndefined();
+    store.stop();
+  });
+
+  it('tries again at once when the app comes to the front, rather than waiting out the backoff', async () => {
+    const host = scriptedHost(() => []);
+    const store = storeFor(host.connector, { backoff: [60_000] });
+    await store.start();
+    host.close(1006);
+    await settle();
+    expect(store.snapshot().hosts[0].status).toBe('reconnecting');
+    await store.refresh();
+    expect(host.connects.opened).toBe(2);
+    expect(store.snapshot().hosts[0].status).toBe('connected');
+    store.stop();
+  });
+
+  it('gives up on a try that never opens, and tries again', async () => {
+    const host = scriptedHost(() => []);
+    host.connects.hang = 1;
+    const store = storeFor(host.connector, { connectTimeout: 20, backoff: [5] });
+    await store.start();
+    expect(store.snapshot().hosts[0]).toMatchObject({ status: 'reconnecting', error: expect.stringContaining("didn't answer") });
+    await settle(30);
+    expect(store.snapshot().hosts[0].status).toBe('connected');
+    expect(host.connects.opened).toBe(1);
+    store.stop();
   });
 });

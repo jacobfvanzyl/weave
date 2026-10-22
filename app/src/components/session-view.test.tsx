@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { AppActions, AppController, OpenSession } from '@/app/app-controller';
+import type { AppActions, AppController, OpenSession, PairedHost } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { SessionView } from './session-view';
 
@@ -25,9 +25,9 @@ const actions = (): AppActions => ({
   setConfigOption: vi.fn(),
 });
 
-const controller = (session: OpenSession, handlers = actions()): AppController => ({
+const controller = (session: OpenSession, handlers = actions(), host: Partial<PairedHost> = {}): AppController => ({
   model: {
-    hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected', canRename: true }],
+    hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected', canRename: true, ...host }],
     sessions: [{
       key: session.key, hostId: 'h', sessionId: 'main', title: 'Count the files', agentId: 'claude', agentName: 'Claude',
       cwd: '/work/project', state: 'open', activity: 'idle', clients: 1, headless: false,
@@ -43,6 +43,16 @@ const controller = (session: OpenSession, handlers = actions()): AppController =
 const transcript = (...events: AcpTranscriptEvent[]) => events.reduce(reduceAcpEvent, createTranscript('main'));
 
 describe('SessionView', () => {
+  it('says while its Host is away, and why when it stopped trying', () => {
+    const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
+    const { rerender } = render(<SessionView controller={controller(session, actions(), { status: 'reconnecting' })} session={session} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting to mac.example.ts.net…');
+    rerender(<SessionView controller={controller(session, actions(), { status: 'incompatible', error: 'This Host needs a newer version of the app.' })} session={session} />);
+    expect(screen.getByRole('status')).toHaveTextContent("mac.example.ts.net isn't connected. This Host needs a newer version of the app.");
+    rerender(<SessionView controller={controller(session)} session={session} />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('says where to update an agent the Host hasn\'t updated, and offers no move yet', () => {
     const session: OpenSession = {
       key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [],

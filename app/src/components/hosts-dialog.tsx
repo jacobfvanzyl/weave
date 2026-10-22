@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ComputerIcon, Delete02Icon, Link01Icon, RefreshIcon } from '@hugeicons/core-free-icons';
 import type { AppController, PairedHost } from '@/app/app-controller';
@@ -25,9 +25,19 @@ const statusLabel: Record<PairedHost['status'], string> = {
   connecting: 'Connecting',
   reconnecting: 'Reconnecting',
   disconnected: 'Disconnected',
+  revoked: 'Revoked',
+  incompatible: 'Incompatible',
 };
 
-function HostRow({ host, actions }: { host: PairedHost; actions: AppController['actions'] }) {
+/** The address `weave pair` shows for a Host's WebSocket. */
+const pairingUrl = (url: string) => url.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+
+function HostRow({ host, actions, onPairAgain }: {
+  host: PairedHost;
+  actions: AppController['actions'];
+  onPairAgain(url: string): void;
+}) {
+  const revoked = host.status === 'revoked';
   return (
     <li className='grid gap-2 rounded-lg border border-border p-3'>
       <div className='flex items-center gap-3'>
@@ -37,33 +47,43 @@ function HostRow({ host, actions }: { host: PairedHost; actions: AppController['
         <span className='min-w-0 flex-1'>
           <span className='flex items-center gap-2'>
             <span className='truncate font-medium'>{host.name}</span>
-            <Badge variant={host.status === 'connected' ? 'default' : 'secondary'}>{statusLabel[host.status]}</Badge>
+            <Badge variant={host.status === 'connected' ? 'default' : revoked ? 'destructive' : 'secondary'}>{statusLabel[host.status]}</Badge>
           </span>
           <span className='block truncate text-muted-foreground'>{host.url}</span>
         </span>
-        {host.status !== 'connected' && (
+        {revoked && (
+          <>
+            <Button variant='outline' size='sm' onClick={() => onPairAgain(pairingUrl(host.url))}>Pair again</Button>
+            <Button variant='ghost' size='icon' aria-label={`Remove ${host.name}`} onClick={() => void actions.forgetHost(host.id)}>
+              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            </Button>
+          </>
+        )}
+        {!revoked && host.status !== 'connected' && (
           <Button variant='outline' size='icon' aria-label={`Reconnect to ${host.name}`} onClick={() => void actions.reconnectHost(host.id)}>
             <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
           </Button>
         )}
-        <AlertDialog>
-          <AlertDialogTrigger render={<Button variant='ghost' size='icon' aria-label={`Forget ${host.name}`} />}>
-            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Forget {host.name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This device deletes its key for the Host and stops showing its sessions. The sessions keep running on the
-                Host. To cut this device off on the Host too, run <code>weave devices revoke</code> there.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant='destructive' onClick={() => void actions.forgetHost(host.id)}>Forget Host</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        {!revoked && (
+          <AlertDialog>
+            <AlertDialogTrigger render={<Button variant='ghost' size='icon' aria-label={`Forget ${host.name}`} />}>
+              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Forget {host.name}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This device deletes its key for the Host and stops showing its sessions. The sessions keep running on the
+                  Host. To cut this device off on the Host too, run <code>weave devices revoke</code> there.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction variant='destructive' onClick={() => void actions.forgetHost(host.id)}>Forget Host</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
       </div>
       {host.error && <p className='text-muted-foreground'>{host.error}</p>}
     </li>
@@ -90,6 +110,13 @@ export function HostsDialog({ controller, open, onOpenChange, offer }: {
   const [name, setName] = useState(defaultDeviceName);
   const [error, setError] = useState<string>();
   const [pairing, setPairing] = useState(false);
+  const codeRef = useRef<HTMLInputElement>(null);
+  const pairAgain = (hostUrl: string) => {
+    setUrl(hostUrl);
+    setCode('');
+    setError(undefined);
+    codeRef.current?.focus();
+  };
 
   useEffect(() => {
     if (!offer) return;
@@ -130,7 +157,7 @@ export function HostsDialog({ controller, open, onOpenChange, offer }: {
         </DialogHeader>
         {model.hosts.length > 0 && (
           <ul aria-label='Paired Hosts' className='grid gap-2'>
-            {model.hosts.map((host) => <HostRow key={host.id} host={host} actions={actions} />)}
+            {model.hosts.map((host) => <HostRow key={host.id} host={host} actions={actions} onPairAgain={pairAgain} />)}
           </ul>
         )}
         <form aria-label='Pair a Host' className='grid gap-3 rounded-lg border border-border p-3' onSubmit={pair}>
@@ -153,7 +180,7 @@ export function HostsDialog({ controller, open, onOpenChange, offer }: {
           </div>
           <div className='grid gap-1.5'>
             <Label htmlFor='pair-code'>Code</Label>
-            <Input id='pair-code' required autoCapitalize='characters' autoCorrect='off' value={code}
+            <Input id='pair-code' ref={codeRef} required autoCapitalize='characters' autoCorrect='off' value={code}
               onChange={(event) => setCode(event.target.value)} />
           </div>
           <div className='grid gap-1.5'>

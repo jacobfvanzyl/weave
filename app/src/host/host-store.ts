@@ -51,6 +51,13 @@ export type HostStoreOptions = {
   deviceName: string;
   /** Delays between reconnecting tries, in milliseconds; the last repeats. */
   backoff?: number[];
+  /** How long connecting and saying hello may take before it counts as a failed try. Defaults to 15 seconds. */
+  connectTimeout?: number;
+  /**
+   * How long a connection has to answer when the app comes to the front or the network changes,
+   * before it's taken for dead and replaced. Defaults to 5 seconds.
+   */
+  probeTimeout?: number;
   /** The client tools this device runs for agents, by name (`capabilities.clientTools`). */
   clientTools?: Record<string, ClientTool>;
   /**
@@ -65,11 +72,15 @@ type HostEntry = {
   status: HostStatus;
   error?: string;
   connection?: HostConnection;
+  /** The try under way; a newer one abandons it. */
+  connecting?: AbortController;
+  /** Whether it connected before, so a try is reconnecting, as is any after the first. */
+  connected: boolean;
   sessions: SessionListing[];
   agents: AgentSummary[];
   attempt: number;
   retry?: ReturnType<typeof setTimeout>;
-  /** No more tries: the device was revoked, or the Host refuses it. */
+  /** No more tries until the person asks: the device was revoked, or the Host refuses it or speaks another protocol. */
   stopped: boolean;
 };
 
@@ -177,20 +188,45 @@ export class HostStore {
     this.#stopped = true;
     for (const entry of this.#hosts.values()) {
       clearTimeout(entry.retry);
+      entry.connecting?.abort();
       entry.connection?.close();
     }
   }
 
   /**
-   * Lists every connected Host's sessions again, and reconnects to the ones that dropped. A Host
-   * that keeps the list live (`sessions/watch`) is asked to start over, so nothing older than
-   * what it last said comes after it.
+   * Lists every Host's sessions again, and reconnects at once to the ones that dropped, or whose
+   * connection doesn't answer within `probeTimeout`: the app came to the front, the network
+   * changed, or the list was pulled down. A Host that keeps the list live (`sessions/watch`) is
+   * asked to start over, so nothing older than what it last said comes after it.
    */
   async refresh() {
-    await Promise.all([...this.#hosts.values()].map(async (entry) => {
-      if (entry.connection && !entry.connection.closed) await this.#list(entry);
-      else if (!entry.stopped && entry.status !== 'connecting') await this.#connect(entry);
-    }));
+    await Promise.all([...this.#hosts.values()].map((entry) => this.#wake(entry)));
+  }
+
+  async #wake(entry: HostEntry) {
+    if (entry.stopped) return;
+    const connection = entry.connection;
+    if (connection && !connection.closed) {
+      if (await this.#answers(entry, connection)) return;
+      // Likely on a network that's gone: the Host will see it go, and this device needn't wait.
+      if (entry.connection === connection) this.#drop(entry);
+    }
+    if (entry.connection || entry.stopped || this.#hosts.get(entry.record.hostId) !== entry) return;
+    entry.attempt = 0;
+    await this.#connect(entry);
+  }
+
+  /** Whether a connection still answers: it lists the sessions again within `probeTimeout`. */
+  async #answers(entry: HostEntry, connection: HostConnection): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const silent = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), this.#options.probeTimeout ?? 5_000);
+    });
+    try {
+      return await Promise.race([this.#list(entry).then(() => !connection.closed), silent]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   readonly actions: AppActions = {
@@ -200,7 +236,8 @@ export class HostStore {
     forgetHost: (hostId) => this.#forget(hostId),
     reconnectHost: async (hostId) => {
       const entry = this.#hosts.get(hostId);
-      if (!entry) return;
+      // A revoked device has no pairing left to connect with.
+      if (!entry || entry.status === 'revoked') return;
       entry.stopped = false;
       entry.attempt = 0;
       await this.#connect(entry);
@@ -264,7 +301,7 @@ export class HostStore {
   }
 
   #entry(record: PairedHostRecord): HostEntry {
-    return { record, status: 'connecting', sessions: [], agents: [], attempt: 0, stopped: false };
+    return { record, status: 'connecting', connected: false, sessions: [], agents: [], attempt: 0, stopped: false };
   }
 
   #changed() {
@@ -277,33 +314,55 @@ export class HostStore {
     });
   }
 
+  /**
+   * Proves the device to the Host again, and once connected attaches after the last position of
+   * the session on screen. A try still under way, as on a network that has since changed, is
+   * abandoned.
+   */
   async #connect(entry: HostEntry) {
     if (this.#stopped) return;
     clearTimeout(entry.retry);
-    entry.status = entry.attempt === 0 ? 'connecting' : 'reconnecting';
+    entry.retry = undefined;
+    this.#drop(entry);
+    entry.connecting?.abort();
+    const connecting = new AbortController();
+    entry.connecting = connecting;
+    const timeout = this.#options.connectTimeout ?? 15_000;
+    const timer = setTimeout(() => connecting.abort(new Error(`The weave Host didn't answer within ${timeout / 1_000} seconds.`)), timeout);
+    entry.status = entry.connected || entry.attempt > 0 ? 'reconnecting' : 'connecting';
     this.#changed();
     const { record } = entry;
+    const current = () => this.#hosts.get(record.hostId) === entry && entry.connecting === connecting && !this.#stopped;
+    let connection: HostConnection | undefined;
     try {
-      const connection = await HostConnection.connect({
+      connection = await HostConnection.connect({
         connector: this.#options.connectorFor(record.url),
         client: this.#options.client,
         capabilities: this.#capabilities(),
         credentials: { method: 'device', deviceId: record.deviceId, key: this.#options.keyFor(record.keyId), hostId: record.hostId },
-        onEvent: (event) => this.#event(entry, connection, event),
+        // What it sends during hello, its close included, is answered by `connect` failing.
+        onEvent: (event) => { if (connection) this.#event(entry, connection, event); },
+        signal: connecting.signal,
       });
-      if (this.#hosts.get(record.hostId) !== entry || this.#stopped) {
-        connection.close();
-        return;
-      }
-      await this.#connected(entry, connection);
     } catch (error) {
-      if (this.#hosts.get(record.hostId) !== entry) return;
+      if (!current()) return;
+      entry.connecting = undefined;
       this.#connectFailed(entry, error);
+      return;
+    } finally {
+      clearTimeout(timer);
     }
+    if (!current()) {
+      connection.close();
+      return;
+    }
+    entry.connecting = undefined;
+    await this.#connected(entry, connection);
   }
 
   async #connected(entry: HostEntry, connection: HostConnection) {
     entry.connection = connection;
+    entry.connected = true;
     entry.status = 'connected';
     entry.error = undefined;
     entry.attempt = 0;
@@ -312,23 +371,27 @@ export class HostStore {
     await this.#list(entry);
     // Catch up on the session on screen, after the last event this client handled.
     const selected = this.#selected();
-    if (selected && selected.hostId === entry.record.hostId) this.#attach(selected);
+    if (selected && selected.hostId === entry.record.hostId && entry.connection === connection) this.#attach(selected);
   }
 
   #connectFailed(entry: HostEntry, error: unknown) {
-    entry.connection = undefined;
     const kind = error instanceof ConnectError ? error.kind : 'connection';
-    if (kind === 'refused' || kind === 'incompatible' || kind === 'wrongHost') {
-      entry.status = 'disconnected';
-      entry.stopped = true;
-      entry.error = kind === 'refused'
-        ? `The Host refused this device (${describe(error)}). Pair it again.`
-        : describe(error);
-      this.#changed();
-      return;
+    switch (kind) {
+      case 'connection':
+        entry.error = describe(error);
+        this.#retry(entry);
+        return;
+      case 'refused':
+        // 4002 follows the error: trying again would only be refused again.
+        this.#halt(entry, 'disconnected', `The Host refused this device (${describe(error)}). Pair it again.`);
+        return;
+      case 'incompatible':
+        this.#halt(entry, 'incompatible', describe(error));
+        return;
+      case 'wrongHost':
+        this.#halt(entry, 'disconnected', describe(error));
+        return;
     }
-    entry.error = describe(error);
-    this.#retry(entry);
   }
 
   #retry(entry: HostEntry) {
@@ -338,6 +401,56 @@ export class HostStore {
     entry.status = 'reconnecting';
     entry.retry = setTimeout(() => void this.#connect(entry), delay);
     this.#changed();
+  }
+
+  /** Stops trying until the person asks, saying why. */
+  #halt(entry: HostEntry, status: HostStatus, error: string) {
+    clearTimeout(entry.retry);
+    entry.retry = undefined;
+    entry.status = status;
+    entry.stopped = true;
+    entry.error = error;
+    this.#changed();
+  }
+
+  /** Lets go of a Host's connection without waiting for it to end, as when it may be on a network that's gone. */
+  #drop(entry: HostEntry) {
+    const connection = entry.connection;
+    if (!connection) return;
+    this.#lost(entry);
+    connection.close();
+  }
+
+  /** The Host's connection ended: steers on their way failed with it, and their senders say so. */
+  #lost(entry: HostEntry) {
+    entry.connection = undefined;
+    for (const followed of this.#followed.values()) {
+      if (followed.hostId === entry.record.hostId) followed.steering = [];
+    }
+    this.#changed();
+  }
+
+  /**
+   * The Host revoked this device (4000), so its pairing is gone: the app deletes its key and
+   * record, and keeps the Host listed, revoked, until it's paired again or forgotten.
+   */
+  async #revoked(entry: HostEntry) {
+    const { hostId, keyId } = entry.record;
+    this.#halt(entry, 'revoked', 'This device was revoked on the Host, and has forgotten the pairing. Pair it again to see its sessions.');
+    entry.sessions = [];
+    entry.agents = [];
+    this.#unfollow(hostId);
+    this.#changed();
+    await this.#options.keyFor(keyId).forget().catch(() => {});
+    await this.#save();
+  }
+
+  /** Forgets what the app followed in a Host's sessions, and leaves the one on screen. */
+  #unfollow(hostId: string) {
+    for (const [key, followed] of this.#followed) {
+      if (followed.hostId === hostId) this.#followed.delete(key);
+    }
+    if (this.#selectedKey?.startsWith(`${hostId}/`)) this.#selectedKey = undefined;
   }
 
   /** The Host's agents, and the version each one's new sessions launch. */
@@ -368,6 +481,8 @@ export class HostStore {
       }
       this.#changed();
     } catch (error) {
+      // A connection that ended shows in the Host's status.
+      if (failedWith(error, CONNECTION_CLOSED)) return;
       this.#error = describe(error);
       this.#changed();
     }
@@ -396,20 +511,24 @@ export class HostStore {
         return;
       case 'disconnected':
         if (entry.connection !== connection) return;
-        entry.connection = undefined;
-        // Steers on their way failed with the connection; their senders say so.
-        for (const followed of this.#followed.values()) followed.steering = [];
-        if (event.code === HOST_PROTOCOL.websocket.closeRevoked) {
-          entry.status = 'disconnected';
-          entry.stopped = true;
-          entry.error = 'This device was revoked on the Host. Pair it again.';
-          this.#changed();
-          return;
+        this.#lost(entry);
+        switch (event.code) {
+          case HOST_PROTOCOL.websocket.closeRevoked:
+            void this.#revoked(entry);
+            return;
+          case HOST_PROTOCOL.websocket.closeUnauthenticated:
+            this.#halt(entry, 'disconnected', `The Host closed the connection: ${event.reason || "this device isn't authenticated"}.`);
+            return;
+          case HOST_PROTOCOL.websocket.closeBehind:
+            // Fell behind: catch up after the position, at once.
+            entry.attempt = 0;
+            void this.#connect(entry);
+            return;
+          default:
+            // A dropped network or a Host restart: try again, backing off.
+            this.#retry(entry);
+            return;
         }
-        // Fell behind (4001), a dropped network or a Host restart: catch up after the position.
-        entry.attempt = event.code === HOST_PROTOCOL.websocket.closeBehind ? 0 : entry.attempt;
-        this.#retry(entry);
-        return;
       case 'notification':
         switch (event.method) {
           case 'session/event':
@@ -979,19 +1098,18 @@ export class HostStore {
     const entry = this.#hosts.get(hostId);
     if (!entry) return;
     clearTimeout(entry.retry);
+    entry.connecting?.abort();
     entry.connection?.close();
     this.#hosts.delete(hostId);
-    for (const [key, followed] of this.#followed) {
-      if (followed.hostId === hostId) this.#followed.delete(key);
-    }
-    if (this.#selectedKey?.startsWith(`${hostId}/`)) this.#selectedKey = undefined;
+    this.#unfollow(hostId);
     await this.#options.keyFor(entry.record.keyId).forget().catch(() => {});
     await this.#save();
     this.#changed();
   }
 
+  /** The pairings this device keeps; a revoked one is listed only until the app quits. */
   #save() {
-    return this.#options.storage.save([...this.#hosts.values()].map(({ record }) => record));
+    return this.#options.storage.save([...this.#hosts.values()].filter(({ status }) => status !== 'revoked').map(({ record }) => record));
   }
 
   #model(): AppModel {

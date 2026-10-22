@@ -3,7 +3,7 @@
 Status: structure settled 2026-10-20 (WVE-99); connecting to Hosts 2026-10-20 (WVE-100); the
 whole journal in the transcript (WVE-101), prompting (WVE-102), pending requests and client
 tools (WVE-103), the live session list (WVE-104), and browsing for a session's directory
-(WVE-112) 2026-10-21. The rest is specified as WVE-105 lands.
+(WVE-112) 2026-10-21; reconnecting and several Hosts (WVE-105) 2026-10-22.
 
 Decision: [ADR 0015](../../../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md).
 Glossary: [`CONTEXT.md`](../../../CONTEXT.md). Host protocol:
@@ -43,8 +43,10 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   directories the Host's sessions use, typed, or picked by browsing the Host's computer) and
   the agent.
 - **Hosts.** "Hosts" at the foot of the list opens the paired Hosts, with each one's connection
-  state, pairing a Host, and forgetting one. While a Host is unreachable its sessions stay in the
-  list, marked as such.
+  state, pairing a Host, and forgetting one, which deletes its key. Hosts are told apart by
+  `host.id`, and each has its own connection and device id. While a Host is unreachable its
+  sessions stay in the list, marked as such. A revoked one offers Pair again (see
+  [Connections that end](#connections-that-end)).
 
 ### A session
 
@@ -253,9 +255,38 @@ no longer waits on attaching says "No longer waiting".
 
 ### Connections that end
 
-A connection that drops is tried again after 1, 2, 5, 10 and then every 30 seconds, and the open
-session catches up after its position. A device the Host revoked (4000) or refuses is not tried
-again: the Hosts dialog says to pair again. WVE-105 does the rest.
+Sessions keep going in the Host whatever happens to the app (WVE-105). Each paired Host has its
+own connection, and every connection proves the device again and then attaches after the last
+position of the session on screen, so only what the app missed arrives, once and in order.
+
+- **Dropped.** A connection that closes is tried again after 1, 2, 5, 10 and then every 30
+  seconds. A try that hasn't connected and said hello within 15 seconds counts as failed; one
+  still under way when another starts is abandoned.
+- **To the front, or another network.** When the app comes to the front (`appStateChange`), when
+  the network comes back or changes, as from Wi-Fi to cellular (Capacitor's Network plugin), and
+  when the list is pulled down, each connection lists its sessions again. One that doesn't answer
+  within 5 seconds is taken for dead, as over a network that's gone, and replaced. A Host waiting
+  to be tried again is tried at once.
+- **A restarted Host** keeps a session's journal: it resumes the session when the app attaches,
+  with the turn the restart interrupted ended as cancelled, and the app catches up after its
+  position.
+- **Close codes.** 4000, revoked: the app deletes the Host's key and pairing, and lists the Host
+  as revoked, with Pair again, until the person pairs again or removes it. 4001, fell behind: it
+  reconnects at once and catches up. 4002, hello failed: it shows the Host's error and doesn't try
+  again until the person asks. A close during hello with any other code is the network's, and is
+  tried again.
+- **Protocol versions.** A Host that answers `incompatible_protocol` is listed as incompatible,
+  with its range and what to change: a newer Host needs a newer app ("This Host needs a newer
+  version of the app: it speaks protocol versions 3 to 4; this app speaks version 2"), and an
+  older one an older app or a newer weave on its computer. It isn't tried again until the person
+  asks.
+- **While away.** A session whose Host isn't connected says so under its header ("Reconnecting to
+  mac…", or why it stopped trying), and its rows in the list say the Host is unreachable.
+- **Drafts** are kept per session in the web view's storage as they're typed, so they survive
+  reconnecting, and iOS discarding the web view in the background. Photos attached to a draft
+  don't.
+
+Alerts while the app is closed need APNs from the Host, and get their own ADR and issue.
 
 ## What came back
 
@@ -280,5 +311,5 @@ acceptance harness and UI tests.
 
 - Queued messages for a session that isn't open in the app wait until it is opened again; the
   Host's queue (WVE-107) would send them as turns end.
-- WVE-105: reconnecting, several Hosts, and acceptance on devices.
+- WVE-105: acceptance on a physical iPhone and iPad.
 - WVE-96: views.

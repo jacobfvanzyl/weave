@@ -13,6 +13,7 @@ import {
   type HostRequests,
   type Replay,
   type SessionState,
+  type VersionRange,
 } from './protocol';
 
 /**
@@ -30,8 +31,11 @@ export type TransportEvents = {
   closed(close: { code?: number; reason?: string }): void;
 };
 
-/** Opens a transport; it rejects when the Host can't be reached at all. */
-export type Connector = (events: TransportEvents) => Promise<Transport>;
+/**
+ * Opens a transport; it rejects when the Host can't be reached at all, or once `signal` aborts
+ * while it's still opening.
+ */
+export type Connector = (events: TransportEvents, signal?: AbortSignal) => Promise<Transport>;
 
 /** An error the Host answered with, or the connection ending under a request. */
 export class HostError extends Error {
@@ -73,6 +77,9 @@ export class ConnectError extends Error {
   }
 }
 
+/** The protocol versions this app speaks. */
+export const APP_PROTOCOL: VersionRange = { min: HOST_PROTOCOL.protocol.oldestSupported, max: HOST_PROTOCOL.protocol.version };
+
 /** How a connection proves itself at `host/hello`. */
 export type Credentials =
   /** A local client: only on the Unix socket. */
@@ -108,12 +115,16 @@ export type ConnectOptions = {
   capabilities?: ClientCapabilities;
   credentials: Credentials;
   onEvent(event: HostEvent): void;
+  /** Gives up on connecting: the transport closes, and `connect` rejects with the signal's reason. */
+  signal?: AbortSignal;
 };
 
 type Waiting = { resolve(result: unknown): void; reject(error: HostError): void };
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const describe = (error: unknown) => error instanceof Error ? error.message : error === undefined ? '' : String(error);
 
 /**
  * One connection to a Host: hello first, then typed requests. Requests flow one way, so the
@@ -133,20 +144,29 @@ export class HostConnection {
 
   /** Connects and says hello; it rejects with a `ConnectError` saying why it couldn't. */
   static async connect(options: ConnectOptions): Promise<HostConnection> {
+    const { signal } = options;
+    const abandoned = () => new ConnectError('connection', describe(signal?.reason) || 'Gave up connecting to the weave Host.', signal?.reason);
     const connection = new HostConnection(options.onEvent);
     try {
+      if (signal?.aborted) throw signal.reason;
       connection.#transport = await options.connector({
         message: (text) => connection.#receive(text),
         closed: (close) => connection.#ended(close),
-      });
+      }, signal);
     } catch (cause) {
-      throw new ConnectError('connection', `Couldn't reach the weave Host: ${cause instanceof Error ? cause.message : String(cause)}`, cause);
+      if (signal?.aborted) throw abandoned();
+      throw new ConnectError('connection', `Couldn't reach the weave Host: ${describe(cause)}`, cause);
     }
+    const abort = () => connection.close();
+    signal?.addEventListener('abort', abort, { once: true });
     try {
+      if (signal?.aborted) throw abandoned();
       connection.#hello = await sayHello(connection, options);
     } catch (error) {
       connection.close();
-      throw error;
+      throw signal?.aborted ? abandoned() : error;
+    } finally {
+      signal?.removeEventListener('abort', abort);
     }
     return connection;
   }
@@ -280,7 +300,7 @@ async function sayHello(connection: HostConnection, options: ConnectOptions): Pr
       }
     }
     return await connection.request('host/hello', {
-      protocol: { min: HOST_PROTOCOL.protocol.oldestSupported, max: HOST_PROTOCOL.protocol.version },
+      protocol: APP_PROTOCOL,
       client: options.client,
       auth,
       capabilities: options.capabilities ?? {},
@@ -293,20 +313,34 @@ async function sayHello(connection: HostConnection, options: ConnectOptions): Pr
 /** Why `host/hello` failed, as the person should hear it. */
 function helloFailed(error: unknown): ConnectError {
   if (error instanceof ConnectError) return error;
-  if (!(error instanceof HostError)) {
-    return new ConnectError('connection', error instanceof Error ? error.message : String(error), error);
-  }
-  if (error.code === HOST_PROTOCOL.errors.incompatibleProtocol) {
-    return new ConnectError('incompatible', `The weave Host and this app share no protocol version (${error.message}).`, error);
-  }
+  if (!(error instanceof HostError)) return new ConnectError('connection', describe(error), error);
+  if (error.code === HOST_PROTOCOL.errors.incompatibleProtocol) return incompatible(error);
   // A Host from before this protocol answers nothing but ACP.
   if (error.code === METHOD_NOT_FOUND) {
     return new ConnectError('incompatible', 'The weave Host is older than this app; update it.', error);
   }
   if (error.code === CONNECTION_CLOSED) {
-    return new ConnectError('refused', `The weave Host closed the connection: ${error.message}`, error);
+    // 4002: the Host gave up on this device's hello. Any other close is the network's.
+    return error.data === HOST_PROTOCOL.websocket.closeUnauthenticated
+      ? new ConnectError('refused', `The weave Host closed the connection: ${error.message}`, error)
+      : new ConnectError('connection', error.message, error);
   }
   return new ConnectError('refused', error.message, error);
+}
+
+const versions = ({ min, max }: VersionRange) => min === max ? `version ${min}` : `versions ${min} to ${max}`;
+
+/** A Host that shares no protocol version with this app needs another version of it, or of weave. */
+function incompatible(error: HostError): ConnectError {
+  const { data } = error;
+  if (!isObject(data) || typeof data.min !== 'number' || typeof data.max !== 'number') {
+    return new ConnectError('incompatible', `The weave Host and this app share no protocol version (${error.message}).`, error);
+  }
+  const host = { min: data.min, max: data.max };
+  const speaks = `it speaks protocol ${versions(host)}; this app speaks ${versions(APP_PROTOCOL)}`;
+  return new ConnectError('incompatible', host.min > APP_PROTOCOL.max
+    ? `This Host needs a newer version of the app: ${speaks}.`
+    : `This Host needs an older version of the app, or a newer weave on its computer: ${speaks}.`, error);
 }
 
 /**
@@ -314,11 +348,19 @@ function helloFailed(error: unknown): ConnectError {
  * subprotocol. In the app this is the web view's own WebSocket, which sends the app's `Origin`.
  */
 export function websocketConnector(url: string, WebSocketImpl: typeof WebSocket = WebSocket): Connector {
-  return (events) => new Promise((resolve, reject) => {
+  return (events, signal) => new Promise((resolve, reject) => {
     const socket = new WebSocketImpl(url, HOST_PROTOCOL.websocket.subprotocol);
     let open = false;
+    // One still opening, as on a network that's gone, is closed rather than waited for.
+    const abort = () => {
+      if (open) return;
+      socket.close();
+      reject(signal?.reason);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     socket.onopen = () => {
       open = true;
+      signal?.removeEventListener('abort', abort);
       resolve({
         send: (message) => socket.send(message),
         close: () => socket.close(1000),

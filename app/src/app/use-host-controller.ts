@@ -9,6 +9,7 @@ import { HOST_PROTOCOL } from '@/host/protocol';
 import { preferencesStorage } from '@/host/storage';
 import type { AppController, AppModel } from './app-controller';
 import { useAppResume } from './use-app-resume';
+import { useNetworkChange } from './use-network-change';
 
 const client = { name: 'weave-app', version: '0.1.0' };
 
@@ -75,7 +76,9 @@ export function useHostController(): AppController {
     void created.start();
     return () => created.stop();
   }, []);
+  // Coming to the front, or onto another network, checks each connection and replaces dead ones.
   useAppResume(() => void store?.refresh());
+  useNetworkChange(() => void store?.refresh());
   const model = useSyncExternalStore(store?.subscribe ?? noSubscription, store?.snapshot ?? (() => emptyModel));
   return { model, actions: store?.actions ?? idleActions };
 }

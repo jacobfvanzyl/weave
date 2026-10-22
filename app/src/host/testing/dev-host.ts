@@ -25,6 +25,11 @@ export type DevHost = {
   url: string;
   /** A directory sessions can run in. */
   cwd: string;
+  /**
+   * Stops the Host as `weave daemon restart` does, its open sessions suspended, and starts it
+   * again in the same directory, with the same config and port.
+   */
+  restart(): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -68,26 +73,39 @@ export async function startDevHost(): Promise<DevHost> {
     '',
   ].join('\n'));
   const daemon = join(root, 'daemon');
-  const host = Bun.spawn([weave, 'daemon', 'run', '--config', config], {
+  const socket = join(daemon, 'daemon.sock');
+  const spawn = () => Bun.spawn([weave, 'daemon', 'run', '--config', config], {
     env: { ...process.env, WEAVE_DAEMON_DIR: daemon, WEAVE_FAKE_AGENT_STATE: join(root, 'fake-agent.json') },
     stdout: 'ignore',
     stderr: 'ignore',
   });
-  const socket = join(daemon, 'daemon.sock');
-  const stop = async () => {
+  let host = spawn();
+  // SIGTERM stops it as `weave daemon stop` does; it removes its socket on the way out.
+  const halt = async () => {
     host.kill();
     await host.exited;
+  };
+  const stop = async () => {
+    await halt();
     await rm(root, { recursive: true, force: true });
   };
-  // Its WebSocket listens once a pairing offer turns remote access on (ADR 0016); with
-  // `[remote] url` set, it makes no Tailscale Serve entry.
-  try {
-    await until(() => existsSync(socket), 'its socket');
-  } catch (error) {
-    await stop();
-    throw error;
-  }
-  return { socket, url, cwd, stop };
+  // Its WebSocket listens once a pairing offer turns remote access on (ADR 0016), and again after
+  // a restart while a device is paired; with `[remote] url` set, it makes no Tailscale Serve entry.
+  const started = async () => {
+    try {
+      await until(() => existsSync(socket), 'its socket');
+    } catch (error) {
+      await stop();
+      throw error;
+    }
+  };
+  await started();
+  const restart = async () => {
+    await halt();
+    host = spawn();
+    await started();
+  };
+  return { socket, url, cwd, restart, stop };
 }
 
 /** The Host's Unix socket as a transport: one JSON-RPC message per line. */
