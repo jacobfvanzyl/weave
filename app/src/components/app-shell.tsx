@@ -39,7 +39,7 @@ function SidebarToggle({ controller }: { controller: AppController }) {
   const count = hidden ? waitingCount(model.sessions, model.selectedKey) : 0;
   return (
     <Button variant='ghost' size='lg' aria-label={hidden ? (count ? `Show sessions, ${count} waiting` : 'Show sessions') : 'Hide sessions'}
-      aria-expanded={!hidden} className='min-h-11 shrink-0 px-1.5' onClick={toggleSidebar}>
+      aria-expanded={!hidden} className='min-h-11 shrink-0 px-1.5 aria-expanded:bg-transparent' onClick={toggleSidebar}>
       <HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} />
       <WaitingBadge count={count} />
     </Button>

@@ -143,6 +143,8 @@
   --success-background: var(--zed-success-background);
   --status-active: var(--zed-success);
   --title-bar: var(--zed-rail-background);
+  /* The bars atop the session list and the session, below the safe area: one height, so they line up. */
+  --title-bar-height: 3.125rem;
   --status-bar: var(--zed-rail-background);
   --chart-1: #cba6f7;
   --chart-2: #b4befe;
@@ -271,6 +273,8 @@
 html[data-device-idiom="phone"] [data-sidebar="menu-button"],
 html[data-device-idiom="phone"] [role="menuitem"] { min-height: 44px; }
 html[data-device-idiom="phone"] [data-sidebar="group-action"] { min-width: 44px; min-height: 44px; top: 0; }
+/* New session, above the directories' +. */
+html[data-device-idiom="phone"] [data-sidebar="header-action"] { min-width: 44px; min-height: 44px; margin-right: 0.25rem; }
 
 html[data-device-idiom="phone"] [data-slot="dialog-content"],
 html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {

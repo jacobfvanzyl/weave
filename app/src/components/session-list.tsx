@@ -149,22 +149,21 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
 
   return (
     <div data-slot='session-list' className='flex h-full min-h-0 w-full flex-col bg-sidebar text-sidebar-foreground'>
-      <SidebarHeader className='shrink-0 gap-2 border-b border-sidebar-border px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2'>
-        <div className='flex items-center gap-2'>
-          <h1 className='flex-1 text-sm font-semibold'>Sessions</h1>
-          <Button size='icon' variant='ghost' aria-label='New session' disabled={!model.hosts.some(({ status }) => status === 'connected')}
-            onClick={() => setNewSession({})}>
-            <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-          </Button>
-        </div>
+      {/* As tall as the session's header beside it, so their edges line up; its + sits over the directories' +. */}
+      <SidebarHeader className='h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 flex-row items-center gap-1 border-b border-sidebar-border pt-[env(safe-area-inset-top)] pr-1.5 pb-0 pl-3'>
+        <h1 className='sr-only'>Sessions</h1>
         {model.hosts.length > 0 && (
-          <div className='relative'>
+          <div className='relative min-w-0 flex-1'>
             <HugeiconsIcon icon={Search01Icon} strokeWidth={2}
               className='pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-icon-muted' />
             <SidebarInput type='search' aria-label='Filter sessions' placeholder='Filter sessions' className='pl-7'
               value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
         )}
+        <Button size='icon' variant='ghost' aria-label='New session' data-sidebar='header-action' className='ml-auto shrink-0'
+          disabled={!model.hosts.some(({ status }) => status === 'connected')} onClick={() => setNewSession({})}>
+          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+        </Button>
       </SidebarHeader>
 
       <SidebarContent {...pull.handlers}>

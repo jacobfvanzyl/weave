@@ -27,7 +27,7 @@ import { Input } from '@/components/ui/input';
 export function SessionHeader({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
   return (
     <header data-slot='session-header'
-      className='flex min-h-11 shrink-0 items-center gap-2 border-b border-border bg-title-bar pt-[env(safe-area-inset-top)] pr-2 pl-[max(env(safe-area-inset-left),0.5rem)]'>
+      className='flex h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 items-center gap-2 border-b border-border bg-title-bar pt-[env(safe-area-inset-top)] pr-2 pl-[max(env(safe-area-inset-left),0.5rem)]'>
       {leading}
       {children}
     </header>
