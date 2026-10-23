@@ -85,6 +85,8 @@ export type ChatPaneActions = {
   /** Starts a turn, or while one runs, steers it or queues the message. */
   send(text: string, images?: PromptImage[]): Promise<void> | void;
   removeQueued?(id: string): void;
+  /** Starts the Host's paused queue again. */
+  resumeQueue?(): Promise<void> | void;
   cancelTurn(): Promise<void> | void;
   respondToPermission(requestId: string, optionId: string): Promise<void> | void;
   respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;
@@ -435,14 +437,36 @@ const promptSummary = (prompt: QueuedPrompt) => {
   return [prompt.text, attached].filter(Boolean).join(' · ');
 };
 
-function QueuedPrompts({ queued, onRemove }: { queued: QueuedPrompt[]; onRemove?(id: string): void }) {
+function QueuedPrompts({
+  queued,
+  paused = false,
+  onRemove,
+  onResume,
+}: {
+  queued: QueuedPrompt[];
+  /** The Host's queue waits for someone to start it again. */
+  paused?: boolean;
+  onRemove?(id: string): void;
+  onResume?(): void;
+}) {
   if (queued.length === 0) return null;
   return (
     <ol aria-label="Queued messages" className="flex flex-col gap-1 px-3 pt-2" data-slot="queued-prompts">
+      {paused && (
+        <li className="flex min-w-0 items-center gap-2 py-0.5 pl-2.5 pr-1 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1">The queue is paused. Sending a message starts it again.</span>
+          {onResume && (
+            <Button type="button" size="xs" variant="ghost" onClick={onResume}>
+              Resume
+            </Button>
+          )}
+        </li>
+      )}
       {queued.map((prompt) => (
         <li key={prompt.id} className="flex min-w-0 items-center gap-2 rounded-md bg-muted/50 py-1 pl-2.5 pr-1 text-xs text-muted-foreground">
           <span className="shrink-0">{prompt.steering ? 'Steering' : 'Queued'}</span>
           <span className="min-w-0 flex-1 truncate text-foreground">{promptSummary(prompt)}</span>
+          {prompt.origin && <span className="shrink-0">from {prompt.origin}</span>}
           {prompt.steering && <HugeiconsIcon icon={Loading03Icon} strokeWidth={2} className="size-3 animate-spin" />}
           {onRemove && !prompt.steering && (
             <Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove queued message: ${prompt.text}`} onClick={() => onRemove(prompt.id)}>
@@ -516,6 +540,7 @@ function Composer({
   model,
   actions,
   queued,
+  queuePaused,
   canSteer,
   canAttachImages,
   focusRequest,
@@ -525,6 +550,7 @@ function Composer({
   model: AcpTranscript;
   actions: ChatPaneActions;
   queued: QueuedPrompt[];
+  queuePaused: boolean;
   canSteer: boolean;
   canAttachImages: boolean;
   focusRequest?: number;
@@ -632,7 +658,12 @@ function Composer({
 
   return (
     <div className="shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)]">
-      <QueuedPrompts queued={queued} onRemove={actions.removeQueued} />
+      <QueuedPrompts
+        queued={queued}
+        paused={queuePaused}
+        onRemove={actions.removeQueued}
+        onResume={actions.resumeQueue ? () => void actions.resumeQueue?.() : undefined}
+      />
       <CommandSuggestions
         model={model}
         text={text}
@@ -728,6 +759,7 @@ export function ChatPane({
   model,
   actions,
   queued = [],
+  queuePaused = false,
   canSteer = false,
   canAttachImages = false,
   readOnly = false,
@@ -740,6 +772,7 @@ export function ChatPane({
   model: AcpTranscript;
   actions: ChatPaneActions;
   queued?: QueuedPrompt[];
+  queuePaused?: boolean;
   canSteer?: boolean;
   canAttachImages?: boolean;
   /** Shows the transcript without a composer, as a subagent's is shown. */
@@ -804,6 +837,7 @@ export function ChatPane({
           model={model}
           actions={actions}
           queued={queued}
+          queuePaused={queuePaused}
           canSteer={canSteer}
           canAttachImages={canAttachImages}
           focusRequest={focusRequest}

@@ -93,8 +93,11 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   (`session/reopen`), which waits for a running turn.
 - **Composer:** one Send button. With no turn running it starts one. While a turn runs it
   steers the turn when the Host lists `turn/steer` and the agent takes steering, and otherwise
-  queues the message. Queued messages show above the composer, can be removed, and go in order
-  as turns end. A Stop button beside Send cancels the turn. Modes and config options sit in the
+  queues the message in the Host. Queued messages show above the composer, every client's, each
+  naming the client that queued it when that isn't this device; they can be removed, and the
+  Host sends them in order as turns end. After a cancelled or failed turn the queue pauses, and
+  says so with a Resume button; sending a message starts it again too. A Stop button beside Send
+  cancels the turn. Modes and config options sit in the
   composer's footer, as in Alpha. A draft starting with `/` offers the agent's commands, and
   Attach photos (for an agent that takes images) picks photos from Photos or the camera.
 
@@ -252,8 +255,12 @@ transcript live and replayed, and an outline of each is a reviewed snapshot.
   `_meta.steering.supported`; the steer shows as "Steering" above the composer until the agent
   takes it, and then where it joined the turn. `notRunning` sends it as a prompt instead, and a
   turn another client started meanwhile (`turn_running`) queues it. With an agent that can't
-  steer, the message queues, and queued messages go one at a time as turns end, while the
-  session is open in the app.
+  steer, the message queues. The queue is the Host's (`queue/add`, WVE-107), which starts queued
+  messages one at a time as turns end, whether the app is there or not: the app shows it from
+  `SessionState.queue` and the `queued`, `unqueued`, `queuePaused` and `queueResumed` events,
+  removes from it with `queue/remove` and resumes it with `queue/resume`. A Host without the
+  `queue` feature gets the app's own queue, which sends messages as turns end while the session
+  is open in the app.
 - **Photos** go only to an agent whose `promptCapabilities.image` allows them, scaled to 2048
   pixels on the longest edge and re-encoded as JPEG, up to 12 MiB a message, well under the
   WebSocket's 32 MiB.
@@ -348,6 +355,4 @@ acceptance harness and UI tests.
 
 ## Later
 
-- Queued messages for a session that isn't open in the app wait until it is opened again; the
-  Host's queue (WVE-107) would send them as turns end.
 - WVE-96: views.

@@ -107,8 +107,11 @@ export type AgentChoice = { id: string; name: string };
 /** A photo for a prompt, downscaled and base64-encoded. */
 export type PromptImage = { mimeType: string; data: string; name?: string };
 
-/** A message waiting to go: queued behind the running turn, or with `steering` on its way into it. */
-export type QueuedPrompt = { id: string; text: string; images?: PromptImage[]; steering?: boolean };
+/**
+ * A message waiting to go: queued behind the running turn, or with `steering` on its way into it.
+ * `origin` names the client that queued it, when it isn't this device.
+ */
+export type QueuedPrompt = { id: string; text: string; images?: PromptImage[]; steering?: boolean; origin?: string };
 
 /** A newer version of a session's agent than the one it runs. */
 export type AgentUpdateNotice = {
@@ -131,6 +134,11 @@ export type OpenSession = {
   /** Whether Send steers the running turn; otherwise it queues. */
   canSteer: boolean;
   queued: QueuedPrompt[];
+  /**
+   * The Host's queue waits rather than start the next turn: after a cancelled or failed turn, or
+   * a Host restart. Sending a message, or `resumeQueue`, starts it again.
+   */
+  queuePaused?: boolean;
   /** Whether the agent takes images in prompts. */
   canAttachImages?: boolean;
   /** A newer version of its agent is out; it is updated on the Host's computer. */
@@ -189,6 +197,8 @@ export type AppActions = {
   /** Starts a turn, steers the running one, or queues the message, as `OpenSession` allows. */
   send(text: string, images?: PromptImage[]): Promise<void> | void;
   removeQueued(id: string): void;
+  /** Starts the open session's paused queue again (`queue/resume`). */
+  resumeQueue(): Promise<void> | void;
   cancelTurn(): Promise<void> | void;
   /** Moves the open session to the version its agent's new sessions launch (`session/reopen`). */
   reopenSession(): Promise<void> | void;

@@ -62,6 +62,7 @@ const idleActions: AppController['actions'] = {
   reconnectHost() {},
   send() {},
   removeQueued() {},
+  resumeQueue() {},
   cancelTurn() {},
   reopenSession() {},
   respondToPermission() {},

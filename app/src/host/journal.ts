@@ -102,6 +102,8 @@ export function transcriptEvents(notification: SessionEventNotification, reading
         prompt: event.prompt,
         sessionId: event.sessionId,
         ...(event.kind === 'turnSteered' ? { steer: true } : {}),
+        // One that waited in the Host's queue was never shown here before.
+        ...(event.kind === 'turnStarted' && event.queuedId ? { queued: true } : {}),
         ...(own ? { own } : { origin: originLabel(event.origin) }),
       };
       return event.kind === 'turnStarted' && event.sessionId === root && live ? [prompt, { type: 'turn/started' }] : [prompt];

@@ -20,6 +20,7 @@ const actions = (): AppActions => ({
   reconnectHost: vi.fn(),
   send: vi.fn(),
   removeQueued: vi.fn(),
+  resumeQueue: vi.fn(),
   cancelTurn: vi.fn(),
   reopenSession: vi.fn(),
   respondToPermission: vi.fn(),

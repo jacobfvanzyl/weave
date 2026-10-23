@@ -238,9 +238,10 @@ export type AcpTranscriptEvent =
   | { type: 'session/update'; update: SessionUpdate; sessionId?: string }
   /**
    * A prompt that started a turn, or with `steer` joined the running one. `own` marks this client's,
-   * which replaces the optimistic message it showed; `origin` names another client's or device's.
+   * which replaces the optimistic message it showed, unless it waited in the Host's queue
+   * (`queued`); `origin` names another client's or device's.
    */
-  | { type: 'prompt'; prompt: ContentBlock[]; sessionId?: string; steer?: boolean; own?: boolean; origin?: string }
+  | { type: 'prompt'; prompt: ContentBlock[]; sessionId?: string; steer?: boolean; own?: boolean; origin?: string; queued?: boolean }
   /** How a turn ended, as the transcript records it; the turn's state changes with `turn/stopped`. */
   | { type: 'turn/ended'; sessionId?: string; stopReason?: StopReason; error?: string }
   | { type: 'terminal/output'; terminalId: string; data: string }
@@ -789,7 +790,8 @@ const appendPrompt = (
   event: Extract<AcpTranscriptEvent, { type: 'prompt' }>,
 ): AcpTranscript => {
   let current = model;
-  if (event.own) {
+  // A prompt from the Host's queue replaces nothing: it showed in the queue, not the transcript.
+  if (event.own && !event.queued) {
     // This device's prompts arrive in the order it sent them: one whose content reads differently
     // from what was sent still replaces the oldest it showed.
     const optimistic = (entry: TranscriptEntry): entry is TranscriptMessage => entry.kind === 'message' && entry.optimistic;

@@ -203,6 +203,55 @@ export type TurnOrigin =
       run: {};
     };
 /**
+ * Content blocks represent displayable information in the Agent Client Protocol.
+ *
+ * They provide a structured way to handle various types of user-facing content—whether
+ * it's text from language models, images for analysis, or embedded resources for context.
+ *
+ * Content blocks appear in:
+ * - User prompts sent via `session/prompt`
+ * - Language model output streamed through `session/update` notifications
+ * - Progress updates and results from tool calls
+ *
+ * This structure is compatible with the Model Context Protocol (MCP), enabling
+ * agents to seamlessly forward content from MCP tool outputs without transformation.
+ *
+ * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ContentBlock".
+ */
+export type ContentBlock =
+  | (TextContent & {
+      type: "text";
+    })
+  | (ImageContent & {
+      type: "image";
+    })
+  | (AudioContent & {
+      type: "audio";
+    })
+  | (ResourceLink & {
+      type: "resource_link";
+    })
+  | (EmbeddedResource & {
+      type: "resource";
+    });
+/**
+ * The sender or recipient of messages and data in a conversation.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Role".
+ */
+export type Role = "assistant" | "user";
+/**
+ * Why a queue waits rather than start the next turn.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "QueuePause".
+ */
+export type QueuePause = "cancelled" | "failed" | "interrupted";
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PendingRequest".
  */
@@ -263,13 +312,6 @@ export type ToolCallContent =
   | (Terminal & {
       type: "terminal";
     });
-/**
- * The sender or recipient of messages and data in a conversation.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "Role".
- */
-export type Role = "assistant" | "user";
 /**
  * Request from the agent to elicit structured user input.
  *
@@ -433,41 +475,6 @@ export type SessionConfigSelectOptions = SessionConfigSelectOption[] | SessionCo
  * via the `definition` "SessionConfigGroupId".
  */
 export type SessionConfigGroupId = string;
-/**
- * Content blocks represent displayable information in the Agent Client Protocol.
- *
- * They provide a structured way to handle various types of user-facing content—whether
- * it's text from language models, images for analysis, or embedded resources for context.
- *
- * Content blocks appear in:
- * - User prompts sent via `session/prompt`
- * - Language model output streamed through `session/update` notifications
- * - Progress updates and results from tool calls
- *
- * This structure is compatible with the Model Context Protocol (MCP), enabling
- * agents to seamlessly forward content from MCP tool outputs without transformation.
- *
- * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ContentBlock".
- */
-export type ContentBlock =
-  | (TextContent & {
-      type: "text";
-    })
-  | (ImageContent & {
-      type: "image";
-    })
-  | (AudioContent & {
-      type: "audio";
-    })
-  | (ResourceLink & {
-      type: "resource_link";
-    })
-  | (EmbeddedResource & {
-      type: "resource";
-    });
 /**
  * Resource content that can be embedded in a message.
  *
@@ -652,6 +659,10 @@ export type SessionEvent =
       sessionId: SessionId;
       prompt: ContentBlock[];
       origin: TurnOrigin;
+      /**
+       * The queued prompt it started from, which has left the queue.
+       */
+      queuedId?: string | null;
       kind: "turnStarted";
     }
   | {
@@ -706,6 +717,28 @@ export type SessionEvent =
   | {
       text: string;
       kind: "notice";
+    }
+  | {
+      queuedId: string;
+      prompt: ContentBlock[];
+      origin: TurnOrigin;
+      kind: "queued";
+    }
+  | {
+      queuedId: string;
+      by?: TurnOrigin | null;
+      kind: "unqueued";
+    }
+  | {
+      reason: QueuePause;
+      kind: "queuePaused";
+    }
+  | {
+      /**
+       * The client that resumed it.
+       */
+      by?: TurnOrigin | null;
+      kind: "queueResumed";
     }
   | {
       kind: "unknown";
@@ -2177,6 +2210,14 @@ export interface SessionState {
   modes?: SessionModeState | null;
   configOptions?: SessionConfigOption[];
   turns?: RunningTurn[];
+  /**
+   * Prompts waiting, in order, for the next turns (feature `queue`).
+   */
+  queue?: QueuedPrompt[];
+  /**
+   * Why the queue waits rather than start the next turn; absent while it runs.
+   */
+  queuePaused?: QueuePause | null;
   pending?: PendingRequest[];
   /**
    * Subagent sessions so far.
@@ -2431,135 +2472,29 @@ export interface RunningTurn {
   origin: TurnOrigin;
 }
 /**
- * Request for user permission to execute a tool call.
- *
- * Sent when the agent needs authorization before performing a sensitive operation.
- *
- * See protocol docs: [Requesting Permission](https://agentclientprotocol.com/protocol/tool-calls#requesting-permission)
+ * A prompt waiting in a session's queue.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "RequestPermissionRequest".
+ * via the `definition` "QueuedPrompt".
  */
-export interface RequestPermissionRequest {
+export interface QueuedPrompt {
+  id: string;
+  prompt: ContentBlock[];
   /**
-   * A unique identifier for a conversation session between a client and agent.
-   *
-   * Sessions maintain their own context, conversation history, and state,
-   * allowing multiple independent interactions with the same agent.
-   *
-   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   * Who started a turn.
    */
-  sessionId: string;
-  toolCall: ToolCallUpdate;
-  /**
-   * Available permission options for the user to choose from.
-   */
-  options: PermissionOption[];
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Details about the tool call requiring permission.
- */
-export interface ToolCallUpdate {
-  /**
-   * The ID of the tool call being updated.
-   */
-  toolCallId: string;
-  /**
-   * Update the tool kind.
-   */
-  kind?: ToolKind | null;
-  /**
-   * Update the execution status.
-   */
-  status?: ToolCallStatus | null;
-  /**
-   * Update the human-readable title.
-   */
-  title?: string | null;
-  /**
-   * Update the programmatic name of the tool being invoked.
-   *
-   * This field is optional. Omitting it or sending `null` both mean that
-   * the existing name is left unchanged.
-   */
-  name?: string | null;
-  /**
-   * Replace the content collection.
-   */
-  content?: ToolCallContent[] | null;
-  /**
-   * Replace the locations collection.
-   */
-  locations?: ToolCallLocation[] | null;
-  /**
-   * Update the raw input.
-   */
-  rawInput?: {
-    [k: string]: unknown;
-  };
-  /**
-   * Update the raw output.
-   */
-  rawOutput?: {
-    [k: string]: unknown;
-  };
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Standard content block (text, images, resources).
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "Content".
- */
-export interface Content {
-  /**
-   * The actual content block.
-   */
-  content:
-    | (TextContent & {
-        type: "text";
-      })
-    | (ImageContent & {
-        type: "image";
-      })
-    | (AudioContent & {
-        type: "audio";
-      })
-    | (ResourceLink & {
-        type: "resource_link";
-      })
-    | (EmbeddedResource & {
-        type: "resource";
-      });
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
+  origin:
+    | {
+        client: {
+          name: string;
+          id: string;
+          device?: string | null;
+        };
+      }
+    | {
+        run: {};
+      };
+  queuedAt: number;
 }
 /**
  * Text provided to or from an LLM.
@@ -2796,6 +2731,150 @@ export interface BlobResourceContents {
    * URI associated with this resource or media payload.
    */
   uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Request for user permission to execute a tool call.
+ *
+ * Sent when the agent needs authorization before performing a sensitive operation.
+ *
+ * See protocol docs: [Requesting Permission](https://agentclientprotocol.com/protocol/tool-calls#requesting-permission)
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RequestPermissionRequest".
+ */
+export interface RequestPermissionRequest {
+  /**
+   * A unique identifier for a conversation session between a client and agent.
+   *
+   * Sessions maintain their own context, conversation history, and state,
+   * allowing multiple independent interactions with the same agent.
+   *
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   */
+  sessionId: string;
+  toolCall: ToolCallUpdate;
+  /**
+   * Available permission options for the user to choose from.
+   */
+  options: PermissionOption[];
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Details about the tool call requiring permission.
+ */
+export interface ToolCallUpdate {
+  /**
+   * The ID of the tool call being updated.
+   */
+  toolCallId: string;
+  /**
+   * Update the tool kind.
+   */
+  kind?: ToolKind | null;
+  /**
+   * Update the execution status.
+   */
+  status?: ToolCallStatus | null;
+  /**
+   * Update the human-readable title.
+   */
+  title?: string | null;
+  /**
+   * Update the programmatic name of the tool being invoked.
+   *
+   * This field is optional. Omitting it or sending `null` both mean that
+   * the existing name is left unchanged.
+   */
+  name?: string | null;
+  /**
+   * Replace the content collection.
+   */
+  content?: ToolCallContent[] | null;
+  /**
+   * Replace the locations collection.
+   */
+  locations?: ToolCallLocation[] | null;
+  /**
+   * Update the raw input.
+   */
+  rawInput?: {
+    [k: string]: unknown;
+  };
+  /**
+   * Update the raw output.
+   */
+  rawOutput?: {
+    [k: string]: unknown;
+  };
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Standard content block (text, images, resources).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Content".
+ */
+export interface Content {
+  /**
+   * Content blocks represent displayable information in the Agent Client Protocol.
+   *
+   * They provide a structured way to handle various types of user-facing content—whether
+   * it's text from language models, images for analysis, or embedded resources for context.
+   *
+   * Content blocks appear in:
+   * - User prompts sent via `session/prompt`
+   * - Language model output streamed through `session/update` notifications
+   * - Progress updates and results from tool calls
+   *
+   * This structure is compatible with the Model Context Protocol (MCP), enabling
+   * agents to seamlessly forward content from MCP tool outputs without transformation.
+   *
+   * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+   */
+  content:
+    | (TextContent & {
+        type: "text";
+      })
+    | (ImageContent & {
+        type: "image";
+      })
+    | (AudioContent & {
+        type: "audio";
+      })
+    | (ResourceLink & {
+        type: "resource_link";
+      })
+    | (EmbeddedResource & {
+        type: "resource";
+      });
   /**
    * The _meta property is reserved by ACP to allow clients and agents to attach additional
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
@@ -3461,6 +3540,66 @@ export interface AgentUpdate {
   latest: string;
 }
 /**
+ * Text-based resource contents.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TextResourceContents".
+ */
+export interface TextResourceContents1 {
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType?: string | null;
+  /**
+   * Text payload carried by this content block.
+   */
+  text: string;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Binary resource contents.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BlobResourceContents".
+ */
+export interface BlobResourceContents1 {
+  /**
+   * Base64-encoded bytes for a binary resource payload.
+   */
+  blob: string;
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType?: string | null;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
  * An update to an existing tool call.
  *
  * Used to report progress and results as tools execute. All fields except
@@ -3515,66 +3654,6 @@ export interface ToolCallUpdate1 {
   rawOutput?: {
     [k: string]: unknown;
   };
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Text-based resource contents.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "TextResourceContents".
- */
-export interface TextResourceContents1 {
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType?: string | null;
-  /**
-   * Text payload carried by this content block.
-   */
-  text: string;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Binary resource contents.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "BlobResourceContents".
- */
-export interface BlobResourceContents1 {
-  /**
-   * Base64-encoded bytes for a binary resource payload.
-   */
-  blob: string;
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType?: string | null;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri: string;
   /**
    * The _meta property is reserved by ACP to allow clients and agents to attach additional
    * metadata to their interactions. Implementations MUST NOT make assumptions about values at
@@ -3765,6 +3844,14 @@ export interface AttachSessionResponse {
   modes?: SessionModeState | null;
   configOptions?: SessionConfigOption[];
   turns?: RunningTurn[];
+  /**
+   * Prompts waiting, in order, for the next turns (feature `queue`).
+   */
+  queue?: QueuedPrompt[];
+  /**
+   * Why the queue waits rather than start the next turn; absent while it runs.
+   */
+  queuePaused?: QueuePause | null;
   pending?: PendingRequest[];
   /**
    * Subagent sessions so far.
@@ -3924,6 +4011,11 @@ export interface RunRequest {
    */
   attach?: boolean;
   trace?: boolean;
+  /**
+   * Makes it safe to send again (feature `requestKeys`). A repeat answers with the session's
+   * id alone; a client that asked to attach attaches with `session/attach`.
+   */
+  key?: string | null;
 }
 /**
  * How a session's permission requests are answered.
@@ -3959,6 +4051,10 @@ export interface RunResponse {
 export interface StartTurnRequest {
   sessionId: SessionId;
   prompt: ContentBlock[];
+  /**
+   * Makes it safe to send again (feature [`REQUEST_KEYS_FEATURE`]).
+   */
+  key?: string | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -4001,6 +4097,74 @@ export interface SteerTurnResponse {
  * via the `definition` "CancelTurnRequest".
  */
 export interface CancelTurnRequest {
+  sessionId: SessionId;
+}
+/**
+ * `queue/add`: add a prompt to the end of the session's queue. With no turn running and
+ * nothing waiting, it starts a turn at once. Adding to a paused queue resumes it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddQueuedRequest".
+ */
+export interface AddQueuedRequest {
+  /**
+   * A unique identifier for a conversation session between a client and agent.
+   *
+   * Sessions maintain their own context, conversation history, and state,
+   * allowing multiple independent interactions with the same agent.
+   *
+   * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
+   */
+  sessionId: string;
+  prompt: ContentBlock[];
+  /**
+   * Makes it safe to send again (feature `requestKeys`).
+   */
+  key?: string | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddQueuedResponse".
+ */
+export interface AddQueuedResponse {
+  queuedId: string;
+  /**
+   * The position of its `turnStarted` when it started a turn at once, otherwise of its
+   * `queued` event.
+   */
+  seq: number;
+  /**
+   * It started a turn at once.
+   */
+  started: boolean;
+}
+/**
+ * `queue/remove`: take a prompt out of the queue, whoever added it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemoveQueuedRequest".
+ */
+export interface RemoveQueuedRequest {
+  sessionId: SessionId;
+  queuedId: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemoveQueuedResponse".
+ */
+export interface RemoveQueuedResponse {
+  /**
+   * The prompt taken out; absent when it had already left the queue, started or removed.
+   */
+  removed?: QueuedPrompt | null;
+}
+/**
+ * `queue/resume`: start a paused queue again. A queue that isn't paused stays as it is.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ResumeQueueRequest".
+ */
+export interface ResumeQueueRequest {
   sessionId: SessionId;
 }
 /**
@@ -5486,7 +5650,8 @@ export const HOST_PROTOCOL = {
     "worktreeBusy": -32072,
     "notARepository": -32073,
     "gitFailed": -32074,
-    "uncommittedChanges": -32075
+    "uncommittedChanges": -32075,
+    "keyReused": -32076
   },
   "features": {
     "steer": "turn/steer",
@@ -5496,13 +5661,18 @@ export const HOST_PROTOCOL = {
     "watch": "sessions/watch",
     "listFiles": "files/list",
     "rename": "session/rename",
-    "worktrees": "worktrees"
+    "worktrees": "worktrees",
+    "queue": "queue",
+    "requestKeys": "requestKeys"
   },
   "files": {
     "maxEntries": 2000
   },
   "sessions": {
     "maxTitle": 200
+  },
+  "requestKeys": {
+    "maxKey": 200
   },
   "clientTools": {
     "clipboardWrite": "clipboard_write"
@@ -5544,6 +5714,9 @@ export interface HostRequests {
   "turn/start": { params: StartTurnRequest; result: StartTurnResponse };
   "turn/steer": { params: SteerTurnRequest; result: SteerTurnResponse };
   "turn/cancel": { params: CancelTurnRequest; result: Empty };
+  "queue/add": { params: AddQueuedRequest; result: AddQueuedResponse };
+  "queue/remove": { params: RemoveQueuedRequest; result: RemoveQueuedResponse };
+  "queue/resume": { params: ResumeQueueRequest; result: Empty };
   "pending/answer": { params: AnswerPendingRequest; result: Empty };
   "worktrees/list": { params: ListWorktreesRequest; result: ListWorktreesResponse };
   "worktrees/create": { params: CreateWorktreeRequest; result: CreateWorktreeResponse };

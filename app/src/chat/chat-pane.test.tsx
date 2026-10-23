@@ -10,6 +10,7 @@ import { ChatPane, type ChatPaneActions } from './chat-pane';
 const actions = (): ChatPaneActions => ({
   send: vi.fn(),
   removeQueued: vi.fn(),
+  resumeQueue: vi.fn(),
   cancelTurn: vi.fn(),
   respondToPermission: vi.fn(),
   respondToElicitation: vi.fn(),
@@ -591,6 +592,26 @@ describe('ChatPane', () => {
     await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'And update the docs');
     await user.click(screen.getByRole('button', { name: 'Queue message' }));
     expect(handlers.send).toHaveBeenCalledWith('And update the docs');
+  });
+
+  it('says who queued a message elsewhere, and when the queue is paused offers to resume it', async () => {
+    const user = userEvent.setup();
+    const model = { ...createAcpShowcaseTranscript(), sessionId: 'paused' };
+    const handlers = actions();
+    render(
+      <ChatPane
+        model={model}
+        actions={handlers}
+        queued={[{ id: 'q1', text: 'Fix the parser', origin: 'the TUI' }, { id: 'q2', text: 'Then the docs' }]}
+        queuePaused
+      />,
+    );
+
+    const list = within(screen.getByRole('list', { name: 'Queued messages' }));
+    expect(list.getByText('from the TUI')).toBeInTheDocument();
+    expect(list.getByText('The queue is paused. Sending a message starts it again.')).toBeInTheDocument();
+    await user.click(list.getByRole('button', { name: 'Resume' }));
+    expect(handlers.resumeQueue).toHaveBeenCalled();
   });
 
   it('preserves a manual scroll position while the last response streams', () => {

@@ -268,6 +268,7 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
             model={session.transcript}
             actions={actions}
             queued={session.queued}
+            queuePaused={session.queuePaused}
             canSteer={session.canSteer}
             canAttachImages={session.canAttachImages}
             onOpenSubagent={openSubagent}

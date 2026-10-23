@@ -465,6 +465,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           queued: { ...current.queued, [key]: (current.queued[key] ?? []).filter((item) => item.id !== id) },
         }));
       },
+      // The mock's queue never pauses.
+      resumeQueue() {},
       cancelTurn() {
         const key = selectedKey();
         if (!key) return;

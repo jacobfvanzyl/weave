@@ -37,6 +37,7 @@ import {
   type GitLocation,
   type PendingRequest,
   type PendingResolvedNotification,
+  type QueuedPrompt as HostQueuedPrompt,
   type SessionEventNotification,
   type SessionListing,
   type SessionState,
@@ -99,7 +100,11 @@ type Followed = {
   tag?: number;
   /** The session as attaching gave it, kept up to date: its agent, whether it's blank, its activity. */
   state?: SessionState;
-  /** Messages for after the running turn, sent in order as turns end. */
+  /** The Host's queue, which holds messages for after the running turn (feature `queue`). */
+  held: QueuedPrompt[];
+  /** The Host's queue waits for someone to start it again. */
+  queuePaused: boolean;
+  /** Messages for after the running turn, sent in order as turns end, for a Host without a queue. */
   queued: QueuedPrompt[];
   /** Steers on their way, until the agent takes them or the Host says no turn runs. */
   steering: QueuedPrompt[];
@@ -269,9 +274,21 @@ export class HostStore {
     removeQueued: (id) => {
       const followed = this.#selected();
       if (!followed) return;
+      if (followed.held.some((prompt) => prompt.id === id)) {
+        // It leaves when the Host's `unqueued` event says so.
+        void this.#report(async () => {
+          await this.#connection(followed).request('queue/remove', { sessionId: followed.sessionId, queuedId: id });
+        });
+        return;
+      }
       followed.queued = followed.queued.filter((prompt) => prompt.id !== id);
       this.#changed();
     },
+    resumeQueue: () => this.#report(async () => {
+      const followed = this.#selected();
+      if (!followed) return;
+      await this.#connection(followed).request('queue/resume', { sessionId: followed.sessionId });
+    }),
     cancelTurn: () => this.#report(async () => {
       const followed = this.#selected();
       if (!followed) return;
@@ -631,6 +648,19 @@ export class HostStore {
     // What waits shows once the history before it has.
     if (!followed.pendingShown && !followed.follower.replaying) this.#showPending(followed);
     if (history) return;
+    // The Host's queue, which a session's state gave up to the journal's head.
+    if (event.kind === 'queued') {
+      followed.held.push(this.#heldPrompt(entry, { id: event.queuedId, prompt: event.prompt, origin: event.origin, queuedAt: notification.at }));
+      this.#changed();
+    } else if (event.kind === 'unqueued' || (event.kind === 'turnStarted' && event.queuedId)) {
+      const id = event.queuedId;
+      followed.held = followed.held.filter((prompt) => prompt.id !== id);
+      if (followed.held.length === 0) followed.queuePaused = false;
+      this.#changed();
+    } else if (event.kind === 'queuePaused' || event.kind === 'queueResumed') {
+      followed.queuePaused = event.kind === 'queuePaused';
+      this.#changed();
+    }
     if (event.kind === 'agentReopened') {
       // The new process says what prompts may carry now, and whether it steers.
       if (followed.state) followed.state = { ...followed.state, agent: event.agent };
@@ -641,6 +671,19 @@ export class HostStore {
     } else if (event.kind === 'turnEnded' && event.sessionId === notification.sessionId) {
       void this.#sendQueued(followed);
     }
+  }
+
+  /** A prompt in the Host's queue, as the composer shows it. */
+  #heldPrompt(entry: HostEntry | undefined, queued: HostQueuedPrompt): QueuedPrompt {
+    const text = queued.prompt.flatMap((block) => block.type === 'text' ? [block.text] : []).join(' ');
+    const images = queued.prompt.flatMap((block) => block.type === 'image' ? [{ mimeType: block.mimeType, data: block.data }] : []);
+    const own = entry ? this.#own(entry, queued.origin) : false;
+    return {
+      id: queued.id,
+      text,
+      ...(images.length > 0 ? { images } : {}),
+      ...(own ? {} : { origin: originLabel(queued.origin) }),
+    };
   }
 
   /** Whether a prompt came from this device: this connection, or an earlier one of it. */
@@ -689,6 +732,8 @@ export class HostStore {
       sessionId,
       follower: new JournalFollower(),
       transcript: createTranscript(sessionId),
+      held: [],
+      queuePaused: false,
       queued: [],
       steering: [],
       reopening: false,
@@ -764,6 +809,9 @@ export class HostStore {
       ? { agentId: state.update.agentId, name: state.update.name, running: state.update.running, latest: state.update.latest }
       : undefined;
     followed.pending = state.pending ?? [];
+    const entry = this.#hosts.get(followed.hostId);
+    followed.held = (state.queue ?? []).map((queued) => this.#heldPrompt(entry, queued));
+    followed.queuePaused = Boolean(state.queuePaused) && followed.held.length > 0;
     // Requests shown before that no longer wait stopped while this device wasn't attached.
     if (!reset) followed.transcript = reduceAcpEvent(followed.transcript, { type: 'requests/settled', waiting: followed.pending.map(({ id }) => id) });
     followed.pendingShown = false;
@@ -989,8 +1037,7 @@ export class HostStore {
       const connection = this.#connection(followed);
       if (followed.transcript.turn.status === 'running') {
         if (!this.#canSteer(followed, connection)) {
-          followed.queued.push(prompt);
-          this.#changed();
+          await this.#enqueue(followed, connection, prompt);
           return;
         }
         if (await this.#steer(followed, connection, prompt)) return;
@@ -1031,8 +1078,8 @@ export class HostStore {
       const entries = followed.transcript.entries.filter(({ id }) => id !== localId);
       if (error instanceof HostError && error.code === HOST_PROTOCOL.errors.turnRunning) {
         followed.transcript = { ...followed.transcript, entries, turn: { status: 'running' } };
-        followed.queued.unshift(prompt);
         this.#changed();
+        await this.#enqueue(followed, connection, prompt, true);
         return;
       }
       followed.transcript = { ...followed.transcript, entries, turn: before };
@@ -1041,7 +1088,22 @@ export class HostStore {
     }
   }
 
-  /** Sends the next queued message, once no turn runs. */
+  /**
+   * Queues a message for after the running turn: in the Host's queue, where every client sees it
+   * and the Host starts it, or here for a Host without one, `first` putting it at the front.
+   */
+  async #enqueue(followed: Followed, connection: HostConnection, prompt: QueuedPrompt, first = false) {
+    if (connection.supports(HOST_PROTOCOL.features.queue)) {
+      // It shows when the Host's `queued` event says so.
+      await connection.request('queue/add', { sessionId: followed.sessionId, prompt: promptBlocks(prompt.text, prompt.images) });
+      return;
+    }
+    if (first) followed.queued.unshift(prompt);
+    else followed.queued.push(prompt);
+    this.#changed();
+  }
+
+  /** Sends the next message queued here, once no turn runs. */
   async #sendQueued(followed: Followed) {
     if (followed.transcript.turn.status === 'running') return;
     const next = followed.queued.shift();
@@ -1257,7 +1319,8 @@ export class HostStore {
             key: this.#selectedKey,
             transcript: selected.transcript,
             canSteer: this.#canSteer(selected),
-            queued: [...selected.steering, ...selected.queued],
+            queued: [...selected.steering, ...selected.held, ...selected.queued],
+            ...(selected.queuePaused && selected.held.length > 0 ? { queuePaused: true } : {}),
             canAttachImages: selected.state?.agent.initialize.agentCapabilities?.promptCapabilities?.image === true,
             ...(selected.update ? { update: this.#updateNotice(selected.update, this.#hosts.get(selected.hostId)) } : {}),
             ...(selected.reopening ? { reopening: true } : {}),

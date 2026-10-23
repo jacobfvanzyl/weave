@@ -187,10 +187,36 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     await running();
     expect(session().canSteer).toBe(false);
     await store.actions.send('After that.');
+    // The Host holds it, and says so before it answers.
     expect(session().queued).toMatchObject([{ text: 'After that.' }]);
     const shown = await until('the queued prompt to be answered', (current) => current.includes('assistant: You said: After that.'));
     expect(shown.filter((entry) => entry.startsWith('user'))).toEqual(['user: /slow 4', 'user: After that.']);
     expect(session().queued).toEqual([]);
+  });
+
+  it('shares the Host\'s queue with other clients, and resumes it after a cancel', async () => {
+    const open = await create('fake-minimal');
+    const sessionId = open.key.slice(hostId.length + 1);
+    await store.actions.send('/slow 50');
+    await running();
+    // The TUI queues one, unattached; this device queues another.
+    await local.request('queue/add', { sessionId, prompt: [{ type: 'text', text: 'From the TUI.' }] });
+    await store.actions.send('From here.');
+    const queued = await waitFor(() => session().queued.length === 2 && session().queued, 'both queued');
+    expect(queued).toMatchObject([{ text: 'From the TUI.', origin: 'the TUI' }, { text: 'From here.' }]);
+    expect(queued[1]).not.toHaveProperty('origin');
+    // Taking one out takes it out for everyone.
+    store.actions.removeQueued(queued[0].id);
+    await waitFor(() => session().queued.length === 1, 'the TUI\'s to leave the queue');
+    // A cancelled turn pauses the queue, until the person resumes it.
+    await store.actions.cancelTurn();
+    await waitFor(() => session().queuePaused, 'the queue to pause');
+    expect(session().transcript.turn.status).not.toBe('running');
+    await store.actions.resumeQueue();
+    const shown = await until('the queued prompt to be answered', (current) => current.includes('assistant: You said: From here.'));
+    expect(shown.filter((entry) => entry.startsWith('user'))).toEqual(['user: /slow 50', 'user: From here.']);
+    expect(session().queued).toEqual([]);
+    expect(session().queuePaused).toBeUndefined();
   });
 
   it('closes a session nobody prompted when it leaves it', async () => {
