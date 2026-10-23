@@ -154,6 +154,9 @@ fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
             ago(now_ms, session.last_activity_at.unwrap_or(now_ms)),
             session.info.cwd.display(),
         ));
+        if let Some(starter) = &session.started_by {
+            out.push_str(&format!("  started by session {starter}\n"));
+        }
     }
     out
 }
@@ -179,6 +182,7 @@ mod tests {
             headless: true,
             last_activity_at: Some(30_000),
             git: None,
+            started_by: None,
         };
         assert_eq!(
             describe(std::slice::from_ref(&session), 7_230_000),
@@ -195,6 +199,11 @@ mod tests {
             ..session.clone()
         };
         assert!(describe(&[on_a_branch], 7_230_000).ends_with("  in /repo on main\n"));
+        let delegated = SessionListing {
+            started_by: Some("s0".into()),
+            ..session.clone()
+        };
+        assert!(describe(&[delegated], 7_230_000).ends_with("  started by session s0\n"));
         assert!(find(&[session], "s2").is_err());
     }
 }

@@ -640,6 +640,7 @@ mod tests {
             headless: false,
             last_activity_at: Some(30_000),
             git: None,
+            started_by: None,
         });
         assert_eq!(
             describe(&status, &paths, 7_230_000),

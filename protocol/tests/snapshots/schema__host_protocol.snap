@@ -68,6 +68,10 @@ expression: schema()
       "params": "ListSessionsRequest",
       "result": "ListSessionsResponse"
     },
+    "sessions/get": {
+      "params": "GetSessionRequest",
+      "result": "GetSessionResponse"
+    },
     "sessions/watch": {
       "params": "WatchSessionsRequest",
       "result": "WatchSessionsResponse"
@@ -214,6 +218,7 @@ expression: schema()
       "rename": "session/rename",
       "worktrees": "worktrees",
       "queue": "queue",
+      "getSession": "sessions/get",
       "requestKeys": "requestKeys"
     },
     "files": {
@@ -229,7 +234,13 @@ expression: schema()
       "clipboardWrite": "clipboard_write"
     },
     "hostTools": {
-      "renameSession": "rename_session"
+      "renameSession": "rename_session",
+      "listSessions": "list_sessions",
+      "readSession": "read_session",
+      "startSession": "start_session",
+      "promptSession": "prompt_session",
+      "steerSession": "steer_session",
+      "cancelSessionTurn": "cancel_session_turn"
     }
   },
   "$defs": {
@@ -717,6 +728,17 @@ expression: schema()
             }
           ],
           "description": "Where in a git repository its directory is, as the Host last read it while the session\nwas open; absent outside one, and for sessions the Host has no record of."
+        },
+        "startedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session whose agent started it, for a delegated session."
         }
       },
       "required": [
@@ -1834,756 +1856,42 @@ expression: schema()
         "sessions"
       ]
     },
-    "WatchSessionsRequest": {
-      "type": "object",
-      "description": "`sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a\n[`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the\nconnection ends or the client sends `sessions/unwatch`. Blank sessions never appear."
-    },
-    "WatchSessionsResponse": {
-      "type": "object",
-      "properties": {
-        "sessions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionListing"
-          }
-        }
-      },
-      "required": [
-        "sessions"
-      ]
-    },
-    "UnwatchSessionsRequest": {
-      "type": "object",
-      "description": "`sessions/unwatch`: stop what `sessions/watch` sends."
-    },
-    "CreateSessionRequest": {
-      "type": "object",
-      "properties": {
-        "agentId": {
-          "type": "string"
-        },
-        "cwd": {
-          "type": "string"
-        },
-        "additionalDirectories": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "mode": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "The mode to start in; the agent's configured one when absent."
-        },
-        "policy": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PermissionPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Asking, when absent."
-        },
-        "trace": {
-          "type": "boolean",
-          "description": "Have the Host trace the agent's protocol."
-        }
-      },
-      "required": [
-        "agentId",
-        "cwd"
-      ],
-      "description": "`session/create`: start a session and attach to it."
-    },
-    "PermissionPolicy": {
-      "type": "object",
-      "properties": {
-        "approve": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ToolKind"
-          },
-          "description": "Tool kinds approved without asking anyone."
-        },
-        "otherwise": {
-          "$ref": "#/$defs/Unapproved",
-          "description": "What happens to the rest.",
-          "default": "ask"
-        }
-      },
-      "description": "How a session's permission requests are answered."
-    },
-    "ToolKind": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "read",
-          "description": "Reading files or data."
-        },
-        {
-          "type": "string",
-          "const": "edit",
-          "description": "Modifying files or content."
-        },
-        {
-          "type": "string",
-          "const": "delete",
-          "description": "Removing files or data."
-        },
-        {
-          "type": "string",
-          "const": "move",
-          "description": "Moving or renaming files."
-        },
-        {
-          "type": "string",
-          "const": "search",
-          "description": "Searching for information."
-        },
-        {
-          "type": "string",
-          "const": "execute",
-          "description": "Running commands or code."
-        },
-        {
-          "type": "string",
-          "const": "think",
-          "description": "Internal reasoning or planning."
-        },
-        {
-          "type": "string",
-          "const": "fetch",
-          "description": "Retrieving external data."
-        },
-        {
-          "type": "string",
-          "const": "switch_mode",
-          "description": "Switching the current session mode."
-        },
-        {
-          "type": "string",
-          "const": "other",
-          "description": "Other tool types (default)."
-        }
-      ],
-      "description": "Categories of tools that can be invoked.\n\nTool kinds help clients choose appropriate icons and optimize how they\ndisplay tool execution progress.\n\nSee protocol docs: [Creating](https://agentclientprotocol.com/protocol/tool-calls#creating)"
-    },
-    "Unapproved": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "ask",
-          "description": "Ask the attached clients, and wait for one if none is attached."
-        },
-        {
-          "type": "string",
-          "const": "reject",
-          "description": "Reject them, and dismiss elicitations: nobody is there to answer."
-        }
-      ],
-      "description": "What happens to permission requests a policy doesn't approve."
-    },
-    "SessionState": {
+    "GetSessionRequest": {
       "type": "object",
       "properties": {
         "sessionId": {
           "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "description": "`sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists\nit, with its latest turn, read without opening it or attaching."
+    },
+    "GetSessionResponse": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/SessionListing"
         },
-        "agent": {
-          "$ref": "#/$defs/SessionAgent"
-        },
-        "cwd": {
-          "type": "string"
-        },
-        "additionalDirectories": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "git": {
+        "latestTurn": {
           "anyOf": [
             {
-              "$ref": "#/$defs/GitLocation"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Where in a git repository `cwd` is; absent outside one."
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "state": {
-          "$ref": "#/$defs/SessionStatus"
-        },
-        "activity": {
-          "$ref": "#/$defs/Activity"
-        },
-        "clients": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "description": "Attached now, the receiving client included."
-        },
-        "blank": {
-          "type": "boolean",
-          "description": "Nobody has prompted it yet."
-        },
-        "policy": {
-          "$ref": "#/$defs/PermissionPolicy"
-        },
-        "modes": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionModeState"
+              "$ref": "#/$defs/LatestTurn"
             },
             {
               "type": "null"
             }
           ]
-        },
-        "configOptions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionConfigOption"
-          },
-          "default": []
-        },
-        "turns": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/RunningTurn"
-          },
-          "default": []
-        },
-        "queue": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/QueuedPrompt"
-          },
-          "description": "Prompts waiting, in order, for the next turns (feature `queue`)."
-        },
-        "queuePaused": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/QueuePause"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Why the queue waits rather than start the next turn; absent while it runs."
-        },
-        "pending": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PendingRequest"
-          },
-          "default": []
-        },
-        "subagents": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionId"
-          },
-          "description": "Subagent sessions so far.",
-          "default": []
-        },
-        "journal": {
-          "$ref": "#/$defs/JournalHead"
-        },
-        "notices": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Things worth telling the user, such as skipped MCP servers.",
-          "default": []
-        },
-        "trace": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Where the Host writes this session's protocol trace, when asked to."
-        },
-        "update": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AgentUpdate"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "A newer version of the agent than the session runs, once the Host has found one."
         }
       },
       "required": [
-        "sessionId",
-        "agent",
-        "cwd",
-        "state",
-        "activity",
-        "clients",
-        "blank",
-        "policy",
-        "journal"
-      ],
-      "description": "An open session as a client attached to it sees it; notifications keep it up to date."
+        "session"
+      ]
     },
-    "SessionAgent": {
+    "LatestTurn": {
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "initialize": {
-          "$ref": "#/$defs/InitializeResponse",
-          "description": "What the agent said about itself: capabilities, prompt capabilities, sign-in."
-        },
-        "release": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AgentRelease"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The version the Host launched, for presets and registry agents."
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "initialize"
-      ],
-      "description": "The agent a session runs with."
-    },
-    "AgentRelease": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "As people know it: the preset's package, or the registry agent's name."
-        },
-        "version": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "version"
-      ],
-      "description": "A version of an agent the Host launches and can update: a preset's npm package, or an ACP\nregistry agent."
-    },
-    "SessionModeState": {
-      "type": "object",
-      "properties": {
-        "currentModeId": {
-          "$ref": "#/$defs/SessionModeId",
-          "description": "The current mode the Agent is in."
-        },
-        "availableModes": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionMode"
-          },
-          "description": "The set of modes that the Agent can operate in",
-          "x-deserialize-default-on-error": true,
-          "x-deserialize-skip-invalid-items": true
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "currentModeId",
-        "availableModes"
-      ],
-      "description": "The set of modes and the one currently active."
-    },
-    "SessionModeId": {
-      "type": "string",
-      "description": "Unique identifier for a Session Mode."
-    },
-    "SessionMode": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/SessionModeId",
-          "description": "Stable identifier used to refer to this protocol object in later messages."
-        },
-        "name": {
-          "type": "string",
-          "description": "Human-readable name shown for this protocol object."
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Optional human-readable details shown with this protocol object.",
-          "x-deserialize-default-on-error": true
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "id",
-        "name"
-      ],
-      "description": "A mode the agent can operate in.\n\nSee protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/session-modes)"
-    },
-    "SessionConfigOption": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/SessionConfigId",
-          "description": "Unique identifier for the configuration option."
-        },
-        "name": {
-          "type": "string",
-          "description": "Human-readable label for the option."
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Optional description for the Client to display to the user.",
-          "x-deserialize-default-on-error": true
-        },
-        "category": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionConfigOptionCategory"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional semantic category for this option (UX only).",
-          "x-deserialize-default-on-error": true
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "id",
-        "name"
-      ],
-      "oneOf": [
-        {
-          "$ref": "#/$defs/SessionConfigSelect",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "select"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "description": "Single-value selector (dropdown)."
-        },
-        {
-          "$ref": "#/$defs/SessionConfigBoolean",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "boolean"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "description": "Boolean on/off toggle."
-        }
-      ],
-      "description": "A session configuration option selector and its current state.",
-      "discriminator": {
-        "propertyName": "type"
-      }
-    },
-    "SessionConfigId": {
-      "type": "string",
-      "description": "Unique identifier for a session configuration option."
-    },
-    "SessionConfigOptionCategory": {
-      "anyOf": [
-        {
-          "type": "string",
-          "const": "mode",
-          "description": "Session mode selector."
-        },
-        {
-          "type": "string",
-          "const": "model",
-          "description": "Model selector."
-        },
-        {
-          "type": "string",
-          "const": "model_config",
-          "description": "Model-related configuration parameter."
-        },
-        {
-          "type": "string",
-          "const": "thought_level",
-          "description": "Thought/reasoning level selector."
-        },
-        {
-          "type": "string",
-          "description": "Unknown / uncategorized selector."
-        }
-      ],
-      "description": "Semantic category for a session configuration option.\n\nThis is intended to help Clients distinguish broadly common selectors (e.g. model selector vs\nsession mode selector vs thought/reasoning level) for UX purposes (keyboard shortcuts, icons,\nplacement). It MUST NOT be required for correctness. Clients MUST handle missing or unknown\ncategories gracefully.\n\nCategory names beginning with `_` are free for custom use, like other ACP extension methods.\nCategory names that do not begin with `_` are reserved for the ACP spec."
-    },
-    "SessionConfigValueId": {
-      "type": "string",
-      "description": "Unique identifier for a session configuration option value."
-    },
-    "SessionConfigSelectOptions": {
-      "anyOf": [
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionConfigSelectOption"
-          },
-          "description": "A flat list of options with no grouping."
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionConfigSelectGroup"
-          },
-          "description": "A list of options grouped under headers."
-        }
-      ],
-      "description": "Possible values for a session configuration option."
-    },
-    "SessionConfigSelectOption": {
-      "type": "object",
-      "properties": {
-        "value": {
-          "$ref": "#/$defs/SessionConfigValueId",
-          "description": "Unique identifier for this option value."
-        },
-        "name": {
-          "type": "string",
-          "description": "Human-readable label for this option value."
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Optional description for this option value.",
-          "x-deserialize-default-on-error": true
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "value",
-        "name"
-      ],
-      "description": "A possible value for a session configuration option."
-    },
-    "SessionConfigSelectGroup": {
-      "type": "object",
-      "properties": {
-        "group": {
-          "$ref": "#/$defs/SessionConfigGroupId",
-          "description": "Unique identifier for this group."
-        },
-        "name": {
-          "type": "string",
-          "description": "Human-readable label for this group."
-        },
-        "options": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionConfigSelectOption"
-          },
-          "description": "The set of option values in this group.",
-          "x-deserialize-default-on-error": true,
-          "x-deserialize-skip-invalid-items": true
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "group",
-        "name",
-        "options"
-      ],
-      "description": "A group of possible values for a session configuration option."
-    },
-    "SessionConfigGroupId": {
-      "type": "string",
-      "description": "Unique identifier for a session configuration option value group."
-    },
-    "SessionConfigSelect": {
-      "type": "object",
-      "properties": {
-        "currentValue": {
-          "$ref": "#/$defs/SessionConfigValueId",
-          "description": "The currently selected value."
-        },
-        "options": {
-          "$ref": "#/$defs/SessionConfigSelectOptions",
-          "description": "The set of selectable options."
-        }
-      },
-      "required": [
-        "currentValue",
-        "options"
-      ],
-      "description": "A single-value selector (dropdown) session configuration option payload."
-    },
-    "SessionConfigBoolean": {
-      "type": "object",
-      "properties": {
-        "currentValue": {
-          "type": "boolean",
-          "description": "The current value of the boolean option."
-        }
-      },
-      "required": [
-        "currentValue"
-      ],
-      "description": "A boolean on/off toggle session configuration option payload."
-    },
-    "RunningTurn": {
-      "type": "object",
-      "properties": {
-        "sessionId": {
-          "$ref": "#/$defs/SessionId",
-          "description": "The session it runs in: the root or a subagent session."
-        },
-        "startedAt": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "origin": {
-          "$ref": "#/$defs/TurnOrigin"
-        }
-      },
-      "required": [
-        "sessionId",
-        "startedAt",
-        "origin"
-      ],
-      "description": "A turn running now."
-    },
-    "TurnOrigin": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "client": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "id": {
-                  "type": "string"
-                },
-                "device": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "name",
-                "id"
-              ]
-            }
-          },
-          "required": [
-            "client"
-          ],
-          "additionalProperties": false,
-          "description": "A client's prompt: its name, and its connection, so it knows its own prompts. A\nremote client's names its device too."
-        },
-        {
-          "type": "object",
-          "properties": {
-            "run": {
-              "type": "object"
-            }
-          },
-          "required": [
-            "run"
-          ],
-          "additionalProperties": false,
-          "description": "A headless run."
-        }
-      ],
-      "description": "Who started a turn."
-    },
-    "QueuedPrompt": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
         "prompt": {
           "type": "array",
           "items": {
@@ -2591,22 +1899,53 @@ expression: schema()
           }
         },
         "origin": {
-          "$ref": "#/$defs/TurnOrigin",
-          "description": "Who added it, which its turn's origin will be."
+          "$ref": "#/$defs/TurnOrigin"
         },
-        "queuedAt": {
+        "startedAt": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it ended, once it has."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it failed."
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The agent's last message in it, as text: its message chunks since the last tool call,\nthought or other message."
         }
       },
       "required": [
-        "id",
         "prompt",
         "origin",
-        "queuedAt"
+        "startedAt",
+        "running"
       ],
-      "description": "A prompt waiting in a session's queue."
+      "description": "A session's latest turn, as its journal records it."
     },
     "ContentBlock": {
       "oneOf": [
@@ -3053,6 +2392,954 @@ expression: schema()
         "resource"
       ],
       "description": "The contents of a resource, embedded into a prompt or tool call result."
+    },
+    "TurnOrigin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "client": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "device": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "client"
+          ],
+          "additionalProperties": false,
+          "description": "A client's prompt: its name, and its connection, so it knows its own prompts. A\nremote client's names its device too."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "run"
+          ],
+          "additionalProperties": false,
+          "description": "A headless run."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "required": [
+                "sessionId"
+              ]
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false,
+          "description": "Another session: the delegated session's starting session, whose agent began the turn\nthrough a Host tool, or the delegated session the Host's message to its starting session\nis about."
+        }
+      ],
+      "description": "Who started a turn."
+    },
+    "PromptResponse": {
+      "type": "object",
+      "properties": {
+        "stopReason": {
+          "$ref": "#/$defs/StopReason",
+          "description": "Indicates why the agent stopped processing the turn."
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "stopReason"
+      ],
+      "description": "Response from processing a user prompt.\n\nSee protocol docs: [Check for Completion](https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion)",
+      "x-side": "agent",
+      "x-method": "session/prompt"
+    },
+    "StopReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "end_turn",
+          "description": "The turn ended successfully."
+        },
+        {
+          "type": "string",
+          "const": "max_tokens",
+          "description": "The turn ended because the agent reached the maximum number of tokens."
+        },
+        {
+          "type": "string",
+          "const": "max_turn_requests",
+          "description": "The turn ended because the agent reached the maximum number of allowed\nagent requests between user turns."
+        },
+        {
+          "type": "string",
+          "const": "refusal",
+          "description": "The turn ended because the agent refused to continue. The user prompt\nand everything that comes after it won't be included in the next\nprompt, so this should be reflected in the UI."
+        },
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "The turn was cancelled by the client via `session/cancel`.\n\nThis stop reason MUST be returned when the client sends a `session/cancel`\nnotification, even if the cancellation causes exceptions in underlying operations.\nAgents should catch these exceptions and return this semantically meaningful\nresponse to confirm successful cancellation."
+        }
+      ],
+      "description": "Reasons why an agent stops processing a prompt turn.\n\nSee protocol docs: [Stop Reasons](https://agentclientprotocol.com/protocol/prompt-turn#stop-reasons)"
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "description": "A number indicating the error type that occurred.\nThis must be an integer as defined in the JSON-RPC specification."
+        },
+        "message": {
+          "type": "string",
+          "description": "A string providing a short description of the error.\nThe message should be limited to a concise single sentence."
+        },
+        "data": {
+          "description": "Optional primitive or structured value that contains additional information about the error.\nThis may include debugging information or context-specific details.",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "description": "JSON-RPC error object.\n\nRepresents an error that occurred during method execution, following the\nJSON-RPC 2.0 error object specification with optional additional data.\n\nSee protocol docs: [JSON-RPC Error Object](https://www.jsonrpc.org/specification#error_object)"
+    },
+    "ErrorCode": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "const": -32700,
+          "description": "**Parse error**: Invalid JSON was received by the server.\nAn error occurred on the server while parsing the JSON text.",
+          "title": "Parse error",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "const": -32600,
+          "description": "**Invalid request**: The JSON sent is not a valid Request object.",
+          "title": "Invalid request",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "const": -32601,
+          "description": "**Method not found**: The method does not exist or is not available.",
+          "title": "Method not found",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "const": -32602,
+          "description": "**Invalid params**: Invalid method parameter(s).",
+          "title": "Invalid params",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "const": -32603,
+          "description": "**Internal error**: Internal JSON-RPC error.\nReserved for implementation-defined server errors.",
+          "title": "Internal error",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "const": -32800,
+          "description": "**Request cancelled**: Execution of the method was aborted either due to a cancellation request from the caller or\nbecause of resource constraints or shutdown.",
+          "title": "Request cancelled",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "const": -32000,
+          "description": "**Authentication required**: Authentication is required before this operation can be performed.",
+          "title": "Authentication required",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "const": -32002,
+          "description": "**Resource not found**: A given resource, such as a file, was not found.",
+          "title": "Resource not found",
+          "format": "int32"
+        },
+        {
+          "type": "integer",
+          "format": "int32",
+          "description": "Other undefined error code."
+        }
+      ],
+      "description": "Predefined error codes for common JSON-RPC and ACP-specific errors.\n\nThese codes follow the JSON-RPC 2.0 specification for standard errors\nand use the reserved range (-32000 to -32099) for protocol-specific errors."
+    },
+    "WatchSessionsRequest": {
+      "type": "object",
+      "description": "`sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a\n[`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the\nconnection ends or the client sends `sessions/unwatch`. Blank sessions never appear."
+    },
+    "WatchSessionsResponse": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionListing"
+          }
+        }
+      },
+      "required": [
+        "sessions"
+      ]
+    },
+    "UnwatchSessionsRequest": {
+      "type": "object",
+      "description": "`sessions/unwatch`: stop what `sessions/watch` sends."
+    },
+    "CreateSessionRequest": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "additionalDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The mode to start in; the agent's configured one when absent."
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Asking, when absent."
+        },
+        "trace": {
+          "type": "boolean",
+          "description": "Have the Host trace the agent's protocol."
+        }
+      },
+      "required": [
+        "agentId",
+        "cwd"
+      ],
+      "description": "`session/create`: start a session and attach to it."
+    },
+    "PermissionPolicy": {
+      "type": "object",
+      "properties": {
+        "approve": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolKind"
+          },
+          "description": "Tool kinds approved without asking anyone."
+        },
+        "otherwise": {
+          "$ref": "#/$defs/Unapproved",
+          "description": "What happens to the rest.",
+          "default": "ask"
+        }
+      },
+      "description": "How a session's permission requests are answered."
+    },
+    "ToolKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "read",
+          "description": "Reading files or data."
+        },
+        {
+          "type": "string",
+          "const": "edit",
+          "description": "Modifying files or content."
+        },
+        {
+          "type": "string",
+          "const": "delete",
+          "description": "Removing files or data."
+        },
+        {
+          "type": "string",
+          "const": "move",
+          "description": "Moving or renaming files."
+        },
+        {
+          "type": "string",
+          "const": "search",
+          "description": "Searching for information."
+        },
+        {
+          "type": "string",
+          "const": "execute",
+          "description": "Running commands or code."
+        },
+        {
+          "type": "string",
+          "const": "think",
+          "description": "Internal reasoning or planning."
+        },
+        {
+          "type": "string",
+          "const": "fetch",
+          "description": "Retrieving external data."
+        },
+        {
+          "type": "string",
+          "const": "switch_mode",
+          "description": "Switching the current session mode."
+        },
+        {
+          "type": "string",
+          "const": "other",
+          "description": "Other tool types (default)."
+        }
+      ],
+      "description": "Categories of tools that can be invoked.\n\nTool kinds help clients choose appropriate icons and optimize how they\ndisplay tool execution progress.\n\nSee protocol docs: [Creating](https://agentclientprotocol.com/protocol/tool-calls#creating)"
+    },
+    "Unapproved": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "ask",
+          "description": "Ask the attached clients, and wait for one if none is attached."
+        },
+        {
+          "type": "string",
+          "const": "reject",
+          "description": "Reject them, and dismiss elicitations: nobody is there to answer."
+        }
+      ],
+      "description": "What happens to permission requests a policy doesn't approve."
+    },
+    "SessionState": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "agent": {
+          "$ref": "#/$defs/SessionAgent"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "additionalDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in a git repository `cwd` is; absent outside one."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/SessionStatus"
+        },
+        "activity": {
+          "$ref": "#/$defs/Activity"
+        },
+        "clients": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Attached now, the receiving client included."
+        },
+        "blank": {
+          "type": "boolean",
+          "description": "Nobody has prompted it yet."
+        },
+        "policy": {
+          "$ref": "#/$defs/PermissionPolicy"
+        },
+        "modes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionModeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configOptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionConfigOption"
+          },
+          "default": []
+        },
+        "turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RunningTurn"
+          },
+          "default": []
+        },
+        "queue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedPrompt"
+          },
+          "description": "Prompts waiting, in order, for the next turns (feature `queue`)."
+        },
+        "queuePaused": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueuePause"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the queue waits rather than start the next turn; absent while it runs."
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PendingRequest"
+          },
+          "default": []
+        },
+        "subagents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionId"
+          },
+          "description": "Subagent sessions so far.",
+          "default": []
+        },
+        "journal": {
+          "$ref": "#/$defs/JournalHead"
+        },
+        "notices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Things worth telling the user, such as skipped MCP servers.",
+          "default": []
+        },
+        "trace": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where the Host writes this session's protocol trace, when asked to."
+        },
+        "update": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A newer version of the agent than the session runs, once the Host has found one."
+        },
+        "startedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session whose agent started it, for a delegated session."
+        }
+      },
+      "required": [
+        "sessionId",
+        "agent",
+        "cwd",
+        "state",
+        "activity",
+        "clients",
+        "blank",
+        "policy",
+        "journal"
+      ],
+      "description": "An open session as a client attached to it sees it; notifications keep it up to date."
+    },
+    "SessionAgent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "initialize": {
+          "$ref": "#/$defs/InitializeResponse",
+          "description": "What the agent said about itself: capabilities, prompt capabilities, sign-in."
+        },
+        "release": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRelease"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The version the Host launched, for presets and registry agents."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "initialize"
+      ],
+      "description": "The agent a session runs with."
+    },
+    "AgentRelease": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "As people know it: the preset's package, or the registry agent's name."
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "description": "A version of an agent the Host launches and can update: a preset's npm package, or an ACP\nregistry agent."
+    },
+    "SessionModeState": {
+      "type": "object",
+      "properties": {
+        "currentModeId": {
+          "$ref": "#/$defs/SessionModeId",
+          "description": "The current mode the Agent is in."
+        },
+        "availableModes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionMode"
+          },
+          "description": "The set of modes that the Agent can operate in",
+          "x-deserialize-default-on-error": true,
+          "x-deserialize-skip-invalid-items": true
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "currentModeId",
+        "availableModes"
+      ],
+      "description": "The set of modes and the one currently active."
+    },
+    "SessionModeId": {
+      "type": "string",
+      "description": "Unique identifier for a Session Mode."
+    },
+    "SessionMode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SessionModeId",
+          "description": "Stable identifier used to refer to this protocol object in later messages."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name shown for this protocol object."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional human-readable details shown with this protocol object.",
+          "x-deserialize-default-on-error": true
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "description": "A mode the agent can operate in.\n\nSee protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/session-modes)"
+    },
+    "SessionConfigOption": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SessionConfigId",
+          "description": "Unique identifier for the configuration option."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable label for the option."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional description for the Client to display to the user.",
+          "x-deserialize-default-on-error": true
+        },
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionConfigOptionCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional semantic category for this option (UX only).",
+          "x-deserialize-default-on-error": true
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SessionConfigSelect",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "select"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Single-value selector (dropdown)."
+        },
+        {
+          "$ref": "#/$defs/SessionConfigBoolean",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "boolean"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Boolean on/off toggle."
+        }
+      ],
+      "description": "A session configuration option selector and its current state.",
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "SessionConfigId": {
+      "type": "string",
+      "description": "Unique identifier for a session configuration option."
+    },
+    "SessionConfigOptionCategory": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "mode",
+          "description": "Session mode selector."
+        },
+        {
+          "type": "string",
+          "const": "model",
+          "description": "Model selector."
+        },
+        {
+          "type": "string",
+          "const": "model_config",
+          "description": "Model-related configuration parameter."
+        },
+        {
+          "type": "string",
+          "const": "thought_level",
+          "description": "Thought/reasoning level selector."
+        },
+        {
+          "type": "string",
+          "description": "Unknown / uncategorized selector."
+        }
+      ],
+      "description": "Semantic category for a session configuration option.\n\nThis is intended to help Clients distinguish broadly common selectors (e.g. model selector vs\nsession mode selector vs thought/reasoning level) for UX purposes (keyboard shortcuts, icons,\nplacement). It MUST NOT be required for correctness. Clients MUST handle missing or unknown\ncategories gracefully.\n\nCategory names beginning with `_` are free for custom use, like other ACP extension methods.\nCategory names that do not begin with `_` are reserved for the ACP spec."
+    },
+    "SessionConfigValueId": {
+      "type": "string",
+      "description": "Unique identifier for a session configuration option value."
+    },
+    "SessionConfigSelectOptions": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionConfigSelectOption"
+          },
+          "description": "A flat list of options with no grouping."
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionConfigSelectGroup"
+          },
+          "description": "A list of options grouped under headers."
+        }
+      ],
+      "description": "Possible values for a session configuration option."
+    },
+    "SessionConfigSelectOption": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/SessionConfigValueId",
+          "description": "Unique identifier for this option value."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable label for this option value."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional description for this option value.",
+          "x-deserialize-default-on-error": true
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "value",
+        "name"
+      ],
+      "description": "A possible value for a session configuration option."
+    },
+    "SessionConfigSelectGroup": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/SessionConfigGroupId",
+          "description": "Unique identifier for this group."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable label for this group."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionConfigSelectOption"
+          },
+          "description": "The set of option values in this group.",
+          "x-deserialize-default-on-error": true,
+          "x-deserialize-skip-invalid-items": true
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "group",
+        "name",
+        "options"
+      ],
+      "description": "A group of possible values for a session configuration option."
+    },
+    "SessionConfigGroupId": {
+      "type": "string",
+      "description": "Unique identifier for a session configuration option value group."
+    },
+    "SessionConfigSelect": {
+      "type": "object",
+      "properties": {
+        "currentValue": {
+          "$ref": "#/$defs/SessionConfigValueId",
+          "description": "The currently selected value."
+        },
+        "options": {
+          "$ref": "#/$defs/SessionConfigSelectOptions",
+          "description": "The set of selectable options."
+        }
+      },
+      "required": [
+        "currentValue",
+        "options"
+      ],
+      "description": "A single-value selector (dropdown) session configuration option payload."
+    },
+    "SessionConfigBoolean": {
+      "type": "object",
+      "properties": {
+        "currentValue": {
+          "type": "boolean",
+          "description": "The current value of the boolean option."
+        }
+      },
+      "required": [
+        "currentValue"
+      ],
+      "description": "A boolean on/off toggle session configuration option payload."
+    },
+    "RunningTurn": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session it runs in: the root or a subagent session."
+        },
+        "startedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "origin": {
+          "$ref": "#/$defs/TurnOrigin"
+        }
+      },
+      "required": [
+        "sessionId",
+        "startedAt",
+        "origin"
+      ],
+      "description": "A turn running now."
+    },
+    "QueuedPrompt": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/TurnOrigin",
+          "description": "Who added it, which its turn's origin will be."
+        },
+        "queuedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "origin",
+        "queuedAt"
+      ],
+      "description": "A prompt waiting in a session's queue."
     },
     "QueuePause": {
       "oneOf": [
@@ -4704,6 +4991,17 @@ expression: schema()
             }
           ],
           "description": "A newer version of the agent than the session runs, once the Host has found one."
+        },
+        "startedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session whose agent started it, for a delegated session."
         },
         "replay": {
           "$ref": "#/$defs/Replay"
@@ -7217,36 +7515,6 @@ expression: schema()
       },
       "description": "Foreground work is in progress."
     },
-    "StopReason": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "end_turn",
-          "description": "The turn ended successfully."
-        },
-        {
-          "type": "string",
-          "const": "max_tokens",
-          "description": "The turn ended because the agent reached the maximum number of tokens."
-        },
-        {
-          "type": "string",
-          "const": "max_turn_requests",
-          "description": "The turn ended because the agent reached the maximum number of allowed\nagent requests between user turns."
-        },
-        {
-          "type": "string",
-          "const": "refusal",
-          "description": "The turn ended because the agent refused to continue. The user prompt\nand everything that comes after it won't be included in the next\nprompt, so this should be reflected in the UI."
-        },
-        {
-          "type": "string",
-          "const": "cancelled",
-          "description": "The turn was cancelled by the client via `session/cancel`.\n\nThis stop reason MUST be returned when the client sends a `session/cancel`\nnotification, even if the cancellation causes exceptions in underlying operations.\nAgents should catch these exceptions and return this semantically meaningful\nresponse to confirm successful cancellation."
-        }
-      ],
-      "description": "Reasons why an agent stops processing a prompt turn.\n\nSee protocol docs: [Stop Reasons](https://agentclientprotocol.com/protocol/prompt-turn#stop-reasons)"
-    },
     "IdleStateUpdate": {
       "type": "object",
       "properties": {
@@ -7474,118 +7742,6 @@ expression: schema()
         "content"
       ],
       "description": "**UNSTABLE**\n\nThis capability is not part of the spec yet, and may be removed or changed at any point.\n\nA streamed content block of an inter-session message."
-    },
-    "PromptResponse": {
-      "type": "object",
-      "properties": {
-        "stopReason": {
-          "$ref": "#/$defs/StopReason",
-          "description": "Indicates why the agent stopped processing the turn."
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "stopReason"
-      ],
-      "description": "Response from processing a user prompt.\n\nSee protocol docs: [Check for Completion](https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion)",
-      "x-side": "agent",
-      "x-method": "session/prompt"
-    },
-    "Error": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "$ref": "#/$defs/ErrorCode",
-          "description": "A number indicating the error type that occurred.\nThis must be an integer as defined in the JSON-RPC specification."
-        },
-        "message": {
-          "type": "string",
-          "description": "A string providing a short description of the error.\nThe message should be limited to a concise single sentence."
-        },
-        "data": {
-          "description": "Optional primitive or structured value that contains additional information about the error.\nThis may include debugging information or context-specific details.",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "code",
-        "message"
-      ],
-      "description": "JSON-RPC error object.\n\nRepresents an error that occurred during method execution, following the\nJSON-RPC 2.0 error object specification with optional additional data.\n\nSee protocol docs: [JSON-RPC Error Object](https://www.jsonrpc.org/specification#error_object)"
-    },
-    "ErrorCode": {
-      "anyOf": [
-        {
-          "type": "integer",
-          "const": -32700,
-          "description": "**Parse error**: Invalid JSON was received by the server.\nAn error occurred on the server while parsing the JSON text.",
-          "title": "Parse error",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "const": -32600,
-          "description": "**Invalid request**: The JSON sent is not a valid Request object.",
-          "title": "Invalid request",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "const": -32601,
-          "description": "**Method not found**: The method does not exist or is not available.",
-          "title": "Method not found",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "const": -32602,
-          "description": "**Invalid params**: Invalid method parameter(s).",
-          "title": "Invalid params",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "const": -32603,
-          "description": "**Internal error**: Internal JSON-RPC error.\nReserved for implementation-defined server errors.",
-          "title": "Internal error",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "const": -32800,
-          "description": "**Request cancelled**: Execution of the method was aborted either due to a cancellation request from the caller or\nbecause of resource constraints or shutdown.",
-          "title": "Request cancelled",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "const": -32000,
-          "description": "**Authentication required**: Authentication is required before this operation can be performed.",
-          "title": "Authentication required",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "const": -32002,
-          "description": "**Resource not found**: A given resource, such as a file, was not found.",
-          "title": "Resource not found",
-          "format": "int32"
-        },
-        {
-          "type": "integer",
-          "format": "int32",
-          "description": "Other undefined error code."
-        }
-      ],
-      "description": "Predefined error codes for common JSON-RPC and ACP-specific errors.\n\nThese codes follow the JSON-RPC 2.0 specification for standard errors\nand use the reserved range (-32000 to -32099) for protocol-specific errors."
     },
     "TerminalExitStatus": {
       "type": "object",

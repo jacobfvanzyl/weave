@@ -110,6 +110,140 @@ export type AuthMethodId = string;
  */
 export type FileKind = ("directory" | "file") | "other";
 /**
+ * Content blocks represent displayable information in the Agent Client Protocol.
+ *
+ * They provide a structured way to handle various types of user-facing content—whether
+ * it's text from language models, images for analysis, or embedded resources for context.
+ *
+ * Content blocks appear in:
+ * - User prompts sent via `session/prompt`
+ * - Language model output streamed through `session/update` notifications
+ * - Progress updates and results from tool calls
+ *
+ * This structure is compatible with the Model Context Protocol (MCP), enabling
+ * agents to seamlessly forward content from MCP tool outputs without transformation.
+ *
+ * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ContentBlock".
+ */
+export type ContentBlock =
+  | (TextContent & {
+      type: "text";
+    })
+  | (ImageContent & {
+      type: "image";
+    })
+  | (AudioContent & {
+      type: "audio";
+    })
+  | (ResourceLink & {
+      type: "resource_link";
+    })
+  | (EmbeddedResource & {
+      type: "resource";
+    });
+/**
+ * The sender or recipient of messages and data in a conversation.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Role".
+ */
+export type Role = "assistant" | "user";
+/**
+ * Who started a turn.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TurnOrigin".
+ */
+export type TurnOrigin =
+  | {
+      client: {
+        name: string;
+        id: string;
+        device?: string | null;
+      };
+    }
+  | {
+      run: {};
+    }
+  | {
+      session: {
+        sessionId: SessionId;
+      };
+    };
+/**
+ * **Parse error**: Invalid JSON was received by the server.
+ * An error occurred on the server while parsing the JSON text.
+ */
+export type ParseError = -32700;
+/**
+ * **Invalid request**: The JSON sent is not a valid Request object.
+ */
+export type InvalidRequest = -32600;
+/**
+ * **Method not found**: The method does not exist or is not available.
+ */
+export type MethodNotFound = -32601;
+/**
+ * **Invalid params**: Invalid method parameter(s).
+ */
+export type InvalidParams = -32602;
+/**
+ * **Internal error**: Internal JSON-RPC error.
+ * Reserved for implementation-defined server errors.
+ */
+export type InternalError = -32603;
+/**
+ * **Request cancelled**: Execution of the method was aborted either due to a cancellation request from the caller or
+ * because of resource constraints or shutdown.
+ */
+export type RequestCancelled = -32800;
+/**
+ * **Authentication required**: Authentication is required before this operation can be performed.
+ */
+export type AuthenticationRequired = -32000;
+/**
+ * **Resource not found**: A given resource, such as a file, was not found.
+ */
+export type ResourceNotFound = -32002;
+/**
+ * Resource content that can be embedded in a message.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "EmbeddedResourceResource".
+ */
+export type EmbeddedResourceResource = TextResourceContents | BlobResourceContents;
+/**
+ * Reasons why an agent stops processing a prompt turn.
+ *
+ * See protocol docs: [Stop Reasons](https://agentclientprotocol.com/protocol/prompt-turn#stop-reasons)
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "StopReason".
+ */
+export type StopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
+/**
+ * Predefined error codes for common JSON-RPC and ACP-specific errors.
+ *
+ * These codes follow the JSON-RPC 2.0 specification for standard errors
+ * and use the reserved range (-32000 to -32099) for protocol-specific errors.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ErrorCode".
+ */
+export type ErrorCode =
+  | ParseError
+  | InvalidRequest
+  | MethodNotFound
+  | InvalidParams
+  | InternalError
+  | RequestCancelled
+  | AuthenticationRequired
+  | ResourceNotFound
+  | number;
+/**
  * Categories of tools that can be invoked.
  *
  * Tool kinds help clients choose appropriate icons and optimize how they
@@ -185,65 +319,6 @@ export type SessionConfigOption1 =
   | (SessionConfigBoolean & {
       type: "boolean";
     });
-/**
- * Who started a turn.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "TurnOrigin".
- */
-export type TurnOrigin =
-  | {
-      client: {
-        name: string;
-        id: string;
-        device?: string | null;
-      };
-    }
-  | {
-      run: {};
-    };
-/**
- * Content blocks represent displayable information in the Agent Client Protocol.
- *
- * They provide a structured way to handle various types of user-facing content—whether
- * it's text from language models, images for analysis, or embedded resources for context.
- *
- * Content blocks appear in:
- * - User prompts sent via `session/prompt`
- * - Language model output streamed through `session/update` notifications
- * - Progress updates and results from tool calls
- *
- * This structure is compatible with the Model Context Protocol (MCP), enabling
- * agents to seamlessly forward content from MCP tool outputs without transformation.
- *
- * See protocol docs: [Content](https://agentclientprotocol.com/protocol/content)
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ContentBlock".
- */
-export type ContentBlock =
-  | (TextContent & {
-      type: "text";
-    })
-  | (ImageContent & {
-      type: "image";
-    })
-  | (AudioContent & {
-      type: "audio";
-    })
-  | (ResourceLink & {
-      type: "resource_link";
-    })
-  | (EmbeddedResource & {
-      type: "resource";
-    });
-/**
- * The sender or recipient of messages and data in a conversation.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "Role".
- */
-export type Role = "assistant" | "user";
 /**
  * Why a queue waits rather than start the next turn.
  *
@@ -475,13 +550,6 @@ export type SessionConfigSelectOptions = SessionConfigSelectOption[] | SessionCo
  * via the `definition` "SessionConfigGroupId".
  */
 export type SessionConfigGroupId = string;
-/**
- * Resource content that can be embedded in a message.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "EmbeddedResourceResource".
- */
-export type EmbeddedResourceResource = TextResourceContents | BlobResourceContents;
 /**
  * Typed identifier used for terminal values on the wire.
  *
@@ -792,50 +860,6 @@ export type StateUpdate =
       [k: string]: unknown;
     };
 /**
- * Reasons why an agent stops processing a prompt turn.
- *
- * See protocol docs: [Stop Reasons](https://agentclientprotocol.com/protocol/prompt-turn#stop-reasons)
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "StopReason".
- */
-export type StopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
-/**
- * **Parse error**: Invalid JSON was received by the server.
- * An error occurred on the server while parsing the JSON text.
- */
-export type ParseError = -32700;
-/**
- * **Invalid request**: The JSON sent is not a valid Request object.
- */
-export type InvalidRequest = -32600;
-/**
- * **Method not found**: The method does not exist or is not available.
- */
-export type MethodNotFound = -32601;
-/**
- * **Invalid params**: Invalid method parameter(s).
- */
-export type InvalidParams = -32602;
-/**
- * **Internal error**: Internal JSON-RPC error.
- * Reserved for implementation-defined server errors.
- */
-export type InternalError = -32603;
-/**
- * **Request cancelled**: Execution of the method was aborted either due to a cancellation request from the caller or
- * because of resource constraints or shutdown.
- */
-export type RequestCancelled = -32800;
-/**
- * **Authentication required**: Authentication is required before this operation can be performed.
- */
-export type AuthenticationRequired = -32000;
-/**
- * **Resource not found**: A given resource, such as a file, was not found.
- */
-export type ResourceNotFound = -32002;
-/**
  * Different types of updates that can be sent during session processing.
  *
  * These updates provide real-time feedback about the agent's progress.
@@ -937,25 +961,6 @@ export type CompactionId = string;
  * via the `definition` "CompactionStatus".
  */
 export type CompactionStatus = "in_progress" | "completed" | "failed" | "cancelled" | string;
-/**
- * Predefined error codes for common JSON-RPC and ACP-specific errors.
- *
- * These codes follow the JSON-RPC 2.0 specification for standard errors
- * and use the reserved range (-32000 to -32099) for protocol-specific errors.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ErrorCode".
- */
-export type ErrorCode =
-  | ParseError
-  | InvalidRequest
-  | MethodNotFound
-  | InvalidParams
-  | InternalError
-  | RequestCancelled
-  | AuthenticationRequired
-  | ResourceNotFound
-  | number;
 /**
  * How a pending request stopped waiting.
  *
@@ -1198,6 +1203,10 @@ export interface SessionListing {
    * was open; absent outside one, and for sessions the Host has no record of.
    */
   git?: GitLocation | null;
+  /**
+   * The session whose agent started it, for a delegated session.
+   */
+  startedBy?: SessionId | null;
 }
 /**
  * As ACP lists it: id, directory, title, last update.
@@ -2119,6 +2128,418 @@ export interface ListSessionsResponse {
   nextCursor?: string | null;
 }
 /**
+ * `sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists
+ * it, with its latest turn, read without opening it or attaching.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "GetSessionRequest".
+ */
+export interface GetSessionRequest {
+  sessionId: SessionId;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "GetSessionResponse".
+ */
+export interface GetSessionResponse {
+  session: SessionListing;
+  latestTurn?: LatestTurn | null;
+}
+/**
+ * A session's latest turn, as its journal records it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LatestTurn".
+ */
+export interface LatestTurn {
+  prompt: ContentBlock[];
+  origin: TurnOrigin;
+  startedAt: number;
+  running: boolean;
+  /**
+   * How it ended, once it has.
+   */
+  response?: PromptResponse | null;
+  /**
+   * Why it failed.
+   */
+  error?: Error | null;
+  /**
+   * The agent's last message in it, as text: its message chunks since the last tool call,
+   * thought or other message.
+   */
+  message?: string | null;
+}
+/**
+ * Text provided to or from an LLM.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TextContent".
+ */
+export interface TextContent {
+  /**
+   * Optional annotations that help clients decide how to display or route this content.
+   */
+  annotations?: Annotations | null;
+  /**
+   * Text payload carried by this content block.
+   */
+  text: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Optional annotations for the client. The client can use annotations to inform how objects are used or displayed
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Annotations".
+ */
+export interface Annotations {
+  /**
+   * Intended recipients for this content, such as the user or assistant.
+   */
+  audience?: Role[] | null;
+  /**
+   * Timestamp indicating when the underlying resource was last modified.
+   */
+  lastModified?: string | null;
+  /**
+   * Relative importance of this content when clients choose what to surface.
+   */
+  priority?: number | null;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * An image provided to or from an LLM.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ImageContent".
+ */
+export interface ImageContent {
+  /**
+   * Optional annotations that help clients decide how to display or route this content.
+   */
+  annotations?: Annotations | null;
+  /**
+   * Base64-encoded media payload.
+   */
+  data: string;
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType: string;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri?: string | null;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Audio provided to or from an LLM.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AudioContent".
+ */
+export interface AudioContent {
+  /**
+   * Optional annotations that help clients decide how to display or route this content.
+   */
+  annotations?: Annotations | null;
+  /**
+   * Base64-encoded media payload.
+   */
+  data: string;
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * A resource that the server is capable of reading, included in a prompt or tool call result.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ResourceLink".
+ */
+export interface ResourceLink {
+  /**
+   * Optional annotations that help clients decide how to display or route this content.
+   */
+  annotations?: Annotations | null;
+  /**
+   * Optional human-readable details shown with this protocol object.
+   */
+  description?: string | null;
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType?: string | null;
+  /**
+   * Human-readable name shown for this protocol object.
+   */
+  name: string;
+  /**
+   * Optional size of the linked resource in bytes, if known.
+   */
+  size?: number | null;
+  /**
+   * Optional display title for end-user UI.
+   */
+  title?: string | null;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * The contents of a resource, embedded into a prompt or tool call result.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "EmbeddedResource".
+ */
+export interface EmbeddedResource {
+  /**
+   * Optional annotations that help clients decide how to display or route this content.
+   */
+  annotations?: Annotations | null;
+  /**
+   * Embedded resource payload, either text or binary data.
+   */
+  resource: TextResourceContents | BlobResourceContents;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Text resource contents embedded directly in the message.
+ */
+export interface TextResourceContents {
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType?: string | null;
+  /**
+   * Text payload carried by this content block.
+   */
+  text: string;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Binary resource contents embedded directly in the message.
+ */
+export interface BlobResourceContents {
+  /**
+   * Base64-encoded bytes for a binary resource payload.
+   */
+  blob: string;
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType?: string | null;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Response from processing a user prompt.
+ *
+ * See protocol docs: [Check for Completion](https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion)
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "PromptResponse".
+ */
+export interface PromptResponse {
+  /**
+   * Indicates why the agent stopped processing the turn.
+   */
+  stopReason: "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * JSON-RPC error object.
+ *
+ * Represents an error that occurred during method execution, following the
+ * JSON-RPC 2.0 error object specification with optional additional data.
+ *
+ * See protocol docs: [JSON-RPC Error Object](https://www.jsonrpc.org/specification#error_object)
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Error".
+ */
+export interface Error {
+  /**
+   * A number indicating the error type that occurred.
+   * This must be an integer as defined in the JSON-RPC specification.
+   */
+  code:
+    | ParseError
+    | InvalidRequest
+    | MethodNotFound
+    | InvalidParams
+    | InternalError
+    | RequestCancelled
+    | AuthenticationRequired
+    | ResourceNotFound
+    | number;
+  /**
+   * A string providing a short description of the error.
+   * The message should be limited to a concise single sentence.
+   */
+  message: string;
+  /**
+   * Optional primitive or structured value that contains additional information about the error.
+   * This may include debugging information or context-specific details.
+   */
+  data?: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * Text-based resource contents.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TextResourceContents".
+ */
+export interface TextResourceContents1 {
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType?: string | null;
+  /**
+   * Text payload carried by this content block.
+   */
+  text: string;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
+ * Binary resource contents.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BlobResourceContents".
+ */
+export interface BlobResourceContents1 {
+  /**
+   * Base64-encoded bytes for a binary resource payload.
+   */
+  blob: string;
+  /**
+   * MIME type describing the encoded media payload.
+   */
+  mimeType?: string | null;
+  /**
+   * URI associated with this resource or media payload.
+   */
+  uri: string;
+  /**
+   * The _meta property is reserved by ACP to allow clients and agents to attach additional
+   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
+   * these keys.
+   *
+   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
+   */
+  _meta?: {
+    [k: string]: unknown;
+  } | null;
+}
+/**
  * `sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a
  * [`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the
  * connection ends or the client sends `sessions/unwatch`. Blank sessions never appear.
@@ -2236,6 +2657,10 @@ export interface SessionState {
    * A newer version of the agent than the session runs, once the Host has found one.
    */
   update?: AgentUpdate | null;
+  /**
+   * The session whose agent started it, for a delegated session.
+   */
+  startedBy?: SessionId | null;
 }
 /**
  * The agent a session runs with.
@@ -2493,254 +2918,13 @@ export interface QueuedPrompt {
       }
     | {
         run: {};
+      }
+    | {
+        session: {
+          sessionId: SessionId;
+        };
       };
   queuedAt: number;
-}
-/**
- * Text provided to or from an LLM.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "TextContent".
- */
-export interface TextContent {
-  /**
-   * Optional annotations that help clients decide how to display or route this content.
-   */
-  annotations?: Annotations | null;
-  /**
-   * Text payload carried by this content block.
-   */
-  text: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Optional annotations for the client. The client can use annotations to inform how objects are used or displayed
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "Annotations".
- */
-export interface Annotations {
-  /**
-   * Intended recipients for this content, such as the user or assistant.
-   */
-  audience?: Role[] | null;
-  /**
-   * Timestamp indicating when the underlying resource was last modified.
-   */
-  lastModified?: string | null;
-  /**
-   * Relative importance of this content when clients choose what to surface.
-   */
-  priority?: number | null;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * An image provided to or from an LLM.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ImageContent".
- */
-export interface ImageContent {
-  /**
-   * Optional annotations that help clients decide how to display or route this content.
-   */
-  annotations?: Annotations | null;
-  /**
-   * Base64-encoded media payload.
-   */
-  data: string;
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType: string;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri?: string | null;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Audio provided to or from an LLM.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "AudioContent".
- */
-export interface AudioContent {
-  /**
-   * Optional annotations that help clients decide how to display or route this content.
-   */
-  annotations?: Annotations | null;
-  /**
-   * Base64-encoded media payload.
-   */
-  data: string;
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * A resource that the server is capable of reading, included in a prompt or tool call result.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ResourceLink".
- */
-export interface ResourceLink {
-  /**
-   * Optional annotations that help clients decide how to display or route this content.
-   */
-  annotations?: Annotations | null;
-  /**
-   * Optional human-readable details shown with this protocol object.
-   */
-  description?: string | null;
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType?: string | null;
-  /**
-   * Human-readable name shown for this protocol object.
-   */
-  name: string;
-  /**
-   * Optional size of the linked resource in bytes, if known.
-   */
-  size?: number | null;
-  /**
-   * Optional display title for end-user UI.
-   */
-  title?: string | null;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * The contents of a resource, embedded into a prompt or tool call result.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "EmbeddedResource".
- */
-export interface EmbeddedResource {
-  /**
-   * Optional annotations that help clients decide how to display or route this content.
-   */
-  annotations?: Annotations | null;
-  /**
-   * Embedded resource payload, either text or binary data.
-   */
-  resource: TextResourceContents | BlobResourceContents;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Text resource contents embedded directly in the message.
- */
-export interface TextResourceContents {
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType?: string | null;
-  /**
-   * Text payload carried by this content block.
-   */
-  text: string;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Binary resource contents embedded directly in the message.
- */
-export interface BlobResourceContents {
-  /**
-   * Base64-encoded bytes for a binary resource payload.
-   */
-  blob: string;
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType?: string | null;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
 }
 /**
  * Request for user permission to execute a tool call.
@@ -3540,66 +3724,6 @@ export interface AgentUpdate {
   latest: string;
 }
 /**
- * Text-based resource contents.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "TextResourceContents".
- */
-export interface TextResourceContents1 {
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType?: string | null;
-  /**
-   * Text payload carried by this content block.
-   */
-  text: string;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * Binary resource contents.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "BlobResourceContents".
- */
-export interface BlobResourceContents1 {
-  /**
-   * Base64-encoded bytes for a binary resource payload.
-   */
-  blob: string;
-  /**
-   * MIME type describing the encoded media payload.
-   */
-  mimeType?: string | null;
-  /**
-   * URI associated with this resource or media payload.
-   */
-  uri: string;
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
  * An update to an existing tool call.
  *
  * Used to report progress and results as tools execute. All fields except
@@ -3870,6 +3994,10 @@ export interface AttachSessionResponse {
    * A newer version of the agent than the session runs, once the Host has found one.
    */
   update?: AgentUpdate | null;
+  /**
+   * The session whose agent started it, for a delegated session.
+   */
+  startedBy?: SessionId | null;
   replay: Replay;
 }
 /**
@@ -5381,71 +5509,6 @@ export interface SessionMessageChunk {
   } | null;
 }
 /**
- * Response from processing a user prompt.
- *
- * See protocol docs: [Check for Completion](https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion)
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "PromptResponse".
- */
-export interface PromptResponse {
-  /**
-   * Reasons why an agent stops processing a prompt turn.
-   *
-   * See protocol docs: [Stop Reasons](https://agentclientprotocol.com/protocol/prompt-turn#stop-reasons)
-   */
-  stopReason: "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
-  /**
-   * The _meta property is reserved by ACP to allow clients and agents to attach additional
-   * metadata to their interactions. Implementations MUST NOT make assumptions about values at
-   * these keys.
-   *
-   * See protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)
-   */
-  _meta?: {
-    [k: string]: unknown;
-  } | null;
-}
-/**
- * JSON-RPC error object.
- *
- * Represents an error that occurred during method execution, following the
- * JSON-RPC 2.0 error object specification with optional additional data.
- *
- * See protocol docs: [JSON-RPC Error Object](https://www.jsonrpc.org/specification#error_object)
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "Error".
- */
-export interface Error {
-  /**
-   * A number indicating the error type that occurred.
-   * This must be an integer as defined in the JSON-RPC specification.
-   */
-  code:
-    | ParseError
-    | InvalidRequest
-    | MethodNotFound
-    | InvalidParams
-    | InternalError
-    | RequestCancelled
-    | AuthenticationRequired
-    | ResourceNotFound
-    | number;
-  /**
-   * A string providing a short description of the error.
-   * The message should be limited to a concise single sentence.
-   */
-  message: string;
-  /**
-   * Optional primitive or structured value that contains additional information about the error.
-   * This may include debugging information or context-specific details.
-   */
-  data?: {
-    [k: string]: unknown;
-  };
-}
-/**
  * Exit status of a terminal command.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -5663,6 +5726,7 @@ export const HOST_PROTOCOL = {
     "rename": "session/rename",
     "worktrees": "worktrees",
     "queue": "queue",
+    "getSession": "sessions/get",
     "requestKeys": "requestKeys"
   },
   "files": {
@@ -5678,7 +5742,13 @@ export const HOST_PROTOCOL = {
     "clipboardWrite": "clipboard_write"
   },
   "hostTools": {
-    "renameSession": "rename_session"
+    "renameSession": "rename_session",
+    "listSessions": "list_sessions",
+    "readSession": "read_session",
+    "startSession": "start_session",
+    "promptSession": "prompt_session",
+    "steerSession": "steer_session",
+    "cancelSessionTurn": "cancel_session_turn"
   }
 } as const;
 
@@ -5699,6 +5769,7 @@ export interface HostRequests {
   "devices/revoke": { params: RevokeDeviceRequest; result: Empty };
   "files/list": { params: ListFilesRequest; result: ListFilesResponse };
   "sessions/list": { params: ListSessionsRequest; result: ListSessionsResponse };
+  "sessions/get": { params: GetSessionRequest; result: GetSessionResponse };
   "sessions/watch": { params: WatchSessionsRequest; result: WatchSessionsResponse };
   "sessions/unwatch": { params: UnwatchSessionsRequest; result: Empty };
   "session/create": { params: CreateSessionRequest; result: SessionState };

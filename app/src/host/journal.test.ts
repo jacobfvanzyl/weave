@@ -63,6 +63,19 @@ describe('transcriptEvents', () => {
     expect(transcript.turn.status).toBe('stopped');
   });
 
+  it('names another session as where a prompt came from, and shows a queued one of its own', () => {
+    const events = [
+      event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'Port the tests' }], origin: { session: { sessionId: 's-0' } } }),
+      event(2, { kind: 'turnEnded', sessionId: 's-1', response: { stopReason: 'end_turn' } }),
+      event(3, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'Queued here' }], origin: { client: { name: 'weave-app', id: 'c2' } }, queuedId: 'q-1' }),
+    ];
+    const transcript = events.flatMap((notification) => transcriptEvents(notification, live)).reduce(reduceAcpEvent, createTranscript('s-1'));
+    expect(transcript.entries.map((entry) => entry.kind === 'message' ? [entry.role, entry.origin ?? null] : entry.kind)).toEqual([
+      ['user', 'another session'],
+      ['user', null],
+    ]);
+  });
+
   it('changes no turn state for history', () => {
     const started = event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'First' }], origin: { run: {} } });
     expect(transcriptEvents(started, replayed).map(({ type }) => type)).toEqual(['prompt']);

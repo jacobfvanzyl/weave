@@ -98,6 +98,27 @@ impl PermissionPolicy {
     pub fn dismisses_elicitations(&self) -> bool {
         self.otherwise == Unapproved::Reject
     }
+
+    /// This policy, approving nothing `ceiling` doesn't, and rejecting the rest if either
+    /// rejects it: what a delegated session gets from the policy asked for and the policy of the
+    /// session that starts it (ADR 0020).
+    pub fn within(&self, ceiling: &PermissionPolicy) -> PermissionPolicy {
+        PermissionPolicy {
+            approve: self
+                .approve
+                .iter()
+                .filter(|kind| ceiling.approve.contains(kind))
+                .copied()
+                .collect(),
+            otherwise: if self.otherwise == Unapproved::Reject
+                || ceiling.otherwise == Unapproved::Reject
+            {
+                Unapproved::Reject
+            } else {
+                Unapproved::Ask
+            },
+        }
+    }
 }
 
 /// The first option of the earliest kind in `preference`.
@@ -157,6 +178,36 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn a_policy_within_another_approves_and_asks_no_more_than_it() {
+        let ceiling = PermissionPolicy {
+            approve: vec![ToolKind::Read, ToolKind::Search],
+            otherwise: Unapproved::Ask,
+        };
+        let asked = PermissionPolicy::headless(vec![ToolKind::Read, ToolKind::Execute]);
+        assert_eq!(
+            asked.within(&ceiling),
+            PermissionPolicy::headless(vec![ToolKind::Read])
+        );
+        let asking = PermissionPolicy {
+            approve: vec![ToolKind::Search, ToolKind::Edit],
+            otherwise: Unapproved::Ask,
+        };
+        assert_eq!(
+            asking.within(&ceiling),
+            PermissionPolicy {
+                approve: vec![ToolKind::Search],
+                otherwise: Unapproved::Ask,
+            }
+        );
+        // Under a headless ceiling nobody is there to ask.
+        assert_eq!(
+            asking.within(&PermissionPolicy::headless(vec![ToolKind::Edit])),
+            PermissionPolicy::headless(vec![ToolKind::Edit])
+        );
+        assert_eq!(ceiling.within(&ceiling), ceiling);
+    }
 
     fn request() -> RequestPermissionRequest {
         RequestPermissionRequest::new(

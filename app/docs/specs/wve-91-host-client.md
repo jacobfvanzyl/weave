@@ -198,7 +198,8 @@ Every `session/event` kind shows, the same whether it arrives live or replayed
   goes to that subagent's own transcript; kinds the app doesn't know change nothing.
 - `turnStarted` and `turnSteered`: the prompt as the person's message, marked when it was a
   steer. One from another client or device says where it came from ("From Jaco's iPad", "From
-  the TUI", "From a headless run"); this device's own (its connection, or its paired name)
+  the TUI", "From a headless run", "From another session" for a delegated session's turn or the
+  Host's message about one); this device's own (its connection, or its paired name)
   replaces the message it showed while sending.
 - `turnEnded`: nothing for a turn that finished; otherwise why it didn't ("Turn cancelled",
   "Stopped: the agent reached its token limit", "Turn failed" with the error), as the TUI says.

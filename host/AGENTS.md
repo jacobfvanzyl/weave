@@ -95,10 +95,20 @@ the client that sent the running turn's latest prompt or steer, if it's attached
 tool, which only that client may answer (`not_target`); otherwise a tool error at once. The
 target detaching fails it as one that may have run; the agent cancelling it withdraws it.
 Agents get only text in `content`, since Claude Code gives the model `structuredContent` in
-its place. Host tools (`host_catalog`, chosen by the config's `host_tools`) are answered by
-the Host itself, in `mcp.rs`'s `host_tool`, for the bound session: each is a Host protocol method
-seen from inside the session, through the same session command. The first is `rename_session`,
-which sends `Command::Rename` as `session/rename` does. A rename journals `Entry::Renamed`, and
+its place. Host tools (`host_catalog`, chosen by the config's `host_tools`; ADR 0020) are
+answered by the Host itself, in `host_tools.rs`, for the bound session: each is a Host protocol
+method seen from inside the session, through the same code as the client request (the free
+functions in `client.rs`: `list_sessions`, `get_session`, `run_as`, `add_queued`, `steer_turn`,
+`cancel_turn`), answering with its JSON or a tool error. `start_session` starts a delegated
+session (`session/run` with the `session` turn origin, its journal header's `started_by` naming
+the caller, its policy `PermissionPolicy::within` the caller's); `prompt_session`,
+`steer_session` and `cancel_session_turn` act only on sessions the caller started and theirs
+(`reaches`), `[delegation]` caps depth and running ones, and `read_session` and `list_sessions`
+read any. A delegated session's task tells its caller (`host_tools::tell`) when a turn the caller
+began ends (`ended_text`, with `journal::latest_turn`'s last message) or waits on a person
+(`waiting_text`): a steer into the caller's running turn, or else `queue/add`, taking the caller
+up again first if it isn't open. `rename_session` sends `Command::Rename` as `session/rename` does.
+A rename journals `Entry::Renamed`, and
 the session task keeps the title in `renamed`, leaving the agent's later titles out of the
 journal and summary. `journal::kept_title` reads it back for a suspended session, and a closed
 session's new journal header carries it on. The TUI lists `clipboard_write` (`daemon::capabilities`) and runs calls targeted at

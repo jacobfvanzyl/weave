@@ -219,6 +219,25 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     expect(session().queuePaused).toBeUndefined();
   });
 
+  it('opens a session another session\'s agent started, saying where its prompt came from', async () => {
+    // The TUI's session, whose agent hands work to another through the Host.
+    const caller = await local.request('session/create', { agentId: 'fake', cwd: host.cwd });
+    await local.request('turn/start', {
+      sessionId: caller.sessionId,
+      prompt: [{ type: 'text', text: 'tool start_session {"agentId": "fake", "prompt": "hello from the caller"}' }],
+    });
+    let delegated: string | undefined;
+    for (const deadline = Date.now() + 15_000; !delegated && Date.now() < deadline; await Bun.sleep(50)) {
+      const { sessions } = await local.request('sessions/list', {});
+      delegated = sessions.find(({ startedBy }) => startedBy === caller.sessionId)?.info.sessionId;
+    }
+    expect(delegated).toBeDefined();
+    store.actions.selectSession(`${hostId}/${delegated}`);
+    await until('the delegated session\'s answer', (current) => current.includes('assistant: You said: hello from the caller'));
+    const prompt = session().transcript.entries.find((entry) => entry.kind === 'message' && entry.role === 'user');
+    expect(prompt).toMatchObject({ origin: 'another session' });
+  });
+
   it('closes a session nobody prompted when it leaves it', async () => {
     const blank = await create('fake');
     const sessionId = blank.key.slice(hostId.length + 1);

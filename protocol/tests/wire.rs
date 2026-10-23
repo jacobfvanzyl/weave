@@ -113,8 +113,11 @@ use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::DeleteSessionRequest;
 use weave_host_protocol::sessions::DetachSessionRequest;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::GetSessionResponse;
 use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
 use weave_host_protocol::sessions::RenameSessionRequest;
@@ -291,6 +294,7 @@ fn state() -> SessionState {
         notices: vec!["The agent doesn't support MCP server docs over SSE; skipped".to_owned()],
         trace: None,
         update: Some(update()),
+        started_by: None,
     }
 }
 
@@ -356,6 +360,7 @@ fn listing() -> SessionListing {
         headless: false,
         last_activity_at: Some(1_760_180_001_234),
         git: Some(git()),
+        started_by: None,
     }
 }
 
@@ -930,6 +935,56 @@ fn turns() {
 }
 
 #[test]
+fn delegated_sessions() {
+    let delegated = SessionListing {
+        info: SessionInfo::new("s-2", "/repo").title("Port the tests".to_owned()),
+        agent_id: "codex".to_owned(),
+        started_by: Some("s-1".into()),
+        ..listing()
+    };
+    insta::assert_json_snapshot!(
+        "get_session_request",
+        message(&GetSessionRequest {
+            session_id: "s-2".into(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "get_session_response",
+        round_trip(&GetSessionResponse {
+            session: delegated.clone(),
+            latest_turn: Some(LatestTurn {
+                prompt: vec![text("port the parser's tests to the new runner")],
+                origin: TurnOrigin::Session {
+                    session_id: "s-1".into(),
+                },
+                started_at: 1_760_180_000_000,
+                running: false,
+                response: Some(PromptResponse::new(StopReason::EndTurn)),
+                error: None,
+                message: Some("Ported 14 tests; all pass.".to_owned()),
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "get_session_response_running",
+        round_trip(&GetSessionResponse {
+            session: delegated,
+            latest_turn: Some(LatestTurn {
+                prompt: vec![text("port the parser's tests to the new runner")],
+                origin: TurnOrigin::Session {
+                    session_id: "s-1".into(),
+                },
+                started_at: 1_760_180_000_000,
+                running: true,
+                response: None,
+                error: None,
+                message: None,
+            }),
+        })
+    );
+}
+
+#[test]
 fn queue() {
     insta::assert_json_snapshot!(
         "add_queued_request",
@@ -1045,6 +1100,20 @@ fn events() {
                 prompt: vec![text("then update the docs")],
                 origin: tui(),
                 queued_id: Some("q-3".to_owned()),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_turn_started_by_another_session",
+        message(&event(
+            41,
+            SessionEvent::TurnStarted {
+                session_id: "s-2".into(),
+                prompt: vec![text("port the parser's tests to the new runner")],
+                origin: TurnOrigin::Session {
+                    session_id: "s-1".into(),
+                },
+                queued_id: None,
             },
         ))
     );

@@ -1,0 +1,41 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&GetSessionResponse\n{\n    session: delegated, latest_turn:\n    Some(LatestTurn\n    {\n        prompt: vec![text(\"port the parser's tests to the new runner\")],\n        origin: TurnOrigin::Session { session_id: \"s-1\".into(), }, started_at:\n        1_760_180_000_000, running: true, response: None, error: None,\n        message: None,\n    }),\n})"
+---
+{
+  "session": {
+    "info": {
+      "sessionId": "s-2",
+      "cwd": "/repo",
+      "title": "Port the tests"
+    },
+    "agentId": "codex",
+    "state": "open",
+    "activity": "running",
+    "clients": 1,
+    "headless": false,
+    "lastActivityAt": 1760180001234,
+    "git": {
+      "repo": "/repo",
+      "worktree": "/repo",
+      "branch": "main",
+      "remote": "github.com/jacobfvanzyl/weave"
+    },
+    "startedBy": "s-1"
+  },
+  "latestTurn": {
+    "prompt": [
+      {
+        "type": "text",
+        "text": "port the parser's tests to the new runner"
+      }
+    ],
+    "origin": {
+      "session": {
+        "sessionId": "s-1"
+      }
+    },
+    "startedAt": 1760180000000,
+    "running": true
+  }
+}

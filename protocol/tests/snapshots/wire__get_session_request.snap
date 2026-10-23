@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&GetSessionRequest { session_id: \"s-2\".into(), })"
+---
+{
+  "method": "sessions/get",
+  "params": {
+    "sessionId": "s-2"
+  }
+}

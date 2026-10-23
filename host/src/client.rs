@@ -92,6 +92,9 @@ use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::DeleteSessionRequest;
 use weave_host_protocol::sessions::DetachSessionRequest;
+use weave_host_protocol::sessions::GET_FEATURE;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::GetSessionResponse;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
 use weave_host_protocol::sessions::RENAME_FEATURE;
@@ -374,6 +377,10 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, list_files),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, get_session),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -682,6 +689,7 @@ impl Connection {
                 WORKTREES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
+                GET_FEATURE.to_owned(),
             ],
             acp: AcpInfo {
                 protocol_version: 1,
@@ -951,23 +959,12 @@ impl Connection {
         request: ListSessionsRequest,
     ) -> Result<ListSessionsResponse, Error> {
         self.hello_info()?;
-        match request.agent_id.clone() {
-            None => {
-                let repo = match &request.repo {
-                    Some(dir) => Some(self.shared.git.repository(dir).await?.primary),
-                    None => None,
-                };
-                Ok(ListSessionsResponse {
-                    sessions: self
-                        .shared
-                        .listings(request.cwd.as_deref(), repo.as_deref()),
-                    next_cursor: None,
-                })
-            }
-            Some(_) if request.repo.is_some() => Err(Error::invalid_params()
-                .data("sessions/list takes a repository only without an agent")),
-            Some(agent_id) => self.agent_sessions(&agent_id, request).await,
-        }
+        list_sessions(&self.shared, request).await
+    }
+
+    async fn get_session(&self, request: GetSessionRequest) -> Result<GetSessionResponse, Error> {
+        self.hello_info()?;
+        get_session(&self.shared, request).await
     }
 
     /// `worktrees/list`: the repository's worktrees and the sessions in each.
@@ -1071,125 +1068,6 @@ impl Connection {
     /// `agent_id`'s sessions: the Host's own in the directory first, open ones and then ones
     /// a stopped Host left open within the idle grace of their last activity; then the
     /// agent's own listing, paged by its cursor.
-    async fn agent_sessions(
-        &self,
-        agent_id: &str,
-        request: ListSessionsRequest,
-    ) -> Result<ListSessionsResponse, Error> {
-        let agent = self.shared.resolve(agent_id).await?;
-        let cwd = request.cwd.clone().unwrap_or_else(home);
-        let handle = self
-            .shared
-            .agent_handle(&agent, &cwd, interactive(agent.options))
-            .await?;
-        let listed = handle
-            .list_sessions(request.cwd.clone(), request.cursor.clone())
-            .await?;
-        let in_scope = |dir: &Path| request.cwd.as_deref().is_none_or(|cwd| cwd == dir);
-        let grace_ms = u64::try_from(self.shared.config.idle_grace.as_millis()).unwrap_or(u64::MAX);
-        let (open, blank, known) = {
-            let registry = self.shared.registry();
-            let (blank, open): (Vec<&SessionHandle>, Vec<&SessionHandle>) = registry
-                .sessions
-                .values()
-                .partition(|session| session.is_blank());
-            let blank: HashSet<SessionId> = blank
-                .into_iter()
-                .map(|session| session.summary().session_id)
-                .collect();
-            let open: Vec<session::Summary> =
-                open.into_iter().map(SessionHandle::summary).collect();
-            (open, blank, registry.known.clone())
-        };
-        let mut leading: Vec<SessionListing> = open
-            .iter()
-            .filter(|summary| summary.agent_id == agent.id && in_scope(&summary.cwd))
-            .map(session::Summary::listing)
-            .collect();
-        leading.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
-        let mut dormant_here: Vec<SessionListing> = known
-            .iter()
-            .filter(|(session_id, recorded)| {
-                !recorded.closed
-                    && now_ms().saturating_sub(recorded.last_activity_ms) < grace_ms
-                    && in_scope(&recorded.cwd)
-                    && recorded.agent_id() == Some(agent.id.as_str())
-                    && !blank.contains(*session_id)
-                    && !open
-                        .iter()
-                        .any(|summary| summary.session_id == **session_id)
-            })
-            .map(|(session_id, recorded)| dormant(session_id, &agent.id, recorded))
-            .collect();
-        dormant_here.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
-        leading.extend(dormant_here);
-
-        let mut sessions = Vec::new();
-        let mut agents_own = listed.sessions;
-        agents_own.retain(|info| !blank.contains(&info.session_id));
-        if request.cursor.is_none() {
-            for mut listing in leading.iter().cloned() {
-                // The agent may save the title only once a turn ends; the Host has seen it.
-                if let Some(index) = agents_own
-                    .iter()
-                    .position(|info| info.session_id == listing.info.session_id)
-                {
-                    let info = agents_own.remove(index);
-                    let title = listing.info.title.take();
-                    listing.info = info;
-                    // The Host's title: the agent may save its own only once a turn ends, and
-                    // one the session was renamed to is the session's.
-                    if title.is_some() {
-                        listing.info.title = title;
-                    }
-                }
-                sessions.push(listing);
-            }
-        } else {
-            agents_own.retain(|info| {
-                !leading
-                    .iter()
-                    .any(|listing| listing.info.session_id == info.session_id)
-            });
-        }
-        for info in agents_own {
-            let state = match known.get(&info.session_id) {
-                Some(recorded) if !recorded.closed => SessionStatus::Suspended,
-                _ => SessionStatus::Closed,
-            };
-            let open = open
-                .iter()
-                .find(|summary| summary.session_id == info.session_id);
-            let listing = match open {
-                Some(summary) => SessionListing {
-                    info,
-                    ..summary.listing()
-                },
-                None => SessionListing {
-                    headless: known
-                        .get(&info.session_id)
-                        .is_some_and(|recorded| recorded.policy.is_headless()),
-                    last_activity_at: known
-                        .get(&info.session_id)
-                        .map(|recorded| recorded.last_activity_ms),
-                    git: known
-                        .get(&info.session_id)
-                        .and_then(|recorded| recorded.git.clone()),
-                    info,
-                    agent_id: agent.id.clone(),
-                    state,
-                    activity: None,
-                    clients: 0,
-                },
-            };
-            sessions.push(listing);
-        }
-        Ok(ListSessionsResponse {
-            sessions,
-            next_cursor: listed.next_cursor,
-        })
-    }
-
     async fn create(&self, request: CreateSessionRequest) -> Result<Ready, Error> {
         self.hello_info()?;
         let agent = self.shared.resolve(&request.agent_id).await?;
@@ -1234,7 +1112,7 @@ impl Connection {
             setup.additional_directories,
             request.policy.unwrap_or_default(),
             snapshot,
-            Origin::New,
+            Origin::New { started_by: None },
             binding,
             git,
         )?;
@@ -1490,10 +1368,7 @@ impl Connection {
     }
 
     fn live(&self, session_id: &SessionId) -> Result<SessionHandle, Error> {
-        self.shared
-            .registry()
-            .live(session_id)
-            .ok_or_else(|| errors::session_not_open(&session_id.to_string()))
+        live(&self.shared, session_id)
     }
 
     /// `session/rename`: a title of the Host's, which the session keeps.
@@ -1588,47 +1463,7 @@ impl Connection {
 
     async fn add_queued(&self, request: AddQueuedRequest) -> Result<AddQueuedResponse, Error> {
         let hello = self.hello_info()?;
-        let origin = self.origin(&hello);
-        let digest = admissions::digest(&AddQueuedRequest {
-            key: None,
-            ..request.clone()
-        });
-        let AddQueuedRequest {
-            session_id,
-            prompt,
-            key,
-        } = request;
-        keyed(
-            &self.shared,
-            key,
-            "queue/add",
-            digest,
-            Some(&session_id),
-            |work| {
-                Some(AddQueuedResponse {
-                    queued_id: work.queued_id?,
-                    seq: work.seq,
-                    started: work.started,
-                })
-            },
-            AddQueuedResponse::clone,
-            async |key| {
-                let session = self.live(&session_id)?;
-                if session.summary().session_id != session_id {
-                    return Err(Error::invalid_params()
-                        .data("a subagent session has no queue: add to its session's"));
-                }
-                let (reply, added) = oneshot::channel();
-                session.send(Command::Enqueue {
-                    origin,
-                    prompt,
-                    key,
-                    reply,
-                })?;
-                added.await.map_err(|_| session::ended())?
-            },
-        )
-        .await
+        add_queued(&self.shared, request, self.origin(&hello)).await
     }
 
     async fn remove_queued(
@@ -1658,24 +1493,12 @@ impl Connection {
 
     async fn steer_turn(&self, request: SteerTurnRequest) -> Result<SteerTurnResponse, Error> {
         let hello = self.hello_info()?;
-        let session = self.live(&request.session_id)?;
-        let (reply, answered) = oneshot::channel();
-        session.send(Command::Steer(Steer {
-            origin: self.origin(&hello),
-            session_id: request.session_id,
-            prompt: request.prompt,
-            reply,
-        }))?;
-        answered.await.map_err(|_| session::ended())?
+        steer_turn(&self.shared, request, self.origin(&hello)).await
     }
 
     async fn cancel_turn(&self, request: CancelTurnRequest) -> Result<Empty, Error> {
         self.hello_info()?;
-        let session = self.live(&request.session_id)?;
-        session.send(Command::Cancel {
-            session_id: request.session_id,
-        })?;
-        Ok(Empty {})
+        cancel_turn(&self.shared, request)
     }
 
     async fn answer_pending(&self, request: AnswerPendingRequest) -> Result<Empty, Error> {
@@ -1724,6 +1547,279 @@ impl Connection {
     }
 }
 
+/// `queue/add` from `origin`, for a client or a Host tool.
+pub(crate) async fn add_queued(
+    shared: &Arc<Shared>,
+    request: AddQueuedRequest,
+    origin: TurnOrigin,
+) -> Result<AddQueuedResponse, Error> {
+    let digest = admissions::digest(&AddQueuedRequest {
+        key: None,
+        ..request.clone()
+    });
+    let AddQueuedRequest {
+        session_id,
+        prompt,
+        key,
+    } = request;
+    keyed(
+        shared,
+        key,
+        "queue/add",
+        digest,
+        Some(&session_id),
+        |work| {
+            Some(AddQueuedResponse {
+                queued_id: work.queued_id?,
+                seq: work.seq,
+                started: work.started,
+            })
+        },
+        AddQueuedResponse::clone,
+        async |key| {
+            let session = live(shared, &session_id)?;
+            if session.summary().session_id != session_id {
+                return Err(Error::invalid_params()
+                    .data("a subagent session has no queue: add to its session's"));
+            }
+            let (reply, added) = oneshot::channel();
+            session.send(Command::Enqueue {
+                origin,
+                prompt,
+                key,
+                reply,
+            })?;
+            added.await.map_err(|_| session::ended())?
+        },
+    )
+    .await
+}
+
+/// `turn/steer` from `origin`, for a client or a Host tool.
+pub(crate) async fn steer_turn(
+    shared: &Arc<Shared>,
+    request: SteerTurnRequest,
+    origin: TurnOrigin,
+) -> Result<SteerTurnResponse, Error> {
+    let session = live(shared, &request.session_id)?;
+    let (reply, answered) = oneshot::channel();
+    session.send(Command::Steer(Steer {
+        origin,
+        session_id: request.session_id,
+        prompt: request.prompt,
+        reply,
+    }))?;
+    answered.await.map_err(|_| session::ended())?
+}
+
+/// `turn/cancel`, for a client or a Host tool.
+pub(crate) fn cancel_turn(
+    shared: &Arc<Shared>,
+    request: CancelTurnRequest,
+) -> Result<Empty, Error> {
+    let session = live(shared, &request.session_id)?;
+    session.send(Command::Cancel {
+        session_id: request.session_id,
+    })?;
+    Ok(Empty {})
+}
+
+/// The open session `session_id` is, or belongs to as a subagent.
+pub(crate) fn live(shared: &Shared, session_id: &SessionId) -> Result<SessionHandle, Error> {
+    shared
+        .registry()
+        .live(session_id)
+        .ok_or_else(|| errors::session_not_open(&session_id.to_string()))
+}
+
+/// `sessions/list`, for a client or a Host tool.
+pub(crate) async fn list_sessions(
+    shared: &Arc<Shared>,
+    request: ListSessionsRequest,
+) -> Result<ListSessionsResponse, Error> {
+    match request.agent_id.clone() {
+        None => {
+            let repo = match &request.repo {
+                Some(dir) => Some(shared.git.repository(dir).await?.primary),
+                None => None,
+            };
+            Ok(ListSessionsResponse {
+                sessions: shared.listings(request.cwd.as_deref(), repo.as_deref()),
+                next_cursor: None,
+            })
+        }
+        Some(_) if request.repo.is_some() => {
+            Err(Error::invalid_params()
+                .data("sessions/list takes a repository only without an agent"))
+        }
+        Some(agent_id) => agent_sessions(shared, &agent_id, request).await,
+    }
+}
+
+/// `sessions/list` for one agent: the Host's own sessions of it in the directory first, then the
+/// agent's own listing.
+async fn agent_sessions(
+    shared: &Arc<Shared>,
+    agent_id: &str,
+    request: ListSessionsRequest,
+) -> Result<ListSessionsResponse, Error> {
+    let agent = shared.resolve(agent_id).await?;
+    let cwd = request.cwd.clone().unwrap_or_else(home);
+    let handle = shared
+        .agent_handle(&agent, &cwd, interactive(agent.options))
+        .await?;
+    let listed = handle
+        .list_sessions(request.cwd.clone(), request.cursor.clone())
+        .await?;
+    let in_scope = |dir: &Path| request.cwd.as_deref().is_none_or(|cwd| cwd == dir);
+    let grace_ms = u64::try_from(shared.config.idle_grace.as_millis()).unwrap_or(u64::MAX);
+    let (open, blank, known) = {
+        let registry = shared.registry();
+        let (blank, open): (Vec<&SessionHandle>, Vec<&SessionHandle>) = registry
+            .sessions
+            .values()
+            .partition(|session| session.is_blank());
+        let blank: HashSet<SessionId> = blank
+            .into_iter()
+            .map(|session| session.summary().session_id)
+            .collect();
+        let open: Vec<session::Summary> = open.into_iter().map(SessionHandle::summary).collect();
+        (open, blank, registry.known.clone())
+    };
+    let mut leading: Vec<SessionListing> = open
+        .iter()
+        .filter(|summary| summary.agent_id == agent.id && in_scope(&summary.cwd))
+        .map(session::Summary::listing)
+        .collect();
+    leading.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
+    let mut dormant_here: Vec<SessionListing> = known
+        .iter()
+        .filter(|(session_id, recorded)| {
+            !recorded.closed
+                && now_ms().saturating_sub(recorded.last_activity_ms) < grace_ms
+                && in_scope(&recorded.cwd)
+                && recorded.agent_id() == Some(agent.id.as_str())
+                && !blank.contains(*session_id)
+                && !open
+                    .iter()
+                    .any(|summary| summary.session_id == **session_id)
+        })
+        .map(|(session_id, recorded)| dormant(session_id, &agent.id, recorded))
+        .collect();
+    dormant_here.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
+    leading.extend(dormant_here);
+
+    let mut sessions = Vec::new();
+    let mut agents_own = listed.sessions;
+    agents_own.retain(|info| !blank.contains(&info.session_id));
+    if request.cursor.is_none() {
+        for mut listing in leading.iter().cloned() {
+            // The agent may save the title only once a turn ends; the Host has seen it.
+            if let Some(index) = agents_own
+                .iter()
+                .position(|info| info.session_id == listing.info.session_id)
+            {
+                let info = agents_own.remove(index);
+                let title = listing.info.title.take();
+                listing.info = info;
+                // The Host's title: the agent may save its own only once a turn ends, and
+                // one the session was renamed to is the session's.
+                if title.is_some() {
+                    listing.info.title = title;
+                }
+            }
+            sessions.push(listing);
+        }
+    } else {
+        agents_own.retain(|info| {
+            !leading
+                .iter()
+                .any(|listing| listing.info.session_id == info.session_id)
+        });
+    }
+    for info in agents_own {
+        let state = match known.get(&info.session_id) {
+            Some(recorded) if !recorded.closed => SessionStatus::Suspended,
+            _ => SessionStatus::Closed,
+        };
+        let open = open
+            .iter()
+            .find(|summary| summary.session_id == info.session_id);
+        let listing = match open {
+            Some(summary) => SessionListing {
+                info,
+                ..summary.listing()
+            },
+            None => SessionListing {
+                headless: known
+                    .get(&info.session_id)
+                    .is_some_and(|recorded| recorded.policy.is_headless()),
+                last_activity_at: known
+                    .get(&info.session_id)
+                    .map(|recorded| recorded.last_activity_ms),
+                git: known
+                    .get(&info.session_id)
+                    .and_then(|recorded| recorded.git.clone()),
+                started_by: known
+                    .get(&info.session_id)
+                    .and_then(|recorded| recorded.started_by.clone()),
+                info,
+                agent_id: agent.id.clone(),
+                state,
+                activity: None,
+                clients: 0,
+            },
+        };
+        sessions.push(listing);
+    }
+    Ok(ListSessionsResponse {
+        sessions,
+        next_cursor: listed.next_cursor,
+    })
+}
+
+/// `sessions/get`, for a client or a Host tool: the session as it lists, with its latest turn
+/// from its journal, without opening it.
+pub(crate) async fn get_session(
+    shared: &Arc<Shared>,
+    request: GetSessionRequest,
+) -> Result<GetSessionResponse, Error> {
+    let unknown = || errors::unknown_session(&request.session_id.to_string());
+    let (live, recorded) = {
+        let registry = shared.registry();
+        (
+            registry.sessions.get(&request.session_id).cloned(),
+            registry.known.get(&request.session_id).cloned(),
+        )
+    };
+    if let Some(session) = live {
+        if session.is_blank() {
+            return Err(unknown());
+        }
+        let (reply, latest) = oneshot::channel();
+        session.send(Command::LatestTurn { reply })?;
+        let latest_turn = latest.await.map_err(|_| session::ended())?;
+        return Ok(GetSessionResponse {
+            session: session.summary().listing(),
+            latest_turn,
+        });
+    }
+    let recorded = recorded.ok_or_else(unknown)?;
+    let agent_id = recorded.agent_id().ok_or_else(unknown)?.to_owned();
+    let records = shared
+        .config
+        .journals
+        .as_ref()
+        .and_then(|dir| journal::read(&journal::path_for(dir, &request.session_id)).ok())
+        .unwrap_or_default();
+    let mut session = dormant(&request.session_id, &agent_id, &recorded);
+    session.info.title = journal::kept_title(&records);
+    Ok(GetSessionResponse {
+        latest_turn: journal::latest_turn(&records, &request.session_id),
+        session,
+    })
+}
+
 /// A session a stopped Host left, or one closed since, as listings show it.
 pub(crate) fn dormant(
     session_id: &SessionId,
@@ -1743,6 +1839,7 @@ pub(crate) fn dormant(
         headless: recorded.policy.is_headless(),
         last_activity_at: Some(recorded.last_activity_ms),
         git: recorded.git.clone(),
+        started_by: recorded.started_by.clone(),
     }
 }
 
@@ -1820,7 +1917,7 @@ fn host_tools(agent: &Agent) -> Vec<Tool> {
 /// stopped Host admitted without answering is looked for first in the journal of `session_id`,
 /// or every journal without one, where `recover` makes the answer from the work it finds.
 #[allow(clippy::too_many_arguments)]
-async fn keyed<T, W>(
+pub(crate) async fn keyed<T, W>(
     shared: &Arc<Shared>,
     key: Option<String>,
     method: &str,
@@ -1906,6 +2003,18 @@ pub(crate) async fn run(
     request: RunRequest,
     link: Option<(ClientId, ClientLink)>,
 ) -> Result<(SessionId, Option<SessionState>), Error> {
+    run_as(shared, request, link, TurnOrigin::Run {}, None).await
+}
+
+/// [`run`], its turn from `origin`; a new session is a delegated session of `started_by`'s when
+/// a session's agent starts it (ADR 0020).
+pub(crate) async fn run_as(
+    shared: &Arc<Shared>,
+    request: RunRequest,
+    link: Option<(ClientId, ClientLink)>,
+    origin: TurnOrigin,
+    started_by: Option<SessionId>,
+) -> Result<(SessionId, Option<SessionState>), Error> {
     let digest = admissions::digest(&RunRequest {
         key: None,
         ..request.clone()
@@ -1929,7 +2038,8 @@ pub(crate) async fn run(
             state: None,
         },
         async |key| {
-            let (session_id, state) = run_now(shared, request, link, key).await?;
+            let (session_id, state) =
+                run_now(shared, request, link, key, origin, started_by).await?;
             Ok(RunResponse {
                 session_id,
                 state: state.map(Box::new),
@@ -1940,12 +2050,14 @@ pub(crate) async fn run(
     Ok((answer.session_id, answer.state.map(|state| *state)))
 }
 
-/// [`run`], under `key` when there is one.
+/// [`run_as`], under `key` when there is one.
 async fn run_now(
     shared: &Arc<Shared>,
     request: RunRequest,
     link: Option<(ClientId, ClientLink)>,
     key: Option<String>,
+    origin: TurnOrigin,
+    started_by: Option<SessionId>,
 ) -> Result<(SessionId, Option<SessionState>), Error> {
     let RunRequest {
         agent_id,
@@ -2009,7 +2121,7 @@ async fn run_now(
                 setup.additional_directories,
                 policy,
                 snapshot,
-                Origin::New,
+                Origin::New { started_by },
                 binding,
                 git,
             )?
@@ -2048,7 +2160,7 @@ async fn run_now(
     };
     let (reply, started) = oneshot::channel();
     session.send(Command::Prompt {
-        origin: TurnOrigin::Run {},
+        origin,
         session_id: root.clone(),
         prompt,
         key,
@@ -2131,6 +2243,7 @@ async fn reopen(
         .or(closed.as_deref());
     let title = earlier.and_then(journal::kept_title);
     let mut queue = earlier.map(Queue::from_records).unwrap_or_default();
+    let started_by = earlier.and_then(journal::started_by);
     let (journal, policy) = match recovered {
         Some((path, records)) => {
             let policy = records
@@ -2180,6 +2293,7 @@ async fn reopen(
             journal,
             title,
             queue,
+            started_by,
         },
         binding,
         git,
@@ -2230,14 +2344,16 @@ fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<
 
 /// Where a session [`open`] starts came from.
 enum Origin {
-    /// `session/create` or a new run: the session is blank until it's prompted.
-    New,
+    /// `session/create` or a new run: the session is blank until it's prompted. A delegated
+    /// session names the session that started it.
+    New { started_by: Option<SessionId> },
     /// The agent's session reopened, with the journal a stopped Host left, if there is one,
     /// and the title and queue the Host kept for it.
     Reopened {
         journal: Option<Journal>,
         title: Option<String>,
         queue: Queue,
+        started_by: Option<SessionId>,
     },
 }
 
@@ -2255,13 +2371,14 @@ fn open(
     binding: Option<Binding>,
     git: Option<GitLocation>,
 ) -> Result<SessionHandle, Error> {
-    let (journal, blank, title, queue) = match origin {
-        Origin::New => (None, true, None, Queue::default()),
+    let (journal, blank, title, queue, started_by) = match origin {
+        Origin::New { started_by } => (None, true, None, Queue::default(), started_by),
         Origin::Reopened {
             journal,
             title,
             queue,
-        } => (journal, false, title, queue),
+            started_by,
+        } => (journal, false, title, queue, started_by),
     };
     let journal = match journal {
         Some(journal) => journal,
@@ -2278,11 +2395,13 @@ fn open(
             if let Entry::Header {
                 queue: carried,
                 queue_paused,
+                started_by: starter,
                 ..
             } = &mut header
             {
                 carried.extend(queue.prompts.iter().cloned());
                 *queue_paused = queue.paused;
+                starter.clone_from(&started_by);
             }
             match &shared.config.journals {
                 Some(dir) => Journal::create(dir, &session_id, header)
@@ -2312,6 +2431,7 @@ fn open(
             title,
             git,
             queue,
+            started_by,
         },
     ))
 }

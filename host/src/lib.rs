@@ -34,6 +34,7 @@ mod client;
 mod devices;
 mod files;
 mod git;
+mod host_tools;
 mod instance;
 mod journal;
 pub mod mcp;

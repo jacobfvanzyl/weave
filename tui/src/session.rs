@@ -98,6 +98,7 @@ mod tests {
             notices: Vec::new(),
             trace: None,
             update: None,
+            started_by: None,
         }
     }
 

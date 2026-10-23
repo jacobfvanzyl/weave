@@ -36,6 +36,7 @@ use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
+use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::TerminalId;
@@ -45,6 +46,7 @@ use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::queue::QueuePause;
 use weave_host_protocol::queue::QueuedId;
 use weave_host_protocol::queue::QueuedPrompt;
+use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::worktrees::GitLocation;
@@ -108,6 +110,10 @@ pub(crate) enum Entry {
         queue: Vec<QueuedPrompt>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         queue_paused: Option<QueuePause>,
+        /// The session whose agent started this one, for a delegated session; carried on into
+        /// the journal a closed session gets when it opens again.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_by: Option<SessionId>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -236,6 +242,7 @@ impl Entry {
             git,
             queue: Vec::new(),
             queue_paused: None,
+            started_by: None,
         }
     }
 
@@ -555,6 +562,8 @@ pub struct Recorded {
     /// Where in a git repository `cwd` is, as the Host last read it: when the journal began,
     /// and while this Host held the session open.
     pub git: Option<GitLocation>,
+    /// The session whose agent started it, for a delegated session.
+    pub started_by: Option<SessionId>,
 }
 
 impl Recorded {
@@ -577,6 +586,75 @@ pub(crate) fn kept_title(records: &[Record]) -> Option<String> {
             Entry::Renamed { title, .. } => Some(title.clone()),
             _ => kept,
         })
+}
+
+/// The session whose agent started the session `records` journal, as its header says.
+pub(crate) fn started_by(records: &[Record]) -> Option<SessionId> {
+    match records.first().map(|record| &record.entry) {
+        Some(Entry::Header { started_by, .. }) => started_by.clone(),
+        _ => None,
+    }
+}
+
+/// The latest turn of `root` in `records`: its prompt, how it ended once it has, and the
+/// agent's last message in it, its message chunks since the last tool call, thought or other
+/// message.
+pub(crate) fn latest_turn(records: &[Record], root: &SessionId) -> Option<LatestTurn> {
+    let start = records.iter().rposition(|record| {
+        matches!(&record.entry, Entry::TurnStarted { session_id, .. } if session_id == root)
+    })?;
+    let Entry::TurnStarted { prompt, origin, .. } = &records[start].entry else {
+        return None;
+    };
+    let mut turn = LatestTurn {
+        prompt: prompt.clone(),
+        origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
+        started_at: records[start].at,
+        running: true,
+        response: None,
+        error: None,
+        message: None,
+    };
+    let mut message = String::new();
+    // Something other than the agent's message came since its last chunk.
+    let mut broken = false;
+    for record in &records[start + 1..] {
+        match &record.entry {
+            Entry::Update { notification } if notification.session_id == *root => {
+                match &notification.update {
+                    SessionUpdate::AgentMessageChunk(chunk) => {
+                        if std::mem::take(&mut broken) {
+                            message.clear();
+                        }
+                        if let ContentBlock::Text(text) = &chunk.content {
+                            message.push_str(&text.text);
+                        }
+                    }
+                    SessionUpdate::AgentThoughtChunk(_)
+                    | SessionUpdate::UserMessageChunk(_)
+                    | SessionUpdate::ToolCall(_)
+                    | SessionUpdate::ToolCallUpdate(_) => broken = true,
+                    _ => {}
+                }
+            }
+            Entry::TurnSteered { session_id, .. } if session_id == root => broken = true,
+            Entry::TurnEnded {
+                session_id,
+                response,
+                stop_reason,
+                error,
+            } if session_id == root => {
+                turn.running = false;
+                turn.response = response
+                    .clone()
+                    .or_else(|| stop_reason.map(PromptResponse::new));
+                turn.error.clone_from(error);
+            }
+            _ => {}
+        }
+    }
+    turn.message = (!message.is_empty()).then_some(message);
+    Some(turn)
 }
 
 /// The record of `session_id`'s journal in `dir`, if it has one.
@@ -621,6 +699,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         cwd,
         policy,
         git,
+        started_by,
         ..
     } = serde_json::from_str::<Record>(&header).ok()?.entry
     else {
@@ -639,6 +718,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
             closed,
             last_activity_ms: modified,
             git,
+            started_by,
         },
     ))
 }
@@ -923,6 +1003,60 @@ mod tests {
         assert!(recorded.closed);
         let index = index(dir.path());
         assert_eq!(index.get(&SessionId::new("s/1")), Some(&recorded));
+    }
+
+    #[test]
+    fn the_latest_turn_says_how_it_ended_and_the_agents_last_message() {
+        use weave_acp_core::schema::ToolCall;
+        let record = |entry: Entry| Record { entry, at: 9 };
+        let id = SessionId::new("s1");
+        let chunk = |text: &str| update(text);
+        let started = |prompt: &str| Entry::TurnStarted {
+            session_id: id.clone(),
+            at_ms: 9,
+            prompt: vec![ContentBlock::from(prompt.to_owned())],
+            origin: None,
+            queued_id: None,
+            key: None,
+        };
+        let tool = Entry::Update {
+            notification: Box::new(SessionNotification::new(
+                "s1",
+                SessionUpdate::ToolCall(ToolCall::new("t1", "Read a file")),
+            )),
+        };
+        let mut records = vec![
+            record(header("s1")),
+            record(started("first")),
+            record(chunk("Done before.")),
+            record(Entry::turn_ended(
+                id.clone(),
+                &Ok(PromptResponse::new(StopReason::EndTurn)),
+            )),
+            record(started("second")),
+            record(chunk("Let me look. ")),
+            record(tool),
+            record(chunk("Found it")),
+            record(chunk(" in a.rs.")),
+        ];
+        let running = latest_turn(&records, &id).expect("a turn");
+        assert!(running.running);
+        assert_eq!(
+            running.prompt,
+            vec![ContentBlock::from("second".to_owned())]
+        );
+        assert_eq!(running.message.as_deref(), Some("Found it in a.rs."));
+        records.push(record(Entry::turn_ended(
+            id.clone(),
+            &Ok(PromptResponse::new(StopReason::Cancelled)),
+        )));
+        let ended = latest_turn(&records, &id).expect("a turn");
+        assert!(!ended.running);
+        assert_eq!(
+            ended.response.map(|response| response.stop_reason),
+            Some(StopReason::Cancelled)
+        );
+        assert_eq!(latest_turn(&records[..1], &id), None);
     }
 
     #[test]

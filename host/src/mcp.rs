@@ -1,6 +1,6 @@
 //! The Host MCP server, `weave`, which every session's agent gets (ADR 0009). Its tools are
-//! client tools: the client that sent the running turn runs them on its device, as a pending
-//! request the session owns. Agents reach the server one of two ways, both MCP 2026-07-28 and
+//! client tools, which the client that sent the running turn runs on its device, as a pending
+//! request the session owns, and Host tools, which the Host answers itself (`host_tools`). Agents reach the server one of two ways, both MCP 2026-07-28 and
 //! both answered by [`Mcp::handle`]:
 //!
 //! - over ACP itself (`"type": "acp"`), for agents that advertise `mcpCapabilities.acp`: their
@@ -51,13 +51,11 @@ use weave_acp_core::schema::McpServerAcp;
 use weave_acp_core::schema::McpServerStdio;
 use weave_acp_core::schema::SessionId;
 use weave_host_protocol::tools::ClientToolResult;
-use weave_host_protocol::tools::RENAME_SESSION;
 use weave_host_protocol::tools::Tool;
 
 use crate::Shared;
 use crate::session::ClientToolCall;
 use crate::session::Command;
-use crate::session::SessionHandle;
 use crate::socket::Peer;
 
 /// The bridge's environment: where the Host's MCP socket is.
@@ -384,7 +382,10 @@ impl Mcp {
             return tool_result(ClientToolResult::error("The session isn't open."));
         };
         if declared.host_tools.iter().any(|known| known == tool) {
-            return tool_result(host_tool(&session, tool, &arguments).await);
+            let Some(shared) = self.shared.upgrade() else {
+                return tool_result(ClientToolResult::error("The Host is stopping."));
+            };
+            return tool_result(crate::host_tools::call(&shared, &session, tool, &arguments).await);
         }
         let call = self.next_call.fetch_add(1, Ordering::Relaxed);
         let (reply, answered) = oneshot::channel();
@@ -406,39 +407,6 @@ impl Mcp {
                 McpOutcome::Cancelled
             }
         }
-    }
-}
-
-/// A Host tool's answer for `session`: each does what a Host protocol method does, through the
-/// same code, for the calling session.
-async fn host_tool(
-    session: &SessionHandle,
-    tool: &str,
-    arguments: &Map<String, Value>,
-) -> ClientToolResult {
-    match tool {
-        RENAME_SESSION => {
-            let asked = arguments
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let title = match crate::session::title(asked) {
-                Ok(title) => title,
-                Err(why) => return ClientToolResult::error(format!("Not renamed: {why}.")),
-            };
-            let renamed = session
-                .finish(|done| Command::Rename {
-                    title: title.clone(),
-                    by: None,
-                    done,
-                })
-                .await;
-            match renamed {
-                Ok(()) => ClientToolResult::text(format!("Renamed this session to “{title}”.")),
-                Err(_) => ClientToolResult::error("The session has ended."),
-            }
-        }
-        _ => ClientToolResult::error(format!("The Host doesn't answer {tool}.")),
     }
 }
 

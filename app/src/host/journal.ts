@@ -58,9 +58,14 @@ export type JournalReading = {
 
 const clientNames: Record<string, string> = { 'weave-tui': 'the TUI', 'weave-app': 'the weave app' };
 
-/** Where another client's prompt came from: its device, its client, or a headless run. */
+/**
+ * Where another client's prompt came from: its device, its client, a headless run, or another
+ * session: the session whose agent started this one, or one this session's agent started.
+ */
 export function originLabel(origin: TurnOrigin): string {
   if ('run' in origin) return 'a headless run';
+  if ('session' in origin) return 'another session';
+  if (!('client' in origin)) return 'elsewhere';
   return origin.client.device || clientNames[origin.client.name] || origin.client.name;
 }
 

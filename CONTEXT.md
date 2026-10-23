@@ -79,6 +79,10 @@ _Avoid_: automation, job, cron
 A session an agent starts under another one. It shares its parent's journal and attached clients.
 _Avoid_: child thread
 
+**Delegated session**:
+A session of its own, with its own journal and agent, that another session's agent started through the Host. It records the session that started it, which hears how its turns end.
+_Avoid_: child session, spawned session, subagent
+
 **Attach**:
 A client's relationship with an open session: it receives the session's events and pending requests, and keeps the session open while it lasts.
 _Avoid_: subscribe, join, connect

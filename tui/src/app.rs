@@ -630,6 +630,7 @@ impl App {
                     }
                     Some(TurnOrigin::Client { name, device, .. }) => device.unwrap_or(name),
                     Some(TurnOrigin::Run {}) => "A headless run".to_owned(),
+                    Some(TurnOrigin::Session { .. }) => "Another session".to_owned(),
                 },
             },
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),

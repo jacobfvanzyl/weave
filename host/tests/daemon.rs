@@ -77,6 +77,8 @@ use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::DeleteSessionRequest;
 use weave_host_protocol::sessions::DetachSessionRequest;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::GetSessionResponse;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::RenameSessionRequest;
@@ -3453,4 +3455,414 @@ impl TestClient {
         .await
         .is_ok()
     }
+}
+
+/// What a tool answered in an agent's text (`<tool> answered: <JSON>`), as JSON.
+fn tool_answer(agent: &str, tool: &str) -> serde_json::Value {
+    let marker = format!("{tool} answered: ");
+    let at = agent
+        .rfind(&marker)
+        .unwrap_or_else(|| panic!("{tool} answered in {agent:?}"));
+    serde_json::Deserializer::from_str(&agent[at + marker.len()..])
+        .into_iter::<serde_json::Value>()
+        .next()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| panic!("JSON after {marker:?} in {agent:?}"))
+}
+
+/// A session's id in a tool's JSON answer.
+fn answered_session(agent: &str, tool: &str) -> SessionId {
+    let answer = tool_answer(agent, tool);
+    SessionId::new(
+        answer["sessionId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a sessionId in {answer}"))
+            .to_owned(),
+    )
+}
+
+impl TestClient {
+    /// Run `tool` with `arguments` in `session_id`'s agent, through the fake agent's `tool`
+    /// script; what this client saw of that turn.
+    async fn call_tool(&mut self, session_id: &SessionId, tool: &str, arguments: &str) -> Seen {
+        self.prompt(session_id, &format!("tool {tool} {arguments}"))
+            .await;
+        let mut seen = Seen::default();
+        self.until_turn_ends(&mut seen, None).await;
+        seen
+    }
+
+    /// Events until a message from the Host about another session reaches this one: as a turn
+    /// it starts or a steer into its turn. Its text.
+    async fn told(&mut self, seen: &mut Seen) -> String {
+        loop {
+            let said = seen
+                .origins
+                .iter()
+                .any(|(origin, _)| matches!(origin, TurnOrigin::Session { .. }));
+            if said
+                || seen
+                    .steered
+                    .iter()
+                    .any(|(text, _)| text.starts_with("[weave]"))
+            {
+                let start = seen.user.find("[weave]");
+                let steered = seen
+                    .steered
+                    .iter()
+                    .find(|(text, _)| text.starts_with("[weave]"));
+                return match (start, steered) {
+                    (Some(at), _) => seen.user[at..].to_owned(),
+                    (None, Some((text, _))) => text.clone(),
+                    (None, None) => panic!("told nothing: {seen:?}"),
+                };
+            }
+            let event = self.next().await;
+            self.note(event, seen, None).await;
+        }
+    }
+
+    async fn get(&self, session_id: &SessionId) -> GetSessionResponse {
+        self.connection
+            .send(GetSessionRequest {
+                session_id: session_id.clone(),
+            })
+            .await
+            .expect("sessions/get")
+    }
+}
+
+#[tokio::test]
+async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_ended() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client.create(&world).await;
+    let mut started = client
+        .call_tool(
+            &caller,
+            "start_session",
+            r#"{"agentId": "other", "prompt": "slow 3"}"#,
+        )
+        .await;
+    let said = started.agent.clone();
+    let delegated = answered_session(&said, "start_session");
+    assert_ne!(delegated, caller);
+    // Without a policy asked for, it runs under the caller's.
+    assert_eq!(
+        tool_answer(&said, "start_session")["policy"],
+        serde_json::to_value(PermissionPolicy::ask()).expect("json")
+    );
+
+    // It's a session of its own, which says who started it.
+    let got = client.get(&delegated).await;
+    assert_eq!(got.session.agent_id, "other");
+    assert_eq!(got.session.started_by.as_ref(), Some(&caller));
+    let latest = got.latest_turn.expect("a turn");
+    assert_eq!(
+        latest.origin,
+        TurnOrigin::Session {
+            session_id: caller.clone()
+        }
+    );
+    let listed = client
+        .connection
+        .send(ListSessionsRequest::default())
+        .await
+        .expect("sessions/list");
+    let listing = listed
+        .sessions
+        .iter()
+        .find(|listing| listing.info.session_id == delegated)
+        .expect("listed");
+    assert_eq!(listing.started_by.as_ref(), Some(&caller));
+
+    // Its turn's end reaches the caller, from the delegated session, with what its agent said.
+    let told = client.told(&mut started).await;
+    assert!(told.contains("finished its turn"), "{told}");
+    assert!(told.contains("Chunk 3 of 3."), "{told}");
+    assert!(told.contains(&delegated.to_string()), "{told}");
+    // The message's own turn tells the delegated session nothing back: no turns go to and fro.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let latest = client.get(&delegated).await.latest_turn.expect("a turn");
+    assert_eq!(
+        latest.prompt,
+        vec![ContentBlock::from("slow 3".to_owned())],
+        "{latest:?}"
+    );
+
+    // Its own journal has its turn, from the caller.
+    let mut watcher = world.client(&daemon).await;
+    watcher.attach(&delegated).await;
+    let mut seen = Seen::default();
+    watcher.until_turn_ends(&mut seen, None).await;
+    assert_eq!(
+        seen.origins.first().map(|(origin, _)| origin.clone()),
+        Some(TurnOrigin::Session {
+            session_id: caller.clone()
+        })
+    );
+    assert!(seen.agent.contains("Chunk 3 of 3."));
+}
+
+#[tokio::test]
+async fn a_delegated_session_approves_no_more_than_the_session_that_started_it() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client
+        .connection
+        .send(CreateSessionRequest {
+            policy: Some(PermissionPolicy {
+                approve: vec![ToolKind::Read],
+                otherwise: Unapproved::Ask,
+            }),
+            ..TestClient::create_request(&world, "fake")
+        })
+        .await
+        .expect("session/create")
+        .session_id;
+    let said = client
+        .call_tool(
+            &caller,
+            "start_session",
+            r#"{"agentId": "other", "prompt": "hello", "approve": ["read", "edit", "execute"], "otherwise": "reject"}"#,
+        )
+        .await
+        .agent;
+    let delegated = answered_session(&said, "start_session");
+    let narrowed = PermissionPolicy::headless(vec![ToolKind::Read]);
+    assert_eq!(
+        tool_answer(&said, "start_session")["policy"],
+        serde_json::to_value(&narrowed).expect("json")
+    );
+    let attached = world.client(&daemon).await.attach(&delegated).await;
+    assert_eq!(attached.state.policy, narrowed);
+    assert_eq!(attached.state.started_by.as_ref(), Some(&caller));
+}
+
+#[tokio::test]
+async fn an_agent_reads_any_session_but_acts_only_on_those_it_started() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client.create(&world).await;
+    let persons = client.session_in(&world, &world.cwd()).await.session_id;
+
+    let said = client
+        .call_tool(
+            &caller,
+            "prompt_session",
+            &format!(r#"{{"sessionId": "{persons}", "prompt": "hi"}}"#),
+        )
+        .await
+        .agent;
+    assert!(
+        said.contains("prompt_session failed:") && said.contains("isn't one this session started"),
+        "{said}"
+    );
+    for tool in ["steer_session", "cancel_session_turn"] {
+        let arguments = if tool == "steer_session" {
+            format!(r#"{{"sessionId": "{persons}", "prompt": "hi"}}"#)
+        } else {
+            format!(r#"{{"sessionId": "{persons}"}}"#)
+        };
+        let said = client.call_tool(&caller, tool, &arguments).await.agent;
+        assert!(said.contains(&format!("{tool} failed:")), "{said}");
+    }
+
+    // Reading answers as sessions/get does.
+    let said = client
+        .call_tool(
+            &caller,
+            "read_session",
+            &format!(r#"{{"sessionId": "{persons}"}}"#),
+        )
+        .await
+        .agent;
+    let got = client.get(&persons).await;
+    assert_eq!(
+        tool_answer(&said, "read_session"),
+        serde_json::to_value(&got).expect("json")
+    );
+    assert_eq!(
+        got.latest_turn.and_then(|turn| turn.message).as_deref(),
+        Some("You said: hello")
+    );
+    let said = client
+        .call_tool(&caller, "list_sessions", r#"{}"#)
+        .await
+        .agent;
+    let listed = tool_answer(&said, "list_sessions");
+    assert!(
+        listed["sessions"]
+            .as_array()
+            .is_some_and(|sessions| sessions
+                .iter()
+                .any(|session| session["info"]["sessionId"] == persons.to_string())),
+        "{listed}"
+    );
+}
+
+#[tokio::test]
+async fn delegation_stops_at_its_depth_and_its_running_limit() {
+    let world = World::new();
+    let config = world.dir.path().join("config.toml");
+    let text = std::fs::read_to_string(&config).expect("config");
+    std::fs::write(&config, format!("[delegation]\nrunning = 1\n\n{text}")).expect("config");
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client.create(&world).await;
+    let mut seen = client
+        .call_tool(
+            &caller,
+            "start_session",
+            r#"{"agentId": "other", "prompt": "hello"}"#,
+        )
+        .await;
+    let delegated = answered_session(&seen.agent, "start_session");
+    client.told(&mut seen).await;
+
+    // The delegated session can't start one of its own.
+    let mut other = world.client(&daemon).await;
+    other.attach_caught_up(&delegated).await;
+    let said = other
+        .call_tool(
+            &delegated,
+            "start_session",
+            r#"{"agentId": "fake", "prompt": "hello"}"#,
+        )
+        .await
+        .agent;
+    assert!(
+        said.contains("start_session failed:") && said.contains("can't start sessions"),
+        "{said}"
+    );
+
+    // With it running, one is as many as this Host allows.
+    let said = client
+        .call_tool(
+            &caller,
+            "prompt_session",
+            &format!(r#"{{"sessionId": "{delegated}", "prompt": "slow 30"}}"#),
+        )
+        .await
+        .agent;
+    assert!(said.contains("prompt_session answered:"), "{said}");
+    let said = client
+        .call_tool(
+            &caller,
+            "start_session",
+            r#"{"agentId": "other", "prompt": "hello"}"#,
+        )
+        .await
+        .agent;
+    assert!(
+        said.contains("start_session failed:") && said.contains("already has 1 delegated session"),
+        "{said}"
+    );
+
+    // Cancelling its turn frees the room, and the caller hears it was cancelled.
+    let mut seen = client
+        .call_tool(
+            &caller,
+            "cancel_session_turn",
+            &format!(r#"{{"sessionId": "{delegated}"}}"#),
+        )
+        .await;
+    assert!(
+        seen.agent.contains("cancel_session_turn answered: {}"),
+        "{}",
+        seen.agent
+    );
+    let told = client.told(&mut seen).await;
+    assert!(told.contains("had its turn cancelled"), "{told}");
+}
+
+#[tokio::test]
+async fn the_caller_is_told_when_a_delegated_session_waits_on_a_person() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client.create(&world).await;
+    let path = world.cwd().join("delegated.txt");
+    // Told while its own turn still runs, or after.
+    let mut seen = client
+        .call_tool(
+            &caller,
+            "start_session",
+            &format!(
+                r#"{{"agentId": "other", "prompt": "write {} written"}}"#,
+                path.display()
+            ),
+        )
+        .await;
+    let delegated = answered_session(&seen.agent, "start_session");
+    let told = client.told(&mut seen).await;
+    assert!(told.contains("is waiting on a person"), "{told}");
+    assert!(told.contains("asks permission"), "{told}");
+    assert!(told.contains("you can't"), "{told}");
+    assert!(!path.exists());
+
+    // A person attached to it answers, and the caller hears how it ended.
+    let mut person = world.client(&daemon).await;
+    let attached = person.attach(&delegated).await;
+    let pending = attached.state.pending.first().cloned().expect("waiting");
+    person
+        .allow(&delegated, &pending, "allow")
+        .await
+        .expect("answered");
+    let mut seen = Seen::default();
+    loop {
+        let told = client.told(&mut seen).await;
+        if told.contains("finished its turn") {
+            break;
+        }
+        seen = Seen::default();
+    }
+    assert!(path.exists());
+}
+
+#[tokio::test]
+async fn a_caller_closed_meanwhile_is_taken_up_again_to_hear_how_its_delegated_turn_ended() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client.create(&world).await;
+    let said = client
+        .call_tool(
+            &caller,
+            "start_session",
+            r#"{"agentId": "other", "prompt": "slow 5"}"#,
+        )
+        .await
+        .agent;
+    let delegated = answered_session(&said, "start_session");
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: caller.clone(),
+        })
+        .await
+        .expect("session/close");
+    let from_delegated = TurnOrigin::Session {
+        session_id: delegated.clone(),
+    };
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let latest = client.get(&caller).await.latest_turn;
+            if latest.is_some_and(|turn| turn.origin == from_delegated && !turn.running) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the caller to hear of it");
+    let got = client.get(&caller).await;
+    assert!(
+        got.latest_turn
+            .and_then(|turn| turn.message)
+            .is_some_and(|message| message.contains("finished its turn")),
+    );
 }

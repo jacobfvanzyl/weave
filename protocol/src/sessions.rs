@@ -6,11 +6,13 @@
 
 use std::path::PathBuf;
 
+use agent_client_protocol::Error;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::v1::ContentBlock;
 use agent_client_protocol::schema::v1::InitializeResponse;
+use agent_client_protocol::schema::v1::PromptResponse;
 use agent_client_protocol::schema::v1::SessionConfigId;
 use agent_client_protocol::schema::v1::SessionConfigOption;
 use agent_client_protocol::schema::v1::SessionConfigOptionValue;
@@ -109,6 +111,11 @@ pub enum TurnOrigin {
     },
     /// A headless run.
     Run {},
+    /// Another session: the delegated session's starting session, whose agent began the turn
+    /// through a Host tool, or the delegated session the Host's message to its starting session
+    /// is about.
+    #[serde(rename_all = "camelCase")]
+    Session { session_id: SessionId },
 }
 
 /// A turn running now.
@@ -171,6 +178,9 @@ pub struct SessionState {
     /// A newer version of the agent than the session runs, once the Host has found one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<AgentUpdate>,
+    /// The session whose agent started it, for a delegated session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -195,6 +205,9 @@ pub struct SessionListing {
     /// was open; absent outside one, and for sessions the Host has no record of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<GitLocation>,
+    /// The session whose agent started it, for a delegated session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<SessionId>,
 }
 
 /// `sessions/list`. Without an agent: the sessions the Host has a journal for, across
@@ -224,6 +237,49 @@ pub struct ListSessionsResponse {
     pub sessions: Vec<SessionListing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+}
+
+/// The Host offers [`GetSessionRequest`], in `features`.
+pub const GET_FEATURE: &str = "sessions/get";
+
+/// `sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists
+/// it, with its latest turn, read without opening it or attaching.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "sessions/get", response = GetSessionResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSessionRequest {
+    pub session_id: SessionId,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct GetSessionResponse {
+    pub session: SessionListing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_turn: Option<LatestTurn>,
+}
+
+/// A session's latest turn, as its journal records it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LatestTurn {
+    pub prompt: Vec<ContentBlock>,
+    pub origin: TurnOrigin,
+    pub started_at: Timestamp,
+    pub running: bool,
+    /// How it ended, once it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<PromptResponse>,
+    /// Why it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<Error>,
+    /// The agent's last message in it, as text: its message chunks since the last tool call,
+    /// thought or other message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// The Host offers [`WatchSessionsRequest`], in `features`.

@@ -1,5 +1,5 @@
 //! `~/.config/weave/config.toml`, owned by section: the Host reads `default_agent`,
-//! `[agents.*]` and `[[mcp_servers]]`, parsed here; clients read `[tui]` and `[daemon]`, and
+//! `[agents.*]`, `[[mcp_servers]]` and `[delegation]`, parsed here; clients read `[tui]` and `[daemon]`, and
 //! the CLI that runs the Host reads `[remote]`, which this keeps as tables for them to parse.
 //!
 //! ```toml
@@ -18,6 +18,10 @@
 //! [remote]                   # let paired devices connect, through Tailscale Serve
 //! listen = "127.0.0.1:7341"  # the default; loopback only
 //! url = "https://mac.example.ts.net:7341" # what `weave pair` gives devices; found when absent
+//!
+//! [delegation]               # sessions agents start through the Host's tools (ADR 0020)
+//! depth = 1                  # how many levels below a person's session; the default
+//! running = 3                # how many of one session's may run at once; the default
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
@@ -86,6 +90,9 @@ pub struct Config {
     pub client_tools: Option<Vec<String>>,
     /// The Host tools the Host MCP server offers agents, by name: all of them when absent.
     pub host_tools: Option<Vec<String>>,
+    /// How far agents may delegate through Host tools.
+    #[serde(default)]
+    pub delegation: DelegationConfig,
     /// The TUI's section, for it to parse.
     #[serde(default)]
     pub tui: toml::Table,
@@ -98,6 +105,30 @@ pub struct Config {
     /// The presets' versions `weave update` locked beside the file (`agents.lock`).
     #[serde(skip)]
     pub lock: Lock,
+}
+
+/// `[delegation]`: limits on the sessions agents start through the Host's tools.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationConfig {
+    /// How many levels below a session a person started a session may start sessions.
+    pub depth: Option<u32>,
+    /// How many delegated sessions of one session may run a turn or wait on a request at once.
+    pub running: Option<u32>,
+}
+
+impl DelegationConfig {
+    /// One level: a person's session may start sessions; those may not.
+    pub const DEFAULT_DEPTH: u32 = 1;
+    pub const DEFAULT_RUNNING: u32 = 3;
+
+    pub fn depth(&self) -> u32 {
+        self.depth.unwrap_or(Self::DEFAULT_DEPTH)
+    }
+
+    pub fn running(&self) -> u32 {
+        self.running.unwrap_or(Self::DEFAULT_RUNNING)
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -400,6 +431,14 @@ mod tests {
         std::fs::write(Lock::beside(&path), "not toml [").expect("a broken lock");
         let broken = Config::load(Some(&path)).expect("still loads");
         assert_eq!(broken.config.lock, Lock::default());
+    }
+
+    #[test]
+    fn delegation_has_limits_unless_the_config_sets_others() {
+        let defaults = parse("").delegation;
+        assert_eq!((defaults.depth(), defaults.running()), (1, 3));
+        let set = parse("[delegation]\ndepth = 2\nrunning = 5\n").delegation;
+        assert_eq!((set.depth(), set.running()), (2, 5));
     }
 
     #[test]

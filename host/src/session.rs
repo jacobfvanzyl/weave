@@ -76,6 +76,7 @@ use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::MAX_TITLE;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::Replay;
@@ -93,8 +94,10 @@ use weave_host_protocol::worktrees::GitLocation;
 
 use crate::Agent;
 use crate::Shared;
+use crate::host_tools;
 use crate::instance::Instance;
 use crate::instance::LaunchKey;
+use crate::journal;
 use crate::journal::Entry;
 use crate::journal::Journal;
 use crate::journal::Recorded;
@@ -252,6 +255,10 @@ pub(crate) enum Command {
         by: TurnOrigin,
         done: oneshot::Sender<()>,
     },
+    /// The session's latest turn, for `sessions/get`.
+    LatestTurn {
+        reply: oneshot::Sender<Option<LatestTurn>>,
+    },
     /// A message for the running turn; see [`Steer`].
     Steer(Steer),
     Cancel {
@@ -348,6 +355,8 @@ pub(crate) struct Summary {
     pub(crate) last_activity_ms: u64,
     /// Where in a git repository `cwd` is, as the session last read it.
     pub(crate) git: Option<GitLocation>,
+    /// The session whose agent started it, for a delegated session.
+    pub(crate) started_by: Option<SessionId>,
 }
 
 impl Summary {
@@ -363,6 +372,7 @@ impl Summary {
             headless: self.policy.is_headless(),
             last_activity_at: Some(self.last_activity_ms),
             git: self.git.clone(),
+            started_by: self.started_by.clone(),
         }
     }
 }
@@ -434,6 +444,8 @@ pub(crate) struct Opened {
     pub(crate) git: Option<GitLocation>,
     /// Prompts waiting for its next turns, from its journal.
     pub(crate) queue: Queue,
+    /// The session whose agent started it, for a delegated session.
+    pub(crate) started_by: Option<SessionId>,
 }
 
 /// Start the task that owns a session, and register it with the Host.
@@ -453,6 +465,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         title,
         git,
         queue,
+        started_by,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
@@ -467,6 +480,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         policy: policy.clone(),
         last_activity_ms: now,
         git: git.clone(),
+        started_by: started_by.clone(),
     }));
     let Instance {
         agent_id: _,
@@ -499,6 +513,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
                 closed: false,
                 last_activity_ms: now,
                 git,
+                started_by,
             },
         );
     }
@@ -818,6 +833,9 @@ impl Actor {
                 self.resume(by);
                 let _ = done.send(());
             }
+            Command::LatestTurn { reply } => {
+                let _ = reply.send(journal::latest_turn(self.journal.records(), &self.root));
+            }
             Command::Steer(steer) => self.steer(steer),
             Command::Cancel { session_id } => self.cancel(&session_id),
             Command::Changed { notification } => {
@@ -887,6 +905,10 @@ impl Actor {
             None => Err("No turn is running, so nobody's device can run it.".to_owned()),
             Some(TurnOrigin::Run {}) => Err(
                 "This turn came from a headless run, so no person's device is attached.".to_owned(),
+            ),
+            Some(TurnOrigin::Session { .. }) => Err(
+                "This turn came from another session's agent, so no person's device is attached."
+                    .to_owned(),
             ),
             Some(TurnOrigin::Client { id, .. }) => self
                 .clients
@@ -1041,6 +1063,7 @@ impl Actor {
             notices,
             trace,
             update: self.update.clone(),
+            started_by: summary.started_by,
         }
     }
 
@@ -1349,6 +1372,26 @@ impl Actor {
     }
 
     fn ask(&mut self, session_id: Option<SessionId>, request: PendingRequest) {
+        // A person has to answer: the session whose agent began the turn is told, to tell them.
+        let asks = match &request {
+            PendingRequest::Permission(request) => Some(host_tools::Asks::Permission(
+                request.request.tool_call.fields.title.clone(),
+            )),
+            PendingRequest::Elicitation(request) => Some(host_tools::Asks::Elicitation(
+                request.request.message.clone(),
+            )),
+            PendingRequest::ClientTool { .. } => None,
+        };
+        if let (Some(asks), Some(caller)) = (asks, self.caller()) {
+            let listing = lock(&self.summary).listing();
+            let text = host_tools::waiting_text(&listing, &asks);
+            tokio::spawn(host_tools::tell(
+                Arc::clone(&self.shared),
+                caller,
+                self.root.clone(),
+                text,
+            ));
+        }
         let pending = Pending {
             id: format!("p{}", self.next_pending),
             session_id,
@@ -1427,7 +1470,23 @@ impl Actor {
         });
     }
 
+    /// The session whose agent began the session's running turn through a Host tool, which
+    /// hears how it goes: one that started this session, or started the one that did. A turn
+    /// from the Host's message about another session, a delegated one of this session's, comes
+    /// from a session that didn't start this one, and tells it nothing back.
+    fn caller(&self) -> Option<SessionId> {
+        match &self.turns.get(&self.root)?.origin {
+            TurnOrigin::Session { session_id }
+                if host_tools::reaches(&self.shared, session_id, &self.root).is_ok() =>
+            {
+                Some(session_id.clone())
+            }
+            _ => None,
+        }
+    }
+
     fn turn_ended(&mut self, session_id: SessionId, result: Result<PromptResponse, Error>) {
+        let caller = (session_id == self.root).then(|| self.caller()).flatten();
         // Whoever stopped the session's own turn decides what follows it.
         let pause = (session_id == self.root)
             .then(|| match &result {
@@ -1450,6 +1509,18 @@ impl Actor {
         self.record(Entry::turn_ended(session_id, &result));
         if let Some(reason) = pause {
             self.pause(reason);
+        }
+        // The session whose agent began the turn hears how it ended.
+        if let Some(caller) = caller {
+            let latest = journal::latest_turn(self.journal.records(), &self.root);
+            let listing = lock(&self.summary).listing();
+            let text = host_tools::ended_text(&listing, latest.as_ref());
+            tokio::spawn(host_tools::tell(
+                Arc::clone(&self.shared),
+                caller,
+                self.root.clone(),
+                text,
+            ));
         }
     }
 
