@@ -140,6 +140,8 @@ const NEW_COMMAND: &str = "new";
 const RELOAD_COMMAND: &str = "reload";
 /// The slash command that renames the session through the Host, in place of any the agent has.
 const RENAME_COMMAND: &str = "rename";
+/// Starts the Host's paused queue again.
+const QUEUE_COMMAND: &str = "queue";
 
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
@@ -149,6 +151,15 @@ const MAX_TRANSCRIPT_IMAGES: usize = 64;
 #[derive(Debug, PartialEq)]
 pub enum AppCommand {
     Prompt(String),
+    /// `queue/add`: a message for after the running turn, which the Host holds (WVE-107). It
+    /// shows once the Host's `queued` event says so; a failure comes back through
+    /// [`ChatWidget::queue_failed`].
+    Enqueue(String),
+    /// `queue/remove` for this client's queued prompts, in order, to edit them again; the ones
+    /// still waiting come back through [`ChatWidget::unqueued`].
+    Unqueue(Vec<String>),
+    /// `queue/resume`: `/queue`.
+    ResumeQueue,
     /// A message for the running turn (`turn/steer`); the Host's answer comes back through
     /// [`ChatWidget::steer_answered`].
     Steer(String),
@@ -248,6 +259,27 @@ pub struct SessionAbilities {
     pub delete: bool,
 }
 
+/// A message waiting for a later turn.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Queued {
+    /// Its id in the Host's queue; none for one kept here.
+    pub id: Option<String>,
+    pub text: String,
+    /// This client added it.
+    pub mine: bool,
+}
+
+impl Queued {
+    /// One kept here, until it can be sent.
+    fn local(text: String) -> Self {
+        Self {
+            id: None,
+            text,
+            mine: true,
+        }
+    }
+}
+
 struct Turn {
     started: Instant,
     cancelling: bool,
@@ -314,7 +346,13 @@ pub struct ChatWidget {
     turn: Option<Turn>,
     permissions: VecDeque<PendingPermission>,
     composer: Composer,
-    queued: VecDeque<String>,
+    /// Messages waiting for the turns after the running one: the Host's queue when it holds
+    /// one, and messages kept here otherwise, as while a session opens.
+    queued: VecDeque<Queued>,
+    /// The Host holds the session's queue (`queue`).
+    host_queue: bool,
+    /// The Host's queue waits for someone to start it again.
+    queue_paused: bool,
     /// Whether messages sent during a turn steer it: the Host and the agent can. Otherwise,
     /// and with Tab, they're queued for after it.
     steerable: bool,
@@ -456,6 +494,8 @@ impl ChatWidget {
             permissions: VecDeque::new(),
             composer: Composer::default(),
             queued: VecDeque::new(),
+            host_queue: false,
+            queue_paused: false,
             steerable: false,
             modes: None,
             config_options: Vec::new(),
@@ -506,6 +546,60 @@ impl ChatWidget {
         self.renamable = renamable;
         self.offer_own_commands();
         self
+    }
+
+    /// Queue messages in the Host, which holds each session's queue (feature `queue`).
+    pub fn with_host_queue(mut self, host_queue: bool) -> Self {
+        self.host_queue = host_queue;
+        self.offer_own_commands();
+        self
+    }
+
+    /// The Host's queue as a session's state gives it, replacing what this chat showed of it.
+    /// Messages kept here stay, after it.
+    pub fn set_queue(&mut self, queued: Vec<Queued>, paused: bool) {
+        self.queued.retain(|queued| queued.id.is_none());
+        for (index, queued) in queued.into_iter().enumerate() {
+            self.queued.insert(index, queued);
+        }
+        self.queue_paused = paused;
+    }
+
+    /// Send the messages kept here while the session opened to the Host's queue.
+    pub fn send_kept_messages(&mut self) -> Vec<AppCommand> {
+        if !self.host_queue {
+            return Vec::new();
+        }
+        let (held, kept): (VecDeque<Queued>, VecDeque<Queued>) = self
+            .queued
+            .drain(..)
+            .partition(|queued| queued.id.is_some());
+        self.queued = held;
+        kept.into_iter()
+            .map(|queued| AppCommand::Enqueue(queued.text))
+            .collect()
+    }
+
+    /// The Host couldn't queue `text`: back to the draft, saying why.
+    pub fn queue_failed(&mut self, text: &str, error: &Error) {
+        self.push_error(&format!("Couldn't queue the message: {error}"));
+        self.restore_to_draft(text);
+    }
+
+    /// This client's queued messages the Host took out for editing, in order.
+    pub fn unqueued(&mut self, texts: &[String]) {
+        for text in texts {
+            self.restore_to_draft(text);
+        }
+    }
+
+    /// Put `text` back in the draft, after anything there.
+    fn restore_to_draft(&mut self, text: &str) {
+        if self.composer.is_empty() {
+            self.composer.insert_str(text);
+        } else {
+            self.composer.insert_str(&format!("\n{text}"));
+        }
     }
 
     pub fn with_updates(mut self, updatable: bool, dismissed: BTreeMap<String, String>) -> Self {
@@ -621,6 +715,7 @@ impl ChatWidget {
         self.messages.clear();
         self.turn = None;
         self.queued.clear();
+        self.queue_paused = false;
         self.commands.clear();
         self.offer_own_commands();
         self.modes = None;
@@ -1325,6 +1420,32 @@ impl ChatWidget {
                 self.title = Some(title);
                 Vec::new()
             }
+            ChatEvent::Queued { id, text, mine } => {
+                // Ahead of messages kept here, which the Host hasn't seen yet.
+                let at = self
+                    .queued
+                    .iter()
+                    .position(|queued| queued.id.is_none())
+                    .unwrap_or(self.queued.len());
+                self.queued.insert(
+                    at,
+                    Queued {
+                        id: Some(id),
+                        text,
+                        mine,
+                    },
+                );
+                Vec::new()
+            }
+            ChatEvent::Unqueued { id } => {
+                self.queued
+                    .retain(|queued| queued.id.as_deref() != Some(id.as_str()));
+                Vec::new()
+            }
+            ChatEvent::QueuePaused(paused) => {
+                self.queue_paused = paused;
+                Vec::new()
+            }
         }
     }
 
@@ -1506,6 +1627,12 @@ impl ChatWidget {
         }
         if self.updatable {
             own.push((updates::COMMAND, updates::COMMAND_DESCRIPTION));
+        }
+        if self.host_queue {
+            own.push((
+                QUEUE_COMMAND,
+                "Start this session's paused queue again, in the weave Host",
+            ));
         }
         self.commands
             .retain(|command| !own.iter().any(|(name, _)| command.name == *name));
@@ -2052,6 +2179,7 @@ impl ChatWidget {
         self.drop_pending_requests();
         let turn = self.turn.take();
         let was_cancelling = turn.as_ref().is_some_and(|turn| turn.cancelling);
+        let failed = result.is_err();
         let notice = match &result {
             Ok(response) if response.stop_reason == StopReason::Cancelled => None,
             Ok(response) if response.stop_reason == StopReason::EndTurn => Some(
@@ -2091,9 +2219,19 @@ impl ChatWidget {
         if was_cancelling {
             return Vec::new();
         }
+        if self.host_queue {
+            // The Host starts the next queued message, so nothing needs the user yet; unless the
+            // turn failed, when the queue waits.
+            let next = self.queued.iter().any(|queued| queued.id.is_some()) && !failed;
+            return if next {
+                Vec::new()
+            } else {
+                notice.map(AppCommand::Notify).into_iter().collect()
+            };
+        }
         // A queued message goes straight on, so nothing needs the user yet.
         match self.queued.pop_front() {
-            Some(text) => self.start_prompt(text),
+            Some(queued) => self.start_prompt(queued.text),
             None => notice.map(AppCommand::Notify).into_iter().collect(),
         }
     }
@@ -2827,6 +2965,13 @@ impl ChatWidget {
             {
                 return self.slash_update(argument.trim());
             }
+            if self.host_queue && text.trim() == format!("/{QUEUE_COMMAND}") {
+                if self.queue_paused && !self.queued.is_empty() {
+                    return vec![AppCommand::ResumeQueue];
+                }
+                self.push_cell(TranscriptCell::info("The queue isn't paused"));
+                return Vec::new();
+            }
             if self.renamable
                 && let Some(title) = text
                     .trim()
@@ -2857,7 +3002,11 @@ impl ChatWidget {
                 if steer && self.can_steer(&text) {
                     return vec![AppCommand::Steer(text)];
                 }
-                self.queued.push_back(text);
+                // The Host holds the queue, once the session is open there.
+                if self.host_queue && !self.opening {
+                    return vec![AppCommand::Enqueue(text)];
+                }
+                self.queued.push_back(Queued::local(text));
                 Vec::new()
             }
             ComposerAction::Submit(text) => self.start_prompt(text),
@@ -2972,12 +3121,28 @@ impl ChatWidget {
         turn.cancelling = true;
         // The Host cancels them with the turn.
         self.drop_pending_requests();
-        // Like Codex, give queued follow-ups back for editing rather than sending them.
-        if !self.queued.is_empty() && self.composer.is_empty() {
-            let restored = self.queued.drain(..).collect::<Vec<_>>().join("\n");
-            self.composer.insert_str(&restored);
+        // Like Codex, give queued follow-ups back for editing rather than sending them: this
+        // client's own, which the Host takes out of its queue first. Other clients' wait in the
+        // queue, which the Host pauses with the turn.
+        let mut commands = vec![AppCommand::Cancel];
+        if self.composer.is_empty() {
+            let (mine, others): (VecDeque<Queued>, VecDeque<Queued>) =
+                self.queued.drain(..).partition(|queued| queued.mine);
+            self.queued = others;
+            let kept: Vec<String> = mine
+                .iter()
+                .filter(|queued| queued.id.is_none())
+                .map(|queued| queued.text.clone())
+                .collect();
+            if !kept.is_empty() {
+                self.composer.insert_str(&kept.join("\n"));
+            }
+            let held: Vec<String> = mine.into_iter().filter_map(|queued| queued.id).collect();
+            if !held.is_empty() {
+                commands.push(AppCommand::Unqueue(held));
+            }
         }
-        vec![AppCommand::Cancel]
+        commands
     }
 
     /// Stop showing every outstanding request. The Host resolves them: with the turn, or
@@ -3300,9 +3465,16 @@ impl ChatWidget {
             };
             lines.push(status_line(&status, now));
         }
-        for text in &self.queued {
-            let first_line = text.lines().next().unwrap_or_default();
+        for queued in &self.queued {
+            let first_line = queued.text.lines().next().unwrap_or_default();
             lines.push(Line::from(Span::styled(format!(" ↳ {first_line}"), dim())));
+        }
+        if self.queue_paused && !self.queued.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  queue paused · ", dim()),
+                Span::raw(format!("/{QUEUE_COMMAND}")),
+                Span::styled(" to carry on", dim()),
+            ]));
         }
         // Subagents can work on after the turn that started them.
         let running = self.running_subagents();
@@ -3876,6 +4048,14 @@ mod tests {
             .collect()
     }
 
+    /// What waits for later turns, in order.
+    fn queued_texts(chat: &ChatWidget) -> Vec<&str> {
+        chat.queued
+            .iter()
+            .map(|queued| queued.text.as_str())
+            .collect()
+    }
+
     fn submit(chat: &mut ChatWidget, text: &str) -> Vec<AppCommand> {
         chat.handle_paste(text);
         chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
@@ -4416,7 +4596,87 @@ mod tests {
             chat.handle_agent_event(turn_ended(StopReason::EndTurn)),
             [AppCommand::Prompt("later".into())]
         );
-        assert_eq!(chat.queued, ["again"]);
+        assert_eq!(queued_texts(&chat), ["again"]);
+    }
+
+    fn host_queued(id: &str, text: &str, mine: bool) -> ChatEvent {
+        ChatEvent::Queued {
+            id: id.into(),
+            text: text.into(),
+            mine,
+        }
+    }
+
+    #[test]
+    fn with_the_hosts_queue_messages_wait_there_and_the_host_starts_them() {
+        let mut chat = chat().with_host_queue(true);
+        submit(&mut chat, "first");
+        assert_eq!(
+            submit(&mut chat, "second"),
+            [AppCommand::Enqueue("second".into())]
+        );
+        // It shows once the Host has it, beside another client's.
+        assert!(queued_texts(&chat).is_empty());
+        chat.handle_agent_event(host_queued("q1", "second", true));
+        chat.handle_agent_event(host_queued("q2", "from the iPad", false));
+        assert_eq!(queued_texts(&chat), ["second", "from the iPad"]);
+        assert!(rows(&chat, 60).iter().any(|row| row == " ↳ from the iPad"));
+
+        // The turn's end starts nothing here: the Host starts the next, and nobody is told.
+        assert_eq!(chat.handle_agent_event(turn_ended(StopReason::EndTurn)), []);
+        chat.handle_agent_event(ChatEvent::Unqueued { id: "q1".into() });
+        assert_eq!(queued_texts(&chat), ["from the iPad"]);
+    }
+
+    #[test]
+    fn with_the_hosts_queue_escape_takes_back_only_this_clients_messages() {
+        let mut chat = chat().with_host_queue(true);
+        submit(&mut chat, "first");
+        chat.handle_agent_event(host_queued("q1", "mine", true));
+        chat.handle_agent_event(host_queued("q2", "theirs", false));
+        chat.handle_agent_event(host_queued("q3", "mine too", true));
+        assert_eq!(
+            chat.handle_key(key(KeyCode::Esc)),
+            [
+                AppCommand::Cancel,
+                AppCommand::Unqueue(vec!["q1".into(), "q3".into()])
+            ]
+        );
+        assert_eq!(queued_texts(&chat), ["theirs"]);
+        chat.unqueued(&["mine".into(), "mine too".into()]);
+        assert_eq!(chat.composer.text(), "mine\nmine too");
+    }
+
+    #[test]
+    fn a_paused_host_queue_says_so_and_queue_starts_it_again() {
+        let mut chat = chat().with_host_queue(true);
+        assert!(chat.commands.iter().any(|command| command.name == "queue"));
+        chat.handle_agent_event(host_queued("q1", "waiting", false));
+        chat.handle_agent_event(ChatEvent::QueuePaused(true));
+        assert!(
+            rows(&chat, 60)
+                .iter()
+                .any(|row| row == "  queue paused · /queue to carry on"),
+            "{:?}",
+            rows(&chat, 60)
+        );
+        assert_eq!(submit(&mut chat, "/queue"), [AppCommand::ResumeQueue]);
+        chat.handle_agent_event(ChatEvent::QueuePaused(false));
+        assert!(submit(&mut chat, "/queue").is_empty());
+        assert!(said(&mut chat).contains("The queue isn't paused"));
+    }
+
+    #[test]
+    fn messages_kept_while_a_session_opens_go_to_the_hosts_queue_once_it_has() {
+        let mut chat = chat().with_host_queue(true);
+        chat.begin_session("s2".into(), None);
+        assert!(submit(&mut chat, "too soon").is_empty());
+        assert_eq!(queued_texts(&chat), ["too soon"]);
+        assert_eq!(
+            chat.send_kept_messages(),
+            [AppCommand::Enqueue("too soon".into())]
+        );
+        assert!(queued_texts(&chat).is_empty());
     }
 
     #[test]
@@ -4430,7 +4690,7 @@ mod tests {
                 .any(|row| row == "  enter to queue message")
         );
         assert!(chat.handle_key(key(KeyCode::Enter)).is_empty());
-        assert_eq!(chat.queued, ["second"]);
+        assert_eq!(queued_texts(&chat), ["second"]);
     }
 
     #[test]

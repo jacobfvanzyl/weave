@@ -1,0 +1,9 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&AddQueuedResponse\n{ queued_id: \"q-3\".to_owned(), seq: 44, started: false, })"
+---
+{
+  "queuedId": "q-3",
+  "seq": 44,
+  "started": false
+}

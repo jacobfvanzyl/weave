@@ -42,6 +42,9 @@ use weave_acp_core::schema::TerminalId;
 use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::queue::QueuePause;
+use weave_host_protocol::queue::QueuedId;
+use weave_host_protocol::queue::QueuedPrompt;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::worktrees::GitLocation;
@@ -100,6 +103,11 @@ pub(crate) enum Entry {
         /// and in journals from before the Host looked.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         git: Option<GitLocation>,
+        /// The queue a closed session's journal left, carried on into this one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        queue: Vec<QueuedPrompt>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue_paused: Option<QueuePause>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -126,6 +134,12 @@ pub(crate) enum Entry {
         prompt: Vec<ContentBlock>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<TurnOrigin>,
+        /// The queued prompt it started from.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queued_id: Option<QueuedId>,
+        /// The request key it was started under, which a repeat finds it by.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
     },
     /// A message joined the running turn (`turn/steer`).
     #[serde(rename_all = "camelCase")]
@@ -160,12 +174,41 @@ pub(crate) enum Entry {
         failed: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
-    Closed { reason: String, at_ms: u64 },
+    Closed {
+        reason: String,
+        at_ms: u64,
+    },
     /// Something the Host told the session's clients.
-    Notice { text: String },
+    Notice {
+        text: String,
+    },
     /// The session was renamed through the Host: its title from now on.
     Renamed {
         title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
+    /// A prompt joined the queue; `at` is when.
+    #[serde(rename_all = "camelCase")]
+    Queued {
+        queued_id: QueuedId,
+        prompt: Vec<ContentBlock>,
+        origin: TurnOrigin,
+        /// The request key it was queued under, which a repeat finds it by.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
+    /// A client took a prompt out of the queue.
+    #[serde(rename_all = "camelCase")]
+    Unqueued {
+        queued_id: QueuedId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
+    QueuePaused {
+        reason: QueuePause,
+    },
+    QueueResumed {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<TurnOrigin>,
     },
@@ -191,6 +234,8 @@ impl Entry {
             created_ms: now_ms(),
             title,
             git,
+            queue: Vec::new(),
+            queue_paused: None,
         }
     }
 
@@ -232,11 +277,13 @@ impl Entry {
                 session_id,
                 prompt,
                 origin,
+                queued_id,
                 ..
             } => SessionEvent::TurnStarted {
                 session_id: session_id.clone(),
                 prompt: prompt.clone(),
                 origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
+                queued_id: queued_id.clone(),
             },
             Self::TurnSteered {
                 session_id,
@@ -280,6 +327,22 @@ impl Entry {
                 title: title.clone(),
                 by: by.clone(),
             },
+            Self::Queued {
+                queued_id,
+                prompt,
+                origin,
+                ..
+            } => SessionEvent::Queued {
+                queued_id: queued_id.clone(),
+                prompt: prompt.clone(),
+                origin: origin.clone(),
+            },
+            Self::Unqueued { queued_id, by } => SessionEvent::Unqueued {
+                queued_id: queued_id.clone(),
+                by: by.clone(),
+            },
+            Self::QueuePaused { reason } => SessionEvent::QueuePaused { reason: *reason },
+            Self::QueueResumed { by } => SessionEvent::QueueResumed { by: by.clone() },
         })
     }
 }
@@ -615,6 +678,52 @@ pub(crate) fn is_closed(records: &[Record]) -> bool {
     )
 }
 
+/// What a journal records of the work done under request key `key`: the position of the
+/// turn or queued prompt it started, which queued prompt that was, and whether it started a
+/// turn.
+pub(crate) fn find_key(records: &[Record], key: &str) -> Option<KeyedWork> {
+    records
+        .iter()
+        .enumerate()
+        .find_map(|(seq, record)| match &record.entry {
+            Entry::TurnStarted {
+                key: Some(found),
+                queued_id,
+                session_id,
+                ..
+            } if found == key => Some(KeyedWork {
+                seq: u64::try_from(seq).unwrap_or(u64::MAX),
+                session_id: session_id.clone(),
+                queued_id: queued_id.clone(),
+                started: true,
+            }),
+            Entry::Queued {
+                key: Some(found),
+                queued_id,
+                ..
+            } if found == key => Some(KeyedWork {
+                seq: u64::try_from(seq).unwrap_or(u64::MAX),
+                session_id: records.first().and_then(|first| match &first.entry {
+                    Entry::Header { session_id, .. } => Some(session_id.clone()),
+                    _ => None,
+                })?,
+                queued_id: Some(queued_id.clone()),
+                started: false,
+            }),
+            _ => None,
+        })
+}
+
+/// The work a request key started, as its session's journal records it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KeyedWork {
+    pub(crate) seq: u64,
+    /// The session the turn started in, a subagent session's when it was one's.
+    pub(crate) session_id: SessionId,
+    pub(crate) queued_id: Option<QueuedId>,
+    pub(crate) started: bool,
+}
+
 /// Sessions whose turn started and never ended.
 pub(crate) fn open_turns(records: &[Record]) -> Vec<SessionId> {
     let mut open: Vec<SessionId> = Vec::new();
@@ -760,6 +869,8 @@ mod tests {
             at_ms: 1,
             prompt: vec![ContentBlock::from("hi".to_owned())],
             origin: None,
+            queued_id: None,
+            key: Some("k1".to_owned()),
         });
         assert_eq!(seq, 1);
         journal.append(Entry::Update {
@@ -777,6 +888,16 @@ mod tests {
         assert_eq!(records.len(), 3);
         assert!(!is_closed(&records));
         assert_eq!(open_turns(&records), std::slice::from_ref(&id));
+        assert_eq!(
+            find_key(&records, "k1"),
+            Some(KeyedWork {
+                seq: 1,
+                session_id: id.clone(),
+                queued_id: None,
+                started: true,
+            })
+        );
+        assert_eq!(find_key(&records, "k2"), None);
 
         // Reopened after a restart, it carries on where it was, under the same id.
         let id_before = journal.id();

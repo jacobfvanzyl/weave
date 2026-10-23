@@ -98,6 +98,13 @@ use weave_host_protocol::pending::PendingRequest;
 use weave_host_protocol::pending::PendingResolvedNotification;
 use weave_host_protocol::pending::Resolution;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::queue::AddQueuedRequest;
+use weave_host_protocol::queue::AddQueuedResponse;
+use weave_host_protocol::queue::QueuePause;
+use weave_host_protocol::queue::QueuedPrompt;
+use weave_host_protocol::queue::RemoveQueuedRequest;
+use weave_host_protocol::queue::RemoveQueuedResponse;
+use weave_host_protocol::queue::ResumeQueueRequest;
 use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::AttachSessionResponse;
@@ -273,6 +280,8 @@ fn state() -> SessionState {
                 device: None,
             },
         }],
+        queue: vec![queued()],
+        queue_paused: None,
         pending: vec![pending()],
         subagents: vec!["s-1-child".into()],
         journal: JournalHead {
@@ -282,6 +291,23 @@ fn state() -> SessionState {
         notices: vec!["The agent doesn't support MCP server docs over SSE; skipped".to_owned()],
         trace: None,
         update: Some(update()),
+    }
+}
+
+fn tui() -> TurnOrigin {
+    TurnOrigin::Client {
+        name: "weave-tui".to_owned(),
+        id: "c7".to_owned(),
+        device: None,
+    }
+}
+
+fn queued() -> QueuedPrompt {
+    QueuedPrompt {
+        id: "q-3".to_owned(),
+        prompt: vec![text("then update the docs")],
+        origin: tui(),
+        queued_at: 1_760_180_000_500,
     }
 }
 
@@ -689,6 +715,21 @@ fn sessions() {
             policy: PermissionPolicy::headless(vec![ToolKind::Read, ToolKind::Edit]),
             attach: false,
             trace: false,
+            key: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "run_request_keyed",
+        message(&RunRequest {
+            agent_id: "codex".to_owned(),
+            cwd: "/repo".into(),
+            session_id: None,
+            additional_directories: Vec::new(),
+            prompt: vec![text("fix the tests")],
+            policy: PermissionPolicy::headless(vec![ToolKind::Read]),
+            attach: false,
+            trace: false,
+            key: Some("nightly-2026-10-23".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
@@ -844,6 +885,15 @@ fn turns() {
         message(&StartTurnRequest {
             session_id: "s-1".into(),
             prompt: vec![text("hello")],
+            key: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "start_turn_request_keyed",
+        message(&StartTurnRequest {
+            session_id: "s-1".into(),
+            prompt: vec![text("hello")],
+            key: Some("0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c11".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
@@ -880,6 +930,73 @@ fn turns() {
 }
 
 #[test]
+fn queue() {
+    insta::assert_json_snapshot!(
+        "add_queued_request",
+        message(&AddQueuedRequest {
+            session_id: "s-1".into(),
+            prompt: vec![text("then update the docs")],
+            key: Some("0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c12".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "add_queued_response",
+        round_trip(&AddQueuedResponse {
+            queued_id: "q-3".to_owned(),
+            seq: 44,
+            started: false,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "add_queued_response_started",
+        round_trip(&AddQueuedResponse {
+            queued_id: "q-4".to_owned(),
+            seq: 45,
+            started: true,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_queued_request",
+        message(&RemoveQueuedRequest {
+            session_id: "s-1".into(),
+            queued_id: "q-3".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_queued_response",
+        round_trip(&RemoveQueuedResponse {
+            removed: Some(queued()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_queued_response_gone",
+        round_trip(&RemoveQueuedResponse { removed: None })
+    );
+    insta::assert_json_snapshot!(
+        "resume_queue_request",
+        message(&ResumeQueueRequest {
+            session_id: "s-1".into(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "attach_session_response_queue_paused",
+        round_trip(&AttachSessionResponse {
+            state: SessionState {
+                activity: Activity::Idle,
+                turns: Vec::new(),
+                pending: Vec::new(),
+                queue_paused: Some(QueuePause::Cancelled),
+                ..state()
+            },
+            replay: Replay {
+                from: 1,
+                reset: true,
+            },
+        })
+    );
+}
+
+#[test]
 fn events() {
     let event = |seq, event| SessionEventNotification {
         session_id: "s-1".into(),
@@ -899,6 +1016,7 @@ fn events() {
                     id: "c7".to_owned(),
                     device: None,
                 },
+                queued_id: None,
             },
         ))
     );
@@ -914,8 +1032,59 @@ fn events() {
                     id: "c9".to_owned(),
                     device: Some("Jaco's iPad".to_owned()),
                 },
+                queued_id: None,
             },
         ))
+    );
+    insta::assert_json_snapshot!(
+        "event_turn_started_from_the_queue",
+        message(&event(
+            49,
+            SessionEvent::TurnStarted {
+                session_id: "s-1".into(),
+                prompt: vec![text("then update the docs")],
+                origin: tui(),
+                queued_id: Some("q-3".to_owned()),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_queued",
+        message(&event(
+            44,
+            SessionEvent::Queued {
+                queued_id: "q-3".to_owned(),
+                prompt: vec![text("then update the docs")],
+                origin: tui(),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_unqueued",
+        message(&event(
+            50,
+            SessionEvent::Unqueued {
+                queued_id: "q-5".to_owned(),
+                by: Some(TurnOrigin::Client {
+                    name: "weave-app".to_owned(),
+                    id: "c9".to_owned(),
+                    device: Some("Jaco's iPad".to_owned()),
+                }),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_queue_paused",
+        message(&event(
+            51,
+            SessionEvent::QueuePaused {
+                reason: QueuePause::Cancelled,
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_queue_resumed",
+        message(&event(52, SessionEvent::QueueResumed { by: Some(tui()) }))
     );
     insta::assert_json_snapshot!(
         "event_renamed",
@@ -1001,6 +1170,7 @@ fn events() {
                 session_id: "s-1".into(),
                 prompt: vec![text("fix the tests")],
                 origin: TurnOrigin::Run {},
+                queued_id: None,
             },
         ))
     );

@@ -1,0 +1,22 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&RemoveQueuedResponse { removed: Some(queued()), })"
+---
+{
+  "removed": {
+    "id": "q-3",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "then update the docs"
+      }
+    ],
+    "origin": {
+      "client": {
+        "name": "weave-tui",
+        "id": "c7"
+      }
+    },
+    "queuedAt": 1760180000500
+  }
+}

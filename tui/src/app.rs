@@ -20,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
+use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::Error;
 use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::PromptCapabilities;
@@ -38,6 +39,11 @@ use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::pending::PendingKind;
 use weave_host_protocol::pending::PendingRequest;
+use weave_host_protocol::queue::AddQueuedRequest;
+use weave_host_protocol::queue::FEATURE as QUEUE_FEATURE;
+use weave_host_protocol::queue::QueuedPrompt;
+use weave_host_protocol::queue::RemoveQueuedRequest;
+use weave_host_protocol::queue::ResumeQueueRequest;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::CreateSessionRequest;
@@ -65,6 +71,7 @@ use weave_host_protocol::turns::SteerTurnResponse;
 use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
 use crate::chat::ChatWidget;
+use crate::chat::Queued;
 use crate::chat::SessionAbilities;
 use crate::clipboard;
 use crate::events::ChatEvent;
@@ -195,6 +202,12 @@ enum AppEvent {
     SessionReopened(SessionId, Result<(), Error>),
     /// `/rename` failed; a rename that worked shows as its `renamed` event.
     RenameFailed(Error),
+    /// The Host couldn't queue a message, which goes back to the draft.
+    QueueFailed(String, Error),
+    /// This client's queued messages the Host took out for editing, in order.
+    Unqueued(Vec<String>),
+    /// `/queue` failed.
+    ResumeFailed(Error),
 }
 
 /// Why a session is being opened, for when the Host answers.
@@ -251,6 +264,11 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .features
         .iter()
         .any(|feature| feature == RENAME_FEATURE);
+    let queueable = connection
+        .hello()
+        .features
+        .iter()
+        .any(|feature| feature == QUEUE_FEATURE);
     let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
     // The session works where the Host says, and so does this client.
@@ -263,6 +281,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .with_detach(detachable)
         .with_updates(updatable, dismissed.versions().clone())
         .with_rename(renamable)
+        .with_host_queue(queueable)
         .with_thumbnails(tui.shows_images());
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
@@ -507,19 +526,47 @@ impl App {
                 session_id,
                 prompt,
                 origin,
+                queued_id,
             } => {
-                // This client's own prompt is on screen already, and its turn running.
-                let own = matches!(&origin, TurnOrigin::Client { id, .. } if id == self.handle.client_id());
-                if own && !replayed {
-                    return Vec::new();
+                // The queue a session's state gave covers the replay.
+                let mut commands = Vec::new();
+                if let Some(id) = queued_id.clone().filter(|_| !replayed) {
+                    commands = chat.handle_agent_event(ChatEvent::Unqueued { id });
                 }
-                ChatEvent::TurnStarted {
+                // This client's own prompt is on screen already, and its turn running, unless
+                // it waited in the Host's queue.
+                if self.is_mine(&origin) && !replayed && queued_id.is_none() {
+                    return commands;
+                }
+                commands.extend(chat.handle_agent_event(ChatEvent::TurnStarted {
                     session_id,
                     prompt,
                     elapsed: since(at),
                     replayed,
-                }
+                }));
+                return commands;
             }
+            // The queue a session's state gave covers the replay.
+            SessionEvent::Queued { .. }
+            | SessionEvent::Unqueued { .. }
+            | SessionEvent::QueuePaused { .. }
+            | SessionEvent::QueueResumed { .. }
+                if replayed =>
+            {
+                return Vec::new();
+            }
+            SessionEvent::Queued {
+                queued_id,
+                prompt,
+                origin,
+            } => ChatEvent::Queued {
+                id: queued_id,
+                text: prompt_text(&prompt),
+                mine: self.is_mine(&origin),
+            },
+            SessionEvent::Unqueued { queued_id, .. } => ChatEvent::Unqueued { id: queued_id },
+            SessionEvent::QueuePaused { .. } => ChatEvent::QueuePaused(true),
+            SessionEvent::QueueResumed { .. } => ChatEvent::QueuePaused(false),
             // Shown as it joins the turn, this client's own messages too.
             SessionEvent::TurnSteered {
                 session_id, prompt, ..
@@ -660,7 +707,9 @@ impl App {
             chat.update_available(update);
         }
         self.track(chat, opened);
-        self.show_state(chat, &opened.state)
+        let mut commands = self.show_state(chat, &opened.state);
+        commands.extend(chat.send_kept_messages());
+        commands
     }
 
     /// Follow what the session's agent says about itself: what prompts may carry, and
@@ -709,7 +758,27 @@ impl App {
         for pending in &state.pending {
             commands.extend(self.pending(chat, &state.session_id, pending.clone()));
         }
+        let queued = state
+            .queue
+            .iter()
+            .map(|queued| self.queued(queued))
+            .collect();
+        chat.set_queue(queued, state.queue_paused.is_some());
         commands
+    }
+
+    /// A prompt in the Host's queue, as the chat shows it.
+    fn queued(&self, queued: &QueuedPrompt) -> Queued {
+        Queued {
+            id: Some(queued.id.clone()),
+            text: prompt_text(&queued.prompt),
+            mine: self.is_mine(&queued.origin),
+        }
+    }
+
+    /// Whether this client is `origin`.
+    fn is_mine(&self, origin: &TurnOrigin) -> bool {
+        matches!(origin, TurnOrigin::Client { id, .. } if id == self.handle.client_id())
     }
 
     /// The Host went away: reconnect when it's back, unless it was in this process.
@@ -778,6 +847,18 @@ impl App {
                 chat.prompt_failed(&error);
                 Vec::new()
             }
+            AppEvent::QueueFailed(text, error) => {
+                chat.queue_failed(&text, &error);
+                Vec::new()
+            }
+            AppEvent::Unqueued(texts) => {
+                chat.unqueued(&texts);
+                Vec::new()
+            }
+            AppEvent::ResumeFailed(error) => {
+                chat.report_info(&format!("Couldn't start the queue again: {error}"));
+                Vec::new()
+            }
             AppEvent::Steered {
                 session_id,
                 text,
@@ -840,10 +921,70 @@ impl App {
                     let handle = self.handle.clone();
                     self.spawn_unless_ok(async move {
                         handle
-                            .send(StartTurnRequest { session_id, prompt })
+                            .send(StartTurnRequest {
+                                session_id,
+                                prompt,
+                                key: None,
+                            })
                             .await
                             .err()
                             .map(AppEvent::PromptFailed)
+                    });
+                }
+                AppCommand::Enqueue(text) => {
+                    let Some(session_id) = chat.active_session().cloned() else {
+                        continue;
+                    };
+                    // What it attaches shows in the message once its turn starts.
+                    let images = chat.prompt_images(&text);
+                    let (prompt, _) =
+                        prompt_blocks(&text, &self.cwd, &self.prompt_capabilities, &images);
+                    let handle = self.handle.clone();
+                    self.spawn_unless_ok(async move {
+                        handle
+                            .send(AddQueuedRequest {
+                                session_id,
+                                prompt,
+                                key: None,
+                            })
+                            .await
+                            .err()
+                            .map(|error| AppEvent::QueueFailed(text, error))
+                    });
+                }
+                AppCommand::Unqueue(ids) => {
+                    let Some(session_id) = chat.active_session().cloned() else {
+                        continue;
+                    };
+                    let handle = self.handle.clone();
+                    self.spawn(async move {
+                        // One at a time, so they come back in order.
+                        let mut texts = Vec::new();
+                        for queued_id in ids {
+                            let removed = handle
+                                .send(RemoveQueuedRequest {
+                                    session_id: session_id.clone(),
+                                    queued_id,
+                                })
+                                .await;
+                            if let Ok(Some(removed)) = removed.map(|answer| answer.removed) {
+                                texts.push(prompt_text(&removed.prompt));
+                            }
+                        }
+                        AppEvent::Unqueued(texts)
+                    });
+                }
+                AppCommand::ResumeQueue => {
+                    let Some(session_id) = chat.active_session().cloned() else {
+                        continue;
+                    };
+                    let handle = self.handle.clone();
+                    self.spawn_unless_ok(async move {
+                        handle
+                            .send(ResumeQueueRequest { session_id })
+                            .await
+                            .err()
+                            .map(AppEvent::ResumeFailed)
                     });
                 }
                 AppCommand::Steer(text) => {
@@ -1264,6 +1405,24 @@ fn run_client_tool(
 }
 
 /// How long ago `at` was.
+/// What a queued prompt says, as the composer would hold it: its text, and a placeholder for
+/// each image.
+fn prompt_text(prompt: &[ContentBlock]) -> String {
+    let mut images = 0;
+    let parts: Vec<String> = prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.clone()),
+            ContentBlock::Image(_) => {
+                images += 1;
+                Some(format!("[image {images}]"))
+            }
+            _ => None,
+        })
+        .collect();
+    parts.join(" ")
+}
+
 fn since(at: u64) -> Duration {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

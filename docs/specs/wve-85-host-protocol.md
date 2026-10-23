@@ -148,7 +148,11 @@ request with `unauthenticated`.
   `sessions/watch` (WVE-104): `sessions/watch`, `sessions/unwatch`, `sessions/updated` and
   `sessions/removed`, `files/list` (WVE-112; see [Files](#files)), and `session/rename`
   (WVE-114): `session/rename`, the `renamed` event and the `rename_session` Host tool (see
-  [Host tools](#host-tools)).
+  [Host tools](#host-tools)), `queue` (WVE-107): `queue/add`, `queue/remove`,
+  `queue/resume`, `SessionState.queue` and `queuePaused`, `turnStarted`'s `queuedId`, and the
+  `queued`, `unqueued`, `queuePaused` and `queueResumed` events (see [Queue](#queue)), and
+  `requestKeys` (WVE-107): the `key` that `session/run`, `turn/start` and `queue/add` take
+  (see [Request keys](#request-keys)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -330,6 +334,8 @@ type SessionState = {
   modes?: SessionModeState;
   configOptions: SessionConfigOption[];
   turns: { sessionId: string; startedAt: number; origin: TurnOrigin }[];
+  queue?: QueuedPrompt[];                      // prompts waiting for the next turns; see Queue
+  queuePaused?: "cancelled" | "failed" | "interrupted";   // why the queue waits
   pending: PendingRequest[];
   subagents: string[];                         // subagent session ids so far
   journal: { id: string; head: number };       // the position of the last event written
@@ -501,7 +507,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `event.kind` | Fields | Written when |
 | --- | --- | --- |
 | `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this session or a subagent session; `notification.sessionId` says which), or a client changes a mode or config option |
-| `turnStarted` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin` | a turn starts |
+| `turnStarted` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin`, `queuedId?` | a turn starts; `queuedId` names the queued prompt it started from |
 | `turnSteered` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin` | a steer joins the running turn (`turn/steer`) |
 | `turnEnded` | `sessionId`, `response?`: ACP `PromptResponse`, `error?`: JSON-RPC error | a turn ends |
 | `terminalOutput` | `terminalId`, `data` | a command the Host runs for the agent writes output |
@@ -510,6 +516,10 @@ the session, as when a closed session is opened again. A client that remembers
 | `closed` | `reason` | the session closes |
 | `notice` | `text` | the Host tells the session's clients something, such as that its agent can't use client tools |
 | `renamed` | `title`, `by?`: `origin` | the session was renamed through the Host (`session/rename`); `by` is the renaming client's origin, absent when the session's own agent renamed it (the `rename_session` Host tool) |
+| `queued` | `queuedId`, `prompt`: ACP `ContentBlock[]`, `origin` | a prompt joined the queue (`queue/add`) |
+| `unqueued` | `queuedId`, `by?`: `origin` | a client took a prompt out of the queue (`queue/remove`) |
+| `queuePaused` | `reason`: `"cancelled" \| "failed" \| "interrupted"` | the queue stopped starting turns (see [Queue](#queue)) |
+| `queueResumed` | `by?`: `origin` | the queue started again; `by` is the client that resumed it |
 
 `origin` is `{"client": {"name": "weave-tui", "id": "c7"}}` for a client's prompt, with the
 connection's `clientId` so a client recognizes its own (a remote client's adds its paired
@@ -542,12 +552,14 @@ catches up from its position (WVE-90).
 
 ## Turns
 
-**`turn/start`** `{sessionId, prompt: ContentBlock[]}` → `{seq}`
+**`turn/start`** `{sessionId, prompt: ContentBlock[], key?}` → `{seq}`
 
 Sends the prompt to the agent and answers once the turn has started, with the position of
 its `turnStarted` event. The session must be open, but the client needn't be attached.
 `sessionId` may be a subagent session's. The turn's end reaches attached clients as
-`turnEnded`, whoever started it. Fails with `session_not_open` or `turn_running`.
+`turnEnded`, whoever started it. Fails with `session_not_open` or `turn_running`. A Host
+with the `queue` feature offers `queue/add` too, which starts a turn or queues the prompt
+behind the running one (see [Queue](#queue)).
 
 **`turn/steer`** `{sessionId, prompt: ContentBlock[]}` →
 `{outcome: "steered", seq} | {outcome: "notRunning"}`
@@ -578,7 +590,7 @@ own, whose output reaches clients but whose end never does. The Host journals th
 Cancels the session's running turn (ACP `session/cancel`) and cancels its pending
 requests.
 
-**`session/run`** `{agentId, cwd, sessionId?, additionalDirectories?, prompt, policy, attach?, trace?}` →
+**`session/run`** `{agentId, cwd, sessionId?, additionalDirectories?, prompt, policy, attach?, trace?, key?}` →
 `{sessionId, state?: SessionState}`
 
 Opens a session (`sessionId`, as attaching would, or a new one) and starts a turn in it
@@ -586,6 +598,91 @@ without the client having to stay. An open session keeps its own policy. With `a
 client is attached before the prompt is sent, so it sees the whole turn, and `state` is
 returned. Nobody can sign in at a terminal for a headless session, so the Host doesn't
 offer agents terminal sign-in for one.
+
+### Queue
+
+Feature `queue`. Each open session has a queue: prompts waiting, in order, to start its next
+turns. The Host holds it rather than a client, so every attached client sees the same queue,
+it outlives the client that added to it, and whatever has no client, such as a trigger or
+another session's agent, can queue too.
+
+```ts
+type QueuedPrompt = {
+  id: string;           // the queuedId, unique in the session
+  prompt: ContentBlock[];
+  origin: TurnOrigin;   // who added it, which its turn's origin will be
+  queuedAt: number;
+};
+```
+
+- **Running.** Whenever no turn of the session's own runs, its queue isn't paused and no
+  `session/reopen` waits, the Host starts the first queued prompt as the next turn, with that
+  prompt's origin. Its `turnStarted` names it in `queuedId`, which is how clients know it left
+  the queue. Only a session has a queue; its subagent sessions don't.
+- **Pausing.** When the session's turn is cancelled (`stopReason: "cancelled"`) or fails while
+  prompts wait, the queue pauses rather than start the next one, journaled as `queuePaused`:
+  whoever stopped the turn decides what follows. So does an interactive session's queue when
+  the Host takes the session up again with prompts waiting, after the Host stopped or the
+  session closed (`interrupted`); a headless session's carries on. A paused queue resumes,
+  journaled as `queueResumed`, with `queue/resume`, or when a client prompts the session with
+  `queue/add`, `turn/start` or `session/run`. A paused queue that empties isn't paused any
+  more, and clients stop showing it as paused.
+- **Journaled.** The queue is in the journal (`queued`, `unqueued`, `queuePaused`,
+  `queueResumed` and `turnStarted`'s `queuedId`), so it survives a Host restart and replays
+  to clients that attach later, and `SessionState` carries it as `queue` and `queuePaused`. A
+  closed session's queue carries on into the journal it gets when it opens again, as a renamed
+  title does. A paused queue doesn't keep its session open: the session closes after the idle
+  grace like any other.
+- **At startup** the Host takes up the suspended headless sessions whose queue holds prompts
+  and isn't paused, so their queue runs with nobody attached.
+
+**`queue/add`** `{sessionId, prompt: ContentBlock[], key?}` → `{queuedId, seq, started}`
+
+Adds a prompt to the end of the session's queue, with the client's origin. Any client may add
+to an open session's queue, attached or not (`session_not_open` otherwise). `sessionId` must be
+the session's own, not a subagent session's (invalid params). When no turn runs and nothing
+waits, the prompt starts a turn at once: `started` is true and `seq` is the position of its
+`turnStarted`. Otherwise `seq` is the position of its `queued` event. Adding to a paused queue
+resumes it. So sending is one request whatever the session is doing.
+
+**`queue/remove`** `{sessionId, queuedId}` → `{removed?: QueuedPrompt}`
+
+Takes a prompt out of the queue, whoever added it, journaled as `unqueued`, and answers with it.
+`removed` is absent when the prompt had already left the queue, started or removed, so a
+client taking a prompt back to edit it never has it both running and in its composer. Queued
+prompts aren't edited in place: remove one and add it again.
+
+**`queue/resume`** `{sessionId}` → `{}`
+
+Resumes a paused queue, starting its first prompt if no turn runs. A queue that isn't paused
+stays as it is.
+
+Steering is unchanged: `turn/steer` joins a running turn, and a `notRunning` answer has the
+client send its message with `queue/add` instead, which starts it, or queues it behind a turn
+that started meanwhile.
+
+### Request keys
+
+Feature `requestKeys`. `session/run`, `turn/start` and `queue/add` take an optional `key`, 1 to
+200 characters the caller chooses, such as a UUID, so a caller that retries after a dropped
+connection never starts the same work twice.
+
+- The Host records a key on disk before acting on its request. A repeat, the same method with
+  the same key, answers as the first did and starts nothing, across Host restarts too. One that
+  arrives while the first is still being answered waits for it.
+- A key belongs to one request: a repeat whose method or params differ fails with
+  `key_reused`.
+- Only work that happened uses a key up. A request that fails, with `turn_running` say, can be
+  sent again with the same key.
+- A repeated `session/run` answers with the session's id alone, without `state`; a client that
+  asked to attach attaches with `session/attach`.
+- The Host journals each key with the turn or queued prompt it started. If the Host stopped
+  between recording a key and answering, a repeat looks there to learn whether the work
+  happened, and does it only if it didn't.
+- Keys are kept as long as journals are: they're forgotten 14 days after they were recorded.
+
+Triggers (WVE-98) are to admit each occurrence through the same record, under a key of its
+own.
 
 ## Pending requests
 
@@ -829,6 +926,7 @@ returns the agent's error unchanged.
 | -32073 | `not_a_repository` | the path isn't in a git repository |
 | -32074 | `git_failed` | git refused or failed; the message is what it said |
 | -32075 | `uncommitted_changes` | the worktree has changes that removing it would lose |
+| -32076 | `key_reused` | the request key was used for another request (see [Request keys](#request-keys)) |
 
 ## Versioning
 
@@ -891,6 +989,10 @@ answer `forbidden`.
 - The TUI lists `clipboard_write` in `capabilities.clientTools`, runs the calls targeted at
   it (pbcopy on a local Mac, OSC 52 otherwise) and answers them; `notice` events show in
   the transcript.
+- Queued prompts are the Host's when it lists `queue` (WVE-107): a message the TUI doesn't
+  steer during a turn goes to `queue/add`, the queue above the composer is the Host's, every
+  client's prompts in it, and Esc takes the TUI's own back into the composer with
+  `queue/remove`, leaving the rest paused in the Host. `/queue` resumes a paused queue.
 - The TUI remembers its journal position. When the Host goes away, it reconnects (never
   starting a Host), attaches again from that position and gets only what it missed. The
   Host now resumes or loads the session in its agent itself.

@@ -29,6 +29,7 @@
 //! ([`remote`], ADR 0016), with the Host's own Tailscale Serve entry ([`tailscale`]); tests
 //! serve a WebSocket of their own with [`Daemon::serve_remote`].
 
+mod admissions;
 mod client;
 mod devices;
 mod files;
@@ -38,6 +39,7 @@ mod journal;
 pub mod mcp;
 mod modes;
 pub mod paths;
+mod queue;
 pub mod remote;
 mod session;
 pub mod socket;
@@ -264,6 +266,8 @@ impl Agent {
 
 pub(crate) struct Shared {
     pub(crate) config: DaemonConfig,
+    /// Request keys, admitted before their requests act.
+    pub(crate) admissions: Arc<admissions::Admissions>,
     /// The Host MCP server.
     pub(crate) mcp: Arc<mcp::Mcp>,
     /// Git, with the agents' environment.
@@ -684,8 +688,13 @@ pub(crate) struct Registry {
 impl Registry {
     /// The open session `session_id` is, or belongs to as a subagent.
     pub(crate) fn live(&self, session_id: &SessionId) -> Option<SessionHandle> {
-        let root = self.children.get(session_id).unwrap_or(session_id);
-        self.sessions.get(root).cloned()
+        self.sessions.get(&self.root(session_id)).cloned()
+    }
+
+    /// The session `session_id` is, or belongs to as an open subagent session, whose journal
+    /// holds its events.
+    pub(crate) fn root(&self, session_id: &SessionId) -> SessionId {
+        self.children.get(session_id).unwrap_or(session_id).clone()
     }
 }
 
@@ -705,8 +714,13 @@ impl Daemon {
         };
         let (stop, _) = watch::channel(false);
         let devices = devices::Devices::load(config.devices.clone());
+        let admissions = Arc::new(admissions::Admissions::load(
+            config.journals.as_deref(),
+            JOURNAL_RETENTION,
+        ));
         Self {
             shared: Arc::new_cyclic(|shared| Shared {
+                admissions,
                 mcp: Arc::new(mcp::Mcp::new(shared.clone())),
                 git: git::Git::new(&config.environment.vars),
                 devices,
@@ -840,6 +854,7 @@ impl Daemon {
         };
         let live: Vec<SessionId> = self.shared.registry().sessions.keys().cloned().collect();
         journal::prune(journals, JOURNAL_RETENTION, &live);
+        self.shared.admissions.prune(JOURNAL_RETENTION);
         let mut pruned = Vec::new();
         self.shared.registry().known.retain(|session_id, _| {
             let kept = journal::path_for(journals, session_id).exists();
@@ -892,6 +907,45 @@ impl Daemon {
             tracing::info!(session_id = %session.info.session_id, "closed a suspended session nobody took up");
             self.shared
                 .tell_watchers(&SessionUpdatedNotification { session });
+        }
+    }
+
+    /// At startup, take up the suspended headless sessions whose queue holds prompts and isn't
+    /// paused, so their queue runs with nobody attached (WVE-107). Interactive sessions' queues
+    /// wait for a client.
+    pub async fn resume_queues(&self) {
+        let Some(journals) = &self.shared.config.journals else {
+            return;
+        };
+        let waiting: Vec<(SessionId, Recorded)> = self
+            .shared
+            .registry()
+            .known
+            .iter()
+            .filter(|(_, recorded)| !recorded.closed && recorded.policy.is_headless())
+            .map(|(session_id, recorded)| (session_id.clone(), recorded.clone()))
+            .collect();
+        for (session_id, recorded) in waiting {
+            let Some(agent_id) = recorded.agent_id() else {
+                continue;
+            };
+            let ready = journal::read(&journal::path_for(journals, &session_id))
+                .is_ok_and(|records| queue::Queue::from_records(&records).is_ready());
+            if !ready {
+                continue;
+            }
+            tracing::info!(%session_id, "taking up a headless session whose queue waits");
+            if let Err(error) = client::take_up(
+                &self.shared,
+                agent_id,
+                recorded.cwd.clone(),
+                session_id.clone(),
+                recorded.policy.clone(),
+            )
+            .await
+            {
+                tracing::warn!(%error, %session_id, "couldn't take up a session whose queue waits");
+            }
         }
     }
 

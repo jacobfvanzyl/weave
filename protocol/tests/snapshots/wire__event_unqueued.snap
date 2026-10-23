@@ -1,0 +1,23 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&event(50, SessionEvent::Unqueued\n{\n    queued_id: \"q-5\".to_owned(), by:\n    Some(TurnOrigin::Client\n    {\n        name: \"weave-app\".to_owned(), id: \"c9\".to_owned(), device:\n        Some(\"Jaco's iPad\".to_owned()),\n    }),\n},))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 50,
+    "at": 1760180001234,
+    "event": {
+      "kind": "unqueued",
+      "queuedId": "q-5",
+      "by": {
+        "client": {
+          "name": "weave-app",
+          "id": "c9",
+          "device": "Jaco's iPad"
+        }
+      }
+    }
+  }
+}

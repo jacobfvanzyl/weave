@@ -63,6 +63,12 @@ use weave_host_protocol::pending::PendingRequest;
 use weave_host_protocol::pending::Resolution;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::policy::Unapproved;
+use weave_host_protocol::queue::AddQueuedRequest;
+use weave_host_protocol::queue::AddQueuedResponse;
+use weave_host_protocol::queue::FEATURE as QUEUE_FEATURE;
+use weave_host_protocol::queue::QueuePause;
+use weave_host_protocol::queue::RemoveQueuedRequest;
+use weave_host_protocol::queue::ResumeQueueRequest;
 use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::AttachSessionResponse;
@@ -85,6 +91,7 @@ use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::REQUEST_KEYS_FEATURE;
 use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::SteerOutcome;
@@ -339,6 +346,14 @@ struct Seen {
     notices: Vec<String>,
     /// Titles the session was renamed to through the Host, and by whom.
     renamed: Vec<(String, Option<TurnOrigin>)>,
+    /// Each turn's origin, and the queued prompt it started from.
+    origins: Vec<(TurnOrigin, Option<String>)>,
+    /// Prompts that joined the queue, by id, and those taken out.
+    queued: Vec<String>,
+    unqueued: Vec<String>,
+    /// Why the queue paused, each time, and how often it resumed.
+    paused: Vec<QueuePause>,
+    resumed: usize,
 }
 
 fn text(block: &ContentBlock) -> String {
@@ -459,10 +474,32 @@ impl TestClient {
             .send(StartTurnRequest {
                 session_id: session_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
+                key: None,
             })
             .await
             .expect("turn/start")
             .seq
+    }
+
+    async fn queue(&self, session_id: &SessionId, text: &str) -> AddQueuedResponse {
+        self.queue_keyed(session_id, text, None)
+            .await
+            .expect("queue/add")
+    }
+
+    async fn queue_keyed(
+        &self,
+        session_id: &SessionId,
+        text: &str,
+        key: Option<&str>,
+    ) -> Result<AddQueuedResponse, Error> {
+        self.connection
+            .send(AddQueuedRequest {
+                session_id: session_id.clone(),
+                prompt: vec![ContentBlock::from(text.to_owned())],
+                key: key.map(str::to_owned),
+            })
+            .await
     }
 
     async fn steer(&self, session_id: &SessionId, text: &str) -> SteerTurnResponse {
@@ -644,8 +681,14 @@ impl Seen {
                 }
                 _ => {}
             },
-            SessionEvent::TurnStarted { prompt, .. } => {
+            SessionEvent::TurnStarted {
+                prompt,
+                origin,
+                queued_id,
+                ..
+            } => {
                 self.started += 1;
+                self.origins.push((origin, queued_id));
                 for block in &prompt {
                     self.user.push_str(&text(block));
                 }
@@ -668,6 +711,10 @@ impl Seen {
             SessionEvent::Closed { reason } => self.closed = Some(reason),
             SessionEvent::Notice { text } => self.notices.push(text),
             SessionEvent::Renamed { title, by } => self.renamed.push((title, by)),
+            SessionEvent::Queued { queued_id, .. } => self.queued.push(queued_id),
+            SessionEvent::Unqueued { queued_id, .. } => self.unqueued.push(queued_id),
+            SessionEvent::QueuePaused { reason } => self.paused.push(reason),
+            SessionEvent::QueueResumed { .. } => self.resumed += 1,
             _ => {}
         }
         false
@@ -740,6 +787,7 @@ fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest
         },
         attach: false,
         trace: false,
+        key: None,
     }
 }
 
@@ -2517,6 +2565,7 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
             },
             attach: true,
             trace: false,
+            key: None,
         })
         .await
         .expect("session/run");
@@ -2961,4 +3010,447 @@ async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged()
     let primary = client.connection.send(remove(&repo, true)).await;
     assert!(primary.is_err(), "{primary:?}");
     assert!(repo.join("README.md").exists());
+}
+
+/// A client's own origin, as the Host gives it in its events.
+fn own_origin(client: &TestClient) -> TurnOrigin {
+    TurnOrigin::Client {
+        name: "test".to_owned(),
+        id: client.connection.client_id().to_owned(),
+        device: None,
+    }
+}
+
+impl TestClient {
+    /// Events until `count` turns have ended.
+    async fn until_turns_end(&mut self, seen: &mut Seen, count: usize) {
+        for _ in 0..count {
+            self.until_turn_ends(seen, None).await;
+        }
+    }
+
+    /// Events until the queue pauses.
+    async fn until_paused(&mut self, seen: &mut Seen) {
+        while seen.paused.is_empty() {
+            let event = self.next().await;
+            self.note(event, seen, None).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_prompt_queued_during_a_turn_starts_the_next_one_with_its_own_origin() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut first = world.client(&daemon).await;
+    assert!(
+        first
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|f| f == QUEUE_FEATURE)
+    );
+    let session_id = first.create(&world).await;
+    let second = world.client(&daemon).await;
+
+    // Adding to an idle session starts a turn at once.
+    let started = first.queue(&session_id, "slow 3").await;
+    assert!(started.started);
+    // Added while that turn runs, by another client that isn't attached, it waits.
+    let queued = second.queue(&session_id, "and then this").await;
+    assert!(!queued.started);
+    assert!(queued.seq > started.seq);
+
+    let mut seen = Seen::default();
+    first.until_turns_end(&mut seen, 2).await;
+    assert_eq!(seen.queued, std::slice::from_ref(&queued.queued_id));
+    assert_eq!(
+        seen.origins,
+        [
+            (own_origin(&first), Some(started.queued_id)),
+            (own_origin(&second), Some(queued.queued_id)),
+        ]
+    );
+    assert!(seen.agent.ends_with("You said: and then this"), "{seen:?}");
+    let attached = first.attach(&session_id).await;
+    assert!(attached.state.queue.is_empty());
+}
+
+#[tokio::test]
+async fn attached_clients_share_one_queue_and_removing_a_prompt_removes_it_for_both() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut first = world.client(&daemon).await;
+    let session_id = first.create(&world).await;
+    first.queue(&session_id, "slow 4").await;
+    let kept = first.queue(&session_id, "kept").await;
+    let mut second = world.client(&daemon).await;
+    let attached = second.attach(&session_id).await;
+    let ids: Vec<&str> = attached.state.queue.iter().map(|q| q.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [kept.queued_id.as_str()],
+        "a later client sees the queue"
+    );
+    assert_eq!(attached.state.queue[0].origin, own_origin(&first));
+
+    let dropped = second.queue(&session_id, "dropped").await;
+    let removed = first
+        .connection
+        .send(RemoveQueuedRequest {
+            session_id: session_id.clone(),
+            queued_id: dropped.queued_id.clone(),
+        })
+        .await
+        .expect("queue/remove")
+        .removed
+        .expect("it was waiting");
+    assert_eq!(removed.id, dropped.queued_id);
+    // Removing it again finds it gone.
+    let again = second
+        .connection
+        .send(RemoveQueuedRequest {
+            session_id: session_id.clone(),
+            queued_id: dropped.queued_id.clone(),
+        })
+        .await
+        .expect("queue/remove");
+    assert_eq!(again.removed, None);
+
+    let mut seen = Seen::default();
+    second.until_turns_end(&mut seen, 2).await;
+    assert_eq!(seen.unqueued, std::slice::from_ref(&dropped.queued_id));
+    assert_eq!(seen.started, 2, "{seen:?}");
+    assert!(seen.agent.ends_with("You said: kept"), "{seen:?}");
+    assert!(!seen.user.contains("dropped"));
+    let mut seen = Seen::default();
+    first.until_turns_end(&mut seen, 2).await;
+    assert_eq!(seen.unqueued, [dropped.queued_id]);
+}
+
+#[tokio::test]
+async fn cancelling_a_turn_pauses_the_queue_until_a_client_resumes_it() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.queue(&session_id, "slow 20").await;
+    let waiting = client.queue(&session_id, "after the cancel").await;
+    client
+        .connection
+        .send(CancelTurnRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("turn/cancel");
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    client.until_paused(&mut seen).await;
+    assert_eq!(seen.ended, Some(StopReason::Cancelled));
+    assert_eq!(seen.paused, [QueuePause::Cancelled]);
+    let attached = world.client(&daemon).await.attach(&session_id).await;
+    assert_eq!(attached.state.queue_paused, Some(QueuePause::Cancelled));
+    assert_eq!(attached.state.queue.len(), 1);
+    assert_eq!(attached.state.activity, Activity::Idle, "nothing started");
+
+    client
+        .connection
+        .send(ResumeQueueRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("queue/resume");
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.resumed, 1);
+    assert_eq!(
+        seen.origins[0].1.as_deref(),
+        Some(waiting.queued_id.as_str())
+    );
+
+    // Adding to a paused queue resumes it, oldest first; so does prompting the session.
+    client.queue(&session_id, "slow 20").await;
+    let older = client.queue(&session_id, "older").await;
+    client
+        .connection
+        .send(CancelTurnRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("turn/cancel");
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    client.until_paused(&mut seen).await;
+    let newer = client.queue(&session_id, "newer").await;
+    assert!(!newer.started);
+    client.until_turns_end(&mut seen, 2).await;
+    let from_queue: Vec<Option<String>> = seen.origins.iter().map(|o| o.1.clone()).collect();
+    assert_eq!(
+        from_queue[1..],
+        [Some(older.queued_id), Some(newer.queued_id)]
+    );
+    assert_eq!(seen.resumed, 1);
+}
+
+#[tokio::test]
+async fn a_queue_outlasts_a_host_restart_paused_for_a_person_or_running_headless() {
+    let world = World::new();
+    let (interactive, headless) = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let interactive = client.create(&world).await;
+        client.queue(&interactive, "slow 50").await;
+        let waiting = client.queue(&interactive, "still here").await;
+        let run = client
+            .connection
+            .send(RunRequest {
+                prompt: vec![ContentBlock::from("slow 50".to_owned())],
+                attach: true,
+                ..run_request(&world, &world.cwd().join("unused"), Vec::new())
+            })
+            .await
+            .expect("session/run");
+        let headless = run.session_id;
+        client.queue(&headless, "headless next").await;
+        daemon.shutdown().await;
+        (interactive, (headless, waiting.queued_id))
+    };
+    let (headless, waiting) = headless;
+
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    daemon.resume_queues().await;
+    let mut client = world.client(&daemon).await;
+    // The headless session's queue ran without anyone.
+    let mut watcher = world.client(&daemon).await;
+    watcher.attach(&headless).await;
+    let mut seen = Seen::default();
+    watcher.until_turn_ends(&mut seen, None).await;
+    while !seen.agent.contains("You said: headless next") {
+        watcher.until_turn_ends(&mut seen, None).await;
+    }
+
+    // The interactive one's waits for a person, its interrupted turn ended.
+    let attached = client.attach(&interactive).await;
+    assert_eq!(attached.state.queue_paused, Some(QueuePause::Interrupted));
+    let ids: Vec<&str> = attached.state.queue.iter().map(|q| q.id.as_str()).collect();
+    assert_eq!(ids, [waiting.as_str()]);
+    assert!(attached.state.turns.is_empty());
+    client
+        .connection
+        .send(ResumeQueueRequest {
+            session_id: interactive.clone(),
+        })
+        .await
+        .expect("queue/resume");
+    let mut seen = Seen::default();
+    while !seen.agent.contains("You said: still here") {
+        client.until_turn_ends(&mut seen, None).await;
+    }
+}
+
+#[tokio::test]
+async fn a_closed_sessions_queue_carries_on_into_its_new_journal() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.queue(&session_id, "slow 50").await;
+    let waiting = client.queue(&session_id, "carried").await;
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+    let attached = client.attach(&session_id).await;
+    assert!(attached.replay.reset, "a new journal");
+    assert_eq!(attached.state.queue_paused, Some(QueuePause::Interrupted));
+    let ids: Vec<&str> = attached.state.queue.iter().map(|q| q.id.as_str()).collect();
+    assert_eq!(ids, [waiting.queued_id.as_str()]);
+}
+
+#[tokio::test]
+async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_after_a_restart() {
+    let world = World::new();
+    let (session_id, first_turn, first_queued, first_run) = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        assert!(
+            client
+                .connection
+                .hello()
+                .features
+                .iter()
+                .any(|f| f == REQUEST_KEYS_FEATURE)
+        );
+        let session_id = client.create(&world).await;
+        let turn = StartTurnRequest {
+            session_id: session_id.clone(),
+            prompt: vec![ContentBlock::from("slow 3".to_owned())],
+            key: Some("turn-1".to_owned()),
+        };
+        let first = client
+            .connection
+            .send(turn.clone())
+            .await
+            .expect("turn/start");
+        // Sent again while that turn runs, it isn't refused as one: it's the same request.
+        let again = client.connection.send(turn.clone()).await.expect("repeat");
+        assert_eq!(again, first);
+        let queued = client
+            .queue_keyed(&session_id, "queued once", Some("queue-1"))
+            .await
+            .expect("queue/add");
+        let repeat = client
+            .queue_keyed(&session_id, "queued once", Some("queue-1"))
+            .await
+            .expect("repeat");
+        assert_eq!(repeat, queued);
+        // The same key for another request is refused.
+        let reused = client
+            .queue_keyed(&session_id, "something else", Some("queue-1"))
+            .await
+            .expect_err("another request");
+        assert!(errors::is(&reused, errors::KEY_REUSED));
+        let mut seen = Seen::default();
+        client.until_turns_end(&mut seen, 2).await;
+        assert_eq!(seen.started, 2, "{seen:?}");
+
+        let run = RunRequest {
+            key: Some("run-1".to_owned()),
+            ..run_request(&world, &world.cwd().join("unused"), Vec::new())
+        };
+        let ran = client
+            .connection
+            .send(run.clone())
+            .await
+            .expect("session/run");
+        let rerun = client.connection.send(run).await.expect("repeat");
+        assert_eq!(rerun.session_id, ran.session_id);
+        daemon.shutdown().await;
+        (session_id, first, queued, ran.session_id)
+    };
+
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    client.attach_caught_up(&session_id).await;
+    let again = client
+        .connection
+        .send(StartTurnRequest {
+            session_id: session_id.clone(),
+            prompt: vec![ContentBlock::from("slow 3".to_owned())],
+            key: Some("turn-1".to_owned()),
+        })
+        .await
+        .expect("repeat after a restart");
+    assert_eq!(again, first_turn);
+    let queued = client
+        .queue_keyed(&session_id, "queued once", Some("queue-1"))
+        .await
+        .expect("repeat after a restart");
+    assert_eq!(queued, first_queued);
+    let rerun = client
+        .connection
+        .send(RunRequest {
+            key: Some("run-1".to_owned()),
+            ..run_request(&world, &world.cwd().join("unused"), Vec::new())
+        })
+        .await
+        .expect("repeat after a restart");
+    assert_eq!(rerun.session_id, first_run);
+    // Nothing started: the session is idle, and its journal has the two turns it had.
+    let listing = client
+        .connection
+        .send(ListSessionsRequest::default())
+        .await
+        .expect("list");
+    let session = listing
+        .sessions
+        .iter()
+        .find(|listing| listing.info.session_id == session_id)
+        .expect("listed");
+    assert_eq!(session.activity, Some(Activity::Idle));
+    assert!(
+        !client.hears_a_turn_start().await,
+        "a repeat started a turn"
+    );
+}
+
+#[tokio::test]
+async fn a_key_a_stopped_host_never_answered_is_found_in_the_journal() {
+    let world = World::new();
+    let (session_id, first) = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let session_id = client.create(&world).await;
+        let first = client
+            .connection
+            .send(StartTurnRequest {
+                session_id: session_id.clone(),
+                prompt: vec![ContentBlock::from("hello".to_owned())],
+                key: Some("lost-answer".to_owned()),
+            })
+            .await
+            .expect("turn/start");
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        daemon.shutdown().await;
+        (session_id, first)
+    };
+    // As if the Host stopped after the turn started but before it recorded the answer.
+    let record = world.dir.path().join("admissions.jsonl");
+    let lines = std::fs::read_to_string(&record).expect("the record");
+    let admitted: Vec<&str> = lines
+        .lines()
+        .filter(|line| !line.contains("\"answered\""))
+        .collect();
+    std::fs::write(&record, admitted.join("\n") + "\n").expect("the record");
+
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    client.attach_caught_up(&session_id).await;
+    let again = client
+        .connection
+        .send(StartTurnRequest {
+            session_id: session_id.clone(),
+            prompt: vec![ContentBlock::from("hello".to_owned())],
+            key: Some("lost-answer".to_owned()),
+        })
+        .await
+        .expect("repeat");
+    assert_eq!(again, first);
+    assert!(!client.hears_a_turn_start().await);
+}
+
+impl TestClient {
+    /// Attach to `session_id` and read its replay through, so what comes next is new.
+    async fn attach_caught_up(&mut self, session_id: &SessionId) {
+        let head = self.attach(session_id).await.state.journal.head;
+        if head == 0 {
+            return;
+        }
+        loop {
+            if let HostEvent::Event(event) = self.next().await
+                && event.seq >= head
+            {
+                return;
+            }
+        }
+    }
+
+    /// Whether a turn starts in an attached session within a moment.
+    async fn hears_a_turn_start(&mut self) -> bool {
+        tokio::time::timeout(Duration::from_millis(400), async {
+            loop {
+                if let HostEvent::Event(event) = self.next().await
+                    && matches!(event.event, SessionEvent::TurnStarted { .. })
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
 }

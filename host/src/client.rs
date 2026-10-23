@@ -6,6 +6,7 @@
 //! one, which the next session for that agent and directory takes.
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,6 +17,8 @@ use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::Role as _;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::sync::oneshot;
 use weave_acp_core::AgentHandle;
 use weave_acp_core::ClientOptions;
@@ -76,6 +79,13 @@ use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::queue::AddQueuedRequest;
+use weave_host_protocol::queue::AddQueuedResponse;
+use weave_host_protocol::queue::FEATURE as QUEUE_FEATURE;
+use weave_host_protocol::queue::QueuePause;
+use weave_host_protocol::queue::RemoveQueuedRequest;
+use weave_host_protocol::queue::RemoveQueuedResponse;
+use weave_host_protocol::queue::ResumeQueueRequest;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CloseSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
@@ -106,6 +116,7 @@ use weave_host_protocol::tools::Tool;
 use weave_host_protocol::tools::catalog;
 use weave_host_protocol::tools::host_catalog;
 use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::REQUEST_KEYS_FEATURE;
 use weave_host_protocol::turns::STEER_FEATURE;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::StartTurnResponse;
@@ -126,6 +137,8 @@ use weave_host_protocol::worktrees::RemoveWorktreeResponse;
 
 use crate::Agent;
 use crate::Shared;
+use crate::admissions;
+use crate::admissions::Admitted;
 use crate::devices::Closer;
 use crate::files;
 use crate::git;
@@ -137,6 +150,7 @@ use crate::journal::Recorded;
 use crate::journal::now_ms;
 use crate::mcp::Binding;
 use crate::modes;
+use crate::queue::Queue;
 use crate::session;
 use crate::session::Answer;
 use crate::session::AttachReply;
@@ -487,6 +501,18 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, add_queued),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, remove_queued),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, resume_queue),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             {
                 let connection = Arc::clone(connection);
                 async move |request: RunRequest, responder, cx: ConnectionTo<HostClient>| {
@@ -602,6 +628,15 @@ impl Connection {
             .map(|device| device.name.clone())
     }
 
+    /// This client, as the origin of what it starts or changes.
+    fn origin(&self, hello: &Hello) -> TurnOrigin {
+        TurnOrigin::Client {
+            name: hello.client.name.clone(),
+            id: self.client_id(),
+            device: self.device_name(),
+        }
+    }
+
     fn hello(&self, request: HelloRequest) -> Result<HelloResponse, Error> {
         let supported = VersionRange::supported();
         let protocol = request
@@ -645,6 +680,8 @@ impl Connection {
                 LIST_FILES_FEATURE.to_owned(),
                 RENAME_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
+                QUEUE_FEATURE.to_owned(),
+                REQUEST_KEYS_FEATURE.to_owned(),
             ],
             acp: AcpInfo {
                 protocol_version: 1,
@@ -1513,20 +1550,110 @@ impl Connection {
 
     async fn start_turn(&self, request: StartTurnRequest) -> Result<StartTurnResponse, Error> {
         let hello = self.hello_info()?;
-        let session = self.live(&request.session_id)?;
-        let (reply, started) = oneshot::channel();
-        session.send(Command::Prompt {
-            origin: TurnOrigin::Client {
-                name: hello.client.name,
-                id: self.client_id(),
-                device: self.device_name(),
+        let origin = self.origin(&hello);
+        let digest = admissions::digest(&StartTurnRequest {
+            key: None,
+            ..request.clone()
+        });
+        let StartTurnRequest {
+            session_id,
+            prompt,
+            key,
+        } = request;
+        let root = self.shared.registry().root(&session_id);
+        keyed(
+            &self.shared,
+            key,
+            "turn/start",
+            digest,
+            Some(&root),
+            |work| work.started.then_some(StartTurnResponse { seq: work.seq }),
+            StartTurnResponse::clone,
+            async |key| {
+                let session = self.live(&session_id)?;
+                let (reply, started) = oneshot::channel();
+                session.send(Command::Prompt {
+                    origin,
+                    session_id,
+                    prompt,
+                    key,
+                    reply,
+                })?;
+                let seq = started.await.map_err(|_| session::ended())??;
+                Ok(StartTurnResponse { seq })
             },
-            session_id: request.session_id,
-            prompt: request.prompt,
+        )
+        .await
+    }
+
+    async fn add_queued(&self, request: AddQueuedRequest) -> Result<AddQueuedResponse, Error> {
+        let hello = self.hello_info()?;
+        let origin = self.origin(&hello);
+        let digest = admissions::digest(&AddQueuedRequest {
+            key: None,
+            ..request.clone()
+        });
+        let AddQueuedRequest {
+            session_id,
+            prompt,
+            key,
+        } = request;
+        keyed(
+            &self.shared,
+            key,
+            "queue/add",
+            digest,
+            Some(&session_id),
+            |work| {
+                Some(AddQueuedResponse {
+                    queued_id: work.queued_id?,
+                    seq: work.seq,
+                    started: work.started,
+                })
+            },
+            AddQueuedResponse::clone,
+            async |key| {
+                let session = self.live(&session_id)?;
+                if session.summary().session_id != session_id {
+                    return Err(Error::invalid_params()
+                        .data("a subagent session has no queue: add to its session's"));
+                }
+                let (reply, added) = oneshot::channel();
+                session.send(Command::Enqueue {
+                    origin,
+                    prompt,
+                    key,
+                    reply,
+                })?;
+                added.await.map_err(|_| session::ended())?
+            },
+        )
+        .await
+    }
+
+    async fn remove_queued(
+        &self,
+        request: RemoveQueuedRequest,
+    ) -> Result<RemoveQueuedResponse, Error> {
+        let hello = self.hello_info()?;
+        let session = self.live(&request.session_id)?;
+        let (reply, removed) = oneshot::channel();
+        session.send(Command::Unqueue {
+            queued_id: request.queued_id,
+            by: self.origin(&hello),
             reply,
         })?;
-        let seq = started.await.map_err(|_| session::ended())??;
-        Ok(StartTurnResponse { seq })
+        removed.await.map_err(|_| session::ended())
+    }
+
+    async fn resume_queue(&self, request: ResumeQueueRequest) -> Result<Empty, Error> {
+        let hello = self.hello_info()?;
+        let session = self.live(&request.session_id)?;
+        let by = self.origin(&hello);
+        session
+            .finish(|done| Command::ResumeQueue { by, done })
+            .await?;
+        Ok(Empty {})
     }
 
     async fn steer_turn(&self, request: SteerTurnRequest) -> Result<SteerTurnResponse, Error> {
@@ -1534,11 +1661,7 @@ impl Connection {
         let session = self.live(&request.session_id)?;
         let (reply, answered) = oneshot::channel();
         session.send(Command::Steer(Steer {
-            origin: TurnOrigin::Client {
-                name: hello.client.name,
-                id: self.client_id(),
-                device: self.device_name(),
-            },
+            origin: self.origin(&hello),
             session_id: request.session_id,
             prompt: request.prompt,
             reply,
@@ -1692,12 +1815,137 @@ fn host_tools(agent: &Agent) -> Vec<Tool> {
         .collect()
 }
 
+/// `work`, done under the request key `key` when there is one (feature `requestKeys`): a
+/// repeat gets the answer the first got, `remembered` from it, and starts nothing. A key a
+/// stopped Host admitted without answering is looked for first in the journal of `session_id`,
+/// or every journal without one, where `recover` makes the answer from the work it finds.
+#[allow(clippy::too_many_arguments)]
+async fn keyed<T, W>(
+    shared: &Arc<Shared>,
+    key: Option<String>,
+    method: &str,
+    digest: String,
+    session_id: Option<&SessionId>,
+    recover: impl FnOnce(journal::KeyedWork) -> Option<T>,
+    remembered: impl FnOnce(&T) -> T,
+    work: impl FnOnce(Option<String>) -> W,
+) -> Result<T, Error>
+where
+    T: Serialize + DeserializeOwned,
+    W: Future<Output = Result<T, Error>>,
+{
+    let Some(key) = key else {
+        return work(None).await;
+    };
+    let ticket = match shared.admissions.admit::<T>(key, method, digest).await? {
+        Admitted::Answered(answer) => return Ok(answer),
+        Admitted::Act(ticket) => ticket,
+    };
+    if ticket.unsettled()
+        && let Some(dir) = &shared.config.journals
+        && let Some(answer) = admissions::find_work(dir, session_id, ticket.key()).and_then(recover)
+    {
+        ticket.settle(&answer);
+        return Ok(answer);
+    }
+    let answer = work(Some(ticket.key().to_owned())).await?;
+    ticket.settle(&remembered(&answer));
+    Ok(answer)
+}
+
+/// Open `session_id`, which the Host doesn't have open, with no client: as `session/run` does
+/// before its turn, and as a Host starting does for a headless session whose queue waits.
+pub(crate) async fn take_up(
+    shared: &Arc<Shared>,
+    agent_id: &str,
+    cwd: PathBuf,
+    session_id: SessionId,
+    policy: PermissionPolicy,
+) -> Result<SessionHandle, Error> {
+    let agent = shared.resolve(agent_id).await?;
+    let (session, _notices) =
+        take_up_with(shared, &agent, cwd, session_id, Vec::new(), policy).await?;
+    Ok(session)
+}
+
+/// [`take_up`], with `agent` resolved already; with what's worth telling the client.
+async fn take_up_with(
+    shared: &Arc<Shared>,
+    agent: &Agent,
+    cwd: PathBuf,
+    session_id: SessionId,
+    additional_directories: Vec<PathBuf>,
+    policy: PermissionPolicy,
+) -> Result<(SessionHandle, Vec<String>), Error> {
+    let (instance, git) = tokio::join!(
+        shared.instance(agent, &cwd, headless(agent.options)),
+        shared.git.locate(&cwd),
+    );
+    let instance = instance?;
+    let (setup, notices, binding) = setup(shared, agent, &instance, cwd, additional_directories);
+    match reopen(
+        shared, instance, session_id, setup, binding, agent, policy, false, git,
+    )
+    .await
+    {
+        Ok(session) => Ok((session, notices)),
+        Err((error, instance)) => {
+            if let Some(instance) = instance {
+                instance.connection.shutdown().await;
+            }
+            Err(error)
+        }
+    }
+}
+
 /// Open `request`'s session and start its turn; see [`crate::Daemon::run`]. `link` is the
-/// requesting client, attached before the prompt goes out so it sees the whole turn.
+/// requesting client, attached before the prompt goes out so it sees the whole turn. Under a
+/// request key, a repeat answers with the session alone, attaching nobody.
 pub(crate) async fn run(
     shared: &Arc<Shared>,
     request: RunRequest,
     link: Option<(ClientId, ClientLink)>,
+) -> Result<(SessionId, Option<SessionState>), Error> {
+    let digest = admissions::digest(&RunRequest {
+        key: None,
+        ..request.clone()
+    });
+    let session_id = request.session_id.clone();
+    let key = request.key.clone();
+    let answer = keyed(
+        shared,
+        key,
+        "session/run",
+        digest,
+        session_id.as_ref(),
+        |work| {
+            Some(RunResponse {
+                session_id: work.session_id,
+                state: None,
+            })
+        },
+        |answer: &RunResponse| RunResponse {
+            session_id: answer.session_id.clone(),
+            state: None,
+        },
+        async |key| {
+            let (session_id, state) = run_now(shared, request, link, key).await?;
+            Ok(RunResponse {
+                session_id,
+                state: state.map(Box::new),
+            })
+        },
+    )
+    .await?;
+    Ok((answer.session_id, answer.state.map(|state| *state)))
+}
+
+/// [`run`], under `key` when there is one.
+async fn run_now(
+    shared: &Arc<Shared>,
+    request: RunRequest,
+    link: Option<(ClientId, ClientLink)>,
+    key: Option<String>,
 ) -> Result<(SessionId, Option<SessionState>), Error> {
     let RunRequest {
         agent_id,
@@ -1708,6 +1956,7 @@ pub(crate) async fn run(
         policy,
         attach: _,
         trace,
+        key: _,
     } = request;
     let agent = shared.resolve(&agent_id).await?;
     let options = headless(agent.options);
@@ -1719,27 +1968,17 @@ pub(crate) async fn run(
         // An open session keeps its own policy.
         (Some(session), _) => session,
         (None, Some(session_id)) => {
-            let (instance, git) = tokio::join!(
-                shared.instance(&agent, &cwd, options),
-                shared.git.locate(&cwd),
-            );
-            let instance = instance?;
-            let (setup, more, binding) =
-                setup(shared, &agent, &instance, cwd, additional_directories);
-            notices = more;
-            match reopen(
-                shared, instance, session_id, setup, binding, &agent, policy, false, git,
+            let (session, more) = take_up_with(
+                shared,
+                &agent,
+                cwd,
+                session_id,
+                additional_directories,
+                policy,
             )
-            .await
-            {
-                Ok(session) => session,
-                Err((error, instance)) => {
-                    if let Some(instance) = instance {
-                        instance.connection.shutdown().await;
-                    }
-                    return Err(error);
-                }
-            }
+            .await?;
+            notices = more;
+            session
         }
         (None, None) => {
             let (instance, git) = tokio::join!(
@@ -1812,6 +2051,7 @@ pub(crate) async fn run(
         origin: TurnOrigin::Run {},
         session_id: root.clone(),
         prompt,
+        key,
         reply,
     })?;
     started.await.map_err(|_| session::ended())??;
@@ -1875,16 +2115,22 @@ async fn reopen(
         modes,
         config_options: config_options.unwrap_or_default(),
     };
-    // A title the Host kept outlives the journal: a closed session's new one begins with it.
-    let title = match &recovered {
-        Some((_, records)) => journal::kept_title(records),
+    // A title the Host kept and a queue outlive the journal: a closed session's new one begins
+    // with them.
+    let closed = match &recovered {
+        Some(_) => None,
         None => shared
             .config
             .journals
             .as_ref()
-            .and_then(|dir| journal::read(&journal::path_for(dir, &session_id)).ok())
-            .and_then(|records| journal::kept_title(&records)),
+            .and_then(|dir| journal::read(&journal::path_for(dir, &session_id)).ok()),
     };
+    let earlier = recovered
+        .as_ref()
+        .map(|(_, records)| records.as_slice())
+        .or(closed.as_deref());
+    let title = earlier.and_then(journal::kept_title);
+    let mut queue = earlier.map(Queue::from_records).unwrap_or_default();
     let (journal, policy) = match recovered {
         Some((path, records)) => {
             let policy = records
@@ -1908,9 +2154,18 @@ async fn reopen(
                     )),
                 ));
             }
+            if interrupt(&mut queue, &policy) {
+                journal.append(Entry::QueuePaused {
+                    reason: QueuePause::Interrupted,
+                });
+            }
             (Some(journal), policy)
         }
-        None => (None, policy),
+        None => {
+            // The new journal's header carries the queue, paused or not.
+            interrupt(&mut queue, &policy);
+            (None, policy)
+        }
     };
     match open(
         shared,
@@ -1921,7 +2176,11 @@ async fn reopen(
         setup.additional_directories,
         policy,
         snapshot,
-        Origin::Reopened(journal, title),
+        Origin::Reopened {
+            journal,
+            title,
+            queue,
+        },
         binding,
         git,
     ) {
@@ -1953,6 +2212,16 @@ impl Drop for TakingUp<'_> {
     }
 }
 
+/// An interactive session taken up again with prompts waiting has its queue paused, for a
+/// person to resume; a headless session's carries on. Whether it paused now.
+fn interrupt(queue: &mut Queue, policy: &PermissionPolicy) -> bool {
+    if !queue.is_ready() || policy.is_headless() {
+        return false;
+    }
+    queue.paused = Some(QueuePause::Interrupted);
+    true
+}
+
 fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<journal::Record>)> {
     let path = journal::path_for(shared.config.journals.as_ref()?, session_id);
     let records = journal::read(&path).ok()?;
@@ -1964,8 +2233,12 @@ enum Origin {
     /// `session/create` or a new run: the session is blank until it's prompted.
     New,
     /// The agent's session reopened, with the journal a stopped Host left, if there is one,
-    /// and the title the Host kept for it.
-    Reopened(Option<Journal>, Option<String>),
+    /// and the title and queue the Host kept for it.
+    Reopened {
+        journal: Option<Journal>,
+        title: Option<String>,
+        queue: Queue,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1982,14 +2255,18 @@ fn open(
     binding: Option<Binding>,
     git: Option<GitLocation>,
 ) -> Result<SessionHandle, Error> {
-    let (journal, blank, title) = match origin {
-        Origin::New => (None, true, None),
-        Origin::Reopened(journal, title) => (journal, false, title),
+    let (journal, blank, title, queue) = match origin {
+        Origin::New => (None, true, None, Queue::default()),
+        Origin::Reopened {
+            journal,
+            title,
+            queue,
+        } => (journal, false, title, queue),
     };
     let journal = match journal {
         Some(journal) => journal,
         None => {
-            let header = Entry::header(
+            let mut header = Entry::header(
                 session_id.clone(),
                 agent.spec.clone(),
                 &agent.id,
@@ -1998,6 +2275,15 @@ fn open(
                 title.clone(),
                 git.clone(),
             );
+            if let Entry::Header {
+                queue: carried,
+                queue_paused,
+                ..
+            } = &mut header
+            {
+                carried.extend(queue.prompts.iter().cloned());
+                *queue_paused = queue.paused;
+            }
             match &shared.config.journals {
                 Some(dir) => Journal::create(dir, &session_id, header)
                     .map_err(|error| journal_error(&error))?,
@@ -2025,6 +2311,7 @@ fn open(
             binding,
             title,
             git,
+            queue,
         },
     ))
 }

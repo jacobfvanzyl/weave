@@ -1,0 +1,17 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&StartTurnRequest\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"hello\")], key:\n    Some(\"0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c11\".to_owned()),\n})"
+---
+{
+  "method": "turn/start",
+  "params": {
+    "sessionId": "s-1",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "hello"
+      }
+    ],
+    "key": "0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c11"
+  }
+}

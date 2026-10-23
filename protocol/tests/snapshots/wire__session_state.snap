@@ -79,6 +79,24 @@ expression: round_trip(&state())
       }
     }
   ],
+  "queue": [
+    {
+      "id": "q-3",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "then update the docs"
+        }
+      ],
+      "origin": {
+        "client": {
+          "name": "weave-tui",
+          "id": "c7"
+        }
+      },
+      "queuedAt": 1760180000500
+    }
+  ],
   "pending": [
     {
       "id": "p-1",

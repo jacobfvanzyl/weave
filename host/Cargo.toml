@@ -23,6 +23,7 @@ getrandom = { workspace = true }
 p256 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }

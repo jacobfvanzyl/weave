@@ -15,7 +15,8 @@
 //!   session is in one.
 //! - [`sessions`]: listing, creating, attaching to, reopening and closing sessions.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
-//! - [`turns`]: starting, steering and cancelling turns.
+//! - [`turns`]: starting, steering and cancelling turns, and request keys.
+//! - [`queue`]: the prompts a session's queue holds for its next turns.
 //! - [`pending`]: permission requests and elicitations waiting on a person, and client tool
 //!   calls waiting on a client.
 //! - [`tools`]: client tools, which an attached client runs for the agent.
@@ -32,6 +33,7 @@ pub mod hello;
 pub mod host;
 pub mod pending;
 pub mod policy;
+pub mod queue;
 mod role;
 pub mod sessions;
 pub mod tools;

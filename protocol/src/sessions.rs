@@ -30,6 +30,8 @@ use crate::agents::AgentUpdate;
 use crate::hello::ClientId;
 use crate::pending::PendingRequest;
 use crate::policy::PermissionPolicy;
+use crate::queue::QueuePause;
+use crate::queue::QueuedPrompt;
 use crate::worktrees::GitLocation;
 
 /// A session's journal, by an id that changes only when the Host starts a new journal for
@@ -148,6 +150,12 @@ pub struct SessionState {
     pub config_options: Vec<SessionConfigOption>,
     #[serde(default)]
     pub turns: Vec<RunningTurn>,
+    /// Prompts waiting, in order, for the next turns (feature `queue`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queue: Vec<QueuedPrompt>,
+    /// Why the queue waits rather than start the next turn; absent while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_paused: Option<QueuePause>,
     #[serde(default)]
     pub pending: Vec<PendingRequest>,
     /// Subagent sessions so far.
@@ -455,6 +463,10 @@ pub struct RunRequest {
     pub attach: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub trace: bool,
+    /// Makes it safe to send again (feature `requestKeys`). A repeat answers with the session's
+    /// id alone; a client that asked to attach attaches with `session/attach`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]

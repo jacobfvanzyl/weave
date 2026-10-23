@@ -20,7 +20,21 @@ dropped it. Journals untouched for 14 days are pruned at startup and hourly, nev
 session's. A prompt is journaled with its turn (`turnStarted`, with the client's origin);
 turns end in `turnEnded` for every client. `turn/steer` (a `features` entry) passes a steer to
 the agent only while a turn the Host started runs, journals it as `turnSteered` where the
-agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Permission requests and elicitations are pending
+agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Each session's queue (`queue.rs`,
+a `features` entry, WVE-107) is the session task's: `queue/add` starts a turn when none of the
+session's own runs and nothing waits, and otherwise journals a `queued` entry; `advance` starts
+the first queued prompt whenever the session's turn isn't running and the queue isn't paused,
+with that prompt's origin and its id in `turnStarted`. A cancelled or failed turn pauses a queue
+that holds prompts (`queuePaused`), and prompting, adding or `queue/resume` resumes it. The queue
+is rebuilt from the journal (`Queue::from_records`); a closed session's new journal header
+carries it on, as it does a title; taking up an interactive session with prompts waiting pauses
+it as `interrupted`, and a Host starting takes up suspended headless sessions whose queue waits
+(`Daemon::resume_queues`). Request keys (`admissions.rs`, feature `requestKeys`) are admitted
+before `session/run`, `turn/start` and `queue/add` act: a line in `admissions.jsonl` beside the
+journals, synced, then the answer, or a refusal that frees the key. The key is journaled with the
+`turnStarted` or `queued` entry it caused, so a repeat of a key a stopped Host never answered
+finds out from the journal whether the work happened (`client::keyed`). Keys go with the journals'
+retention. Permission requests and elicitations are pending
 requests (`pending/added`) every attached client sees, and later attachers in their state;
 the first `pending/answer` counts, and `turn/cancel` cancels them. `sessions/watch` (a
 `features` entry) keeps a client's list of the Host's sessions live without attaching:

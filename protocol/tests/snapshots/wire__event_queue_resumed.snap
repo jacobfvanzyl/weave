@@ -1,0 +1,21 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&event(52, SessionEvent::QueueResumed { by: Some(tui()) }))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 52,
+    "at": 1760180001234,
+    "event": {
+      "kind": "queueResumed",
+      "by": {
+        "client": {
+          "name": "weave-tui",
+          "id": "c7"
+        }
+      }
+    }
+  }
+}

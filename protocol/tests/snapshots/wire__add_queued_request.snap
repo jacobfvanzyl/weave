@@ -1,0 +1,17 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AddQueuedRequest\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"then update the docs\")], key:\n    Some(\"0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c12\".to_owned()),\n})"
+---
+{
+  "method": "queue/add",
+  "params": {
+    "sessionId": "s-1",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "then update the docs"
+      }
+    ],
+    "key": "0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c12"
+  }
+}

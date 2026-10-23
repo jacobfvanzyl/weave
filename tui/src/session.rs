@@ -87,6 +87,8 @@ mod tests {
             modes: None,
             config_options: Vec::new(),
             turns: Vec::new(),
+            queue: Vec::new(),
+            queue_paused: None,
             pending: Vec::new(),
             subagents: Vec::new(),
             journal: JournalHead {

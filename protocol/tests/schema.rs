@@ -23,6 +23,7 @@ use weave_host_protocol::files;
 use weave_host_protocol::hello;
 use weave_host_protocol::host;
 use weave_host_protocol::pending;
+use weave_host_protocol::queue;
 use weave_host_protocol::sessions;
 use weave_host_protocol::tools;
 use weave_host_protocol::turns;
@@ -115,6 +116,9 @@ fn schema() -> Value {
         "turn/start" => turns::StartTurnRequest,
         "turn/steer" => turns::SteerTurnRequest,
         "turn/cancel" => turns::CancelTurnRequest,
+        "queue/add" => queue::AddQueuedRequest,
+        "queue/remove" => queue::RemoveQueuedRequest,
+        "queue/resume" => queue::ResumeQueueRequest,
         "pending/answer" => pending::AnswerPendingRequest,
         "worktrees/list" => worktrees::ListWorktreesRequest,
         "worktrees/create" => worktrees::CreateWorktreeRequest,
@@ -177,6 +181,7 @@ fn schema() -> Value {
                 "notARepository": errors::NOT_A_REPOSITORY,
                 "gitFailed": errors::GIT_FAILED,
                 "uncommittedChanges": errors::UNCOMMITTED_CHANGES,
+                "keyReused": errors::KEY_REUSED,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
@@ -187,9 +192,12 @@ fn schema() -> Value {
                 "listFiles": files::LIST_FEATURE,
                 "rename": sessions::RENAME_FEATURE,
                 "worktrees": worktrees::FEATURE,
+                "queue": queue::FEATURE,
+                "requestKeys": turns::REQUEST_KEYS_FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "sessions": {"maxTitle": sessions::MAX_TITLE},
+            "requestKeys": {"maxKey": turns::MAX_KEY},
             "clientTools": {"clipboardWrite": tools::CLIPBOARD_WRITE},
             "hostTools": {"renameSession": tools::RENAME_SESSION},
         },

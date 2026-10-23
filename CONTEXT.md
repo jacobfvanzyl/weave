@@ -112,8 +112,12 @@ What a person sends an agent while its turn runs, which joins that turn instead 
 _Avoid_: interjection, injection, interrupt
 
 **Queued prompt**:
-A prompt a client holds while a turn runs, to start the next turn once that one ends.
+A prompt the Host holds in a session's queue while a turn runs, to start a later turn once the turns before it end. Every client attached to the session sees it, and it outlives the client that sent it.
 _Avoid_: follow-up, pending message
+
+**Request key**:
+A name the sender of a request chooses so that sending it again starts nothing more: the Host answers a repeat as it answered the first.
+_Avoid_: idempotency token, nonce
 
 **Pending request**:
 A permission request, elicitation or client tool call from an agent that waits on a client. A client tool call is for one client; any attached client may answer the others, and the first answer counts.

@@ -136,6 +136,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         policy,
         attach: !args.detach,
         trace: launch.trace,
+        key: None,
     };
     let response = match connection.send(request).await {
         Ok(response) => {

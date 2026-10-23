@@ -51,6 +51,7 @@ use weave_acp_core::schema::SessionInfo;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::SessionUpdate;
+use weave_acp_core::schema::StopReason;
 use weave_acp_core::strip_terminal_events;
 use weave_agents::lock::compare;
 use weave_host_protocol::HostClient;
@@ -67,6 +68,10 @@ use weave_host_protocol::pending::PendingResolvedNotification;
 use weave_host_protocol::pending::Resolution;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::policy::ToolKinds;
+use weave_host_protocol::queue::AddQueuedResponse;
+use weave_host_protocol::queue::QueuePause;
+use weave_host_protocol::queue::QueuedPrompt;
+use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::JournalHead;
@@ -96,6 +101,7 @@ use crate::journal::Recorded;
 use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 use crate::mcp::Binding;
+use crate::queue::Queue;
 use crate::updates::Feed;
 use crate::updates::describe;
 
@@ -223,8 +229,28 @@ pub(crate) enum Command {
         origin: TurnOrigin,
         session_id: SessionId,
         prompt: Vec<ContentBlock>,
+        /// The request key it came under, journaled with its turn.
+        key: Option<String>,
         /// The position of the turn's `turnStarted`, once it has started.
         reply: oneshot::Sender<Result<u64, Error>>,
+    },
+    /// `queue/add`: a prompt for the end of the queue, or a turn now if nothing runs or waits.
+    Enqueue {
+        origin: TurnOrigin,
+        prompt: Vec<ContentBlock>,
+        key: Option<String>,
+        reply: oneshot::Sender<Result<AddQueuedResponse, Error>>,
+    },
+    /// `queue/remove`.
+    Unqueue {
+        queued_id: String,
+        by: TurnOrigin,
+        reply: oneshot::Sender<RemoveQueuedResponse>,
+    },
+    /// `queue/resume`.
+    ResumeQueue {
+        by: TurnOrigin,
+        done: oneshot::Sender<()>,
     },
     /// A message for the running turn; see [`Steer`].
     Steer(Steer),
@@ -406,6 +432,8 @@ pub(crate) struct Opened {
     pub(crate) title: Option<String>,
     /// Where in a git repository `cwd` is.
     pub(crate) git: Option<GitLocation>,
+    /// Prompts waiting for its next turns, from its journal.
+    pub(crate) queue: Queue,
 }
 
 /// Start the task that owns a session, and register it with the Host.
@@ -424,6 +452,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         binding,
         title,
         git,
+        queue,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
@@ -488,6 +517,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         clients: BTreeMap::new(),
         children: Vec::new(),
         turns: HashMap::new(),
+        queue,
         pending: Vec::new(),
         next_pending: 1,
         steers: HashMap::new(),
@@ -641,6 +671,8 @@ struct Actor {
     children: Vec<SessionId>,
     /// Turns running, by session: this one's, or a subagent's.
     turns: HashMap<SessionId, Turn>,
+    /// Prompts waiting for the session's next turns.
+    queue: Queue,
     pending: Vec<Pending>,
     next_pending: u64,
     /// Messages steered into turns, by tag, until the agent answers.
@@ -706,6 +738,9 @@ impl Actor {
             {
                 self.reopen().await;
             }
+            if self.stopping.is_none() && self.reopens.is_empty() {
+                self.advance();
+            }
             if let Some(ending) = self.stopping.take() {
                 self.finish(ending).await;
                 return;
@@ -747,9 +782,41 @@ impl Actor {
                 origin,
                 session_id,
                 prompt,
+                key,
                 reply,
             } => {
-                let _ = reply.send(self.prompt(origin, session_id, prompt));
+                let started = self.prompt(origin.clone(), session_id, prompt, None, key);
+                // Prompting the session resumes its queue, after this turn.
+                if started.is_ok() {
+                    self.resume(origin);
+                }
+                let _ = reply.send(started);
+            }
+            Command::Enqueue {
+                origin,
+                prompt,
+                key,
+                reply,
+            } => {
+                let _ = reply.send(self.enqueue(origin, prompt, key));
+            }
+            Command::Unqueue {
+                queued_id,
+                by,
+                reply,
+            } => {
+                let removed = self.queue.take(&queued_id);
+                if removed.is_some() {
+                    self.record(Entry::Unqueued {
+                        queued_id,
+                        by: Some(by),
+                    });
+                }
+                let _ = reply.send(RemoveQueuedResponse { removed });
+            }
+            Command::ResumeQueue { by, done } => {
+                self.resume(by);
+                let _ = done.send(());
             }
             Command::Steer(steer) => self.steer(steer),
             Command::Cancel { session_id } => self.cancel(&session_id),
@@ -963,6 +1030,8 @@ impl Actor {
                     origin: turn.origin.clone(),
                 })
                 .collect(),
+            queue: self.queue.prompts.iter().cloned().collect(),
+            queue_paused: self.queue.pause(),
             pending: self.pending.iter().map(Pending::describe).collect(),
             subagents: self.children.clone(),
             journal: JournalHead {
@@ -975,11 +1044,15 @@ impl Actor {
         }
     }
 
+    /// Start a turn in `session_id` with `prompt`: from the queue when `queued_id` names the
+    /// queued prompt, under the request key `key` when there is one.
     fn prompt(
         &mut self,
         origin: TurnOrigin,
         session_id: SessionId,
         prompt: Vec<ContentBlock>,
+        queued_id: Option<String>,
+        key: Option<String>,
     ) -> Result<u64, Error> {
         if self.turns.contains_key(&session_id) {
             return Err(errors::turn_running());
@@ -991,6 +1064,8 @@ impl Actor {
             at_ms: now_ms(),
             prompt,
             origin: Some(origin.clone()),
+            queued_id,
+            key,
         });
         self.turns.insert(
             session_id,
@@ -1001,6 +1076,89 @@ impl Actor {
             },
         );
         Ok(seq)
+    }
+
+    /// `queue/add`: a turn now, when no turn of the session's own runs and nothing waits in a
+    /// queue that would start, or else the end of the queue. Adding resumes a paused queue.
+    fn enqueue(
+        &mut self,
+        origin: TurnOrigin,
+        prompt: Vec<ContentBlock>,
+        key: Option<String>,
+    ) -> Result<AddQueuedResponse, Error> {
+        let queued_id = crate::queue::new_id();
+        self.resume(origin.clone());
+        let free = !self.turns.contains_key(&self.root)
+            && self.queue.prompts.is_empty()
+            && self.reopens.is_empty()
+            && self.stopping.is_none();
+        if free {
+            let root = self.root.clone();
+            let seq = self.prompt(origin, root, prompt, Some(queued_id.clone()), key)?;
+            return Ok(AddQueuedResponse {
+                queued_id,
+                seq,
+                started: true,
+            });
+        }
+        let (seq, at) = self.record(Entry::Queued {
+            queued_id: queued_id.clone(),
+            prompt: prompt.clone(),
+            origin: origin.clone(),
+            key,
+        });
+        self.queue.prompts.push_back(QueuedPrompt {
+            id: queued_id.clone(),
+            prompt,
+            origin,
+            queued_at: at,
+        });
+        Ok(AddQueuedResponse {
+            queued_id,
+            seq,
+            started: false,
+        })
+    }
+
+    /// Start a paused queue again, as `by` asked.
+    fn resume(&mut self, by: TurnOrigin) {
+        if self.queue.pause().is_some() {
+            self.queue.paused = None;
+            self.record(Entry::QueueResumed { by: Some(by) });
+        }
+    }
+
+    /// Stop the queue starting turns, for `reason`, if prompts wait in it.
+    fn pause(&mut self, reason: QueuePause) {
+        if self.queue.prompts.is_empty() || self.queue.paused.is_some() {
+            return;
+        }
+        self.queue.paused = Some(reason);
+        self.record(Entry::QueuePaused { reason });
+    }
+
+    /// Start the first queued prompt, when no turn of the session's own runs and the queue
+    /// isn't paused. One the agent won't take goes back to the front, and the queue pauses.
+    fn advance(&mut self) {
+        if self.turns.contains_key(&self.root) || !self.queue.is_ready() {
+            return;
+        }
+        let Some(next) = self.queue.prompts.pop_front() else {
+            return;
+        };
+        let root = self.root.clone();
+        let started = self.prompt(
+            next.origin.clone(),
+            root,
+            next.prompt.clone(),
+            Some(next.id.clone()),
+            None,
+        );
+        if let Err(error) = started {
+            tracing::warn!(session = %self.root, %error, "couldn't start a queued prompt");
+            self.queue.prompts.push_front(next);
+            self.pause(QueuePause::Failed);
+        }
     }
 
     /// `turn/steer`: pass the message to the agent, whose answer comes back as
@@ -1270,6 +1428,16 @@ impl Actor {
     }
 
     fn turn_ended(&mut self, session_id: SessionId, result: Result<PromptResponse, Error>) {
+        // Whoever stopped the session's own turn decides what follows it.
+        let pause = (session_id == self.root)
+            .then(|| match &result {
+                Err(_) => Some(QueuePause::Failed),
+                Ok(response) if response.stop_reason == StopReason::Cancelled => {
+                    Some(QueuePause::Cancelled)
+                }
+                Ok(_) => None,
+            })
+            .flatten();
         if session_id == self.root {
             self.locate();
         }
@@ -1280,6 +1448,9 @@ impl Actor {
             Resolution::Cancelled,
         );
         self.record(Entry::turn_ended(session_id, &result));
+        if let Some(reason) = pause {
+            self.pause(reason);
+        }
     }
 
     /// Read again where in a git repository the session's directory is, as a turn may have

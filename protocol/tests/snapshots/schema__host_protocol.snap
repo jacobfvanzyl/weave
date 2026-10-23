@@ -128,6 +128,18 @@ expression: schema()
       "params": "CancelTurnRequest",
       "result": "Empty"
     },
+    "queue/add": {
+      "params": "AddQueuedRequest",
+      "result": "AddQueuedResponse"
+    },
+    "queue/remove": {
+      "params": "RemoveQueuedRequest",
+      "result": "RemoveQueuedResponse"
+    },
+    "queue/resume": {
+      "params": "ResumeQueueRequest",
+      "result": "Empty"
+    },
     "pending/answer": {
       "params": "AnswerPendingRequest",
       "result": "Empty"
@@ -189,7 +201,8 @@ expression: schema()
       "worktreeBusy": -32072,
       "notARepository": -32073,
       "gitFailed": -32074,
-      "uncommittedChanges": -32075
+      "uncommittedChanges": -32075,
+      "keyReused": -32076
     },
     "features": {
       "steer": "turn/steer",
@@ -199,13 +212,18 @@ expression: schema()
       "watch": "sessions/watch",
       "listFiles": "files/list",
       "rename": "session/rename",
-      "worktrees": "worktrees"
+      "worktrees": "worktrees",
+      "queue": "queue",
+      "requestKeys": "requestKeys"
     },
     "files": {
       "maxEntries": 2000
     },
     "sessions": {
       "maxTitle": 200
+    },
+    "requestKeys": {
+      "maxKey": 200
     },
     "clientTools": {
       "clipboardWrite": "clipboard_write"
@@ -2049,6 +2067,24 @@ expression: schema()
           },
           "default": []
         },
+        "queue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedPrompt"
+          },
+          "description": "Prompts waiting, in order, for the next turns (feature `queue`)."
+        },
+        "queuePaused": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueuePause"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the queue waits rather than start the next turn; absent while it runs."
+        },
         "pending": {
           "type": "array",
           "items": {
@@ -2542,24 +2578,23 @@ expression: schema()
       ],
       "description": "Who started a turn."
     },
-    "PendingRequest": {
+    "QueuedPrompt": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string"
         },
-        "sessionId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionId"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The session it's for, the root or a subagent session, when it's for one."
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
         },
-        "createdAt": {
+        "origin": {
+          "$ref": "#/$defs/TurnOrigin",
+          "description": "Who added it, which its turn's origin will be."
+        },
+        "queuedAt": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -2567,278 +2602,11 @@ expression: schema()
       },
       "required": [
         "id",
-        "createdAt"
+        "prompt",
+        "origin",
+        "queuedAt"
       ],
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "request": {
-              "$ref": "#/$defs/RequestPermissionRequest"
-            },
-            "kind": {
-              "type": "string",
-              "const": "permission"
-            }
-          },
-          "required": [
-            "kind",
-            "request"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "request": {
-              "$ref": "#/$defs/CreateElicitationRequest"
-            },
-            "kind": {
-              "type": "string",
-              "const": "elicitation"
-            }
-          },
-          "required": [
-            "kind",
-            "request"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "tool": {
-              "type": "string"
-            },
-            "arguments": {
-              "type": "object",
-              "additionalProperties": true
-            },
-            "target": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "clientTool"
-            }
-          },
-          "required": [
-            "kind",
-            "tool",
-            "arguments",
-            "target"
-          ],
-          "description": "A client tool call ([`crate::tools`]) for the client `target`, the only one that may\nanswer it."
-        }
-      ]
-    },
-    "RequestPermissionRequest": {
-      "type": "object",
-      "properties": {
-        "sessionId": {
-          "$ref": "#/$defs/SessionId",
-          "description": "The session ID for this request."
-        },
-        "toolCall": {
-          "$ref": "#/$defs/ToolCallUpdate",
-          "description": "Details about the tool call requiring permission."
-        },
-        "options": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PermissionOption"
-          },
-          "description": "Available permission options for the user to choose from."
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "sessionId",
-        "toolCall",
-        "options"
-      ],
-      "description": "Request for user permission to execute a tool call.\n\nSent when the agent needs authorization before performing a sensitive operation.\n\nSee protocol docs: [Requesting Permission](https://agentclientprotocol.com/protocol/tool-calls#requesting-permission)",
-      "x-side": "client",
-      "x-method": "session/request_permission"
-    },
-    "ToolCallUpdate": {
-      "type": "object",
-      "properties": {
-        "toolCallId": {
-          "$ref": "#/$defs/ToolCallId",
-          "description": "The ID of the tool call being updated."
-        },
-        "kind": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolKind"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Update the tool kind.",
-          "x-deserialize-default-on-error": true
-        },
-        "status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ToolCallStatus"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Update the execution status.",
-          "x-deserialize-default-on-error": true
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Update the human-readable title.",
-          "x-deserialize-default-on-error": true
-        },
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Update the programmatic name of the tool being invoked.\n\nThis field is optional. Omitting it or sending `null` both mean that\nthe existing name is left unchanged.",
-          "x-deserialize-default-on-error": true
-        },
-        "content": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ToolCallContent"
-          },
-          "description": "Replace the content collection.",
-          "x-deserialize-default-on-error": true,
-          "x-deserialize-skip-invalid-items": true
-        },
-        "locations": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/ToolCallLocation"
-          },
-          "description": "Replace the locations collection.",
-          "x-deserialize-default-on-error": true,
-          "x-deserialize-skip-invalid-items": true
-        },
-        "rawInput": {
-          "description": "Update the raw input.",
-          "x-deserialize-default-on-error": true
-        },
-        "rawOutput": {
-          "description": "Update the raw output.",
-          "x-deserialize-default-on-error": true
-        },
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true,
-          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
-          "x-deserialize-default-on-error": true
-        }
-      },
-      "required": [
-        "toolCallId"
-      ],
-      "description": "An update to an existing tool call.\n\nUsed to report progress and results as tools execute. All fields except\nthe tool call ID are optional - only changed fields need to be included.\n\nSee protocol docs: [Updating](https://agentclientprotocol.com/protocol/tool-calls#updating)"
-    },
-    "ToolCallId": {
-      "type": "string",
-      "description": "Unique identifier for a tool call within a session."
-    },
-    "ToolCallStatus": {
-      "oneOf": [
-        {
-          "type": "string",
-          "const": "pending",
-          "description": "The tool call hasn't started running yet because the input is either\nstreaming or we're awaiting approval."
-        },
-        {
-          "type": "string",
-          "const": "in_progress",
-          "description": "The tool call is currently running."
-        },
-        {
-          "type": "string",
-          "const": "completed",
-          "description": "The tool call completed successfully."
-        },
-        {
-          "type": "string",
-          "const": "failed",
-          "description": "The tool call failed with an error."
-        }
-      ],
-      "description": "Execution status of a tool call.\n\nTool calls progress through different statuses during their lifecycle.\n\nSee protocol docs: [Status](https://agentclientprotocol.com/protocol/tool-calls#status)"
-    },
-    "ToolCallContent": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/Content",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "content"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "description": "Standard content block (text, images, resources)."
-        },
-        {
-          "$ref": "#/$defs/Diff",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "diff"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "description": "File modification shown as a diff."
-        },
-        {
-          "$ref": "#/$defs/Terminal",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "terminal"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "description": "Embed a terminal created with `terminal/create` by its id.\n\nThe terminal must be added before calling `terminal/release`.\n\nSee protocol docs: [Terminal](https://agentclientprotocol.com/protocol/terminals)"
-        }
-      ],
-      "description": "Content produced by a tool call.\n\nTool calls can produce different types of content including\nstandard content blocks (text, images) or file diffs.\n\nSee protocol docs: [Content](https://agentclientprotocol.com/protocol/tool-calls#content)",
-      "discriminator": {
-        "propertyName": "type"
-      }
+      "description": "A prompt waiting in a session's queue."
     },
     "ContentBlock": {
       "oneOf": [
@@ -3285,6 +3053,324 @@ expression: schema()
         "resource"
       ],
       "description": "The contents of a resource, embedded into a prompt or tool call result."
+    },
+    "QueuePause": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "The turn was cancelled."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "The turn failed."
+        },
+        {
+          "type": "string",
+          "const": "interrupted",
+          "description": "The Host took the session up again, after it stopped or the session closed."
+        }
+      ],
+      "description": "Why a queue waits rather than start the next turn."
+    },
+    "PendingRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session it's for, the root or a subagent session, when it's for one."
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "createdAt"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/RequestPermissionRequest"
+            },
+            "kind": {
+              "type": "string",
+              "const": "permission"
+            }
+          },
+          "required": [
+            "kind",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/CreateElicitationRequest"
+            },
+            "kind": {
+              "type": "string",
+              "const": "elicitation"
+            }
+          },
+          "required": [
+            "kind",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string"
+            },
+            "arguments": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "target": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "clientTool"
+            }
+          },
+          "required": [
+            "kind",
+            "tool",
+            "arguments",
+            "target"
+          ],
+          "description": "A client tool call ([`crate::tools`]) for the client `target`, the only one that may\nanswer it."
+        }
+      ]
+    },
+    "RequestPermissionRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session ID for this request."
+        },
+        "toolCall": {
+          "$ref": "#/$defs/ToolCallUpdate",
+          "description": "Details about the tool call requiring permission."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionOption"
+          },
+          "description": "Available permission options for the user to choose from."
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "sessionId",
+        "toolCall",
+        "options"
+      ],
+      "description": "Request for user permission to execute a tool call.\n\nSent when the agent needs authorization before performing a sensitive operation.\n\nSee protocol docs: [Requesting Permission](https://agentclientprotocol.com/protocol/tool-calls#requesting-permission)",
+      "x-side": "client",
+      "x-method": "session/request_permission"
+    },
+    "ToolCallUpdate": {
+      "type": "object",
+      "properties": {
+        "toolCallId": {
+          "$ref": "#/$defs/ToolCallId",
+          "description": "The ID of the tool call being updated."
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Update the tool kind.",
+          "x-deserialize-default-on-error": true
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCallStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Update the execution status.",
+          "x-deserialize-default-on-error": true
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Update the human-readable title.",
+          "x-deserialize-default-on-error": true
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Update the programmatic name of the tool being invoked.\n\nThis field is optional. Omitting it or sending `null` both mean that\nthe existing name is left unchanged.",
+          "x-deserialize-default-on-error": true
+        },
+        "content": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ToolCallContent"
+          },
+          "description": "Replace the content collection.",
+          "x-deserialize-default-on-error": true,
+          "x-deserialize-skip-invalid-items": true
+        },
+        "locations": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ToolCallLocation"
+          },
+          "description": "Replace the locations collection.",
+          "x-deserialize-default-on-error": true,
+          "x-deserialize-skip-invalid-items": true
+        },
+        "rawInput": {
+          "description": "Update the raw input.",
+          "x-deserialize-default-on-error": true
+        },
+        "rawOutput": {
+          "description": "Update the raw output.",
+          "x-deserialize-default-on-error": true
+        },
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true,
+          "description": "The _meta property is reserved by ACP to allow clients and agents to attach additional\nmetadata to their interactions. Implementations MUST NOT make assumptions about values at\nthese keys.\n\nSee protocol docs: [Extensibility](https://agentclientprotocol.com/protocol/extensibility)",
+          "x-deserialize-default-on-error": true
+        }
+      },
+      "required": [
+        "toolCallId"
+      ],
+      "description": "An update to an existing tool call.\n\nUsed to report progress and results as tools execute. All fields except\nthe tool call ID are optional - only changed fields need to be included.\n\nSee protocol docs: [Updating](https://agentclientprotocol.com/protocol/tool-calls#updating)"
+    },
+    "ToolCallId": {
+      "type": "string",
+      "description": "Unique identifier for a tool call within a session."
+    },
+    "ToolCallStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "pending",
+          "description": "The tool call hasn't started running yet because the input is either\nstreaming or we're awaiting approval."
+        },
+        {
+          "type": "string",
+          "const": "in_progress",
+          "description": "The tool call is currently running."
+        },
+        {
+          "type": "string",
+          "const": "completed",
+          "description": "The tool call completed successfully."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "The tool call failed with an error."
+        }
+      ],
+      "description": "Execution status of a tool call.\n\nTool calls progress through different statuses during their lifecycle.\n\nSee protocol docs: [Status](https://agentclientprotocol.com/protocol/tool-calls#status)"
+    },
+    "ToolCallContent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Content",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "content"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Standard content block (text, images, resources)."
+        },
+        {
+          "$ref": "#/$defs/Diff",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "diff"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "File modification shown as a diff."
+        },
+        {
+          "$ref": "#/$defs/Terminal",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "terminal"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Embed a terminal created with `terminal/create` by its id.\n\nThe terminal must be added before calling `terminal/release`.\n\nSee protocol docs: [Terminal](https://agentclientprotocol.com/protocol/terminals)"
+        }
+      ],
+      "description": "Content produced by a tool call.\n\nTool calls can produce different types of content including\nstandard content blocks (text, images) or file diffs.\n\nSee protocol docs: [Content](https://agentclientprotocol.com/protocol/tool-calls#content)",
+      "discriminator": {
+        "propertyName": "type"
+      }
     },
     "Content": {
       "type": "object",
@@ -4557,6 +4643,24 @@ expression: schema()
           },
           "default": []
         },
+        "queue": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedPrompt"
+          },
+          "description": "Prompts waiting, in order, for the next turns (feature `queue`)."
+        },
+        "queuePaused": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueuePause"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the queue waits rather than start the next turn; absent while it runs."
+        },
         "pending": {
           "type": "array",
           "items": {
@@ -4879,6 +4983,13 @@ expression: schema()
         },
         "trace": {
           "type": "boolean"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Makes it safe to send again (feature `requestKeys`). A repeat answers with the session's\nid alone; a client that asked to attach attaches with `session/attach`."
         }
       },
       "required": [
@@ -4921,6 +5032,13 @@ expression: schema()
           "items": {
             "$ref": "#/$defs/ContentBlock"
           }
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Makes it safe to send again (feature [`REQUEST_KEYS_FEATURE`])."
         }
       },
       "required": [
@@ -5007,6 +5125,100 @@ expression: schema()
         "sessionId"
       ],
       "description": "`turn/cancel`: cancel the session's running turn and its pending requests."
+    },
+    "AddQueuedRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session's own id, not a subagent session's."
+        },
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Makes it safe to send again (feature `requestKeys`)."
+        }
+      },
+      "required": [
+        "sessionId",
+        "prompt"
+      ],
+      "description": "`queue/add`: add a prompt to the end of the session's queue. With no turn running and\nnothing waiting, it starts a turn at once. Adding to a paused queue resumes it."
+    },
+    "AddQueuedResponse": {
+      "type": "object",
+      "properties": {
+        "queuedId": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The position of its `turnStarted` when it started a turn at once, otherwise of its\n`queued` event."
+        },
+        "started": {
+          "type": "boolean",
+          "description": "It started a turn at once."
+        }
+      },
+      "required": [
+        "queuedId",
+        "seq",
+        "started"
+      ]
+    },
+    "RemoveQueuedRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "queuedId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "queuedId"
+      ],
+      "description": "`queue/remove`: take a prompt out of the queue, whoever added it."
+    },
+    "RemoveQueuedResponse": {
+      "type": "object",
+      "properties": {
+        "removed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueuedPrompt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The prompt taken out; absent when it had already left the queue, started or removed."
+        }
+      }
+    },
+    "ResumeQueueRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "description": "`queue/resume`: start a paused queue again. A queue that isn't paused stays as it is."
     },
     "AnswerPendingRequest": {
       "type": "object",
@@ -5645,6 +5857,13 @@ expression: schema()
             "origin": {
               "$ref": "#/$defs/TurnOrigin"
             },
+            "queuedId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The queued prompt it started from, which has left the queue."
+            },
             "kind": {
               "type": "string",
               "const": "turnStarted"
@@ -5878,6 +6097,102 @@ expression: schema()
             "text"
           ],
           "description": "Something the Host tells the session's clients, such as why its agent can't use client\ntools."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "queuedId": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ContentBlock"
+              }
+            },
+            "origin": {
+              "$ref": "#/$defs/TurnOrigin"
+            },
+            "kind": {
+              "type": "string",
+              "const": "queued"
+            }
+          },
+          "required": [
+            "kind",
+            "queuedId",
+            "prompt",
+            "origin"
+          ],
+          "description": "A prompt joined the session's queue (`queue/add`)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "queuedId": {
+              "type": "string"
+            },
+            "by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "unqueued"
+            }
+          },
+          "required": [
+            "kind",
+            "queuedId"
+          ],
+          "description": "A client took a prompt out of the queue (`queue/remove`)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/QueuePause"
+            },
+            "kind": {
+              "type": "string",
+              "const": "queuePaused"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "description": "The queue stopped starting turns. A paused queue that empties isn't paused any more."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The client that resumed it."
+            },
+            "kind": {
+              "type": "string",
+              "const": "queueResumed"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "The queue started again."
         },
         {
           "type": "object",

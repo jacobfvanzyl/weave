@@ -107,4 +107,17 @@ pub enum ChatEvent {
         title: String,
         by: String,
     },
+    /// A prompt joined the session's queue in the Host (WVE-107); `mine` when this client
+    /// added it.
+    Queued {
+        id: String,
+        text: String,
+        mine: bool,
+    },
+    /// A prompt left the Host's queue: taken out, or its turn started.
+    Unqueued {
+        id: String,
+    },
+    /// The Host's queue stopped starting turns, or started again.
+    QueuePaused(bool),
 }

@@ -18,6 +18,8 @@ use serde::Serialize;
 
 use crate::Timestamp;
 use crate::agents::AgentRelease;
+use crate::queue::QueuePause;
+use crate::queue::QueuedId;
 use crate::sessions::Activity;
 use crate::sessions::SessionAgent;
 use crate::sessions::TurnOrigin;
@@ -55,6 +57,9 @@ pub enum SessionEvent {
         session_id: SessionId,
         prompt: Vec<ContentBlock>,
         origin: TurnOrigin,
+        /// The queued prompt it started from, which has left the queue.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queued_id: Option<QueuedId>,
     },
     /// A message joined the running turn (`turn/steer`).
     TurnSteered {
@@ -110,6 +115,26 @@ pub enum SessionEvent {
     /// Something the Host tells the session's clients, such as why its agent can't use client
     /// tools.
     Notice { text: String },
+    /// A prompt joined the session's queue (`queue/add`).
+    Queued {
+        queued_id: QueuedId,
+        prompt: Vec<ContentBlock>,
+        origin: TurnOrigin,
+    },
+    /// A client took a prompt out of the queue (`queue/remove`).
+    Unqueued {
+        queued_id: QueuedId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
+    /// The queue stopped starting turns. A paused queue that empties isn't paused any more.
+    QueuePaused { reason: QueuePause },
+    /// The queue started again.
+    QueueResumed {
+        /// The client that resumed it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
     /// A kind this build doesn't know, from a newer Host. Its position still counts.
     #[serde(other)]
     Unknown,

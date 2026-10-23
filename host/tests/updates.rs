@@ -233,6 +233,7 @@ impl Client {
             .send(StartTurnRequest {
                 session_id: session_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
+                key: None,
             })
             .await
             .expect("turn/start");

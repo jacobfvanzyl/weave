@@ -243,6 +243,7 @@ async fn attach(session_id: &str, mut prompt: Option<&str>) {
                 .send(StartTurnRequest {
                     session_id: session_id.to_owned().into(),
                     prompt: vec![text.to_owned().into()],
+                    key: None,
                 })
                 .await
                 .expect("turn/start");

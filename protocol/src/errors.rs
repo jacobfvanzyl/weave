@@ -38,6 +38,8 @@ pub const NOT_A_REPOSITORY: i32 = -32073;
 pub const GIT_FAILED: i32 = -32074;
 /// The worktree has staged, unstaged or untracked changes, which removing it would lose.
 pub const UNCOMMITTED_CHANGES: i32 = -32075;
+/// The request key was used for another request: another method, or other params.
+pub const KEY_REUSED: i32 = -32076;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -145,6 +147,13 @@ pub fn uncommitted_changes(path: &Path) -> Error {
             "{} has changes that removing it would lose; remove it with force to discard them",
             path.display()
         ),
+    )
+}
+
+pub fn key_reused() -> Error {
+    Error::new(
+        KEY_REUSED,
+        "this request key was used for another request; choose a new one",
     )
 }
 

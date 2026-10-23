@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RemoveQueuedRequest\n{ session_id: \"s-1\".into(), queued_id: \"q-3\".to_owned(), })"
+---
+{
+  "method": "queue/remove",
+  "params": {
+    "sessionId": "s-1",
+    "queuedId": "q-3"
+  }
+}

@@ -1,0 +1,5 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&RemoveQueuedResponse { removed: None })"
+---
+{}

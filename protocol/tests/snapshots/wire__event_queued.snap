@@ -1,0 +1,28 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&event(44, SessionEvent::Queued\n{\n    queued_id: \"q-3\".to_owned(), prompt: vec![text(\"then update the docs\")],\n    origin: tui(),\n},))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 44,
+    "at": 1760180001234,
+    "event": {
+      "kind": "queued",
+      "queuedId": "q-3",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "then update the docs"
+        }
+      ],
+      "origin": {
+        "client": {
+          "name": "weave-tui",
+          "id": "c7"
+        }
+      }
+    }
+  }
+}

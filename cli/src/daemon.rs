@@ -414,6 +414,8 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     };
     let resuming = daemon.clone();
     tokio::spawn(async move { resuming.resume_remote().await });
+    let queues = daemon.clone();
+    tokio::spawn(async move { queues.resume_queues().await });
     daemon.serve(listening.listener, idle_exit).await;
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("weave Host stopped");

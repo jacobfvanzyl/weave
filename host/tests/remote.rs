@@ -554,6 +554,7 @@ async fn remote_clients_do_everything_but_administer_the_host() {
         .send(StartTurnRequest {
             session_id: state.session_id.clone(),
             prompt: vec![ContentBlock::from("hello".to_owned())],
+            key: None,
         })
         .await
         .expect("turn/start");

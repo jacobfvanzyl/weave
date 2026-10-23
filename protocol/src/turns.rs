@@ -1,5 +1,8 @@
 //! Starting, steering and cancelling turns. A turn's end reaches every attached client as a
 //! `turnEnded` event, whoever started it.
+//!
+//! Request keys: `session/run`, `turn/start` and `queue/add` take a `key` the caller chooses, so
+//! a request sent again after a dropped connection answers as the first did and starts nothing.
 
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
@@ -19,6 +22,9 @@ use crate::Empty;
 pub struct StartTurnRequest {
     pub session_id: SessionId,
     pub prompt: Vec<ContentBlock>,
+    /// Makes it safe to send again (feature [`REQUEST_KEYS_FEATURE`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
@@ -28,6 +34,15 @@ pub struct StartTurnResponse {
     /// The position of the turn's `turnStarted` event.
     pub seq: u64,
 }
+
+/// The [`crate::hello::HelloResponse::features`] entry of a Host that takes request keys: the
+/// `key` of `session/run`, `turn/start` and `queue/add`. A repeat, the same method with the same
+/// key, answers as the first did and starts nothing, across Host restarts too; one whose method
+/// or params differ fails with `key_reused`. A request that fails doesn't use its key up.
+pub const REQUEST_KEYS_FEATURE: &str = "requestKeys";
+
+/// The longest request key, in characters.
+pub const MAX_KEY: usize = 200;
 
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that takes `turn/steer`.
 pub const STEER_FEATURE: &str = "turn/steer";

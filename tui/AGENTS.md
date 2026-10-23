@@ -23,7 +23,12 @@ whether they draw them). An image's `Slot` (its id and thumbnail) is shared by t
 the transcript, so a sent image is neither decoded nor sent again; images from the journal
 are decoded one at a time off the UI thread, and the transcript holds the newest 64;
 during a turn Enter steers it when the Host and the agent can (`ChatWidget::can_steer`; not the
-agent's slash commands) and queues otherwise, and Tab always queues, as in Codex;
+agent's slash commands) and queues otherwise, and Tab always queues, as in Codex; a Host that
+lists `queue` holds the queue (WVE-107): queued messages go to `queue/add`, the queue shown is
+the Host's, every client's prompts in it (`set_queue`, then `queued`/`unqueued` events, with the
+state covering a replay), the Host starts them, and Esc takes this client's own back with
+`queue/remove`, leaving the rest paused, which `/queue` resumes; messages sent while a session
+opens are kept here and go to the Host once it's open (`send_kept_messages`);
 `/new`, `/reload`, `/rename`, `/subagents` and `/update` are the TUI's own slash commands,
 offered with the agent's and handled locally (`/reload` ends the TUI and the CLI execs its own
 binary again with `--resume`; `/rename <title>`, offered when the Host lists `session/rename`,
