@@ -1,11 +1,12 @@
 import { useRef, useState, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Add01Icon, ComputerIcon, Delete02Icon, Folder01Icon, Search01Icon, StopIcon, ViewIcon, ViewOffIcon } from '@hugeicons/core-free-icons';
+import { Add01Icon, ComputerIcon, Delete02Icon, Folder01Icon, GitBranchIcon, Search01Icon, StopIcon, ViewIcon, ViewOffIcon } from '@hugeicons/core-free-icons';
 import type { AppController, PairedHost, SessionSummary } from '@/app/app-controller';
-import { type DirectoryGroup, sessionListView } from '@/app/session-list';
+import { type DirectoryGroup, sessionListView, subdirectory, type WorktreeGroup } from '@/app/session-list';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { DeleteSessionDialog } from '@/components/delete-session-dialog';
 import { type NewSessionTarget, NewSessionDialog } from '@/components/new-session-dialog';
+import { RemoveWorktreeDialog } from '@/components/remove-worktree-dialog';
 import { Badge } from '@/components/ui/badge';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { Button } from '@/components/ui/button';
@@ -70,7 +71,9 @@ function SessionRow({ session, host, selected, unread, showDirectory, onOpen, ac
               <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
                 <ActivityIndicator activity={session.activity} unread={unread} />
                 <span className='shrink-0'>{session.agentName}</span>
-                {showDirectory && <span className='truncate'>· {directoryName(session.cwd)}</span>}
+                {showDirectory
+                  ? <span className='truncate'>· {directoryName(session.git?.repo ?? session.cwd)}{session.git?.branch && ` (${session.git.branch})`}</span>
+                  : subdirectory(session) && <span className='truncate'>· {subdirectory(session)}</span>}
                 {session.headless && <Badge variant='outline'>headless</Badge>}
                 {closed && <span>closed</span>}
                 {unreachable && <span>· Host unreachable</span>}
@@ -96,6 +99,7 @@ function SessionRow({ session, host, selected, unread, showDirectory, onOpen, ac
   );
 }
 
+/** A group's heading: its directory, or its repository, and the Host when there are several. */
 function GroupHeading({ group, onNewSession }: { group: DirectoryGroup; onNewSession?: () => void }) {
   return (
     <>
@@ -112,6 +116,56 @@ function GroupHeading({ group, onNewSession }: { group: DirectoryGroup; onNewSes
     </>
   );
 }
+
+/** What a worktree is called in its repository's group: its branch, or its directory when detached. */
+const worktreeLabel = (worktree: WorktreeGroup) => worktree.branch ?? directoryName(worktree.cwd);
+
+/**
+ * A worktree's heading, under its repository's. A long press, or a right-click, on one other than
+ * the repository's own checkout offers Remove worktree.
+ */
+function WorktreeHeading({ group, worktree, canRemove, actions, onNewSession }: {
+  group: DirectoryGroup;
+  worktree: WorktreeGroup;
+  canRemove: boolean;
+  actions: AppController['actions'];
+  onNewSession(): void;
+}) {
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const name = `${group.name} ${worktreeLabel(worktree)}`;
+  const label = (
+    <SidebarGroupLabel title={worktree.cwd} className='gap-1.5 pr-9 font-normal'>
+      <HugeiconsIcon icon={GitBranchIcon} strokeWidth={2} className='shrink-0' aria-hidden />
+      <span className='min-w-0 truncate'>{worktreeLabel(worktree)}</span>
+    </SidebarGroupLabel>
+  );
+  return (
+    <>
+      {canRemove
+        ? (
+            <ContextMenu>
+              <ContextMenuTrigger className='[-webkit-touch-callout:none]'>{label}</ContextMenuTrigger>
+              <ContextMenuContent aria-label={`${name} actions`}>
+                <ContextMenuItem variant='destructive' onClick={() => setConfirmRemove(true)}>
+                  <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+                  Remove worktree…
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          )
+        : label}
+      {canRemove && (
+        <RemoveWorktreeDialog hostId={group.hostId} worktree={worktree} actions={actions} open={confirmRemove} onOpenChange={setConfirmRemove} />
+      )}
+      <SidebarGroupAction aria-label={`New session in ${name}`} title={`New session in ${worktree.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
+        <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+      </SidebarGroupAction>
+    </>
+  );
+}
+
+/** A group's accessible name: its directory or repository, and the Host when there are several. */
+const groupName = (group: DirectoryGroup) => [group.name, group.hostName && `on ${group.hostName}`].filter(Boolean).join(' ');
 
 /** Pulling the list down from its top, past a threshold, lists the sessions again. */
 function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
@@ -219,9 +273,27 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
           </SidebarGroup>
         )}
         {view.groups.map((group) => (
-          <SidebarGroup key={group.key} role='group' aria-label={group.hostName ? `${group.name} on ${group.hostName}` : group.name} className='py-1'>
+          <SidebarGroup key={group.key} role='group' aria-label={groupName(group)} className='py-1'>
             <GroupHeading group={group} onNewSession={() => setNewSession({ hostId: group.hostId, cwd: group.cwd })} />
-            <SidebarMenu>{group.sessions.map((session) => row(session, false))}</SidebarMenu>
+            {group.worktrees
+              ? group.worktrees.map((worktree) => (
+                  <div
+                    key={worktree.key}
+                    role='group'
+                    aria-label={`${group.name} ${worktreeLabel(worktree)}`}
+                    className='relative ml-2.5 border-l border-sidebar-border pl-1'
+                  >
+                    <WorktreeHeading
+                      group={group}
+                      worktree={worktree}
+                      canRemove={!worktree.primary && host(group.hostId)?.status === 'connected' && host(group.hostId)?.canWorktree === true}
+                      actions={actions}
+                      onNewSession={() => setNewSession({ hostId: group.hostId, cwd: worktree.cwd })}
+                    />
+                    <SidebarMenu>{worktree.sessions.map((session) => row(session, false))}</SidebarMenu>
+                  </div>
+                ))
+              : <SidebarMenu>{group.sessions.map((session) => row(session, false))}</SidebarMenu>}
           </SidebarGroup>
         ))}
         {model.hosts.length > 0 && view.groups.length === 0 && (

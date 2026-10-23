@@ -9,6 +9,8 @@ import {
   type PairedHost,
   type PromptImage,
   type QueuedPrompt,
+  type RepositoryListing,
+  type SessionGit,
   type SessionSummary,
   sessionKey,
 } from './app-controller';
@@ -38,7 +40,7 @@ const AGENTS: AgentChoice[] = [
 const steers = (agentId: string) => agentId !== 'gemini';
 
 const hosts = (now: number, unreachable: boolean): PairedHost[] => [
-  { id: MAC, name: 'mac.tail1234.ts.net', url: 'https://mac.tail1234.ts.net:7341', status: 'connected', canBrowse: true, canRename: true },
+  { id: MAC, name: 'mac.tail1234.ts.net', url: 'https://mac.tail1234.ts.net:7341', status: 'connected', canBrowse: true, canRename: true, canWorktree: true },
   {
     id: SERVER,
     name: 'build.tail1234.ts.net',
@@ -46,6 +48,7 @@ const hosts = (now: number, unreachable: boolean): PairedHost[] => [
     status: unreachable ? 'reconnecting' : 'connected',
     canBrowse: true,
     canRename: true,
+    canWorktree: true,
     ...(unreachable ? { error: `Unreachable since ${new Date(now - 4 * MINUTE).toLocaleTimeString()}` } : {}),
   },
 ];
@@ -69,6 +72,28 @@ const DIRECTORIES: Record<string, Record<string, string[]>> = {
   },
 };
 const HOMES: Record<string, string> = { [MAC]: '/Users/jaco', [SERVER]: '/home/jaco' };
+
+/** A worktree of a fixture repository. */
+type MockWorktree = { path: string; branch?: string; changes: boolean };
+
+/** Each Host's repositories, by primary worktree: their default branch and worktrees, primary first. */
+type MockRepositories = Record<string, Record<string, { defaultBranch: string; worktrees: MockWorktree[] }>>;
+
+const RECONNECT = `${WEAVE}.fix-reconnect`;
+
+const repositories = (): MockRepositories => ({
+  [MAC]: {
+    [WEAVE]: {
+      defaultBranch: 'main',
+      worktrees: [
+        { path: WEAVE, branch: 'main', changes: false },
+        { path: RECONNECT, branch: 'fix-reconnect', changes: true },
+      ],
+    },
+  },
+});
+
+const onMain: SessionGit = { repo: WEAVE, worktree: WEAVE, branch: 'main' };
 
 const parentOf = (path: string) => path === '/' ? undefined : path.slice(0, path.lastIndexOf('/')) || '/';
 
@@ -98,17 +123,22 @@ const summary = (
 });
 
 const sessions = (now: number): SessionSummary[] => [
-  summary(MAC, 'fix-reconnect', `${WEAVE}/tui`, 'Fix the flaky reconnect test', 'claude', 1, now, {
+  summary(MAC, 'fix-reconnect', RECONNECT, 'Fix the flaky reconnect test', 'claude', 1, now, {
+    git: { repo: WEAVE, worktree: RECONNECT, branch: 'fix-reconnect' },
     activity: 'waiting',
     waitingOn: 'Permission to run cargo test',
     clients: 1,
   }),
-  summary(MAC, 'protocol-spec', `${WEAVE}/tui`, 'Update the Host protocol spec', 'gemini', 3, now, { activity: 'running' }),
-  summary(MAC, 'steer-tui', `${WEAVE}/tui`, 'Steer handling in the TUI', 'claude', 80, now),
-  summary(MAC, 'nightly', `${WEAVE}/tui`, 'Nightly dependency check', 'claude', 300, now, { headless: true }),
-  summary(MAC, 'alpha-back', `${WEAVE}/app`, 'Bring Alpha back', 'claude', 2, now, { activity: 'running', clients: 2 }),
-  summary(MAC, 'usb-latency', `${WEAVE}/trackpad`, 'USB transport latency', 'codex', 60 * 26, now),
-  summary(MAC, 'pencil-hover', `${WEAVE}/trackpad`, 'Pencil hover', 'claude', 60 * 50, now, { state: 'closed', activity: undefined }),
+  summary(MAC, 'protocol-spec', `${WEAVE}/tui`, 'Update the Host protocol spec', 'gemini', 3, now, { git: onMain, activity: 'running' }),
+  summary(MAC, 'steer-tui', `${WEAVE}/tui`, 'Steer handling in the TUI', 'claude', 80, now, { git: onMain }),
+  summary(MAC, 'nightly', WEAVE, 'Nightly dependency check', 'claude', 300, now, { git: onMain, headless: true }),
+  summary(MAC, 'alpha-back', `${WEAVE}/app`, 'Bring Alpha back', 'claude', 2, now, { git: onMain, activity: 'running', clients: 2 }),
+  summary(MAC, 'usb-latency', `${WEAVE}/trackpad`, 'USB transport latency', 'codex', 60 * 26, now, { git: onMain }),
+  summary(MAC, 'pencil-hover', `${WEAVE}/trackpad`, 'Pencil hover', 'claude', 60 * 50, now, {
+    git: onMain,
+    state: 'closed',
+    activity: undefined,
+  }),
   summary(SERVER, 'upload-failures', '/srv/odin', 'Diagnose upload failures', 'codex', 45, now),
 ];
 
@@ -116,6 +146,7 @@ type MockState = {
   model: AppModel;
   transcripts: Record<string, AcpTranscript>;
   queued: Record<string, QueuedPrompt[]>;
+  repositories: MockRepositories;
 };
 
 const transcriptFor = (session: SessionSummary): AcpTranscript => {
@@ -125,7 +156,7 @@ const transcriptFor = (session: SessionSummary): AcpTranscript => {
 
 const initialState = (scenario: MockScenario, now: number): MockState => {
   if (scenario === 'empty') {
-    return { model: { hosts: [], sessions: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {} };
+    return { model: { hosts: [], sessions: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {} };
   }
   const list = sessions(now);
   const selectedKey = scenario === 'session'
@@ -143,7 +174,22 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
     },
     transcripts: {},
     queued: scenario === 'running' ? { [sessionKey(MAC, 'protocol-spec')]: [{ id: 'q1', text: 'Then regenerate the fixtures.' }] } : {},
+    repositories: repositories(),
   };
+};
+
+/** The fixture repository `path` is in on a Host, by its primary worktree. */
+const repositoryOf = (repositories: MockRepositories, hostId: string, path: string) =>
+  Object.entries(repositories[hostId] ?? {}).find(([, { worktrees }]) =>
+    worktrees.some((worktree) => path === worktree.path || path.startsWith(`${worktree.path}/`)));
+
+/** Where a session in `cwd` is in the fixture repositories. */
+const gitOf = (repositories: MockRepositories, hostId: string, cwd: string): SessionGit | undefined => {
+  const [repo, found] = repositoryOf(repositories, hostId, cwd) ?? [];
+  const worktree = found?.worktrees
+    .filter(({ path }) => cwd === path || cwd.startsWith(`${path}/`))
+    .sort((left, right) => right.path.length - left.path.length)[0];
+  return repo && worktree ? { repo, worktree: worktree.path, ...(worktree.branch ? { branch: worktree.branch } : {}) } : undefined;
 };
 
 let nextId = 0;
@@ -256,7 +302,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       selectSession,
       createSession({ hostId, cwd, agentId }) {
         const sessionId = localId('session');
-        const created = summary(hostId, sessionId, cwd, '', agentId, 0, Date.now());
+        const git = gitOf(state.current.repositories, hostId, cwd);
+        const created = summary(hostId, sessionId, cwd, '', agentId, 0, Date.now(), git ? { git } : {});
         update((current) => ({
           ...current,
           transcripts: { ...current.transcripts, [created.key]: createTranscript(sessionId) },
@@ -276,6 +323,65 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           directories: directories.filter((name) => hidden || !name.startsWith('.')),
           truncated: false,
         };
+      },
+      async listWorktrees({ hostId, path }): Promise<RepositoryListing | undefined> {
+        const [repo, found] = repositoryOf(state.current.repositories, hostId, path) ?? [];
+        if (!repo || !found) return undefined;
+        return {
+          repo,
+          defaultBranch: found.defaultBranch,
+          worktrees: found.worktrees.map((worktree, index) => ({
+            ...worktree,
+            primary: index === 0,
+            sessions: state.current.model.sessions
+              .filter((session) => session.hostId === hostId && session.git?.worktree === worktree.path)
+              .map(({ sessionId }) => sessionId),
+          })),
+        };
+      },
+      async createWorktree({ hostId, repo: dir, branch }) {
+        const [repo, found] = repositoryOf(state.current.repositories, hostId, dir) ?? [];
+        if (!repo || !found) throw new Error(`Couldn't make the worktree: ${dir} isn't in a git repository`);
+        if (!branch.trim() || /\s|\.\./.test(branch)) throw new Error(`Couldn't make the worktree: "${branch}" isn't a branch name`);
+        const taken = found.worktrees.find((worktree) => worktree.branch === branch);
+        if (taken) throw new Error(`Couldn't make the worktree: ${branch} is checked out in ${taken.path} already`);
+        const path = `${repo}.${branch.replaceAll('/', '-')}`;
+        update((current) => ({
+          ...current,
+          repositories: {
+            ...current.repositories,
+            [hostId]: {
+              ...current.repositories[hostId],
+              [repo]: { ...found, worktrees: [...found.worktrees, { path, branch, changes: false }] },
+            },
+          },
+        }));
+        return path;
+      },
+      async removeWorktree({ hostId, path, force }) {
+        const [repo, found] = repositoryOf(state.current.repositories, hostId, path) ?? [];
+        const worktree = found?.worktrees.find((item) => item.path === path);
+        if (!repo || !found || !worktree || worktree.path === repo) throw new Error(`Couldn't remove the worktree: ${path} isn't one that can be removed`);
+        const inside = state.current.model.sessions.filter((session) => session.hostId === hostId && session.git?.worktree === path);
+        if (inside.some(({ activity }) => activity === 'running' || activity === 'waiting')) {
+          throw new Error('A session in it is running a turn or waiting on you. Let it finish, or stop it, first.');
+        }
+        if (worktree.changes && !force) return { outcome: 'hasChanges' };
+        update((current) => ({
+          ...current,
+          repositories: {
+            ...current.repositories,
+            [hostId]: { ...current.repositories[hostId], [repo]: { ...found, worktrees: found.worktrees.filter((item) => item !== worktree) } },
+          },
+          model: {
+            ...current.model,
+            sessions: current.model.sessions.map((session) => inside.includes(session)
+              ? { ...session, state: 'closed', activity: undefined, waitingOn: undefined }
+              : session),
+            selectedKey: inside.some(({ key }) => key === current.model.selectedKey) ? undefined : current.model.selectedKey,
+          },
+        }));
+        return { outcome: 'removed', ...(worktree.branch ? { branch: worktree.branch } : {}), branchDeleted: false };
       },
       renameSession(key, title) {
         setSession(key, { title });

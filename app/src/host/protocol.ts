@@ -1160,6 +1160,11 @@ export interface SessionListing {
    */
   headless?: boolean;
   lastActivityAt?: number | null;
+  /**
+   * Where in a git repository its directory is, as the Host last read it while the session
+   * was open; absent outside one, and for sessions the Host has no record of.
+   */
+  git?: GitLocation | null;
 }
 /**
  * As ACP lists it: id, directory, title, last update.
@@ -1199,6 +1204,33 @@ export interface SessionInfo {
   _meta?: {
     [k: string]: unknown;
   } | null;
+}
+/**
+ * Where in a git repository a session's directory is, as the Host last read it: when the
+ * session opened, and again after each of its turns.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "GitLocation".
+ */
+export interface GitLocation {
+  /**
+   * The repository, by its primary worktree.
+   */
+  repo: string;
+  /**
+   * The worktree the directory is in: the primary one or another.
+   */
+  worktree: string;
+  /**
+   * The branch checked out there; absent when its HEAD is detached.
+   */
+  branch?: string | null;
+  /**
+   * The repository's remote as a host and path, such as `github.com/owner/name`, without
+   * credentials or `.git`: `origin`, or else the first. Absent without one, or for a remote
+   * that's a path on this computer.
+   */
+  remote?: string | null;
 }
 /**
  * Information about a session returned by session/list
@@ -2038,6 +2070,11 @@ export interface FileEntry {
 export interface ListSessionsRequest {
   agentId?: string | null;
   cwd?: string | null;
+  /**
+   * Only the sessions in this repository's worktrees, given by any directory in it. Without
+   * an agent only (feature `worktrees`).
+   */
+  repo?: string | null;
   cursor?: string | null;
 }
 /**
@@ -2121,6 +2158,10 @@ export interface SessionState {
   agent: SessionAgent;
   cwd: string;
   additionalDirectories?: string[];
+  /**
+   * Where in a git repository `cwd` is; absent outside one.
+   */
+  git?: GitLocation | null;
   title?: string | null;
   state: SessionStatus;
   activity: Activity;
@@ -3705,6 +3746,10 @@ export interface AttachSessionResponse {
   agent: SessionAgent;
   cwd: string;
   additionalDirectories?: string[];
+  /**
+   * Where in a git repository `cwd` is; absent outside one.
+   */
+  git?: GitLocation | null;
   title?: string | null;
   state: SessionStatus;
   activity: Activity;
@@ -4053,6 +4098,208 @@ export interface ClientToolResult {
    */
   content?: unknown[];
   isError?: boolean;
+}
+/**
+ * `worktrees/list`: a repository's worktrees and the sessions in each.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListWorktreesRequest".
+ */
+export interface ListWorktreesRequest {
+  /**
+   * Any directory in the repository.
+   */
+  repo: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListWorktreesResponse".
+ */
+export interface ListWorktreesResponse {
+  /**
+   * The repository's primary worktree.
+   */
+  repo: string;
+  /**
+   * As [`GitLocation::remote`].
+   */
+  remote?: string | null;
+  /**
+   * The branch new worktrees start from unless asked otherwise: the remote's default
+   * branch, else `main` or `master`. Absent when there's none of those.
+   */
+  defaultBranch?: string | null;
+  /**
+   * The primary worktree first, then by path. Worktrees whose directory is gone are left
+   * out.
+   */
+  worktrees: Worktree[];
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Worktree".
+ */
+export interface Worktree {
+  path: string;
+  /**
+   * Absent when its HEAD is detached.
+   */
+  branch?: string | null;
+  /**
+   * The commit checked out; absent before the first commit.
+   */
+  head?: string | null;
+  /**
+   * The repository's primary worktree, which can't be removed.
+   */
+  primary?: boolean;
+  /**
+   * Staged, unstaged or untracked changes; ignored files don't count.
+   */
+  changes?: boolean;
+  /**
+   * How far its HEAD is from the default branch; absent without one.
+   */
+  divergence?: Divergence | null;
+  /**
+   * The branch it tracks, and how far it is from it.
+   */
+  upstream?: Upstream | null;
+  /**
+   * The sessions the Host has a record of in it, open or not, most recently active first.
+   */
+  sessions?: SessionId[];
+}
+/**
+ * Commits one side has that the other doesn't.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Divergence".
+ */
+export interface Divergence {
+  /**
+   * Commits it has that the other doesn't.
+   */
+  ahead: number;
+  /**
+   * Commits the other has that it doesn't.
+   */
+  behind: number;
+}
+/**
+ * Commits one side has that the other doesn't.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Upstream".
+ */
+export interface Upstream {
+  /**
+   * Such as `origin/feature`.
+   */
+  name: string;
+  /**
+   * Commits it has that the other doesn't.
+   */
+  ahead: number;
+  /**
+   * Commits the other has that it doesn't.
+   */
+  behind: number;
+}
+/**
+ * `worktrees/create`: a new worktree for `branch`, beside the repository as
+ * `<repo>.<branch>` with the branch made safe for a path (`feature/auth` becomes
+ * `weave.feature-auth`). A branch that doesn't exist is made from `base`. One that exists is
+ * checked out, a branch only a remote has included, unless another worktree has it checked
+ * out. The client then starts a session there with `session/create`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CreateWorktreeRequest".
+ */
+export interface CreateWorktreeRequest {
+  /**
+   * Any directory in the repository.
+   */
+  repo: string;
+  branch: string;
+  /**
+   * What a new branch starts from: a branch, tag or commit. The default branch when absent,
+   * else the primary worktree's HEAD. Refused for a branch that exists.
+   */
+  base?: string | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CreateWorktreeResponse".
+ */
+export interface CreateWorktreeResponse {
+  /**
+   * The new worktree.
+   */
+  path: string;
+  branch: string;
+  /**
+   * The branch was made for it, rather than one that existed.
+   */
+  createdBranch?: boolean;
+}
+/**
+ * `worktrees/remove`: remove a worktree other than the primary one. Refused while a session
+ * in it runs a turn or waits on a request (`worktree_busy`), and when it has changes
+ * (`uncommitted_changes`) unless `force`. Otherwise the sessions open in it close first. Their
+ * journals stay, so they can still be deleted. Its branch is deleted when git counts it merged,
+ * and regardless with `deleteBranch`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemoveWorktreeRequest".
+ */
+export interface RemoveWorktreeRequest {
+  path: string;
+  /**
+   * Remove it with its changes, which are lost.
+   */
+  force?: boolean;
+  /**
+   * Delete its branch even when it isn't merged, losing commits only it has.
+   */
+  deleteBranch?: boolean;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemoveWorktreeResponse".
+ */
+export interface RemoveWorktreeResponse {
+  /**
+   * The sessions that were open in it, now closed.
+   */
+  closed?: SessionId[];
+  /**
+   * Its branch; absent when its HEAD was detached.
+   */
+  branch?: string | null;
+  branchDeleted?: boolean;
+}
+/**
+ * `worktrees/release`: let a worktree go before something else removes it, as
+ * `weave worktrees pre-remove` asks when worktrunk does. Refused, as `worktrees/remove` is,
+ * while a session in it runs a turn or waits on a request; otherwise the sessions open in it
+ * close.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ReleaseWorktreeRequest".
+ */
+export interface ReleaseWorktreeRequest {
+  path: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ReleaseWorktreeResponse".
+ */
+export interface ReleaseWorktreeResponse {
+  /**
+   * The sessions that were open in it, now closed.
+   */
+  closed?: SessionId[];
 }
 /**
  * `session/event`: one journaled event, in order.
@@ -5094,6 +5341,10 @@ export interface SessionChangedNotification {
   clients?: number | null;
   title?: string | null;
   blank?: boolean | null;
+  /**
+   * Where in a git repository the session's directory is, as a turn left it.
+   */
+  git?: GitLocation | null;
 }
 /**
  * `sessions/updated`, to watching clients: a session appeared or changed (opened, suspended,
@@ -5231,7 +5482,11 @@ export const HOST_PROTOCOL = {
     "requiresTerminal": -32068,
     "forbidden": -32069,
     "notTarget": -32070,
-    "remoteUnavailable": -32071
+    "remoteUnavailable": -32071,
+    "worktreeBusy": -32072,
+    "notARepository": -32073,
+    "gitFailed": -32074,
+    "uncommittedChanges": -32075
   },
   "features": {
     "steer": "turn/steer",
@@ -5240,7 +5495,8 @@ export const HOST_PROTOCOL = {
     "clientTools": "clientTools",
     "watch": "sessions/watch",
     "listFiles": "files/list",
-    "rename": "session/rename"
+    "rename": "session/rename",
+    "worktrees": "worktrees"
   },
   "files": {
     "maxEntries": 2000
@@ -5289,6 +5545,10 @@ export interface HostRequests {
   "turn/steer": { params: SteerTurnRequest; result: SteerTurnResponse };
   "turn/cancel": { params: CancelTurnRequest; result: Empty };
   "pending/answer": { params: AnswerPendingRequest; result: Empty };
+  "worktrees/list": { params: ListWorktreesRequest; result: ListWorktreesResponse };
+  "worktrees/create": { params: CreateWorktreeRequest; result: CreateWorktreeResponse };
+  "worktrees/remove": { params: RemoveWorktreeRequest; result: RemoveWorktreeResponse };
+  "worktrees/release": { params: ReleaseWorktreeRequest; result: ReleaseWorktreeResponse };
 }
 
 /** What each notification the Host sends carries. */

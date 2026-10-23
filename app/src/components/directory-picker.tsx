@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowRight01Icon, ArrowUp01Icon, Folder01Icon, Home01Icon } from '@hugeicons/core-free-icons';
+import { ArrowRight01Icon, ArrowUp01Icon, Clock01Icon, Folder01Icon, Home01Icon } from '@hugeicons/core-free-icons';
 import type { DirectoryListing } from '@/app/app-controller';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { directoryName } from '@/lib/display-path';
 
 /** A path as the person reads it: under the home directory, as `~/…`. */
 export const homePath = (path: string, home: string) =>
@@ -13,14 +14,19 @@ export const homePath = (path: string, home: string) =>
 
 const join = (path: string, name: string) => path.endsWith('/') ? `${path}${name}` : `${path}/${name}`;
 
+/** How many of the directories sessions use the picker offers. */
+const RECENT = 5;
+
 /**
- * Picks a directory on a Host's computer by browsing it (`files/list`): into a directory, up to
- * its parent, or home, with hidden ones on request. It opens at `start`, or at home when `start`
- * can't be listed.
+ * Picks a directory on a Host's computer: one its sessions use (`recent`), or any by browsing it
+ * (`files/list`): into a directory, up to its parent, or home, with hidden ones on request. It
+ * opens at `start`, or at home when `start` can't be listed.
  */
-export function DirectoryPicker({ list, start, onChoose, onCancel }: {
+export function DirectoryPicker({ list, start, recent = [], onChoose, onCancel }: {
   list(input: { path?: string; hidden?: boolean }): Promise<DirectoryListing>;
   start?: string;
+  /** Directories the Host's sessions use, most recently active first. */
+  recent?: string[];
   onChoose(path: string): void;
   onCancel(): void;
 }) {
@@ -58,6 +64,20 @@ export function DirectoryPicker({ list, start, onChoose, onCancel }: {
 
   return (
     <div className='grid gap-3' data-slot='directory-picker'>
+      {recent.length > 0 && (
+        <ul aria-label='Recent directories' className='rounded-md border'>
+          {recent.slice(0, RECENT).map((path) => (
+            <li key={path}>
+              <button type='button' title={path} className='flex min-h-10 w-full min-w-0 items-center gap-2 px-2.5 text-left text-xs hover:bg-muted'
+                onClick={() => onChoose(path)}>
+                <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.75} className='size-4 shrink-0 text-muted-foreground' />
+                <span className='shrink-0 font-medium'>{directoryName(path)}</span>
+                <span className='min-w-0 flex-1 truncate text-muted-foreground'>{listing ? homePath(path, listing.home) : path}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className='flex min-w-0 items-center gap-1'>
         <Button type='button' size='icon' variant='outline' aria-label='Up' disabled={!listing?.parent || loading}
           onClick={() => listing?.parent && void go(listing.parent)}>

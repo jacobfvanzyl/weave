@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PairedHost, SessionSummary } from './app-controller';
-import { knownDirectories, sessionListView, waitingCount } from './session-list';
+import { knownDirectories, sessionListView, subdirectory, waitingCount } from './session-list';
 
 const host = (id: string, name: string): PairedHost => ({ id, name, url: `https://${name}`, status: 'connected' });
 
@@ -52,6 +52,46 @@ describe('sessionListView', () => {
       'mac.example.ts.net weave',
       'mac.example.ts.net trackpad',
     ]);
+  });
+
+  it('groups sessions in a repository under it, by worktree, and places the repository by its latest activity', () => {
+    const git = (worktree: string, branch?: string) => ({ repo: '/code/weave', worktree, ...(branch ? { branch } : {}) });
+    const inRepo = [
+      session('mac', 'tui', '/code/weave/tui', 30, { git: git('/code/weave', 'main') }),
+      session('mac', 'root', '/code/weave', 20, { git: git('/code/weave', 'main') }),
+      session('mac', 'auth', '/code/weave.feature-auth', 50, { git: git('/code/weave.feature-auth', 'feature/auth') }),
+      session('mac', 'review', '/code/weave.review', 10, { git: git('/code/weave.review') }),
+      session('mac', 'notes', '/code/notes', 40),
+      // From a journal written before the Host recorded repositories: it joins the worktree it's in.
+      session('mac', 'older', '/code/weave.feature-auth/src', 5),
+    ];
+    const view = sessionListView(inRepo, [mac]);
+    expect(view.groups.map(({ name, cwd, worktrees }) => ({
+      name,
+      cwd,
+      worktrees: worktrees?.map(({ cwd: path, branch, primary, sessions: grouped }) => ({
+        path,
+        branch,
+        primary,
+        sessions: grouped.map(({ sessionId }) => sessionId),
+      })),
+    }))).toEqual([
+      {
+        name: 'weave',
+        cwd: '/code/weave',
+        worktrees: [
+          { path: '/code/weave.feature-auth', branch: 'feature/auth', primary: false, sessions: ['auth', 'older'] },
+          { path: '/code/weave', branch: 'main', primary: true, sessions: ['tui', 'root'] },
+          { path: '/code/weave.review', branch: undefined, primary: false, sessions: ['review'] },
+        ],
+      },
+      { name: 'notes', cwd: '/code/notes', worktrees: undefined },
+    ]);
+    const older = view.groups[0].worktrees?.[0].sessions[1];
+    expect(older && subdirectory(older)).toBe('src');
+    expect(inRepo.map(subdirectory)).toEqual(['tui', undefined, undefined, undefined, undefined, undefined]);
+    expect(sessionListView(inRepo, [mac], { query: 'feature/' }).groups[0].worktrees?.map(({ cwd }) => cwd))
+      .toEqual(['/code/weave.feature-auth']);
   });
 
   it('filters by title, directory and agent', () => {

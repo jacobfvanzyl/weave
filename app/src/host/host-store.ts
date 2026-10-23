@@ -16,7 +16,10 @@ import type {
   PairedHost,
   PromptImage,
   QueuedPrompt,
+  RepositoryListing,
+  SessionGit,
   SessionSummary,
+  WorktreeRemoval,
 } from '@/app/app-controller';
 import { sessionKey } from '@/app/app-controller';
 import { SessionReadState } from '@/app/session-read-state';
@@ -31,6 +34,7 @@ import {
   type ClientCapabilities,
   type ClientInfo,
   type ContentBlock,
+  type GitLocation,
   type PendingRequest,
   type PendingResolvedNotification,
   type SessionEventNotification,
@@ -124,6 +128,12 @@ const AUTH_REQUIRED = -32000;
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const failedWith = (error: unknown, code: number) => error instanceof HostError && error.code === code;
+
+const sessionGit = (git: GitLocation): SessionGit => ({
+  repo: git.repo,
+  worktree: git.worktree,
+  ...(git.branch ? { branch: git.branch } : {}),
+});
 
 /** What failed, and why as the Host says it: its error's text, when it gave one, says more than its message. */
 const failed = (what: string, error: unknown) =>
@@ -249,6 +259,9 @@ export class HostStore {
     },
     createSession: (input) => this.#create(input),
     listDirectory: (input) => this.#listDirectory(input),
+    listWorktrees: (input) => this.#listWorktrees(input),
+    createWorktree: (input) => this.#createWorktree(input),
+    removeWorktree: (input) => this.#removeWorktree(input),
     closeSession: (key) => this.#report(() => this.#close(key)),
     renameSession: (key, title) => this.#rename(key, title),
     deleteSession: (key) => this.#report(() => this.#delete(key)),
@@ -888,6 +901,59 @@ export class HostStore {
     }
   }
 
+  /** A Host's connection for a request the person waits on, or why there's none. */
+  #requestable(hostId: string): HostConnection {
+    const entry = this.#hosts.get(hostId);
+    const connection = entry?.connection;
+    if (!entry || !connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    return connection;
+  }
+
+  async #listWorktrees({ hostId, path }: { hostId: string; path: string }): Promise<RepositoryListing | undefined> {
+    const connection = this.#requestable(hostId);
+    try {
+      const listed = await connection.request('worktrees/list', { repo: path });
+      return {
+        repo: listed.repo,
+        ...(listed.defaultBranch ? { defaultBranch: listed.defaultBranch } : {}),
+        worktrees: listed.worktrees.map((worktree) => ({
+          path: worktree.path,
+          ...(worktree.branch ? { branch: worktree.branch } : {}),
+          primary: worktree.primary ?? false,
+          changes: worktree.changes ?? false,
+          sessions: worktree.sessions ?? [],
+        })),
+      };
+    } catch (error) {
+      if (failedWith(error, HOST_PROTOCOL.errors.notARepository)) return undefined;
+      throw failed("Couldn't list the repository's worktrees", error);
+    }
+  }
+
+  async #createWorktree({ hostId, repo, branch, base }: { hostId: string; repo: string; branch: string; base?: string }): Promise<string> {
+    const connection = this.#requestable(hostId);
+    try {
+      const created = await connection.request('worktrees/create', { repo, branch, ...(base ? { base } : {}) });
+      return created.path;
+    } catch (error) {
+      throw failed("Couldn't make the worktree", error);
+    }
+  }
+
+  async #removeWorktree({ hostId, path, force }: { hostId: string; path: string; force?: boolean }): Promise<WorktreeRemoval> {
+    const connection = this.#requestable(hostId);
+    try {
+      const removed = await connection.request('worktrees/remove', { path, ...(force ? { force } : {}) });
+      return { outcome: 'removed', ...(removed.branch ? { branch: removed.branch } : {}), branchDeleted: removed.branchDeleted ?? false };
+    } catch (error) {
+      if (failedWith(error, HOST_PROTOCOL.errors.uncommittedChanges)) return { outcome: 'hasChanges' };
+      if (failedWith(error, HOST_PROTOCOL.errors.worktreeBusy)) {
+        throw new Error('A session in it is running a turn or waiting on you. Let it finish, or stop it, first.');
+      }
+      throw failed("Couldn't remove the worktree", error);
+    }
+  }
+
   /** Starts a session and opens it; it rejects saying why the Host couldn't. */
   #create(input: { hostId: string; cwd: string; agentId: string }): Promise<void> {
     const entry = this.#hosts.get(input.hostId);
@@ -1140,6 +1206,7 @@ export class HostStore {
         ...(entry.error ? { error: entry.error } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.listFiles) ? { canBrowse: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.rename) ? { canRename: true } : {}),
+        ...(entry.connection?.supports(HOST_PROTOCOL.features.worktrees) ? { canWorktree: true } : {}),
       });
       agents[record.hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
@@ -1152,6 +1219,7 @@ export class HostStore {
           agentId: listing.agentId,
           agentName: agentName(listing.agentId),
           cwd: listing.info.cwd,
+          ...(listing.git ? { git: sessionGit(listing.git) } : {}),
           state: listing.state,
           ...(listing.activity ? { activity: listing.activity } : {}),
           clients: listing.clients ?? 0,
@@ -1170,6 +1238,7 @@ export class HostStore {
           agentId: state.agent.id,
           agentName: state.agent.name,
           cwd: state.cwd,
+          ...(state.git ? { git: sessionGit(state.git) } : {}),
           state: 'open',
           activity: state.activity,
           clients: state.clients,

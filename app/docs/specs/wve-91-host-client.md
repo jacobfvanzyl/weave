@@ -30,6 +30,13 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 - **Grouped by directory.** Sessions are grouped by the directory they run in, one group per
   Host and directory. Groups are ordered by their latest activity, and sessions in a group most
   recent first.
+- **Or by repository and worktree.** Sessions in a git repository (the listing's `git`, ADR
+  0019) are grouped under the repository instead, with each of its worktrees indented beneath,
+  headed by its branch (or its directory, when detached), and its sessions under that. A row
+  says its subdirectory when it isn't the worktree's top. The repository's place among the
+  groups is its latest activity in any worktree. A session from a journal written before the
+  Host recorded repositories joins the worktree another session of its Host places its
+  directory in. Under "Needs you" a row names the repository and branch.
 - **Needs you.** Sessions waiting on the person (activity `waiting`) also show in a "Needs you"
   group at the top, across Hosts and directories.
 - **A row** shows the session's title, its agent, its activity (waiting, running or idle), when
@@ -42,11 +49,20 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   one and Delete session, confirmed, for any, so an old session goes without being opened (and
   resumed in its agent) first. The Host forgets a deleted session even when its agent can't
   delete it, or its directory is gone. A failure says what failed and why.
-- **Filtering.** A field filters the list by title, directory and agent.
+- **Removing a worktree.** A long press, or a right-click, on the heading of a worktree other
+  than the repository's own checkout offers Remove worktree, confirmed. The Host refuses while
+  a session in it runs a turn or waits on the person; one with uncommitted changes asks again,
+  as Remove anyway. Its sessions close, and its branch goes too when it's merged.
+- **Filtering.** A field filters the list by title, directory, agent and branch.
 - **New sessions.** A directory's heading starts a session in that directory with a chosen
-  agent. "New session" asks for the Host (with more than one), the directory (one of the
-  directories the Host's sessions use, typed, or picked by browsing the Host's computer) and
-  the agent.
+  agent. "New session" asks for the Host (with more than one), the directory and the agent.
+  The directory comes from a picker that replaces the form: the directories the Host's sessions
+  use, most recent first, then the Host's computer to browse; a Host that doesn't list its
+  directories (`files/list`) takes a path typed instead. When the
+  directory is in a git repository on a Host that lists `worktrees`, a Worktree field opens a
+  picker of the repository's worktrees, with their branches, changes and sessions, which also
+  creates one: a branch, and what to start it from (the default branch unless told otherwise).
+  The Host creates it beside the repository there and then, and the session starts in it.
 - **Hosts.** "Hosts" at the foot of the list opens the paired Hosts, with each one's connection
   state, pairing a Host, and forgetting one, which deletes its key. Hosts are told apart by
   `host.id`, and each has its own connection and device id. While a Host is unreachable its
@@ -221,12 +237,14 @@ transcript live and replayed, and an outline of each is a reviewed snapshot.
 
 `HostStore` speaks for the session on screen (`src/host/host-store.ts`):
 
-- **New sessions** (`session/create`) take a Host, a directory (one its sessions use, typed, or
-  browsed for) and an agent from `agents/list`, and open at once. Browse…, for a Host that lists
-  `files/list` (WVE-112), opens a folder picker in the dialog. It starts at the directory chosen
-  so far, or at home when that can't be listed, and shows paths under home as `~/…`. You can go
-  into a directory, up, or home, with hidden directories on request. "Use this directory" fills in
-  the dialog. A session nobody has prompted isn't listed
+- **New sessions** (`session/create`) take a Host, a directory and an agent from `agents/list`,
+  and open at once. For a Host that lists `files/list` (WVE-112), the Directory field opens a
+  folder picker in the dialog: up to five directories the Host's sessions use, then the Host's
+  computer from the directory chosen so far, or from home when that can't be listed, with paths
+  under home as `~/…`. You can go into a directory, up, or home, with hidden directories on
+  request. "Use this directory" fills in the dialog. For a Host that lists `worktrees`, the
+  Worktree field opens a picker of the repository's worktrees (`worktrees/list`) that also
+  creates one (`worktrees/create`). A session nobody has prompted isn't listed
   by the Host, so the app lists it while it's open; leaving it detaches with `ifUnused`, which
   closes it, as the TUI does.
 - **Send** starts a turn (`turn/start`) and shows the prompt at once. While a turn runs it

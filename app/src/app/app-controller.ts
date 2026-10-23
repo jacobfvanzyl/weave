@@ -21,7 +21,47 @@ export type PairedHost = {
   canBrowse?: boolean;
   /** Whether it renames sessions (`session/rename`). */
   canRename?: boolean;
+  /** Whether it lists, makes and removes git worktrees (`worktrees`). */
+  canWorktree?: boolean;
 };
+
+/** Where in a git repository a session's directory is. */
+export type SessionGit = {
+  /** The repository, by its primary worktree. */
+  repo: string;
+  /** The worktree the directory is in: the primary one or another. */
+  worktree: string;
+  /** None when its HEAD is detached. */
+  branch?: string;
+};
+
+/** One of a repository's worktrees, as `worktrees/list` gives it. */
+export type WorktreeSummary = {
+  path: string;
+  /** None when its HEAD is detached. */
+  branch?: string;
+  /** The repository's own checkout, which can't be removed. */
+  primary: boolean;
+  /** Staged, unstaged or untracked changes. */
+  changes: boolean;
+  /** The ids of the sessions the Host has in it. */
+  sessions: string[];
+};
+
+/** A git repository on a Host's computer and its worktrees. */
+export type RepositoryListing = {
+  /** Its primary worktree. */
+  repo: string;
+  /** The branch new worktrees start from unless told otherwise. */
+  defaultBranch?: string;
+  /** The primary worktree first. */
+  worktrees: WorktreeSummary[];
+};
+
+/** What removing a worktree did: removed it, or left it because it has changes only `force` discards. */
+export type WorktreeRemoval =
+  | { outcome: 'removed'; branch?: string; branchDeleted: boolean }
+  | { outcome: 'hasChanges' };
 
 /** A directory on a Host's computer and the directories in it, as `files/list` gives them. */
 export type DirectoryListing = {
@@ -49,6 +89,8 @@ export type SessionSummary = {
   agentId: string;
   agentName: string;
   cwd: string;
+  /** Where in a git repository `cwd` is; none outside one. */
+  git?: SessionGit;
   state: 'open' | 'suspended' | 'closed';
   /** Open sessions only. */
   activity?: SessionActivity;
@@ -118,6 +160,22 @@ export type AppActions = {
    * saying why the Host couldn't list it.
    */
   listDirectory(input: { hostId: string; path?: string; hidden?: boolean }): Promise<DirectoryListing>;
+  /**
+   * The repository `path` is in on a Host's computer, with its worktrees; none outside one. Rejects
+   * saying why the Host couldn't list them.
+   */
+  listWorktrees(input: { hostId: string; path: string }): Promise<RepositoryListing | undefined>;
+  /**
+   * Makes a worktree of the repository `repo` is in, beside it, for `branch`: a new branch from
+   * `base` (else the default branch) when it doesn't exist. Resolves to the worktree's path, for a
+   * session to start in; rejects saying why not.
+   */
+  createWorktree(input: { hostId: string; repo: string; branch: string; base?: string }): Promise<string>;
+  /**
+   * Removes a worktree other than the primary one, closing its sessions, and its branch when that's
+   * merged. Rejects saying why not, as when a session in it runs a turn or waits on the person.
+   */
+  removeWorktree(input: { hostId: string; path: string; force?: boolean }): Promise<WorktreeRemoval>;
   closeSession(key: string): Promise<void> | void;
   /** Gives an open session a title of the Host's, for every client; rejects saying why not. */
   renameSession(key: string, title: string): Promise<void> | void;
