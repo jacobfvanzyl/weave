@@ -11,6 +11,8 @@
 //! - [`devices`]: pairing the person's other devices, whose remote clients use the WebSocket.
 //! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
 //! - [`files`]: files on the Host's computer, for clients that aren't on it.
+//! - [`worktrees`]: git repositories on the Host's computer, their worktrees, and where a
+//!   session is in one.
 //! - [`sessions`]: listing, creating, attaching to, reopening and closing sessions.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns.
@@ -34,6 +36,7 @@ mod role;
 pub mod sessions;
 pub mod tools;
 pub mod turns;
+pub mod worktrees;
 
 use agent_client_protocol::JsonRpcResponse;
 use serde::Deserialize;

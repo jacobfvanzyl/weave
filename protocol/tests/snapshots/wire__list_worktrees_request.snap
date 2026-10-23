@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListWorktreesRequest { repo: \"/Users/jaco/Projects/weave\".into(), })"
+---
+{
+  "method": "worktrees/list",
+  "params": {
+    "repo": "/Users/jaco/Projects/weave"
+  }
+}

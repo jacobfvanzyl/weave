@@ -1,7 +1,10 @@
 //! The Host's own error codes. An agent's errors pass through unchanged, ACP's
 //! `auth_required` (-32000) among them.
 
+use std::path::Path;
+
 use agent_client_protocol::Error;
+use agent_client_protocol::schema::v1::SessionId;
 
 /// No successful `host/hello`, or authentication failed.
 pub const UNAUTHENTICATED: i32 = -32060;
@@ -27,6 +30,14 @@ pub const FORBIDDEN: i32 = -32069;
 pub const NOT_TARGET: i32 = -32070;
 /// Remote access couldn't be turned on, as when Tailscale Serve can't reach the Host.
 pub const REMOTE_UNAVAILABLE: i32 = -32071;
+/// A session in the worktree runs a turn or waits on a request; `data.sessions` says which.
+pub const WORKTREE_BUSY: i32 = -32072;
+/// The path isn't in a git repository.
+pub const NOT_A_REPOSITORY: i32 = -32073;
+/// Git refused or failed; the message is what it said.
+pub const GIT_FAILED: i32 = -32074;
+/// The worktree has staged, unstaged or untracked changes, which removing it would lose.
+pub const UNCOMMITTED_CHANGES: i32 = -32075;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -101,6 +112,39 @@ pub fn not_target() -> Error {
     Error::new(
         NOT_TARGET,
         "this tool call is for the client that sent the turn",
+    )
+}
+
+pub fn worktree_busy(sessions: &[SessionId]) -> Error {
+    let ids: Vec<String> = sessions.iter().map(ToString::to_string).collect();
+    Error::new(
+        WORKTREE_BUSY,
+        format!(
+            "a session in this worktree is running a turn or waiting on a request: {}",
+            ids.join(", ")
+        ),
+    )
+    .data(serde_json::json!({"sessions": ids}))
+}
+
+pub fn not_a_repository(path: &Path) -> Error {
+    Error::new(
+        NOT_A_REPOSITORY,
+        format!("{} isn't in a git repository", path.display()),
+    )
+}
+
+pub fn git_failed(what: impl Into<String>) -> Error {
+    Error::new(GIT_FAILED, what)
+}
+
+pub fn uncommitted_changes(path: &Path) -> Error {
+    Error::new(
+        UNCOMMITTED_CHANGES,
+        format!(
+            "{} has changes that removing it would lose; remove it with force to discard them",
+            path.display()
+        ),
     )
 }
 

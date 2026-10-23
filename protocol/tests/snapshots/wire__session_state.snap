@@ -39,6 +39,12 @@ expression: round_trip(&state())
   "additionalDirectories": [
     "/docs"
   ],
+  "git": {
+    "repo": "/repo",
+    "worktree": "/repo",
+    "branch": "main",
+    "remote": "github.com/jacobfvanzyl/weave"
+  },
   "title": "Fix the parser",
   "state": "open",
   "activity": "waiting",

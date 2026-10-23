@@ -90,6 +90,16 @@ use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::SteerTurnResponse;
+use weave_host_protocol::worktrees::CreateWorktreeRequest;
+use weave_host_protocol::worktrees::CreateWorktreeResponse;
+use weave_host_protocol::worktrees::Divergence;
+use weave_host_protocol::worktrees::FEATURE as WORKTREES_FEATURE;
+use weave_host_protocol::worktrees::GitLocation;
+use weave_host_protocol::worktrees::ListWorktreesRequest;
+use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
+use weave_host_protocol::worktrees::RemoveWorktreeRequest;
+use weave_host_protocol::worktrees::RemoveWorktreeResponse;
+use weave_host_protocol::worktrees::Worktree;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -230,7 +240,13 @@ impl World {
             registry_cache: Some(self.dir.path().join("cache")),
             agents: Default::default(),
             withheld: Withheld::default(),
-            environment: Environment::default(),
+            environment: Environment {
+                vars: ISOLATED_GIT
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                    .collect(),
+                ..Environment::default()
+            },
             service: Service::InProcess,
             traces: self.dir.path().join("traces"),
             devices: Some(self.dir.path().join("devices.json")),
@@ -253,6 +269,18 @@ impl World {
 
     fn cwd(&self) -> PathBuf {
         self.dir.path().to_path_buf()
+    }
+
+    /// A repository at `code/weave` with one commit on `main`, by its path with symlinks
+    /// resolved, as the Host gives paths in repositories.
+    fn repository(&self) -> PathBuf {
+        let repo = self.dir.path().join("code/weave");
+        std::fs::create_dir_all(&repo).expect("the repository's directory");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("README.md"), "weave\n").expect("a file");
+        git(&repo, &["add", "README.md"]);
+        git(&repo, &["commit", "-q", "-m", "init"]);
+        repo.canonicalize().expect("canonical")
     }
 
     async fn client(&self, daemon: &Daemon) -> TestClient {
@@ -336,6 +364,33 @@ impl TestClient {
         self.create_with(world, "fake").await.session_id
     }
 
+    /// A session in `dir`, prompted once so it isn't blank.
+    async fn session_in(&mut self, world: &World, dir: &Path) -> SessionState {
+        let state = self
+            .connection
+            .send(CreateSessionRequest {
+                cwd: dir.to_path_buf(),
+                ..Self::create_request(world, "fake")
+            })
+            .await
+            .expect("session/create");
+        self.prompt(&state.session_id, "hello").await;
+        self.until_turn_ends(&mut Seen::default(), None).await;
+        state
+    }
+
+    /// The Host's own listing, across agents, of the sessions in `repo`'s repository.
+    async fn in_repository(&self, repo: &Path) -> Vec<SessionListing> {
+        self.connection
+            .send(ListSessionsRequest {
+                repo: Some(repo.to_path_buf()),
+                ..ListSessionsRequest::default()
+            })
+            .await
+            .expect("sessions/list")
+            .sessions
+    }
+
     async fn create_with(&mut self, world: &World, agent: &str) -> SessionState {
         let state = self
             .connection
@@ -391,6 +446,7 @@ impl TestClient {
             .send(ListSessionsRequest {
                 agent_id: Some("fake".to_owned()),
                 cwd: Some(world.cwd()),
+                repo: None,
                 cursor: None,
             })
             .await
@@ -632,6 +688,33 @@ impl Change {
             Change::Removed(_) => None,
         }
     }
+}
+
+/// Git for a test's repositories, away from the configuration of whoever runs the tests.
+const ISOLATED_GIT: &[(&str, &str)] = &[
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_AUTHOR_NAME", "Test"),
+    ("GIT_AUTHOR_EMAIL", "test@example.com"),
+    ("GIT_COMMITTER_NAME", "Test"),
+    ("GIT_COMMITTER_EMAIL", "test@example.com"),
+];
+
+/// Run git in `dir`, as the person would in a terminal; what it printed.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .envs(ISOLATED_GIT.iter().copied())
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 async fn wait_for(mut condition: impl FnMut() -> bool) {
@@ -1196,6 +1279,7 @@ async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_
             .send(ListSessionsRequest {
                 agent_id: None,
                 cwd: None,
+                repo: None,
                 cursor: None,
             })
             .await
@@ -1308,6 +1392,7 @@ async fn deleting_a_session_whose_directory_is_gone_forgets_it_in_the_host() {
         .send(ListSessionsRequest {
             agent_id: Some("fake".to_owned()),
             cwd: Some(worktree),
+            repo: None,
             cursor: None,
         })
         .await
@@ -2477,4 +2562,403 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
         "{seen:?}"
     );
     assert!(seen.renamed.is_empty());
+}
+
+fn path_text(path: &Path) -> &str {
+    path.to_str().expect("a UTF-8 path")
+}
+
+#[tokio::test]
+async fn a_session_in_a_worktree_says_its_repository_and_branch_and_lists_by_repository() {
+    let world = World::new();
+    let repo = world.repository();
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://someone:secret@github.com/jacobfvanzyl/weave.git",
+        ],
+    );
+    let worktree = repo.with_file_name("weave.feature-auth");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature/auth",
+            path_text(&worktree),
+        ],
+    );
+    std::fs::create_dir(worktree.join("src")).expect("a subdirectory");
+    let expected = GitLocation {
+        repo: repo.clone(),
+        worktree: worktree.clone(),
+        branch: Some("feature/auth".to_owned()),
+        // Without the credentials in its URL.
+        remote: Some("github.com/jacobfvanzyl/weave".to_owned()),
+    };
+    let session_id = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let state = client.session_in(&world, &worktree.join("src")).await;
+        assert_eq!(state.git.as_ref(), Some(&expected));
+        let elsewhere = client.session_in(&world, &world.cwd()).await;
+        assert_eq!(elsewhere.git, None);
+
+        // Any directory in the repository names it, another worktree included.
+        let listed = client.in_repository(&worktree).await;
+        assert_eq!(
+            listed
+                .iter()
+                .map(|listing| (&listing.info.session_id, listing.git.as_ref()))
+                .collect::<Vec<_>>(),
+            [(&state.session_id, Some(&expected))]
+        );
+        // Only the Host's own listing goes by repository.
+        let refused = client
+            .connection
+            .send(ListSessionsRequest {
+                agent_id: Some("fake".to_owned()),
+                repo: Some(repo.clone()),
+                ..ListSessionsRequest::default()
+            })
+            .await;
+        assert!(refused.is_err(), "{refused:?}");
+        let outside = client
+            .connection
+            .send(ListSessionsRequest {
+                repo: Some(world.cwd()),
+                ..ListSessionsRequest::default()
+            })
+            .await;
+        assert!(
+            outside
+                .as_ref()
+                .is_err_and(|error| errors::is(error, errors::NOT_A_REPOSITORY)),
+            "{outside:?}"
+        );
+        daemon.shutdown().await;
+        state.session_id
+    };
+
+    // A later Host has it from the journal.
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let client = world.client(&daemon).await;
+    let listed = client.in_repository(&repo).await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].info.session_id, session_id);
+    assert_eq!(listed[0].git.as_ref(), Some(&expected));
+}
+
+#[tokio::test]
+async fn a_session_says_the_branch_its_worktree_switched_to_once_a_turn_ends() {
+    let world = World::new();
+    let repo = world.repository();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let state = client.session_in(&world, &repo).await;
+    assert_eq!(
+        state.git.as_ref().and_then(|git| git.branch.as_deref()),
+        Some("main")
+    );
+
+    git(&repo, &["switch", "-q", "-c", "feature/next"]);
+    client.prompt(&state.session_id, "hello again").await;
+    // Attached clients hear of it, and listings say it.
+    let changed = tokio::time::timeout(WAIT, async {
+        loop {
+            if let HostEvent::Changed(changed) = client.next().await
+                && let Some(git) = changed.git
+            {
+                return git;
+            }
+        }
+    })
+    .await
+    .expect("the session's new branch in time");
+    assert_eq!(changed.branch.as_deref(), Some("feature/next"));
+    let listed = client.in_repository(&repo).await;
+    assert_eq!(
+        listed[0].git.as_ref().and_then(|git| git.branch.as_deref()),
+        Some("feature/next")
+    );
+}
+
+#[tokio::test]
+async fn a_client_makes_a_worktree_beside_the_repository_and_starts_a_session_in_it() {
+    let world = World::new();
+    let repo = world.repository();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    assert!(
+        client
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == WORKTREES_FEATURE)
+    );
+    let create = |branch: &str, base: Option<&str>| CreateWorktreeRequest {
+        repo: repo.clone(),
+        branch: branch.to_owned(),
+        base: base.map(str::to_owned),
+    };
+
+    // Where worktrunk would put it, on a new branch from the default one.
+    let created = client
+        .connection
+        .send(create("feature/auth", None))
+        .await
+        .expect("worktrees/create");
+    let worktree = repo.with_file_name("weave.feature-auth");
+    assert_eq!(
+        created,
+        CreateWorktreeResponse {
+            path: worktree.clone(),
+            branch: "feature/auth".to_owned(),
+            created_branch: true,
+        }
+    );
+    assert_eq!(
+        git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feature/auth"
+    );
+    let state = client.session_in(&world, &created.path).await;
+    assert_eq!(
+        state.git,
+        Some(GitLocation {
+            repo: repo.clone(),
+            worktree: worktree.clone(),
+            branch: Some("feature/auth".to_owned()),
+            remote: None,
+        })
+    );
+
+    // A branch that exists is checked out rather than made, and takes no base.
+    git(&repo, &["branch", "existing"]);
+    let refused = client
+        .connection
+        .send(create("existing", Some("main")))
+        .await;
+    assert!(refused.is_err(), "{refused:?}");
+    let existing = client
+        .connection
+        .send(create("existing", None))
+        .await
+        .expect("a worktree for a branch that exists");
+    assert!(!existing.created_branch);
+    assert_eq!(existing.path, repo.with_file_name("weave.existing"));
+
+    // A branch another worktree has, a name that isn't a branch's, and a directory outside
+    // any repository are refused.
+    for (request, code) in [
+        (create("feature/auth", None), None),
+        (create("bad..name", None), None),
+        (create("-f", None), None),
+        (
+            CreateWorktreeRequest {
+                repo: world.cwd(),
+                ..create("elsewhere", None)
+            },
+            Some(errors::NOT_A_REPOSITORY),
+        ),
+    ] {
+        let refused = client.connection.send(request).await;
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|error| code.is_none_or(|code| errors::is(error, code))),
+            "{refused:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn worktrees_list_with_their_status_and_the_sessions_in_each() {
+    let world = World::new();
+    let repo = world.repository();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let worktree = client
+        .connection
+        .send(CreateWorktreeRequest {
+            repo: repo.clone(),
+            branch: "feature/auth".to_owned(),
+            base: None,
+        })
+        .await
+        .expect("worktrees/create")
+        .path;
+    let in_primary = client.session_in(&world, &repo).await.session_id;
+    let in_worktree = client.session_in(&world, &worktree).await.session_id;
+    // A commit only it has, and a file git doesn't track yet.
+    std::fs::write(worktree.join("auth.rs"), "fn login() {}\n").expect("a file");
+    git(&worktree, &["add", "auth.rs"]);
+    git(&worktree, &["commit", "-q", "-m", "Log in"]);
+    std::fs::write(worktree.join("notes.md"), "todo\n").expect("a file");
+
+    let listed = client
+        .connection
+        .send(ListWorktreesRequest {
+            repo: worktree.clone(),
+        })
+        .await
+        .expect("worktrees/list");
+    assert_eq!(listed.repo, repo);
+    assert_eq!(listed.default_branch.as_deref(), Some("main"));
+    let head = |dir: &Path| Some(git(dir, &["rev-parse", "HEAD"]));
+    assert_eq!(
+        listed.worktrees,
+        vec![
+            Worktree {
+                path: repo.clone(),
+                branch: Some("main".to_owned()),
+                head: head(&repo),
+                primary: true,
+                changes: false,
+                divergence: Some(Divergence::default()),
+                upstream: None,
+                sessions: vec![in_primary],
+            },
+            Worktree {
+                path: worktree.clone(),
+                branch: Some("feature/auth".to_owned()),
+                head: head(&worktree),
+                primary: false,
+                changes: true,
+                divergence: Some(Divergence {
+                    ahead: 1,
+                    behind: 0,
+                }),
+                upstream: None,
+                sessions: vec![in_worktree],
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged() {
+    let world = World::new();
+    let repo = world.repository();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let create = |branch: &str| CreateWorktreeRequest {
+        repo: repo.clone(),
+        branch: branch.to_owned(),
+        base: None,
+    };
+    let remove = |path: &Path, force: bool| RemoveWorktreeRequest {
+        path: path.to_path_buf(),
+        force,
+        delete_branch: false,
+    };
+    let worktree = client
+        .connection
+        .send(create("merged"))
+        .await
+        .expect("worktrees/create")
+        .path;
+    let session_id = client.session_in(&world, &worktree).await.session_id;
+
+    // Neither removing nor releasing it goes ahead while a request in its session waits.
+    let target = worktree.join("out.txt");
+    client
+        .prompt(&session_id, &format!("write {} hello", target.display()))
+        .await;
+    let (_, asked) = client.asked(&mut Seen::default()).await;
+    let busy = client.connection.send(remove(&worktree, true)).await;
+    assert!(
+        busy.as_ref()
+            .is_err_and(|error| errors::is(error, errors::WORKTREE_BUSY)),
+        "{busy:?}"
+    );
+    let busy = client
+        .connection
+        .send(ReleaseWorktreeRequest {
+            path: worktree.clone(),
+        })
+        .await;
+    assert!(
+        busy.as_ref()
+            .is_err_and(|error| errors::is(error, errors::WORKTREE_BUSY)),
+        "{busy:?}"
+    );
+    client
+        .allow(&session_id, &asked, "allow")
+        .await
+        .expect("answered");
+    client.until_turn_ends(&mut Seen::default(), None).await;
+
+    // What the turn wrote isn't committed, so it goes only by force, leaving the session open.
+    let changed = client.connection.send(remove(&worktree, false)).await;
+    assert!(
+        changed
+            .as_ref()
+            .is_err_and(|error| errors::is(error, errors::UNCOMMITTED_CHANGES)),
+        "{changed:?}"
+    );
+    assert_eq!(
+        client.in_repository(&repo).await[0].state,
+        SessionStatus::Open
+    );
+    let removed = client
+        .connection
+        .send(remove(&worktree, true))
+        .await
+        .expect("worktrees/remove");
+    assert_eq!(
+        removed,
+        RemoveWorktreeResponse {
+            closed: vec![session_id.clone()],
+            branch: Some("merged".to_owned()),
+            // Its branch adds nothing to main, so it goes too.
+            branch_deleted: true,
+        }
+    );
+    assert!(!worktree.exists());
+    assert_eq!(git(&repo, &["branch", "--list", "merged"]), "");
+    // The session is closed, not forgotten.
+    assert_eq!(
+        client.in_repository(&repo).await[0].state,
+        SessionStatus::Closed
+    );
+    assert!(world.has_journal(&session_id));
+
+    // A branch with commits main doesn't have stays.
+    let unmerged = client
+        .connection
+        .send(create("unmerged"))
+        .await
+        .expect("worktrees/create")
+        .path;
+    std::fs::write(unmerged.join("idea.md"), "maybe\n").expect("a file");
+    git(&unmerged, &["add", "idea.md"]);
+    git(&unmerged, &["commit", "-q", "-m", "An idea"]);
+    let idle = client.session_in(&world, &unmerged).await.session_id;
+    let released = client
+        .connection
+        .send(ReleaseWorktreeRequest {
+            path: unmerged.clone(),
+        })
+        .await
+        .expect("worktrees/release");
+    assert_eq!(released.closed, vec![idle]);
+    let removed = client
+        .connection
+        .send(remove(&unmerged, false))
+        .await
+        .expect("worktrees/remove");
+    assert!(removed.closed.is_empty());
+    assert!(!removed.branch_deleted);
+    assert_eq!(git(&repo, &["branch", "--list", "unmerged"]), "unmerged");
+
+    // The primary worktree stays.
+    let primary = client.connection.send(remove(&repo, true)).await;
+    assert!(primary.is_err(), "{primary:?}");
+    assert!(repo.join("README.md").exists());
 }

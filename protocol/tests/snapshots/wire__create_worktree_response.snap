@@ -1,0 +1,9 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&CreateWorktreeResponse\n{\n    path: \"/Users/jaco/Projects/weave.feature-auth\".into(), branch:\n    \"feature/auth\".to_owned(), created_branch: true,\n})"
+---
+{
+  "path": "/Users/jaco/Projects/weave.feature-auth",
+  "branch": "feature/auth",
+  "createdBranch": true
+}

@@ -21,7 +21,13 @@ expression: "round_trip(&HostStatus\n{\n    protocol: 2, version: \"0.1.0\".to_o
       "activity": "running",
       "clients": 1,
       "headless": false,
-      "lastActivityAt": 1760180001234
+      "lastActivityAt": 1760180001234,
+      "git": {
+        "repo": "/repo",
+        "worktree": "/repo",
+        "branch": "main",
+        "remote": "github.com/jacobfvanzyl/weave"
+      }
     }
   ],
   "remote": "127.0.0.1:7341"

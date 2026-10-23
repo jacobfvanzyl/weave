@@ -142,8 +142,14 @@ fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
             Some(title) => format!("{title} · {agent}"),
             None => agent.clone(),
         };
+        let branch = session
+            .git
+            .as_ref()
+            .and_then(|git| git.branch.as_ref())
+            .map(|branch| format!(" on {branch}"))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "{}  {activity}, {clients}{headless}, active {} ago\n  {about}\n  in {}\n",
+            "{}  {activity}, {clients}{headless}, active {} ago\n  {about}\n  in {}{branch}\n",
             session.info.session_id,
             ago(now_ms, session.last_activity_at.unwrap_or(now_ms)),
             session.info.cwd.display(),
@@ -157,6 +163,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use weave_acp_core::schema::SessionInfo;
     use weave_host_protocol::sessions::SessionStatus;
+    use weave_host_protocol::worktrees::GitLocation;
 
     use super::*;
 
@@ -171,12 +178,23 @@ mod tests {
             clients: 0,
             headless: true,
             last_activity_at: Some(30_000),
+            git: None,
         };
         assert_eq!(
             describe(std::slice::from_ref(&session), 7_230_000),
             "s1  waiting on you, no clients, headless, active 2h ago\n  Fix the build · claude\n  in \
              /repo\n"
         );
+        let on_a_branch = SessionListing {
+            git: Some(GitLocation {
+                repo: "/repo".into(),
+                worktree: "/repo".into(),
+                branch: Some("main".to_owned()),
+                remote: None,
+            }),
+            ..session.clone()
+        };
+        assert!(describe(&[on_a_branch], 7_230_000).ends_with("  in /repo on main\n"));
         assert!(find(&[session], "s2").is_err());
     }
 }

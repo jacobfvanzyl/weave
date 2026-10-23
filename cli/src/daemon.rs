@@ -637,6 +637,7 @@ mod tests {
             clients: 0,
             headless: false,
             last_activity_at: Some(30_000),
+            git: None,
         });
         assert_eq!(
             describe(&status, &paths, 7_230_000),

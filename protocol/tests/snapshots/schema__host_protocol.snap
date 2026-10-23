@@ -131,6 +131,22 @@ expression: schema()
     "pending/answer": {
       "params": "AnswerPendingRequest",
       "result": "Empty"
+    },
+    "worktrees/list": {
+      "params": "ListWorktreesRequest",
+      "result": "ListWorktreesResponse"
+    },
+    "worktrees/create": {
+      "params": "CreateWorktreeRequest",
+      "result": "CreateWorktreeResponse"
+    },
+    "worktrees/remove": {
+      "params": "RemoveWorktreeRequest",
+      "result": "RemoveWorktreeResponse"
+    },
+    "worktrees/release": {
+      "params": "ReleaseWorktreeRequest",
+      "result": "ReleaseWorktreeResponse"
     }
   },
   "x-weave-notifications": {
@@ -169,7 +185,11 @@ expression: schema()
       "requiresTerminal": -32068,
       "forbidden": -32069,
       "notTarget": -32070,
-      "remoteUnavailable": -32071
+      "remoteUnavailable": -32071,
+      "worktreeBusy": -32072,
+      "notARepository": -32073,
+      "gitFailed": -32074,
+      "uncommittedChanges": -32075
     },
     "features": {
       "steer": "turn/steer",
@@ -178,7 +198,8 @@ expression: schema()
       "clientTools": "clientTools",
       "watch": "sessions/watch",
       "listFiles": "files/list",
-      "rename": "session/rename"
+      "rename": "session/rename",
+      "worktrees": "worktrees"
     },
     "files": {
       "maxEntries": 2000
@@ -667,6 +688,17 @@ expression: schema()
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in a git repository its directory is, as the Host last read it while the session\nwas open; absent outside one, and for sessions the Host has no record of."
         }
       },
       "required": [
@@ -766,6 +798,38 @@ expression: schema()
         }
       ],
       "description": "What an open session is doing."
+    },
+    "GitLocation": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "The repository, by its primary worktree."
+        },
+        "worktree": {
+          "type": "string",
+          "description": "The worktree the directory is in: the primary one or another."
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The branch checked out there; absent when its HEAD is detached."
+        },
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The repository's remote as a host and path, such as `github.com/owner/name`, without\ncredentials or `.git`: `origin`, or else the first. Absent without one, or for a remote\nthat's a path on this computer."
+        }
+      },
+      "required": [
+        "repo",
+        "worktree"
+      ],
+      "description": "Where in a git repository a session's directory is, as the Host last read it: when the\nsession opened, and again after each of its turns."
     },
     "ShutdownRequest": {
       "type": "object",
@@ -1716,6 +1780,13 @@ expression: schema()
             "null"
           ]
         },
+        "repo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only the sessions in this repository's worktrees, given by any directory in it. Without\nan agent only (feature `worktrees`)."
+        },
         "cursor": {
           "type": [
             "string",
@@ -1917,6 +1988,17 @@ expression: schema()
             "type": "string"
           },
           "default": []
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in a git repository `cwd` is; absent outside one."
         },
         "title": {
           "type": [
@@ -4415,6 +4497,17 @@ expression: schema()
           },
           "default": []
         },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in a git repository `cwd` is; absent outside one."
+        },
         "title": {
           "type": [
             "string",
@@ -5216,6 +5309,277 @@ expression: schema()
         }
       },
       "description": "A client's answer to a client tool call: MCP's `CallToolResult`, which the agent gets as it\nis."
+    },
+    "ListWorktreesRequest": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "Any directory in the repository."
+        }
+      },
+      "required": [
+        "repo"
+      ],
+      "description": "`worktrees/list`: a repository's worktrees and the sessions in each."
+    },
+    "ListWorktreesResponse": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "The repository's primary worktree."
+        },
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "As [`GitLocation::remote`]."
+        },
+        "defaultBranch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The branch new worktrees start from unless asked otherwise: the remote's default\nbranch, else `main` or `master`. Absent when there's none of those."
+        },
+        "worktrees": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Worktree"
+          },
+          "description": "The primary worktree first, then by path. Worktrees whose directory is gone are left\nout."
+        }
+      },
+      "required": [
+        "repo",
+        "worktrees"
+      ]
+    },
+    "Worktree": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Absent when its HEAD is detached."
+        },
+        "head": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The commit checked out; absent before the first commit."
+        },
+        "primary": {
+          "type": "boolean",
+          "description": "The repository's primary worktree, which can't be removed."
+        },
+        "changes": {
+          "type": "boolean",
+          "description": "Staged, unstaged or untracked changes; ignored files don't count."
+        },
+        "divergence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Divergence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How far its HEAD is from the default branch; absent without one."
+        },
+        "upstream": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Upstream"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The branch it tracks, and how far it is from it."
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionId"
+          },
+          "description": "The sessions the Host has a record of in it, open or not, most recently active first.",
+          "default": []
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "Divergence": {
+      "type": "object",
+      "properties": {
+        "ahead": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits it has that the other doesn't."
+        },
+        "behind": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the other has that it doesn't."
+        }
+      },
+      "required": [
+        "ahead",
+        "behind"
+      ],
+      "description": "Commits one side has that the other doesn't."
+    },
+    "Upstream": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Such as `origin/feature`."
+        },
+        "ahead": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits it has that the other doesn't."
+        },
+        "behind": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Commits the other has that it doesn't."
+        }
+      },
+      "required": [
+        "name",
+        "ahead",
+        "behind"
+      ],
+      "description": "Commits one side has that the other doesn't."
+    },
+    "CreateWorktreeRequest": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "Any directory in the repository."
+        },
+        "branch": {
+          "type": "string"
+        },
+        "base": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What a new branch starts from: a branch, tag or commit. The default branch when absent,\nelse the primary worktree's HEAD. Refused for a branch that exists."
+        }
+      },
+      "required": [
+        "repo",
+        "branch"
+      ],
+      "description": "`worktrees/create`: a new worktree for `branch`, beside the repository as\n`<repo>.<branch>` with the branch made safe for a path (`feature/auth` becomes\n`weave.feature-auth`). A branch that doesn't exist is made from `base`. One that exists is\nchecked out, a branch only a remote has included, unless another worktree has it checked\nout. The client then starts a session there with `session/create`."
+    },
+    "CreateWorktreeResponse": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The new worktree."
+        },
+        "branch": {
+          "type": "string"
+        },
+        "createdBranch": {
+          "type": "boolean",
+          "description": "The branch was made for it, rather than one that existed."
+        }
+      },
+      "required": [
+        "path",
+        "branch"
+      ]
+    },
+    "RemoveWorktreeRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Remove it with its changes, which are lost."
+        },
+        "deleteBranch": {
+          "type": "boolean",
+          "description": "Delete its branch even when it isn't merged, losing commits only it has."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "description": "`worktrees/remove`: remove a worktree other than the primary one. Refused while a session\nin it runs a turn or waits on a request (`worktree_busy`), and when it has changes\n(`uncommitted_changes`) unless `force`. Otherwise the sessions open in it close first. Their\njournals stay, so they can still be deleted. Its branch is deleted when git counts it merged,\nand regardless with `deleteBranch`."
+    },
+    "RemoveWorktreeResponse": {
+      "type": "object",
+      "properties": {
+        "closed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionId"
+          },
+          "description": "The sessions that were open in it, now closed.",
+          "default": []
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its branch; absent when its HEAD was detached."
+        },
+        "branchDeleted": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ReleaseWorktreeRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "description": "`worktrees/release`: let a worktree go before something else removes it, as\n`weave worktrees pre-remove` asks when worktrunk does. Refused, as `worktrees/remove` is,\nwhile a session in it runs a turn or waits on a request; otherwise the sessions open in it\nclose."
+    },
+    "ReleaseWorktreeResponse": {
+      "type": "object",
+      "properties": {
+        "closed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionId"
+          },
+          "description": "The sessions that were open in it, now closed.",
+          "default": []
+        }
+      }
     },
     "SessionEventNotification": {
       "type": "object",
@@ -6976,6 +7340,17 @@ expression: schema()
             "boolean",
             "null"
           ]
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in a git repository the session's directory is, as a turn left it."
         }
       },
       "required": [

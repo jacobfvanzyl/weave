@@ -16,7 +16,13 @@ expression: "message(&SessionUpdatedNotification { session: listing() })"
       "activity": "running",
       "clients": 1,
       "headless": false,
-      "lastActivityAt": 1760180001234
+      "lastActivityAt": 1760180001234,
+      "git": {
+        "repo": "/repo",
+        "worktree": "/repo",
+        "branch": "main",
+        "remote": "github.com/jacobfvanzyl/weave"
+      }
     }
   }
 }

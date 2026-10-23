@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&RemoveWorktreeResponse\n{\n    closed: vec![\"s-2\".into()], branch: Some(\"feature/auth\".to_owned()),\n    branch_deleted: false,\n})"
+---
+{
+  "closed": [
+    "s-2"
+  ],
+  "branch": "feature/auth"
+}

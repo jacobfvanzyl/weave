@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&CreateWorktreeRequest\n{\n    repo: \"/Users/jaco/Projects/weave\".into(), branch:\n    \"feature/auth\".to_owned(), base: Some(\"main\".to_owned()),\n})"
+---
+{
+  "method": "worktrees/create",
+  "params": {
+    "repo": "/Users/jaco/Projects/weave",
+    "branch": "feature/auth",
+    "base": "main"
+  }
+}

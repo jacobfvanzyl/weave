@@ -1,0 +1,9 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ReleaseWorktreeResponse { closed: vec![\"s-2\".into()], })"
+---
+{
+  "closed": [
+    "s-2"
+  ]
+}

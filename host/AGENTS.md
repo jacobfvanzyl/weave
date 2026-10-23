@@ -32,7 +32,17 @@ session is deleted, its journal pruned, or closed while blank. Take the watchers
 the registry, never while holding it. `files/list` (`files.rs`) lists a directory on the Host's computer for clients
 that aren't on it: names and kinds, off the dispatch loop, with paths worked out from their text
 so symlinks stay as named. It's the first of the `files/*` family, which `files/search` and
-`files/read` are to join. Host-run terminals reach
+`files/read` are to join. The Host is git-aware (ADR 0019, `git.rs`, through the `git` command
+with the agents' environment, `GIT_OPTIONAL_LOCKS=0` and no prompts): a session's `GitLocation`
+(repository by primary worktree, worktree, branch, remote without credentials) is read alongside
+starting its agent, kept in its summary and `Registry::known` and the header of any journal it
+begins, and read again after each of its own turns (`Command::Located`, which sends
+`session/changed`). `worktrees/*` list, make (beside the repository as worktrunk lays them out,
+`git::worktree_path`) and remove worktrees; `Shared::release` refuses while a session in one runs
+a turn or waits on a request, and otherwise closes them, for `worktrees/remove` and for
+`worktrees/release`, which worktrunk's `pre-remove` hook asks through `weave worktrees
+pre-remove`. The Host never removes a worktree on its own. Tests run git with
+`GIT_CONFIG_GLOBAL=/dev/null`, so the person's git configuration stays out. Host-run terminals reach
 clients as `terminalOutput`/`terminalExit` events; the Host strips agents' `_meta` terminal
 output after turning it into the same events, so each chunk arrives once. The Host resolves
 agents by id (`../agents`) and starts them in the session's directory with its own

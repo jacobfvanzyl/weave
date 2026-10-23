@@ -16,6 +16,9 @@
 //! [`PermissionPolicy`](weave_host_protocol::policy::PermissionPolicy) answers what it can
 //! without anyone.
 //!
+//! The Host is git-aware (ADR 0019, [`git`]): it records where in a repository each session's
+//! directory is, and lists, makes and removes a repository's worktrees for clients.
+//!
 //! When a session opens, the Host looks for a newer version of its agent in the background
 //! and tells the session's clients of one; `agents/update` moves the agent's new sessions to
 //! it, and `session/reopen` an open session, which keeps its id and journal (`updates`).
@@ -29,6 +32,7 @@
 mod client;
 mod devices;
 mod files;
+mod git;
 mod instance;
 mod journal;
 pub mod mcp;
@@ -76,11 +80,13 @@ use weave_host_protocol::errors;
 use weave_host_protocol::host::EnvironmentSource;
 use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
+use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
+use weave_host_protocol::worktrees::GitLocation;
 
 use crate::instance::Instance;
 pub use crate::instance::Launch;
@@ -95,6 +101,7 @@ pub use crate::remote::RemoteSettings;
 pub use crate::remote::Serve;
 use crate::session::Command;
 use crate::session::SessionHandle;
+use crate::session::Summary;
 use crate::session::lock;
 pub use crate::websocket::RemoteConfig;
 
@@ -259,6 +266,8 @@ pub(crate) struct Shared {
     pub(crate) config: DaemonConfig,
     /// The Host MCP server.
     pub(crate) mcp: Arc<mcp::Mcp>,
+    /// Git, with the agents' environment.
+    pub(crate) git: git::Git,
     registry: Mutex<Registry>,
     pub(crate) devices: devices::Devices,
     pub(crate) updates: updates::Updates,
@@ -499,20 +508,26 @@ impl Shared {
 
     /// The sessions the Host has a journal for, across agents, most recently active first:
     /// what `sessions/list` gives without an agent, and `sessions/watch` starts from. Blank
-    /// sessions aren't listed.
-    pub(crate) fn listings(&self, cwd: Option<&Path>) -> Vec<SessionListing> {
+    /// sessions aren't listed. With `cwd`, only those there; with `repo`, a primary worktree,
+    /// only those in its repository.
+    pub(crate) fn listings(&self, cwd: Option<&Path>, repo: Option<&Path>) -> Vec<SessionListing> {
         let registry = self.registry();
-        let in_scope = |dir: &Path| cwd.is_none_or(|cwd| cwd == dir);
+        let in_scope = |dir: &Path, git: Option<&GitLocation>| {
+            cwd.is_none_or(|cwd| cwd == dir)
+                && repo.is_none_or(|repo| git.is_some_and(|git| git.repo == repo))
+        };
         let mut sessions: Vec<SessionListing> = registry
             .sessions
             .values()
             .filter(|session| !session.is_blank())
             .map(SessionHandle::summary)
-            .filter(|summary| in_scope(&summary.cwd))
+            .filter(|summary| in_scope(&summary.cwd, summary.git.as_ref()))
             .map(|summary| summary.listing())
             .collect();
         for (session_id, recorded) in &registry.known {
-            if registry.sessions.contains_key(session_id) || !in_scope(&recorded.cwd) {
+            if registry.sessions.contains_key(session_id)
+                || !in_scope(&recorded.cwd, recorded.git.as_ref())
+            {
                 continue;
             }
             let Some(agent_id) = recorded.agent_id() else {
@@ -522,6 +537,72 @@ impl Shared {
         }
         sessions.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
         sessions
+    }
+
+    /// Each session the Host has a record of, open or not, blank ones aside: its directory with
+    /// symlinks resolved, and when it was last active.
+    pub(crate) fn session_directories(&self) -> Vec<(SessionId, PathBuf, u64)> {
+        let sessions: Vec<(SessionId, PathBuf, u64)> = {
+            let registry = self.registry();
+            let open = registry
+                .sessions
+                .values()
+                .filter(|session| !session.is_blank())
+                .map(SessionHandle::summary)
+                .map(|summary| (summary.session_id, summary.cwd, summary.last_activity_ms));
+            let dormant = registry
+                .known
+                .iter()
+                .filter(|(session_id, _)| !registry.sessions.contains_key(*session_id))
+                .map(|(session_id, recorded)| {
+                    (
+                        session_id.clone(),
+                        recorded.cwd.clone(),
+                        recorded.last_activity_ms,
+                    )
+                });
+            open.chain(dormant).collect()
+        };
+        sessions
+            .into_iter()
+            .map(|(session_id, cwd, last_activity)| {
+                (session_id, git::canonical(&cwd), last_activity)
+            })
+            .collect()
+    }
+
+    /// Let the worktree at `path` (symlinks resolved) go before it's removed: refused while a
+    /// session in it runs a turn or waits on a request, otherwise closing the sessions open in
+    /// it, blank ones included. Those it closed.
+    pub(crate) async fn release(&self, path: &Path) -> Result<Vec<SessionId>, Error> {
+        // Taken from the registry first, so it isn't held while directories are resolved.
+        let mut inside: Vec<(SessionHandle, Summary)> = self
+            .registry()
+            .sessions
+            .values()
+            .map(|session| (session.clone(), session.summary()))
+            .collect();
+        inside.retain(|(_, summary)| git::canonical(&summary.cwd).starts_with(path));
+        let busy: Vec<SessionId> = inside
+            .iter()
+            .filter(|(_, summary)| summary.activity != Activity::Idle)
+            .map(|(_, summary)| summary.session_id.clone())
+            .collect();
+        if !busy.is_empty() {
+            return Err(errors::worktree_busy(&busy));
+        }
+        let mut closed = Vec::new();
+        for (session, summary) in inside {
+            // One that ended meanwhile is closed already.
+            let _ = session
+                .finish(|done| Command::End {
+                    reason: "its worktree was removed".to_owned(),
+                    done,
+                })
+                .await;
+            closed.push(summary.session_id);
+        }
+        Ok(closed)
     }
 
     /// `sessions/watch`: `respond` with the Host's sessions as they are, then tell `client` of
@@ -534,7 +615,7 @@ impl Shared {
         respond: impl FnOnce(Vec<SessionListing>) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let mut watchers = lock(&self.watchers);
-        respond(self.listings(None))?;
+        respond(self.listings(None, None))?;
         watchers.insert(client, cx);
         Ok(())
     }
@@ -627,6 +708,7 @@ impl Daemon {
         Self {
             shared: Arc::new_cyclic(|shared| Shared {
                 mcp: Arc::new(mcp::Mcp::new(shared.clone())),
+                git: git::Git::new(&config.environment.vars),
                 devices,
                 updates: updates::Updates::default(),
                 remote: remote::Remote::default(),

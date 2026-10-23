@@ -44,6 +44,7 @@ use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::worktrees::GitLocation;
 
 const VERSION: u32 = 1;
 
@@ -95,6 +96,10 @@ pub(crate) enum Entry {
         /// as one that replaced a closed session's journal.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// Where in a git repository `cwd` was when this journal began; absent outside one,
+        /// and in journals from before the Host looked.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        git: Option<GitLocation>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -174,6 +179,7 @@ impl Entry {
         cwd: PathBuf,
         policy: PermissionPolicy,
         title: Option<String>,
+        git: Option<GitLocation>,
     ) -> Self {
         Self::Header {
             version: VERSION,
@@ -184,6 +190,7 @@ impl Entry {
             policy,
             created_ms: now_ms(),
             title,
+            git,
         }
     }
 
@@ -482,6 +489,9 @@ pub struct Recorded {
     pub closed: bool,
     /// When it was last written to.
     pub last_activity_ms: u64,
+    /// Where in a git repository `cwd` is, as the Host last read it: when the journal began,
+    /// and while this Host held the session open.
+    pub git: Option<GitLocation>,
 }
 
 impl Recorded {
@@ -547,6 +557,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         choice,
         cwd,
         policy,
+        git,
         ..
     } = serde_json::from_str::<Record>(&header).ok()?.entry
     else {
@@ -564,6 +575,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
             policy,
             closed,
             last_activity_ms: modified,
+            git,
         },
     ))
 }
@@ -694,7 +706,17 @@ mod tests {
             "/repo".into(),
             PermissionPolicy::ask(),
             None,
+            Some(git()),
         )
+    }
+
+    fn git() -> GitLocation {
+        GitLocation {
+            repo: "/repo".into(),
+            worktree: "/repo".into(),
+            branch: Some("main".to_owned()),
+            remote: None,
+        }
     }
 
     #[test]
@@ -776,6 +798,7 @@ mod tests {
         let recorded = recorded(dir.path(), &SessionId::new("s/1")).expect("recorded");
         assert_eq!(recorded.agent_id(), Some("agent"));
         assert_eq!(recorded.cwd, PathBuf::from("/repo"));
+        assert_eq!(recorded.git, Some(git()));
         assert!(recorded.closed);
         let index = index(dir.path());
         assert_eq!(index.get(&SessionId::new("s/1")), Some(&recorded));

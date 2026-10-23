@@ -1,0 +1,45 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ListWorktreesResponse\n{\n    repo: \"/Users/jaco/Projects/weave\".into(), remote:\n    Some(\"github.com/jacobfvanzyl/weave\".to_owned()), default_branch:\n    Some(\"main\".to_owned()), worktrees:\n    vec![Worktree\n    {\n        path: \"/Users/jaco/Projects/weave\".into(), branch:\n        Some(\"main\".to_owned()), head:\n        Some(\"4ec84ecd295eb5d9052c10dc5cc2f28a082c7fff\".to_owned()), primary:\n        true, changes: false, divergence: Some(Divergence::default()),\n        upstream:\n        Some(Upstream\n        {\n            name: \"origin/main\".to_owned(), divergence: Divergence\n            { ahead: 0, behind: 2, },\n        }), sessions: vec![\"s-1\".into()],\n    }, Worktree\n    {\n        path: \"/Users/jaco/Projects/weave.feature-auth\".into(), branch:\n        Some(\"feature/auth\".to_owned()), head:\n        Some(\"b772e68a3d0c4f1e9b2a7c5d8e6f1a2b3c4d5e6f\".to_owned()), primary:\n        false, changes: true, divergence:\n        Some(Divergence { ahead: 3, behind: 1, }), upstream: None, sessions:\n        Vec::new(),\n    }, Worktree\n    {\n        path: \"/Users/jaco/Projects/weave.review\".into(), branch: None, head:\n        Some(\"41ee083c9d7e5f2a1b3c4d5e6f7a8b9c0d1e2f3a\".to_owned()), primary:\n        false, changes: false, divergence: None, upstream: None, sessions:\n        Vec::new(),\n    },],\n})"
+---
+{
+  "repo": "/Users/jaco/Projects/weave",
+  "remote": "github.com/jacobfvanzyl/weave",
+  "defaultBranch": "main",
+  "worktrees": [
+    {
+      "path": "/Users/jaco/Projects/weave",
+      "branch": "main",
+      "head": "4ec84ecd295eb5d9052c10dc5cc2f28a082c7fff",
+      "primary": true,
+      "divergence": {
+        "ahead": 0,
+        "behind": 0
+      },
+      "upstream": {
+        "name": "origin/main",
+        "ahead": 0,
+        "behind": 2
+      },
+      "sessions": [
+        "s-1"
+      ]
+    },
+    {
+      "path": "/Users/jaco/Projects/weave.feature-auth",
+      "branch": "feature/auth",
+      "head": "b772e68a3d0c4f1e9b2a7c5d8e6f1a2b3c4d5e6f",
+      "changes": true,
+      "divergence": {
+        "ahead": 3,
+        "behind": 1
+      },
+      "sessions": []
+    },
+    {
+      "path": "/Users/jaco/Projects/weave.review",
+      "head": "41ee083c9d7e5f2a1b3c4d5e6f7a8b9c0d1e2f3a",
+      "sessions": []
+    }
+  ]
+}

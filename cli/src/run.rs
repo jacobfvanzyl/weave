@@ -108,6 +108,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                 .send(ListSessionsRequest {
                     agent_id: Some(launch.agent_id().to_owned()),
                     cwd: Some(launch.cwd.clone()),
+                    repo: None,
                     cursor: None,
                 })
                 .await;

@@ -30,6 +30,7 @@ use crate::agents::AgentUpdate;
 use crate::hello::ClientId;
 use crate::pending::PendingRequest;
 use crate::policy::PermissionPolicy;
+use crate::worktrees::GitLocation;
 
 /// A session's journal, by an id that changes only when the Host starts a new journal for
 /// the session, as when a closed session is opened again.
@@ -129,6 +130,9 @@ pub struct SessionState {
     pub cwd: PathBuf,
     #[serde(default)]
     pub additional_directories: Vec<PathBuf>,
+    /// Where in a git repository `cwd` is; absent outside one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub state: SessionStatus,
@@ -179,6 +183,10 @@ pub struct SessionListing {
     pub headless: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<Timestamp>,
+    /// Where in a git repository its directory is, as the Host last read it while the session
+    /// was open; absent outside one, and for sessions the Host has no record of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitLocation>,
 }
 
 /// `sessions/list`. Without an agent: the sessions the Host has a journal for, across
@@ -193,6 +201,10 @@ pub struct ListSessionsRequest {
     pub agent_id: Option<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Only the sessions in this repository's worktrees, given by any directory in it. Without
+    /// an agent only (feature `worktrees`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }

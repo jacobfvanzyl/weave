@@ -77,6 +77,7 @@ mod tests {
             },
             cwd: "/repo".into(),
             additional_directories: Vec::new(),
+            git: None,
             title: None,
             state: SessionStatus::Open,
             activity: Activity::Idle,

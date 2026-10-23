@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&SessionChangedNotification\n{\n    session_id: \"s-1\".into(), activity: None, clients: None, title: None,\n    blank: None, git:\n    Some(GitLocation\n    {\n        worktree: \"/repo.feature-auth\".into(), branch:\n        Some(\"feature/auth\".to_owned()), ..git()\n    }),\n})"
+---
+{
+  "method": "session/changed",
+  "params": {
+    "sessionId": "s-1",
+    "git": {
+      "repo": "/repo",
+      "worktree": "/repo.feature-auth",
+      "branch": "feature/auth",
+      "remote": "github.com/jacobfvanzyl/weave"
+    }
+  }
+}

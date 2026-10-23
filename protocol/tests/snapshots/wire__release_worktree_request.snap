@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ReleaseWorktreeRequest\n{ path: \"/Users/jaco/Projects/weave.feature-auth\".into(), })"
+---
+{
+  "method": "worktrees/release",
+  "params": {
+    "path": "/Users/jaco/Projects/weave.feature-auth"
+  }
+}

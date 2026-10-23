@@ -84,6 +84,7 @@ use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::SteerTurnResponse;
+use weave_host_protocol::worktrees::GitLocation;
 
 use crate::Agent;
 use crate::Shared;
@@ -260,6 +261,10 @@ pub(crate) enum Command {
     UpdateAvailable {
         latest: String,
     },
+    /// Where in a git repository the session's directory is, read again after a turn.
+    Located {
+        git: Option<GitLocation>,
+    },
     /// `session/reopen`: once nothing runs or waits, take the session up in a new process of
     /// the agent's current version.
     Reopen {
@@ -315,6 +320,8 @@ pub(crate) struct Summary {
     pub(crate) clients: u32,
     pub(crate) policy: PermissionPolicy,
     pub(crate) last_activity_ms: u64,
+    /// Where in a git repository `cwd` is, as the session last read it.
+    pub(crate) git: Option<GitLocation>,
 }
 
 impl Summary {
@@ -329,6 +336,7 @@ impl Summary {
             clients: self.clients,
             headless: self.policy.is_headless(),
             last_activity_at: Some(self.last_activity_ms),
+            git: self.git.clone(),
         }
     }
 }
@@ -396,6 +404,8 @@ pub(crate) struct Opened {
     pub(crate) binding: Option<Binding>,
     /// The title the Host keeps for it, from its journal.
     pub(crate) title: Option<String>,
+    /// Where in a git repository `cwd` is.
+    pub(crate) git: Option<GitLocation>,
 }
 
 /// Start the task that owns a session, and register it with the Host.
@@ -413,6 +423,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         blank,
         binding,
         title,
+        git,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
@@ -426,6 +437,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         clients: 0,
         policy: policy.clone(),
         last_activity_ms: now,
+        git: git.clone(),
     }));
     let Instance {
         agent_id: _,
@@ -457,6 +469,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
                 policy: policy.clone(),
                 closed: false,
                 last_activity_ms: now,
+                git,
             },
         );
     }
@@ -610,6 +623,7 @@ struct Reported {
     clients: Option<u32>,
     title: Option<String>,
     blank: Option<bool>,
+    git: Option<GitLocation>,
 }
 
 struct Actor {
@@ -772,6 +786,12 @@ impl Actor {
                 self.stop(Ending::Suspended);
             }
             Command::UpdateAvailable { latest } => self.update_available(latest),
+            Command::Located { git } => {
+                if let Some(recorded) = self.shared.registry().known.get_mut(&self.root) {
+                    recorded.git.clone_from(&git);
+                }
+                lock(&self.summary).git = git;
+            }
             Command::Reopen { reply } => self.reopens.push(reply),
             Command::ClientTool(call) => self.client_tool(call),
             Command::WithdrawClientTool { call } => {
@@ -925,6 +945,7 @@ impl Actor {
             agent: self.agent.clone(),
             cwd: self.cwd.clone(),
             additional_directories: self.additional_directories.clone(),
+            git: summary.git,
             title: summary.title,
             state: SessionStatus::Open,
             activity: self.activity(),
@@ -1249,6 +1270,9 @@ impl Actor {
     }
 
     fn turn_ended(&mut self, session_id: SessionId, result: Result<PromptResponse, Error>) {
+        if session_id == self.root {
+            self.locate();
+        }
         self.turns.remove(&session_id);
         // An agent resolves its requests before ending a turn; any left can't matter now.
         self.resolve_where(
@@ -1256,6 +1280,20 @@ impl Actor {
             Resolution::Cancelled,
         );
         self.record(Entry::turn_ended(session_id, &result));
+    }
+
+    /// Read again where in a git repository the session's directory is, as a turn may have
+    /// switched its branch, off the session's task; [`Command::Located`] brings it back.
+    fn locate(&self) {
+        let shared = Arc::clone(&self.shared);
+        let root = self.root.clone();
+        let cwd = self.cwd.clone();
+        tokio::spawn(async move {
+            let git = shared.git.locate(&cwd).await;
+            if let Some(session) = shared.registry().live(&root) {
+                let _ = session.send(Command::Located { git });
+            }
+        });
     }
 
     /// Journal `entry` and send it to every attached client. Returns its position and time.
@@ -1293,17 +1331,18 @@ impl Actor {
     fn update_summary(&mut self) {
         let activity = self.activity();
         let clients = u32::try_from(self.clients.len()).unwrap_or(u32::MAX);
-        let title = {
+        let (title, git) = {
             let mut summary = lock(&self.summary);
             summary.clients = clients;
             summary.activity = activity;
-            summary.title.clone()
+            (summary.title.clone(), summary.git.clone())
         };
         let now = Reported {
             activity: Some(activity),
             clients: Some(clients),
             title,
             blank: Some(self.blank.load(Ordering::Relaxed)),
+            git,
         };
         if now == self.reported {
             return;
@@ -1314,6 +1353,7 @@ impl Actor {
             clients: changed(&now.clients, &self.reported.clients),
             title: changed(&now.title, &self.reported.title),
             blank: changed(&now.blank, &self.reported.blank),
+            git: changed(&now.git, &self.reported.git),
         };
         self.reported = now;
         self.broadcast(&notification);

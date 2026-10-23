@@ -113,11 +113,22 @@ use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::SteerTurnResponse;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
+use weave_host_protocol::worktrees::CreateWorktreeRequest;
+use weave_host_protocol::worktrees::CreateWorktreeResponse;
+use weave_host_protocol::worktrees::FEATURE as WORKTREES_FEATURE;
+use weave_host_protocol::worktrees::GitLocation;
+use weave_host_protocol::worktrees::ListWorktreesRequest;
+use weave_host_protocol::worktrees::ListWorktreesResponse;
+use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
+use weave_host_protocol::worktrees::ReleaseWorktreeResponse;
+use weave_host_protocol::worktrees::RemoveWorktreeRequest;
+use weave_host_protocol::worktrees::RemoveWorktreeResponse;
 
 use crate::Agent;
 use crate::Shared;
 use crate::devices::Closer;
 use crate::files;
+use crate::git;
 use crate::instance::Instance;
 use crate::journal;
 use crate::journal::Entry;
@@ -349,6 +360,22 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, list_files),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, list_worktrees),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, create_worktree),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, remove_worktree),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, release_worktree),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -617,6 +644,7 @@ impl Connection {
                 WATCH_FEATURE.to_owned(),
                 LIST_FILES_FEATURE.to_owned(),
                 RENAME_FEATURE.to_owned(),
+                WORKTREES_FEATURE.to_owned(),
             ],
             acp: AcpInfo {
                 protocol_version: 1,
@@ -887,12 +915,120 @@ impl Connection {
     ) -> Result<ListSessionsResponse, Error> {
         self.hello_info()?;
         match request.agent_id.clone() {
-            None => Ok(ListSessionsResponse {
-                sessions: self.shared.listings(request.cwd.as_deref()),
-                next_cursor: None,
-            }),
+            None => {
+                let repo = match &request.repo {
+                    Some(dir) => Some(self.shared.git.repository(dir).await?.primary),
+                    None => None,
+                };
+                Ok(ListSessionsResponse {
+                    sessions: self
+                        .shared
+                        .listings(request.cwd.as_deref(), repo.as_deref()),
+                    next_cursor: None,
+                })
+            }
+            Some(_) if request.repo.is_some() => Err(Error::invalid_params()
+                .data("sessions/list takes a repository only without an agent")),
             Some(agent_id) => self.agent_sessions(&agent_id, request).await,
         }
+    }
+
+    /// `worktrees/list`: the repository's worktrees and the sessions in each.
+    async fn list_worktrees(
+        &self,
+        request: ListWorktreesRequest,
+    ) -> Result<ListWorktreesResponse, Error> {
+        self.hello_info()?;
+        let git = &self.shared.git;
+        let repository = git.repository(&request.repo).await?;
+        let default = git.default_branch(&repository).await;
+        let mut worktrees = git.worktrees(&repository, default.as_ref()).await;
+        let mut sessions = self.shared.session_directories();
+        sessions.sort_by_key(|(_, _, last_activity)| std::cmp::Reverse(*last_activity));
+        for (session_id, dir, _) in sessions {
+            // The deepest worktree it's in, as one can sit inside another.
+            if let Some(worktree) = worktrees
+                .iter_mut()
+                .filter(|worktree| dir.starts_with(&worktree.path))
+                .max_by_key(|worktree| worktree.path.components().count())
+            {
+                worktree.sessions.push(session_id);
+            }
+        }
+        Ok(ListWorktreesResponse {
+            repo: repository.primary,
+            remote: repository.remote.map(|(_, identity)| identity),
+            default_branch: default.map(|default| default.name),
+            worktrees,
+        })
+    }
+
+    /// `worktrees/create`: a new worktree beside the repository.
+    async fn create_worktree(
+        &self,
+        request: CreateWorktreeRequest,
+    ) -> Result<CreateWorktreeResponse, Error> {
+        self.hello_info()?;
+        let git = &self.shared.git;
+        let repository = git.repository(&request.repo).await?;
+        git.create(&repository, &request.branch, request.base.as_deref())
+            .await
+    }
+
+    /// `worktrees/remove`: refused while a session in it is busy, or when it has changes
+    /// unless forced; otherwise its sessions close and it goes, with its branch when merged.
+    async fn remove_worktree(
+        &self,
+        request: RemoveWorktreeRequest,
+    ) -> Result<RemoveWorktreeResponse, Error> {
+        self.hello_info()?;
+        let git = &self.shared.git;
+        let path = git::canonical(&request.path);
+        let repository = git.repository(&path).await?;
+        let Some(index) = repository
+            .entries
+            .iter()
+            .position(|entry| entry.path == path)
+        else {
+            return Err(Error::invalid_params().data(format!(
+                "{} isn't the top directory of one of the repository's worktrees",
+                path.display()
+            )));
+        };
+        if index == 0 {
+            return Err(Error::invalid_params().data(format!(
+                "{} is the repository's primary worktree, which can't be removed",
+                path.display()
+            )));
+        }
+        if !request.force && git.has_changes(&path).await? {
+            return Err(errors::uncommitted_changes(&path));
+        }
+        let closed = self.shared.release(&path).await?;
+        git.remove(&repository, &path, request.force).await?;
+        let branch = repository.entries[index].branch.clone();
+        let branch_deleted = match &branch {
+            Some(branch) => {
+                git.delete_branch(&repository, branch, request.delete_branch)
+                    .await
+            }
+            None => false,
+        };
+        Ok(RemoveWorktreeResponse {
+            closed,
+            branch,
+            branch_deleted,
+        })
+    }
+
+    /// `worktrees/release`, which `weave worktrees pre-remove` asks for.
+    async fn release_worktree(
+        &self,
+        request: ReleaseWorktreeRequest,
+    ) -> Result<ReleaseWorktreeResponse, Error> {
+        self.hello_info()?;
+        let closed = self.shared.release(&git::canonical(&request.path)).await?;
+        Ok(ReleaseWorktreeResponse { closed })
     }
 
     /// `agent_id`'s sessions: the Host's own in the directory first, open ones and then ones
@@ -999,6 +1135,9 @@ impl Connection {
                     last_activity_at: known
                         .get(&info.session_id)
                         .map(|recorded| recorded.last_activity_ms),
+                    git: known
+                        .get(&info.session_id)
+                        .and_then(|recorded| recorded.git.clone()),
                     info,
                     agent_id: agent.id.clone(),
                     state,
@@ -1017,10 +1156,12 @@ impl Connection {
     async fn create(&self, request: CreateSessionRequest) -> Result<Ready, Error> {
         self.hello_info()?;
         let agent = self.shared.resolve(&request.agent_id).await?;
-        let instance = self
-            .shared
-            .instance(&agent, &request.cwd, interactive(agent.options))
-            .await?;
+        let (instance, git) = tokio::join!(
+            self.shared
+                .instance(&agent, &request.cwd, interactive(agent.options)),
+            self.shared.git.locate(&request.cwd),
+        );
+        let instance = instance?;
         let (setup, mut notices, binding) = setup(
             &self.shared,
             &agent,
@@ -1058,6 +1199,7 @@ impl Connection {
             snapshot,
             Origin::New,
             binding,
+            git,
         )?;
         let trace = self.trace(&session, request.trace)?;
         updates::look_for_update(&self.shared, &session);
@@ -1115,10 +1257,12 @@ impl Connection {
             .or_else(|| request.cwd.clone())
             .ok_or_else(|| errors::unknown_session(&session_id.to_string()))?;
         let agent = self.shared.resolve(&agent_id).await?;
-        let instance = self
-            .shared
-            .instance(&agent, &cwd, interactive(agent.options))
-            .await?;
+        let (instance, git) = tokio::join!(
+            self.shared
+                .instance(&agent, &cwd, interactive(agent.options)),
+            self.shared.git.locate(&cwd),
+        );
+        let instance = instance?;
         let (setup, notices, binding) = setup(&self.shared, &agent, &instance, cwd, Vec::new());
         match reopen(
             &self.shared,
@@ -1129,6 +1273,7 @@ impl Connection {
             &agent,
             PermissionPolicy::ask(),
             true,
+            git,
         )
         .await
         {
@@ -1474,6 +1619,7 @@ pub(crate) fn dormant(
         clients: 0,
         headless: recorded.policy.is_headless(),
         last_activity_at: Some(recorded.last_activity_ms),
+        git: recorded.git.clone(),
     }
 }
 
@@ -1573,12 +1719,16 @@ pub(crate) async fn run(
         // An open session keeps its own policy.
         (Some(session), _) => session,
         (None, Some(session_id)) => {
-            let instance = shared.instance(&agent, &cwd, options).await?;
+            let (instance, git) = tokio::join!(
+                shared.instance(&agent, &cwd, options),
+                shared.git.locate(&cwd),
+            );
+            let instance = instance?;
             let (setup, more, binding) =
                 setup(shared, &agent, &instance, cwd, additional_directories);
             notices = more;
             match reopen(
-                shared, instance, session_id, setup, binding, &agent, policy, false,
+                shared, instance, session_id, setup, binding, &agent, policy, false, git,
             )
             .await
             {
@@ -1592,7 +1742,11 @@ pub(crate) async fn run(
             }
         }
         (None, None) => {
-            let instance = shared.instance(&agent, &cwd, options).await?;
+            let (instance, git) = tokio::join!(
+                shared.instance(&agent, &cwd, options),
+                shared.git.locate(&cwd),
+            );
+            let instance = instance?;
             let (setup, more, binding) =
                 setup(shared, &agent, &instance, cwd, additional_directories);
             notices = more;
@@ -1618,6 +1772,7 @@ pub(crate) async fn run(
                 snapshot,
                 Origin::New,
                 binding,
+                git,
             )?
         }
     };
@@ -1677,6 +1832,7 @@ async fn reopen(
     agent: &Agent,
     policy: PermissionPolicy,
     replay: bool,
+    git: Option<GitLocation>,
 ) -> Result<SessionHandle, (Error, Option<Instance>)> {
     // Nothing closes the journal while it's taken up (`Daemon::close_unclaimed`).
     let _taking_up = TakingUp::new(shared, &session_id);
@@ -1767,6 +1923,7 @@ async fn reopen(
         snapshot,
         Origin::Reopened(journal, title),
         binding,
+        git,
     ) {
         Ok(session) => Ok(session),
         Err(error) => Err((error, None)),
@@ -1823,6 +1980,7 @@ fn open(
     snapshot: Snapshot,
     origin: Origin,
     binding: Option<Binding>,
+    git: Option<GitLocation>,
 ) -> Result<SessionHandle, Error> {
     let (journal, blank, title) = match origin {
         Origin::New => (None, true, None),
@@ -1838,6 +1996,7 @@ fn open(
                 cwd.clone(),
                 policy.clone(),
                 title.clone(),
+                git.clone(),
             );
             match &shared.config.journals {
                 Some(dir) => Journal::create(dir, &session_id, header)
@@ -1865,6 +2024,7 @@ fn open(
             blank,
             binding,
             title,
+            git,
         },
     ))
 }

@@ -140,6 +140,18 @@ use weave_host_protocol::turns::StartTurnResponse;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::SteerTurnResponse;
+use weave_host_protocol::worktrees::CreateWorktreeRequest;
+use weave_host_protocol::worktrees::CreateWorktreeResponse;
+use weave_host_protocol::worktrees::Divergence;
+use weave_host_protocol::worktrees::GitLocation;
+use weave_host_protocol::worktrees::ListWorktreesRequest;
+use weave_host_protocol::worktrees::ListWorktreesResponse;
+use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
+use weave_host_protocol::worktrees::ReleaseWorktreeResponse;
+use weave_host_protocol::worktrees::RemoveWorktreeRequest;
+use weave_host_protocol::worktrees::RemoveWorktreeResponse;
+use weave_host_protocol::worktrees::Upstream;
+use weave_host_protocol::worktrees::Worktree;
 
 /// A request or notification as sent: its method and params, after a round trip.
 fn message<M: JsonRpcMessage + Serialize + DeserializeOwned>(message: &M) -> Value {
@@ -237,6 +249,7 @@ fn state() -> SessionState {
         agent: session_agent("0.31.0"),
         cwd: "/repo".into(),
         additional_directories: vec!["/docs".into()],
+        git: Some(git()),
         title: Some("Fix the parser".to_owned()),
         state: SessionStatus::Open,
         activity: Activity::Waiting,
@@ -316,6 +329,16 @@ fn listing() -> SessionListing {
         clients: 1,
         headless: false,
         last_activity_at: Some(1_760_180_001_234),
+        git: Some(git()),
+    }
+}
+
+fn git() -> GitLocation {
+    GitLocation {
+        repo: "/repo".into(),
+        worktree: "/repo".into(),
+        branch: Some("main".to_owned()),
+        remote: Some("github.com/jacobfvanzyl/weave".to_owned()),
     }
 }
 
@@ -539,7 +562,15 @@ fn sessions() {
         message(&ListSessionsRequest {
             agent_id: Some("claude".to_owned()),
             cwd: Some("/repo".into()),
+            repo: None,
             cursor: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "list_sessions_request_in_a_repository",
+        message(&ListSessionsRequest {
+            repo: Some("/repo/src".into()),
+            ..ListSessionsRequest::default()
         })
     );
     insta::assert_json_snapshot!(
@@ -699,6 +730,109 @@ fn files() {
                 },
             ],
             truncated: false,
+        })
+    );
+}
+
+#[test]
+fn worktrees() {
+    insta::assert_json_snapshot!(
+        "list_worktrees_request",
+        message(&ListWorktreesRequest {
+            repo: "/Users/jaco/Projects/weave".into(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "list_worktrees_response",
+        round_trip(&ListWorktreesResponse {
+            repo: "/Users/jaco/Projects/weave".into(),
+            remote: Some("github.com/jacobfvanzyl/weave".to_owned()),
+            default_branch: Some("main".to_owned()),
+            worktrees: vec![
+                Worktree {
+                    path: "/Users/jaco/Projects/weave".into(),
+                    branch: Some("main".to_owned()),
+                    head: Some("4ec84ecd295eb5d9052c10dc5cc2f28a082c7fff".to_owned()),
+                    primary: true,
+                    changes: false,
+                    divergence: Some(Divergence::default()),
+                    upstream: Some(Upstream {
+                        name: "origin/main".to_owned(),
+                        divergence: Divergence {
+                            ahead: 0,
+                            behind: 2,
+                        },
+                    }),
+                    sessions: vec!["s-1".into()],
+                },
+                Worktree {
+                    path: "/Users/jaco/Projects/weave.feature-auth".into(),
+                    branch: Some("feature/auth".to_owned()),
+                    head: Some("b772e68a3d0c4f1e9b2a7c5d8e6f1a2b3c4d5e6f".to_owned()),
+                    primary: false,
+                    changes: true,
+                    divergence: Some(Divergence {
+                        ahead: 3,
+                        behind: 1,
+                    }),
+                    upstream: None,
+                    sessions: Vec::new(),
+                },
+                Worktree {
+                    path: "/Users/jaco/Projects/weave.review".into(),
+                    branch: None,
+                    head: Some("41ee083c9d7e5f2a1b3c4d5e6f7a8b9c0d1e2f3a".to_owned()),
+                    primary: false,
+                    changes: false,
+                    divergence: None,
+                    upstream: None,
+                    sessions: Vec::new(),
+                },
+            ],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "create_worktree_request",
+        message(&CreateWorktreeRequest {
+            repo: "/Users/jaco/Projects/weave".into(),
+            branch: "feature/auth".to_owned(),
+            base: Some("main".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "create_worktree_response",
+        round_trip(&CreateWorktreeResponse {
+            path: "/Users/jaco/Projects/weave.feature-auth".into(),
+            branch: "feature/auth".to_owned(),
+            created_branch: true,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_worktree_request",
+        message(&RemoveWorktreeRequest {
+            path: "/Users/jaco/Projects/weave.feature-auth".into(),
+            force: true,
+            delete_branch: false,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_worktree_response",
+        round_trip(&RemoveWorktreeResponse {
+            closed: vec!["s-2".into()],
+            branch: Some("feature/auth".to_owned()),
+            branch_deleted: false,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "release_worktree_request",
+        message(&ReleaseWorktreeRequest {
+            path: "/Users/jaco/Projects/weave.feature-auth".into(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "release_worktree_response",
+        round_trip(&ReleaseWorktreeResponse {
+            closed: vec!["s-2".into()],
         })
     );
 }
@@ -902,6 +1036,22 @@ fn events() {
             clients: Some(1),
             title: None,
             blank: None,
+            git: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "session_changed_notification_branch",
+        message(&SessionChangedNotification {
+            session_id: "s-1".into(),
+            activity: None,
+            clients: None,
+            title: None,
+            blank: None,
+            git: Some(GitLocation {
+                worktree: "/repo.feature-auth".into(),
+                branch: Some("feature/auth".to_owned()),
+                ..git()
+            }),
         })
     );
     insta::assert_json_snapshot!(

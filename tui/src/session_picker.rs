@@ -12,6 +12,7 @@ use ratatui::text::Span;
 use weave_acp_core::schema::SessionId;
 use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::worktrees::GitLocation;
 
 use crate::history_cell::dim;
 use crate::style;
@@ -196,8 +197,8 @@ impl SessionPicker {
                     dim(),
                 ));
             }
-            if self.all_directories {
-                spans.push(Span::styled(format!("  · {}", info.cwd.display()), dim()));
+            if let Some(place) = place(session, self.all_directories) {
+                spans.push(Span::styled(format!("  · {place}"), dim()));
             }
             let line = Line::from(spans);
             lines.push(if selected {
@@ -277,6 +278,27 @@ fn badge(listed: &SessionListing) -> Vec<Span<'static>> {
     spans
 }
 
+/// Where a session is, past what the picker's scope says already: its branch in this
+/// directory; across directories its repository and branch, or its directory outside one.
+fn place(session: &SessionListing, all_directories: bool) -> Option<String> {
+    let branch = |git: &GitLocation| git.branch.as_ref().map(|branch| format!("on {branch}"));
+    match (&session.git, all_directories) {
+        (Some(git), false) => branch(git),
+        (Some(git), true) => {
+            let repo = git.repo.file_name().map_or_else(
+                || git.repo.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            Some(match branch(git) {
+                Some(branch) => format!("{repo} {branch}"),
+                None => repo,
+            })
+        }
+        (None, true) => Some(session.info.cwd.display().to_string()),
+        (None, false) => None,
+    }
+}
+
 /// "just now", "5m ago", "3h ago", "2d ago", or the date.
 fn relative_time(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> String {
     let Ok(then) = chrono::DateTime::parse_from_rfc3339(timestamp) else {
@@ -303,6 +325,7 @@ pub(crate) fn listing(info: weave_acp_core::schema::SessionInfo) -> SessionListi
         clients: 0,
         headless: false,
         last_activity_at: None,
+        git: None,
     }
 }
 
@@ -394,6 +417,60 @@ mod tests {
         // The running badge is green.
         let running = &picker.lines(now())[1].spans[1];
         assert_eq!(running.style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn sessions_in_a_repository_say_their_branch() {
+        let in_worktree = SessionListing {
+            git: Some(GitLocation {
+                repo: "/code/weave".into(),
+                worktree: "/code/weave.feature-auth".into(),
+                branch: Some("feature/auth".to_owned()),
+                remote: None,
+            }),
+            ..session("s1", "Fix the login", "2026-10-07T11:55:00Z")
+        };
+        let detached = SessionListing {
+            git: Some(GitLocation {
+                repo: "/code/weave".into(),
+                worktree: "/code/weave.review".into(),
+                branch: None,
+                remote: None,
+            }),
+            ..session("s2", "Review", "2026-10-07T11:55:00Z")
+        };
+        let elsewhere = session("s3", "Notes", "2026-10-07T11:55:00Z");
+        let rows = |all_directories: bool| {
+            let mut picker = SessionPicker::new(false, false);
+            picker.all_directories = all_directories;
+            picker.listed(
+                vec![in_worktree.clone(), detached.clone(), elsewhere.clone()],
+                None,
+                false,
+            );
+            let text: Vec<String> = picker
+                .lines(now())
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            text[1..4].to_vec()
+        };
+        assert_eq!(
+            rows(false),
+            [
+                "› Fix the login  · 5m ago  · on feature/auth",
+                "  Review  · 5m ago",
+                "  Notes  · 5m ago",
+            ]
+        );
+        assert_eq!(
+            rows(true),
+            [
+                "› Fix the login  · 5m ago  · weave on feature/auth",
+                "  Review  · 5m ago  · weave",
+                "  Notes  · 5m ago  · /repo",
+            ]
+        );
     }
 
     #[test]

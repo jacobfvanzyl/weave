@@ -320,6 +320,7 @@ type SessionState = {
   };
   cwd: string;
   additionalDirectories: string[];
+  git?: GitLocation;                           // where in a git repository cwd is; see Worktrees
   title?: string;
   state: "open";
   activity: "idle" | "running" | "waiting";   // waiting: a pending request is unanswered
@@ -340,11 +341,13 @@ type SessionState = {
 
 ### Methods
 
-**`sessions/list`** `{agentId?, cwd?, cursor?}` → `{sessions: SessionListing[], nextCursor?}`
+**`sessions/list`** `{agentId?, cwd?, repo?, cursor?}` → `{sessions: SessionListing[], nextCursor?}`
 
 - Without `agentId`: the sessions the Host has a journal for, across agents (open,
   suspended and closed), most recently active first. No agent is started. Paging isn't
-  needed.
+  needed. With `repo` (feature `worktrees`), any directory in a git repository, only the
+  sessions in that repository's worktrees, by the repository each session's `git` names. A
+  `repo` outside a repository fails with `not_a_repository`.
 - With `agentId`: that agent's sessions. The Host's own sessions of it in `cwd` lead the
   first page: open ones, then suspended ones within the idle grace of their last activity.
   The agent's own ACP `session/list` follows, paged by its cursor, without the sessions
@@ -360,8 +363,11 @@ type SessionListing = {
   clients: number;
   headless: boolean;
   lastActivityAt?: number;
+  git?: GitLocation;            // as the Host last read it while the session was open
 };
 ```
+
+`repo` with `agentId` fails with invalid params: an agent's own listing goes by directory.
 
 **`sessions/watch`** `{}` → `{sessions: SessionListing[]}`
 
@@ -373,7 +379,7 @@ attached to them or not, until the connection ends or it sends `sessions/unwatch
 - `sessions/updated` `{session: SessionListing}`: a session appeared or changed, as it lists
   now. It's sent when a session opens (a blank one at its first prompt), when its
   `activity`, `clients` or title change, and when it's suspended or closed; no more often than
-  `session/changed`, from the same changes. A closed or suspended session lists with no
+  `session/changed`, from the same changes, its branch included. A closed or suspended session lists with no
   `activity` and no clients.
 - `sessions/removed` `{sessionId}`: a session went away: deleted, its journal pruned, or closed
   while blank.
@@ -518,8 +524,9 @@ Clients must ignore event kinds they don't know, while still advancing their pos
 
 These aren't journaled. They go to the session's attached clients.
 
-- `session/changed` `{sessionId, activity?, clients?, title?, blank?}`: fields of
-  `SessionState` that changed.
+- `session/changed` `{sessionId, activity?, clients?, title?, blank?, git?}`: fields of
+  `SessionState` that changed. `git` changes when a turn ends in a worktree whose branch
+  changed meanwhile.
 - `pending/added` `{sessionId, pending: PendingRequest}`
 - `pending/resolved` `{sessionId, pendingId, outcome: "answered" | "cancelled" | "withdrawn", by?: clientId}`
 - `session/elicitationCompleted` `{sessionId, notification: CompleteElicitationNotification}`:
@@ -694,6 +701,75 @@ Later methods join the family:
 Shell commands, the other method remote clients need, would be a family of their own, since they
 run things rather than read them.
 
+## Worktrees
+
+The Host is git-aware (ADR 0019): it knows where in a git repository each session's directory
+is, and lists, makes and removes a repository's worktrees for clients, as a phone can't. It runs
+the `git` command with the agents' environment, so the person's git configuration and hooks
+apply; it never prompts, and its reads take no optional locks.
+
+```ts
+type GitLocation = {
+  repo: string;       // the repository, by its primary worktree
+  worktree: string;   // the worktree the directory is in: the primary one or another
+  branch?: string;    // absent when HEAD is detached
+  remote?: string;    // "github.com/owner/name": origin, else the first; no credentials or .git
+};
+```
+
+When a session opens (created, run, or taken up again) the Host reads its location while it
+starts the agent, and records it in the header of any journal it begins, so listings of sessions
+that aren't open give it. After each of the session's own turns it reads it again,
+and an attached client hears of a change in `session/changed`, a watcher in
+`sessions/updated`. A session outside a repository, and one from a journal from before, has
+no `git`. Paths in repositories are given and compared with symlinks resolved.
+
+Worktrees are the person's, beside sessions rather than parts of them, so clients manage the
+two together or apart: make a worktree, then `session/create` in it; or remove a worktree with
+its sessions. New worktrees go where worktrunk puts them by default, beside the repository as
+`<repo>.<branch>` with `/` and `\` in the branch made `-`, so worktrunk in a terminal manages
+the same ones. The Host never removes a worktree on its own: pruning a journal leaves its
+worktree alone. These methods are feature `worktrees`; remote clients may use them.
+
+**`worktrees/list`** `{repo}` →
+`{repo, remote?, defaultBranch?, worktrees: {path, branch?, head?, primary?, changes?, divergence?: {ahead, behind}, upstream?: {name, ahead, behind}, sessions: sessionId[]}[]}`
+
+The repository `repo` is in (any directory in it), by its primary worktree, and its worktrees,
+the primary one first, then by path; worktrees whose directory is gone are left out.
+`defaultBranch` is the remote's default branch (`refs/remotes/<remote>/HEAD`), else `main` or
+`master`. For each worktree: `changes` counts staged, unstaged and untracked files, not ignored
+ones; `divergence` is how far its HEAD is from the default branch; `upstream` is the branch it
+tracks; `sessions` are the sessions the Host has a record of in it (in its directory or below,
+the deepest worktree winning), open or not, blank ones aside, most recently active first.
+
+**`worktrees/create`** `{repo, branch, base?}` → `{path, branch, createdBranch?}`
+
+A worktree for `branch`, beside the repository. A branch that doesn't exist is made from
+`base` (a branch, tag or commit; by default the default branch, else the primary worktree's
+HEAD) and `createdBranch` says so. One that exists locally, or only on a remote (which git then
+tracks), is checked out, and refuses a `base`. Invalid params when `branch` isn't a branch
+name (`git check-ref-format --branch`), another worktree has it checked out, or the directory
+exists; `git_failed` with git's own words when it refuses.
+
+**`worktrees/remove`** `{path, force?, deleteBranch?}` → `{closed: sessionId[], branch?, branchDeleted?}`
+
+Removes a worktree other than the primary one, which must be its top directory:
+
+1. Refused with `worktree_busy` while a session in it runs a turn or waits on a request; `data.sessions` says which.
+2. Refused with `uncommitted_changes` when it has changes, unless `force`, which loses them.
+3. The sessions open in it close (`closed`); their journals stay, so they list as closed and
+   can still be deleted, as sessions whose directory is gone (WVE-120).
+4. `git worktree remove`; then its branch goes when git counts it merged (`git branch -d`),
+   or regardless with `deleteBranch`.
+
+**`worktrees/release`** `{path}` → `{closed: sessionId[]}`
+
+What `worktrees/remove` does before git removes the worktree, for removals the Host doesn't
+make: refused with `worktree_busy` while a session in the worktree runs a turn or waits on a
+request; otherwise its open sessions close. `weave worktrees pre-remove` asks it as a worktrunk
+`pre-remove` hook, so `wt remove`, `wt merge` and `wt step prune` stop while a session needs the
+worktree.
+
 ## Host management
 
 **`host/status`** `{}` →
@@ -748,6 +824,11 @@ returns the agent's error unchanged.
 | -32068 | `requires_terminal` | the sign-in method needs a terminal on the Host's computer |
 | -32069 | `forbidden` | a remote client asked to administer the Host |
 | -32070 | `not_target` | the client tool call is for another client |
+| -32071 | `remote_unavailable` | remote access couldn't be turned on |
+| -32072 | `worktree_busy` | a session in the worktree runs a turn or waits on a request; `data: {sessions}` |
+| -32073 | `not_a_repository` | the path isn't in a git repository |
+| -32074 | `git_failed` | git refused or failed; the message is what it said |
+| -32075 | `uncommitted_changes` | the worktree has changes that removing it would lose |
 
 ## Versioning
 
@@ -784,6 +865,9 @@ as it does now.
 - Clients can't make the Host run a command, set an agent's environment or write to a path
   of their choosing: the protocol has no field for any of them.
 - `files/*` read only, and only what the Host's user can (see [Files](#files)).
+- `worktrees/*` write only what git does: a worktree beside a repository, on a branch, and
+  removing a repository's worktree other than its primary one (see [Worktrees](#worktrees)).
+  Git runs the repository's own hooks, which no client sets.
 - `agents/terminalSignIn` is the only response that carries a command, and only `local`
   clients that claimed `terminalSignIn` get it.
 - Journals and traces stay 0600. The agent environment is never written or sent.
@@ -814,6 +898,9 @@ answer `forbidden`.
   with `ifUnused`, so a session nothing else needs closes at once, as before.
 - The default mode, MCP servers and their notices, and extra directories the agent can't
   accept move to the Host. `weave --trace` asks the Host for a trace and shows its path.
+- The session picker says each session's branch, and across directories its repository and
+  branch in place of its directory. A worktree in a terminal comes from worktrunk
+  (`wt switch -c <branch> -x weave`).
 - Shell mode (`!`), `@` file search, attachments and pasted images stay local. That is
   right only because the TUI runs on the Host's computer; a TUI elsewhere needs the Host
   methods listed as later work.
@@ -837,6 +924,10 @@ answer `forbidden`.
   using the agent last used in the directory (`recent.rs`), a client preference.
 - `weave smoke`, `login` and `logout` resolve agents with `weave-agents` and talk to them
   directly, as now.
+- `weave sessions` says a session's branch. `weave worktrees pre-remove [path]` asks a running
+  Host (never starting one) for `worktrees/release`, failing while a session in the worktree is
+  busy, for worktrunk's `pre-remove` hooks; `weave worktrees install-hook` adds it to
+  worktrunk's user config when asked.
 
 ## Crates
 

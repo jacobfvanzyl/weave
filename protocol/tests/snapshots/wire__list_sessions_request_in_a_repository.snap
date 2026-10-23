@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListSessionsRequest\n{ repo: Some(\"/repo/src\".into()), ..ListSessionsRequest::default() })"
+---
+{
+  "method": "sessions/list",
+  "params": {
+    "repo": "/repo/src"
+  }
+}

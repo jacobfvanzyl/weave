@@ -888,6 +888,7 @@ impl App {
                     let request = ListSessionsRequest {
                         agent_id: Some(self.agent_id.clone()),
                         cwd: (!all_directories).then(|| self.cwd.clone()),
+                        repo: None,
                         cursor: cursor.clone(),
                     };
                     let append = cursor.is_some();

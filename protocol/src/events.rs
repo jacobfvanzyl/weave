@@ -21,6 +21,7 @@ use crate::agents::AgentRelease;
 use crate::sessions::Activity;
 use crate::sessions::SessionAgent;
 use crate::sessions::TurnOrigin;
+use crate::worktrees::GitLocation;
 
 /// `session/event`: one journaled event, in order.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonRpcNotification)]
@@ -129,6 +130,9 @@ pub struct SessionChangedNotification {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blank: Option<bool>,
+    /// Where in a git repository the session's directory is, as a turn left it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitLocation>,
 }
 
 /// `session/elicitationCompleted`: an accepted URL elicitation's external step finished.

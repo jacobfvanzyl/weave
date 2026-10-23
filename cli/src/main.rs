@@ -9,6 +9,7 @@ mod sessions;
 mod smoke;
 mod start;
 mod update;
+mod worktrees;
 
 use std::fs::File;
 use std::io::IsTerminal;
@@ -70,6 +71,8 @@ enum Command {
     Run(run::RunArgs),
     /// Sessions open in the weave Host: list them, stop a turn, or close one.
     Sessions(sessions::SessionsArgs),
+    /// Git worktrees: what worktrunk asks the weave Host before it removes one.
+    Worktrees(worktrees::WorktreesArgs),
     /// Manage the weave Host, which runs agents so their sessions outlive the TUI.
     Daemon(daemon::DaemonArgs),
     /// Pair another of your devices with the weave Host, to reach it over your tailnet.
@@ -130,6 +133,10 @@ async fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Sessions(args)) => {
             log_to_stderr("warn");
             sessions::command(args).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Worktrees(args)) => {
+            log_to_stderr("warn");
+            worktrees::command(args).await
         }
         Some(Command::Daemon(args)) => {
             // A Host's stderr is its log, agents' stderr included, as `--log-file` has it.

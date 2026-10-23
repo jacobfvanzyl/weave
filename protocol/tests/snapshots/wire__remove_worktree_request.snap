@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RemoveWorktreeRequest\n{\n    path: \"/Users/jaco/Projects/weave.feature-auth\".into(), force: true,\n    delete_branch: false,\n})"
+---
+{
+  "method": "worktrees/remove",
+  "params": {
+    "path": "/Users/jaco/Projects/weave.feature-auth",
+    "force": true
+  }
+}

@@ -27,6 +27,7 @@ use weave_host_protocol::sessions;
 use weave_host_protocol::tools;
 use weave_host_protocol::turns;
 use weave_host_protocol::websocket;
+use weave_host_protocol::worktrees;
 
 /// `T`'s name among the definitions, defining it there if the generator inlined it.
 fn define<T: JsonSchema>(
@@ -115,6 +116,10 @@ fn schema() -> Value {
         "turn/steer" => turns::SteerTurnRequest,
         "turn/cancel" => turns::CancelTurnRequest,
         "pending/answer" => pending::AnswerPendingRequest,
+        "worktrees/list" => worktrees::ListWorktreesRequest,
+        "worktrees/create" => worktrees::CreateWorktreeRequest,
+        "worktrees/remove" => worktrees::RemoveWorktreeRequest,
+        "worktrees/release" => worktrees::ReleaseWorktreeRequest,
     };
     let notifications = notifications! { generator, inlined;
         "session/event" => events::SessionEventNotification,
@@ -168,6 +173,10 @@ fn schema() -> Value {
                 "forbidden": errors::FORBIDDEN,
                 "notTarget": errors::NOT_TARGET,
                 "remoteUnavailable": errors::REMOTE_UNAVAILABLE,
+                "worktreeBusy": errors::WORKTREE_BUSY,
+                "notARepository": errors::NOT_A_REPOSITORY,
+                "gitFailed": errors::GIT_FAILED,
+                "uncommittedChanges": errors::UNCOMMITTED_CHANGES,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
@@ -177,6 +186,7 @@ fn schema() -> Value {
                 "watch": sessions::WATCH_FEATURE,
                 "listFiles": files::LIST_FEATURE,
                 "rename": sessions::RENAME_FEATURE,
+                "worktrees": worktrees::FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "sessions": {"maxTitle": sessions::MAX_TITLE},
