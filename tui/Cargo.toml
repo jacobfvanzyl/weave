@@ -41,6 +41,7 @@ url = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+weave-fake-agent = { workspace = true }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

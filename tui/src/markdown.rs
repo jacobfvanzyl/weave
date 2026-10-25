@@ -23,6 +23,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use pulldown_cmark::Alignment;
@@ -32,37 +33,116 @@ use crate::style;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::wrap_sourced;
 
+/// A held fence or display equation past this many bytes renders as its source, so it commits
+/// line by line again.
+const HELD_SOURCE_LIMIT: usize = 16 * 1024;
+
 pub fn render_markdown(source: &str, width: usize) -> Vec<DisplayLine> {
-    // Math, sub- and superscript and wikilinks stay off: math is found before parsing, single
-    // tildes are strikethrough, and wikilinks are where 0.13.4's exponential parse lived.
-    let options = Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_TABLES
-        | Options::ENABLE_GFM;
     let mut renderer = Renderer::new(width);
-    for event in Parser::new_ext(source, options) {
+    for event in Parser::new_ext(source, options()) {
         renderer.event(event);
     }
     renderer.finish()
 }
 
+/// Math, sub- and superscript and wikilinks stay off: math is found before parsing, single
+/// tildes are strikethrough, and wikilinks are where 0.13.4's exponential parse lived.
+fn options() -> Options {
+    Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_TABLES
+        | Options::ENABLE_GFM
+}
+
+/// Fences whose blocks render differently once they close: Mermaid diagrams.
+fn renders_when_closed(info: &str) -> bool {
+    info.split([',', ' ', '\t']).next() == Some("mermaid")
+}
+
 /// Where a streaming message's committed prefix may end: after its last complete line,
-/// unless that line is in a table still arriving, whose column widths aren't known yet. Then
-/// the table's block is held back until it ends.
+/// unless something there renders differently once complete. A table still arriving, whose
+/// column widths aren't known yet, or a Mermaid fence holds its block back until the next one
+/// starts; an unclosed display equation is held from its first line.
 pub fn commit_boundary(source: &str) -> Option<usize> {
     let end = source.rfind('\n')? + 1;
-    let block_start = source[..end]
-        .trim_end_matches('\n')
-        .rfind("\n\n")
-        .map_or(0, |index| index + 2);
-    let in_table = source[block_start..end]
-        .lines()
-        .any(|line| line.trim_start().starts_with('|'));
-    if in_table {
-        (block_start > 0).then_some(block_start)
-    } else {
-        Some(end)
+    let complete = &source[..end];
+    let mut depth = 0usize;
+    let mut last_block = 0;
+    let mut last_is_code = false;
+    let mut held = false;
+    let mut code = Vec::new();
+    for (event, range) in Parser::new_ext(complete, options()).into_offset_iter() {
+        if depth == 0 && matches!(event, Event::Start(_) | Event::Rule) {
+            last_block = range.start;
+            last_is_code = matches!(event, Event::Start(Tag::CodeBlock(_)));
+            held = false;
+        }
+        match &event {
+            Event::Start(Tag::Table(_)) => held = true,
+            Event::Start(Tag::CodeBlock(kind)) => {
+                if let CodeBlockKind::Fenced(info) = kind
+                    && renders_when_closed(info)
+                    && range.len() <= HELD_SOURCE_LIMIT
+                {
+                    held = true;
+                }
+                code.push(range);
+            }
+            Event::Code(_) => code.push(range),
+            _ => {}
+        }
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
     }
+    // A table's header row reads as a paragraph until its delimiter row arrives.
+    held |= !last_is_code
+        && complete[last_block..]
+            .lines()
+            .any(|line| line.trim_start().starts_with('|'));
+    let boundary = [
+        held.then_some(last_block),
+        open_display_math(complete, &code),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(end);
+    (boundary > 0).then_some(boundary)
+}
+
+/// The start of the line where a display equation (`$$` or `\[` first on its line, outside
+/// code) opens and has not closed yet.
+fn open_display_math(source: &str, code: &[Range<usize>]) -> Option<usize> {
+    let line_end = |from: usize| {
+        source[from..]
+            .find('\n')
+            .map_or(source.len(), |at| from + at + 1)
+    };
+    let mut offset = 0;
+    while offset < source.len() {
+        let next = line_end(offset);
+        let line = &source[offset..next];
+        let opener = offset + line.len() - line.trim_start().len();
+        let close = match &source[opener..next] {
+            _ if code.iter().any(|range| range.contains(&opener)) => None,
+            rest if rest.starts_with("$$") => Some("$$"),
+            rest if rest.starts_with("\\[") => Some("\\]"),
+            _ => None,
+        };
+        let Some(close) = close else {
+            offset = next;
+            continue;
+        };
+        let body = opener + 2;
+        match source[body..].find(close) {
+            Some(at) => offset = line_end(body + at),
+            None => return (source.len() - body <= HELD_SOURCE_LIMIT).then_some(offset),
+        }
+    }
+    None
 }
 
 struct Renderer {
@@ -122,7 +202,14 @@ impl Renderer {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
             Event::Text(text) if self.in_code_block => self.code_text(&text),
-            Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => self.text(&text),
+            Event::Text(text) | Event::InlineHtml(text) => self.text(&text),
+            // An HTML block's lines arrive one per event, each with its newline.
+            Event::Html(text) => {
+                self.text(text.trim_end_matches('\n'));
+                if text.ends_with('\n') {
+                    self.flush();
+                }
+            }
             Event::Code(code) => {
                 let style = self.style().patch(inline_code_style());
                 self.push(&code, style);
@@ -312,7 +399,13 @@ impl Renderer {
             }
             TagEnd::DefinitionListTitle | TagEnd::DefinitionListDefinition => self.flush(),
             TagEnd::DefinitionList => self.blank_before_next_block = true,
-            TagEnd::HtmlBlock | TagEnd::MetadataBlock(_) => {}
+            TagEnd::HtmlBlock => {
+                if !self.spans.is_empty() {
+                    self.flush();
+                }
+                self.blank_before_next_block = true;
+            }
+            TagEnd::MetadataBlock(_) => {}
         }
     }
 
@@ -658,6 +751,71 @@ mod tests {
         let done = format!("{partial}\nafter\n");
         assert_eq!(commit_boundary(&done), Some(done.len()));
         assert_eq!(commit_boundary("no newline yet"), None);
+    }
+
+    #[test]
+    fn streaming_holds_back_a_mermaid_fence_until_the_next_block() {
+        let intro = "A diagram:\n\n";
+        let open = format!("{intro}```mermaid\nflowchart LR\n    A --> B\n");
+        assert_eq!(commit_boundary(&open), Some(intro.len()));
+        let closed = format!("{open}```\n");
+        assert_eq!(commit_boundary(&closed), Some(intro.len()));
+        let after = format!("{closed}\nafter\n");
+        assert_eq!(commit_boundary(&after), Some(after.len()));
+        // In a list, its item's block is what waits.
+        let listed = "- first\n- diagram:\n\n  ```mermaid\n  graph TD\n";
+        assert_eq!(commit_boundary(listed), None);
+    }
+
+    #[test]
+    fn streaming_holds_back_a_table_header_before_its_delimiter_row() {
+        let intro = "Keys:\n\n";
+        let header = format!("{intro}| Keys | What they do |\n");
+        assert_eq!(commit_boundary(&header), Some(intro.len()));
+    }
+
+    #[test]
+    fn html_blocks_keep_their_lines() {
+        let source = "<details>\n<summary>More</summary>\n\nHidden.\n";
+        assert_eq!(
+            render(source, 40),
+            ["<details>", "<summary>More</summary>", "", "Hidden."]
+        );
+    }
+
+    #[test]
+    fn streaming_commits_other_code_and_what_looks_like_tables_in_it() {
+        let rust = "Code:\n\n```rust\nfn main() {\n";
+        assert_eq!(commit_boundary(rust), Some(rust.len()));
+        let pipes = "Code:\n\n```\n| not | a table |\n";
+        assert_eq!(commit_boundary(pipes), Some(pipes.len()));
+    }
+
+    #[test]
+    fn streaming_holds_back_an_open_display_equation_from_its_first_line() {
+        let intro = "The roots:\n\n";
+        for (open, close) in [("$$", "$$"), ("\\[", "\\]")] {
+            let partial = format!("{intro}{open}\nx = \\frac{{a}}{{b}}\n");
+            assert_eq!(commit_boundary(&partial), Some(intro.len()), "{open}");
+            let done = format!("{partial}{close}\n");
+            assert_eq!(commit_boundary(&done), Some(done.len()), "{open}");
+        }
+        let one_line = "$$ E = mc^2 $$\nnext\n";
+        assert_eq!(commit_boundary(one_line), Some(one_line.len()));
+        // Mid-sentence dollars, and dollars in code, open nothing.
+        let prose = "It costs $$5\nand `$$` too\n";
+        assert_eq!(commit_boundary(prose), Some(prose.len()));
+        let code = "```\n$$\n";
+        assert_eq!(commit_boundary(code), Some(code.len()));
+    }
+
+    #[test]
+    fn streaming_commits_a_held_block_past_the_limit_line_by_line() {
+        let body = "x + ".repeat(HELD_SOURCE_LIMIT / 4 + 1);
+        let math = format!("Big:\n\n$$\n{body}\n");
+        assert_eq!(commit_boundary(&math), Some(math.len()));
+        let fence = format!("Big:\n\n```mermaid\n{body}\n");
+        assert_eq!(commit_boundary(&fence), Some(fence.len()));
     }
 
     #[test]

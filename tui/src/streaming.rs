@@ -252,4 +252,23 @@ mod tests {
         committed.extend(text(&streamed.finish()));
         assert_eq!(committed, expected);
     }
+
+    #[test]
+    fn every_line_of_rich_markdown_is_committed_exactly_once() {
+        for width in [40, 80] {
+            let source = weave_fake_agent::MARKDOWN;
+            let mut whole = MessageStream::new(StreamKind::Agent, width, None);
+            whole.push(source);
+            let expected = text(&whole.finish());
+
+            let mut streamed = MessageStream::new(StreamKind::Agent, width, None);
+            let mut committed = Vec::new();
+            for piece in source.split_inclusive([' ', '\n']) {
+                streamed.push(piece);
+                committed.extend(text(&streamed.take_complete()));
+            }
+            committed.extend(text(&streamed.finish()));
+            assert_eq!(committed, expected, "at width {width}");
+        }
+    }
 }

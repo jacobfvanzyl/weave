@@ -4480,6 +4480,7 @@ dependencies = [
  "url",
  "vt100",
  "weave-acp-core",
+ "weave-fake-agent",
  "weave-host-client",
  "weave-host-protocol",
 ]
