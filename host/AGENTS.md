@@ -111,7 +111,10 @@ up again first if it isn't open. `rename_session` sends `Command::Rename` as `se
 A rename journals `Entry::Renamed`, and
 the session task keeps the title in `renamed`, leaving the agent's later titles out of the
 journal and summary. `journal::kept_title` reads it back for a suspended session, and a closed
-session's new journal header carries it on. The TUI lists `clipboard_write` (`daemon::capabilities`) and runs calls targeted at
+session's new journal header carries it on. A session shows its rename or else its agent's last
+title (`journal::shown_title`; `Recorded::title` for one the Host isn't running), and is ordered
+by its last activity, the last journal record that is some (`Entry::is_activity`): taking it up,
+and the commands, modes and usage its agent tells as it's taken up, aren't. The TUI lists `clipboard_write` (`daemon::capabilities`) and runs calls targeted at
 it with `Tui::try_copy`. Host tests (`tests/daemon.rs`) give the fake agents an
 in-process bridge (`StdioMcp`) that runs the same `relay` to the Host's real socket, and a
 Host whose agents take MCP over ACP (`daemon_over_acp`).

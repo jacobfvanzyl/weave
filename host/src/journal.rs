@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
@@ -221,6 +222,38 @@ pub(crate) enum Entry {
 }
 
 impl Entry {
+    /// Whether someone did something in the session, which is what its last activity goes by.
+    /// The agent telling its commands, modes, settings, usage or title, as it does when the Host
+    /// takes the session up, isn't; nor are the Host's notices, a reopened agent, a paused
+    /// queue or closing.
+    pub(crate) fn is_activity(&self) -> bool {
+        match self {
+            Entry::Update { notification } => matches!(
+                notification.update,
+                SessionUpdate::UserMessageChunk(_)
+                    | SessionUpdate::AgentMessageChunk(_)
+                    | SessionUpdate::AgentThoughtChunk(_)
+                    | SessionUpdate::ToolCall(_)
+                    | SessionUpdate::ToolCallUpdate(_)
+                    | SessionUpdate::Plan(_)
+            ),
+            Entry::AgentReopened { .. }
+            | Entry::Closed { .. }
+            | Entry::Notice { .. }
+            | Entry::QueuePaused { .. } => false,
+            Entry::Header { .. }
+            | Entry::TerminalOutput { .. }
+            | Entry::TerminalExit { .. }
+            | Entry::TurnStarted { .. }
+            | Entry::TurnSteered { .. }
+            | Entry::TurnEnded { .. }
+            | Entry::Renamed { .. }
+            | Entry::Queued { .. }
+            | Entry::Unqueued { .. }
+            | Entry::QueueResumed { .. } => true,
+        }
+    }
+
     pub(crate) fn header(
         session_id: SessionId,
         agent: AgentSpec,
@@ -557,8 +590,10 @@ pub struct Recorded {
     pub cwd: PathBuf,
     pub policy: PermissionPolicy,
     pub closed: bool,
-    /// When it was last written to.
+    /// When someone last did something in it ([`Entry::is_activity`]).
     pub last_activity_ms: u64,
+    /// The title it shows: the one it was renamed to, or else the last its agent gave it.
+    pub title: Option<String>,
     /// Where in a git repository `cwd` is, as the Host last read it: when the journal began,
     /// and while this Host held the session open.
     pub git: Option<GitLocation>,
@@ -586,6 +621,46 @@ pub(crate) fn kept_title(records: &[Record]) -> Option<String> {
             Entry::Renamed { title, .. } => Some(title.clone()),
             _ => kept,
         })
+}
+
+/// The last title the agent of the session `records` journal gave it, its subagents' aside.
+pub(crate) fn agent_title(records: &[Record]) -> Option<String> {
+    let Entry::Header { session_id, .. } = &records.first()?.entry else {
+        return None;
+    };
+    records
+        .iter()
+        .rev()
+        .find_map(|record| title_given(&record.entry, session_id))
+}
+
+/// The title `entry` has the agent of `root` give it.
+fn title_given(entry: &Entry, root: &SessionId) -> Option<String> {
+    match entry {
+        Entry::Update { notification } if notification.session_id == *root => {
+            match &notification.update {
+                SessionUpdate::SessionInfoUpdate(info) => info.title.value().cloned(),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The title the session `records` journal shows: the one it was renamed to, or else the last
+/// its agent gave it.
+pub(crate) fn shown_title(records: &[Record]) -> Option<String> {
+    kept_title(records).or_else(|| agent_title(records))
+}
+
+/// When someone last did something in the session `records` journal, if its records are timed.
+pub(crate) fn last_activity(records: &[Record]) -> Option<u64> {
+    records
+        .iter()
+        .rev()
+        .find(|record| record.entry.is_activity())
+        .map(|record| record.at)
+        .filter(|at| *at > 0)
 }
 
 /// The session whose agent started the session `records` journal, as its header says.
@@ -678,7 +753,11 @@ pub(crate) fn index(dir: &Path) -> HashMap<SessionId, Recorded> {
         .collect()
 }
 
-/// A journal's header and whether its last record closed it, without reading the rest.
+/// How many of a journal's last records [`record_of`] looks through for its last activity.
+const TAIL: usize = 64;
+
+/// What a journal's header and last records say about its session, and the title it shows.
+/// Only the header, the records that can carry a title, and the last [`TAIL`] are parsed.
 fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
     let file = File::open(path).ok()?;
     let modified = file
@@ -691,7 +770,6 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         });
     let mut lines = io::BufReader::new(file).lines().map_while(Result::ok);
     let header = lines.next()?;
-    let last = lines.last();
     let Entry::Header {
         session_id,
         agent,
@@ -700,14 +778,45 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         policy,
         git,
         started_by,
+        title: mut renamed,
         ..
     } = serde_json::from_str::<Record>(&header).ok()?.entry
     else {
         return None;
     };
-    let closed = last
-        .and_then(|line| serde_json::from_str::<Record>(&line).ok())
+    let mut agent_title = None;
+    let mut tail = VecDeque::from([header]);
+    for line in lines {
+        // Escaped inside a string, these can't match text an agent wrote.
+        if line.starts_with(r#"{"type":"renamed""#)
+            || line.contains(r#""sessionUpdate":"session_info_update""#)
+        {
+            match serde_json::from_str::<Record>(&line).map(|record| record.entry) {
+                Ok(Entry::Renamed { title, .. }) => renamed = Some(title),
+                Ok(entry) => {
+                    if let Some(title) = title_given(&entry, &session_id) {
+                        agent_title = Some(title);
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        if tail.len() == TAIL {
+            tail.pop_front();
+        }
+        tail.push_back(line);
+    }
+    let tail: Vec<Record> = tail
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let closed = tail
+        .last()
         .is_some_and(|record| matches!(record.entry, Entry::Closed { .. }));
+    // Past the tail, the activity was before its first record.
+    let last_activity_ms = last_activity(&tail)
+        .or_else(|| tail.first().map(|record| record.at).filter(|at| *at > 0))
+        .unwrap_or(modified);
     Some((
         session_id,
         Recorded {
@@ -716,7 +825,8 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
             cwd,
             policy,
             closed,
-            last_activity_ms: modified,
+            last_activity_ms,
+            title: renamed.or(agent_title),
             git,
             started_by,
         },
@@ -882,7 +992,9 @@ pub(crate) fn private_file(path: &Path, truncate: bool) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
+    use weave_acp_core::schema::AvailableCommandsUpdate;
     use weave_acp_core::schema::ContentChunk;
+    use weave_acp_core::schema::SessionInfoUpdate;
     use weave_acp_core::schema::SessionUpdate;
 
     use super::*;
@@ -935,6 +1047,56 @@ mod tests {
             ])
             .as_deref(),
             Some("Second")
+        );
+    }
+
+    #[test]
+    fn a_journal_shows_its_agents_last_title_or_its_rename_and_when_it_was_last_active() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let id = SessionId::new("s1");
+        let path = path_for(dir.path(), &id);
+        let mut journal = Journal::create(dir.path(), &id, header("s1")).expect("create");
+        let titled = |title: &str| Entry::Update {
+            notification: Box::new(SessionNotification::new(
+                "s1",
+                SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title.to_owned())),
+            )),
+        };
+        journal.append(titled("The agent's first title"));
+        journal.append(titled("The agent's title"));
+        let (_, active) = journal.append(update("hi"));
+        // The agent telling its commands again, as when the Host takes the session up, later.
+        for _ in 0..3 {
+            std::thread::sleep(Duration::from_millis(5));
+            journal.append(Entry::Update {
+                notification: Box::new(SessionNotification::new(
+                    "s1",
+                    SessionUpdate::AvailableCommandsUpdate(
+                        AvailableCommandsUpdate::new(Vec::new()),
+                    ),
+                )),
+            });
+        }
+        journal.flush();
+        let record = recorded(dir.path(), &id).expect("recorded");
+        assert_eq!(record.title.as_deref(), Some("The agent's title"));
+        assert_eq!(record.last_activity_ms, active);
+        let records = read(&path).expect("read");
+        assert_eq!(last_activity(&records), Some(active));
+        assert_eq!(shown_title(&records).as_deref(), Some("The agent's title"));
+
+        // A rename holds over the agent's titles.
+        journal.append(Entry::Renamed {
+            title: "Renamed".to_owned(),
+            by: None,
+        });
+        journal.append(titled("A later one"));
+        journal.flush();
+        let record = recorded(dir.path(), &id).expect("recorded");
+        assert_eq!(record.title.as_deref(), Some("Renamed"));
+        assert_eq!(
+            shown_title(&read(&path).expect("read")).as_deref(),
+            Some("Renamed")
         );
     }
 

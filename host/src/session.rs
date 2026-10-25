@@ -453,6 +453,10 @@ pub(crate) struct Opened {
     pub(crate) binding: Option<Binding>,
     /// The title the Host keeps for it, from its journal.
     pub(crate) title: Option<String>,
+    /// The last title its agent gave it, from its journal, shown until it's renamed.
+    pub(crate) agent_title: Option<String>,
+    /// When someone last did something in it, from its journal.
+    pub(crate) last_activity_ms: Option<u64>,
     /// Where in a git repository `cwd` is.
     pub(crate) git: Option<GitLocation>,
     /// Prompts waiting for its next turns, from its journal.
@@ -476,22 +480,26 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         blank,
         binding,
         title,
+        agent_title,
+        last_activity_ms,
         git,
         queue,
         started_by,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
-    let now = now_ms();
+    // Taking a session up isn't activity: it keeps the time its journal last saw some.
+    let last_activity_ms = last_activity_ms.unwrap_or_else(now_ms);
+    let shown_title = title.clone().or(agent_title);
     let summary = Arc::new(Mutex::new(Summary {
         session_id: session_id.clone(),
         agent_id: agent.id.clone(),
         cwd: cwd.clone(),
-        title: title.clone(),
+        title: shown_title.clone(),
         activity: Activity::Idle,
         clients: 0,
         policy: policy.clone(),
-        last_activity_ms: now,
+        last_activity_ms,
         git: git.clone(),
         started_by: started_by.clone(),
     }));
@@ -524,7 +532,8 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
                 cwd: cwd.clone(),
                 policy: policy.clone(),
                 closed: false,
-                last_activity_ms: now,
+                last_activity_ms,
+                title: shown_title,
                 git,
                 started_by,
             },
@@ -1287,7 +1296,6 @@ impl Actor {
     }
 
     fn agent_event(&mut self, event: AgentEvent) {
-        lock(&self.summary).last_activity_ms = now_ms();
         match event {
             AgentEvent::SessionUpdate(mut notification) => {
                 // Output in `_meta` already came through as terminal events.
@@ -1571,7 +1579,11 @@ impl Actor {
     /// Journal `entry` and send it to every attached client. Returns its position and time.
     fn record(&mut self, entry: Entry) -> (u64, u64) {
         let event = entry.event();
+        let activity = entry.is_activity();
         let (seq, at) = self.journal.append(entry);
+        if activity {
+            lock(&self.summary).last_activity_ms = at;
+        }
         if let Some(event) = event {
             self.broadcast(&SessionEventNotification {
                 session_id: self.root.clone(),
@@ -1651,7 +1663,10 @@ impl Actor {
         };
         // Nothing reaches this session from now on.
         {
-            let last_activity_ms = lock(&self.summary).last_activity_ms;
+            let (last_activity_ms, title) = {
+                let summary = lock(&self.summary);
+                (summary.last_activity_ms, summary.title.clone())
+            };
             let mut registry = self.shared.registry();
             registry.sessions.remove(&self.root);
             for child in &self.children {
@@ -1663,6 +1678,7 @@ impl Actor {
             } else if let Some(known) = registry.known.get_mut(&self.root) {
                 known.closed = !suspended;
                 known.last_activity_ms = last_activity_ms;
+                known.title = title;
             }
         }
         if blank {

@@ -1159,6 +1159,56 @@ async fn a_restarted_host_takes_sessions_up_from_their_journals() {
 }
 
 #[tokio::test]
+async fn a_restarted_host_keeps_its_sessions_order_and_titles_and_taking_one_up_changes_neither() {
+    let world = World::new();
+    let before = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        for prompt in ["the older one", "the newer one"] {
+            let session_id = client.create(&world).await;
+            client.prompt(&session_id, prompt).await;
+            client.until_turn_ends(&mut Seen::default(), None).await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let listed = client.watch().await;
+        daemon.shutdown().await;
+        listed
+    };
+    let shown = |listed: &[SessionListing]| -> Vec<(SessionId, Option<String>, Option<u64>)> {
+        listed
+            .iter()
+            .map(|listing| {
+                (
+                    listing.info.session_id.clone(),
+                    listing.info.title.clone(),
+                    listing.last_activity_at,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        before
+            .iter()
+            .map(|listing| listing.info.title.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("the newer one"), Some("the older one")]
+    );
+
+    // Left open, they're listed as they were.
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    assert_eq!(shown(&client.watch().await), shown(&before));
+
+    // Taken up again, as a TUI re-attaching does, the older one stays where it was and keeps its
+    // agent's title, though its agent tells its commands again.
+    let older = before[1].info.session_id.clone();
+    client.attach(&older).await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    wait_for(|| daemon.status().sessions.len() == 1).await;
+    assert_eq!(shown(&client.watch().await), shown(&before));
+}
+
+#[tokio::test]
 async fn idle_sessions_close_after_their_grace_and_reopen_in_the_agent() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_millis(100));

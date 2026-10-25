@@ -1832,7 +1832,7 @@ pub(crate) async fn get_session(
         .and_then(|dir| journal::read(&journal::path_for(dir, &request.session_id)).ok())
         .unwrap_or_default();
     let mut session = dormant(&request.session_id, &agent_id, &recorded);
-    session.info.title = journal::kept_title(&records);
+    session.info.title = journal::shown_title(&records);
     Ok(GetSessionResponse {
         latest_turn: journal::latest_turn(&records, &request.session_id),
         session,
@@ -1845,8 +1845,10 @@ pub(crate) fn dormant(
     agent_id: &str,
     recorded: &Recorded,
 ) -> SessionListing {
+    let mut info = SessionInfo::new(session_id.clone(), recorded.cwd.clone());
+    info.title.clone_from(&recorded.title);
     SessionListing {
-        info: SessionInfo::new(session_id.clone(), recorded.cwd.clone()),
+        info,
         agent_id: agent_id.to_owned(),
         state: if recorded.closed {
             SessionStatus::Closed
@@ -2261,6 +2263,8 @@ async fn reopen(
         .map(|(_, records)| records.as_slice())
         .or(closed.as_deref());
     let title = earlier.and_then(journal::kept_title);
+    let agent_title = earlier.and_then(journal::agent_title);
+    let last_activity_ms = earlier.and_then(journal::last_activity);
     let mut queue = earlier.map(Queue::from_records).unwrap_or_default();
     let started_by = earlier.and_then(journal::started_by);
     let (journal, policy) = match recovered {
@@ -2311,6 +2315,8 @@ async fn reopen(
         Origin::Reopened {
             journal,
             title,
+            agent_title,
+            last_activity_ms,
             queue,
             started_by,
         },
@@ -2367,10 +2373,13 @@ enum Origin {
     /// session names the session that started it.
     New { started_by: Option<SessionId> },
     /// The agent's session reopened, with the journal a stopped Host left, if there is one,
-    /// and the title and queue the Host kept for it.
+    /// and the title and queue the Host kept for it, the last title its agent gave it, and when
+    /// it was last active.
     Reopened {
         journal: Option<Journal>,
         title: Option<String>,
+        agent_title: Option<String>,
+        last_activity_ms: Option<u64>,
         queue: Queue,
         started_by: Option<SessionId>,
     },
@@ -2390,14 +2399,24 @@ fn open(
     binding: Option<Binding>,
     git: Option<GitLocation>,
 ) -> Result<SessionHandle, Error> {
-    let (journal, blank, title, queue, started_by) = match origin {
-        Origin::New { started_by } => (None, true, None, Queue::default(), started_by),
+    let (journal, blank, title, agent_title, last_activity_ms, queue, started_by) = match origin {
+        Origin::New { started_by } => (None, true, None, None, None, Queue::default(), started_by),
         Origin::Reopened {
             journal,
             title,
+            agent_title,
+            last_activity_ms,
             queue,
             started_by,
-        } => (journal, false, title, queue, started_by),
+        } => (
+            journal,
+            false,
+            title,
+            agent_title,
+            last_activity_ms,
+            queue,
+            started_by,
+        ),
     };
     let journal = match journal {
         Some(journal) => journal,
@@ -2448,6 +2467,8 @@ fn open(
             blank,
             binding,
             title,
+            agent_title,
+            last_activity_ms,
             git,
             queue,
             started_by,
