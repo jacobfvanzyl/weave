@@ -1,13 +1,13 @@
 # weave
 
-The `weave` terminal client and the Host it connects to, which runs ACP agents and keeps their sessions going for any number of clients.
+The `weave` terminal client and the Host it connects to, which runs ACP agents and keeps their threads going for any number of clients.
 
 ## Language
 
 ### Host and clients
 
 **Host**:
-The long-lived per-user process on one computer that runs agents and owns their sessions, outliving the clients connected to it.
+The long-lived per-user process on one computer that runs agents and owns their threads, outliving the clients connected to it.
 _Avoid_: server, Portal, Host Daemon
 
 **Client**:
@@ -23,7 +23,7 @@ A device of the person's that the Host has paired with and accepts remote client
 _Avoid_: credential, principal, token
 
 **Peer Host**:
-One of the person's Hosts paired with another, so that the agents of one can reach the sessions of the other.
+One of the person's Hosts paired with another, so that the agents of one can reach the threads of the other.
 _Avoid_: remote Host, linked Host, federated Host
 
 **Agent**:
@@ -31,74 +31,74 @@ An ACP agent program the Host can launch, known by an id: a preset, one defined 
 _Avoid_: adapter, provider, model
 
 **Agent update**:
-A newer version of a preset's or registry agent's program than the one a session's process runs, which the Host looks for when the session opens.
+A newer version of a preset's or registry agent's program than the one a thread's process runs, which the Host looks for when the thread opens.
 _Avoid_: upgrade, new release
 
 **Client tool**:
-A tool the Host offers a session's agent that an attached client runs on its own device, such as putting text on that device's clipboard.
+A tool the Host offers a thread's agent that an attached client runs on its own device, such as putting text on that device's clipboard.
 _Avoid_: client-side MCP server, frontend tool, local tool
 
 **Host MCP server**:
-The one MCP server, `weave`, that the Host offers every session's agent, carrying client tools, the Host's own tools and the tools of upstream servers.
+The one MCP server, `weave`, that the Host offers every thread's agent, carrying client tools, the Host's own tools and the tools of upstream servers.
 _Avoid_: weave MCP, bridge, proxy, gateway
 
 **Upstream server**:
 An MCP server in the Host's configuration that the Host connects to itself and offers through the Host MCP server.
 _Avoid_: proxied server, backend server
 
-### Sessions
+### Threads
 
-**Session**:
-A conversation with one agent in one directory, identified by the agent's own session id.
-_Avoid_: thread, chat, conversation
+**Thread**:
+A conversation with one agent in one directory, identified by the id of the agent's ACP session.
+_Avoid_: session (ACP's word for the agent's side of it), chat, conversation
 
-**Open session**:
-A session the Host holds with its agent running, which clients can attach to and prompt.
-_Avoid_: live session, active session
+**Open thread**:
+A thread the Host holds with its agent running, which clients can attach to and prompt.
+_Avoid_: live thread, active thread
 
-**Suspended session**:
-A session that was open when its Host stopped; the next Host opens it again from its journal when a client asks for it.
-_Avoid_: dormant session, orphaned session
+**Suspended thread**:
+A thread that was open when its Host stopped; the next Host opens it again from its journal when a client asks for it.
+_Avoid_: dormant thread, orphaned thread
 
-**Closed session**:
-A session the Host no longer holds. It can be opened again from the agent's own history when the agent supports that.
+**Closed thread**:
+A thread the Host no longer holds. It can be opened again from the agent's own history when the agent supports that.
 
-**Blank session**:
-An open session nobody has prompted yet, so there is nothing in it to come back to.
-_Avoid_: empty session, draft
+**Blank thread**:
+An open thread nobody has prompted yet, so there is nothing in it to come back to.
+_Avoid_: empty thread, draft
 
-**Headless session**:
-A session whose permission requests a permission policy answers, so it can run with nobody attached.
-_Avoid_: background session, run
+**Headless thread**:
+A thread whose permission requests a permission policy answers, so it can run with nobody attached.
+_Avoid_: background thread, run
 
 **Trigger**:
-A schedule or webhook that starts a headless session's turn in the Host with no client involved.
+A schedule or webhook that starts a headless thread's turn in the Host with no client involved.
 _Avoid_: automation, job, cron
 
-**Subagent session**:
-A session an agent starts under another one. It shares its parent's journal and attached clients.
-_Avoid_: child thread
+**Subagent thread**:
+A thread an agent starts under another one. It shares its parent's journal and attached clients.
+_Avoid_: subthread
 
-**Delegated session**:
-A session of its own, with its own journal and agent, that another session's agent started through the Host. It records the session that started it, which hears how its turns end.
-_Avoid_: child session, spawned session, subagent
+**Delegated thread**:
+A thread of its own, with its own journal and agent, that another thread's agent started through the Host. It records the thread that started it, which hears how its turns end.
+_Avoid_: child thread, spawned thread, subagent
 
 **Attach**:
-A client's relationship with an open session: it receives the session's events and pending requests, and keeps the session open while it lasts.
+A client's relationship with an open thread: it receives the thread's events and pending requests, and keeps the thread open while it lasts.
 _Avoid_: subscribe, join, connect
 
 **Reopen**:
-Moving an open session to a new process of its agent, on the version the agent's new sessions get, keeping the session's id and journal.
+Moving an open thread to a new process of its agent, on the version the agent's new threads get, keeping the thread's id and journal.
 _Avoid_: restart, reload (the TUI's own restart)
 
 ### Repositories
 
 **Repository**:
-A git repository on the Host's computer that sessions' directories can be in, known by its primary worktree.
+A git repository on the Host's computer that threads' directories can be in, known by its primary worktree.
 _Avoid_: project, workspace
 
 **Worktree**:
-One of a repository's working trees, which sessions can run in. It belongs to the person rather than to any session, and outlives the sessions in it.
+One of a repository's working trees, which threads can run in. It belongs to the person rather than to any thread, and outlives the threads in it.
 _Avoid_: checkout, sandbox, workspace
 
 ### Turns
@@ -116,7 +116,7 @@ What a person sends an agent while its turn runs, which joins that turn instead 
 _Avoid_: interjection, injection, interrupt
 
 **Queued prompt**:
-A prompt the Host holds in a session's queue while a turn runs, to start a later turn once the turns before it end. Every client attached to the session sees it, and it outlives the client that sent it.
+A prompt the Host holds in a thread's queue while a turn runs, to start a later turn once the turns before it end. Every client attached to the thread sees it, and it outlives the client that sent it.
 _Avoid_: follow-up, pending message
 
 **Request key**:
@@ -128,17 +128,17 @@ A permission request, elicitation or client tool call from an agent that waits o
 _Avoid_: question, dialog, prompt
 
 **Permission policy**:
-The rules a session answers permission requests by without asking anyone.
+The rules a thread answers permission requests by without asking anyone.
 _Avoid_: auto-approve, allowlist
 
 ### Records
 
 **Journal**:
-The numbered record of everything a session's attached clients are sent, from which a client catches up after the last position it saw.
+The numbered record of everything a thread's attached clients are sent, from which a client catches up after the last position it saw.
 _Avoid_: history, log
 
 **Transcript**:
-A client's rendering of a session's journal.
+A client's rendering of a thread's journal.
 _Avoid_: history, scrollback
 
 ### Views

@@ -783,7 +783,7 @@ other client runs it. The agent cancelling the call withdraws it.
 Host tools are answered by the Host, for the session whose agent calls them. Each is a Host
 protocol method seen from inside the session, with the same parameters less what the calling
 session supplies, and is answered by the same code as the client request
-([ADR 0020](../adr/0020-agents-reach-the-host-as-clients-do-and-act-only-on-sessions-they-start.md)).
+([ADR 0020](../adr/0020-agents-reach-the-host-as-clients-do-and-act-only-on-threads-they-start.md)).
 No Host tool does what no client request can, so a new capability lands in the protocol first.
 They need no client, so they work in headless sessions too. A tool's answer is its method's
 answer as JSON text, or a tool error saying why the method failed.

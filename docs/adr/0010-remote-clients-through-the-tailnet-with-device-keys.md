@@ -12,7 +12,7 @@ Clients on the person's other devices, the iPad and iPhone first, need to reach 
 - **Binding the Host to its tailnet address.** It is just as tailnet-only, but brings no trusted TLS, so iOS needs App Transport Security exceptions for plain `ws://`. A non-loopback listener also brings macOS firewall prompts for a binary that's rebuilt often, and the address may not exist yet when the Host starts.
 - **TLS in the Host**, with its own pinned certificate or `tailscale cert` files as Portal used. That puts certificate renewal and private keys in the Host, and pinning needs the client's WebSocket to be native rather than a WebView's.
 - **Bearer device tokens**, the `token` method WVE-85 reserved. Simpler, but whoever copies a token is that device until it's revoked. A Secure Enclave key can't be copied, and the Host keeps no secrets.
-- **Directory allowlists or per-device grants**, as Portal had. An agent's shell isn't confined to its session's directory, so they would limit what a device opens, not what it can do. Revoking the device is the control.
+- **Directory allowlists or per-device grants**, as Portal had. An agent's shell isn't confined to its thread's directory, so they would limit what a device opens, not what it can do. Revoking the device is the control.
 
 ## Consequences
 
