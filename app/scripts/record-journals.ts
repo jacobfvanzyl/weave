@@ -43,6 +43,7 @@ const scripts: Record<string, Script> = {
   },
   compact: (session) => session.prompt('/compact'),
   think: (session) => session.prompt('/think'),
+  markdown: (session) => session.prompt('/markdown'),
   image: (session) => session.prompt([{ type: 'text', text: 'What is in this picture?' }, { type: 'image', mimeType: 'image/png', data: PNG }]),
   steer: async (session) => {
     const ended = session.prompt('/slow 12');

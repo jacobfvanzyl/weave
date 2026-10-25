@@ -1,4 +1,5 @@
-import { memo, type ComponentProps, type MouseEvent } from 'react';
+import { createCodePlugin } from '@streamdown/code';
+import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
 import {
   defaultComponents,
   defaultRehypePlugins,
@@ -20,6 +21,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
 import { imagesAsLinks } from '@/markdown/images-as-links';
+import { mathPlugin, withMath } from '@/markdown/math';
 
 export type MessageResponseProps = StreamdownProps;
 
@@ -63,6 +65,12 @@ function LinkConfirmation({ isOpen, onClose, onConfirm, url }: LinkSafetyModalPr
     </AlertDialog>
   );
 }
+
+/** Code in the app's Catppuccin palette; the app is dark, so Mocha is the one shown. */
+const plugins: StreamdownProps['plugins'] = {
+  code: createCodePlugin({ themes: ['catppuccin-latte', 'catppuccin-mocha'] }),
+  math: mathPlugin,
+};
 
 const linkSafety: StreamdownProps['linkSafety'] = { enabled: true, renderModal: (props) => <LinkConfirmation {...props} /> };
 
@@ -111,23 +119,33 @@ const markdownComponents: StreamdownProps['components'] = {
 
 /**
  * AI Elements' streaming Markdown response, for agent text, which is untrusted: raw HTML shows as
- * text, and links open only once the person confirms them.
+ * text, links open only once the person confirms them, code is highlighted and math typeset.
  */
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
-    <Streamdown
-      className={cn(
-        'min-w-0 max-w-full text-xs/relaxed [overflow-wrap:break-word] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
-        className,
-      )}
-      data-slot="message-response"
-      remarkPlugins={remarkPlugins}
-      rehypePlugins={rehypePlugins}
-      linkSafety={linkSafety}
-      {...props}
-      components={{ ...markdownComponents, ...props.components }}
-    />
-  ),
+  ({ className, children, isAnimating = false, ...props }: MessageResponseProps) => {
+    const markdown = useMemo(
+      () => (typeof children === 'string' ? withMath(children, { streaming: isAnimating }) : children),
+      [children, isAnimating],
+    );
+    return (
+      <Streamdown
+        className={cn(
+          'min-w-0 max-w-full text-xs/relaxed [overflow-wrap:break-word] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
+          className,
+        )}
+        data-slot="message-response"
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        linkSafety={linkSafety}
+        plugins={plugins}
+        isAnimating={isAnimating}
+        {...props}
+        components={{ ...markdownComponents, ...props.components }}
+      >
+        {markdown}
+      </Streamdown>
+    );
+  },
 );
 
 MessageResponse.displayName = 'MessageResponse';

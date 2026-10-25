@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MessageResponse } from './message';
@@ -101,6 +101,29 @@ describe('MessageResponse', () => {
     expect(container.querySelector('[data-incomplete]')).toBeInTheDocument();
     rerender(<MessageResponse isAnimating={false}>{'```ts\nconst answer = 42;\n```'}</MessageResponse>);
     expect(container.querySelector('[data-incomplete]')).not.toBeInTheDocument();
+  });
+
+  it('typesets math in every delimiter and leaves money and shell variables as text', () => {
+    const { container } = render(
+      <MessageResponse>
+        {'Inline $e^{i\\pi}$ and \\(a^2\\); it costs $5 and $10, and $HOME is home.\n\n\\[\n\\sum_k k\n\\]\n\n$$\nx^2\n$$\n\n```math\n\\int x\n```'}
+      </MessageResponse>,
+    );
+    expect(container.querySelectorAll('.katex-display')).toHaveLength(3);
+    expect(container.querySelectorAll('.katex')).toHaveLength(5);
+    expect(container).toHaveTextContent('it costs $5 and $10, and $HOME is home.');
+  });
+
+  it('shows TeX that KaTeX cannot typeset as its source, and never follows its links', () => {
+    const { container } = render(<MessageResponse>{'Bad $\\notacommand{x}$ and $\\href{https://example.com}{x}$.'}</MessageResponse>);
+    expect(container).toHaveTextContent('\\notacommand');
+    expect(container).toHaveTextContent('\\href');
+    expect(container.querySelector('a')).not.toBeInTheDocument();
+  });
+
+  it('highlights code in the app\'s Catppuccin palette', async () => {
+    const { container } = render(<MessageResponse>{'```ts\nconst answer: number = 42;\n```'}</MessageResponse>);
+    await waitFor(() => expect(container.querySelector('[style*="--shiki-dark: #CBA6F7"]')).toHaveTextContent('const'));
   });
 
   it('opens a link only once the person confirms it, naming its host and the whole URL', async () => {

@@ -90,7 +90,7 @@ const shown = ({ turn: _turn, ...rest }: AcpTranscript) => rest;
 describe('transcripts from recorded journals', () => {
   it('records the journals the tests read', () => {
     expect(Object.keys(recordings).sort()).toEqual(
-      ['cancel', 'close', 'compact', 'delegate', 'image', 'modes', 'notice', 'plan', 'reopen', 'run', 'steer', 'think', 'write'],
+      ['cancel', 'close', 'compact', 'delegate', 'image', 'markdown', 'modes', 'notice', 'plan', 'reopen', 'run', 'steer', 'think', 'write'],
     );
   });
 
