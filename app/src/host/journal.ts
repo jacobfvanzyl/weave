@@ -98,7 +98,12 @@ export function transcriptEvents(notification: SessionEventNotification, reading
   const live = !reading.history;
   switch (event.kind) {
     case 'update':
-      return [{ type: 'session/update', update: event.notification.update, sessionId: event.notification.sessionId }];
+      return [{
+        type: 'session/update',
+        update: event.notification.update,
+        sessionId: event.notification.sessionId,
+        ...(live ? {} : { replayed: true }),
+      }];
     case 'turnStarted':
     case 'turnSteered': {
       const own = reading.own(event.origin);
@@ -110,6 +115,7 @@ export function transcriptEvents(notification: SessionEventNotification, reading
         // One that waited in the Host's queue was never shown here before.
         ...(event.kind === 'turnStarted' && event.queuedId ? { queued: true } : {}),
         ...(own ? { own } : { origin: originLabel(event.origin) }),
+        ...(live ? {} : { replayed: true }),
       };
       return event.kind === 'turnStarted' && event.sessionId === root && live ? [prompt, { type: 'turn/started' }] : [prompt];
     }

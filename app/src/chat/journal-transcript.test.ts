@@ -84,8 +84,19 @@ function outline(transcript: AcpTranscript, root = transcript, depth = 0): strin
   return [...lines, ...nested].map((line) => indent + line);
 }
 
-/** Everything but the turn's state, which replayed history doesn't change. */
-const shown = ({ turn: _turn, ...rest }: AcpTranscript) => rest;
+/**
+ * Everything but the turn's state, which replayed history doesn't change, and which messages
+ * were replayed, here and in subagents.
+ */
+const shown = ({ turn: _turn, entries, subagents, ...rest }: AcpTranscript): unknown => ({
+  ...rest,
+  entries: entries.map((entry) => {
+    if (entry.kind !== 'message') return entry;
+    const { replayed: _replayed, ...unmarked } = entry;
+    return unmarked;
+  }),
+  subagents: subagents.map((subagent) => ({ ...subagent, transcript: shown(subagent.transcript) })),
+});
 
 describe('transcripts from recorded journals', () => {
   it('records the journals the tests read', () => {
@@ -109,6 +120,15 @@ describe('transcripts from recorded journals', () => {
     expect(live.entries[0]).toMatchObject({ kind: 'message', role: 'user', origin: 'the TUI' });
     expect(live.turn.status).toBe('stopped');
     expect(replayed.turn.status).toBe('idle');
+  });
+
+  it('marks the messages it replays, and none that arrive live', () => {
+    const messages = (transcript: AcpTranscript) => transcript.entries.filter((entry) => entry.kind === 'message');
+    const replayed = messages(follow(recordings.steer, 'replayed'));
+    const live = messages(follow(recordings.steer, 'live'));
+    expect(replayed.length).toBeGreaterThan(1);
+    expect(replayed.every((message) => message.replayed)).toBe(true);
+    expect(live.some((message) => message.replayed)).toBe(false);
   });
 
   it('keeps the latest modes and config options', () => {

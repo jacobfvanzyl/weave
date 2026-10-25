@@ -39,6 +39,11 @@ export type TranscriptMessage = {
   origin?: string;
   /** A message steered into the running turn. */
   steer?: boolean;
+  /**
+   * Replayed from the journal when this client attached, at opening or after reconnecting,
+   * rather than arriving while it was attached. Set when the entry is made, and never after.
+   */
+  replayed?: true;
 };
 
 export type TranscriptToolCall = {
@@ -235,13 +240,13 @@ export type AcpTranscript = {
 
 export type AcpTranscriptEvent =
   /** An agent's update, for this session or, with `sessionId`, one of its subagents. */
-  | { type: 'session/update'; update: SessionUpdate; sessionId?: string }
+  | { type: 'session/update'; update: SessionUpdate; sessionId?: string; replayed?: boolean }
   /**
    * A prompt that started a turn, or with `steer` joined the running one. `own` marks this client's,
    * which replaces the optimistic message it showed, unless it waited in the Host's queue
    * (`queued`); `origin` names another client's or device's.
    */
-  | { type: 'prompt'; prompt: ContentBlock[]; sessionId?: string; steer?: boolean; own?: boolean; origin?: string; queued?: boolean }
+  | { type: 'prompt'; prompt: ContentBlock[]; sessionId?: string; steer?: boolean; own?: boolean; origin?: string; queued?: boolean; replayed?: boolean }
   /** How a turn ended, as the transcript records it; the turn's state changes with `turn/stopped`. */
   | { type: 'turn/ended'; sessionId?: string; stopReason?: StopReason; error?: string }
   | { type: 'terminal/output'; terminalId: string; data: string }
@@ -326,6 +331,7 @@ const appendProtocolMessage = (
   chunkKind: 'message' | 'thought',
   messageId: string | null | undefined,
   content: ContentBlock,
+  replayed = false,
 ): AcpTranscript => {
   const entries = [...model.entries];
   const last = entries.at(-1);
@@ -395,6 +401,7 @@ const appendProtocolMessage = (
     messageId,
     optimistic: false,
     chunks: [{ kind: chunkKind, messageId, content: [content] }],
+    ...(replayed ? { replayed: true } : {}),
   });
   return {
     ...model,
@@ -540,6 +547,7 @@ const upsertCompaction = (
 const reduceSessionUpdate = (
   model: AcpTranscript,
   update: SessionUpdate,
+  replayed = false,
 ): AcpTranscript => {
   switch (update.sessionUpdate) {
     case 'user_message_chunk':
@@ -549,6 +557,7 @@ const reduceSessionUpdate = (
         'message',
         update.messageId,
         update.content,
+        replayed,
       );
     case 'agent_message_chunk':
       return appendProtocolMessage(
@@ -557,6 +566,7 @@ const reduceSessionUpdate = (
         'message',
         update.messageId,
         update.content,
+        replayed,
       );
     case 'agent_thought_chunk':
       return appendProtocolMessage(
@@ -565,6 +575,7 @@ const reduceSessionUpdate = (
         'thought',
         update.messageId,
         update.content,
+        replayed,
       );
     case 'tool_call':
       return upsertTool(model, update, false);
@@ -807,6 +818,7 @@ const appendPrompt = (
     chunks: [{ kind: 'message', content: event.prompt }],
     ...(event.origin ? { origin: event.origin } : {}),
     ...(event.steer ? { steer: true } : {}),
+    ...(event.replayed ? { replayed: true } : {}),
   });
 };
 
@@ -1061,7 +1073,7 @@ export const reduceAcpEvent = (
 ): AcpTranscript => {
   switch (event.type) {
     case 'session/update':
-      return inSession(model, event.sessionId, (transcript) => reduceSessionUpdate(transcript, event.update));
+      return inSession(model, event.sessionId, (transcript) => reduceSessionUpdate(transcript, event.update, event.replayed));
     case 'prompt':
       return inSession(model, event.sessionId, (transcript) => appendPrompt(transcript, event));
     case 'turn/ended':

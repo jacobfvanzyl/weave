@@ -4,7 +4,7 @@ import type { ElicitationSchema } from '@/host/protocol';
 import { Capacitor } from '@capacitor/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpShowcaseTranscript } from './acp-showcase';
-import { createTranscript, formElicitation } from './acp-transcript';
+import { createTranscript, formElicitation, reduceAcpEvent } from './acp-transcript';
 import { ChatPane, type ChatPaneActions } from './chat-pane';
 
 const actions = (): ChatPaneActions => ({
@@ -309,6 +309,28 @@ describe('ChatPane', () => {
     expect(container.querySelectorAll('[data-slot="dropdown-menu-trigger"]'))
       .toHaveLength(1);
     expect(screen.queryByText('1 command')).not.toBeInTheDocument();
+  });
+
+  it('makes prompts that arrive while the thread is open scroll anchors, and none it replays', () => {
+    const reply = (text: string, replayed?: boolean) => ({
+      type: 'session/update' as const,
+      update: { sessionUpdate: 'agent_message_chunk' as const, content: { type: 'text' as const, text } },
+      replayed,
+    });
+    const model = [
+      { type: 'prompt' as const, prompt: [{ type: 'text' as const, text: 'From the journal' }], replayed: true },
+      reply('First answer.', true),
+      { type: 'session/update' as const, update: { sessionUpdate: 'user_message_chunk' as const, content: { type: 'text' as const, text: 'Loaded by the agent' } }, replayed: true },
+      reply('Second answer.', true),
+      { type: 'prompt' as const, prompt: [{ type: 'text' as const, text: 'Sent just now' }] },
+    ].reduce(reduceAcpEvent, createTranscript('s1'));
+
+    render(<ChatPane model={model} actions={actions()} />);
+
+    const anchor = (text: string) => screen.getByText(text).closest('[data-slot="message-scroller-item"]')?.getAttribute('data-scroll-anchor');
+    expect(anchor('From the journal')).toBe('false');
+    expect(anchor('Loaded by the agent')).toBe('false');
+    expect(anchor('Sent just now')).toBe('true');
   });
 
   it('uses the shadcn empty state when a session has no transcript entries', () => {

@@ -755,6 +755,14 @@ function Composer({
   );
 }
 
+/**
+ * A prompt that arrives while the thread is open moves to the top of the view, as one sent here
+ * does. Those replayed as it opens or catches up aren't anchors, so the view stays at the end:
+ * the replay renders a frame at a time, and a frame holding one would pull the view to it.
+ */
+const isScrollAnchor = (entry: TranscriptEntry) =>
+  entry.kind === 'message' && entry.role === 'user' && !entry.replayed;
+
 export function ChatPane({
   model,
   actions,
@@ -807,7 +815,7 @@ export function ChatPane({
               <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
                 {items.map((item) => item.kind === 'entry'
                   ? (
-                    <MessageScrollerItem key={item.entry.id} scrollAnchor={item.entry.kind === 'message' && item.entry.role === 'user'}>
+                    <MessageScrollerItem key={item.entry.id} scrollAnchor={isScrollAnchor(item.entry)}>
                       <EntryView entry={item.entry} transcript={model} actions={actions} isStreaming={item.entry.id === streamingId} />
                     </MessageScrollerItem>
                   )
