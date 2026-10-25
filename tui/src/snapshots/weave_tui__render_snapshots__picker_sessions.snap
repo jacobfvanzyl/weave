@@ -1,12 +1,13 @@
 ---
 source: tui/src/render_snapshots.rs
+assertion_line: 487
 expression: screen(&mut chat)
 ---
 ── transcript ──
 
 ── viewport ──
 
-  Resume a session  (this directory)
+  Resume a thread  (this directory)
 › Fix the flaky parser test
   Untitled (b)
   ⏎ open · n new · a all dirs · d delete · esc close

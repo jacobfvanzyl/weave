@@ -13,11 +13,11 @@ cargo build                                      # from the repository root
 ./target/debug/weave --agent opencode            # any agent in the ACP registry
 ./target/debug/weave agents                      # list presets, config and registry agents
 ./target/debug/weave -- my-agent --acp           # any ACP command
-./target/debug/weave --agent claude --resume     # pick a previous session
-./target/debug/weave --continue                  # latest session here, with the agent last used here
+./target/debug/weave --agent claude --resume     # pick a previous thread
+./target/debug/weave --continue                  # latest thread here, with the agent last used here
 ./target/debug/weave login --agent codex         # sign in; `logout` signs out
 ./target/debug/weave run --agent claude "…"      # one prompt, headless, reply on stdout
-./target/debug/weave sessions                    # sessions open in the daemon
+./target/debug/weave threads                    # threads open in the daemon
 ./target/debug/weave smoke --agent claude        # one headless turn, every event printed
 ```
 
@@ -35,66 +35,66 @@ which must be installed.
 Agents sign in with their own CLIs. When an agent reports that sign-in is required,
 `weave` offers the agent's sign-in methods and retries.
 
-## Sessions that keep running
+## Threads that keep running
 
 Agents run in the weave daemon, which `weave` starts in the background the first time
-it's needed, so a session outlives the TUI. Two TUIs can attach to one session; each sees
+it's needed, so a thread outlives the TUI. Two TUIs can attach to one thread; each sees
 the other's prompts, and the first to answer a permission prompt answers it for both.
 
-**Opening.** `--resume` and `--continue` only choose which session to open:
+**Opening.** `--resume` and `--continue` only choose which thread to open:
 
-| You run | Agent | Session |
+| You run | Agent | Thread |
 | --- | --- | --- |
 | `weave` | `--agent`, else `default_agent` | a new one |
 | `weave --continue` | `--agent`, else the one last used here, else `default_agent` | the latest here for that agent: open ones first, headless runs skipped |
-| `weave --resume <id>` | the one the session was started with, whatever `--agent` says | that one, in its own directory |
+| `weave --resume <id>` | the one the thread was started with, whatever `--agent` says | that one, in its own directory |
 | `weave --resume` | `--agent`, else `default_agent` | chosen from a list |
 
-Whichever it is, a session open in the daemon is attached to: the transcript so far, the
-turn if it's still running, and any question the agent is waiting on. A session a stopped
+Whichever it is, a thread open in the daemon is attached to: the transcript so far, the
+turn if it's still running, and any question the agent is waiting on. A thread a stopped
 daemon left open is taken up again, its transcript from the daemon's journal. Any other is
-reopened from the agent's own history. In the list (`--resume`, Ctrl+R), sessions open in
+reopened from the agent's own history. In the list (`--resume`, Ctrl+R), threads open in
 the daemon wear a badge: `● running`, `● waiting on you`, or `● open` when idle, with how
-many TUIs are attached, and `headless` for `weave run`s. Sessions a stopped daemon left
+many TUIs are attached, and `headless` for `weave run`s. Threads a stopped daemon left
 open lead the list for 30 minutes after they were last used, as if it had stayed up, and
 then take their place among the rest.
 
 **Leaving.**
 
-| You | The turn | The session |
+| You | The turn | The thread |
 | --- | --- | --- |
 | Ctrl+D (empty prompt), close the terminal, or quit | carries on | stays open, and closes after 30 idle minutes with nobody attached |
 | Ctrl+C | stops; Ctrl+C twice once idle quits | as above |
-| switch session (Ctrl+R) | carries on | closes at once if it's idle and nobody else is attached |
-| `weave sessions close <id>` | ends | closes for everyone |
+| switch thread (Ctrl+R) | carries on | closes at once if it's idle and nobody else is attached |
+| `weave threads close <id>` | ends | closes for everyone |
 | `weave daemon stop` or `restart` | is lost | reopens with its transcript when next attached |
 
-A blank session, one nothing has been sent in yet, has nothing to come back to, so it
+A blank thread, one nothing has been sent in yet, has nothing to come back to, so it
 isn't kept: quitting closes it at once (a minute later if the TUI was killed instead),
 `weave daemon stop` closes it too, and a TUI that reconnects starts a new one. It's never
 listed, so `--continue` passes over it; `/reload` still comes back to it.
 
-The daemon itself exits 10 minutes after its last session and client are gone. Journals of
-sessions untouched for 14 days are removed.
+The daemon itself exits 10 minutes after its last thread and client are gone. Journals of
+threads untouched for 14 days are removed.
 
 When the daemon restarts under an open TUI, the TUI reconnects by itself and carries on in
-the same session, its transcript and draft as they were; a turn the old daemon was running
+the same thread, its transcript and draft as they were; a turn the old daemon was running
 ends with it. It waits about 15 seconds for a daemon to come back without starting one, so
 `weave daemon stop` stays stopped; `/reload` then starts it again.
 
-`weave run` sends one prompt and prints the reply: in a session of its own, or in one
+`weave run` sends one prompt and prints the reply: in a thread of its own, or in one
 named as the TUI names them (`--resume <id>`, `--continue`). Nobody is there to answer the
 agent, so `--approve` lists the tool kinds it may use (`read`, `edit`, `execute`, …, or
 `all`) and everything else is refused. `--detach` leaves the turn running and prints the
-session's id; `--json` prints every update. `weave smoke` takes its prompt and `--approve`
+thread's id; `--json` prints every update. `weave smoke` takes its prompt and `--approve`
 the same way.
 
-`weave sessions` lists the sessions open in the daemon, what each is doing and who's
-attached (`--json` for scripts); `weave sessions cancel <id>` stops a session's turn and
-`weave sessions close <id>` closes it for everyone. `weave daemon status` describes the
-daemon, `stop` stops it (its sessions resume when you next attach), and `restart` picks up a
+`weave threads` lists the threads open in the daemon, what each is doing and who's
+attached (`--json` for scripts); `weave threads cancel <id>` stops a thread's turn and
+`weave threads close <id>` closes it for everyone. `weave daemon status` describes the
+daemon, `stop` stops it (its threads resume when you next attach), and `restart` picks up a
 rebuilt weave. It keeps each
-session's transcript in `~/.local/state/weave/daemon/sessions`, readable only by you, for
+thread's transcript in `~/.local/state/weave/daemon/sessions`, readable only by you, for
 14 days. `--no-daemon` (or `[daemon] enabled = false`) runs agents inside `weave` instead,
 ending them when it exits.
 
@@ -107,13 +107,13 @@ ending them when it exits.
 | Esc, Ctrl+C | Stop the running turn; Ctrl+C twice when idle quits |
 | Ctrl+D | Quit, on an empty composer; a running turn carries on in the daemon |
 | `/` | Complete the agent's slash commands |
-| `/new` | Start a new session in this directory, as Claude Code and Codex do; one still at work carries on in the daemon |
-| `/reload` | Restart the TUI in place, picking up a rebuilt weave, and reattach to the session; the daemon and the agent carry on, mid-turn too (rebuild the binary you run: `cargo build --release` for `weave` on your PATH). After the daemon went away for good, it starts it again |
-| `/rename <title>` | Rename the session for every client of the weave Host, in place of the agent's own `/rename`; titles the agent sets afterwards don't replace it |
+| `/new` | Start a new thread in this directory, as Claude Code and Codex do; one still at work carries on in the daemon |
+| `/reload` | Restart the TUI in place, picking up a rebuilt weave, and reattach to the thread; the daemon and the agent carry on, mid-turn too (rebuild the binary you run: `cargo build --release` for `weave` on your PATH). After the daemon went away for good, it starts it again |
+| `/rename <title>` | Rename the thread for every client of the weave Host, in place of the agent's own `/rename`; titles the agent sets afterwards don't replace it |
 | `@` | Fuzzy-find a file to attach (tab completes; respects .gitignore): embedded, as an image or audio, or as a link, as the agent allows. Quote paths with spaces: `@"my notes.md"` |
 | Shift+Tab | Next mode |
-| Ctrl+O | Session settings (mode, model, and the agent's other options) |
-| Ctrl+R | Switch to another session |
+| Ctrl+O | Thread settings (mode, model, and the agent's other options) |
+| Ctrl+R | Switch to another thread |
 | PageUp / PageDown, wheel | Scroll the transcript (fullscreen) |
 | Ctrl+Home / Ctrl+End (or Alt+< / Alt+>) | Jump to the start / back to the newest output |
 | Esc while scrolled back | Return to the newest output (before it stops the turn) |
@@ -125,7 +125,7 @@ ending them when it exits.
 | `?` | Keyboard shortcuts (on an empty composer) |
 | Ctrl+G | Switch between the basic and Vim composers, keeping the draft (with `vim = true`) |
 | Ctrl+V | Paste an image from the clipboard as `[image N]` (dragging an image file in works too); in Ghostty and kitty its thumbnail shows above the composer, and fullscreen, in the prompt once sent |
-| `!` | Shell mode: run a command in the session directory (shown here, not sent to the agent) |
+| `!` | Shell mode: run a command in the thread directory (shown here, not sent to the agent) |
 
 ### Vim composer
 
@@ -153,7 +153,7 @@ do), weave shows them as Codex shows its own. The main transcript gets a row as 
 spawned, sent input, and finished (`• Completed Robie └ <its reply>`), and the status shows
 how many are running. Alt+←/→ or `/subagents` switch to a subagent's own transcript; Esc
 comes back, Ctrl+C stops one the agent lets you stop, and its permission requests show here,
-named. Messages always go to the main session.
+named. Messages always go to the main thread.
 
 Permission requests, agent questions (forms and links) and pickers take over the input
 area with their own keys: approvals take `y` (allow), `a` (always), `esc` (reject) or a
@@ -165,7 +165,7 @@ code highlighted with Catppuccin themes. Colors adapt to your terminal's backgro
 weave asks the terminal for at startup.
 
 Fullscreen leaves your screen as it was when you quit, then prints how to reopen the
-session (`weave … --resume <id>`). Selections are copied with `pbcopy` on a local Mac,
+thread (`weave … --resume <id>`). Selections are copied with `pbcopy` on a local Mac,
 otherwise through the terminal (OSC 52, also over SSH and in tmux with passthrough on).
 Your terminal's own selection still works with its mouse-reporting override, usually
 Shift-drag (Option-drag in iTerm2).
@@ -173,24 +173,24 @@ Shift-drag (Option-drag in iTerm2).
 ## Configure
 
 `~/.config/weave/tui.toml` (or `--config`) defines agents, which client services each may
-use, and MCP servers passed to every session:
+use, and MCP servers passed to every thread:
 
 ```toml
 default_agent = "claude"
 # Tools agents may run on the device of whoever sent the turn, through weave's own MCP
 # server: all of them when absent, [] for none; an agent's `client_tools` overrides it.
 client_tools = ["clipboard_write"]
-# Tools the weave Host answers for the agent's own session, such as renaming it; the same rules.
+# Tools the weave Host answers for the agent's own thread, such as renaming it; the same rules.
 host_tools = ["rename_session"]
 
 [tui]
 alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen
-# Footer status line: model, agent, mode, directory, session, context (% used), and cost
+# Footer status line: model, agent, mode, directory, thread, context (% used), and cost
 # (at the right; Claude's adapter reports an API-price estimate even under a subscription).
 # [] shows "? for shortcuts".
-status_line = ["agent", "model", "mode", "context", "session", "cost"]  # the default; "directory" is off
+status_line = ["agent", "model", "mode", "context", "thread", "cost"]  # the default; "directory" is off
 notifications = true   # desktop notification when a turn ends or needs you, while unfocused
-terminal_title = true  # window title: activity spinner, session title, project
+terminal_title = true  # window title: activity spinner, thread title, project
 vim = true             # the Vim composer for new threads and multi-line drafts (off by default)
 images = "never"       # no image thumbnails; "auto" (default) shows them where the
                        # terminal draws Kitty graphics placeholders (Ghostty, kitty; not in tmux)
@@ -201,12 +201,12 @@ enabled = false        # run agents inside each weave rather than the shared dae
 [agents.claude]
 terminal = false          # don't let it run commands through weave
 compaction = false        # no compaction updates (an ACP Preview feature; on by default)
-subagents = false         # no subagent sessions (an ACP draft feature; on by default)
-mode = "acceptEdits"      # the mode new sessions start in, by the agent's id or name for it
+subagents = false         # no subagent threads (an ACP draft feature; on by default)
+mode = "acceptEdits"      # the mode new threads start in, by the agent's id or name for it
 
 [agents.codex]
 mode = "workspace-write"  # Codex's modes: read-only, workspace-write, agent, agent-full-access
-# Sessions reloaded by load or resume, and `weave run` ones, aren't set to `mode`: they're in
+# Threads reloaded by load or resume, and `weave run` ones, aren't set to `mode`: they're in
 # whatever mode the agent restores, and codex-acp restores none. Its own default covers them.
 env = { INITIAL_AGENT_MODE = "workspace-write" }
 
@@ -228,7 +228,7 @@ url = "https://mcp.example.com"
 ```
 
 Other flags: `--no-alt-screen` (inline for this run), `--no-daemon`, `--cwd`, `--add-dir`, `--no-fs`, `--no-terminal`, `--trace FILE` (ACP SDK
-trace-viewer format; with the daemon, the session's agent from when this weave attaches, for
+trace-viewer format; with the daemon, the thread's agent from when this weave attaches, for
 as long as it stays) and `--log-file FILE` (diagnostics). Agents' stderr goes to the
 daemon's log, `~/.local/state/weave/daemon/daemon.log`, or with `--no-daemon` to
 `--log-file`.

@@ -99,8 +99,8 @@ async fn rename(caller: &SessionHandle, arguments: &Map<String, Value>) -> Resul
             done,
         })
         .await
-        .map_err(|_| "The session has ended.".to_owned())?;
-    Ok(format!("Renamed this session to “{title}”."))
+        .map_err(|_| "The thread has ended.".to_owned())?;
+    Ok(format!("Renamed this thread to “{title}”."))
 }
 
 #[derive(Deserialize)]
@@ -142,7 +142,7 @@ async fn start(
             let depth = depth(shared, &me.session_id);
             if depth >= limits.depth() {
                 return Err(format!(
-                    "This session can't start sessions: it is {depth} level{} below a session a \
+                    "This thread can't start threads: it is {depth} level{} below a thread a \
                      person started, and the Host allows {} (`[delegation] depth`).",
                     if depth == 1 { "" } else { "s" },
                     limits.depth()
@@ -281,7 +281,7 @@ pub(crate) fn reaches(
         }
     }
     Err(format!(
-        "Session {target} isn't one this session started, so it can only be read \
+        "Thread {target} isn't one this thread started, so it can only be read \
          (read_session), not prompted, steered or cancelled."
     ))
 }
@@ -323,7 +323,7 @@ fn room(shared: &Shared, caller: &SessionId, running: u32) -> Result<(), String>
         return Ok(());
     }
     Err(format!(
-        "This session already has {busy} delegated session{} running, as many as the Host \
+        "This thread already has {busy} delegated thread{} running, as many as the Host \
          allows (`[delegation] running`). Wait to hear that one finished, or cancel one with \
          cancel_session_turn.",
         if busy == 1 { "" } else { "s" }
@@ -369,7 +369,7 @@ pub(crate) fn ended_text(listing: &SessionListing, latest: Option<&LatestTurn>) 
         },
         _ => "ended its turn".to_owned(),
     };
-    let mut text = format!("[weave] Session {} {how}.", name(listing));
+    let mut text = format!("[weave] Thread {} {how}.", name(listing));
     if let Some(message) = latest.and_then(|turn| turn.message.as_deref()) {
         let shown: String = message.chars().take(MESSAGE_CHARS).collect();
         text.push_str(" Its agent's last message:\n\n");
@@ -390,7 +390,7 @@ pub(crate) fn waiting_text(listing: &SessionListing, asks: &Asks) -> String {
         Asks::Elicitation(message) => format!("asks: “{message}”"),
     };
     format!(
-        "[weave] Session {} is waiting on a person: it {what}. Someone attached to it in a weave \
+        "[weave] Thread {} is waiting on a person: it {what}. Someone attached to it in a weave \
          client has to answer; you can't. Tell the person if they need to.",
         name(listing)
     )
@@ -436,7 +436,7 @@ pub(crate) async fn tell(shared: Arc<Shared>, caller: SessionId, about: SessionI
         if let Some(session) = shared.registry().live(&about) {
             let _ = session.send(Command::Notice {
                 text: format!(
-                    "The session that started this one, {caller}, couldn't be told how its turn \
+                    "The thread that started this one, {caller}, couldn't be told how its turn \
                      went: {why}"
                 ),
             });

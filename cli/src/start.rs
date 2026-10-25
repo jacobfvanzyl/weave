@@ -276,7 +276,7 @@ async fn establish(
                 )),
                 None => Ok((
                     Some(created(handle).await?),
-                    vec!["No earlier session here; started a new one".to_owned()],
+                    vec!["No earlier thread here; started a new one".to_owned()],
                 )),
             }
         }

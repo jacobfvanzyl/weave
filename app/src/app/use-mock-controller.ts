@@ -364,7 +364,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         if (!repo || !found || !worktree || worktree.path === repo) throw new Error(`Couldn't remove the worktree: ${path} isn't one that can be removed`);
         const inside = state.current.model.sessions.filter((session) => session.hostId === hostId && session.git?.worktree === path);
         if (inside.some(({ activity }) => activity === 'running' || activity === 'waiting')) {
-          throw new Error('A session in it is running a turn or waiting on you. Let it finish, or stop it, first.');
+          throw new Error('A thread in it is running a turn or waiting on you. Let it finish, or stop it, first.');
         }
         if (worktree.changes && !force) return { outcome: 'hasChanges' };
         update((current) => ({
@@ -455,7 +455,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       reopenSession() {
         const key = selectedKey();
         if (!key) return;
-        reduce(key, { type: 'agent/reopened', text: 'Reopened this session in a new agent process', failed: false });
+        reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
       },
       removeQueued(id) {
         const key = selectedKey();

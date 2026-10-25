@@ -114,7 +114,7 @@ async fn run_turn(
         Err(error) if error.code == ErrorCode::AuthRequired => {
             bail!(
                 "agent requires authentication ({error}); sign in with the agent's own CLI first. \
-                 Interactive ACP authentication arrives with session management."
+                 Interactive ACP authentication arrives with thread management."
             );
         }
         Err(error) => return Err(error).context("session/new"),

@@ -165,10 +165,10 @@ export function NewSessionDialog({ controller, target, onClose }: {
     <Dialog open={target !== undefined} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className='w-[min(28rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
         <DialogHeader>
-          <DialogTitle>{view === 'directory' ? 'Choose a directory' : view === 'worktree' ? 'Choose a worktree' : 'New session'}</DialogTitle>
+          <DialogTitle>{view === 'directory' ? 'Choose a directory' : view === 'worktree' ? 'Choose a worktree' : 'New thread'}</DialogTitle>
           <DialogDescription>
             {view === 'directory'
-              ? `Where the session runs, on ${hostName}.`
+              ? `Where the thread runs, on ${hostName}.`
               : view === 'worktree' && repository
                 ? `In ${directoryName(repository.repo)}, on ${hostName}.`
                 : 'An agent in a directory on one of your Hosts.'}
@@ -192,7 +192,7 @@ export function NewSessionDialog({ controller, target, onClose }: {
             onCancel={() => setView('form')}
           />
         )}
-        <form aria-label='New session' className={cn('grid gap-3', view !== 'form' && 'hidden')} onSubmit={create}>
+        <form aria-label='New thread' className={cn('grid gap-3', view !== 'form' && 'hidden')} onSubmit={create}>
           {model.hosts.length > 1 && (
             <div className='grid gap-1.5'>
               <Label htmlFor='new-session-host'>Host</Label>

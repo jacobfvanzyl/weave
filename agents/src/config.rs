@@ -7,7 +7,7 @@
 //!
 //! [tui]
 //! alternate_screen = "never" # inline mode: history in the terminal's own scrollback
-//! status_line = ["agent", "model", "mode", "context", "session", "cost"] # the default; [] for "? for shortcuts"
+//! status_line = ["agent", "model", "mode", "context", "thread", "cost"] # the default; [] for "? for shortcuts"
 //! notifications = false        # no desktop notifications when a turn ends or needs you
 //! terminal_title = false       # leave the window title alone
 //! vim = true                   # a Vim composer for new threads and multi-line drafts
@@ -19,15 +19,15 @@
 //! listen = "127.0.0.1:7341"  # the default; loopback only
 //! url = "https://mac.example.ts.net:7341" # what `weave pair` gives devices; found when absent
 //!
-//! [delegation]               # sessions agents start through the Host's tools (ADR 0020)
-//! depth = 1                  # how many levels below a person's session; the default
-//! running = 3                # how many of one session's may run at once; the default
+//! [delegation]               # threads agents start through the Host's tools (ADR 0020)
+//! depth = 1                  # how many levels below a person's thread; the default
+//! running = 3                # how many of one thread's may run at once; the default
 //!
 //! [agents.claude]            # adjust a preset…
 //! terminal = false           # don't offer it client terminals
 //! compaction = false         # no compaction updates (ACP Preview; on by default)
-//! subagents = false          # no subagent sessions (ACP draft; on by default)
-//! mode = "bypassPermissions" # the mode new sessions start in, by the agent's id or name
+//! subagents = false          # no subagent threads (ACP draft; on by default)
+//! mode = "bypassPermissions" # the mode new threads start in, by the agent's id or name
 //!
 //! [agents.opencode]         # …or a registry agent (`weave agents` lists them)…
 //! terminal = false

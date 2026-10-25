@@ -141,7 +141,7 @@ fn describe(report: &Report) -> String {
     if report.dry_run {
         out.push_str("Dry run: nothing changed.\n");
     } else if changed {
-        out.push_str("New sessions use these. Open sessions keep theirs until they close, or /update moves them.\n");
+        out.push_str("New threads use these. Open threads keep theirs until they close, or /update moves them.\n");
     }
     out
 }
@@ -193,7 +193,7 @@ mod tests {
              codex   @acp/codex-acp   2.1.1 → 2.2.2     failed · runs /opt/codex: 2.2.2 doesn't start, so 2.1.1 stays: it exited\n\
              gemini  @acp/gemini-acp  0.63.0            up to date\n\
              ACP registry catalog: refreshed\n\
-             New sessions use these. Open sessions keep theirs until they close, or /update moves them.\n"
+             New threads use these. Open threads keep theirs until they close, or /update moves them.\n"
         );
         let dry = Report {
             agents: vec![entry(

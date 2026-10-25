@@ -21,7 +21,7 @@ export function DeleteSessionDialog({ session, actions, open, onOpenChange }: {
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete {session.title || 'this session'}?</AlertDialogTitle>
+          <AlertDialogTitle>Delete {session.title || 'this thread'}?</AlertDialogTitle>
           <AlertDialogDescription>
             The Host forgets it on every device, and so does its agent if it can. Its turn stops if one is running.
           </AlertDialogDescription>

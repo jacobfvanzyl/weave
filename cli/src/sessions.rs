@@ -26,11 +26,11 @@ pub struct SessionsArgs {
 
 #[derive(Subcommand)]
 enum SessionsCommand {
-    /// List the sessions open in the weave Host (the default).
+    /// List the threads open in the weave Host (the default).
     List(ListArgs),
-    /// Stop the turn a session is running, as Esc does in the TUI.
+    /// Stop the turn a thread is running, as Esc does in the TUI.
     Cancel(SessionArg),
-    /// Close a session for every client: its turn ends and its agent stops. `weave --resume`
+    /// Close a thread for every client: its turn ends and its agent stops. `weave --resume`
     /// can still reopen it from the agent's history.
     Close(SessionArg),
 }
@@ -44,6 +44,7 @@ struct ListArgs {
 
 #[derive(Args)]
 struct SessionArg {
+    #[arg(value_name = "THREAD_ID")]
     session_id: String,
 }
 
@@ -59,11 +60,11 @@ pub async fn command(args: SessionsArgs) -> anyhow::Result<()> {
                 Ok(())
             }
             SessionsCommand::List(_) => {
-                println!("The weave Host isn't running, so no sessions are open.");
+                println!("The weave Host isn't running, so no threads are open.");
                 Ok(())
             }
             SessionsCommand::Cancel(_) | SessionsCommand::Close(_) => {
-                bail!("the weave Host isn't running, so no sessions are open")
+                bail!("the weave Host isn't running, so no threads are open")
             }
         };
     };
@@ -99,7 +100,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                     session_id: SessionId::new(session_id.clone()),
                 })
                 .await
-                .context("closing the session")?;
+                .context("closing the thread")?;
             eprintln!("Closed {session_id}; weave --resume {session_id} reopens it.");
         }
     }
@@ -115,14 +116,14 @@ fn find<'a>(
         .find(|session| session.info.session_id.to_string() == session_id)
         .with_context(|| {
             format!(
-                "{session_id} isn't open in the weave Host (`weave sessions` lists those that are)"
+                "{session_id} isn't open in the weave Host (`weave threads` lists those that are)"
             )
         })
 }
 
 fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
     if sessions.is_empty() {
-        return "No sessions open.\n".to_owned();
+        return "No threads open.\n".to_owned();
     }
     let mut out = String::new();
     for session in sessions {
@@ -155,7 +156,7 @@ fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
             session.info.cwd.display(),
         ));
         if let Some(starter) = &session.started_by {
-            out.push_str(&format!("  started by session {starter}\n"));
+            out.push_str(&format!("  started by thread {starter}\n"));
         }
     }
     out
@@ -172,7 +173,7 @@ mod tests {
 
     #[test]
     fn each_session_says_what_its_doing() {
-        assert_eq!(describe(&[], 0), "No sessions open.\n");
+        assert_eq!(describe(&[], 0), "No threads open.\n");
         let session = SessionListing {
             info: SessionInfo::new("s1", "/repo").title("Fix the build".to_owned()),
             agent_id: "claude".into(),
@@ -203,7 +204,7 @@ mod tests {
             started_by: Some("s0".into()),
             ..session.clone()
         };
-        assert!(describe(&[delegated], 7_230_000).ends_with("  started by session s0\n"));
+        assert!(describe(&[delegated], 7_230_000).ends_with("  started by thread s0\n"));
         assert!(find(&[session], "s2").is_err());
     }
 }

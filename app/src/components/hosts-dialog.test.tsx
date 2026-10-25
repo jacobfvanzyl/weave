@@ -14,11 +14,11 @@ describe('HostsDialog', () => {
     const user = userEvent.setup();
     const hosts = controller([{
       id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'revoked',
-      error: 'This device was revoked on the Host, and has forgotten the pairing. Pair it again to see its sessions.',
+      error: 'This device was revoked on the Host, and has forgotten the pairing. Pair it again to see its threads.',
     }]);
     render(<HostsDialog controller={hosts} open onOpenChange={() => {}} />);
     expect(screen.getByText('Revoked')).toBeInTheDocument();
-    expect(screen.getByText(/Pair it again to see its sessions/)).toBeInTheDocument();
+    expect(screen.getByText(/Pair it again to see its threads/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reconnect to mac.example.ts.net' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Pair again' }));

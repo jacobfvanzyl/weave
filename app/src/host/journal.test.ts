@@ -71,7 +71,7 @@ describe('transcriptEvents', () => {
     ];
     const transcript = events.flatMap((notification) => transcriptEvents(notification, live)).reduce(reduceAcpEvent, createTranscript('s-1'));
     expect(transcript.entries.map((entry) => entry.kind === 'message' ? [entry.role, entry.origin ?? null] : entry.kind)).toEqual([
-      ['user', 'another session'],
+      ['user', 'another thread'],
       ['user', null],
     ]);
   });
@@ -106,7 +106,7 @@ describe('transcriptEvents', () => {
     expect(renamed({ client: { name: 'weave-app', id: 'c8', device: "Jaco's iPhone" } })[0]).toMatchObject({ by: "Jaco's iPhone" });
     const shown = renamed().reduce(reduceAcpEvent, createTranscript('s-1'));
     expect(shown.title).toBe('Parser fixes');
-    expect(shown.entries).toMatchObject([{ kind: 'diagnostic', severity: 'info', title: 'The agent renamed this session to “Parser fixes”' }]);
+    expect(shown.entries).toMatchObject([{ kind: 'diagnostic', severity: 'info', title: 'The agent renamed this thread to “Parser fixes”' }]);
   });
 
   it('shows the Host\'s notices', () => {
@@ -118,9 +118,9 @@ describe('transcriptEvents', () => {
 describe('reopenedText', () => {
   it('says what the session runs now, as the TUI does', () => {
     const release = { name: '@zed-industries/claude-code-acp', version: '0.7.0' };
-    expect(reopenedText(release, { name: release.name, version: '0.6.1' })).toBe('Moved this session to claude-code-acp 0.7.0, from 0.6.1');
-    expect(reopenedText(release)).toBe('Reopened this session on claude-code-acp 0.7.0');
+    expect(reopenedText(release, { name: release.name, version: '0.6.1' })).toBe('Moved this thread to claude-code-acp 0.7.0, from 0.6.1');
+    expect(reopenedText(release)).toBe('Reopened this thread on claude-code-acp 0.7.0');
     expect(reopenedText(release, undefined, "0.7.1 couldn't take the session up")).toBe("0.7.1 couldn't take the session up; it runs claude-code-acp 0.7.0 again");
-    expect(reopenedText()).toBe('Reopened this session in a new agent process');
+    expect(reopenedText()).toBe('Reopened this thread in a new agent process');
   });
 });

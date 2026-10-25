@@ -650,7 +650,7 @@ fn updated(mut chat: ChatWidget) -> ChatWidget {
     chat.handle_agent_event(reopened("0.93.0", None));
     chat.handle_agent_event(reopened(
         "0.93.0",
-        Some("0.94.0 couldn't resume the session: unknown session"),
+        Some("0.94.0 couldn't resume the thread: unknown session"),
     ));
     chat
 }

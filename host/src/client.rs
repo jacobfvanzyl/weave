@@ -1580,7 +1580,7 @@ pub(crate) async fn add_queued(
             let session = live(shared, &session_id)?;
             if session.summary().session_id != session_id {
                 return Err(Error::invalid_params()
-                    .data("a subagent session has no queue: add to its session's"));
+                    .data("a subagent thread has no queue: add to its parent's"));
             }
             let (reply, added) = oneshot::channel();
             session.send(Command::Enqueue {
@@ -2214,7 +2214,7 @@ async fn reopen(
             .await
             .map(|response| (response.modes, response.config_options))
     } else {
-        Err(Error::method_not_found().data("the agent can't reopen sessions"))
+        Err(Error::method_not_found().data("the agent can't reopen threads"))
     };
     let (modes, config_options) = match opened {
         Ok(opened) => opened,
@@ -2437,5 +2437,5 @@ fn open(
 }
 
 fn journal_error(error: &std::io::Error) -> Error {
-    Error::internal_error().data(format!("the session journal: {error}"))
+    Error::internal_error().data(format!("the thread journal: {error}"))
 }

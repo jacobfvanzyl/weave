@@ -23,7 +23,7 @@ function BackButton({ controller }: { controller: AppController }) {
   const { model, actions } = controller;
   const count = waitingCount(model.sessions, model.selectedKey);
   return (
-    <Button variant='ghost' size='lg' aria-label={count ? `Sessions, ${count} waiting` : 'Sessions'} className='min-h-11 shrink-0 px-1.5'
+    <Button variant='ghost' size='lg' aria-label={count ? `Threads, ${count} waiting` : 'Threads'} className='min-h-11 shrink-0 px-1.5'
       onClick={() => actions.selectSession(undefined)}>
       <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
       <WaitingBadge count={count} />
@@ -38,7 +38,7 @@ function SidebarToggle({ controller }: { controller: AppController }) {
   const hidden = isMobile ? !openMobile : state === 'collapsed';
   const count = hidden ? waitingCount(model.sessions, model.selectedKey) : 0;
   return (
-    <Button variant='ghost' size='lg' aria-label={hidden ? (count ? `Show sessions, ${count} waiting` : 'Show sessions') : 'Hide sessions'}
+    <Button variant='ghost' size='lg' aria-label={hidden ? (count ? `Show threads, ${count} waiting` : 'Show threads') : 'Hide threads'}
       aria-expanded={!hidden} className='min-h-11 shrink-0 px-1.5 aria-expanded:bg-transparent' onClick={toggleSidebar}>
       <HugeiconsIcon icon={SidebarLeftIcon} strokeWidth={2} />
       <WaitingBadge count={count} />
@@ -71,8 +71,8 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
               <SessionHeader leading={<SidebarToggle controller={controller} />} />
               <Empty className='flex-1'>
                 <EmptyHeader>
-                  <EmptyTitle>No session open</EmptyTitle>
-                  <EmptyDescription>Pick a session from the list, or start a new one.</EmptyDescription>
+                  <EmptyTitle>No thread open</EmptyTitle>
+                  <EmptyDescription>Pick a thread from the list, or start a new one.</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             </>

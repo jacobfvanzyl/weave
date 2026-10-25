@@ -630,7 +630,7 @@ impl App {
                     }
                     Some(TurnOrigin::Client { name, device, .. }) => device.unwrap_or(name),
                     Some(TurnOrigin::Run {}) => "A headless run".to_owned(),
-                    Some(TurnOrigin::Session { .. }) => "Another session".to_owned(),
+                    Some(TurnOrigin::Session { .. }) => "Another thread".to_owned(),
                 },
             },
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
@@ -684,7 +684,7 @@ impl App {
                 self.show_state(chat, &opened.state)
             }
             (OpenKind::Reattach, Err(error)) => {
-                chat.report_info(&format!("Couldn't reattach to the session: {error}"));
+                chat.report_info(&format!("Couldn't reattach to the thread: {error}"));
                 Vec::new()
             }
         }
@@ -900,7 +900,7 @@ impl App {
                     .as_ref()
                     .and_then(serde_json::Value::as_str)
                     .map_or_else(|| error.message.clone(), str::to_owned);
-                chat.report_info(&format!("Couldn't rename the session: {why}"));
+                chat.report_info(&format!("Couldn't rename the thread: {why}"));
                 Vec::new()
             }
         }
@@ -1172,7 +1172,7 @@ impl App {
                     };
                     if let Err(error) = self.request_open(Open::Attach(request), OpenKind::Reattach)
                     {
-                        chat.report_info(&format!("Couldn't reattach to the session: {error}"));
+                        chat.report_info(&format!("Couldn't reattach to the thread: {error}"));
                     }
                 }
             }

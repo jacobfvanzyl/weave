@@ -63,19 +63,19 @@ pub fn unknown_agent(agent_id: &str) -> Error {
 pub fn unknown_session(session_id: &str) -> Error {
     Error::new(
         UNKNOWN_SESSION,
-        format!("the Host has no record of session {session_id}; name its agent and directory"),
+        format!("the Host has no record of thread {session_id}; name its agent and directory"),
     )
 }
 
 pub fn session_not_open(session_id: &str) -> Error {
     Error::new(
         SESSION_NOT_OPEN,
-        format!("session {session_id} isn't open; attach to it first"),
+        format!("thread {session_id} isn't open; attach to it first"),
     )
 }
 
 pub fn turn_running() -> Error {
-    Error::new(TURN_RUNNING, "a turn is already running in this session")
+    Error::new(TURN_RUNNING, "a turn is already running in this thread")
 }
 
 pub fn already_resolved() -> Error {
@@ -88,7 +88,7 @@ pub fn already_resolved() -> Error {
 pub fn wrong_agent(session_id: &str, agent: &str) -> Error {
     Error::new(
         WRONG_AGENT,
-        format!("session {session_id} runs with {agent}, not this agent"),
+        format!("thread {session_id} runs with {agent}, not this agent"),
     )
 }
 
@@ -122,7 +122,7 @@ pub fn worktree_busy(sessions: &[SessionId]) -> Error {
     Error::new(
         WORKTREE_BUSY,
         format!(
-            "a session in this worktree is running a turn or waiting on a request: {}",
+            "a thread in this worktree is running a turn or waiting on a request: {}",
             ids.join(", ")
         ),
     )

@@ -419,7 +419,7 @@ impl SessionHandle {
 }
 
 pub(crate) fn ended() -> Error {
-    Error::invalid_request().data("the session has ended")
+    Error::invalid_request().data("the thread has ended")
 }
 
 /// What a newly opened session starts with.
@@ -907,7 +907,7 @@ impl Actor {
                 "This turn came from a headless run, so no person's device is attached.".to_owned(),
             ),
             Some(TurnOrigin::Session { .. }) => Err(
-                "This turn came from another session's agent, so no person's device is attached."
+                "This turn came from another thread's agent, so no person's device is attached."
                     .to_owned(),
             ),
             Some(TurnOrigin::Client { id, .. }) => self
@@ -1294,7 +1294,7 @@ impl Actor {
                             session = %self.root,
                             tool = %request.request.tool_call.tool_call_id,
                             outcome = ?response.outcome,
-                            "permission answered by the session's policy"
+                            "permission answered by the thread's policy"
                         );
                         let _ = request.respond_with(response);
                     }
@@ -1658,7 +1658,7 @@ impl Actor {
                 pending.cancel();
             }
         } else {
-            let error = Error::internal_error().data(format!("the session ended: {reason}"));
+            let error = Error::internal_error().data(format!("the thread ended: {reason}"));
             let turns: Vec<SessionId> = self
                 .turns
                 .drain()
@@ -1714,8 +1714,8 @@ impl Actor {
         }
         let cant = || {
             Error::method_not_found().data(
-                "the agent can't resume or load sessions, so this one can't move to another \
-                 process; new sessions start the agent's current version",
+                "the agent can't resume or load threads, so this one can't move to another \
+                 process; new threads start the agent's current version",
             )
         };
         if !self.handle.agent().is_some_and(takes_sessions_up) {
@@ -1726,8 +1726,8 @@ impl Actor {
         // session is all it would be.
         if self.blank.load(Ordering::Relaxed) {
             return Err(Error::invalid_request().data(
-                "nothing has been sent in the session, so there's nothing to move and it stays \
-                 as it was; new sessions start the agent's current version",
+                "nothing has been sent in the thread, so there's nothing to move and it stays \
+                 as it was; new threads start the agent's current version",
             ));
         }
         let agent = self.shared.resolve(&self.resolved.id).await?;
@@ -1736,7 +1736,7 @@ impl Actor {
             .map_or_else(|| agent.id.clone(), |release| release.version);
         let mut fresh = self.start(&agent).await.map_err(|error| {
             Error::internal_error().data(format!(
-                "{wanted} doesn't start, so the session stays as it was: {}",
+                "{wanted} doesn't start, so the thread stays as it was: {}",
                 describe(&error)
             ))
         })?;
@@ -1751,7 +1751,7 @@ impl Actor {
             Err(error) => error,
         };
         fresh.connection.shutdown().await;
-        let failed = format!("{wanted} couldn't resume the session: {}", describe(&error));
+        let failed = format!("{wanted} couldn't resume the thread: {}", describe(&error));
         tracing::warn!(session = %self.root, "{failed}; reopening it on the version it ran");
         let old = self.resolved.clone();
         let restarted = match self.start(&old).await {

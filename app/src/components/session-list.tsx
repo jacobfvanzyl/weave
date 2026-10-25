@@ -65,7 +65,7 @@ function SessionRow({ session, host, selected, unread, showDirectory, onOpen, ac
           >
             <span className='flex min-w-0 flex-1 flex-col gap-0.5'>
               <span className='flex min-w-0 items-center gap-2'>
-                <span className='truncate font-medium text-sidebar-foreground'>{session.title || 'New session'}</span>
+                <span className='truncate font-medium text-sidebar-foreground'>{session.title || 'New thread'}</span>
                 <span className='ml-auto shrink-0 text-[0.6875rem] text-muted-foreground'>{sinceLabel(session.lastActivityAt)}</span>
               </span>
               <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
@@ -81,16 +81,16 @@ function SessionRow({ session, host, selected, unread, showDirectory, onOpen, ac
             </span>
           </SidebarMenuButton>
         </ContextMenuTrigger>
-        <ContextMenuContent aria-label={`${session.title || 'New session'} actions`}>
+        <ContextMenuContent aria-label={`${session.title || 'New thread'} actions`}>
           {session.state === 'open' && (
             <ContextMenuItem disabled={unreachable} onClick={() => void actions.closeSession(session.key)}>
               <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
-              Close session
+              Close thread
             </ContextMenuItem>
           )}
           <ContextMenuItem variant='destructive' disabled={unreachable} onClick={() => setConfirmDelete(true)}>
             <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-            Delete session…
+            Delete thread…
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -109,7 +109,7 @@ function GroupHeading({ group, onNewSession }: { group: DirectoryGroup; onNewSes
         {group.hostName && <span className='min-w-0 truncate font-normal text-muted-foreground'>{group.hostName}</span>}
       </SidebarGroupLabel>
       {onNewSession && (
-        <SidebarGroupAction aria-label={`New session in ${group.name}`} title={`New session in ${group.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
+        <SidebarGroupAction aria-label={`New thread in ${group.name}`} title={`New thread in ${group.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
           <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
         </SidebarGroupAction>
       )}
@@ -157,7 +157,7 @@ function WorktreeHeading({ group, worktree, canRemove, actions, onNewSession }: 
       {canRemove && (
         <RemoveWorktreeDialog hostId={group.hostId} worktree={worktree} actions={actions} open={confirmRemove} onOpenChange={setConfirmRemove} />
       )}
-      <SidebarGroupAction aria-label={`New session in ${name}`} title={`New session in ${worktree.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
+      <SidebarGroupAction aria-label={`New thread in ${name}`} title={`New thread in ${worktree.cwd}`} className='top-2 right-2.5' onClick={onNewSession}>
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </SidebarGroupAction>
     </>
@@ -231,16 +231,16 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
     <div data-slot='session-list' className='flex h-full min-h-0 w-full flex-col bg-sidebar text-sidebar-foreground'>
       {/* As tall as the session's header beside it, so their edges line up; its + sits over the directories' +. */}
       <SidebarHeader className='h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 flex-row items-center gap-1 border-b border-sidebar-border pt-[env(safe-area-inset-top)] pr-1.5 pb-0 pl-3'>
-        <h1 className='sr-only'>Sessions</h1>
+        <h1 className='sr-only'>Threads</h1>
         {model.hosts.length > 0 && (
           <div className='relative min-w-0 flex-1'>
             <HugeiconsIcon icon={Search01Icon} strokeWidth={2}
               className='pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-icon-muted' />
-            <SidebarInput type='search' aria-label='Filter sessions' placeholder='Filter sessions' className='pl-7'
+            <SidebarInput type='search' aria-label='Filter threads' placeholder='Filter threads' className='pl-7'
               value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
         )}
-        <Button size='icon' variant='ghost' aria-label='New session' data-sidebar='header-action' className='ml-auto shrink-0'
+        <Button size='icon' variant='ghost' aria-label='New thread' data-sidebar='header-action' className='ml-auto shrink-0'
           disabled={!model.hosts.some(({ status }) => status === 'connected')} onClick={() => setNewSession({})}>
           <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
         </Button>
@@ -259,7 +259,7 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
           <Empty className='p-6'>
             <EmptyHeader>
               <EmptyTitle>No Hosts yet</EmptyTitle>
-              <EmptyDescription>Pair this device with a weave Host to see its sessions.</EmptyDescription>
+              <EmptyDescription>Pair this device with a weave Host to see its threads.</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button onClick={onOpenHosts}>Pair a Host</Button>
@@ -299,9 +299,9 @@ export function SessionList({ controller, onOpen, onOpenHosts }: {
         {model.hosts.length > 0 && view.groups.length === 0 && (
           <Empty className='p-6'>
             <EmptyHeader>
-              <EmptyTitle>{query ? 'No matching sessions' : 'No sessions'}</EmptyTitle>
+              <EmptyTitle>{query ? 'No matching threads' : 'No threads'}</EmptyTitle>
               <EmptyDescription>
-                {query ? 'Try another filter.' : 'Start one with New session.'}
+                {query ? 'Try another filter.' : 'Start one with New thread.'}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

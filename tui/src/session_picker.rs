@@ -153,7 +153,7 @@ impl SessionPicker {
         };
         let mut lines = vec![Line::from(vec![
             Span::styled(
-                "  Resume a session",
+                "  Resume a thread",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!("  ({scope})"), dim()),
@@ -167,7 +167,7 @@ impl SessionPicker {
             let text = if self.loading {
                 "  Loading…"
             } else {
-                "  No sessions yet."
+                "  No threads yet."
             };
             lines.push(Line::from(Span::styled(text, dim())));
         }
@@ -219,7 +219,7 @@ impl SessionPicker {
             });
         }
         hints.push(if self.startup {
-            "esc new session"
+            "esc new thread"
         } else {
             "esc close"
         });
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(
             text,
             [
-                "  Resume a session  (this directory)",
+                "  Resume a thread  (this directory)",
                 "› Fix the build  · 5m ago",
                 "  Plan release  · 2d ago",
                 "  ⏎ open · n new · a all dirs · d delete · esc close",

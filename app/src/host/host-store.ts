@@ -471,7 +471,7 @@ export class HostStore {
    */
   async #revoked(entry: HostEntry) {
     const { hostId, keyId } = entry.record;
-    this.#halt(entry, 'revoked', 'This device was revoked on the Host, and has forgotten the pairing. Pair it again to see its sessions.');
+    this.#halt(entry, 'revoked', 'This device was revoked on the Host, and has forgotten the pairing. Pair it again to see its threads.');
     entry.sessions = [];
     entry.agents = [];
     this.#unfollow(hostId);
@@ -784,7 +784,7 @@ export class HostStore {
     followed.tag = undefined;
     if (event.type === 'openFailed') {
       const agentId = entry.sessions.find(({ info }) => info.sessionId === followed.sessionId)?.agentId;
-      this.#error = `Couldn't open the session: ${this.#explain(event.error, entry, agentId).message}`;
+      this.#error = `Couldn't open the thread: ${this.#explain(event.error, entry, agentId).message}`;
       this.#changed();
       return;
     }
@@ -996,7 +996,7 @@ export class HostStore {
     } catch (error) {
       if (failedWith(error, HOST_PROTOCOL.errors.uncommittedChanges)) return { outcome: 'hasChanges' };
       if (failedWith(error, HOST_PROTOCOL.errors.worktreeBusy)) {
-        throw new Error('A session in it is running a turn or waiting on you. Let it finish, or stop it, first.');
+        throw new Error('A thread in it is running a turn or waiting on you. Let it finish, or stop it, first.');
       }
       throw failed("Couldn't remove the worktree", error);
     }
@@ -1165,7 +1165,7 @@ export class HostStore {
     const connection = entry?.connection;
     if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
     await connection.request('session/close', { sessionId: rest.join('/') }).catch((error: unknown) => {
-      throw failed("Couldn't close the session", error);
+      throw failed("Couldn't close the thread", error);
     });
     if (followed) this.#followed.delete(key);
     if (this.#selectedKey === key) this.#selectedKey = undefined;
@@ -1180,7 +1180,7 @@ export class HostStore {
     if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
     const agentId = entry.sessions.find(({ info }) => info.sessionId === sessionId)?.agentId ?? this.#followed.get(key)?.state?.agent.id;
     await connection.request('session/delete', { sessionId, ...(agentId ? { agentId } : {}) }).catch((error: unknown) => {
-      throw failed("Couldn't delete the session", error);
+      throw failed("Couldn't delete the thread", error);
     });
     this.#followed.delete(key);
     this.#read.forget(key);

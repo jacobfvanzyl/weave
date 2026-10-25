@@ -252,7 +252,7 @@ describe('HostStore closing and deleting', () => {
     await store.start();
     await settle();
     await store.actions.deleteSession(sessionKey(HOST, SESSION));
-    expect(store.snapshot().error).toBe("Couldn't delete the session: the agent couldn't start");
+    expect(store.snapshot().error).toBe("Couldn't delete the thread: the agent couldn't start");
     expect(store.snapshot().sessions.map(({ sessionId }) => sessionId)).toEqual([SESSION]);
     store.stop();
   });

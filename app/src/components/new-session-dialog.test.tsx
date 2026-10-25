@@ -67,7 +67,7 @@ describe('the new-session dialog in a repository', () => {
     expect(field).toHaveTextContent('mainweave');
     await user.click(field);
     expect(screen.getByRole('heading', { name: 'Choose a worktree' })).toBeInTheDocument();
-    expect(worktrees().map(({ textContent }) => textContent)).toEqual(['mainweave · 1 session', 'detached HEADweave.review']);
+    expect(worktrees().map(({ textContent }) => textContent)).toEqual(['mainweave · 1 thread', 'detached HEADweave.review']);
     expect(worktrees()[0]).toHaveAttribute('aria-current', 'true');
     await user.click(worktrees()[1]);
     expect(screen.getByRole('button', { name: 'Worktree' })).toHaveTextContent('detached HEADweave.review');

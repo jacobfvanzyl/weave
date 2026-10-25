@@ -26,7 +26,7 @@ use crate::wrapping::wrap_sourced;
 /// The slash command, handled here rather than by the agent.
 pub const COMMAND: &str = "update";
 pub const COMMAND_DESCRIPTION: &str =
-    "Move this session to its agent's newest version; `/update dismiss` hides the notice";
+    "Move this thread to its agent's newest version; `/update dismiss` hides the notice";
 /// What `/update` takes to dismiss the notice.
 pub const DISMISS: &str = "dismiss";
 
@@ -53,7 +53,7 @@ impl Task {
     pub fn label(&self) -> String {
         match &self.stage {
             Stage::Checking => format!("Updating {}", self.name),
-            Stage::Moving(version) => format!("Moving this session to {version}"),
+            Stage::Moving(version) => format!("Moving this thread to {version}"),
         }
     }
 
@@ -78,7 +78,7 @@ pub fn short_name(name: &str) -> &str {
 pub fn notice_lines(update: &AgentUpdate, width: usize) -> Vec<DisplayLine> {
     let first = Line::from(vec![
         Span::from(format!("{} {}", short_name(&update.name), update.latest)).bold(),
-        Span::from(format!(" is out; this session runs {}.", update.running)),
+        Span::from(format!(" is out; this thread runs {}.", update.running)),
     ]);
     let second = Line::from(vec![
         Span::from("/update").cyan(),
@@ -116,18 +116,18 @@ pub fn reopened_text(
         (None, Some(failed)) => format!("{failed}; it runs the agent it ran again"),
         (Some(release), None) => match previous {
             Some(previous) if previous.version != release.version => format!(
-                "Moved this session to {} {}, from {}",
+                "Moved this thread to {} {}, from {}",
                 short_name(&release.name),
                 release.version,
                 previous.version
             ),
             _ => format!(
-                "Reopened this session on {} {}",
+                "Reopened this thread on {} {}",
                 short_name(&release.name),
                 release.version
             ),
         },
-        (None, None) => "Reopened this session in a new agent process".to_owned(),
+        (None, None) => "Reopened this thread in a new agent process".to_owned(),
     }
 }
 

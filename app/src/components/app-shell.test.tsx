@@ -37,7 +37,7 @@ describe('the session list', () => {
     const row = () => screen.queryByRole('button', { name: /^Steer handling in the TUI/ });
     await user.pointer({ keys: '[MouseRight]', target: row()! });
     const menu = await screen.findByRole('menu');
-    await user.click(within(menu).getByRole('menuitem', { name: 'Close session' }));
+    await user.click(within(menu).getByRole('menuitem', { name: 'Close thread' }));
     expect(row()).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Steer handling in the TUI' })).not.toBeInTheDocument();
 
@@ -45,8 +45,8 @@ describe('the session list', () => {
     await user.click(screen.getByRole('button', { name: 'Show closed' }));
     await user.pointer({ keys: '[MouseRight]', target: row()! });
     const closedMenu = await screen.findByRole('menu');
-    expect(within(closedMenu).queryByRole('menuitem', { name: 'Close session' })).not.toBeInTheDocument();
-    await user.click(within(closedMenu).getByRole('menuitem', { name: 'Delete session…' }));
+    expect(within(closedMenu).queryByRole('menuitem', { name: 'Close thread' })).not.toBeInTheDocument();
+    await user.click(within(closedMenu).getByRole('menuitem', { name: 'Delete thread…' }));
     const confirm = await screen.findByRole('alertdialog', { name: 'Delete Steer handling in the TUI?' });
     await user.click(within(confirm).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(row()).not.toBeInTheDocument());
@@ -67,7 +67,7 @@ describe('the session list', () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.type(screen.getByRole('searchbox', { name: 'Filter sessions' }), 'odin');
+    await user.type(screen.getByRole('searchbox', { name: 'Filter threads' }), 'odin');
     expect(screen.getByText('Diagnose upload failures')).toBeInTheDocument();
     expect(screen.queryByText('Bring Alpha back')).not.toBeInTheDocument();
   });
@@ -83,12 +83,12 @@ describe('the session list', () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New session in odin' }));
-    const form = screen.getByRole('form', { name: 'New session' });
+    await user.click(screen.getByRole('button', { name: 'New thread in odin' }));
+    const form = screen.getByRole('form', { name: 'New thread' });
     expect(within(form).getByRole('button', { name: 'Directory' })).toHaveAttribute('title', '/srv/odin');
     await user.selectOptions(within(form).getByLabelText('Agent'), 'Codex');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
-    const session = await screen.findByRole('region', { name: 'New session' });
+    const session = await screen.findByRole('region', { name: 'New thread' });
     expect(within(session).getByText('Codex')).toBeInTheDocument();
   });
 });
@@ -98,19 +98,19 @@ describe('worktrees', () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New session in weave main' }));
-    const form = screen.getByRole('form', { name: 'New session' });
+    await user.click(screen.getByRole('button', { name: 'New thread in weave main' }));
+    const form = screen.getByRole('form', { name: 'New thread' });
     await user.click(await within(form).findByRole('button', { name: 'Worktree' }));
     const listed = within(screen.getByRole('list', { name: 'Worktrees' })).getAllByRole('button');
     expect(listed.map(({ textContent }) => textContent)).toEqual([
-      'mainweave · 6 sessions',
-      'fix-reconnectweave.fix-reconnect · changed · 1 session',
+      'mainweave · 6 threads',
+      'fix-reconnectweave.fix-reconnect · changed · 1 thread',
     ]);
     await user.type(screen.getByRole('textbox', { name: 'Branch' }), 'feature/auth');
     await user.click(screen.getByRole('button', { name: 'Create worktree' }));
     expect(await within(form).findByRole('button', { name: 'Worktree' })).toHaveTextContent('feature/authweave.feature-auth');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
-    await screen.findByRole('region', { name: 'New session' });
+    await screen.findByRole('region', { name: 'New thread' });
     const group = within(screen.getByRole('group', { name: 'weave on mac.tail1234.ts.net' })).getByRole('group', { name: 'weave feature/auth' });
 
     await user.pointer({ keys: '[MouseRight]', target: within(group).getByText('feature/auth') });
@@ -150,7 +150,7 @@ describe('on an iPhone', () => {
     expect(screen.queryByRole('group', { name: 'Needs you' })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message agent' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Sessions, 1 waiting' }));
+    await user.click(screen.getByRole('button', { name: 'Threads, 1 waiting' }));
     expect(screen.getByRole('group', { name: 'Needs you' })).toBeInTheDocument();
   });
 
@@ -168,7 +168,7 @@ describe('on an iPad', () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    expect(screen.getByText('No session open')).toBeInTheDocument();
+    expect(screen.getByText('No thread open')).toBeInTheDocument();
     await user.click(screen.getByText('Diagnose upload failures'));
     expect(screen.getByRole('region', { name: 'Diagnose upload failures' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Needs you' })).toBeInTheDocument();

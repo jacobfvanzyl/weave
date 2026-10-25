@@ -350,7 +350,7 @@ impl SettingsPicker {
         let bold = Style::default().add_modifier(Modifier::BOLD);
         match &self.page {
             Page::Options { selected } => {
-                let mut lines = vec![Line::from(Span::styled("  Session settings", bold))];
+                let mut lines = vec![Line::from(Span::styled("  Thread settings", bold))];
                 if supported.is_empty() {
                     if let Some(modes) = modes {
                         for (index, mode) in modes.available_modes.iter().enumerate() {
@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(
             text(&picker.lines(&options, None)),
             [
-                "  Session settings",
+                "  Thread settings",
                 "› Mode  Ask",
                 "  Model  Small",
                 "  Verbose  off",

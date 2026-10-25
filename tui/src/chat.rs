@@ -731,7 +731,7 @@ impl ChatWidget {
         self.active_session = Some(session_id);
         self.opening = true;
         if let Some(title) = title {
-            self.push_cell(TranscriptCell::info(&format!("Session: {title}")));
+            self.push_cell(TranscriptCell::info(&format!("Thread: {title}")));
         }
     }
 
@@ -743,7 +743,7 @@ impl ChatWidget {
             let marked = self.has_history;
             self.begin_session(opened.session_id.clone(), None);
             if marked {
-                self.push_cell(TranscriptCell::info("Session: new session"));
+                self.push_cell(TranscriptCell::info("Thread: new thread"));
             }
         }
         self.settle();
@@ -801,7 +801,7 @@ impl ChatWidget {
                 view.restore_session(stashed.cells);
             }
         }
-        self.push_error(&format!("Couldn't open the session: {error}"));
+        self.push_error(&format!("Couldn't open the thread: {error}"));
         self.active_session = previous;
         if self.active_session.is_none() && self.abilities.list {
             return self.open_session_picker(true);
@@ -828,7 +828,7 @@ impl ChatWidget {
         };
         match result {
             Ok(response) => picker.listed(response.sessions, response.next_cursor, append),
-            Err(error) => picker.failed(format!("Couldn't list sessions: {error}")),
+            Err(error) => picker.failed(format!("Couldn't list threads: {error}")),
         }
     }
 
@@ -836,7 +836,7 @@ impl ChatWidget {
         match (result, &mut self.session_picker) {
             (Ok(()), Some(picker)) => picker.deleted(session_id),
             (Ok(()), None) => {}
-            (Err(error), _) => self.push_error(&format!("Couldn't delete the session: {error}")),
+            (Err(error), _) => self.push_error(&format!("Couldn't delete the thread: {error}")),
         }
     }
 
@@ -1048,7 +1048,7 @@ impl ChatWidget {
             .is_some_and(|release| release.version == version)
         {
             self.report_info(&format!(
-                "{} {version} is the newest, and this session runs it",
+                "{} {version} is the newest, and this thread runs it",
                 task.name
             ));
             return Vec::new();
@@ -1057,7 +1057,7 @@ impl ChatWidget {
         // to move: a new session on the new version takes its place, and it closes.
         if self.blank_session().is_some() {
             self.opened_note = Some(format!(
-                "Started a new session on {} {version}: nothing had been sent in the last one, \
+                "Started a new thread on {} {version}: nothing had been sent in the last one, \
                  so there was nothing to move",
                 task.name
             ));
@@ -1073,7 +1073,7 @@ impl ChatWidget {
             ""
         };
         self.report_info(&format!(
-            "{} {version} starts. Moving this session to it{when}: background commands and \
+            "{} {version} starts. Moving this thread to it{when}: background commands and \
              running subagents end with the old process, and the mode is whatever the agent \
              restores",
             task.name
@@ -1100,7 +1100,7 @@ impl ChatWidget {
         if let Err(error) = result
             && self.is_active(session_id)
         {
-            self.push_error(&format!("Couldn't move the session: {error}"));
+            self.push_error(&format!("Couldn't move the thread: {error}"));
         }
     }
 
@@ -1380,7 +1380,7 @@ impl ChatWidget {
                     self.drop_pending_requests();
                     self.turn = None;
                     self.disconnected = true;
-                    self.push_error(&format!("Session ended: {reason}"));
+                    self.push_error(&format!("Thread ended: {reason}"));
                 }
                 Vec::new()
             }
@@ -1415,7 +1415,7 @@ impl ChatWidget {
             }
             ChatEvent::Renamed { title, by } => {
                 self.push_cell(TranscriptCell::info(&format!(
-                    "{by} renamed this session to “{title}”"
+                    "{by} renamed this thread to “{title}”"
                 )));
                 self.title = Some(title);
                 Vec::new()
@@ -1613,7 +1613,7 @@ impl ChatWidget {
     /// names, as Codex's built-ins are.
     fn offer_own_commands(&mut self) {
         let mut own = vec![
-            (NEW_COMMAND, "Start a new session in this directory"),
+            (NEW_COMMAND, "Start a new thread in this directory"),
             (
                 RELOAD_COMMAND,
                 "Restart this TUI, picking up a rebuilt weave, and reattach",
@@ -1622,7 +1622,7 @@ impl ChatWidget {
         if self.renamable {
             own.push((
                 RENAME_COMMAND,
-                "Rename this session, for every client of the weave Host",
+                "Rename this thread, for every client of the weave Host",
             ));
         }
         if self.updatable {
@@ -1631,7 +1631,7 @@ impl ChatWidget {
         if self.host_queue {
             own.push((
                 QUEUE_COMMAND,
-                "Start this session's paused queue again, in the weave Host",
+                "Start this thread's paused queue again, in the weave Host",
             ));
         }
         self.commands
@@ -2584,12 +2584,12 @@ impl ChatWidget {
         if ctrl && key.code == KeyCode::Char('r') {
             if self.turn.is_some() {
                 self.push_cell(TranscriptCell::info(
-                    "Finish or cancel the current turn before switching sessions",
+                    "Finish or cancel the current turn before switching threads",
                 ));
                 return Vec::new();
             }
             if !self.abilities.list {
-                self.push_cell(TranscriptCell::info("This agent can't list its sessions"));
+                self.push_cell(TranscriptCell::info("This agent can't list its threads"));
                 return Vec::new();
             }
             return self.open_session_picker(false);
@@ -4324,7 +4324,7 @@ mod tests {
         assert_eq!(names, ["new", "reload", "review"]);
         assert_eq!(
             chat.commands[0].description,
-            "Start a new session in this directory"
+            "Start a new thread in this directory"
         );
         // Typed and sent, it opens a new session instead of reaching the agent, mid-turn too.
         submit(&mut chat, "do it");
@@ -4458,7 +4458,7 @@ mod tests {
         assert!(
             history
                 .iter()
-                .any(|line| line.contains("Session ended: the agent exited")),
+                .any(|line| line.contains("Thread ended: the agent exited")),
             "{history:?}"
         );
         assert!(submit(&mut chat, "more").is_empty());
@@ -5098,7 +5098,7 @@ mod tests {
         assert_eq!(
             history(&mut chat),
             [
-                "• Session: Fix the build",
+                "• Thread: Fix the build",
                 "",
                 "",
                 "› fix it",
@@ -5126,9 +5126,9 @@ mod tests {
             reopened: None,
             notices: Vec::new(),
         });
-        assert_eq!(history(&mut chat), ["", "• Session: new session"]);
+        assert_eq!(history(&mut chat), ["", "• Thread: new thread"]);
         let footer = rows(&chat, 80).pop().unwrap_or_default();
-        assert!(!footer.contains("new session"), "{footer}");
+        assert!(!footer.contains("new thread"), "{footer}");
         assert_eq!(chat.terminal_title(Instant::now()), "repo");
     }
 
@@ -5367,7 +5367,7 @@ mod tests {
             rows.iter().any(|row| row.starts_with("  >_ weave")),
             "{rows:?}"
         );
-        assert!(rows.contains(&"• Session: Other".to_owned()));
+        assert!(rows.contains(&"• Thread: Other".to_owned()));
         assert!(!rows.contains(&"› first session".to_owned()));
 
         chat.session_failed(&Error::internal_error(), Some("s1".into()));
@@ -6196,7 +6196,7 @@ mod tests {
             .collect();
         assert_eq!(
             renames,
-            ["Rename this session, for every client of the weave Host"]
+            ["Rename this thread, for every client of the weave Host"]
         );
         assert_eq!(
             submit(&mut chat, "/rename  Parser fixes "),
@@ -6213,7 +6213,7 @@ mod tests {
             by: "The agent".into(),
         });
         assert_eq!(chat.title.as_deref(), Some("Parser fixes"));
-        assert!(said(&mut chat).contains("The agent renamed this session to “Parser fixes”"));
+        assert!(said(&mut chat).contains("The agent renamed this thread to “Parser fixes”"));
     }
 
     #[test]
@@ -6244,7 +6244,7 @@ mod tests {
         let shown = said(&mut chat);
         assert_eq!(shown.matches("is out").count(), 1, "{shown}");
         assert!(
-            shown.contains("claude-agent-acp 0.93.0 is out; this session runs 0.86.0."),
+            shown.contains("claude-agent-acp 0.93.0 is out; this thread runs 0.86.0."),
             "{shown}"
         );
         assert_eq!(
@@ -6283,7 +6283,7 @@ mod tests {
             [AppCommand::ReopenSession("s1".into())]
         );
         let status = rows(&chat, 60).join("\n");
-        assert!(status.contains("Moving this session to 0.93.0"), "{status}");
+        assert!(status.contains("Moving this thread to 0.93.0"), "{status}");
         assert!(
             said(&mut chat)
                 .contains("background commands and running subagents end with the old process"),
@@ -6293,7 +6293,7 @@ mod tests {
         assert!(!chat.is_animating());
         let shown = said(&mut chat);
         assert!(
-            shown.contains("Moved this session to claude-agent-acp 0.93.0, from 0.86.0"),
+            shown.contains("Moved this thread to claude-agent-acp 0.93.0, from 0.86.0"),
             "{shown}"
         );
         // On the newest, a notice of it is no news.
@@ -6306,7 +6306,7 @@ mod tests {
         let mut chat = updatable(&[]);
         submit(&mut chat, "/update");
         assert!(chat.agent_updated(Ok("0.86.0".into())).is_empty());
-        assert!(said(&mut chat).contains("0.86.0 is the newest, and this session runs it"));
+        assert!(said(&mut chat).contains("0.86.0 is the newest, and this thread runs it"));
         submit(&mut chat, "/update");
         assert!(
             chat.agent_updated(Err(Error::internal_error().data("no network")))
@@ -6319,7 +6319,7 @@ mod tests {
             &"s1".into(),
             Err(Error::method_not_found().data("the agent can't resume or load sessions")),
         );
-        assert!(said(&mut chat).contains("Couldn't move the session"));
+        assert!(said(&mut chat).contains("Couldn't move the thread"));
         assert!(!chat.is_animating());
     }
 
@@ -6346,7 +6346,7 @@ mod tests {
         });
         let shown = said(&mut chat);
         assert!(
-            shown.contains("Started a new session on claude-agent-acp 0.93.0"),
+            shown.contains("Started a new thread on claude-agent-acp 0.93.0"),
             "{shown}"
         );
     }
@@ -6357,17 +6357,17 @@ mod tests {
         chat.handle_agent_event(reopened("0.93.0", None, true));
         chat.handle_agent_event(reopened(
             "0.86.0",
-            Some("0.94.0 couldn't resume the session: unknown session"),
+            Some("0.94.0 couldn't resume the thread: unknown session"),
             true,
         ));
         let shown = said(&mut chat);
         assert!(
-            shown.contains("Moved this session to claude-agent-acp 0.93.0"),
+            shown.contains("Moved this thread to claude-agent-acp 0.93.0"),
             "{shown}"
         );
         assert!(
             shown.contains(
-                "0.94.0 couldn't resume the session: unknown session; it runs claude-agent-acp \
+                "0.94.0 couldn't resume the thread: unknown session; it runs claude-agent-acp \
                  0.86.0 again"
             ),
             "{shown}"

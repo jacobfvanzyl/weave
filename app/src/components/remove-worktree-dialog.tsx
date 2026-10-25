@@ -62,7 +62,7 @@ export function RemoveWorktreeDialog({ hostId, worktree, actions, open, onOpenCh
           <AlertDialogDescription>
             {hasChanges
               ? 'It has changes that aren’t committed. Removing it anyway loses them.'
-              : `Its directory goes, and its sessions close${branch ? `; ${branch} is deleted too if it’s merged` : ''}.`}
+              : `Its directory goes, and its threads close${branch ? `; ${branch} is deleted too if it’s merged` : ''}.`}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}

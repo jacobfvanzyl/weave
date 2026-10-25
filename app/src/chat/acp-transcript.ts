@@ -1080,12 +1080,12 @@ export const reduceAcpEvent = (
       };
     case 'session/renamed':
       return {
-        ...appendEntry(model, { kind: 'diagnostic', severity: 'info', title: `${event.by} renamed this session to “${event.title}”` }),
+        ...appendEntry(model, { kind: 'diagnostic', severity: 'info', title: `${event.by} renamed this thread to “${event.title}”` }),
         title: event.title,
       };
     case 'session/closed':
       return {
-        ...settleOptimisticPrompts(appendEntry(model, { kind: 'diagnostic', severity: 'info', title: 'The session closed', detail: event.reason })),
+        ...settleOptimisticPrompts(appendEntry(model, { kind: 'diagnostic', severity: 'info', title: 'The thread closed', detail: event.reason })),
         turn: { status: 'idle' },
       };
     case 'notice':

@@ -58,7 +58,7 @@ export function WorktreePicker({ repository, selected, create, onChoose, onCance
                     {[
                       directoryName(worktree.path),
                       worktree.changes && 'changed',
-                      sessions > 0 && `${sessions} ${sessions === 1 ? 'session' : 'sessions'}`,
+                      sessions > 0 && `${sessions} ${sessions === 1 ? 'thread' : 'threads'}`,
                     ].filter(Boolean).join(' · ')}
                   </span>
                 </span>

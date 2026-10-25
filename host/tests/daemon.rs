@@ -2576,7 +2576,7 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
     assert_eq!(seen.renamed, [("Named by its agent".to_owned(), None)]);
     assert!(
         seen.agent
-            .contains("rename_session answered: Renamed this session to “Named by its agent”."),
+            .contains("rename_session answered: Renamed this thread to “Named by its agent”."),
         "{seen:?}"
     );
     assert_eq!(
@@ -3658,7 +3658,7 @@ async fn an_agent_reads_any_session_but_acts_only_on_those_it_started() {
         .await
         .agent;
     assert!(
-        said.contains("prompt_session failed:") && said.contains("isn't one this session started"),
+        said.contains("prompt_session failed:") && said.contains("isn't one this thread started"),
         "{said}"
     );
     for tool in ["steer_session", "cancel_session_turn"] {
@@ -3735,7 +3735,7 @@ async fn delegation_stops_at_its_depth_and_its_running_limit() {
         .await
         .agent;
     assert!(
-        said.contains("start_session failed:") && said.contains("can't start sessions"),
+        said.contains("start_session failed:") && said.contains("can't start threads"),
         "{said}"
     );
 
@@ -3758,7 +3758,7 @@ async fn delegation_stops_at_its_depth_and_its_running_limit() {
         .await
         .agent;
     assert!(
-        said.contains("start_session failed:") && said.contains("already has 1 delegated session"),
+        said.contains("start_session failed:") && said.contains("already has 1 delegated thread"),
         "{said}"
     );
 

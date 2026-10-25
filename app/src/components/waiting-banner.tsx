@@ -49,7 +49,7 @@ export function WaitingBanner({ controller, onOpen }: { controller: AppControlle
       <div className='flex w-full max-w-md items-center gap-1 rounded-xl border border-warning/40 bg-popover p-1 shadow-lg'>
         <button type='button' className='min-w-0 flex-1 rounded-lg px-2.5 py-1.5 text-left hover:bg-muted'
           onClick={() => { actions.selectSession(banner.key); onOpen?.(); dismiss(); }}>
-          <span className='block truncate text-xs font-medium'>{banner.title || 'New session'} needs you</span>
+          <span className='block truncate text-xs font-medium'>{banner.title || 'New thread'} needs you</span>
           <span className='block truncate text-[0.6875rem] text-muted-foreground'>{banner.waitingOn ?? `${banner.agentName} is waiting`}</span>
         </button>
         <Button size='icon' variant='ghost' aria-label='Dismiss' onClick={dismiss}>

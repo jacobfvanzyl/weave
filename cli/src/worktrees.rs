@@ -35,8 +35,8 @@ pub struct WorktreesArgs {
 
 #[derive(Subcommand)]
 enum WorktreesCommand {
-    /// Before a worktree is removed: fail while a session in it runs a turn or waits on you,
-    /// otherwise close its sessions. worktrunk runs it as a pre-remove hook in the worktree it
+    /// Before a worktree is removed: fail while a thread in it runs a turn or waits on you,
+    /// otherwise close its threads. worktrunk runs it as a pre-remove hook in the worktree it
     /// removes (`weave worktrees install-hook`).
     PreRemove {
         /// The worktree; the current directory when absent.
@@ -85,7 +85,7 @@ async fn pre_remove(path: &Path) -> anyhow::Result<ExitCode> {
         .any(|feature| feature == FEATURE)
     {
         eprintln!(
-            "weave: this weave Host can't say whether sessions use {}; `weave daemon restart` \
+            "weave: this weave Host can't say whether threads use {}; `weave daemon restart` \
              runs one that can",
             path.display()
         );
@@ -104,20 +104,20 @@ async fn pre_remove(path: &Path) -> anyhow::Result<ExitCode> {
         Ok(Ok(released)) => {
             match released.closed.len() {
                 0 => {}
-                1 => eprintln!("weave: closed the session in {}", path.display()),
-                count => eprintln!("weave: closed the {count} sessions in {}", path.display()),
+                1 => eprintln!("weave: closed the thread in {}", path.display()),
+                count => eprintln!("weave: closed the {count} threads in {}", path.display()),
             }
             Ok(ExitCode::SUCCESS)
         }
         Ok(Err(error)) if errors::is(&error, errors::WORKTREE_BUSY) => {
             eprintln!(
-                "weave: {}. Let it finish or stop it (`weave sessions cancel <id>`) first.",
+                "weave: {}. Let it finish or stop it (`weave threads cancel <id>`) first.",
                 error.message
             );
             Ok(ExitCode::FAILURE)
         }
         Ok(Err(error)) => Err(error).context("asking the weave Host about the worktree"),
-        Err(_) => bail!("the weave Host took too long to close the worktree's sessions"),
+        Err(_) => bail!("the weave Host took too long to close the worktree's threads"),
     }
 }
 
@@ -157,8 +157,8 @@ fn install_hook(config: &Path) -> anyhow::Result<()> {
             println!(
                 "Added to {}:\n\n[pre-remove]\n{HOOK_NAME} = \"{HOOK_COMMAND}\"\n\n\
                  wt remove, wt merge and wt step prune now ask the weave Host first, and stop \
-                 while a session in the worktree runs a turn or waits on you; otherwise its \
-                 sessions close. The hook needs `weave` on the PATH worktrunk runs hooks with; \
+                 while a thread in the worktree runs a turn or waits on you; otherwise its \
+                 threads close. The hook needs `weave` on the PATH worktrunk runs hooks with; \
                  --no-hooks skips it.",
                 config.display()
             );

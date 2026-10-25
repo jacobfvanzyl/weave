@@ -48,7 +48,7 @@ pub struct RunArgs {
     #[command(flatten)]
     workspace: WorkspaceArgs,
 
-    /// Continue a session (`--resume <id>`, or `--continue` for the last one here) instead
+    /// Continue a thread (`--resume <id>`, or `--continue` for the last one here) instead
     /// of starting one.
     #[command(flatten)]
     session: SessionArgs,
@@ -56,11 +56,11 @@ pub struct RunArgs {
     #[command(flatten)]
     approve: ApproveArgs,
 
-    /// Leave the turn running in the weave Host and print the session's id.
+    /// Leave the turn running in the weave Host and print the thread's id.
     #[arg(long)]
     detach: bool,
 
-    /// Print every session update as a JSON line instead of the reply's text.
+    /// Print every ACP session update as a JSON line instead of the reply's text.
     #[arg(long)]
     json: bool,
 
@@ -74,7 +74,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     let policy = PermissionPolicy::headless(args.approve.kinds()?);
     let mode = args.session.mode();
     if matches!(mode, StartMode::Pick) {
-        bail!("--resume needs a session id here; choosing from a list is the TUI's");
+        bail!("--resume needs a thread id here; choosing from a list is the TUI's");
     }
     let recent = Recent::default_location();
     let disabled = args.agent.load_config()?.daemon.enabled == Some(false);
@@ -115,13 +115,13 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             match listed.map(|listed| listed.sessions.into_iter().next()) {
                 Ok(Some(latest)) => Some(latest.info.session_id),
                 Ok(None) => {
-                    eprintln!("weave: no earlier session here; starting one");
+                    eprintln!("weave: no earlier thread here; starting one");
                     None
                 }
                 Err(error) => {
                     connection.shutdown().await;
                     host.finish().await;
-                    return Err(error).context("finding the last session here");
+                    return Err(error).context("finding the last thread here");
                 }
             }
         }
@@ -211,7 +211,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                         };
                     }
                     SessionEvent::Closed { reason } => {
-                        break Err(anyhow::anyhow!("the session ended: {reason}"));
+                        break Err(anyhow::anyhow!("the thread ended: {reason}"));
                     }
                     _ => {}
                 }
@@ -242,7 +242,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     host.finish().await;
     let response = outcome?;
     eprintln!(
-        "weave: session {session_id}; continue it with {}",
+        "weave: thread {session_id}; continue it with {}",
         reopen_command(&launch.agent, &session_id.to_string())
     );
     match response.stop_reason {

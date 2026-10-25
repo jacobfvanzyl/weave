@@ -72,8 +72,8 @@ pub struct TuiConfig {
     #[serde(default)]
     pub alternate_screen: AlternateScreen,
     /// Footer status line items, as Codex's `tui.status_line`: model, agent, mode,
-    /// directory, session, context (the percentage used), and cost (at the right). Defaults
-    /// to agent, model, mode, context, session and cost.
+    /// directory, thread, context (the percentage used), and cost (at the right). Defaults
+    /// to agent, model, mode, context, thread and cost.
     pub status_line: Option<Vec<String>>,
     /// Desktop notifications when a turn ends or the agent needs you (default true).
     pub notifications: Option<bool>,

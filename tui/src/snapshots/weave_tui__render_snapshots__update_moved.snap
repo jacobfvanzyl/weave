@@ -1,18 +1,19 @@
 ---
 source: tui/src/render_snapshots.rs
+assertion_line: 682
 expression: screen(&mut chat)
 ---
 ── transcript ──
-✨ claude-agent-acp 0.93.0 is out; this session runs 0.86.0.
+✨ claude-agent-acp 0.93.0 is out; this thread runs 0.86.0.
    /update moves it over · /update dismiss hides this version
 
-• claude-agent-acp 0.93.0 starts. Moving this session to it: background
+• claude-agent-acp 0.93.0 starts. Moving this thread to it: background
   commands and running subagents end with the old process, and the mode
   is whatever the agent restores
 
-• Moved this session to claude-agent-acp 0.93.0, from 0.86.0
+• Moved this thread to claude-agent-acp 0.93.0, from 0.86.0
 
-■ 0.94.0 couldn't resume the session: unknown session; it runs
+■ 0.94.0 couldn't resume the thread: unknown session; it runs
   claude-agent-acp 0.93.0 again
 ── viewport ──
 

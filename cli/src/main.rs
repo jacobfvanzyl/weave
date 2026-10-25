@@ -60,20 +60,21 @@ struct Cli {
     no_alt_screen: bool,
 
     /// Run the agent in a Host inside this process rather than the shared weave Host, so its
-    /// sessions end when weave does. Also `enabled = false` under `[daemon]` in the config.
+    /// threads end when weave does. Also `enabled = false` under `[daemon]` in the config.
     #[arg(long)]
     no_daemon: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run one prompt in a headless session in the weave Host, printing the reply.
+    /// Run one prompt in a headless thread in the weave Host, printing the reply.
     Run(run::RunArgs),
-    /// Sessions open in the weave Host: list them, stop a turn, or close one.
+    /// Threads open in the weave Host: list them, stop a turn, or close one.
+    #[command(name = "threads", alias = "sessions")]
     Sessions(sessions::SessionsArgs),
     /// Git worktrees: what worktrunk asks the weave Host before it removes one.
     Worktrees(worktrees::WorktreesArgs),
-    /// Manage the weave Host, which runs agents so their sessions outlive the TUI.
+    /// Manage the weave Host, which runs agents so their threads outlive the TUI.
     Daemon(daemon::DaemonArgs),
     /// Pair another of your devices with the weave Host, to reach it over your tailnet.
     Pair(devices::PairArgs),
@@ -310,7 +311,7 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
         if exit.turn_running && host.is_shared() {
             println!("The turn carries on in the weave Host. To attach again, run: {command}");
         } else {
-            println!("To continue this session, run: {command}");
+            println!("To continue this thread, run: {command}");
         }
     }
     Ok(())
@@ -421,7 +422,7 @@ async fn login(args: LoginArgs) -> anyhow::Result<()> {
     connection.shutdown().await;
     match result? {
         SignedIn::Ready => eprintln!("Signed in."),
-        SignedIn::Reconnect => eprintln!("Signed in. The next session will use it."),
+        SignedIn::Reconnect => eprintln!("Signed in. The next thread will use it."),
     }
     Ok(())
 }
@@ -557,9 +558,11 @@ mod tests {
             "weave", "login", "--agent", "claude", "--trace", "t.jsonl"
         ]));
         assert!(!parses(&["weave", "login", "--cwd", "/tmp"]));
-        assert!(parses(&["weave", "sessions"]));
-        assert!(parses(&["weave", "sessions", "close", "s1"]));
-        assert!(parses(&["weave", "sessions", "list", "--json"]));
+        assert!(parses(&["weave", "threads"]));
+        assert!(parses(&["weave", "threads", "close", "s1"]));
+        assert!(parses(&["weave", "threads", "list", "--json"]));
+        // Its name before threads.
+        assert!(parses(&["weave", "sessions", "cancel", "s1"]));
     }
 
     fn words(line: &str) -> Vec<String> {

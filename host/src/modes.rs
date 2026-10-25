@@ -22,7 +22,7 @@ pub(crate) async fn start_in(
     let named = |id: &str, name: &str| id == wanted || name.eq_ignore_ascii_case(wanted);
     let failed =
         |error: agent_client_protocol::Error| format!("Couldn't start in mode {wanted}: {error}");
-    let missing = || format!("The agent has no mode {wanted}; the session uses its default");
+    let missing = || format!("The agent has no mode {wanted}; the thread uses its default");
     let mode_option = snapshot
         .config_options
         .iter()

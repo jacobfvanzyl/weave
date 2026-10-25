@@ -45,10 +45,10 @@ function RenameDialog({ session, actions, open, onOpenChange }: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='w-[min(28rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
         <DialogHeader>
-          <DialogTitle>Rename session</DialogTitle>
+          <DialogTitle>Rename thread</DialogTitle>
           <DialogDescription>Every device and the TUI show the new title. The agent keeps its own.</DialogDescription>
         </DialogHeader>
-        <form aria-label='Rename session' className='grid gap-3' onSubmit={async (event) => {
+        <form aria-label='Rename thread' className='grid gap-3' onSubmit={async (event) => {
           event.preventDefault();
           setSaving(true);
           setError(undefined);
@@ -78,7 +78,7 @@ function SessionMenu({ session, actions, canRename }: { session: SessionSummary;
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button size='icon' variant='ghost' aria-label='Session actions' />}>
+        <DropdownMenuTrigger render={<Button size='icon' variant='ghost' aria-label='Thread actions' />}>
           <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end'>
@@ -86,16 +86,16 @@ function SessionMenu({ session, actions, canRename }: { session: SessionSummary;
             {canRename && (
               <DropdownMenuItem disabled={session.state !== 'open'} onClick={() => setRenaming(true)}>
                 <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
-                Rename session…
+                Rename thread…
               </DropdownMenuItem>
             )}
             <DropdownMenuItem disabled={session.state === 'closed'} onClick={() => void actions.closeSession(session.key)}>
               <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
-              Close session
+              Close thread
             </DropdownMenuItem>
             <DropdownMenuItem variant='destructive' onClick={() => setConfirmDelete(true)}>
               <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-              Delete session
+              Delete thread
             </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>
@@ -136,17 +136,17 @@ function UpdateNotice({ update, reopening, onMove }: { update: AgentUpdateNotice
   return (
     <Alert className='m-2 w-auto'>
       <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} />
-      <AlertTitle>{shortName(update.name)} {update.latest} is out; this session runs {update.running}.</AlertTitle>
+      <AlertTitle>{shortName(update.name)} {update.latest} is out; this thread runs {update.running}.</AlertTitle>
       {update.available
         ? (
           <AlertDescription>
-            The Host has {update.available} for new sessions. Moving this one ends its background commands and running subagents,
+            The Host has {update.available} for new threads. Moving this one ends its background commands and running subagents,
             and waits for a running turn.
           </AlertDescription>
         )
         : (
           <AlertDescription>
-            Update it on the Host's computer with <code>weave update {update.agentId}</code>; this session can move to it then.
+            Update it on the Host's computer with <code>weave update {update.agentId}</code>; this thread can move to it then.
           </AlertDescription>
         )}
       {update.available && (
@@ -199,10 +199,10 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
       .map(({ sessionId }) => sessionId),
   ];
   return (
-    <section aria-label={summary?.title || 'New session'} data-slot='session-view' className='flex min-h-0 min-w-0 flex-1 flex-col' {...swipe}>
+    <section aria-label={summary?.title || 'New thread'} data-slot='session-view' className='flex min-h-0 min-w-0 flex-1 flex-col' {...swipe}>
       <SessionHeader leading={leading}>
         <div className='min-w-0 flex-1 py-1.5'>
-          <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New session'}</h2>
+          <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New thread'}</h2>
           {summary && (
             <p className='flex min-w-0 items-center gap-1 text-[0.6875rem] text-muted-foreground'>
               <span className='shrink-0'>{summary.agentName}</span>

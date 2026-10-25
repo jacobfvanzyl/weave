@@ -64,7 +64,7 @@ const clientNames: Record<string, string> = { 'weave-tui': 'the TUI', 'weave-app
  */
 export function originLabel(origin: TurnOrigin): string {
   if ('run' in origin) return 'a headless run';
-  if ('session' in origin) return 'another session';
+  if ('session' in origin) return 'another thread';
   if (!('client' in origin)) return 'elsewhere';
   return origin.client.device || clientNames[origin.client.name] || origin.client.name;
 }
@@ -81,11 +81,11 @@ export function reopenedText(release?: AgentRelease | null, previous?: AgentRele
   if (failed) {
     return release ? `${failed}; it runs ${shortName(release.name)} ${release.version} again` : `${failed}; it runs the agent it ran again`;
   }
-  if (!release) return 'Reopened this session in a new agent process';
+  if (!release) return 'Reopened this thread in a new agent process';
   if (previous && previous.version !== release.version) {
-    return `Moved this session to ${shortName(release.name)} ${release.version}, from ${previous.version}`;
+    return `Moved this thread to ${shortName(release.name)} ${release.version}, from ${previous.version}`;
   }
-  return `Reopened this session on ${shortName(release.name)} ${release.version}`;
+  return `Reopened this thread on ${shortName(release.name)} ${release.version}`;
 }
 
 /**

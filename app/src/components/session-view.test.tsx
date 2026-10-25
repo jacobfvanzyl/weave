@@ -63,7 +63,7 @@ describe('SessionView', () => {
       update: { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' },
     };
     render(<SessionView controller={controller(session)} session={session} />);
-    expect(screen.getByText('claude-agent-acp 0.94.0 is out; this session runs 0.86.0.')).toBeInTheDocument();
+    expect(screen.getByText('claude-agent-acp 0.94.0 is out; this thread runs 0.86.0.')).toBeInTheDocument();
     expect(screen.getByText('weave update claude')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Move/ })).not.toBeInTheDocument();
   });
@@ -76,7 +76,7 @@ describe('SessionView', () => {
       update: { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0', available: '0.94.0' },
     };
     const { rerender } = render(<SessionView controller={controller(session, handlers)} session={session} />);
-    expect(screen.getByText(/The Host has 0.94.0 for new sessions/)).toBeInTheDocument();
+    expect(screen.getByText(/The Host has 0.94.0 for new threads/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Move to 0.94.0' }));
     expect(handlers.reopenSession).toHaveBeenCalled();
     const moving = { ...session, reopening: true };
@@ -149,8 +149,8 @@ describe('SessionView', () => {
     const handlers = actions();
     const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
     render(<SessionView controller={controller(session, handlers)} session={session} />);
-    await user.click(screen.getByRole('button', { name: 'Session actions' }));
-    await user.click(await screen.findByRole('menuitem', { name: 'Rename session…' }));
+    await user.click(screen.getByRole('button', { name: 'Thread actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename thread…' }));
     const title = await screen.findByRole('textbox', { name: 'Title' });
     expect(title).toHaveValue('Count the files');
     await user.clear(title);
@@ -160,8 +160,8 @@ describe('SessionView', () => {
     await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument());
 
     vi.mocked(handlers.renameSession).mockRejectedValueOnce(new Error("Couldn't rename it: a title is at most 200 characters."));
-    await user.click(screen.getByRole('button', { name: 'Session actions' }));
-    await user.click(await screen.findByRole('menuitem', { name: 'Rename session…' }));
+    await user.click(screen.getByRole('button', { name: 'Thread actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename thread…' }));
     await user.click(await screen.findByRole('button', { name: 'Rename' }));
     expect(await screen.findByText("Couldn't rename it: a title is at most 200 characters.")).toBeInTheDocument();
   });

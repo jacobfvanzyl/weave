@@ -332,7 +332,7 @@ enum DaemonCommand {
     Run(RunArgs),
     /// Start the Host in the background, if it isn't running.
     Start,
-    /// Stop the Host and its agents. Sessions it had open can be reopened later.
+    /// Stop the Host and its agents. Threads it had open can be reopened later.
     Stop,
     /// Stop the Host if it's running, then start it again: after rebuilding weave.
     Restart,
@@ -346,7 +346,7 @@ enum DaemonCommand {
 
 #[derive(Args)]
 struct RunArgs {
-    /// Exit after this many seconds with no sessions open and no clients connected.
+    /// Exit after this many seconds with no threads open and no clients connected.
     #[arg(long, value_name = "SECONDS")]
     idle_exit: Option<u64>,
 
@@ -554,12 +554,12 @@ fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
         })
         .count();
     let sessions = match (status.sessions.len(), running) {
-        (0, _) => "No sessions open.".to_owned(),
-        (1, 0) => "1 session open; `weave sessions` lists it.".to_owned(),
-        (1, _) => "1 session open, at work; `weave sessions` lists it.".to_owned(),
-        (open, 0) => format!("{open} sessions open; `weave sessions` lists them."),
+        (0, _) => "No threads open.".to_owned(),
+        (1, 0) => "1 thread open; `weave threads` lists it.".to_owned(),
+        (1, _) => "1 thread open, at work; `weave threads` lists it.".to_owned(),
+        (open, 0) => format!("{open} threads open; `weave threads` lists them."),
         (open, running) => {
-            format!("{open} sessions open, {running} at work; `weave sessions` lists them.")
+            format!("{open} threads open, {running} at work; `weave threads` lists them.")
         }
     };
     let service = match status.service {
@@ -630,7 +630,7 @@ mod tests {
             sessions: Vec::new(),
             remote: None,
         };
-        assert!(describe(&status, &paths, 90_000).ends_with("No sessions open.\n"));
+        assert!(describe(&status, &paths, 90_000).ends_with("No threads open.\n"));
         status.sessions.push(SessionListing {
             info: SessionInfo::new("s1", "/repo").title("Fix the build".to_owned()),
             agent_id: "claude".into(),
@@ -646,7 +646,7 @@ mod tests {
             describe(&status, &paths, 7_230_000),
             "weave Host 0.1.0 (pid 42), up 2h, run on demand\n  socket   \
              /state/weave/daemon/daemon.sock\n  journals /state/weave/daemon/sessions\n  agents \
-             get your login shell's environment\n\n1 session open, at work; `weave sessions` \
+             get your login shell's environment\n\n1 thread open, at work; `weave threads` \
              lists it.\n"
         );
         status.remote = Some("127.0.0.1:7341".to_owned());

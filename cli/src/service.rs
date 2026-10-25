@@ -76,7 +76,7 @@ pub async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     launchctl(&["bootstrap", &domain(paths)?, &plist.display().to_string()])?;
     drop(daemon::wait_until_listening(paths).await?);
     let restarted = if was_running {
-        " (it replaced the one that was running; sessions it had open reopen when attached)"
+        " (it replaced the one that was running; threads it had open reopen when attached)"
     } else {
         ""
     };

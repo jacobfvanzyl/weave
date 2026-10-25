@@ -59,7 +59,8 @@ impl StatusItem {
             "agent" => Self::Agent,
             "mode" => Self::Mode,
             "directory" => Self::Directory,
-            "session" => Self::Session,
+            // Its name before threads.
+            "thread" | "session" => Self::Session,
             "context" => Self::Context,
             "cost" => Self::Cost,
             _ => return None,
@@ -72,7 +73,7 @@ impl StatusItem {
             "agent",
             "mode",
             "directory",
-            "session",
+            "thread",
             "context",
             "cost",
         ]
@@ -442,7 +443,7 @@ fn compose_keys(vim: bool, steer: bool) -> Vec<(&'static str, &'static str)> {
 const SESSION: &[(&str, &str)] = &[
     ("⇧tab", "Next mode"),
     ("⌃o", "Settings"),
-    ("⌃r", "Sessions"),
+    ("⌃r", "Threads"),
     ("esc", "Interrupt"),
     ("⌃c", "Quit"),
 ];
@@ -451,7 +452,7 @@ const SESSION: &[(&str, &str)] = &[
 const SESSION_IN_DAEMON: &[(&str, &str)] = &[
     ("⇧tab", "Next mode"),
     ("⌃o", "Settings"),
-    ("⌃r", "Sessions"),
+    ("⌃r", "Threads"),
     ("esc", "Interrupt"),
     ("⌃c", "Quit"),
     ("⌃d", "Leave it running"),
@@ -469,7 +470,7 @@ pub fn shortcut_lines(
     let columns: [ShortcutColumn; 3] = [
         ("Compose", compose_keys(vim, steer)),
         (
-            "Session",
+            "Thread",
             if detachable {
                 SESSION_IN_DAEMON
             } else {
@@ -700,6 +701,8 @@ mod tests {
             ["high"]
         );
         assert_eq!(StatusItem::parse("directory"), Some(StatusItem::Directory));
+        assert_eq!(StatusItem::parse("thread"), Some(StatusItem::Session));
+        assert_eq!(StatusItem::parse("session"), Some(StatusItem::Session));
         assert_eq!(StatusItem::parse("branch"), None);
     }
 

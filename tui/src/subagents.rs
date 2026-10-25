@@ -38,7 +38,7 @@ const REPLY_PREVIEW: usize = 240;
 
 /// The local command that opens the picker, as Codex names its own.
 pub const COMMAND: &str = "subagents";
-pub const COMMAND_DESCRIPTION: &str = "Switch between this session's subagents";
+pub const COMMAND_DESCRIPTION: &str = "Switch between this thread's subagents";
 
 /// A child session the parent created and owns.
 pub struct Subagent {

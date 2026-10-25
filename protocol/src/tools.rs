@@ -90,7 +90,7 @@ pub fn catalog() -> Vec<Tool> {
 pub fn host_catalog() -> Vec<Tool> {
     let session_id = json!({
         "type": "string",
-        "description": "The session's id, as list_sessions or start_session gave it."
+        "description": "The thread's id, as list_sessions or start_session gave it."
     });
     let key = json!({
         "type": "string",
@@ -103,21 +103,21 @@ pub fn host_catalog() -> Vec<Tool> {
         rename_session(),
         Tool {
             name: LIST_SESSIONS.to_owned(),
-            title: "List sessions".to_owned(),
-            description: "List the sessions of the weave Host this session runs in, across \
+            title: "List threads".to_owned(),
+            description: "List the threads of the weave Host this thread runs in, across \
                           agents and directories, most recently active first: each one's id, \
                           agent, directory, title, whether it is open and running, and which \
-                          session started it. Answers with the Host's sessions/list result as \
+                          thread started it. Answers with the Host's sessions/list result as \
                           JSON."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "agentId": {"type": "string", "description": "Only this agent's sessions, \
+                    "agentId": {"type": "string", "description": "Only this agent's threads, \
                         such as claude or codex, with the agent's own history of the directory."},
-                    "cwd": {"type": "string", "description": "Only sessions in this absolute \
+                    "cwd": {"type": "string", "description": "Only threads in this absolute \
                         directory."},
-                    "repo": {"type": "string", "description": "Only sessions in this git \
+                    "repo": {"type": "string", "description": "Only threads in this git \
                         repository's worktrees, given by any directory in it. Not with agentId."}
                 },
                 "additionalProperties": false
@@ -125,11 +125,11 @@ pub fn host_catalog() -> Vec<Tool> {
         },
         Tool {
             name: READ_SESSION.to_owned(),
-            title: "Read a session".to_owned(),
-            description: "Read one session of the weave Host: how it lists, and its latest \
+            title: "Read a thread".to_owned(),
+            description: "Read one thread of the weave Host: how it lists, and its latest \
                           turn: the prompt, whether it is still running, how it ended, and the \
-                          agent's last message in it. Use it to read a delegated session's full \
-                          answer, or a session a person started. Answers with the Host's \
+                          agent's last message in it. Use it to read a delegated thread's full \
+                          answer, or a thread a person started. Answers with the Host's \
                           sessions/get result as JSON."
                 .to_owned(),
             input_schema: json!({
@@ -141,25 +141,25 @@ pub fn host_catalog() -> Vec<Tool> {
         },
         Tool {
             name: START_SESSION.to_owned(),
-            title: "Start a session with another agent".to_owned(),
-            description: "Hand work to another agent: start a session with it in the weave Host \
-                          and send it a prompt. It works on its own, in a session people can \
+            title: "Start a thread with another agent".to_owned(),
+            description: "Hand work to another agent: start a thread with it in the weave Host \
+                          and send it a prompt. It works on its own, in a thread people can \
                           watch and answer from their weave clients. This answers once its turn \
                           has started; when the turn ends, you'll get a message saying how it \
                           ended, with the start of the agent's answer, so don't wait or poll for \
-                          it. It can approve only the tool kinds your own session approves. Give \
-                          sessionId to prompt a session you started before instead of a new one."
+                          it. It can approve only the tool kinds your own thread approves. Give \
+                          sessionId to prompt a thread you started before instead of a new one."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "agentId": {"type": "string", "description": "The agent to start, such as \
-                        claude or codex; list_sessions shows which agents sessions run."},
+                        claude or codex; list_sessions shows which agents threads run."},
                     "prompt": {"type": "string", "description": "What to ask of it: everything \
                         it needs to know, since it doesn't see this conversation."},
                     "cwd": {"type": "string", "description": "The absolute directory it works \
                         in; yours when absent."},
-                    "sessionId": {"type": "string", "description": "A session you started \
+                    "sessionId": {"type": "string", "description": "A thread you started \
                         before, to prompt instead of starting one."},
                     "approve": {
                         "type": "array",
@@ -182,9 +182,9 @@ pub fn host_catalog() -> Vec<Tool> {
         },
         Tool {
             name: PROMPT_SESSION.to_owned(),
-            title: "Prompt a session you started".to_owned(),
-            description: "Send a prompt to a session you started with start_session: it starts \
-                          a turn at once if none runs, or waits in the session's queue for the \
+            title: "Prompt a thread you started".to_owned(),
+            description: "Send a prompt to a thread you started with start_session: it starts \
+                          a turn at once if none runs, or waits in the thread's queue for the \
                           running one to end. When the turn ends, you'll get a message saying \
                           how it ended."
                 .to_owned(),
@@ -201,8 +201,8 @@ pub fn host_catalog() -> Vec<Tool> {
         },
         Tool {
             name: STEER_SESSION.to_owned(),
-            title: "Steer a session you started".to_owned(),
-            description: "Send a message into the running turn of a session you started, to \
+            title: "Steer a thread you started".to_owned(),
+            description: "Send a message into the running turn of a thread you started, to \
                           correct or add to what it's doing, without starting another turn. If \
                           no turn runs, nothing is sent: use prompt_session instead."
                 .to_owned(),
@@ -218,8 +218,8 @@ pub fn host_catalog() -> Vec<Tool> {
         },
         Tool {
             name: CANCEL_SESSION_TURN.to_owned(),
-            title: "Cancel a session's turn".to_owned(),
-            description: "Stop the running turn of a session you started. The session stays, \
+            title: "Cancel a thread's turn".to_owned(),
+            description: "Stop the running turn of a thread you started. The thread stays, \
                           and can be prompted again."
                 .to_owned(),
             input_schema: json!({
@@ -235,9 +235,9 @@ pub fn host_catalog() -> Vec<Tool> {
 fn rename_session() -> Tool {
     Tool {
         name: RENAME_SESSION.to_owned(),
-        title: "Rename this session".to_owned(),
-        description: "Give this session a new title: the name people see for it in their \
-                      weave session lists, on every device. Use it when the person asks for a \
+        title: "Rename this thread".to_owned(),
+        description: "Give this thread a new title: the name people see for it in their \
+                      weave thread lists, on every device. Use it when the person asks for a \
                       name, or when the work has moved on and the title misleads. Keep it \
                       short and specific. It doesn't change the title you keep yourself."
             .to_owned(),

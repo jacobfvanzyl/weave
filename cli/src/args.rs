@@ -74,11 +74,11 @@ pub struct AgentArgs {
 /// Where a session works, and what the agent may use there.
 #[derive(Args, Default)]
 pub struct WorkspaceArgs {
-    /// Session working directory. Defaults to the current directory.
+    /// Thread working directory. Defaults to the current directory.
     #[arg(long)]
     cwd: Option<PathBuf>,
 
-    /// An extra workspace root for the session; repeatable. Needs agent support.
+    /// An extra workspace root for the thread; repeatable. Needs agent support.
     #[arg(long = "add-dir", value_name = "DIR")]
     add_dirs: Vec<PathBuf>,
 
@@ -94,11 +94,11 @@ pub struct WorkspaceArgs {
 /// Which session to open.
 #[derive(Args)]
 pub struct SessionArgs {
-    /// Reopen a session: by id, or (in the TUI) choose one from a list when no id is given.
-    #[arg(long, value_name = "SESSION_ID", num_args = 0..=1, conflicts_with = "continue_last")]
+    /// Reopen a thread: by id, or (in the TUI) choose one from a list when no id is given.
+    #[arg(long, value_name = "THREAD_ID", num_args = 0..=1, conflicts_with = "continue_last")]
     resume: Option<Option<String>>,
 
-    /// Reopen the session last used in this directory (one open in the daemon first), with
+    /// Reopen the thread last used in this directory (one open in the daemon first), with
     /// the agent last used here unless --agent or `--` names one.
     #[arg(long = "continue")]
     continue_last: bool,
@@ -364,7 +364,7 @@ impl WorkspaceArgs {
             None => std::env::current_dir()?,
         };
         cwd.canonicalize()
-            .with_context(|| format!("session directory {}", cwd.display()))
+            .with_context(|| format!("thread directory {}", cwd.display()))
     }
 }
 

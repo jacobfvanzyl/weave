@@ -77,10 +77,10 @@ const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
 const PARSE_ERROR: i32 = -32700;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
-const INSTRUCTIONS: &str = "Tools of the weave Host this session runs in. Client tools, such \
+const INSTRUCTIONS: &str = "Tools of the weave Host this thread runs in. Client tools, such \
                             as clipboard_write, run on the device of the person who sent the \
                             current turn, and fail when nobody is connected, as in a headless \
-                            run. Host tools, such as rename_session, act on this session in the \
+                            run. Host tools, such as rename_session, act on this thread in the \
                             Host and need nobody connected.";
 
 /// What a client is told when its session's agent can't use the server.
@@ -379,7 +379,7 @@ impl Mcp {
                 .and_then(|shared| shared.registry().live(&session_id))
         });
         let Some(session) = session else {
-            return tool_result(ClientToolResult::error("The session isn't open."));
+            return tool_result(ClientToolResult::error("The thread isn't open."));
         };
         if declared.host_tools.iter().any(|known| known == tool) {
             let Some(shared) = self.shared.upgrade() else {
@@ -396,11 +396,11 @@ impl Mcp {
             reply,
         }));
         if sent.is_err() {
-            return tool_result(ClientToolResult::error("The session has ended."));
+            return tool_result(ClientToolResult::error("The thread has ended."));
         }
         tokio::select! {
             answer = answered => tool_result(answer.unwrap_or_else(|_| {
-                ClientToolResult::error("The session ended before the tool ran.")
+                ClientToolResult::error("The thread ended before the tool ran.")
             })),
             () = cancelled => {
                 let _ = session.send(Command::WithdrawClientTool { call });

@@ -1,12 +1,13 @@
 ---
 source: tui/src/render_snapshots.rs
+assertion_line: 494
 expression: screen(&mut chat)
 ---
 ── transcript ──
 
 ── viewport ──
 
-  Session settings
+  Thread settings
 › Mode  Ask
   Model  Small
   Verbose  off

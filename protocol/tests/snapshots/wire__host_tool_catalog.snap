@@ -1,12 +1,13 @@
 ---
 source: protocol/tests/wire.rs
+assertion_line: 1460
 expression: round_trip(&host_catalog())
 ---
 [
   {
     "name": "rename_session",
-    "title": "Rename this session",
-    "description": "Give this session a new title: the name people see for it in their weave session lists, on every device. Use it when the person asks for a name, or when the work has moved on and the title misleads. Keep it short and specific. It doesn't change the title you keep yourself.",
+    "title": "Rename this thread",
+    "description": "Give this thread a new title: the name people see for it in their weave thread lists, on every device. Use it when the person asks for a name, or when the work has moved on and the title misleads. Keep it short and specific. It doesn't change the title you keep yourself.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -25,22 +26,22 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "list_sessions",
-    "title": "List sessions",
-    "description": "List the sessions of the weave Host this session runs in, across agents and directories, most recently active first: each one's id, agent, directory, title, whether it is open and running, and which session started it. Answers with the Host's sessions/list result as JSON.",
+    "title": "List threads",
+    "description": "List the threads of the weave Host this thread runs in, across agents and directories, most recently active first: each one's id, agent, directory, title, whether it is open and running, and which thread started it. Answers with the Host's sessions/list result as JSON.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "Only this agent's sessions, such as claude or codex, with the agent's own history of the directory."
+          "description": "Only this agent's threads, such as claude or codex, with the agent's own history of the directory."
         },
         "cwd": {
           "type": "string",
-          "description": "Only sessions in this absolute directory."
+          "description": "Only threads in this absolute directory."
         },
         "repo": {
           "type": "string",
-          "description": "Only sessions in this git repository's worktrees, given by any directory in it. Not with agentId."
+          "description": "Only threads in this git repository's worktrees, given by any directory in it. Not with agentId."
         }
       },
       "additionalProperties": false
@@ -48,14 +49,14 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "read_session",
-    "title": "Read a session",
-    "description": "Read one session of the weave Host: how it lists, and its latest turn: the prompt, whether it is still running, how it ended, and the agent's last message in it. Use it to read a delegated session's full answer, or a session a person started. Answers with the Host's sessions/get result as JSON.",
+    "title": "Read a thread",
+    "description": "Read one thread of the weave Host: how it lists, and its latest turn: the prompt, whether it is still running, how it ended, and the agent's last message in it. Use it to read a delegated thread's full answer, or a thread a person started. Answers with the Host's sessions/get result as JSON.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "sessionId": {
           "type": "string",
-          "description": "The session's id, as list_sessions or start_session gave it."
+          "description": "The thread's id, as list_sessions or start_session gave it."
         }
       },
       "required": [
@@ -66,14 +67,14 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "start_session",
-    "title": "Start a session with another agent",
-    "description": "Hand work to another agent: start a session with it in the weave Host and send it a prompt. It works on its own, in a session people can watch and answer from their weave clients. This answers once its turn has started; when the turn ends, you'll get a message saying how it ended, with the start of the agent's answer, so don't wait or poll for it. It can approve only the tool kinds your own session approves. Give sessionId to prompt a session you started before instead of a new one.",
+    "title": "Start a thread with another agent",
+    "description": "Hand work to another agent: start a thread with it in the weave Host and send it a prompt. It works on its own, in a thread people can watch and answer from their weave clients. This answers once its turn has started; when the turn ends, you'll get a message saying how it ended, with the start of the agent's answer, so don't wait or poll for it. It can approve only the tool kinds your own thread approves. Give sessionId to prompt a thread you started before instead of a new one.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "The agent to start, such as claude or codex; list_sessions shows which agents sessions run."
+          "description": "The agent to start, such as claude or codex; list_sessions shows which agents threads run."
         },
         "prompt": {
           "type": "string",
@@ -85,7 +86,7 @@ expression: round_trip(&host_catalog())
         },
         "sessionId": {
           "type": "string",
-          "description": "A session you started before, to prompt instead of starting one."
+          "description": "A thread you started before, to prompt instead of starting one."
         },
         "approve": {
           "type": "array",
@@ -130,14 +131,14 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "prompt_session",
-    "title": "Prompt a session you started",
-    "description": "Send a prompt to a session you started with start_session: it starts a turn at once if none runs, or waits in the session's queue for the running one to end. When the turn ends, you'll get a message saying how it ended.",
+    "title": "Prompt a thread you started",
+    "description": "Send a prompt to a thread you started with start_session: it starts a turn at once if none runs, or waits in the thread's queue for the running one to end. When the turn ends, you'll get a message saying how it ended.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "sessionId": {
           "type": "string",
-          "description": "The session's id, as list_sessions or start_session gave it."
+          "description": "The thread's id, as list_sessions or start_session gave it."
         },
         "prompt": {
           "type": "string",
@@ -159,14 +160,14 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "steer_session",
-    "title": "Steer a session you started",
-    "description": "Send a message into the running turn of a session you started, to correct or add to what it's doing, without starting another turn. If no turn runs, nothing is sent: use prompt_session instead.",
+    "title": "Steer a thread you started",
+    "description": "Send a message into the running turn of a thread you started, to correct or add to what it's doing, without starting another turn. If no turn runs, nothing is sent: use prompt_session instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "sessionId": {
           "type": "string",
-          "description": "The session's id, as list_sessions or start_session gave it."
+          "description": "The thread's id, as list_sessions or start_session gave it."
         },
         "prompt": {
           "type": "string",
@@ -182,14 +183,14 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "cancel_session_turn",
-    "title": "Cancel a session's turn",
-    "description": "Stop the running turn of a session you started. The session stays, and can be prompted again.",
+    "title": "Cancel a thread's turn",
+    "description": "Stop the running turn of a thread you started. The thread stays, and can be prompted again.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "sessionId": {
           "type": "string",
-          "description": "The session's id, as list_sessions or start_session gave it."
+          "description": "The thread's id, as list_sessions or start_session gave it."
         }
       },
       "required": [

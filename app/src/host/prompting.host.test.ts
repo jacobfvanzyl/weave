@@ -235,7 +235,7 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     store.actions.selectSession(`${hostId}/${delegated}`);
     await until('the delegated session\'s answer', (current) => current.includes('assistant: You said: hello from the caller'));
     const prompt = session().transcript.entries.find((entry) => entry.kind === 'message' && entry.role === 'user');
-    expect(prompt).toMatchObject({ origin: 'another session' });
+    expect(prompt).toMatchObject({ origin: 'another thread' });
   });
 
   it('closes a session nobody prompted when it leaves it', async () => {
@@ -256,7 +256,7 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     await until('the answer', (current) => current.includes('assistant: You said: before'));
     await store.actions.reopenSession();
     expect(session().reopening).toBeUndefined();
-    await until('the reopen', (current) => current.includes('info: Reopened this session in a new agent process'));
+    await until('the reopen', (current) => current.includes('info: Reopened this thread in a new agent process'));
     await store.actions.send('after');
     await until('the answer from the new process', (current) => current.includes('assistant: You said: after'));
   });
@@ -299,12 +299,12 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     const listedTitle = () => model().sessions.find((listed) => listed.key === key)?.title;
 
     await store.actions.renameSession(key, '  Named here ');
-    await until('the rename', (current) => current.includes('info: You renamed this session to “Named here”'));
+    await until('the rename', (current) => current.includes('info: You renamed this thread to “Named here”'));
     await waitFor(() => listedTitle() === 'Named here', 'the listed title');
     await expect(store.actions.renameSession(key, ' ')).rejects.toThrow("Couldn't rename it: a title can't be empty.");
 
     await store.actions.send('/tool rename_session {"title": "Named by its agent"}');
-    await until('the agent\'s rename', (current) => current.includes('info: The agent renamed this session to “Named by its agent”'));
+    await until('the agent\'s rename', (current) => current.includes('info: The agent renamed this thread to “Named by its agent”'));
     await waitFor(() => listedTitle() === 'Named by its agent', 'the agent\'s title');
     expect(session().transcript.title).toBe('Named by its agent');
   });

@@ -586,7 +586,7 @@ async fn a_version_that_cant_take_the_session_up_gives_way_to_the_old_one() {
     assert!(
         failed
             .as_deref()
-            .is_some_and(|failed| failed.starts_with("98.0.0 couldn't resume the session")),
+            .is_some_and(|failed| failed.starts_with("98.0.0 couldn't resume the thread")),
         "{failed:?}"
     );
     let launched = world.launched();
@@ -642,7 +642,7 @@ async fn an_agent_that_cant_resume_or_load_keeps_its_process() {
         })
         .await
         .expect_err("it can't move");
-    assert!(error.to_string().contains("new sessions"), "{error}");
+    assert!(error.to_string().contains("new threads"), "{error}");
     assert_eq!(world.launched().len(), started, "nothing started");
     client.turn(&session_id, "hello").await;
 }

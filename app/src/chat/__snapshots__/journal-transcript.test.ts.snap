@@ -11,7 +11,7 @@ info: Turn cancelled"
 exports[`transcripts from recorded journals > shows the close journal the same live and replayed 1`] = `
 "user (from the TUI): hello before closing
 assistant: You said: hello before closing
-info: The session closed — closed by a client"
+info: The thread closed — closed by a client"
 `;
 
 exports[`transcripts from recorded journals > shows the compact journal the same live and replayed 1`] = `
@@ -64,7 +64,7 @@ assistant: All steps are done."
 exports[`transcripts from recorded journals > shows the reopen journal the same live and replayed 1`] = `
 "user (from the TUI): hello before the reopen
 assistant: You said: hello before the reopen
-info: Reopened this session in a new agent process
+info: Reopened this thread in a new agent process
 user (from the TUI): hello after it
 assistant: You said: hello after it"
 `;
