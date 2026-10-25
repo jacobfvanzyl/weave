@@ -276,3 +276,16 @@ async fn cancelling_ends_the_turn_as_cancelled() {
         }
     }
 }
+
+#[tokio::test]
+async fn markdown_streams_its_fixture_a_few_words_at_a_time() {
+    let mut harness = Harness::start(ClientOptions::default()).await;
+    let log = harness.turn("/markdown", "allow").await;
+    assert_eq!(log.message, weave_fake_agent::MARKDOWN);
+    let chunks = log
+        .updates
+        .iter()
+        .filter(|update| matches!(update, SessionUpdate::AgentMessageChunk(_)))
+        .count();
+    assert!(chunks > 50, "{chunks} chunks");
+}

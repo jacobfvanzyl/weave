@@ -144,6 +144,7 @@ impl Turn {
             }
             "plan" => self.plan(cx).await?,
             "slow" => self.slow(cx, rest.parse().unwrap_or(20)).await?,
+            "markdown" => self.markdown(cx).await?,
             "ask" => self.ask(cx).await?,
             "connect" => self.connect(cx).await?,
             "mcp" => self.list_mcp_servers(cx).await?,
@@ -490,6 +491,20 @@ impl Turn {
                 SessionUpdate::AgentMessageChunk(ContentChunk::new(text)),
             )?;
             if self.cancel.sleep(Duration::from_millis(200)).await {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    /// [`crate::MARKDOWN`], a few words per chunk and a little apart, so clients see its blocks
+    /// arrive half-written.
+    async fn markdown(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        let words: Vec<&str> = crate::MARKDOWN.split_inclusive(' ').collect();
+        for chunk in words.chunks(3) {
+            let chunk = ContentChunk::new(ContentBlock::from(chunk.concat()));
+            self.update(cx, SessionUpdate::AgentMessageChunk(chunk))?;
+            if self.cancel.sleep(Duration::from_millis(15)).await {
                 return Ok(());
             }
         }

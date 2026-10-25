@@ -11,6 +11,7 @@
 //! | `kill-after <ms> <command>` | `run` that kills the command after a delay |
 //! | `plan` | a plan whose entries progress |
 //! | `slow <n>` | `n` message chunks, slowly, honoring cancellation |
+//! | `markdown` | [`MARKDOWN`], streamed a few words at a time |
 //! | `ask` | a form elicitation using every field type |
 //! | `connect` | a URL elicitation, completed shortly after consent |
 //! | `mcp` | lists the MCP servers the session was given |
@@ -109,6 +110,12 @@ use crate::steering::SteerResponse;
 use crate::turn::Turn;
 use crate::turn::notify;
 use crate::turn::prompt_text;
+
+/// The `markdown` script's reply: the rich Markdown agents write, which clients render or fall
+/// back on (WVE-122). Mermaid inside and outside a terminal renderer's subset and one that doesn't
+/// parse; math in every delimiter beside money and a shell variable; each GitHub alert; a footnote,
+/// a remote image, inline HTML and highlighted code.
+pub const MARKDOWN: &str = include_str!("markdown.md");
 
 /// How a fake agent instance behaves.
 #[derive(Clone, Debug)]
@@ -583,6 +590,11 @@ fn advertise_commands(cx: &ConnectionTo<Client>, session_id: &SessionId) -> Resu
         ),
         command("plan", "Show a plan that progresses", None),
         command("slow", "Stream chunks slowly", Some("number of chunks")),
+        command(
+            "markdown",
+            "Write diagrams, math, alerts and other rich Markdown",
+            None,
+        ),
         command("ask", "Ask a few questions with a form", None),
         command("connect", "Connect an account through a URL", None),
         command("mcp", "List the MCP servers this session has", None),
