@@ -281,3 +281,7 @@ html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {
   max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 2rem);
   overflow-y: auto;
 }
+
+/* An inline diagram pans sideways but leaves a vertical swipe to scroll the transcript, which
+   Streamdown's touch-action: none would take; fullscreen still pans every way. */
+[data-streamdown="mermaid-block"] [role="application"] { touch-action: pan-y !important; }

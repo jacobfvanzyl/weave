@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/utils';
 import { imagesAsLinks } from '@/markdown/images-as-links';
 import { mathPlugin, withMath } from '@/markdown/math';
+import { MermaidSource, mermaidPlugin } from '@/markdown/mermaid';
 
 export type MessageResponseProps = StreamdownProps;
 
@@ -70,6 +71,15 @@ function LinkConfirmation({ isOpen, onClose, onConfirm, url }: LinkSafetyModalPr
 const plugins: StreamdownProps['plugins'] = {
   code: createCodePlugin({ themes: ['catppuccin-latte', 'catppuccin-mocha'] }),
   math: mathPlugin,
+  mermaid: mermaidPlugin,
+};
+
+const mermaid: StreamdownProps['mermaid'] = { errorComponent: MermaidSource };
+
+/** Copy and fullscreen, and no downloads, which the iOS web view doesn't save anywhere. */
+const controls: StreamdownProps['controls'] = {
+  code: { copy: true, download: false },
+  mermaid: { copy: true, download: false, fullscreen: true, panZoom: true },
 };
 
 const linkSafety: StreamdownProps['linkSafety'] = { enabled: true, renderModal: (props) => <LinkConfirmation {...props} /> };
@@ -119,7 +129,8 @@ const markdownComponents: StreamdownProps['components'] = {
 
 /**
  * AI Elements' streaming Markdown response, for agent text, which is untrusted: raw HTML shows as
- * text, links open only once the person confirms them, code is highlighted and math typeset.
+ * text, links open only once the person confirms them, code is highlighted, math typeset and
+ * Mermaid diagrams drawn, all inert.
  */
 export const MessageResponse = memo(
   ({ className, children, isAnimating = false, ...props }: MessageResponseProps) => {
@@ -138,6 +149,8 @@ export const MessageResponse = memo(
         rehypePlugins={rehypePlugins}
         linkSafety={linkSafety}
         plugins={plugins}
+        mermaid={mermaid}
+        controls={controls}
         isAnimating={isAnimating}
         {...props}
         components={{ ...markdownComponents, ...props.components }}

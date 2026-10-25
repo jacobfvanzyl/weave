@@ -9,6 +9,7 @@ import {
   type AcpTranscript,
   type AcpTranscriptEvent,
 } from './acp-transcript';
+import markdownRecording from './fixtures/journals/markdown.json';
 
 export const ACP_SESSION_UPDATE_KINDS = [
   'user_message_chunk',
@@ -373,3 +374,16 @@ const events: AcpTranscriptEvent[] = [
 
 export const createAcpShowcaseTranscript = (): AcpTranscript =>
   structuredClone(events).reduce(reduceAcpEvent, createTranscript('showcase'));
+
+/**
+ * The fake agent's `/markdown` reply (WVE-128) as recorded from a dev Host, for the `markdown` mock
+ * scenario: diagrams, math, alerts and the rest of the rich Markdown agents write.
+ */
+export const createMarkdownShowcaseTranscript = (): AcpTranscript => markdownRecording.events
+  .flatMap(({ event }): AcpTranscriptEvent[] => (event.kind === 'update' && event.notification
+    ? [{ type: 'session/update', update: event.notification.update as SessionUpdate }]
+    : []))
+  .reduce(reduceAcpEvent, reduceAcpEvent(createTranscript('markdown'), {
+    type: 'session/update',
+    update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: '/markdown' } },
+  }));

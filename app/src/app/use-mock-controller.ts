@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react';
-import { createAcpShowcaseTranscript } from '@/chat/acp-showcase';
+import { createAcpShowcaseTranscript, createMarkdownShowcaseTranscript } from '@/chat/acp-showcase';
 import { type AcpTranscript, type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import type { ContentBlock } from '@/host/protocol';
 import {
@@ -17,7 +17,7 @@ import {
 import { SessionReadState } from './session-read-state';
 
 /** Fixture states for UI work and tests until the app talks to a Host (WVE-100). */
-export const MOCK_SCENARIOS = ['list', 'session', 'running', 'unreachable', 'banner', 'empty'] as const;
+export const MOCK_SCENARIOS = ['list', 'session', 'running', 'unreachable', 'banner', 'empty', 'markdown'] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const mockScenarioFromLocation = (search = location.search): MockScenario => {
@@ -149,8 +149,12 @@ type MockState = {
   repositories: MockRepositories;
 };
 
+/** The `markdown` scenario's thread, which shows the fake agent's rich Markdown reply. */
+const MARKDOWN = 'rich-markdown';
+
 const transcriptFor = (session: SessionSummary): AcpTranscript => {
-  const transcript = { ...createAcpShowcaseTranscript(), sessionId: session.sessionId, title: session.title };
+  const showcase = session.sessionId === MARKDOWN ? createMarkdownShowcaseTranscript() : createAcpShowcaseTranscript();
+  const transcript = { ...showcase, sessionId: session.sessionId, title: session.title };
   return session.activity === 'running' ? reduceAcpEvent(transcript, { type: 'turn/started' }) : transcript;
 };
 
@@ -158,12 +162,16 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
   if (scenario === 'empty') {
     return { model: { hosts: [], sessions: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {} };
   }
-  const list = sessions(now);
+  const list = scenario === 'markdown'
+    ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain }), ...sessions(now)]
+    : sessions(now);
   const selectedKey = scenario === 'session'
     ? sessionKey(MAC, 'fix-reconnect')
     : scenario === 'running'
       ? sessionKey(MAC, 'protocol-spec')
-      : undefined;
+      : scenario === 'markdown'
+        ? sessionKey(MAC, MARKDOWN)
+        : undefined;
   return {
     model: {
       hosts: hosts(now, scenario === 'unreachable'),

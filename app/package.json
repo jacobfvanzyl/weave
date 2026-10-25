@@ -31,6 +31,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "katex": "^0.19.1",
+    "mermaid": "^11.17.2",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "rehype-katex": "7.0.1",

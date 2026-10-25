@@ -62,8 +62,8 @@ Record them again with `scripts/record-journals.ts` after the Host or fake agent
 journals, and review the snapshot's diff.
 
 `?mock=` picks a fixture scenario (`list`, `session`, `running`, `unreachable`, `banner`,
-`empty`); `?idiom=phone` or `?idiom=pad` stands in for the device in a browser, since the layout
-follows the device, not the window's width. A debug build takes the scenario as a launch argument
+`empty`, and `markdown`, the fake agent's rich Markdown reply); `?idiom=phone` or `?idiom=pad`
+stands in for the device in a browser, since the layout follows the device, not the window's width. A debug build takes the scenario as a launch argument
 instead: `xcrun simctl launch <device> com.veezee.weave --mock running`.
 
 ## Conventions
