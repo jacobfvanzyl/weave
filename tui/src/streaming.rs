@@ -18,6 +18,7 @@ use crate::history_cell;
 use crate::history_cell::dim;
 use crate::markdown::commit_boundary;
 use crate::markdown::render_markdown;
+use crate::runs::Times;
 use crate::style;
 use crate::thumbnails;
 use crate::thumbnails::Slot;
@@ -44,6 +45,8 @@ pub struct MessageStream {
     images: Vec<Arc<Slot>>,
     /// Rendered lines already committed to scrollback.
     committed: usize,
+    /// When its first and latest chunks came.
+    times: Times,
 }
 
 impl MessageStream {
@@ -55,6 +58,7 @@ impl MessageStream {
             source: String::new(),
             images: Vec::new(),
             committed: 0,
+            times: Times::default(),
         }
     }
 
@@ -72,6 +76,15 @@ impl MessageStream {
 
     pub fn push_image(&mut self, image: Arc<Slot>) {
         self.images.push(image);
+    }
+
+    /// A chunk came at `at`, in milliseconds since the Unix epoch.
+    pub fn touch(&mut self, at: u64) {
+        self.times.touch(at);
+    }
+
+    pub fn times(&self) -> Times {
+        self.times
     }
 
     /// Lines for every complete source line that has not been committed yet (holding back a

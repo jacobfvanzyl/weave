@@ -20,6 +20,7 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use unicode_width::UnicodeWidthStr;
 use weave_acp_core::extension_terminal_id;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::Diff;
@@ -34,8 +35,10 @@ use weave_acp_core::schema::ToolKind;
 
 use crate::conventions::ToolInput;
 use crate::conventions::title_without_verb;
+use crate::footer::truncate;
 use crate::highlight;
 use crate::permission::Subject;
+use crate::runs::Times;
 use crate::status::activity_bullet;
 use crate::style;
 use crate::style::DiffKind;
@@ -83,6 +86,8 @@ pub struct ToolCallCell {
     /// What its `rawInput` says, where it follows a known convention.
     input: ToolInput,
     started: Instant,
+    /// When the events that made and last changed it happened, for timing runs of work.
+    times: Times,
     /// A command the user ran from shell mode, not one of the agent's.
     user_shell: bool,
 }
@@ -99,6 +104,7 @@ impl ToolCallCell {
             locations: call.locations,
             input: ToolInput::from_raw(call.raw_input.as_ref()),
             started: Instant::now(),
+            times: Times::default(),
             user_shell: false,
         }
     }
@@ -120,6 +126,25 @@ impl ToolCallCell {
 
     pub fn is_user_shell(&self) -> bool {
         self.user_shell
+    }
+
+    pub fn kind(&self) -> ToolKind {
+        self.kind
+    }
+
+    pub fn times(&self) -> Times {
+        self.times
+    }
+
+    /// Made or changed by an event at `at`, in milliseconds since the Unix epoch.
+    pub fn touch(&mut self, at: u64) {
+        self.times.touch(at);
+    }
+
+    /// Dated as `earlier`, the call it takes the place of, was.
+    pub fn continuing(mut self, earlier: &Self) -> Self {
+        self.times = earlier.times.join(self.times);
+        self
     }
 
     /// A cell for an update whose tool call was never announced.
@@ -238,6 +263,11 @@ impl ToolCallCell {
             (_, Some(now)) => activity_bullet(now.saturating_duration_since(self.started)),
             (_, None) => "•".dim(),
         }
+    }
+
+    /// The call as one row, as the app's card shows it closed: its title, and its status.
+    pub fn card(&self, width: usize, now: Option<Instant>) -> DisplayLine {
+        card_line(self.bullet(now), self.title(), self.status, width)
     }
 
     fn header(&self, running: &str, done: &str, now: Option<Instant>) -> Line<'static> {
@@ -932,6 +962,62 @@ impl ExploreGroup {
         rows.extend(elbow(entries, width));
         rows
     }
+
+    /// The group as one row, as a call's card: its calls' titles, and their status together;
+    /// `active` while more exploring may follow.
+    pub fn card(&self, width: usize, now: Option<Instant>, active: bool) -> DisplayLine {
+        let status = if active || self.calls.iter().any(|call| !call.is_finished()) {
+            ToolCallStatus::InProgress
+        } else if self.calls.iter().any(ToolCallCell::failed) {
+            ToolCallStatus::Failed
+        } else {
+            ToolCallStatus::Completed
+        };
+        let bullet = match (status, now, self.calls.first()) {
+            (ToolCallStatus::Completed, ..) => "•".green().bold(),
+            (ToolCallStatus::Failed, ..) => "•".red().bold(),
+            (_, Some(now), Some(first)) => {
+                activity_bullet(now.saturating_duration_since(first.started))
+            }
+            _ => "•".dim(),
+        };
+        let titles: Vec<&str> = self.calls.iter().map(ToolCallCell::title).collect();
+        card_line(bullet, &titles.join(", "), status, width)
+    }
+}
+
+/// A call's card as one row: `bullet`, `title` cut to fit, and `status` as the app words it at
+/// the row's end, on the work rows' fill.
+fn card_line(
+    bullet: Span<'static>,
+    title: &str,
+    status: ToolCallStatus,
+    width: usize,
+) -> DisplayLine {
+    let word = match status {
+        ToolCallStatus::InProgress => "in progress",
+        ToolCallStatus::Completed => "completed",
+        ToolCallStatus::Failed => "failed",
+        _ => "pending",
+    };
+    let word = if status == ToolCallStatus::Failed {
+        word.red()
+    } else {
+        Span::styled(word, style::dim())
+    };
+    // The bullet and a space before; a space between, and one after.
+    let room = width.saturating_sub(4 + word.width());
+    let title = truncate(&title.replace(char::is_control, " "), room);
+    let gap = room.saturating_sub(title.width()) + 1;
+    let line = Line::from(vec![
+        Span::raw(title),
+        Span::raw(" ".repeat(gap)),
+        word,
+        Span::raw(" "),
+    ]);
+    let mut row = DisplayLine::whole(line).prefixed(&[bullet, Span::raw(" ")]);
+    row.line.style = style::work_row();
+    row
 }
 
 /// `Read a.rs` / `Search query`: the action in the accent color, wrapped under its target.

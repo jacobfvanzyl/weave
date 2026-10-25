@@ -192,6 +192,16 @@ fn sent_prompt_for(palette: &Palette) -> Style {
     shade(palette, 0.16, 0.02)
 }
 
+/// Rows that stand for the agent's work in the fullscreen transcript, a tool call's card and a
+/// run of them: a fainter fill than a sent prompt's.
+pub fn work_row() -> Style {
+    work_row_for(&palette::current())
+}
+
+fn work_row_for(palette: &Palette) -> Style {
+    shade(palette, 0.07, 0.012)
+}
+
 fn shade(palette: &Palette, dark_alpha: f32, light_alpha: f32) -> Style {
     let fill = if palette.is_light() {
         palette.over_background((0, 0, 0), light_alpha)
@@ -224,6 +234,7 @@ mod tests {
         assert_eq!(composer_for(&dark).bg, Some(rgb((57, 57, 71))));
         assert_eq!(composer_for(&light).bg, Some(rgb((229, 231, 235))));
         assert_eq!(sent_prompt_for(&dark).bg, Some(rgb((66, 66, 79))));
+        assert_eq!(work_row_for(&dark).bg, Some(rgb((45, 45, 60))));
         assert_eq!(composer_for(&Palette::UNKNOWN), Style::default());
 
         assert_eq!(accent_for(&dark), rgb((99, 168, 248)));

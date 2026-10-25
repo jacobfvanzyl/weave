@@ -11,7 +11,7 @@ export type ToolProps = ComponentProps<typeof Collapsible>;
 export function Tool({ className, ...props }: ToolProps) {
   return (
     <Collapsible
-      className={cn('group w-full overflow-hidden rounded-md border bg-card/50', className)}
+      className={cn('group w-full overflow-hidden rounded-md border bg-work-background', className)}
       data-slot="tool"
       {...props}
     />

@@ -710,3 +710,291 @@ fn update_moved_fullscreen() {
     let chat = updated(with_update(fullscreen_chat()));
     insta::assert_snapshot!(full_screen(&chat, 18));
 }
+
+/// When the turns below began, in milliseconds since the Unix epoch, as the journal dates them.
+const TURN_START: u64 = 1_761_400_000_000;
+
+/// `event` from the journal, `seconds` into the turn.
+fn journal(chat: &mut ChatWidget, seconds: u64, event: ChatEvent) {
+    chat.handle_journal_event(event, TURN_START + seconds * 1000);
+}
+
+fn journal_update(chat: &mut ChatWidget, seconds: u64, update: SessionUpdate) {
+    journal(
+        chat,
+        seconds,
+        ChatEvent::SessionUpdate(SessionNotification::new("s1", update)),
+    );
+}
+
+/// A command run in terminal `terminal`, which printed `output`.
+fn command(id: &str, command: &str, terminal: &str) -> ToolCall {
+    ToolCall::new(id.to_owned(), command)
+        .kind(ToolKind::Execute)
+        .status(ToolCallStatus::InProgress)
+        .raw_input(serde_json::json!({ "command": command }))
+        .content(vec![ToolCallContent::Terminal(Terminal::new(
+            terminal.to_owned(),
+        ))])
+}
+
+fn finished(id: &str, seconds: u64, status: ToolCallStatus, chat: &mut ChatWidget) {
+    journal_update(
+        chat,
+        seconds,
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            id.to_owned(),
+            ToolCallUpdateFields::new().status(status),
+        )),
+    );
+}
+
+fn terminal_output(chat: &mut ChatWidget, seconds: u64, terminal: &str, text: &str) {
+    journal(
+        chat,
+        seconds,
+        ChatEvent::TerminalOutput {
+            terminal_id: terminal.to_owned().into(),
+            text: text.into(),
+        },
+    );
+}
+
+/// A turn started on another client 2m 20s ago, its prompt dated then.
+fn started_elsewhere(chat: &mut ChatWidget, replayed: bool) {
+    journal(
+        chat,
+        0,
+        ChatEvent::TurnStarted {
+            session_id: "s1".into(),
+            prompt: vec!["Fix the flaky parser test".into()],
+            elapsed: std::time::Duration::from_secs(140),
+            replayed,
+        },
+    );
+}
+
+/// The turn, from its thinking through its tool calls to its answer: a read, a search, the
+/// tests (failing, when `fails`), an edit, and the tests again, the last done 2m 17s in.
+fn worked(chat: &mut ChatWidget, fails: bool, replayed: bool) {
+    started_elsewhere(chat, replayed);
+    journal_update(
+        chat,
+        2,
+        SessionUpdate::AgentThoughtChunk(text(
+            "**Finding the fixture**\n\nThe test reads a fixture that may have moved.",
+        )),
+    );
+    journal_update(
+        chat,
+        4,
+        SessionUpdate::ToolCall(
+            ToolCall::new("read", "Read parser.rs")
+                .kind(ToolKind::Read)
+                .status(ToolCallStatus::Completed)
+                .locations(vec![ToolCallLocation::new("/repo/src/parser.rs")]),
+        ),
+    );
+    journal_update(
+        chat,
+        5,
+        SessionUpdate::ToolCall(
+            ToolCall::new("grep", "grep fixtures/")
+                .kind(ToolKind::Search)
+                .status(ToolCallStatus::Completed)
+                .raw_input(serde_json::json!({ "pattern": "fixtures/", "path": "src" })),
+        ),
+    );
+    journal_update(
+        chat,
+        9,
+        SessionUpdate::ToolCall(command("test", "cargo test -p parser", "term-1")),
+    );
+    let (output, first_run) = if fails {
+        ("test parser::empty ... FAILED", ToolCallStatus::Failed)
+    } else {
+        ("test parser::empty ... ok", ToolCallStatus::Completed)
+    };
+    terminal_output(chat, 30, "term-1", &format!("running 4 tests\n{output}\n"));
+    finished("test", 40, first_run, chat);
+    journal_update(
+        chat,
+        70,
+        SessionUpdate::ToolCall(
+            ToolCall::new("edit", "Edit parser.rs")
+                .kind(ToolKind::Edit)
+                .status(ToolCallStatus::Completed)
+                .content(vec![ToolCallContent::Diff(
+                    Diff::new(
+                        "/repo/src/parser.rs",
+                        "const FIXTURES: &str = \"tests/fixtures\";\n",
+                    )
+                    .old_text("const FIXTURES: &str = \"fixtures\";\n".to_owned()),
+                )]),
+        ),
+    );
+    journal_update(
+        chat,
+        100,
+        SessionUpdate::ToolCall(command("retest", "cargo test -p parser", "term-2")),
+    );
+    terminal_output(chat, 130, "term-2", "running 4 tests\ntest result: ok\n");
+    finished("retest", 137, ToolCallStatus::Completed, chat);
+    journal_update(
+        chat,
+        138,
+        SessionUpdate::AgentMessageChunk(text(
+            "Fixed: the test read its fixture from the old path.",
+        )),
+    );
+    journal(
+        chat,
+        140,
+        ChatEvent::TurnEnded {
+            session_id: "s1".into(),
+            result: Ok(PromptResponse::new(StopReason::EndTurn)),
+            replayed,
+        },
+    );
+}
+
+/// The screen in the compact view, then in the detailed one (Ctrl+T).
+fn both_views(chat: &mut ChatWidget, compact: u16, detailed: u16) -> String {
+    let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+    let shown = full_screen(chat, compact);
+    chat.handle_key(ctrl_t);
+    let full = full_screen(chat, detailed);
+    chat.handle_key(ctrl_t);
+    format!("── compact ──\n{shown}\n── detailed ──\n{full}")
+}
+
+/// Click the row that starts with `text`.
+fn click(chat: &mut ChatWidget, height: u16, text: &str) {
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
+
+    let screen = full_screen(chat, height);
+    let row = screen
+        .lines()
+        .position(|row| row.starts_with(text))
+        .unwrap_or_else(|| panic!("no row starts with {text:?} in\n{screen}"));
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        chat.handle_mouse(MouseEvent {
+            kind,
+            column: 4,
+            row: u16::try_from(row).unwrap_or_default(),
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+}
+
+#[test]
+fn fullscreen_run_closed() {
+    let mut chat = fullscreen_chat();
+    worked(&mut chat, false, false);
+    insta::assert_snapshot!(both_views(&mut chat, 14, 38));
+}
+
+#[test]
+fn fullscreen_run_open() {
+    let mut chat = fullscreen_chat();
+    worked(&mut chat, false, false);
+    click(&mut chat, 38, "• Ran ");
+    insta::assert_snapshot!(both_views(&mut chat, 38, 38));
+}
+
+#[test]
+fn fullscreen_run_failed() {
+    let mut chat = fullscreen_chat();
+    worked(&mut chat, true, false);
+    insta::assert_snapshot!(both_views(&mut chat, 14, 38));
+}
+
+/// A turn of this client's own, at work on a command: undated events are timed as they arrive.
+#[test]
+fn fullscreen_run_running() {
+    let mut chat = fullscreen_chat();
+    chat.handle_paste("Fix the flaky parser test");
+    chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    send(
+        &mut chat,
+        SessionUpdate::ToolCall(
+            ToolCall::new("read", "Read parser.rs")
+                .kind(ToolKind::Read)
+                .status(ToolCallStatus::Completed)
+                .locations(vec![ToolCallLocation::new("/repo/src/parser.rs")]),
+        ),
+    );
+    send(
+        &mut chat,
+        SessionUpdate::ToolCall(command("test", "cargo test -p parser", "term-1")),
+    );
+    chat.handle_agent_event(ChatEvent::TerminalOutput {
+        terminal_id: "term-1".into(),
+        text: "running 4 tests\n".into(),
+    });
+    insta::assert_snapshot!(both_views(&mut chat, 12, 24));
+}
+
+/// One tool call, with thinking before it, doesn't fold.
+#[test]
+fn fullscreen_lone_tool_call() {
+    let mut chat = fullscreen_chat();
+    started_elsewhere(&mut chat, false);
+    journal_update(
+        &mut chat,
+        2,
+        SessionUpdate::AgentThoughtChunk(text("**Running the tests**\n\nThey should pass now.")),
+    );
+    journal_update(
+        &mut chat,
+        3,
+        SessionUpdate::ToolCall(command("test", "cargo test -p parser", "term-1")),
+    );
+    terminal_output(
+        &mut chat,
+        30,
+        "term-1",
+        "running 4 tests\ntest result: ok\n",
+    );
+    finished("test", 31, ToolCallStatus::Completed, &mut chat);
+    journal_update(
+        &mut chat,
+        32,
+        SessionUpdate::AgentMessageChunk(text("They pass.")),
+    );
+    journal(
+        &mut chat,
+        33,
+        ChatEvent::TurnEnded {
+            session_id: "s1".into(),
+            result: Ok(PromptResponse::new(StopReason::EndTurn)),
+            replayed: false,
+        },
+    );
+    insta::assert_snapshot!(both_views(&mut chat, 22, 22));
+}
+
+/// A replayed thread's runs fold as a live one's did, timed by the journal.
+#[test]
+fn fullscreen_run_replayed_folds_as_live() {
+    let rows = |replayed| {
+        let mut chat = fullscreen_chat();
+        worked(&mut chat, false, replayed);
+        chat.replay_finished();
+        full_screen(&chat, 16)
+            .lines()
+            .filter(|row| row.starts_with("• Ran"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rows(true),
+        ["• Ran 2 commands, 1 edit, 1 read, 1 search · 2m 17s"]
+    );
+    assert_eq!(rows(false), rows(true));
+}

@@ -18,6 +18,7 @@
 //! | `tool <name> <json>` | calls a tool on the session's `weave` MCP server, over ACP (`mcp/message`) or stdio |
 //! | `mcp-legacy` | opens the `weave` MCP server with `initialize`, as a client before MCP 2026-07-28 |
 //! | `think` | thought chunks, then a message |
+//! | `work [fail]` | thinking, then five tool calls a moment apart (one failing with `fail`), then a message |
 //! | `delegate` | two subagents (draft RFD) that report work in their own sessions |
 //! | `delegate-legacy` | the same in the RFD's earlier draft, as some adapters send it |
 //! | `compact` | a context compaction with a streamed summary (Preview), when the client asks for them |
@@ -599,6 +600,11 @@ fn advertise_commands(cx: &ConnectionTo<Client>, session_id: &SessionId) -> Resu
         command("connect", "Connect an account through a URL", None),
         command("mcp", "List the MCP servers this session has", None),
         command("think", "Reason out loud, then answer", None),
+        command(
+            "work",
+            "Think, then make five tool calls a moment apart",
+            Some("fail, to fail one"),
+        ),
         command("compact", "Compact the context, keeping a summary", None),
         command("delegate", "Delegate to two subagents", None),
         command(

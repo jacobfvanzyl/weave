@@ -83,6 +83,7 @@ use crate::input::Input;
 use crate::links;
 use crate::markdown;
 use crate::markdown::Rendering;
+use crate::runs;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
 use crate::settings::SettingChange;
@@ -550,12 +551,15 @@ impl App {
                 if self.is_mine(&origin) && !replayed && queued_id.is_none() {
                     return commands;
                 }
-                commands.extend(chat.handle_agent_event(ChatEvent::TurnStarted {
-                    session_id,
-                    prompt,
-                    elapsed: since(at),
-                    replayed,
-                }));
+                commands.extend(chat.handle_journal_event(
+                    ChatEvent::TurnStarted {
+                        session_id,
+                        prompt,
+                        elapsed: since(at),
+                        replayed,
+                    },
+                    at,
+                ));
                 return commands;
             }
             // The queue a session's state gave covers the replay.
@@ -647,7 +651,7 @@ impl App {
             },
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
         };
-        chat.handle_agent_event(event)
+        chat.handle_journal_event(event, at)
     }
 
     /// The Host answered an open: show the session, then what's running and waiting in it.
@@ -1417,7 +1421,6 @@ fn run_client_tool(
     }
 }
 
-/// How long ago `at` was.
 /// What a queued prompt says, as the composer would hold it: its text, and a placeholder for
 /// each image.
 fn prompt_text(prompt: &[ContentBlock]) -> String {
@@ -1436,13 +1439,9 @@ fn prompt_text(prompt: &[ContentBlock]) -> String {
     parts.join(" ")
 }
 
+/// How long ago `at` was.
 fn since(at: u64) -> Duration {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-        });
-    Duration::from_millis(now.saturating_sub(at))
+    Duration::from_millis(runs::now_millis().saturating_sub(at))
 }
 
 /// Run a shell-mode command in `cwd`, streaming its output (stdout and stderr together, as

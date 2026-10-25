@@ -1,0 +1,50 @@
+---
+source: tui/src/render_snapshots.rs
+expression: "both_views(&mut chat, 22, 22)"
+---
+── compact ──
+
+› Fix the flaky parser test
+
+
+• Running the tests
+
+  They should pass now.
+
+• cargo test -p parser                                        completed
+
+• They pass.
+
+  Worked for 2m 20s • 12:00
+
+
+
+
+
+
+›
+
+  Agent
+── detailed ──
+
+› Fix the flaky parser test
+
+
+• Running the tests
+
+  They should pass now.
+
+• cargo test -p parser                                        completed
+• Ran cargo test -p parser
+  └ running 4 tests
+    test result: ok
+
+• They pass.
+
+  Worked for 2m 20s • 12:00
+
+  Full transcript · ⌃t to return
+
+›
+
+  Agent

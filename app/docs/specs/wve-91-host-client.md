@@ -220,10 +220,12 @@ as part of the text, as the TUI draws them, with no frame or buttons.
 
 How the work shows (`src/chat/transcript-runs.ts`):
 
-- **Tool calls** start closed, whatever their status, and open when tapped. The agent's raw input
-  and output aren't shown.
+- **Tool calls** start closed, whatever their status, and open when tapped: a card a little
+  lighter than the chat, its title and status on one line. The agent's raw input and output
+  aren't shown.
 - **Runs of work.** Two or more tool calls in a row, with the thinking between them, fold into
-  one closed row: "Worked for 2m 17s · 9 commands, 2 edits", and "1 failed" when one did.
+  one closed card drawn as a tool call's is: "Worked for 2m 17s · 9 commands, 2 edits", and
+  "1 failed" when one did. The TUI shades its rows for both the same way (WVE-140).
   Anything else the agent says ends a run. A tool call waiting on the person shows below the row
   while it's closed.
 - **While a turn runs,** its latest run is its activity, however short: "Working", how long so

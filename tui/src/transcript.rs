@@ -29,6 +29,9 @@ use crate::compaction::Compaction;
 use crate::find;
 use crate::history_cell;
 use crate::links;
+use crate::runs::Part;
+use crate::runs::Times;
+use crate::runs::WorkRun;
 use crate::streaming::StreamKind;
 use crate::streaming::render_compact;
 use crate::streaming::render_with_images;
@@ -46,11 +49,13 @@ const WHEEL_ROWS: isize = 3;
 
 type Render = dyn Fn(usize, bool) -> Vec<DisplayLine> + Send + Sync;
 
+type RenderCard = dyn Fn(usize) -> DisplayLine + Send + Sync;
+
 /// A cell's rows at one width and state of its images.
 type CachedLayout = (Shape, Arc<Vec<DisplayLine>>);
 
-/// What a cell's rows depend on: the width, and for a cell showing images, their thumbnails
-/// and the shape of the cells they're sized by.
+/// What a cell's rows depend on, besides what opening and closing it changes: the width, and
+/// for a cell showing images, their thumbnails and the shape of the cells they're sized by.
 #[derive(Clone, Copy, PartialEq)]
 struct Shape {
     width: usize,
@@ -60,11 +65,27 @@ struct Shape {
 
 /// One committed transcript entry, renderable at any width, compactly or in full detail.
 pub struct TranscriptCell {
-    render: Box<Render>,
+    body: Body,
     /// The images the cell shows.
     images: Vec<Arc<Slot>>,
     /// The latest layout for each of the compact and detailed views, with its shape.
     cache: Mutex<[Option<CachedLayout>; 2]>,
+    /// What the cell is to a run of work, and when it was made and last changed.
+    part: Part,
+    times: Times,
+}
+
+enum Body {
+    Render(Box<Render>),
+    /// A tool call, or reads and searches as one: folded (`open` some), its card, with the call
+    /// as drawn otherwise under it while open; unfolded, as in inline mode, just the call.
+    Call {
+        card: Box<RenderCard>,
+        render: Box<Render>,
+        open: Option<bool>,
+    },
+    /// A run of work folded into one row, with its entries under it while open.
+    Run(WorkRun),
 }
 
 impl TranscriptCell {
@@ -78,9 +99,11 @@ impl TranscriptCell {
         render: impl Fn(usize, bool) -> Vec<DisplayLine> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            render: Box::new(render),
+            body: Body::Render(Box::new(render)),
             images: Vec::new(),
             cache: Mutex::new([None, None]),
+            part: Part::Other,
+            times: Times::default(),
         }
     }
 
@@ -95,8 +118,104 @@ impl TranscriptCell {
         }
     }
 
+    /// A tool call's cell: `render` draws the call, and `card` its one row once folded.
+    fn call(
+        card: impl Fn(usize) -> DisplayLine + Send + Sync + 'static,
+        render: impl Fn(usize, bool) -> Vec<DisplayLine> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            body: Body::Call {
+                card: Box::new(card),
+                render: Box::new(render),
+                open: None,
+            },
+            ..Self::with_detail(|_, _| Vec::new())
+        }
+    }
+
+    /// A run of work folded into one row, closed unless it was opened while it ran.
+    pub fn run(run: WorkRun) -> Self {
+        let images = run
+            .entries()
+            .iter()
+            .flat_map(|entry| entry.images.iter().cloned())
+            .collect();
+        Self {
+            body: Body::Run(run),
+            images,
+            cache: Mutex::new([None, None]),
+            part: Part::Other,
+            times: Times::default(),
+        }
+    }
+
+    /// Dated by the events that made and last changed it.
+    pub fn with_times(mut self, times: Times) -> Self {
+        self.times = times;
+        self
+    }
+
+    fn with_part(mut self, part: Part) -> Self {
+        self.part = part;
+        self
+    }
+
+    pub fn part(&self) -> &Part {
+        &self.part
+    }
+
+    pub fn times(&self) -> Times {
+        self.times
+    }
+
+    /// When a prompt or message was last written; a run after it began then.
+    pub fn written(&self) -> Option<u64> {
+        if self.part == Part::Message {
+            self.times.updated
+        } else {
+            None
+        }
+    }
+
+    /// A tool call's cell folded to its card, as the fullscreen transcript shows calls, `open`
+    /// or closed; other cells stay as they are.
+    pub fn fold(mut self, open: bool) -> Self {
+        if let Body::Call { open: folded, .. } = &mut self.body {
+            *folded = Some(open);
+        }
+        self
+    }
+
+    /// Whether a click on the cell's first row opens or closes it.
+    pub fn folds(&self) -> bool {
+        matches!(self.body, Body::Call { open: Some(_), .. } | Body::Run(_))
+    }
+
+    /// Open or close what the cell's row `row` heads, as laid out at `width` in the view
+    /// `detail` names: the cell itself, from its first row, or a call within an open run.
+    /// Returns whether anything did.
+    pub fn toggle_at(&mut self, row: usize, width: usize, detail: bool) -> bool {
+        let toggled = match &mut self.body {
+            Body::Call {
+                open: Some(open), ..
+            } if row == 0 => {
+                *open = !*open;
+                true
+            }
+            Body::Run(run) => run.toggle_at(row, width, detail),
+            _ => false,
+        };
+        if toggled {
+            *self
+                .cache
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = [None, None];
+        }
+        toggled
+    }
+
     /// The cell's lines at `width`, rendered once per width and view, and again when its
-    /// images change.
+    /// images change or it opens or closes.
     pub fn lines(&self, width: usize, detail: bool) -> Arc<Vec<DisplayLine>> {
         let shape = self.shape(width);
         let mut cache = self
@@ -109,7 +228,24 @@ impl TranscriptCell {
         {
             return Arc::clone(lines);
         }
-        let lines = Arc::new((self.render)(width, detail));
+        let lines = Arc::new(match &self.body {
+            Body::Render(render) => render(width, detail),
+            Body::Call {
+                render, open: None, ..
+            } => render(width, detail),
+            Body::Call {
+                card,
+                render,
+                open: Some(open),
+            } => {
+                let mut lines = vec![card(width)];
+                if *open || detail {
+                    lines.extend(render(width, detail));
+                }
+                lines
+            }
+            Body::Run(run) => run.lines(width, detail),
+        });
         *slot = Some((shape, Arc::clone(&lines)));
         lines
     }
@@ -150,6 +286,7 @@ impl TranscriptCell {
         Self::with_images(images, move |width, _| {
             render_with_images(StreamKind::User, &text, &shown, width)
         })
+        .with_part(Part::Message)
     }
 
     pub fn plan(plan: Plan) -> Self {
@@ -160,6 +297,11 @@ impl TranscriptCell {
     /// compact view.
     pub fn message(kind: StreamKind, source: String, images: Vec<Arc<Slot>>) -> Self {
         let shown = images.clone();
+        let part = if kind == StreamKind::Thought {
+            Part::Thought
+        } else {
+            Part::Message
+        };
         Self::with_images(images, move |width, detail| {
             if detail || kind != StreamKind::Thought {
                 render_with_images(kind, &source, &shown, width)
@@ -167,11 +309,17 @@ impl TranscriptCell {
                 render_compact(kind, &source, width)
             }
         })
+        .with_part(part)
     }
 
-    /// A finished tool call, with the output of the terminals it embeds as it stood.
+    /// A finished tool call, with the output of the terminals it embeds as it stood. The user's
+    /// own shell commands have no card: they show whole.
     pub fn tool_call(cell: ToolCallCell, cwd: PathBuf, terminals: TerminalTranscripts) -> Self {
-        Self::with_detail(move |width, detail| {
+        let part = Part::call(&cell);
+        let times = cell.times();
+        let shell = cell.is_user_shell();
+        let card = cell.clone();
+        let render = move |width, detail| {
             let cx = RenderContext {
                 cwd: &cwd,
                 terminals: &terminals,
@@ -179,20 +327,37 @@ impl TranscriptCell {
                 now: None,
             };
             cell.lines(width, &cx)
-        })
+        };
+        let cell = if shell {
+            Self::with_detail(render)
+        } else {
+            Self::call(move |width| card.card(width, None), render)
+        };
+        cell.with_part(part).with_times(times)
     }
 
     /// Reads and searches that ran together, as one `Explored` entry.
     pub fn explored(group: ExploreGroup, cwd: PathBuf, terminals: TerminalTranscripts) -> Self {
-        Self::with_detail(move |width, detail| {
-            let cx = RenderContext {
-                cwd: &cwd,
-                terminals: &terminals,
-                detail,
-                now: None,
-            };
-            group.lines(width, &cx, false)
-        })
+        let part = Part::calls(group.calls());
+        let times = group
+            .calls()
+            .iter()
+            .fold(Times::default(), |times, call| times.join(call.times()));
+        let card = group.clone();
+        Self::call(
+            move |width| card.card(width, None, false),
+            move |width, detail| {
+                let cx = RenderContext {
+                    cwd: &cwd,
+                    terminals: &terminals,
+                    detail,
+                    now: None,
+                };
+                group.lines(width, &cx, false)
+            },
+        )
+        .with_part(part)
+        .with_times(times)
     }
 
     /// A finished context compaction; the detailed view adds the summary it kept.
@@ -415,6 +580,16 @@ fn delete_word(query: &mut String) {
         .rfind(char::is_whitespace)
         .map_or(0, |space| space + 1);
     query.truncate(word);
+}
+
+/// What a mouse event over the transcript comes to, beyond scrolling and selecting.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MouseOutcome {
+    /// A drag ended over this text, to copy.
+    Copy(String),
+    /// A click on this row of the live content drawn below the cells, which the view
+    /// leaves to the chat drawing it.
+    LiveClick(usize),
 }
 
 /// Where the transcript was last drawn, for mapping the mouse and paging.
@@ -846,9 +1021,15 @@ impl TranscriptView {
         self.drag_from = None;
     }
 
-    /// Wheel scrolling and drag selection over the transcript. Returns the selected text when
-    /// a drag ends, for copying. `live` is the live content drawn below the cells.
-    pub fn handle_mouse(&mut self, event: MouseEvent, live: &[DisplayLine]) -> Option<String> {
+    /// Wheel scrolling, drag selection and clicks over the transcript. A drag gives the text it
+    /// selected, for copying, once it ends; a click (a press and release without a drag) opens
+    /// or closes a run of work, or is given back when it lands on `live`, the live content
+    /// drawn below the cells.
+    pub fn handle_mouse(
+        &mut self,
+        event: MouseEvent,
+        live: &[DisplayLine],
+    ) -> Option<MouseOutcome> {
         let geometry = self.geometry.get()?;
         let area = geometry.area;
         let inside = area.contains((event.column, event.row).into());
@@ -876,13 +1057,68 @@ impl TranscriptView {
                 });
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                self.drag_from.take()?;
-                let selection = self.selection?;
-                return Some(self.selected_text(selection, live));
+                let pressed = self.drag_from.take()?;
+                return match self.selection {
+                    Some(selection) => {
+                        Some(MouseOutcome::Copy(self.selected_text(selection, live)))
+                    }
+                    None => self.click(geometry.width, pressed, live.len()),
+                };
             }
             _ => {}
         }
         None
+    }
+
+    /// A click at `point`: a tool call's card or a run's row opens or closes, staying where it is
+    /// on screen.
+    fn click(&mut self, width: usize, point: Point, live: usize) -> Option<MouseOutcome> {
+        let layout = self.layout(width, live);
+        if point.row >= layout.live_start {
+            return Some(MouseOutcome::LiveClick(point.row - layout.live_start));
+        }
+        let ViewPosition::Reading { cell, offset } = layout.anchor(point.row) else {
+            return None;
+        };
+        // Blocks after the first open with a separator.
+        let row = offset.checked_sub(usize::from(cell > 0))?;
+        let top = self.top_row(live);
+        let detailed = self.detailed;
+        if let Some(clicked) = self.cells.get_mut(cell)
+            && clicked.toggle_at(row, width, detailed)
+        {
+            self.keep_top(top, live);
+        }
+        None
+    }
+
+    /// The top row as the view stands, with `live` rows of live content.
+    pub fn top_row(&self, live: usize) -> usize {
+        let Some(geometry) = self.geometry.get() else {
+            return 0;
+        };
+        self.top(
+            &self.layout(geometry.width, live),
+            usize::from(geometry.area.height),
+        )
+    }
+
+    /// Keep `top` the top row after what's below it changed, now with `live` rows of live
+    /// content, so a row clicked open or closed stays where it was; unless that shows the
+    /// newest output anyway, which the view then follows.
+    pub fn keep_top(&mut self, top: usize, live: usize) {
+        let Some(geometry) = self.geometry.get() else {
+            return;
+        };
+        let layout = self.layout(geometry.width, live);
+        let bottom = layout
+            .total
+            .saturating_sub(usize::from(geometry.area.height));
+        if top >= bottom {
+            self.follow();
+        } else {
+            self.position = layout.anchor(top);
+        }
     }
 
     /// `geometry` with its top updated for scrolling done since it was drawn.
@@ -1125,6 +1361,14 @@ mod tests {
             .collect()
     }
 
+    /// The text a mouse event gave to copy.
+    fn copy_of(outcome: Option<MouseOutcome>) -> Option<String> {
+        match outcome {
+            Some(MouseOutcome::Copy(text)) => Some(text),
+            _ => None,
+        }
+    }
+
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
         MouseEvent {
             kind,
@@ -1305,7 +1549,7 @@ mod tests {
         let left = MouseButton::Left;
         view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 1), &[]);
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 2, 3), &[]);
-        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 2, 3), &[]);
+        let copied = copy_of(view.handle_mouse(mouse(MouseEventKind::Up(left), 2, 3), &[]));
         assert_eq!(copied.as_deref(), Some("line 5\n\nlin"));
 
         // The selection stays highlighted until the next click.
@@ -1334,7 +1578,7 @@ mod tests {
         let left = MouseButton::Left;
         view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 0), &[]);
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 5), &[]);
-        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 5), &[]);
+        let copied = copy_of(view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 5), &[]));
         assert_eq!(
             copied.as_deref(),
             Some("The quick brown fox jumps over the lazy dog.\n\n- first item\n- second")
@@ -1343,7 +1587,7 @@ mod tests {
         // A selection inside a row takes just those characters.
         view.handle_mouse(mouse(MouseEventKind::Down(left), 6, 1), &[]);
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 10, 1), &[]);
-        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 10, 1), &[]);
+        let copied = copy_of(view.handle_mouse(mouse(MouseEventKind::Up(left), 10, 1), &[]));
         assert_eq!(copied.as_deref(), Some("jumps"));
     }
 
@@ -1366,13 +1610,14 @@ mod tests {
         let left = MouseButton::Left;
         view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 0), &[]);
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, last as u16), &[]);
-        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, last as u16), &[]);
+        let copied =
+            copy_of(view.handle_mouse(mouse(MouseEventKind::Up(left), 19, last as u16), &[]));
         assert_eq!(copied, Some(format!("Before\n\n{fence}\n\nAfter")));
 
         // Part of the drawing still copies all of its source.
         view.handle_mouse(mouse(MouseEventKind::Down(left), 4, 3), &[]);
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 6, 3), &[]);
-        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 6, 3), &[]);
+        let copied = copy_of(view.handle_mouse(mouse(MouseEventKind::Up(left), 6, 3), &[]));
         assert_eq!(copied.as_deref(), Some(fence));
     }
 
@@ -1405,8 +1650,7 @@ mod tests {
         let left = MouseButton::Left;
         view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 0), &[]);
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 6), &[]);
-        let copied = view
-            .handle_mouse(mouse(MouseEventKind::Up(left), 19, 6), &[])
+        let copied = copy_of(view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 6), &[]))
             .unwrap_or_default();
         assert!(!copied.contains('\u{10EEEE}'), "{copied:?}");
         assert_eq!(copied.trim(), "look");
@@ -1440,7 +1684,7 @@ mod tests {
         let left = MouseButton::Left;
         view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 1), &[]);
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, 2), &[]);
-        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 2), &[]);
+        let copied = copy_of(view.handle_mouse(mouse(MouseEventKind::Up(left), 19, 2), &[]));
         assert_eq!(copied.as_deref(), Some("hello\nworld"));
     }
 }

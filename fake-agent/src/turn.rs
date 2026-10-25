@@ -151,6 +151,7 @@ impl Turn {
             "tool" => self.call_tool(cx, rest).await?,
             "mcp-legacy" => self.mcp_legacy(cx).await?,
             "think" => self.think(cx).await?,
+            "work" => self.work(cx, rest == "fail").await?,
             "compact" => self.compact(cx).await?,
             "delegate" => self.delegate(cx).await?,
             "delegate-legacy" => self.delegate_legacy(cx).await?,
@@ -648,6 +649,85 @@ impl Turn {
             self.update(cx, SessionUpdate::AgentThoughtChunk(chunk))?;
         }
         self.say(cx, "Done thinking.").await
+    }
+
+    /// A run of work as agents do it: thinking, then tool calls one after another, each taking a
+    /// moment (a read, a search, the tests, an edit and the tests again, failing the first time
+    /// when it `fails`), and an answer.
+    async fn work(&self, cx: &ConnectionTo<Client>, fails: bool) -> Result<(), Error> {
+        let thought = "**Looking around**\n\nI'll read the parser, find its fixtures, then test.\n";
+        let chunk = ContentChunk::new(ContentBlock::from(thought));
+        self.update(cx, SessionUpdate::AgentThoughtChunk(chunk))?;
+        let path = "src/parser.rs";
+        let read = ToolCall::new(next_tool_call_id(), format!("Read {path}"))
+            .kind(ToolKind::Read)
+            .locations(vec![ToolCallLocation::new(path)]);
+        let old = "const FIXTURES: &str = \"fixtures\";\n";
+        if self.step(cx, read, ToolCallStatus::Completed, old).await? {
+            return Ok(());
+        }
+        let search = ToolCall::new(next_tool_call_id(), "Search fixtures/").kind(ToolKind::Search);
+        let found = format!("{path}:1");
+        if self
+            .step(cx, search, ToolCallStatus::Completed, found)
+            .await?
+        {
+            return Ok(());
+        }
+        let test = || {
+            ToolCall::new(next_tool_call_id(), "cargo test -p parser")
+                .kind(ToolKind::Execute)
+                .raw_input(serde_json::json!({ "command": "cargo test -p parser" }))
+        };
+        let (status, output) = if fails {
+            (ToolCallStatus::Failed, "test parser::empty ... FAILED")
+        } else {
+            (ToolCallStatus::Completed, "test result: ok")
+        };
+        if self.step(cx, test(), status, output).await? {
+            return Ok(());
+        }
+        let diff = Diff::new(path, "const FIXTURES: &str = \"tests/fixtures\";\n")
+            .old_text(old.to_owned());
+        let edit = ToolCall::new(next_tool_call_id(), format!("Edit {path}")).kind(ToolKind::Edit);
+        let edited = ToolCallContent::Diff(diff);
+        if self
+            .step(cx, edit, ToolCallStatus::Completed, edited)
+            .await?
+        {
+            return Ok(());
+        }
+        let passed = "test result: ok";
+        if self
+            .step(cx, test(), ToolCallStatus::Completed, passed)
+            .await?
+        {
+            return Ok(());
+        }
+        self.say(cx, "Done: the tests read their fixtures from the old path.")
+            .await
+    }
+
+    /// Start `call`, and a moment later finish it as `status` with `content`; true when the
+    /// turn was cancelled meanwhile.
+    async fn step(
+        &self,
+        cx: &ConnectionTo<Client>,
+        call: ToolCall,
+        status: ToolCallStatus,
+        content: impl Into<ToolCallContent>,
+    ) -> Result<bool, Error> {
+        let id = call.tool_call_id.to_string();
+        let call = call.status(ToolCallStatus::InProgress);
+        self.update(cx, SessionUpdate::ToolCall(call))?;
+        if self.cancel.sleep(Duration::from_millis(800)).await {
+            return Ok(true);
+        }
+        let fields = ToolCallUpdateFields::new()
+            .status(status)
+            .content(vec![content.into()]);
+        self.finish_tool(cx, &id, fields)?;
+        Ok(false)
     }
 
     /// Compact the context: the compaction's start, its summary streamed, then its end, for

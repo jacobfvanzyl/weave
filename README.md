@@ -118,6 +118,7 @@ ending them when it exits.
 | Ctrl+Home / Ctrl+End (or Alt+< / Alt+>) | Jump to the start / back to the newest output |
 | Esc while scrolled back | Return to the newest output (before it stops the turn) |
 | Drag | Select transcript text; it is copied when you release |
+| Click | Open or close a tool call's card, or a run of them folded into one row (fullscreen) |
 | Ctrl+T | Full transcript: whole command output, diffs, thoughts and compaction summaries (a pager inline) |
 | Alt+← / Alt+→ | Watch the previous / next agent's transcript when the agent runs subagents (Alt+B / Alt+F on an empty draft); Esc goes back |
 | `/subagents` | Pick a subagent to watch, with what each is doing (once there are any) |
@@ -161,7 +162,11 @@ number. Links open in your browser only after you choose to.
 
 The transcript looks like Codex's: commands as `• Ran cmd` with their first lines of
 output, reads and searches grouped as `• Explored`, edits as numbered, tinted diffs, and
-code highlighted with Catppuccin themes. Colors adapt to your terminal's background, which
+code highlighted with Catppuccin themes. Fullscreen, the agent's work folds as it does in the
+app: each tool call to a card, its title and status on one shaded row, and two or more calls in a
+row, with the thinking between them, into one row such as `• Ran 9 commands, 2 edits · 2m 17s`,
+saying how many failed. While a turn runs, its latest work is one `• Working` row with the step
+it's on. Click a row to open it; Ctrl+T shows everything open. Colors adapt to your terminal's background, which
 weave asks the terminal for at startup.
 
 Fullscreen leaves your screen as it was when you quit, then prints how to reopen the

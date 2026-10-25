@@ -5,7 +5,13 @@ state, composer. The `weave` binary in `../cli` runs it. Read the root `AGENTS.m
 
 The TUI shows one session at a time. Like Codex, it runs fullscreen by default: on the
 alternate screen, `weave` owns the transcript (`transcript.rs`: retained cells that
-reflow, scrolling, selection and copy, and Find, matched by `find.rs`). Inline mode
+reflow, scrolling, selection and copy, and Find, matched by `find.rs`), and folds the agent's
+work as the app does (WVE-140): each tool call to a one-row card (`ToolCallCell::card`: title and
+status, as the app's), and each run of them into one row (`runs.rs`): `ChatWidget` holds the
+latest run until something other than a tool call or thought ends it, draws it live (one `Working`
+row while the turn's latest), and dates entries with the journal's times (`handle_journal_event`).
+Cards and run rows share a fill fainter than a prompt's (`style::work_row`); a click opens one
+(live ones too, which stay open once committed), and Ctrl+T shows everything open. Inline mode
 (`--no-alt-screen`, `[tui] alternate_screen = "never"`) keeps Codex's inline viewport,
 with finished history in native terminal scrollback. Both modes must keep working.
 

@@ -130,6 +130,8 @@
   --input: var(--border);
   --input-background: var(--zed-element-background);
   --chat-background: var(--zed-panel-background);
+  /* Tool calls and runs of work: cards a little lighter than the chat, as the TUI shades their rows. */
+  --work-background: color-mix(in srgb, var(--muted) 35%, var(--chat-background));
   --composer-background: var(--zed-editor-background);
   --ring: var(--zed-focus);
   --placeholder: var(--zed-text-placeholder);
@@ -187,6 +189,7 @@
   --color-disabled: var(--disabled);
   --color-placeholder: var(--placeholder);
   --color-chat-background: var(--chat-background);
+  --color-work-background: var(--work-background);
   --color-composer-background: var(--composer-background);
   --color-input-background: var(--input-background);
   --color-destructive-background: var(--destructive-background);

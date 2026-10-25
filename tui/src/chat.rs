@@ -96,6 +96,11 @@ use crate::history_cell::home_relative;
 use crate::permission::Decision;
 use crate::permission::PermissionView;
 use crate::permission::Subject;
+use crate::runs;
+use crate::runs::Part;
+use crate::runs::Summary;
+use crate::runs::Times;
+use crate::runs::WorkRun;
 use crate::session::OpenedSession;
 use crate::session::Reopened;
 use crate::session::SessionTarget;
@@ -123,6 +128,7 @@ use crate::tool_call::RenderContext;
 use crate::tool_call::ToolCallCell;
 use crate::tool_output::TerminalTranscripts;
 use crate::transcript::FindStatus;
+use crate::transcript::MouseOutcome;
 use crate::transcript::Reading;
 use crate::transcript::TranscriptCell;
 use crate::transcript::TranscriptView;
@@ -339,6 +345,15 @@ pub struct ChatWidget {
     exploring: ExploreGroup,
     /// Tool calls already committed; later updates to them are ignored.
     committed_tool_calls: HashSet<ToolCallId>,
+    /// The fullscreen transcript's latest run of work: tool calls and thoughts committed since
+    /// anything else, which fold into one row once something else ends the run.
+    run: WorkRun,
+    /// Live tool calls clicked open in the fullscreen transcript, which stay open once
+    /// committed; reads and searches open as their group, under any of its calls.
+    open_calls: HashSet<ToolCallId>,
+    /// When the journal event being shown happened, in milliseconds since the Unix epoch; now,
+    /// for anything else.
+    event_at: Option<u64>,
     /// Context compactions not yet finished, in the order they started.
     compactions: Vec<Compaction>,
     /// Compactions already committed; later updates to them are ignored.
@@ -432,6 +447,35 @@ struct PastedImage {
     slot: Arc<Slot>,
 }
 
+/// The live rows under the fullscreen transcript's cells, and which of them a click opens or
+/// closes something on.
+#[derive(Default)]
+struct Live {
+    lines: Vec<DisplayLine>,
+    targets: Vec<(usize, Toggle)>,
+}
+
+impl Live {
+    fn push(&mut self, line: DisplayLine) {
+        self.lines.push(line);
+    }
+
+    /// A click on the next row pushed opens or closes `toggle`.
+    fn target(&mut self, toggle: Toggle) {
+        self.targets.push((self.lines.len(), toggle));
+    }
+}
+
+/// What a click on a live row opens or closes.
+enum Toggle {
+    /// The latest run of work.
+    Run,
+    /// One of its committed entries, by index.
+    Entry(usize),
+    /// A live tool call, or reads and searches as their group.
+    Calls(Vec<ToolCallId>),
+}
+
 /// A message between sessions as this chat shows it.
 struct MessageShape {
     /// The other session's name.
@@ -488,6 +532,9 @@ impl ChatWidget {
             tool_calls: Vec::new(),
             exploring: ExploreGroup::default(),
             committed_tool_calls: HashSet::new(),
+            run: WorkRun::default(),
+            open_calls: HashSet::new(),
+            event_at: None,
             compactions: Vec::new(),
             committed_compactions: HashSet::new(),
             turn: None,
@@ -706,6 +753,7 @@ impl ChatWidget {
         self.resumable = false;
         // Tool call ids are only unique within a session, and a reload replays its own.
         self.committed_tool_calls.clear();
+        self.open_calls.clear();
         self.compactions.clear();
         self.committed_compactions.clear();
         // Subagents belong to the session that created them.
@@ -781,6 +829,7 @@ impl ChatWidget {
             self.end_stream();
             self.commit_finished_tool_calls();
             self.flush_exploring();
+            self.end_run();
         }
     }
 
@@ -1233,14 +1282,32 @@ impl ChatWidget {
         }
     }
 
+    /// An event from the session's journal, which dated it `at` (milliseconds since the Unix
+    /// epoch): the runs of work it makes are timed by it, replayed or not.
+    pub fn handle_journal_event(&mut self, event: ChatEvent, at: u64) -> Vec<AppCommand> {
+        self.event_at = Some(at);
+        let commands = self.handle_agent_event(event);
+        self.event_at = None;
+        commands
+    }
+
+    /// When what's being shown happened: the journal's date for its events, and now otherwise.
+    fn event_time(&self) -> u64 {
+        self.event_at.unwrap_or_else(runs::now_millis)
+    }
+
     pub fn handle_agent_event(&mut self, event: ChatEvent) -> Vec<AppCommand> {
         match event {
             ChatEvent::SessionUpdate(notification) => {
                 if self.is_active(&notification.session_id) {
                     self.handle_update(notification.update);
                 } else if let Some(path) = self.path_to(&notification.session_id) {
-                    // A subagent's own update, for its transcript.
-                    self.chat_at_mut(&path).handle_update(notification.update);
+                    // A subagent's own update, for its transcript, dated as this one is.
+                    let at = self.event_at;
+                    let chat = self.chat_at_mut(&path);
+                    chat.event_at = at;
+                    chat.handle_update(notification.update);
+                    chat.event_at = None;
                     self.note_activity();
                 }
                 self.take_decodes()
@@ -1966,9 +2033,10 @@ impl ChatWidget {
                 if self.committed_tool_calls.contains(&call.tool_call_id) {
                     return;
                 }
-                let cell = ToolCallCell::new(call);
+                let mut cell = ToolCallCell::new(call);
+                cell.touch(self.event_time());
                 match self.tool_calls.iter_mut().find(|live| live.id == cell.id) {
-                    Some(live) => *live = cell,
+                    Some(live) => *live = cell.continuing(live),
                     None => {
                         // A finished call stays live until the next entry, as Codex keeps its
                         // active cell, so updates trailing its completion still reach it: a
@@ -2083,12 +2151,18 @@ impl ChatWidget {
         if self.committed_tool_calls.contains(&id) {
             return;
         }
+        let at = self.event_time();
         match self.tool_calls.iter_mut().find(|live| live.id == id) {
-            Some(live) => live.apply(fields),
+            Some(live) => {
+                live.apply(fields);
+                live.touch(at);
+            }
             // An update for a call never announced starts one, unless it has nothing to show,
             // such as only `_meta` for a call the agent reported another way (a subagent).
             None if has_content(fields) => {
-                self.tool_calls.push(ToolCallCell::from_update(id, fields));
+                let mut cell = ToolCallCell::from_update(id, fields);
+                cell.touch(at);
+                self.tool_calls.push(cell);
             }
             None => {}
         }
@@ -2811,14 +2885,14 @@ impl ChatWidget {
         }
     }
 
-    /// Wheel scrolling and drag selection in the fullscreen transcript (or the inline pager);
-    /// a finished selection is copied.
+    /// Wheel scrolling, drag selection and clicks in the fullscreen transcript (or the inline
+    /// pager); a finished selection is copied, and a click on a run of work opens or closes it.
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Vec<AppCommand> {
         let Some((view, live)) = self.viewed_mut() else {
             return Vec::new();
         };
         match view.handle_mouse(event, &live) {
-            Some(text) if !text.is_empty() => {
+            Some(MouseOutcome::Copy(text)) if !text.is_empty() => {
                 let count = text.chars().count();
                 let noun = if count == 1 {
                     "character"
@@ -2829,7 +2903,51 @@ impl ChatWidget {
                 self.copied = Some((note, Instant::now() + COPIED_NOTE));
                 vec![AppCommand::Copy(text)]
             }
+            Some(MouseOutcome::LiveClick(row)) if !self.pager_open => {
+                let width = self.content_width();
+                self.shown_mut().click_live(row, live.len(), width);
+                Vec::new()
+            }
             _ => Vec::new(),
+        }
+    }
+
+    /// A click on row `row` of the `drawn` live rows of this chat's fullscreen transcript: on the
+    /// latest run's row or a tool call's card, that opens or closes, staying in place.
+    fn click_live(&mut self, row: usize, drawn: usize, width: usize) {
+        let Some(top) = self.transcript.as_ref().map(|view| view.top_row(drawn)) else {
+            return;
+        };
+        let detail = self
+            .transcript
+            .as_ref()
+            .is_some_and(TranscriptView::is_detailed);
+        let target = self
+            .live(width)
+            .targets
+            .into_iter()
+            .find_map(|(at, target)| (at == row).then_some(target));
+        match target {
+            Some(Toggle::Run) => self.run.open = !self.run.open,
+            Some(Toggle::Entry(index)) => {
+                if let Some(entry) = self.run.entries_mut().get_mut(index) {
+                    entry.toggle_at(0, width, detail);
+                }
+            }
+            Some(Toggle::Calls(ids)) => {
+                if ids.iter().any(|id| self.open_calls.contains(id)) {
+                    for id in &ids {
+                        self.open_calls.remove(id);
+                    }
+                } else {
+                    self.open_calls.extend(ids.into_iter().take(1));
+                }
+            }
+            None => return,
+        }
+        let live = self.live_lines(width).len();
+        if let Some(view) = &mut self.transcript {
+            view.keep_top(top, live);
         }
     }
 
@@ -3076,7 +3194,8 @@ impl ChatWidget {
         for image in &images {
             self.show_in_transcript(image);
         }
-        self.push_cell(TranscriptCell::user(&text, images));
+        let sent = Times::at(self.event_time());
+        self.push_cell(TranscriptCell::user(&text, images).with_times(sent));
         self.resumable = true;
         self.last_reply = None;
         // Sending a message returns to the newest output, where its reply will appear.
@@ -3170,11 +3289,13 @@ impl ChatWidget {
         };
         let width = self.content_width();
         let message_id = chunk.message_id.clone();
+        let at = self.event_time();
         let stream = self
             .stream
             .get_or_insert_with(|| MessageStream::new(kind, width, message_id));
         let first = !stream.has_committed();
         stream.push(&content_text(&chunk.content));
+        stream.touch(at);
         if let Some(image) = image {
             stream.push_image(image);
         }
@@ -3208,9 +3329,10 @@ impl ChatWidget {
         }
         if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
             let kind = stream.kind();
+            let times = stream.times();
             let (source, images) = stream.into_parts();
             if !source.trim().is_empty() {
-                self.push_cell(TranscriptCell::message(kind, source, images));
+                self.push_cell(TranscriptCell::message(kind, source, images).with_times(times));
             }
             return;
         }
@@ -3256,7 +3378,29 @@ impl ChatWidget {
             return;
         }
         let terminals = self.terminals_of(std::slice::from_ref(&cell));
-        self.push_cell(TranscriptCell::tool_call(cell, self.cwd.clone(), terminals));
+        let open = self.take_open(std::slice::from_ref(&cell));
+        let cell = TranscriptCell::tool_call(cell, self.cwd.clone(), terminals);
+        self.push_cell(self.folded(cell, open));
+    }
+
+    /// Whether any of `calls` was clicked open while live, forgetting it: once committed, the
+    /// cell they make keeps it.
+    fn take_open(&mut self, calls: &[ToolCallCell]) -> bool {
+        let mut open = false;
+        for call in calls {
+            open |= self.open_calls.remove(&call.id);
+        }
+        open
+    }
+
+    /// A tool call's cell folded to its card, `open` or closed, in the fullscreen transcript;
+    /// inline, it shows whole, as scrollback can't open it.
+    fn folded(&self, cell: TranscriptCell, open: bool) -> TranscriptCell {
+        if self.transcript.is_some() {
+            cell.fold(open)
+        } else {
+            cell
+        }
     }
 
     /// Copies of the terminals `calls` embed, as they stand.
@@ -3278,11 +3422,9 @@ impl ChatWidget {
         }
         let group = std::mem::take(&mut self.exploring);
         let terminals = self.terminals_of(group.calls());
-        self.push_cell_after_exploring(TranscriptCell::explored(
-            group,
-            self.cwd.clone(),
-            terminals,
-        ));
+        let open = self.take_open(group.calls());
+        let cell = TranscriptCell::explored(group, self.cwd.clone(), terminals);
+        self.push_cell_after_exploring(self.folded(cell, open));
     }
 
     /// Commit everything still live, as it stands, when the turn ends.
@@ -3296,6 +3438,7 @@ impl ChatWidget {
         for compaction in std::mem::take(&mut self.compactions) {
             self.commit_compaction(compaction);
         }
+        self.end_run();
     }
 
     /// Commit `cell` after anything finished that came before it.
@@ -3308,8 +3451,18 @@ impl ChatWidget {
 
     fn push_cell_after_exploring(&mut self, cell: TranscriptCell) {
         match &mut self.transcript {
-            Some(view) => {
-                view.push(cell);
+            // In the fullscreen transcript, work joins the latest run, and anything else ends it.
+            Some(view) if cell.part().is_work() => {
+                view.note_activity();
+                self.run.push(cell);
+                self.has_history = true;
+            }
+            Some(_) => {
+                self.end_run();
+                self.run = WorkRun::after(cell.written());
+                if let Some(view) = &mut self.transcript {
+                    view.push(cell);
+                }
                 self.has_history = true;
             }
             None => {
@@ -3318,6 +3471,22 @@ impl ChatWidget {
                 if let Some(pager) = &mut self.pager {
                     pager.push(cell);
                 }
+            }
+        }
+    }
+
+    /// End the fullscreen transcript's latest run: it folds into one row once it holds two tool
+    /// calls, and its entries stay as they are otherwise.
+    fn end_run(&mut self) {
+        let Some(view) = &mut self.transcript else {
+            return;
+        };
+        let run = std::mem::take(&mut self.run);
+        if run.summary().folds() {
+            view.push(TranscriptCell::run(run));
+        } else {
+            for entry in run.into_entries() {
+                view.push(entry);
             }
         }
     }
@@ -3360,8 +3529,15 @@ impl ChatWidget {
             .map(|mode| mode.name.as_str())
     }
 
-    /// Live lines above the composer: running tool calls and the streaming message's tail.
+    /// Live lines above the composer: running tool calls and the streaming message's tail. The
+    /// fullscreen transcript shows the latest run of work first, as it will fold, and the user's
+    /// own shell commands after it.
     fn live_lines(&self, width: usize) -> Vec<DisplayLine> {
+        self.live(width).lines
+    }
+
+    /// [`Self::live_lines`], with the rows a click opens or closes something on.
+    fn live(&self, width: usize) -> Live {
         let detail = self
             .transcript
             .as_ref()
@@ -3372,52 +3548,180 @@ impl ChatWidget {
             detail,
             now: Some(Instant::now()),
         };
-        let mut lines = Vec::new();
-        // Reads and searches, finished and running, show as the one group they'll join.
+        let fullscreen = self.transcript.is_some();
+        let mut live = Live::default();
+        if fullscreen {
+            self.live_run(&mut live, width, &cx);
+            for cell in self.tool_calls.iter().filter(|cell| cell.is_user_shell()) {
+                live.push(DisplayLine::default());
+                live.lines.extend(cell.lines(width, &cx));
+            }
+        } else {
+            self.live_calls(&mut live, width, &cx, |_| true);
+        }
+        for entry in &self.messages {
+            live.push(DisplayLine::default());
+            live.lines.extend(self.message_shape(entry).lines(width));
+        }
+        if let Some(stream) = &self.stream {
+            if fullscreen {
+                // A thought is drawn with its run.
+                if stream.kind() != StreamKind::Thought {
+                    live.lines.extend(self.stream_lines(stream, width, detail));
+                }
+            } else if stream.kind() == StreamKind::Thought {
+                live.lines.extend(self.stream_lines(stream, width, detail));
+            } else {
+                let tail = stream.tail();
+                if !tail.is_empty() {
+                    if !stream.has_committed() || !self.tool_calls.is_empty() {
+                        live.push(DisplayLine::default());
+                    }
+                    live.lines.extend(tail.into_iter().map(DisplayLine::plain));
+                }
+            }
+        }
+        live
+    }
+
+    /// The tool calls still live that `shows` keeps, each after a blank row: reads and
+    /// searches, finished and running, as the one group they'll join, then the rest. The
+    /// fullscreen transcript folds each to its card, whole only while clicked open.
+    fn live_calls(
+        &self,
+        live: &mut Live,
+        width: usize,
+        cx: &RenderContext<'_>,
+        shows: impl Fn(&ToolCallCell) -> bool,
+    ) {
+        let fold = self.transcript.is_some();
         let (exploring, others): (Vec<&ToolCallCell>, Vec<&ToolCallCell>) = self
             .tool_calls
             .iter()
+            .filter(|cell| shows(cell))
             .partition(|cell| cell.is_exploration());
         if !self.exploring.is_empty() || !exploring.is_empty() {
             let mut group = self.exploring.clone();
             for cell in exploring {
                 group.push(cell.clone());
             }
-            lines.push(DisplayLine::default());
             // Outside a turn (a replay the agent sent late) nothing more is coming.
-            lines.extend(group.lines(width, &cx, self.turn.is_some()));
+            let active = self.turn.is_some();
+            live.push(DisplayLine::default());
+            let ids: Vec<ToolCallId> = group.calls().iter().map(|call| call.id.clone()).collect();
+            if fold {
+                live.target(Toggle::Calls(ids.clone()));
+                live.push(group.card(width, cx.now, active));
+            }
+            if !fold || cx.detail || ids.iter().any(|id| self.open_calls.contains(id)) {
+                live.lines.extend(group.lines(width, cx, active));
+            }
         }
         for cell in others {
-            lines.push(DisplayLine::default());
-            lines.extend(cell.lines(width, &cx));
+            live.push(DisplayLine::default());
+            if fold {
+                live.target(Toggle::Calls(vec![cell.id.clone()]));
+                live.push(cell.card(width, cx.now));
+            }
+            if !fold || cx.detail || self.open_calls.contains(&cell.id) {
+                live.lines.extend(cell.lines(width, cx));
+            }
         }
-        for entry in &self.messages {
-            lines.push(DisplayLine::default());
-            lines.extend(self.message_shape(entry).lines(width));
+    }
+
+    /// A streaming message drawn whole, after a blank row; thoughts cut to a preview compactly.
+    fn stream_lines(&self, stream: &MessageStream, width: usize, detail: bool) -> Vec<DisplayLine> {
+        // Only thoughts look different compactly; anything else shows its images.
+        let message = if detail || stream.kind() != StreamKind::Thought {
+            stream.render_all(width)
+        } else {
+            render_compact(stream.kind(), stream.source(), width)
+        };
+        if message.is_empty() {
+            return message;
         }
-        if let Some(stream) = &self.stream {
-            if self.transcript.is_some() || stream.kind() == StreamKind::Thought {
-                // Only thoughts look different compactly; anything else shows its images.
-                let message = if detail || stream.kind() != StreamKind::Thought {
-                    stream.render_all(width)
-                } else {
-                    render_compact(stream.kind(), stream.source(), width)
-                };
-                if !message.is_empty() {
-                    lines.push(DisplayLine::default());
-                    lines.extend(message);
-                }
-            } else {
-                let tail = stream.tail();
-                if !tail.is_empty() {
-                    if !stream.has_committed() || !self.tool_calls.is_empty() {
-                        lines.push(DisplayLine::default());
-                    }
-                    lines.extend(tail.into_iter().map(DisplayLine::plain));
+        let mut lines = vec![DisplayLine::default()];
+        lines.extend(message);
+        lines
+    }
+
+    /// The thought streaming now, if one is.
+    fn live_thought(&self) -> Option<&MessageStream> {
+        self.stream
+            .as_ref()
+            .filter(|stream| stream.kind() == StreamKind::Thought)
+    }
+
+    /// Whether the latest run of work is the running turn's activity: nothing the agent said
+    /// since is on screen.
+    fn run_working(&self) -> bool {
+        self.turn.is_some()
+            && self.messages.is_empty()
+            && self
+                .stream
+                .as_ref()
+                .is_none_or(|stream| stream.kind() == StreamKind::Thought)
+    }
+
+    /// What the latest run of work adds up to, live work included: finished reads and searches
+    /// waiting to group, the agent's tool calls still live, and a thought streaming. Its step is
+    /// the thought, or else a call still running.
+    fn live_run_summary(&self) -> Summary {
+        let mut summary = self.run.summary();
+        for call in self.exploring.calls() {
+            summary.add(&Part::call(call), call.times());
+        }
+        let calls = || self.tool_calls.iter().filter(|call| !call.is_user_shell());
+        for call in calls() {
+            summary.add(&Part::call(call), call.times());
+        }
+        match self.live_thought() {
+            Some(thought) => summary.add(&Part::Thought, thought.times()),
+            None => {
+                if let Some(running) = calls().rfind(|call| !call.is_finished()) {
+                    summary.step = Some(running.title().to_owned());
                 }
             }
         }
-        lines
+        summary
+    }
+
+    /// The latest run's row, when it shows as one: while it's the running turn's activity,
+    /// however short, and once it holds two tool calls.
+    fn live_run_row(&self, width: usize) -> Option<DisplayLine> {
+        let summary = self.live_run_summary();
+        let working = self.run_working();
+        if summary.is_empty() || !(working || summary.folds()) {
+            return None;
+        }
+        Some(summary.header(working.then(runs::now_millis), width))
+    }
+
+    /// The latest run of work in the fullscreen transcript: its row, with its entries and live
+    /// work under it while it's open and in the detailed view; or those alone, when it doesn't
+    /// fold.
+    fn live_run(&self, live: &mut Live, width: usize, cx: &RenderContext<'_>) {
+        if let Some(row) = self.live_run_row(width) {
+            live.push(DisplayLine::default());
+            live.target(Toggle::Run);
+            live.push(row);
+            if !self.run.open && !cx.detail {
+                return;
+            }
+        }
+        for (index, entry) in self.run.entries().iter().enumerate() {
+            live.push(DisplayLine::default());
+            if entry.folds() {
+                live.target(Toggle::Entry(index));
+            }
+            live.lines
+                .extend(entry.lines(width, cx.detail).iter().cloned());
+        }
+        self.live_calls(live, width, cx, |cell| !cell.is_user_shell());
+        if let Some(thought) = self.live_thought() {
+            live.lines
+                .extend(self.stream_lines(thought, width, cx.detail));
+        }
     }
 
     fn status_lines(&self, now: Instant) -> Vec<Line<'static>> {
@@ -5407,12 +5711,20 @@ mod tests {
         let mut chat = fullscreen_chat();
         submit(&mut chat, "count");
         ten_line_command(&mut chat);
+        // The call shows as its card, and clicked open, as drawn compactly.
         let compact = screen_rows(&chat, 60, 30);
+        let card = row_starting(&compact, "• seq 1 10 ");
+        assert!(compact[card].ends_with(" completed"), "{compact:#?}");
+        assert!(!compact.iter().any(|row| row.contains("+7 lines")));
+        click_at(&mut chat, 6, card);
+        let open = screen_rows(&chat, 60, 30);
+        assert_eq!(open[card + 1], "• Ran seq 1 10", "{open:#?}");
         assert!(
-            compact
-                .iter()
+            open.iter()
                 .any(|row| row.trim() == "+7 lines (⌃t to view transcript)")
         );
+        click_at(&mut chat, 6, card);
+        assert_eq!(screen_rows(&chat, 60, 30), compact);
 
         let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
         assert!(chat.handle_key(ctrl_t).is_empty());
@@ -5425,6 +5737,151 @@ mod tests {
 
         chat.handle_key(ctrl_t);
         assert_eq!(screen_rows(&chat, 60, 30), compact);
+    }
+
+    /// A command the agent ran, finished, with `output` as its text.
+    fn ran(id: &str, command: &str, output: &str) -> ChatEvent {
+        update(SessionUpdate::ToolCall(
+            ToolCall::new(id.to_owned(), command)
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::Completed)
+                .raw_input(serde_json::json!({ "command": command }))
+                .content(vec![ContentBlock::from(output.to_owned()).into()]),
+        ))
+    }
+
+    fn click_at(chat: &mut ChatWidget, column: u16, row: usize) -> Vec<AppCommand> {
+        use crossterm::event::MouseButton;
+        use crossterm::event::MouseEventKind;
+        let row = u16::try_from(row).unwrap_or_default();
+        let mouse = |kind| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        chat.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+        chat.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left)))
+    }
+
+    fn row_starting(rows: &[String], text: &str) -> usize {
+        rows.iter()
+            .position(|row| row.starts_with(text))
+            .unwrap_or_else(|| panic!("no row starts with {text:?}: {rows:#?}"))
+    }
+
+    #[test]
+    fn a_click_opens_and_closes_a_run_and_a_drag_over_it_still_copies() {
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "check");
+        chat.handle_agent_event(ran("t1", "cargo fmt", "formatted"));
+        chat.handle_agent_event(ran("t2", "cargo test", "a needle in the output"));
+        reply(&mut chat, "m1", "All good.");
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        let closed = screen_rows(&chat, 40, 20);
+        let row = row_starting(&closed, "• Ran 2 commands · ");
+        assert!(!closed.iter().any(|row| row.contains("cargo fmt")));
+
+        // Opened, its calls show under it as their cards, and it stays where it was.
+        assert!(click_at(&mut chat, 6, row).is_empty());
+        let open = screen_rows(&chat, 40, 20);
+        assert_eq!(open[row], closed[row]);
+        assert!(open[row + 2].starts_with("• cargo fmt "), "{open:#?}");
+        assert!(open[row + 2].ends_with(" completed"), "{open:#?}");
+        // A card opens to the call as drawn, and closes again.
+        click_at(&mut chat, 6, row + 2);
+        let call = screen_rows(&chat, 40, 20);
+        assert_eq!(call[row + 3..row + 5], ["• Ran cargo fmt", "  └ formatted"]);
+        click_at(&mut chat, 6, row + 2);
+        assert_eq!(screen_rows(&chat, 40, 20), open);
+        // Elsewhere, a click does nothing; on the run's row again, it closes the run.
+        let message = row_starting(&open, "• All good.");
+        click_at(&mut chat, 6, message);
+        assert_eq!(screen_rows(&chat, 40, 20), open);
+        click_at(&mut chat, 6, row);
+        assert_eq!(screen_rows(&chat, 40, 20), closed);
+
+        // A drag over the row selects it, without opening it.
+        use crossterm::event::MouseButton;
+        use crossterm::event::MouseEventKind;
+        let at = |kind, column| MouseEvent {
+            kind,
+            column,
+            row: u16::try_from(row).unwrap_or_default(),
+            modifiers: KeyModifiers::NONE,
+        };
+        let left = MouseButton::Left;
+        chat.handle_mouse(at(MouseEventKind::Down(left), 2));
+        chat.handle_mouse(at(MouseEventKind::Drag(left), 15));
+        assert_eq!(
+            chat.handle_mouse(at(MouseEventKind::Up(left), 15)),
+            [AppCommand::Copy("Ran 2 commands".into())]
+        );
+        assert!(
+            !screen_rows(&chat, 40, 20)
+                .iter()
+                .any(|row| row.contains("cargo fmt"))
+        );
+
+        // Find searches the full transcript, where every run is open.
+        chat.handle_key(key(KeyCode::F(3)));
+        for ch in "needle".chars() {
+            chat.handle_key(key(KeyCode::Char(ch)));
+        }
+        let found = screen_rows(&chat, 40, 20);
+        assert!(
+            found
+                .iter()
+                .any(|row| row.contains("a needle in the output")),
+            "{found:#?}"
+        );
+    }
+
+    #[test]
+    fn the_running_turns_row_opens_and_stays_open_once_its_run_ends() {
+        let mut chat = fullscreen_chat();
+        submit(&mut chat, "check");
+        chat.handle_agent_event(ran("t1", "cargo fmt", "formatted"));
+        chat.handle_agent_event(update(SessionUpdate::ToolCall(
+            ToolCall::new("t2", "cargo test")
+                .kind(ToolKind::Execute)
+                .status(ToolCallStatus::InProgress)
+                .raw_input(serde_json::json!({ "command": "cargo test" })),
+        )));
+        let working = screen_rows(&chat, 40, 20);
+        // The bullet pulses, and the status line below says "Working" too.
+        let row = working
+            .iter()
+            .position(|row| row.ends_with(" Working · 0s · cargo test"))
+            .unwrap_or_else(|| panic!("{working:#?}"));
+        assert!(!working.iter().any(|row| row.contains("cargo fmt")));
+
+        click_at(&mut chat, 6, row);
+        let open = screen_rows(&chat, 40, 20);
+        assert_eq!(open[row], working[row]);
+        assert!(open[row + 2].starts_with("• cargo fmt "), "{open:#?}");
+        assert!(open[row + 4].ends_with(" in progress"), "{open:#?}");
+        // The call still running opens too.
+        click_at(&mut chat, 6, row + 4);
+        let running = screen_rows(&chat, 40, 20);
+        assert!(
+            running[row + 5].ends_with(" Running cargo test"),
+            "{running:#?}"
+        );
+
+        chat.handle_agent_event(update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t2",
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        ))));
+        reply(&mut chat, "m1", "All good.");
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        chat.handle_key(key(KeyCode::Esc));
+        // Both stay open once committed, the run and the call opened in it.
+        let done = screen_rows(&chat, 40, 24);
+        let row = row_starting(&done, "• Ran 2 commands · ");
+        assert!(done[row + 2].starts_with("• cargo fmt "), "{done:#?}");
+        assert!(done[row + 4].ends_with(" completed"), "{done:#?}");
+        assert_eq!(done[row + 5], "• Ran cargo test", "{done:#?}");
     }
 
     #[test]

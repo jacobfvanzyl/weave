@@ -1,0 +1,42 @@
+---
+source: tui/src/render_snapshots.rs
+expression: "both_views(&mut chat, 12, 24)"
+---
+── compact ──
+
+› Fix the flaky parser test
+
+
+• Working · 0s · cargo test -p parser
+
+
+• Working (0s • esc to interrupt)
+
+›
+
+  Agent
+── detailed ──
+
+› Fix the flaky parser test
+
+
+• Working · 0s · cargo test -p parser
+
+• Read parser.rs                                            in progress
+• Exploring
+  └ Read src/parser.rs
+
+• cargo test -p parser                                      in progress
+• Running cargo test -p parser
+  └ running 4 tests
+
+
+
+
+
+  Full transcript · ⌃t to return
+• Working (0s • esc to interrupt)
+
+›
+
+  Agent

@@ -31,6 +31,7 @@ mod palette;
 mod permission;
 #[cfg(test)]
 mod render_snapshots;
+mod runs;
 mod session;
 mod session_picker;
 mod settings;
