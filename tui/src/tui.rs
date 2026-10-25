@@ -38,7 +38,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
-use ratatui::text::Line;
 
 use crate::custom_terminal::Frame;
 use crate::custom_terminal::Terminal;
@@ -53,6 +52,7 @@ use crate::notify::NotifyMethod;
 use crate::palette;
 use crate::palette::Palette;
 use crate::vim::CursorShape;
+use crate::wrapping::DisplayLine;
 use crate::wrapping::wrap_line;
 
 /// Rows always left above the viewport so history can scroll through a valid region.
@@ -309,7 +309,7 @@ impl Tui {
     }
 
     /// Write `history` into scrollback, fit the viewport to `height`, and draw it.
-    pub fn draw<F>(&mut self, history: Vec<Line<'static>>, height: u16, render: F) -> io::Result<()>
+    pub fn draw<F>(&mut self, history: Vec<DisplayLine>, height: u16, render: F) -> io::Result<()>
     where
         F: FnOnce(&mut Frame<'_>),
     {
@@ -327,7 +327,7 @@ impl Tui {
     fn update_and_draw<F>(
         &mut self,
         screen: Size,
-        history: Vec<Line<'static>>,
+        history: Vec<DisplayLine>,
         height: u16,
         render: F,
     ) -> io::Result<()>
@@ -354,11 +354,20 @@ impl Tui {
             self.terminal.replace_viewport_area(area)?;
         }
 
-        // Lines were wrapped when created; re-wrap any the terminal has since become too narrow for.
+        // Lines were wrapped when created; re-wrap any the terminal has since become too narrow
+        // for, which loses their links.
         let width = usize::from(screen.width);
-        let history: Vec<Line<'static>> = history
-            .iter()
-            .flat_map(|line| wrap_line(line, width))
+        let history: Vec<DisplayLine> = history
+            .into_iter()
+            .flat_map(|row| {
+                let mut wrapped = wrap_line(&row.line, width);
+                if wrapped.len() == 1
+                    && let Some(line) = wrapped.pop()
+                {
+                    return vec![DisplayLine { line, ..row }];
+                }
+                wrapped.into_iter().map(DisplayLine::plain).collect()
+            })
             .collect();
         insert_history_lines(&mut self.terminal, &history)?;
         self.terminal.draw(render)

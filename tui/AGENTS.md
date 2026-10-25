@@ -17,7 +17,10 @@ TeX math as Unicode through `math` (Codex's pre-pass, which finds `$`, `\(`, `$$
 before CommonMark takes their backslashes), each falling back to its source and turned off by
 `[tui] mermaid` and `math`; their rows copy as their source (`LineSource::drawn`), and in inline
 mode `commit_boundary` holds a table, a Mermaid or math fence and an open display equation out of
-scrollback until it is complete; `palette` probes the terminal's
+scrollback until it is complete; web links (`links`, after Codex's `terminal_hyperlinks`) ride
+beside their rows as columns (`DisplayLine::links`) and become OSC 8 only in the fullscreen buffer
+and the inline history writer, showing just their label where the terminal is known to open them
+outside a multiplexer; `palette` probes the terminal's
 colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
 two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
 (after Codex's composer Vim mode) editing the same text in the opt-in Vim composer, and

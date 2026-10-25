@@ -76,7 +76,7 @@ impl MessageStream {
 
     /// Lines for every complete source line that has not been committed yet (holding back a
     /// table still arriving; see [`commit_boundary`]).
-    pub fn take_complete(&mut self) -> Vec<Line<'static>> {
+    pub fn take_complete(&mut self) -> Vec<DisplayLine> {
         match commit_boundary(&self.source) {
             Some(end) => {
                 let lines = self.render(&self.source[..end]);
@@ -87,14 +87,14 @@ impl MessageStream {
     }
 
     /// The remaining uncommitted lines, once the message is over.
-    pub fn finish(mut self) -> Vec<Line<'static>> {
+    pub fn finish(mut self) -> Vec<DisplayLine> {
         let lines = self.render(&self.source);
         self.take_from(lines)
     }
 
     /// The uncommitted lines as they look now, for the live viewport.
     pub fn tail(&self) -> Vec<Line<'static>> {
-        let mut lines = self.render(&self.source);
+        let mut lines = plain_lines(self.render(&self.source));
         lines.drain(..self.committed.min(lines.len()));
         lines
     }
@@ -103,14 +103,14 @@ impl MessageStream {
         self.committed > 0
     }
 
-    fn take_from(&mut self, mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    fn take_from(&mut self, mut lines: Vec<DisplayLine>) -> Vec<DisplayLine> {
         let fresh = lines.split_off(self.committed.min(lines.len()));
         self.committed = self.committed.max(lines.len() + fresh.len());
         fresh
     }
 
-    fn render(&self, source: &str) -> Vec<Line<'static>> {
-        plain_lines(render_message(self.kind, source, self.width))
+    fn render(&self, source: &str) -> Vec<DisplayLine> {
+        render_message(self.kind, source, self.width)
     }
 
     /// The whole message as it stands, at `width`; fullscreen redraws it live until it ends.
@@ -206,8 +206,25 @@ mod tests {
 
     use super::*;
 
-    fn text(lines: &[Line<'_>]) -> Vec<String> {
-        lines.iter().map(ToString::to_string).collect()
+    fn text(lines: &[impl Shown]) -> Vec<String> {
+        lines.iter().map(Shown::shown).collect()
+    }
+
+    /// A row as text, whether it carries its source or not.
+    trait Shown {
+        fn shown(&self) -> String;
+    }
+
+    impl Shown for Line<'_> {
+        fn shown(&self) -> String {
+            self.to_string()
+        }
+    }
+
+    impl Shown for DisplayLine {
+        fn shown(&self) -> String {
+            self.line.to_string()
+        }
     }
 
     #[test]

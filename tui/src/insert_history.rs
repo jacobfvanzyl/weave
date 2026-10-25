@@ -3,7 +3,8 @@
 //! Adapted from openai/codex `codex-rs/tui/src/insert_history.rs` (Apache-2.0). History is
 //! inserted with escape sequences rather than a ratatui render: a scroll region limited to the
 //! rows above the viewport lets new lines push older ones into native scrollback while the
-//! viewport stays put.
+//! viewport stays put. A row's web links are written as hyperlinks (OSC 8) around their columns,
+//! after its text has been filtered.
 
 use std::fmt;
 use std::io;
@@ -23,15 +24,16 @@ use ratatui::backend::Backend;
 use ratatui::backend::IntoCrossterm;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
-use ratatui::text::Line;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::custom_terminal::Terminal;
+use crate::links;
+use crate::links::RowLink;
+use crate::wrapping::DisplayLine;
 
 /// Insert `lines` above the viewport. Lines must already fit the viewport width.
-pub fn insert_history_lines<B>(
-    terminal: &mut Terminal<B>,
-    lines: &[Line<'static>],
-) -> io::Result<()>
+pub fn insert_history_lines<B>(terminal: &mut Terminal<B>, lines: &[DisplayLine]) -> io::Result<()>
 where
     B: Backend<Error = io::Error> + Write,
 {
@@ -127,18 +129,41 @@ where
     Ok(())
 }
 
-fn write_line<W: Write>(writer: &mut W, line: &Line<'_>) -> io::Result<()> {
+fn write_line<W: Write>(writer: &mut W, row: &DisplayLine) -> io::Result<()> {
     queue!(
         writer,
         SetAttribute(Attribute::Reset),
         Clear(ClearType::UntilNewLine)
     )?;
+    let line = &row.line;
+    let mut column = 0u16;
+    let mut open: Option<&RowLink> = None;
     for span in &line.spans {
         apply_style(writer, line.style.patch(span.style))?;
         // History bypasses ratatui's buffer, so filter control characters here: agent output
-        // is untrusted and must not be able to emit escape sequences.
+        // is untrusted and must not be able to emit escape sequences. Links, whose
+        // destinations are already safe, are the only ones written.
         let text: String = span.content.chars().filter(|c| !c.is_control()).collect();
-        queue!(writer, Print(text), SetAttribute(Attribute::Reset))?;
+        let mut run = String::new();
+        for grapheme in text.graphemes(true) {
+            let link = row.links.iter().find(|link| link.columns.contains(&column));
+            if link != open {
+                queue!(writer, Print(std::mem::take(&mut run)))?;
+                if open.is_some() {
+                    queue!(writer, Print(links::CLOSE))?;
+                }
+                if let Some(link) = link {
+                    queue!(writer, Print(links::open(&link.destination)))?;
+                }
+                open = link;
+            }
+            run.push_str(grapheme);
+            column = column.saturating_add(u16::try_from(grapheme.width()).unwrap_or(u16::MAX));
+        }
+        queue!(writer, Print(run), SetAttribute(Attribute::Reset))?;
+    }
+    if open.is_some() {
+        queue!(writer, Print(links::CLOSE))?;
     }
     Ok(())
 }
@@ -190,7 +215,9 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::layout::Position;
     use ratatui::layout::Rect;
+    use ratatui::style::Color;
     use ratatui::text::Line;
+    use ratatui::text::Span;
 
     use super::*;
     use crate::test_backend::VT100Backend;
@@ -223,8 +250,11 @@ mod tests {
         terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
         draw_viewport(&mut terminal, "viewport");
 
-        insert_history_lines(&mut terminal, &[Line::from("one"), Line::from("two")])
-            .expect("insert");
+        insert_history_lines(
+            &mut terminal,
+            &[Line::from("one").into(), Line::from("two").into()],
+        )
+        .expect("insert");
         draw_viewport(&mut terminal, "viewport");
 
         assert_eq!(terminal.viewport_area, Rect::new(0, 2, 20, 2));
@@ -240,7 +270,10 @@ mod tests {
         terminal.set_viewport_area(Rect::new(0, 2, 20, 2));
         draw_viewport(&mut terminal, "viewport");
 
-        let lines: Vec<Line<'static>> = ["a", "b", "c"].into_iter().map(Line::from).collect();
+        let lines: Vec<DisplayLine> = ["a", "b", "c"]
+            .into_iter()
+            .map(|text| Line::from(text).into())
+            .collect();
         insert_history_lines(&mut terminal, &lines).expect("insert");
 
         assert_eq!(terminal.viewport_area, Rect::new(0, 2, 20, 2));
@@ -254,7 +287,7 @@ mod tests {
         terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
         draw_viewport(&mut terminal, "viewport");
 
-        insert_history_lines(&mut terminal, &[Line::from("first")]).expect("insert");
+        insert_history_lines(&mut terminal, &[Line::from("first").into()]).expect("insert");
         draw_viewport(&mut terminal, "viewport");
 
         assert_eq!(rows(&terminal), ["first", "viewport", "", "", "", ""]);
@@ -269,9 +302,9 @@ mod tests {
         terminal.set_viewport_area(Rect::new(0, 0, 20, 2));
         draw_viewport(&mut terminal, "viewport");
 
-        let lines: Vec<Line<'static>> = ["a", "b", "c", "d", "e"]
+        let lines: Vec<DisplayLine> = ["a", "b", "c", "d", "e"]
             .into_iter()
-            .map(Line::from)
+            .map(|text| Line::from(text).into())
             .collect();
         insert_history_lines(&mut terminal, &lines).expect("insert");
 
@@ -285,8 +318,36 @@ mod tests {
             Terminal::with_cursor_position(VT100Backend::new(20, 4), Position::ORIGIN);
         terminal.set_viewport_area(Rect::new(0, 0, 20, 1));
 
-        insert_history_lines(&mut terminal, &[Line::from("ok\x1b[2Jstill")]).expect("insert");
+        insert_history_lines(&mut terminal, &[Line::from("ok\x1b[2Jstill").into()])
+            .expect("insert");
 
         assert_eq!(rows(&terminal)[0], "ok[2Jstill");
+    }
+
+    #[test]
+    fn links_are_written_around_their_columns_after_filtering() {
+        let row = DisplayLine {
+            line: Line::from(vec![
+                Span::raw("see "),
+                Span::styled("the\x1b]8;; docs", Style::default().fg(Color::Cyan)),
+                Span::raw(" now"),
+            ]),
+            source: None,
+            links: vec![RowLink {
+                columns: 4..16,
+                destination: "https://doc.rust-lang.org".into(),
+            }],
+        };
+        let mut written = Vec::new();
+        write_line(&mut written, &row).expect("write");
+        let written = String::from_utf8(written).expect("utf-8");
+        let open = links::open("https://doc.rust-lang.org");
+        assert_eq!(written.matches(open.as_str()).count(), 1, "{written:?}");
+        assert_eq!(written.matches(links::CLOSE).count(), 1, "{written:?}");
+        // The agent's own escape is gone; only the link's sequences remain.
+        let label = &written[written.find(&open).map(|at| at + open.len()).unwrap_or(0)..];
+        assert!(label.starts_with("the]8;; docs"), "{written:?}");
+        let after = &written[written.find(links::CLOSE).unwrap_or(0)..];
+        assert!(after.contains(" now"));
     }
 }

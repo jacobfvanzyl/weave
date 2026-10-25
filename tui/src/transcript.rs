@@ -28,6 +28,7 @@ use weave_acp_core::schema::Plan;
 use crate::compaction::Compaction;
 use crate::find;
 use crate::history_cell;
+use crate::links;
 use crate::streaming::StreamKind;
 use crate::streaming::render_compact;
 use crate::streaming::render_with_images;
@@ -1017,6 +1018,7 @@ impl TranscriptView {
                 buf.set_style(Rect::new(area.x, y, area.width, 1), Style::default().bg(bg));
             }
             buf.set_line(area.x, y, &row.line, area.width);
+            links::mark(buf, area.x, y, area.width, &row.links);
         }
         self.render_find(&layout, &rows, top, area, buf);
         let Some(selection) = self.selection.filter(|selection| selection.width == width) else {

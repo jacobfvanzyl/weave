@@ -291,6 +291,7 @@ impl Strip {
                         prefix_width: 0,
                         drawn: false,
                     }),
+                    links: Vec::new(),
                 }
             })
             .collect();

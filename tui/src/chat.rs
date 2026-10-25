@@ -329,7 +329,7 @@ pub struct ChatWidget {
     pager_open: bool,
     /// The session being left, kept until the next one opens so a failed switch can go back.
     stashed: Option<Stashed>,
-    pending_history: Vec<Line<'static>>,
+    pending_history: Vec<DisplayLine>,
     has_history: bool,
     stream: Option<MessageStream>,
     /// Tool calls still running, in the order they started.
@@ -1143,7 +1143,7 @@ impl ChatWidget {
     }
 
     /// Lines to write into scrollback above the viewport, in order.
-    pub fn take_history(&mut self) -> Vec<Line<'static>> {
+    pub fn take_history(&mut self) -> Vec<DisplayLine> {
         std::mem::take(&mut self.pending_history)
     }
 
@@ -3226,14 +3226,14 @@ impl ChatWidget {
         }
     }
 
-    fn commit_stream_lines(&mut self, first: bool, lines: Vec<Line<'static>>) {
+    fn commit_stream_lines(&mut self, first: bool, lines: Vec<DisplayLine>) {
         if lines.is_empty() {
             return;
         }
         if first {
             self.commit_finished_tool_calls();
             self.flush_exploring();
-            self.push_lines(lines);
+            self.push_rows(lines);
         } else {
             self.pending_history.extend(lines);
         }
@@ -3324,10 +3324,15 @@ impl ChatWidget {
 
     /// Queue a cell's lines for scrollback, after a blank separator.
     fn push_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.push_rows(lines.into_iter().map(DisplayLine::plain).collect());
+    }
+
+    /// [`Self::push_lines`], for rows that carry their links.
+    fn push_rows(&mut self, rows: Vec<DisplayLine>) {
         if self.has_history {
-            self.pending_history.push(Line::default());
+            self.pending_history.push(DisplayLine::default());
         }
-        self.pending_history.extend(lines);
+        self.pending_history.extend(rows);
         self.has_history = true;
     }
 
@@ -4044,7 +4049,7 @@ mod tests {
     fn history(chat: &mut ChatWidget) -> Vec<String> {
         chat.take_history()
             .iter()
-            .map(ToString::to_string)
+            .map(|row| row.line.to_string())
             .collect()
     }
 

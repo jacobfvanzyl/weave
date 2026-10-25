@@ -133,7 +133,7 @@ fn screen(chat: &mut ChatWidget) -> String {
     let history: Vec<String> = chat
         .take_history()
         .iter()
-        .map(|line| line.to_string().trim_end().to_owned())
+        .map(|row| row.line.to_string().trim_end().to_owned())
         .collect();
     format!(
         "── transcript ──\n{}\n── viewport ──\n{}",

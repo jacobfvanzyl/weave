@@ -32,6 +32,7 @@ use std::sync::OnceLock;
 use pulldown_cmark::Alignment;
 
 use crate::highlight;
+use crate::links;
 use crate::math::MathMarkdown;
 use crate::mermaid;
 use crate::mermaid::RenderError;
@@ -39,7 +40,7 @@ use crate::mermaid::Role;
 use crate::style;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::LineSource;
-use crate::wrapping::wrap_sourced;
+use crate::wrapping::wrap_linked;
 
 /// A Mermaid fence whose block passes this many bytes renders as its source, closed or not, so
 /// streaming commits it line by line again. It is the diagram renderer's own source limit.
@@ -74,14 +75,21 @@ fn rendering() -> Rendering {
 }
 
 pub fn render_markdown(source: &str, width: usize) -> Vec<DisplayLine> {
-    render_markdown_with(source, width, rendering())
+    render_markdown_with(source, width, rendering(), links::label_only())
 }
 
-fn render_markdown_with(source: &str, width: usize, rendering: Rendering) -> Vec<DisplayLine> {
+/// [`render_markdown`] with what to draw, and whether web links show only their labels.
+fn render_markdown_with(
+    source: &str,
+    width: usize,
+    rendering: Rendering,
+    label_only: bool,
+) -> Vec<DisplayLine> {
     // Math is found first, before CommonMark takes the backslashes of `\(` and `\[`; the parser
     // reads a copy with each formula masked, and its text events carry the rendering.
     let math = MathMarkdown::new(source, options(), Some(width), rendering.math);
     let mut renderer = Renderer::new(width, source, rendering);
+    renderer.label_only = label_only;
     renderer.display_math.clone_from(&math.display_ranges);
     let parser = Parser::new_ext(&math.markdown, options());
     for (event, range) in math.events(parser.into_offset_iter()) {
@@ -175,6 +183,8 @@ struct Renderer<'s> {
     /// The message's source, which event ranges index.
     source: &'s str,
     rendering: Rendering,
+    /// Web links show only their labels, the terminal making them clickable.
+    label_only: bool,
     /// Where display equations are in the source, so their rows copy as their TeX.
     display_math: Vec<Range<usize>>,
     /// Rows from this one on draw `source[range]`, once the row being filled is flushed.
@@ -200,6 +210,11 @@ struct Renderer<'s> {
     code_range: Range<usize>,
     code_end: usize,
     link: Option<(String, usize)>,
+    /// The open link's destination, when it is a web link the terminal can open, and where its
+    /// label starts in the line being filled.
+    web_link: Option<(Arc<str>, usize)>,
+    /// Web links in the line being filled: the bytes of its text each labels, and where to.
+    line_links: Vec<(Range<usize>, Arc<str>)>,
     blank_before_next_block: bool,
     table: Option<Table>,
 }
@@ -217,6 +232,7 @@ impl<'s> Renderer<'s> {
             width,
             source,
             rendering,
+            label_only: false,
             display_math: Vec::new(),
             drawing: None,
             lines: Vec::new(),
@@ -233,6 +249,8 @@ impl<'s> Renderer<'s> {
             code_range: 0..0,
             code_end: 0,
             link: None,
+            web_link: None,
+            line_links: Vec::new(),
             blank_before_next_block: false,
             table: None,
         }
@@ -353,6 +371,10 @@ impl<'s> Renderer<'s> {
                         .fg(style::accent())
                         .add_modifier(Modifier::UNDERLINED),
                 );
+                // A table lays its cells out as plain rows, so links there keep their URL.
+                self.web_link = links::web_destination(&dest_url)
+                    .filter(|_| self.table.is_none())
+                    .map(|destination| (destination, self.text_len()));
                 self.link = Some((dest_url.into_string(), self.spans.len()));
             }
             Tag::Image { dest_url, .. } => {
@@ -712,9 +734,23 @@ impl<'s> Renderer<'s> {
         if image {
             self.text("]");
         }
-        if label != url && !url.starts_with('#') {
+        let linked = !image && self.web_link.is_some();
+        if let Some((destination, start)) = self.web_link.take().filter(|_| !image) {
+            let end = self.text_len();
+            if start < end {
+                self.line_links.push((start..end, destination));
+            }
+        }
+        // Where the terminal opens the link, the label alone is enough.
+        let hidden = linked && self.label_only;
+        if label != url && !url.starts_with('#') && !hidden {
             self.spans.push(Span::styled(format!(" ({url})"), dim()));
         }
+    }
+
+    /// Bytes of text in the line being filled.
+    fn text_len(&self) -> usize {
+        self.spans.iter().map(|span| span.content.len()).sum()
     }
 
     fn start_block(&mut self) {
@@ -764,6 +800,15 @@ impl<'s> Renderer<'s> {
 
     /// End the current source line, wrapping it under the active quote and list prefixes.
     fn flush(&mut self) {
+        // A link whose label goes on past this line continues at the next one's start.
+        if let Some((destination, start)) = &mut self.web_link {
+            let end = self.spans.iter().map(|span| span.content.len()).sum();
+            if *start < end {
+                self.line_links.push((*start..end, Arc::clone(destination)));
+            }
+            *start = 0;
+        }
+        let links = std::mem::take(&mut self.line_links);
         let content = Line::from(std::mem::take(&mut self.spans));
         let hang = self.items.last().copied().unwrap_or(0);
         let marker = self.pending_marker.take();
@@ -784,7 +829,13 @@ impl<'s> Renderer<'s> {
         let rest_indent = " ".repeat(hang);
         let mut rest = self.quote_prefix();
         rest.push(Span::raw(rest_indent));
-        let mut rows = wrap_sourced(&content, self.width, &Line::from(first), &Line::from(rest));
+        let mut rows = wrap_linked(
+            &content,
+            &links,
+            self.width,
+            &Line::from(first),
+            &Line::from(rest),
+        );
         if let Some((_, marker)) = marker {
             copy_with_marker(&mut rows, &marker);
         }
@@ -815,6 +866,7 @@ fn drawn_rows(rows: &mut [DisplayLine], source: &Arc<str>) {
             prefix_width,
             drawn: true,
         });
+        row.links.clear();
     }
 }
 
@@ -1034,6 +1086,63 @@ mod tests {
         assert_eq!(commit_boundary(&fence), Some(fence.len()));
     }
 
+    /// Each row's links: the text they cover and where to.
+    fn links_of(rows: &[DisplayLine]) -> Vec<(usize, String, String)> {
+        rows.iter()
+            .enumerate()
+            .flat_map(|(index, row)| {
+                let text: Vec<char> = row.line.to_string().chars().collect();
+                row.links.iter().map(move |link| {
+                    let label: String = text
+                        [usize::from(link.columns.start)..usize::from(link.columns.end)]
+                        .iter()
+                        .collect();
+                    (index, label, link.destination.to_string())
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn web_links_carry_their_destination_on_the_label_columns() {
+        let rows = render_markdown("see [the docs](https://x.dev) and [here](#top)", 40);
+        assert_eq!(
+            links_of(&rows),
+            [(0, "the docs".to_owned(), "https://x.dev".to_owned())]
+        );
+        // Wrapped, and across a soft break, each row links its part of the label.
+        let rows = render_markdown("[a long label for a link](https://x.dev)", 12);
+        let linked: Vec<String> = links_of(&rows).into_iter().map(|link| link.1).collect();
+        assert_eq!(linked, ["a long label", "for a link"]);
+        let rows = render_markdown("[first\nsecond](https://x.dev)", 40);
+        let linked: Vec<String> = links_of(&rows).into_iter().map(|link| link.1).collect();
+        assert_eq!(linked, ["first", "second"]);
+    }
+
+    #[test]
+    fn only_clickable_web_links_drop_their_destination() {
+        let source = "[docs](https://x.dev), [mail](mailto:a@b.c), ![pic](https://x.dev/p.png)";
+        let shown = |label_only| -> Vec<String> {
+            render_markdown_with(source, 80, Rendering::default(), label_only)
+                .iter()
+                .map(|row| row.line.to_string())
+                .collect()
+        };
+        assert_eq!(
+            shown(false),
+            ["docs (https://x.dev), mail (mailto:a@b.c), [image: pic] (https://x.dev/p.png)"]
+        );
+        assert_eq!(
+            shown(true),
+            ["docs, mail (mailto:a@b.c), [image: pic] (https://x.dev/p.png)"]
+        );
+        // A table's cells lay out without links, so they keep the URL.
+        let table = "| a |\n|---|\n| [docs](https://x.dev) |\n";
+        let rows = render_markdown_with(table, 80, Rendering::default(), true);
+        assert!(rows[2].line.to_string().contains("(https://x.dev)"));
+        assert!(rows.iter().all(|row| row.links.is_empty()));
+    }
+
     #[test]
     fn headings_quotes_and_links() {
         let source = "## Title\n\n> quoted\n\nsee [docs](https://x.dev)";
@@ -1110,7 +1219,7 @@ mod tests {
             mermaid: false,
             ..Rendering::default()
         };
-        let rows: Vec<String> = render_markdown_with(FLOWCHART, 60, off)
+        let rows: Vec<String> = render_markdown_with(FLOWCHART, 60, off, false)
             .iter()
             .map(|row| row.line.to_string())
             .collect();
@@ -1156,7 +1265,7 @@ mod tests {
             math: false,
             ..Rendering::default()
         };
-        let rows: Vec<String> = render_markdown_with(source, 40, off)
+        let rows: Vec<String> = render_markdown_with(source, 40, off, false)
             .iter()
             .map(|row| row.line.to_string())
             .collect();

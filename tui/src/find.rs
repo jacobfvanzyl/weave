@@ -185,6 +185,7 @@ mod tests {
                         prefix_width,
                         drawn: false,
                     }),
+                    links: Vec::new(),
                 }
             })
             .collect()

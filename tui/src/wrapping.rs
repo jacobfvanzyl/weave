@@ -14,11 +14,15 @@ use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// A rendered row and, when it shows text worth copying, where that text came from.
+use crate::links::RowLink;
+
+/// A rendered row and, when it shows text worth copying, where that text came from, and the
+/// web links on it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DisplayLine {
     pub line: Line<'static>,
     pub source: Option<LineSource>,
+    pub links: Vec<RowLink>,
 }
 
 /// The part of a logical line one row shows.
@@ -38,7 +42,11 @@ pub struct LineSource {
 impl DisplayLine {
     /// A row with nothing to copy beyond what is on screen, such as a blank separator.
     pub fn plain(line: Line<'static>) -> Self {
-        Self { line, source: None }
+        Self {
+            line,
+            source: None,
+            links: Vec::new(),
+        }
     }
 
     /// A row that is its own logical line, all of it text.
@@ -57,6 +65,7 @@ impl DisplayLine {
                 prefix_width: 0,
                 drawn: false,
             }),
+            links: Vec::new(),
         }
     }
 
@@ -66,6 +75,11 @@ impl DisplayLine {
         self.line.spans.splice(0..0, prefix.iter().cloned());
         if let Some(source) = &mut self.source {
             source.prefix_width += width;
+        }
+        let shift = u16::try_from(width).unwrap_or(u16::MAX);
+        for link in &mut self.links {
+            link.columns =
+                link.columns.start.saturating_add(shift)..link.columns.end.saturating_add(shift);
         }
         self
     }
@@ -191,6 +205,18 @@ pub fn wrap_sourced(
     first: &Line<'static>,
     rest: &Line<'static>,
 ) -> Vec<DisplayLine> {
+    wrap_linked(content, &[], width, first, rest)
+}
+
+/// [`wrap_sourced`], with web links: the bytes of `content`'s text each labels, and where it
+/// goes. Each row gets the columns of the links on it.
+pub fn wrap_linked(
+    content: &Line<'static>,
+    links: &[(Range<usize>, Arc<str>)],
+    width: usize,
+    first: &Line<'static>,
+    rest: &Line<'static>,
+) -> Vec<DisplayLine> {
     let prefix_width = line_width(first).max(line_width(rest));
     let text: Arc<str> = content
         .spans
@@ -205,14 +231,31 @@ pub fn wrap_sourced(
             let prefix = if index == 0 { first } else { rest };
             let mut spans = prefix.spans.clone();
             spans.extend(line.spans);
+            let prefix_width = line_width(prefix);
+            let column = |byte: usize| {
+                let width = prefix_width + text[range.start..byte].width();
+                u16::try_from(width).unwrap_or(u16::MAX)
+            };
+            let links = links
+                .iter()
+                .filter_map(|(bytes, destination)| {
+                    let start = bytes.start.max(range.start);
+                    let end = bytes.end.min(range.end);
+                    (start < end).then(|| RowLink {
+                        columns: column(start)..column(end),
+                        destination: Arc::clone(destination),
+                    })
+                })
+                .collect();
             DisplayLine {
                 line: Line::from(spans).style(line.style),
                 source: Some(LineSource {
                     text: Arc::clone(&text),
                     range,
-                    prefix_width: line_width(prefix),
+                    prefix_width,
                     drawn: false,
                 }),
+                links,
             }
         })
         .collect()

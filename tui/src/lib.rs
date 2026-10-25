@@ -22,6 +22,7 @@ mod highlight;
 mod history_cell;
 mod input;
 mod insert_history;
+mod links;
 mod markdown;
 mod math;
 mod mermaid;

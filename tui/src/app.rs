@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,6 +80,7 @@ use crate::events::ElicitationAsk;
 use crate::events::PermissionAsk;
 use crate::footer::StatusItem;
 use crate::input::Input;
+use crate::links;
 use crate::markdown;
 use crate::markdown::Rendering;
 use crate::session::OpenedSession;
@@ -237,6 +239,10 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         dismissed_updates,
     } = ui;
     markdown::set_rendering(rendering);
+    links::set_label_only(links::label_only_for(
+        |name| std::env::var(name).ok(),
+        std::io::stdout().is_terminal(),
+    ));
     let Session {
         connection,
         events,
