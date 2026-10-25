@@ -285,3 +285,6 @@ html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {
 /* An inline diagram pans sideways but leaves a vertical swipe to scroll the transcript, which
    Streamdown's touch-action: none would take; fullscreen still pans every way. */
 [data-streamdown="mermaid-block"] [role="application"] { touch-action: pan-y !important; }
+/* On the phone an inline diagram's zoom buttons would cover it, so they stay in fullscreen. They
+   are the first child of Streamdown's pan-zoom view, which names them no other way. */
+html[data-device-idiom="phone"] [data-streamdown="mermaid-block"] [data-streamdown="mermaid"] > div > div:has(> button) { display: none; }
