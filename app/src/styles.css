@@ -288,3 +288,12 @@ html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {
 /* On the phone an inline diagram's zoom buttons would cover it, so they stay in fullscreen. They
    are the first child of Streamdown's pan-zoom view, which names them no other way. */
 html[data-device-idiom="phone"] [data-streamdown="mermaid-block"] [data-streamdown="mermaid"] > div > div:has(> button) { display: none; }
+/* A diagram shows in its own frame, without Streamdown's card around it or the card's "mermaid"
+   label, its first row, which has no name of its own. Copy and fullscreen float in the frame's
+   top right corner, in a card like the zoom buttons' in its bottom left. */
+[data-streamdown="mermaid-block"] { @apply gap-0 rounded-none border-0 bg-transparent p-0; }
+[data-streamdown="mermaid-block"] > div:first-child { display: none; }
+[data-streamdown="mermaid-block-actions"] {
+  @apply gap-1 border-border bg-background/80 p-1 supports-[backdrop-filter]:bg-background/70 supports-[backdrop-filter]:backdrop-blur-sm;
+}
+[data-streamdown="mermaid-block-actions"] > button { @apply rounded p-1.5 hover:bg-muted; }
