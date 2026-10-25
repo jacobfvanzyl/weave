@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Rebuild weave in release and restart its Host: on this computer, then on others over SSH.
+#
+#   scripts/update-hosts [--now] [--hosts-only] [HOST...]
+#
+# Here, `cargo build --release` in this checkout, with ~/.local/bin/weave pointing at
+# target/release/weave (or given a copy of it), then `weave daemon restart`. Then on each
+# HOST (by default the ones in $WEAVE_HOSTS, separated by spaces): this working tree, less
+# the app and the trackpad, replaces ~/.cache/weave/build/src there, and the same script builds
+# it with its target directory beside it, so builds after the first are incremental, copies
+# the binary over ~/.local/bin/weave and restarts the Host. A host without rustup gets it in
+# ~/.cargo, leaving its shell's files alone; the toolchain comes from rust-toolchain.toml.
+# Restarts wait for running turns, unless --now. --hosts-only leaves this computer's Host
+# alone.
+#
+# Each host runs `scripts/update-hosts --here-only [--now] --target-dir DIR` from its copy.
+
+set -euo pipefail
+
+now=""
+mode=all # all, hosts (--hosts-only) or here (--here-only)
+target_dir=""
+hosts=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --now) now="--now" ;;
+    --hosts-only) mode=hosts ;;
+    --here-only) mode=here ;;
+    --target-dir) target_dir="$2"; shift ;;
+    -h | --help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
+    -*) echo "update-hosts: unknown option $1" >&2; exit 2 ;;
+    *) hosts+=("$1") ;;
+  esac
+  shift
+done
+if [ "$mode" != here ] && [ ${#hosts[@]} -eq 0 ] && [ -n "${WEAVE_HOSTS:-}" ]; then
+  read -r -a hosts <<<"$WEAVE_HOSTS"
+fi
+
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+# Where a host keeps its copy and its build, relative to its home.
+build_dir=".cache/weave/build"
+
+step() { printf '\n==> %s\n' "$*"; }
+
+# Where `path` leads, symlinks followed.
+resolve() { readlink -f "$1" 2>/dev/null || true; }
+
+# Build weave here, make ~/.local/bin/weave this build, and restart the Host.
+update_here() {
+  local where="$1"
+  local dir
+  for dir in "$HOME/.cargo/bin" /opt/homebrew/opt/rustup/bin; do
+    if ! command -v cargo >/dev/null && [ -x "$dir/cargo" ]; then
+      PATH="$dir:$PATH"
+    fi
+  done
+  if ! command -v cargo >/dev/null; then
+    step "Installing rustup in ~/.cargo on $where"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y -q --no-modify-path --profile minimal --default-toolchain none
+    PATH="$HOME/.cargo/bin:$PATH"
+  fi
+
+  step "Building weave (release) on $where"
+  local target="${target_dir:-$repo/target}"
+  (cd "$repo" && CARGO_TARGET_DIR="$target" cargo build --release -p weave-cli)
+
+  local built="$target/release/weave"
+  local installed="$HOME/.local/bin/weave"
+  if [ "$(resolve "$installed")" != "$(resolve "$built")" ] && ! cmp -s "$built" "$installed"; then
+    mkdir -p "$(dirname "$installed")"
+    install -m 755 "$built" "$(dirname "$installed")/.weave.new"
+    mv -f "$(dirname "$installed")/.weave.new" "$installed"
+    echo "Copied it to $installed."
+  fi
+
+  step "Restarting the weave Host on $where"
+  "$installed" daemon restart $now
+}
+
+# Copy this working tree to `host` and have it update itself there.
+update_host() {
+  local host="$1"
+  step "Copying the source to $host"
+  local tar_flags=()
+  if tar --version 2>/dev/null | grep -q bsdtar; then
+    tar_flags=(--no-mac-metadata --no-xattrs)
+  fi
+  git -C "$repo" ls-files -z -co --exclude-standard -- . ':!app' ':!trackpad' \
+    | COPYFILE_DISABLE=1 tar -C "$repo" ${tar_flags[@]+"${tar_flags[@]}"} --null -T - -czf - \
+    | ssh "$host" "rm -rf $build_dir/src && mkdir -p $build_dir/src && tar xzf - -C $build_dir/src"
+  # A terminal when there is one, so Ctrl+C reaches the build and the restart's wait.
+  local tty=()
+  if [ -t 0 ] && [ -t 1 ]; then
+    tty=(-t)
+  fi
+  ssh ${tty[@]+"${tty[@]}"} "$host" \
+    "bash $build_dir/src/scripts/update-hosts --here-only $now --target-dir $build_dir/target"
+}
+
+case "$mode" in
+  here)
+    # From a host's copy, its target directory is given relative to its home.
+    case "$target_dir" in /* | "") ;; *) target_dir="$HOME/$target_dir" ;; esac
+    update_here "$(hostname -s 2>/dev/null || hostname)"
+    ;;
+  all | hosts)
+    done_on=()
+    if [ "$mode" = all ]; then
+      update_here "this computer"
+      done_on+=("this computer")
+    elif [ ${#hosts[@]} -eq 0 ]; then
+      echo "update-hosts: no hosts; name them, or set WEAVE_HOSTS" >&2
+      exit 2
+    fi
+    for host in ${hosts[@]+"${hosts[@]}"}; do
+      update_host "$host"
+      done_on+=("$host")
+    done
+    step "Updated $(IFS=,; echo "${done_on[*]}" | sed 's/,/, /g')"
+    ;;
+esac

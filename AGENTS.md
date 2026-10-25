@@ -14,6 +14,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |
 | `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
+| `scripts/` | `update-hosts`: rebuild weave in release and restart the installed Host, here and on the person's other computers over SSH. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |
 | `docs/specs/` | The Host protocol (WVE-85) and remote clients (WVE-90). |
 | `docs/research/` | Dated research: evidence, not implementation requirements. |
@@ -82,6 +83,11 @@ cargo fmt
 ./target/debug/weave smoke --agent claude   # one headless turn
 ./target/debug/weave --no-daemon -- ./target/debug/weave-fake-agent   # scripted agent
 ```
+
+`scripts/update-hosts [--now] [HOST...]` rebuilds the release here and restarts the Host
+(`~/.local/bin/weave` points at `target/release/weave`), then copies this working tree to each
+host over SSH (by default those in `$WEAVE_HOSTS`), builds it there in `~/.cache/weave/build`,
+installs rustup first if needed, and restarts that Host too; `--hosts-only` leaves this one alone.
 
 Keep only the latest debug build in `target/debug`, which otherwise grows with every rebuild
 and can fill the disk: clear `target/debug/incremental` (old incremental sessions pile up
