@@ -36,6 +36,25 @@ fn accent_for(palette: &Palette) -> Color {
     palette.color(preferred).unwrap_or(Color::Cyan)
 }
 
+/// Codex's muted amber for warnings on dark backgrounds, and a darker one on light backgrounds.
+const WARNING_DARK: Rgb = (196, 167, 103);
+const WARNING_LIGHT: Rgb = (139, 98, 20);
+
+/// Warnings, such as a warning alert's: amber; where only ANSI colors show, yellow, or red on a
+/// light background, where yellow can't be read.
+pub fn warning() -> Color {
+    warning_for(&palette::current())
+}
+
+fn warning_for(palette: &Palette) -> Color {
+    let (preferred, ansi) = if palette.is_light() {
+        (WARNING_LIGHT, Color::Red)
+    } else {
+        (WARNING_DARK, Color::Yellow)
+    };
+    palette.color(preferred).unwrap_or(ansi)
+}
+
 /// Secondary text, such as hint wording around key names: the foreground 60% of the way
 /// from the background, or dim where the colors are unknown.
 pub fn secondary() -> Style {
@@ -213,5 +232,14 @@ mod tests {
 
         assert_eq!(secondary_for(&dark).fg, Some(rgb((135, 140, 164))));
         assert_eq!(secondary_for(&Palette::UNKNOWN), dim());
+
+        assert_eq!(warning_for(&dark), rgb((196, 167, 103)));
+        assert_eq!(warning_for(&light), rgb((139, 98, 20)));
+        assert_eq!(warning_for(&Palette::UNKNOWN), Color::Yellow);
+        let light_ansi = Palette {
+            level: ColorLevel::Ansi16,
+            ..light
+        };
+        assert_eq!(warning_for(&light_ansi), Color::Red);
     }
 }

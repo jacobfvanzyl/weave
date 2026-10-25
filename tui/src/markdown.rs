@@ -633,14 +633,14 @@ fn alert_label(kind: BlockQuoteKind) -> &'static str {
     }
 }
 
-/// An alert's color, after GitHub's: blue, green, purple, yellow and red, in the terminal's own
-/// shades of them.
+/// An alert's color, after GitHub's: blue, green, purple, amber and red, in the terminal's own
+/// shades of them but for the amber, which keeps to what reads on its background.
 fn alert_color(kind: BlockQuoteKind) -> Color {
     match kind {
         BlockQuoteKind::Note => Color::Blue,
         BlockQuoteKind::Tip => Color::Green,
         BlockQuoteKind::Important => Color::Magenta,
-        BlockQuoteKind::Warning => Color::Yellow,
+        BlockQuoteKind::Warning => style::warning(),
         BlockQuoteKind::Caution => Color::Red,
     }
 }
@@ -834,10 +834,10 @@ mod tests {
         let text: Vec<String> = rows.iter().map(|row| row.line.to_string()).collect();
         assert_eq!(text, ["> Warning", "> Quitting ends turns.", "", "> plain"]);
         let style = |row: usize, text: &str| span(&rows[row], text).style;
-        assert_eq!(style(0, ">").fg, Some(Color::Yellow));
-        assert_eq!(style(1, ">").fg, Some(Color::Yellow));
+        assert_eq!(style(0, ">").fg, Some(style::warning()));
+        assert_eq!(style(1, ">").fg, Some(style::warning()));
         assert_eq!(style(3, ">").fg, Some(Color::Green));
-        assert_eq!(style(0, "Warning").fg, Some(Color::Yellow));
+        assert_eq!(style(0, "Warning").fg, Some(style::warning()));
         assert!(style(0, "Warning").add_modifier.contains(Modifier::BOLD));
         // An alert's text keeps the surrounding style; a plain quote's is green.
         assert_eq!(style(1, "Quitting").fg, None);
