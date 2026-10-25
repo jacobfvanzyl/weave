@@ -63,6 +63,7 @@ import {
   ReasoningTrigger,
 } from '@/components/ai-elements/reasoning';
 import { Empty, EmptyDescription, EmptyHeader } from '@/components/ui/empty';
+import { Spinner } from '@/components/ui/spinner';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
 import {
@@ -776,6 +777,7 @@ export function ChatPane({
   focusRequest,
   discardDraftOnUnmount,
   draftKey,
+  loading = false,
 }: {
   model: AcpTranscript;
   actions: ChatPaneActions;
@@ -791,9 +793,14 @@ export function ChatPane({
   focusRequest?: number;
   discardDraftOnUnmount?: boolean;
   draftKey?: string;
+  /**
+   * Its history is still replaying as it opens: a spinner shows until it's in, and then the
+   * transcript, at its end, without having been laid out a frame at a time.
+   */
+  loading?: boolean;
 }) {
   const running = model.turn.status === 'running';
-  const items = useMemo(() => transcriptItems(model.entries, running), [model.entries, running]);
+  const items = useMemo(() => loading ? [] : transcriptItems(model.entries, running), [loading, model.entries, running]);
   const streamingId = running ? model.entries.at(-1)?.id : undefined;
   const session = root ?? model;
   const context = useMemo<TranscriptContextValue>(() => ({ root: session, openSubagent: onOpenSubagent }), [session, onOpenSubagent]);
@@ -809,7 +816,11 @@ export function ChatPane({
             Agent response in progress.
           </span>
         )}
-        <MessageScrollerProvider autoScroll>
+        {loading ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center" data-slot="chat-loading">
+            <Spinner aria-label="Loading the thread" className="size-5 text-muted-foreground" />
+          </div>
+        ) : <MessageScrollerProvider autoScroll>
           <MessageScroller>
             <MessageScrollerViewport>
               <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-4 px-3 py-5">
@@ -838,7 +849,7 @@ export function ChatPane({
             </MessageScrollerViewport>
             <MessageScrollerButton />
           </MessageScroller>
-        </MessageScrollerProvider>
+        </MessageScrollerProvider>}
         {!readOnly && <Composer
           key={draftKey ?? model.sessionId}
           draftKey={draftKey}

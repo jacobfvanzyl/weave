@@ -120,6 +120,11 @@ type Followed = {
    * shows after what came before it.
    */
   pendingShown: boolean;
+  /**
+   * Opened with nothing of it shown yet, its history still replaying: the transcript shows once
+   * the replay has caught up, all at once, rather than filling in a frame at a time.
+   */
+  loading: boolean;
   /** Clients that prompted it, by client id, for naming who runs a client tool. */
   clients: Map<string, string>;
 };
@@ -656,6 +661,7 @@ export class HostStore {
       followed.clients.set(event.origin.client.id, originLabel(event.origin));
     }
     this.#apply(followed, transcriptEvents(notification, { history, own: (origin) => this.#own(entry, origin) }), notification.at);
+    if (followed.loading && !followed.follower.replaying) followed.loading = false;
     // What waits shows once the history before it has.
     if (!followed.pendingShown && !followed.follower.replaying) this.#showPending(followed);
     if (history) return;
@@ -750,6 +756,7 @@ export class HostStore {
       reopening: false,
       pending: [],
       pendingShown: false,
+      loading: false,
       clients: new Map(),
     };
   }
@@ -811,6 +818,9 @@ export class HostStore {
     const { reset } = followed.follower.opened(session);
     const { state } = session;
     const base = reset ? createTranscript(state.sessionId) : followed.transcript;
+    // A thread on screen that catches up after a reconnect keeps showing; one that opens, or
+    // whose opening replay a reconnect cut short, waits for its history.
+    followed.loading = followed.follower.replaying && (followed.loading || base.entries.length === 0);
     const events: AcpTranscriptEvent[] = [{ type: 'session/loaded', modes: state.modes, configOptions: state.configOptions }];
     // Replayed history changes no turn state: what runs now is the session's.
     const running = (state.turns ?? []).some(({ sessionId }) => sessionId === state.sessionId);
@@ -1340,6 +1350,7 @@ export class HostStore {
             canAttachImages: selected.state?.agent.initialize.agentCapabilities?.promptCapabilities?.image === true,
             ...(selected.update ? { update: this.#updateNotice(selected.update, this.#hosts.get(selected.hostId)) } : {}),
             ...(selected.reopening ? { reopening: true } : {}),
+            ...(selected.loading ? { loading: true } : {}),
           }
         : undefined,
       unread: this.#read.unread(),

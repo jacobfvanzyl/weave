@@ -311,6 +311,18 @@ describe('ChatPane', () => {
     expect(screen.queryByText('1 command')).not.toBeInTheDocument();
   });
 
+  it('shows a spinner rather than a thread whose history is still loading', () => {
+    const model = createAcpShowcaseTranscript();
+    const { rerender } = render(<ChatPane model={model} actions={actions()} loading />);
+    expect(screen.getByRole('status', { name: 'Loading the thread' })).toBeVisible();
+    expect(screen.queryByRole('log')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toBeVisible();
+
+    rerender(<ChatPane model={model} actions={actions()} />);
+    expect(screen.queryByRole('status', { name: 'Loading the thread' })).not.toBeInTheDocument();
+    expect(screen.getByRole('log')).toBeVisible();
+  });
+
   it('makes prompts that arrive while the thread is open scroll anchors, and none it replays', () => {
     const reply = (text: string, replayed?: boolean) => ({
       type: 'session/update' as const,

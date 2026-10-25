@@ -336,6 +336,40 @@ describe('HostStore reconnecting', () => {
     store.stop();
   });
 
+  it('loads a thread it opens before showing it, and keeps one on screen showing as it catches up', async () => {
+    let head = 2;
+    const host = scriptedHost(() => [], {
+      'session/attach': (given) => {
+        const after = (given as { after?: { seq: number } }).after;
+        return { result: { ...host.state, journal: { id: 'j-1', head }, replay: { from: (after?.seq ?? 0) + 1, reset: !after } } };
+      },
+    });
+    const store = storeFor(host.connector, { backoff: [60_000] });
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    expect(store.snapshot().session?.loading).toBe(true);
+    host.notify('session/event', chunk(1, 'Chunk 1. '));
+    await settle();
+    expect(store.snapshot().session?.loading).toBe(true);
+    host.notify('session/event', chunk(2, 'Chunk 2. '));
+    await settle();
+    expect(store.snapshot().session?.loading).toBeUndefined();
+    expect(said(store)).toBe('Chunk 1. Chunk 2. ');
+
+    // Caught up after a reconnect, it shows throughout.
+    head = 3;
+    host.close(HOST_PROTOCOL.websocket.closeBehind, 'fell behind; attach again after your position');
+    await settle();
+    expect(host.connects.opened).toBe(2);
+    expect(store.snapshot().session?.loading).toBeUndefined();
+    host.notify('session/event', chunk(3, 'Chunk 3. '));
+    await settle();
+    expect(store.snapshot().session?.loading).toBeUndefined();
+    expect(said(store)).toBe('Chunk 1. Chunk 2. Chunk 3. ');
+    store.stop();
+  });
+
   it("backs off, and doesn't say the thread couldn't open, when an attach falls behind before its answer (4001)", async () => {
     let attaches = 0;
     const host = scriptedHost(() => [], {

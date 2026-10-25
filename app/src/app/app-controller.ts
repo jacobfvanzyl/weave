@@ -145,6 +145,8 @@ export type OpenSession = {
   update?: AgentUpdateNotice;
   /** `session/reopen` is moving it to the version its agent's new sessions launch. */
   reopening?: boolean;
+  /** Its history is still replaying as it opens; the transcript shows once it's in. */
+  loading?: boolean;
 };
 
 export type AppModel = {
