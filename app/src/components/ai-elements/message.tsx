@@ -1,5 +1,13 @@
-import { memo, type ComponentProps } from 'react';
-import { defaultRehypePlugins, defaultRemarkPlugins, type LinkSafetyModalProps, Streamdown, type StreamdownProps } from 'streamdown';
+import { memo, type ComponentProps, type MouseEvent } from 'react';
+import {
+  defaultComponents,
+  defaultRehypePlugins,
+  defaultRemarkPlugins,
+  type ExtraProps,
+  type LinkSafetyModalProps,
+  Streamdown,
+  type StreamdownProps,
+} from 'streamdown';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,6 +19,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
+import { imagesAsLinks } from '@/markdown/images-as-links';
 
 export type MessageResponseProps = StreamdownProps;
 
@@ -25,7 +34,7 @@ function htmlAsText() {
   return walk;
 }
 
-const remarkPlugins = [...Object.values(defaultRemarkPlugins), htmlAsText];
+const remarkPlugins = [...Object.values(defaultRemarkPlugins), htmlAsText, imagesAsLinks];
 // Without `raw`, nothing parses HTML; sanitizing and hardening links stay.
 const rehypePlugins = Object.entries(defaultRehypePlugins).filter(([name]) => name !== 'raw').map(([, plugin]) => plugin);
 
@@ -58,7 +67,16 @@ function LinkConfirmation({ isOpen, onClose, onConfirm, url }: LinkSafetyModalPr
 const linkSafety: StreamdownProps['linkSafety'] = { enabled: true, renderModal: (props) => <LinkConfirmation {...props} /> };
 
 /** What Streamdown passes a component besides the element's own props: its Markdown node. */
-type Rendered<T extends keyof React.JSX.IntrinsicElements> = ComponentProps<T> & { node?: unknown };
+type Rendered<T extends keyof React.JSX.IntrinsicElements> = ComponentProps<T> & ExtraProps;
+
+/** Scrolls to the element a fragment link names, within the same message: footnotes and their way back. */
+function scrollToFragment(event: MouseEvent<HTMLAnchorElement>) {
+  event.preventDefault();
+  const id = decodeURIComponent(event.currentTarget.hash.slice(1));
+  const message = event.currentTarget.closest('[data-slot="message-response"]');
+  const target = [...(message?.querySelectorAll('[id]') ?? [])].find((element) => element.id === id);
+  target?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
 
 /**
  * Tables read as part of the text, as the TUI draws them: a bold heading ruled column by column,
@@ -66,6 +84,11 @@ type Rendered<T extends keyof React.JSX.IntrinsicElements> = ComponentProps<T> &
  * arrives as the cell's style, which wins over the heading's `text-left`.
  */
 const markdownComponents: StreamdownProps['components'] = {
+  // A link within the message, such as a footnote's, scrolls to its target; every other link
+  // asks before it opens.
+  a: ({ node, href, ...props }: Rendered<'a'>) => href?.startsWith('#')
+    ? <a href={href} onClick={scrollToFragment} {...props} />
+    : <defaultComponents.a node={node} href={href} {...props} />,
   table: ({ node: _node, className, ...props }: Rendered<'table'>) => (
     <div className="my-3 max-w-full overflow-x-auto" data-streamdown="table-wrapper">
       <table

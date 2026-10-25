@@ -24,6 +24,7 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
 | `src/host` | The Host protocol's generated types (`protocol.ts`, never edited by hand), the connection, device keys, journal following, and the store behind the Host controller (`host-store.ts`). |
 | `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls and their terminals, plans, subagents, elicitations; the recorded journals its tests read (`fixtures/journals`). |
 | `src/components` | The shell (`app-shell.tsx`), the session list and view, the banner and dialogs; `ui` and `ai-elements` are shadcn and AI Elements components. |
+| `src/markdown` | What agent Markdown renders as beyond Streamdown's defaults (WVE-122), kept inert: no script, no fetch, no navigation without consent. `MessageResponse` (`src/components/ai-elements/message.tsx`) puts it together. |
 | `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout) and `DeviceKeyPlugin.swift` (Secure Enclave keys). |
 | `scripts/ios.ts` | Builds, installs and launches the iOS app. |
 
@@ -68,6 +69,9 @@ instead: `xcrun simctl launch <device> com.veezee.weave --mock running`.
 ## Conventions
 
 - Tests run in Vitest with happy-dom and Testing Library; query by role and accessible name.
+- Agent text fetches nothing without consent. Markdown images become links that ask first, and the
+  built app runs under a Content Security Policy (`src/content-security-policy.ts`, added to the
+  page at build time only) that loads nothing from another address but the Hosts' WebSockets.
 - Xcode builds use Xcode's configured DerivedData location. Never pass `-derivedDataPath` or
   `-resultBundlePath` under `/tmp` or the home directory; an isolated build goes under
   `/Volumes/External/Build/xcodebuild.noindex/<name>` and is removed afterwards.

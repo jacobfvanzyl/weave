@@ -122,7 +122,7 @@ function MessageEntryView({
                     Thinking
                   </ReasoningTrigger>
                   <ReasoningContent>
-                    <ContentBlocksView blocks={chunk.content} />
+                    <ContentBlocksView blocks={chunk.content} isStreaming={isStreaming && index === message.chunks.length - 1} />
                   </ReasoningContent>
                 </Reasoning>
               );
@@ -135,7 +135,7 @@ function MessageEntryView({
                 className={cn(isUser && 'w-max max-w-[90%]')}
               >
                 <BubbleContent className={cn(isUser && 'w-max')}>
-                  <ContentBlocksView blocks={chunk.content} />
+                  <ContentBlocksView blocks={chunk.content} isStreaming={isStreaming && index === message.chunks.length - 1} />
                 </BubbleContent>
               </Bubble>
             );

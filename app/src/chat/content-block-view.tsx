@@ -120,11 +120,12 @@ function ImageThumbnail({ block }: { block: Extract<ContentBlock, { type: 'image
   );
 }
 
-export function ContentBlockView({ block }: { block: ContentBlock }) {
+/** A content block; `isStreaming` while it is the end of a message still arriving. */
+export function ContentBlockView({ block, isStreaming = false }: { block: ContentBlock; isStreaming?: boolean }) {
   switch (block.type) {
     case 'text':
       return (
-        <MessageResponse>
+        <MessageResponse isAnimating={isStreaming}>
           {block.text}
         </MessageResponse>
       );
@@ -154,14 +155,21 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
   }
 }
 
-export function ContentBlocksView({ blocks }: { blocks: ContentBlock[] }) {
+/** A message's blocks; `isStreaming` while more of it is arriving, which only its last block can take. */
+export function ContentBlocksView({ blocks, isStreaming = false }: { blocks: ContentBlock[]; isStreaming?: boolean }) {
   const renderBlocks = coalesceContentBlocks(blocks);
   const images = renderBlocks.filter((block) => block.type === 'image');
   return (
     <div className="flex min-w-0 flex-col gap-2">
       {renderBlocks.map((block, index) => block.type === 'image'
         ? null
-        : <ContentBlockView key={`${block.type}-${index}`} block={block} />)}
+        : (
+          <ContentBlockView
+            key={`${block.type}-${index}`}
+            block={block}
+            isStreaming={isStreaming && index === renderBlocks.length - 1}
+          />
+        ))}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-1.5" data-slot="image-thumbnails">
           {images.map((block, index) => <ContentBlockView key={`image-${index}`} block={block} />)}
