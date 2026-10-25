@@ -1,12 +1,14 @@
 //! Renders agent markdown into styled, wrapped terminal lines, in Codex's styles
 //! (`codex-rs/tui/src/markdown_render.rs`, Apache-2.0): bold and underlined top headings, inline
 //! code and links in the theme's colors, light blue list numbers, green quotes, highlighted code
-//! blocks without their fences, and tables laid out in columns.
+//! blocks without their fences, and tables laid out in columns. GitHub's alerts (`> [!NOTE]` and
+//! the rest) are quotes headed by their kind, in its color.
 //!
 //! Source line breaks are kept (soft breaks render as breaks), so rendering a prefix of a
 //! message yields a prefix of the full rendering. Streaming relies on that to commit finished
 //! lines to scrollback before the message is complete.
 
+use pulldown_cmark::BlockQuoteKind;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::Event;
 use pulldown_cmark::HeadingLevel;
@@ -31,8 +33,12 @@ use crate::wrapping::DisplayLine;
 use crate::wrapping::wrap_sourced;
 
 pub fn render_markdown(source: &str, width: usize) -> Vec<DisplayLine> {
-    let options =
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
+    // Math, sub- and superscript and wikilinks stay off: math is found before parsing, single
+    // tildes are strikethrough, and wikilinks are where 0.13.4's exponential parse lived.
+    let options = Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_TABLES
+        | Options::ENABLE_GFM;
     let mut renderer = Renderer::new(width);
     for event in Parser::new_ext(source, options) {
         renderer.event(event);
@@ -71,7 +77,8 @@ struct Renderer {
     items: Vec<usize>,
     /// Indent and marker for the first line of the newest list item.
     pending_marker: Option<(usize, String)>,
-    quote_depth: usize,
+    /// Open quotes, outermost first, with the alert kind of those that are alerts.
+    quotes: Vec<Option<BlockQuoteKind>>,
     in_code_block: bool,
     fenced_code: bool,
     /// The open code block's language, and its text so far, highlighted when it ends.
@@ -99,7 +106,7 @@ impl Renderer {
             lists: Vec::new(),
             items: Vec::new(),
             pending_marker: None,
-            quote_depth: 0,
+            quotes: Vec::new(),
             in_code_block: false,
             fenced_code: false,
             code_lang: String::new(),
@@ -131,6 +138,8 @@ impl Renderer {
                 self.text(if checked { "[x] " } else { "[ ] " });
             }
             Event::FootnoteReference(name) => self.text(&format!("[^{name}]")),
+            // Not emitted: `ENABLE_MATH` is off.
+            Event::InlineMath(text) | Event::DisplayMath(text) => self.text(&text),
         }
     }
 
@@ -144,10 +153,22 @@ impl Renderer {
                 self.spans.push(Span::styled(format!("{hashes} "), style));
                 self.styles.push(style);
             }
-            Tag::BlockQuote => {
+            Tag::BlockQuote(kind) => {
                 self.start_block();
-                self.quote_depth += 1;
-                self.push_style(Style::default().fg(Color::Green));
+                self.quotes.push(kind);
+                match kind {
+                    // An alert's text keeps the surrounding style; its label and bar carry
+                    // the color.
+                    Some(kind) => {
+                        self.styles.push(self.style());
+                        let style = Style::default()
+                            .fg(alert_color(kind))
+                            .add_modifier(Modifier::BOLD);
+                        self.spans.push(Span::styled(alert_label(kind), style));
+                        self.flush();
+                    }
+                    None => self.push_style(Style::default().fg(Color::Green)),
+                }
             }
             Tag::CodeBlock(kind) => {
                 self.start_block();
@@ -215,6 +236,11 @@ impl Renderer {
                 });
             }
             Tag::TableHead => self.push_style(Style::default().add_modifier(Modifier::BOLD)),
+            Tag::Superscript | Tag::Subscript => self.styles.push(self.style()),
+            // Not emitted: definition lists are off.
+            Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
+                self.start_block();
+            }
             Tag::HtmlBlock | Tag::MetadataBlock(_) | Tag::TableRow | Tag::TableCell => {}
         }
     }
@@ -230,12 +256,12 @@ impl Renderer {
                 self.flush();
                 self.blank_before_next_block = true;
             }
-            TagEnd::BlockQuote => {
+            TagEnd::BlockQuote(_) => {
                 if !self.spans.is_empty() {
                     self.flush();
                 }
                 self.styles.pop();
-                self.quote_depth = self.quote_depth.saturating_sub(1);
+                self.quotes.pop();
                 self.blank_before_next_block = true;
             }
             TagEnd::CodeBlock => self.end_code_block(),
@@ -251,7 +277,11 @@ impl Renderer {
                 }
                 self.items.pop();
             }
-            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
+            TagEnd::Emphasis
+            | TagEnd::Strong
+            | TagEnd::Strikethrough
+            | TagEnd::Superscript
+            | TagEnd::Subscript => {
                 self.styles.pop();
             }
             TagEnd::Link => {
@@ -280,6 +310,8 @@ impl Renderer {
                 }
                 self.blank_before_next_block = true;
             }
+            TagEnd::DefinitionListTitle | TagEnd::DefinitionListDefinition => self.flush(),
+            TagEnd::DefinitionList => self.blank_before_next_block = true,
             TagEnd::HtmlBlock | TagEnd::MetadataBlock(_) => {}
         }
     }
@@ -429,15 +461,15 @@ impl Renderer {
         self.styles.last().copied().unwrap_or_default()
     }
 
+    /// A `> ` per open quote, in its alert's color or the quotes' green.
     fn quote_prefix(&self) -> Vec<Span<'static>> {
-        if self.quote_depth == 0 {
-            Vec::new()
-        } else {
-            vec![Span::styled(
-                "> ".repeat(self.quote_depth),
-                Style::default().fg(Color::Green),
-            )]
-        }
+        self.quotes
+            .iter()
+            .map(|kind| {
+                let color = kind.map_or(Color::Green, alert_color);
+                Span::styled("> ", Style::default().fg(color))
+            })
+            .collect()
     }
 
     /// End the current source line, wrapping it under the active quote and list prefixes.
@@ -494,6 +526,29 @@ fn copy_with_marker(rows: &mut [DisplayLine], marker: &str) {
                 source.range.start + marker.len()..source.range.end + marker.len()
             };
         }
+    }
+}
+
+/// An alert's heading, as GitHub titles it.
+fn alert_label(kind: BlockQuoteKind) -> &'static str {
+    match kind {
+        BlockQuoteKind::Note => "Note",
+        BlockQuoteKind::Tip => "Tip",
+        BlockQuoteKind::Important => "Important",
+        BlockQuoteKind::Warning => "Warning",
+        BlockQuoteKind::Caution => "Caution",
+    }
+}
+
+/// An alert's color, after GitHub's: blue, green, purple, yellow and red, in the terminal's own
+/// shades of them.
+fn alert_color(kind: BlockQuoteKind) -> Color {
+    match kind {
+        BlockQuoteKind::Note => Color::Blue,
+        BlockQuoteKind::Tip => Color::Green,
+        BlockQuoteKind::Important => Color::Magenta,
+        BlockQuoteKind::Warning => Color::Yellow,
+        BlockQuoteKind::Caution => Color::Red,
     }
 }
 
@@ -615,8 +670,43 @@ mod tests {
     }
 
     #[test]
+    fn alerts_are_quotes_headed_by_their_kind_in_its_color() {
+        let source = "> [!WARNING]\n> Quitting ends turns.\n\n> plain";
+        let rows = render_markdown(source, 40);
+        let text: Vec<String> = rows.iter().map(|row| row.line.to_string()).collect();
+        assert_eq!(text, ["> Warning", "> Quitting ends turns.", "", "> plain"]);
+        let style = |row: usize, text: &str| span(&rows[row], text).style;
+        assert_eq!(style(0, ">").fg, Some(Color::Yellow));
+        assert_eq!(style(1, ">").fg, Some(Color::Yellow));
+        assert_eq!(style(3, ">").fg, Some(Color::Green));
+        assert_eq!(style(0, "Warning").fg, Some(Color::Yellow));
+        assert!(style(0, "Warning").add_modifier.contains(Modifier::BOLD));
+        // An alert's text keeps the surrounding style; a plain quote's is green.
+        assert_eq!(style(1, "Quitting").fg, None);
+        assert_eq!(style(3, "plain").fg, Some(Color::Green));
+    }
+
+    /// The first span of `row` whose text contains `text`.
+    fn span<'a>(row: &'a DisplayLine, text: &str) -> &'a Span<'static> {
+        row.line
+            .spans
+            .iter()
+            .find(|span| span.content.contains(text))
+            .unwrap_or_else(|| panic!("no {text:?} in {:?}", row.line))
+    }
+
+    #[test]
+    fn single_tildes_stay_strikethrough_and_carets_stay_text() {
+        assert_eq!(render("~gone~ and x^2^", 40), ["gone and x^2^"]);
+        let rows = render_markdown("~gone~", 40);
+        let style = span(&rows[0], "gone").style;
+        assert!(style.add_modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
     fn rendering_a_line_prefix_yields_an_output_prefix() {
-        let full = "Intro line\n\n- item one\n- item two\n\n```sh\nls\n```\nTail\n";
+        let full =
+            "Intro line\n\n- item one\n- item two\n\n```sh\nls\n```\n> [!NOTE]\n> noted\n\nTail\n";
         let complete = render(full, 30);
         let mut end = 0;
         while let Some(offset) = full[end..].find('\n') {

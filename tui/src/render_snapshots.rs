@@ -171,6 +171,17 @@ fn update_agent_message_chunk() {
 }
 
 #[test]
+fn agent_message_alerts() {
+    let mut chat = chat();
+    let markdown = "> [!NOTE]\n> Threads outlive the TUI.\n\n> [!TIP]\n> `weave --resume` finds the thread again.\n\n> [!IMPORTANT]\n> The Host runs the agents.\n\n> [!WARNING]\n> Quitting the Host ends its threads' turns.\n\n> [!CAUTION]\n> Agent text is untrusted.\n\n> A plain quote.\n";
+    for piece in markdown.split_inclusive(' ') {
+        send(&mut chat, SessionUpdate::AgentMessageChunk(text(piece)));
+    }
+    finish_turn(&mut chat);
+    insta::assert_snapshot!(screen(&mut chat));
+}
+
+#[test]
 fn update_agent_thought_chunk() {
     let mut chat = chat();
     send(

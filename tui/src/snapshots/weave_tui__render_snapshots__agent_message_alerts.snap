@@ -1,0 +1,27 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• > Note
+  > Threads outlive the TUI.
+
+  > Tip
+  > weave --resume finds the thread again.
+
+  > Important
+  > The Host runs the agents.
+
+  > Warning
+  > Quitting the Host ends its threads' turns.
+
+  > Caution
+  > Agent text is untrusted.
+
+  > A plain quote.
+── viewport ──
+
+
+›
+
+  Agent
