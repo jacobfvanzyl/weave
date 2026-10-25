@@ -20,26 +20,18 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
+import { type AlertKind, alerts } from '@/markdown/alerts';
 import { imagesAsLinks } from '@/markdown/images-as-links';
+import { inlineHtml, sanitize } from '@/markdown/inline-html';
 import { mathPlugin, withMath } from '@/markdown/math';
 import { MermaidSource, mermaidPlugin } from '@/markdown/mermaid';
 
 export type MessageResponseProps = StreamdownProps;
 
-type MarkdownNode = { type: string; value?: string; children?: MarkdownNode[] };
-
-/** Raw HTML in an agent's Markdown shows as the text it is, never as markup. */
-function htmlAsText() {
-  const walk = (node: MarkdownNode) => {
-    if (node.type === 'html') node.type = 'text';
-    node.children?.forEach(walk);
-  };
-  return walk;
-}
-
-const remarkPlugins = [...Object.values(defaultRemarkPlugins), htmlAsText, imagesAsLinks];
-// Without `raw`, nothing parses HTML; sanitizing and hardening links stay.
-const rehypePlugins = Object.entries(defaultRehypePlugins).filter(([name]) => name !== 'raw').map(([, plugin]) => plugin);
+const remarkPlugins = [...Object.values(defaultRemarkPlugins), inlineHtml, imagesAsLinks, alerts];
+// `raw` parses only the HTML `inlineHtml` kept; sanitizing to Markdown's elements and that HTML,
+// and hardening links, follow.
+const rehypePlugins = [defaultRehypePlugins.raw, sanitize, defaultRehypePlugins.harden];
 
 const hostOf = (url: string) => {
   try {
@@ -101,12 +93,32 @@ function scrollToFragment(event: MouseEvent<HTMLAnchorElement>) {
  * plain rows, only as wide as they need, and no frame or buttons around them. A column's alignment
  * arrives as the cell's style, which wins over the heading's `text-left`.
  */
+/** Each alert kind's label and colour, after GitHub's. */
+const ALERTS: Record<AlertKind, { label: string; className: string }> = {
+  note: { label: 'Note', className: 'border-info [&>[data-slot=alert-label]]:text-info' },
+  tip: { label: 'Tip', className: 'border-success [&>[data-slot=alert-label]]:text-success' },
+  important: { label: 'Important', className: 'border-primary [&>[data-slot=alert-label]]:text-primary' },
+  warning: { label: 'Warning', className: 'border-warning [&>[data-slot=alert-label]]:text-warning' },
+  caution: { label: 'Caution', className: 'border-destructive [&>[data-slot=alert-label]]:text-destructive' },
+};
+
 const markdownComponents: StreamdownProps['components'] = {
   // A link within the message, such as a footnote's, scrolls to its target; every other link
   // asks before it opens.
   a: ({ node, href, ...props }: Rendered<'a'>) => href?.startsWith('#')
     ? <a href={href} onClick={scrollToFragment} {...props} />
     : <defaultComponents.a node={node} href={href} {...props} />,
+  // A GitHub alert, which `alerts` marks with its kind: labelled and coloured, not a plain quote.
+  blockquote: ({ node, className, children, ...props }: Rendered<'blockquote'> & { 'data-alert'?: AlertKind }) => {
+    const alert = props['data-alert'] && ALERTS[props['data-alert']];
+    if (!alert) return <defaultComponents.blockquote node={node} className={className} {...props}>{children}</defaultComponents.blockquote>;
+    return (
+      <blockquote className={cn('my-4 border-l-4 pl-4 [&>p:last-child]:mb-0', alert.className, className)} {...props}>
+        <p className="mb-1 font-semibold" data-slot="alert-label">{alert.label}</p>
+        {children}
+      </blockquote>
+    );
+  },
   table: ({ node: _node, className, ...props }: Rendered<'table'>) => (
     <div className="my-3 max-w-full overflow-x-auto" data-streamdown="table-wrapper">
       <table

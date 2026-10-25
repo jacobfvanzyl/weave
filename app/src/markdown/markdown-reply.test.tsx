@@ -21,4 +21,18 @@ describe("the fake agent's /markdown reply", () => {
     expect(container).toHaveTextContent('Not math: it costs $5 and $10, and $HOME is your home directory.');
     expect(container).toHaveTextContent('A matrix, $$\\begin{pmatrix}');
   });
+
+  it('labels its alerts and renders its inline HTML', () => {
+    const { container } = render(<MessageResponse>{reply}</MessageResponse>);
+    expect(container.querySelectorAll('blockquote[data-alert]')).toHaveLength(5);
+    expect(container.querySelectorAll('kbd')).toHaveLength(3);
+    expect(container.querySelector('td br')).toBeInTheDocument();
+    expect(container.querySelector('details summary')).toHaveTextContent('More');
+  });
+
+  it('never loads its image', () => {
+    const { container } = render(<MessageResponse>{reply}</MessageResponse>);
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+    expect(container).toHaveTextContent("Image: The Host's diagram");
+  });
 });
