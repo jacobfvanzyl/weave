@@ -16,6 +16,11 @@ use weave_acp_core::InitializeError;
 use weave_acp_core::Traces;
 use weave_acp_core::schema::InitializeResponse;
 
+/// The variable naming an agent process in its environment, so a `weave` it runs can tell
+/// the Host which turn is its own, as `weave daemon restart` does to leave that turn out of
+/// the wait (`host/drain`'s `except`).
+pub const AGENT_PROCESS_VARIABLE: &str = "WEAVE_AGENT_PROCESS";
+
 /// An agent to start: how, and where.
 #[derive(Clone, Debug)]
 pub struct Launch {
@@ -26,6 +31,15 @@ pub struct Launch {
     pub cwd: PathBuf,
     /// The environment the agent inherits, under its own settings. Never written to disk.
     pub environment: BTreeMap<String, String>,
+    /// This agent process's name, given to it as [`AGENT_PROCESS_VARIABLE`].
+    pub process: String,
+}
+
+impl Launch {
+    /// A new name for an agent process.
+    pub(crate) fn new_process() -> String {
+        format!("a-{}", crate::devices::random_id(8))
+    }
 }
 
 /// Starts an agent and connects to it, uninitialized, tracing its protocol into whatever
@@ -90,6 +104,8 @@ pub(crate) struct Instance {
     pub(crate) key: LaunchKey,
     /// Where its protocol is traced, for the clients that asked.
     pub(crate) traces: Arc<Traces>,
+    /// Its name, as [`Launch::process`].
+    pub(crate) process: String,
 }
 
 impl Instance {
@@ -124,6 +140,7 @@ impl Instance {
             events,
             key: LaunchKey::new(launch, options),
             traces,
+            process: launch.process.clone(),
         })
     }
 
@@ -151,6 +168,7 @@ fn in_directory(launch: &Launch) -> AgentSpec {
             .iter()
             .map(|(name, value)| (name.clone(), value.clone())),
     );
+    env.insert(AGENT_PROCESS_VARIABLE.to_owned(), launch.process.clone());
     if cfg!(not(unix)) {
         return AgentSpec {
             env,
@@ -193,6 +211,7 @@ mod tests {
                 ("PATH".to_owned(), "/client/bin".to_owned()),
                 ("MODE".to_owned(), "shell".to_owned()),
             ]),
+            process: "a-1".to_owned(),
         };
         let spec = in_directory(&launch);
         assert_eq!(spec.command, "/bin/sh");
@@ -204,6 +223,11 @@ mod tests {
         // The agent's own settings win over the Host's environment.
         assert_eq!(spec.env.get("MODE").map(String::as_str), Some("acp"));
         assert_eq!(spec.env.get("PWD").map(String::as_str), Some("/repo dir"));
+        // And it knows its name, whatever its settings say.
+        assert_eq!(
+            spec.env.get(AGENT_PROCESS_VARIABLE).map(String::as_str),
+            Some("a-1")
+        );
 
         // And the wrapper really runs it there.
         let output = std::process::Command::new(&spec.command)

@@ -20,6 +20,10 @@ expression: schema()
       "params": "StatusRequest",
       "result": "HostStatus"
     },
+    "host/drain": {
+      "params": "DrainRequest",
+      "result": "DrainResponse"
+    },
     "host/shutdown": {
       "params": "ShutdownRequest",
       "result": "Empty"
@@ -206,7 +210,8 @@ expression: schema()
       "notARepository": -32073,
       "gitFailed": -32074,
       "uncommittedChanges": -32075,
-      "keyReused": -32076
+      "keyReused": -32076,
+      "hostStopping": -32077
     },
     "features": {
       "steer": "turn/steer",
@@ -219,7 +224,8 @@ expression: schema()
       "worktrees": "worktrees",
       "queue": "queue",
       "getSession": "sessions/get",
-      "requestKeys": "requestKeys"
+      "requestKeys": "requestKeys",
+      "drain": "drain"
     },
     "files": {
       "maxEntries": 2000
@@ -875,6 +881,38 @@ expression: schema()
         "worktree"
       ],
       "description": "Where in a git repository a session's directory is, as the Host last read it: when the\nsession opened, and again after each of its turns."
+    },
+    "DrainRequest": {
+      "type": "object",
+      "properties": {
+        "wait": {
+          "type": "boolean",
+          "description": "Wait for running turns before answering.",
+          "default": false
+        },
+        "except": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The agent process whose turn isn't waited for, from the `WEAVE_AGENT_PROCESS` the\nHost gives each agent: the one asking, when an agent stops the Host."
+        }
+      },
+      "description": "`host/drain`: get ready to stop. From now on the Host starts no new turns (`turn/start`\nand `session/run` answer `host_stopping`, and queued prompts wait), and with `wait` it\nanswers once no turn runs but `except`'s, or when its drain timeout passes. The stop that\nfollows doesn't wait again. If the asking client goes before the Host stops, the drain\nends. Local clients only."
+    },
+    "DrainResponse": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Turns still running, but for `except`'s, which stopping cuts off."
+        }
+      },
+      "required": [
+        "running"
+      ]
     },
     "ShutdownRequest": {
       "type": "object",

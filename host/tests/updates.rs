@@ -156,6 +156,7 @@ impl World {
         Daemon::new(DaemonConfig {
             journals: Some(self.dir.path().join("sessions")),
             idle_grace: Duration::from_secs(60),
+            drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
             blank_grace: Duration::from_secs(60),
             launcher,
             config_file: Some(self.dir.path().join("config.toml")),

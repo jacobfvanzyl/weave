@@ -40,6 +40,8 @@ pub const GIT_FAILED: i32 = -32074;
 pub const UNCOMMITTED_CHANGES: i32 = -32075;
 /// The request key was used for another request: another method, or other params.
 pub const KEY_REUSED: i32 = -32076;
+/// The Host is draining before it stops, and starts no new turns.
+pub const HOST_STOPPING: i32 = -32077;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -154,6 +156,14 @@ pub fn key_reused() -> Error {
     Error::new(
         KEY_REUSED,
         "this request key was used for another request; choose a new one",
+    )
+}
+
+pub fn host_stopping() -> Error {
+    Error::new(
+        HOST_STOPPING,
+        "the Host is stopping once its running turns end, and starts no new ones; prompt again \
+         once it's back",
     )
 }
 

@@ -106,6 +106,11 @@ git ls-files -z -co --exclude-standard -- . ':!app' ':!trackpad' \
         && mkdir /src && tar xzf - -C /src && cd /src && cargo test && cargo clippy --all-targets'
 ```
 
+Under that emulation two `host/tests/remote.rs` tests with 100–200 ms deadlines time out; for
+aarch64 proper, a lima VM on Apple silicon runs natively (`limactl start --vm-type=vz
+template:debian-13`, `LIMA_HOME` on the External disk and `.mounts=[]`, then the same commands
+with `cargo test -j 3` in 6 GiB, and `limactl delete` after).
+
 The service itself needs systemd as PID 1 and a login over SSH: an Ubuntu or Debian image with
 `systemd`, `libpam-systemd`, `dbus-user-session` and `openssh-server`, run with
 `--cgroupns=private --security-opt writable-cgroups=true --tmpfs /run --tmpfs /run/lock` (no

@@ -73,7 +73,15 @@ current version once no turn runs or request waits, taking the session up throug
 or load, journaling `agentReopened`, and going back to the old version when the new one
 can't (`tests/updates.rs`); a blank session it refuses, since the agent may have
 kept nothing of it to take up. An ACP `initialize` from a client of the old protocol is answered with
-the protocol version, so it reloads into the current weave. Host tests
+the protocol version, so it reloads into the current weave. Before it stops, the Host drains
+(WVE-143, `Shared::begin_drain`): `SessionTask::prompt` refuses new turns with `host_stopping`,
+`enqueue` queues and `advance` holds the queue, while `wait_for_turns` waits, up to
+`drain_timeout` (5 minutes), for every session whose `Summary::activity` isn't idle, but the
+one whose agent process is `except`. Each agent process gets a name, `WEAVE_AGENT_PROCESS`
+(`Launch::process`, kept in `Summary::agent_process`), which a `weave` it runs passes as
+`except`. `host/drain` begins a drain for a client, which `lapse_drain` ends if that client
+goes before the Host stops (then `Command::Advance` restarts queues); `Daemon::drain` is the
+signal's, which skips a drain a client already waited out. Host tests
 (`tests/daemon.rs`) run in-process with fake agents sharing one state file,
 named in a test config.
 

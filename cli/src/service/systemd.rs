@@ -21,9 +21,13 @@ use crate::daemon;
 /// The default Host's unit, without its `.service`.
 const UNIT: &str = "weave-host";
 
-/// How long systemd lets the Host take to stop before it kills it and its agents: the Host
-/// suspends every open session as it stops, each given up to 10 seconds.
-const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the Host may take to suspend its sessions as it stops, each given up to 10
+/// seconds.
+const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long systemd lets the Host take to stop before it kills it and its agents: the wait
+/// for running turns, then the suspend.
+const STOP_TIMEOUT: Duration = weave_host::DEFAULT_DRAIN_TIMEOUT.saturating_add(SUSPEND_TIMEOUT);
 
 /// Whether systemd runs the Host for `paths`.
 pub(super) fn installed(paths: &DaemonPaths) -> bool {
@@ -36,7 +40,7 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     // Fails here, before anything changes, without a user manager to reach.
     systemctl(&["daemon-reload"])?;
     // A Host started on demand holds the socket; systemd's takes over from it.
-    let was_running = daemon::stop(paths).await?;
+    let was_running = daemon::stop(paths, false).await?;
     paths
         .prepare()
         .with_context(|| format!("creating {}", paths.dir.display()))?;
@@ -143,16 +147,16 @@ fn stop_limit_note(uid: u32) -> Option<String> {
             "--value",
         ],
     )?;
-    if timespan(&shown)? >= STOP_TIMEOUT {
+    if timespan(&shown)? >= SUSPEND_TIMEOUT {
         return None;
     }
-    let seconds = STOP_TIMEOUT.as_secs();
+    let seconds = SUSPEND_TIMEOUT.as_secs();
     Some(format!(
         "systemd gives your user manager {shown} to stop when this computer shuts down, less \
-         than the {seconds}s the Host may take to suspend its threads, so it can be cut off. To \
-         give it as long, as root put `[Service]` and `TimeoutStopSec={seconds}` in \
-         /etc/systemd/system/user@{uid}.service.d/zz-weave.conf, then run `systemctl \
-         daemon-reload`."
+         than the {seconds}s the Host may take to suspend its threads, so it can be cut off, \
+         and running turns aren't waited for. To give it as long, as root put `[Service]` and \
+         `TimeoutStopSec={seconds}` in /etc/systemd/system/user@{uid}.service.d/zz-weave.conf, \
+         then run `systemctl daemon-reload`."
     ))
 }
 
@@ -343,7 +347,7 @@ mod tests {
              Restart=always\n\
              RestartSec=2\n\
              KillMode=mixed\n\
-             TimeoutStopSec=30\n\
+             TimeoutStopSec=330\n\
              StandardOutput=append:/state/daemon.log\n\
              StandardError=append:/state/daemon.log\n\
              \n\

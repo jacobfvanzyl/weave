@@ -55,6 +55,8 @@ use weave_host_protocol::hello::Auth;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::hello::HelloRequest;
+use weave_host_protocol::host::DRAIN_FEATURE;
+use weave_host_protocol::host::DrainRequest;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
@@ -179,6 +181,9 @@ struct World {
     dir: tempfile::TempDir,
 }
 
+/// The names agent processes were started with, by directory.
+type Started = Arc<std::sync::Mutex<Vec<(PathBuf, String)>>>;
+
 impl World {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -205,6 +210,29 @@ impl World {
         require_auth: bool,
     ) -> Daemon {
         Daemon::new(self.config(journals, idle_grace, blank_grace, require_auth))
+    }
+
+    /// A Host whose drain gives up after `timeout`, and the names its agent processes were
+    /// started with, by directory.
+    fn daemon_draining(&self, timeout: Duration) -> (Daemon, Started) {
+        let mut config = self.config(
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.drain_timeout = timeout;
+        let started = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = Arc::clone(&started);
+        let launcher = config.launcher.clone();
+        config.launcher = Arc::new(move |launch: &Launch, options, traces| {
+            record
+                .lock()
+                .expect("lock")
+                .push((launch.cwd.clone(), launch.process.clone()));
+            launcher(launch, options, traces)
+        });
+        (Daemon::new(config), started)
     }
 
     /// A Host whose agents take MCP servers over ACP.
@@ -243,6 +271,7 @@ impl World {
         DaemonConfig {
             journals: journals.then(|| self.journals()),
             idle_grace,
+            drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
             blank_grace,
             launcher: fake_agents(self.dir.path().join("agent-state.json"), require_auth),
             config_file: Some(self.dir.path().join("config.toml")),
@@ -3914,5 +3943,160 @@ async fn a_caller_closed_meanwhile_is_taken_up_again_to_hear_how_its_delegated_t
         got.latest_turn
             .and_then(|turn| turn.message)
             .is_some_and(|message| message.contains("finished its turn")),
+    );
+}
+
+#[tokio::test]
+async fn a_drain_waits_for_running_turns_and_starts_no_new_ones() {
+    let world = World::new();
+    let (daemon, _) = world.daemon_draining(WAIT);
+    let mut client = world.client(&daemon).await;
+    assert!(
+        client
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|f| f == DRAIN_FEATURE)
+    );
+    let running = client.create(&world).await;
+    let idle = client.create(&world).await;
+    client.prompt(&running, "slow 5").await;
+
+    let ready = client
+        .connection
+        .send(DrainRequest {
+            wait: false,
+            except: None,
+        })
+        .await
+        .expect("host/drain");
+    assert_eq!(ready.running, 1);
+    // No new turns: refused, or queued for the Host that comes back.
+    let refused = client
+        .connection
+        .send(StartTurnRequest {
+            session_id: idle.clone(),
+            prompt: vec![ContentBlock::from("hello".to_owned())],
+            key: None,
+        })
+        .await
+        .expect_err("turn/start is refused");
+    assert!(errors::is(&refused, errors::HOST_STOPPING), "{refused:?}");
+    let refused = client
+        .connection
+        .send(run_request(&world, &world.cwd().join("file"), Vec::new()))
+        .await
+        .expect_err("session/run is refused");
+    assert!(errors::is(&refused, errors::HOST_STOPPING), "{refused:?}");
+    assert!(!client.queue(&idle, "later").await.started);
+
+    let drained = client
+        .connection
+        .send(DrainRequest {
+            wait: true,
+            except: None,
+        })
+        .await
+        .expect("host/drain");
+    assert_eq!(drained.running, 0);
+    let status = daemon.status();
+    assert!(
+        status
+            .sessions
+            .iter()
+            .all(|session| session.activity == Some(Activity::Idle)),
+        "{status:?}"
+    );
+    assert_eq!(client.attach(&idle).await.state.queue.len(), 1);
+}
+
+#[tokio::test]
+async fn a_drain_gives_up_at_its_timeout_and_leaves_out_the_turn_that_asked() {
+    let world = World::new();
+    let (daemon, started) = world.daemon_draining(Duration::from_millis(300));
+    let mut client = world.client(&daemon).await;
+    let dir = world.cwd().join("asking");
+    std::fs::create_dir_all(&dir).expect("a directory");
+    let asking = client.session_in(&world, &dir).await.session_id;
+    let other = client.create(&world).await;
+    client.prompt(&asking, "slow 50").await;
+    client.prompt(&other, "slow 50").await;
+    let process = started
+        .lock()
+        .expect("lock")
+        .iter()
+        .find(|(cwd, _)| cwd.ends_with("asking"))
+        .map(|(_, process)| process.clone())
+        .expect("the asking session's agent");
+
+    // The other turn holds the drain until its timeout and is left running; the asking one
+    // isn't counted.
+    let drained = tokio::time::timeout(
+        WAIT,
+        client.connection.send(DrainRequest {
+            wait: true,
+            except: Some(process),
+        }),
+    )
+    .await
+    .expect("answered at the timeout")
+    .expect("host/drain");
+    assert_eq!(drained.running, 1);
+}
+
+#[tokio::test]
+async fn a_drain_ends_when_the_client_that_asked_goes_and_queued_prompts_start() {
+    let world = World::new();
+    let (daemon, _) = world.daemon_draining(WAIT);
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    let asking = world.client(&daemon).await;
+    asking
+        .connection
+        .send(DrainRequest {
+            wait: false,
+            except: None,
+        })
+        .await
+        .expect("host/drain");
+    assert!(!client.queue(&session_id, "later").await.started);
+
+    asking.connection.shutdown().await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert!(seen.agent.ends_with("You said: later"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_signal_waits_for_running_turns_unless_a_client_drained_first() {
+    let world = World::new();
+    let (daemon, _) = world.daemon_draining(WAIT);
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "slow 5").await;
+    assert_eq!(daemon.drain().await, 0);
+    assert_eq!(daemon.status().sessions[0].activity, Some(Activity::Idle));
+
+    let world = World::new();
+    let (daemon, _) = world.daemon_draining(WAIT);
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "slow 50").await;
+    let ready = client
+        .connection
+        .send(DrainRequest {
+            wait: false,
+            except: None,
+        })
+        .await
+        .expect("host/drain");
+    assert_eq!(ready.running, 1);
+    // `weave daemon stop --now` drained first, so the signal that follows doesn't wait.
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), daemon.drain())
+            .await
+            .expect("no wait"),
+        1
     );
 }

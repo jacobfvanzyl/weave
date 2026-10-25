@@ -62,7 +62,12 @@ a systemd user service on Linux (`service/systemd.rs`, `weave-host.service`), wh
 lingering on so the Host runs from boot and after the person logs out of SSH. While it's
 installed, clients never start a Host and `start`/`stop`/`restart` use `launchctl` or `systemctl
 --user` (a restart is one systemd job, so an agent inside the Host can ask for it); `uninstall`
-removes it. `weave daemon status` adds what may stop a systemd service running when expected
+removes it. `weave daemon stop` and `restart` drain the Host first (`daemon::drain`,
+`host/drain`): they say how many turns they wait for and wait up to 5 minutes, unless `--now`
+or Ctrl+C; run by an agent, they leave its own turn out (`WEAVE_AGENT_PROCESS`), and they keep
+the drain's connection open until the Host has stopped. `weave daemon run` drains on its first
+SIGTERM or SIGINT and stops at once on a second; the systemd unit gives it 330 seconds.
+`weave daemon status` adds what may stop a systemd service running when expected
 (`service::notes`: lingering off, a user manager given less time to stop than the unit). A Linux
 Host is set up over SSH, with no terminal needed but for an agent's own sign-in (`ssh -t host
 weave login --agent claude`, which prints a code to paste); `weave pair` there needs

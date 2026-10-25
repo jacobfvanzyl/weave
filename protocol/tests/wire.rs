@@ -86,6 +86,8 @@ use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::hello::HelloRequest;
 use weave_host_protocol::hello::HelloResponse;
 use weave_host_protocol::hello::HostInfo;
+use weave_host_protocol::host::DrainRequest;
+use weave_host_protocol::host::DrainResponse;
 use weave_host_protocol::host::EnvironmentSource;
 use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
@@ -1483,6 +1485,14 @@ fn host() {
         })
     );
     insta::assert_json_snapshot!("shutdown_request", message(&ShutdownRequest {}));
+    insta::assert_json_snapshot!(
+        "drain_request",
+        message(&DrainRequest {
+            wait: true,
+            except: Some("a-3f9c2e7d".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!("drain_response", round_trip(&DrainResponse { running: 1 }));
 }
 
 /// What a newer Host may send, an older client must still read.

@@ -91,6 +91,7 @@ use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::worktrees::GitLocation;
 
+pub use crate::instance::AGENT_PROCESS_VARIABLE;
 use crate::instance::Instance;
 pub use crate::instance::Launch;
 use crate::instance::LaunchKey;
@@ -123,12 +124,18 @@ const UNCLAIMED: &str = "nobody took it up after the Host restarted";
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// How long stopping waits for each session's agent.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a Host about to stop waits for its running turns to end (WVE-143).
+pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// How often a drain looks whether turns are still running.
+const DRAIN_POLL: Duration = Duration::from_millis(200);
 
 pub struct DaemonConfig {
     /// Where session journals are written; `None` keeps them in memory only.
     pub journals: Option<PathBuf>,
     /// How long a session nothing needs stays open.
     pub idle_grace: Duration,
+    /// How long stopping waits for running turns to end.
+    pub drain_timeout: Duration,
     /// How long a blank session nothing needs stays open.
     pub blank_grace: Duration,
     pub launcher: Launcher,
@@ -173,6 +180,7 @@ impl DaemonConfig {
         Self {
             journals: None,
             idle_grace: DEFAULT_IDLE_GRACE,
+            drain_timeout: DEFAULT_DRAIN_TIMEOUT,
             blank_grace: DEFAULT_BLANK_GRACE,
             launcher: process_launcher(),
             config_file,
@@ -284,11 +292,102 @@ pub(crate) struct Shared {
     /// Clients watching the Host's sessions (`sessions/watch`), by connection. Taken before
     /// the registry, never while holding it.
     watchers: Mutex<BTreeMap<u64, ConnectionTo<HostClient>>>,
+    /// The drain before the Host stops, while one is on: no new turns start.
+    drain: Mutex<Option<Drain>>,
+}
+
+/// A drain before the Host stops.
+#[derive(Debug, Default)]
+struct Drain {
+    /// The agent process whose turn isn't waited for: the one that asked.
+    except: Option<String>,
+    /// The client that asked (`host/drain`), whose going away before the Host stops ends the
+    /// drain; none when a signal began it.
+    client: Option<u64>,
+    /// Waited for, or not to be: the stop that follows goes ahead at once.
+    over: bool,
 }
 
 impl Shared {
     pub(crate) fn registry(&self) -> MutexGuard<'_, Registry> {
         lock(&self.registry)
+    }
+
+    /// Whether the Host is draining before it stops, so starts no new turns.
+    pub(crate) fn draining(&self) -> bool {
+        lock(&self.drain).is_some()
+    }
+
+    /// Drain, if the Host isn't already: for `client`'s `host/drain`, or for a signal.
+    /// `except` names the agent process whose turn isn't waited for.
+    pub(crate) fn begin_drain(&self, except: Option<String>, client: Option<u64>) {
+        let mut drain = lock(&self.drain);
+        let drain = drain.get_or_insert_with(Drain::default);
+        if except.is_some() {
+            drain.except = except;
+        }
+        if client.is_some() {
+            drain.client = client;
+        }
+    }
+
+    /// Wait, if `wait`, until no turn runs but the excepted one, or `timeout` passes. How
+    /// many still run, which the stop that follows cuts off without waiting again.
+    pub(crate) async fn wait_for_turns(&self, wait: bool, timeout: Duration) -> usize {
+        let deadline = Instant::now() + if wait { timeout } else { Duration::ZERO };
+        let running = loop {
+            let running = self.running_turns();
+            if running == 0 || Instant::now() >= deadline {
+                break running;
+            }
+            tokio::time::sleep(DRAIN_POLL).await;
+        };
+        if let Some(drain) = lock(&self.drain).as_mut() {
+            drain.over = true;
+        }
+        running
+    }
+
+    /// Whether the drain was waited for, or not to be, so a stop goes ahead at once.
+    fn drain_over(&self) -> bool {
+        lock(&self.drain).as_ref().is_some_and(|drain| drain.over)
+    }
+
+    /// Turns running, or waiting on someone, but for the excepted agent process's.
+    fn running_turns(&self) -> usize {
+        let except = lock(&self.drain)
+            .as_ref()
+            .and_then(|drain| drain.except.clone());
+        self.registry()
+            .sessions
+            .values()
+            .map(SessionHandle::summary)
+            .filter(|summary| {
+                summary.activity != Activity::Idle
+                    && except.as_deref() != Some(summary.agent_process.as_str())
+            })
+            .count()
+    }
+
+    /// The client that asked for the drain went before the Host stopped: drain no more, and
+    /// let queues start what waits in them.
+    pub(crate) fn lapse_drain(&self, client: u64) {
+        let lapsed = {
+            let mut drain = lock(&self.drain);
+            let asked = drain
+                .as_ref()
+                .is_some_and(|drain| drain.client == Some(client));
+            if asked && !*self.stop.borrow() {
+                *drain = None;
+            }
+            asked && drain.is_none()
+        };
+        if lapsed {
+            tracing::info!("the client that asked for a drain went; turns start again");
+            for session in self.registry().sessions.values() {
+                let _ = session.send(Command::Advance);
+            }
+        }
     }
 
     /// The configuration, read afresh, so edits apply to the next session.
@@ -371,6 +470,7 @@ impl Shared {
             spec: agent.spec.clone(),
             cwd: cwd.to_path_buf(),
             environment: self.config.environment.vars.clone(),
+            process: Launch::new_process(),
         }
     }
 
@@ -736,6 +836,7 @@ impl Daemon {
                 next_client: AtomicU64::new(1),
                 stop,
                 watchers: Mutex::new(BTreeMap::new()),
+                drain: Mutex::new(None),
             }),
         }
     }
@@ -953,6 +1054,26 @@ impl Daemon {
     /// Ask [`Self::serve`] to stop.
     pub fn stop(&self) {
         let _ = self.shared.stop.send(true);
+    }
+
+    /// Get ready to stop, as on SIGTERM: start no new turns, and wait up to the drain
+    /// timeout for the running ones to end, unless a client's `host/drain` was waited for
+    /// already. How many still run.
+    pub async fn drain(&self) -> usize {
+        self.shared.begin_drain(None, None);
+        let wait = !self.shared.drain_over();
+        let running = self.shared.running_turns();
+        if wait && running > 0 {
+            tracing::info!(running, "waiting for running turns before stopping");
+        }
+        let left = self
+            .shared
+            .wait_for_turns(wait, self.shared.config.drain_timeout)
+            .await;
+        if left > 0 {
+            tracing::warn!(left, "stopping with turns still running");
+        }
+        left
     }
 
     /// Stop every session's agent, and the spare ones. Their journals stay open, so a later

@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&DrainRequest { wait: true, except: Some(\"a-3f9c2e7d\".to_owned()), })"
+---
+{
+  "method": "host/drain",
+  "params": {
+    "wait": true,
+    "except": "a-3f9c2e7d"
+  }
+}

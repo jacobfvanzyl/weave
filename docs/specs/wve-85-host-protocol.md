@@ -212,7 +212,9 @@ environment built from three layers, later layers winning:
 A Host started by launchd or systemd has almost no environment of its own, so layer 2 gives
 agents the user's `PATH` and other settings. A Host the CLI starts also keeps whatever the
 starting terminal exported. `weave daemon restart` captures again. The environment is never
-written to disk or sent to a client.
+written to disk or sent to a client. Over all three, each agent process gets
+`WEAVE_AGENT_PROCESS`, a name of its own, so a `weave` it runs can say which turn is its own
+(see `host/drain`).
 
 ### Methods
 
@@ -952,7 +954,19 @@ Host serves one.
 
 **`host/shutdown`** `{}` → `{}`
 
-Suspends every open session (closing blank ones) and exits.
+Suspends every open session (closing blank ones) and exits, without waiting for running
+turns.
+
+**`host/drain`** `{wait?: bool, except?: string}` → `{running: number}` (feature `drain`)
+
+Gets the Host ready to stop (WVE-143). From then on it starts no new turns: `turn/start` and
+`session/run` answer `host_stopping`, `queue/add` queues, and queued prompts wait for the Host
+that comes back; steers and answers to pending requests still go through. With `wait` it
+answers once no turn runs, or one waits on someone, but the turn of the agent process named
+`except` (its `WEAVE_AGENT_PROCESS`), or when its drain timeout (5 minutes) passes; without
+it, at once. `running` is how many such turns still run, which the stop cuts off. The stop
+that follows doesn't wait again. If the asking client goes before the Host stops, the drain
+ends and queues start what waits in them. Local clients only.
 
 ### Running the Host
 
@@ -960,6 +974,12 @@ The Host is the `weave daemon run` process; the CLI keeps the `weave daemon` com
 
 - **On demand.** When no Host is listening, a client command starts one in the background
   as now. That Host exits after 10 minutes with no open session and no client.
+- **Stopping waits for running turns.** `weave daemon stop` and `restart` drain the Host
+  first (`host/drain`), saying how many turns they wait for, for up to 5 minutes; `--now`, or
+  Ctrl+C while waiting, stops them instead. A `weave` an agent runs leaves that agent's own
+  turn out of the wait. A Host told to stop by a signal (SIGTERM, as from a service manager)
+  drains the same way unless a client drained it already, and a second signal stops it at
+  once.
 - **As a service.** `weave daemon install` has the computer's service manager run this
   `weave` binary's `daemon run` and restart it if it exits, with no idle exit, logging to
   `daemon.log`. `weave daemon uninstall` removes it. While it's installed, `start`, `stop`
@@ -970,7 +990,9 @@ The Host is the `weave daemon run` process; the CLI keeps the `weave daemon` com
   - **macOS** gets a launchd user agent, `local.weave.host`, which runs at login. macOS
     keeps the processes launchd starts out of `~/Documents`, `~/Desktop` and `~/Downloads`
     until they're let in, so `install` refuses a binary in one of them, and macOS may ask to
-    let weave in when an agent first works in a session there.
+    let weave in when an agent first works in a session there. launchd allows the Host 20
+    seconds to stop, so logging out doesn't wait for running turns; `stop` and `restart`
+    drain before they boot it out.
   - **Linux** gets a systemd user service, `weave-host.service` in
     `~/.config/systemd/user`, enabled for `default.target`; `restart` is one
     `systemctl --user restart`, so it completes even when an agent inside the Host asks for
@@ -978,10 +1000,11 @@ The Host is the `weave daemon run` process; the CLI keeps the `weave daemon` com
     `install` turns it on (`loginctl enable-linger`, which polkit lets a user do for
     themselves by default) and says how when it can't; then the Host starts at boot and keeps
     running after the SSH session ends. The unit's `KillMode=mixed` signals the Host alone, which
-    stops its agents itself, and its `TimeoutStopSec` (30 seconds) covers suspending every
-    session. `weave daemon status` says when lingering is off, and when systemd gives the
-    user manager less than that to stop at shutdown (`user@<uid>.service`'s
-    `TimeoutStopUSec`, five seconds on Ubuntu 24.04), with the drop-in that raises it.
+    stops its agents itself, and its `TimeoutStopSec` (330 seconds) covers the drain and then
+    suspending every session (30 seconds). `weave daemon status` says when lingering is off,
+    and when systemd gives the user manager less than the 30 seconds to stop at shutdown
+    (`user@<uid>.service`'s `TimeoutStopUSec`, five seconds on Ubuntu 24.04), with the
+    drop-in that raises it; a shutdown cuts a drain short, as it would the turn.
     Tailscale runs as root there, and changes Serve only for root and its operator, so
     pairing asks for `sudo tailscale set --operator=$USER` once. The socket is in the user's
     runtime directory, `/run/user/<uid>/weave`, which the CLI finds also from a session that
@@ -1019,6 +1042,7 @@ returns the agent's error unchanged.
 | -32074 | `git_failed` | git refused or failed; the message is what it said |
 | -32075 | `uncommitted_changes` | the worktree has changes that removing it would lose |
 | -32076 | `key_reused` | the request key was used for another request (see [Request keys](#request-keys)) |
+| -32077 | `host_stopping` | the Host is draining before it stops and starts no new turns (see `host/drain`) |
 
 ## Versioning
 

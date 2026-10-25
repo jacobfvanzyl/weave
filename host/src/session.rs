@@ -277,6 +277,8 @@ pub(crate) enum Command {
     Cancel {
         session_id: SessionId,
     },
+    /// The Host stopped draining: start what waits in the queue.
+    Advance,
     /// A client changed a mode or config option; every client hears of it.
     Changed {
         notification: Box<SessionNotification>,
@@ -370,6 +372,8 @@ pub(crate) struct Summary {
     pub(crate) git: Option<GitLocation>,
     /// The session whose agent started it, for a delegated session.
     pub(crate) started_by: Option<SessionId>,
+    /// The name of its agent process ([`crate::AGENT_PROCESS_VARIABLE`]).
+    pub(crate) agent_process: String,
 }
 
 impl Summary {
@@ -502,6 +506,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         last_activity_ms,
         git: git.clone(),
         started_by: started_by.clone(),
+        agent_process: instance.process.clone(),
     }));
     let Instance {
         agent_id: _,
@@ -509,6 +514,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         events,
         key,
         traces,
+        process: _,
     } = instance;
     let options = key.options();
     let handle = SessionHandle {
@@ -892,6 +898,7 @@ impl Actor {
                 self.waiting.push(done);
                 self.stop(Ending::Suspended);
             }
+            Command::Advance => self.advance(),
             Command::UpdateAvailable { latest } => self.update_available(latest),
             Command::Located { git } => {
                 if let Some(recorded) = self.shared.registry().known.get_mut(&self.root) {
@@ -1119,6 +1126,9 @@ impl Actor {
         if self.turns.contains_key(&session_id) {
             return Err(errors::turn_running());
         }
+        if self.shared.draining() {
+            return Err(errors::host_stopping());
+        }
         self.handle.prompt(session_id.clone(), prompt.clone())?;
         self.blank.store(false, Ordering::Relaxed);
         let (seq, at) = self.record(Entry::TurnStarted {
@@ -1153,7 +1163,8 @@ impl Actor {
         let free = !self.turns.contains_key(&self.root)
             && self.queue.prompts.is_empty()
             && self.reopens.is_empty()
-            && self.stopping.is_none();
+            && self.stopping.is_none()
+            && !self.shared.draining();
         if free {
             let root = self.root.clone();
             let seq = self.prompt(origin, root, prompt, Some(queued_id.clone()), key)?;
@@ -1202,7 +1213,8 @@ impl Actor {
     /// Start the first queued prompt, when no turn of the session's own runs and the queue
     /// isn't paused. One the agent won't take goes back to the front, and the queue pauses.
     fn advance(&mut self) {
-        if self.turns.contains_key(&self.root) || !self.queue.is_ready() {
+        let free = !self.turns.contains_key(&self.root) && !self.shared.draining();
+        if !free || !self.queue.is_ready() {
             return;
         }
         let Some(next) = self.queue.prompts.pop_front() else {
@@ -1924,8 +1936,10 @@ impl Actor {
             connection,
             events,
             key,
+            process,
             ..
         } = instance;
+        lock(&self.summary).agent_process = process;
         // The old process won't answer a steer now.
         for (_, steer) in self.steers.drain() {
             let _ = steer.reply.send(Ok(not_running()));

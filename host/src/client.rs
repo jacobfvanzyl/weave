@@ -75,6 +75,9 @@ use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::hello::HelloRequest;
 use weave_host_protocol::hello::HelloResponse;
 use weave_host_protocol::hello::HostInfo;
+use weave_host_protocol::host::DRAIN_FEATURE;
+use weave_host_protocol::host::DrainRequest;
+use weave_host_protocol::host::DrainResponse;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
@@ -237,6 +240,7 @@ async fn serve_as(
     let result = handlers(&connection, transport).await;
     shared.registry().clients -= 1;
     shared.unwatch(connection.id);
+    shared.lapse_drain(connection.id);
     if let Some(device) = lock(&connection.device).take() {
         shared.devices.disconnected(&device.id, connection.id);
     }
@@ -346,6 +350,10 @@ async fn handlers(
                 let _ = on_shutdown.shared.stop.send(true);
                 Ok(())
             },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, drain),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -630,6 +638,20 @@ impl Connection {
     }
 
     /// The client's hello, if it's local: remote clients may not administer the Host.
+    /// `host/drain`: start no new turns, and with `wait` answer once no turn runs but
+    /// `except`'s, or the drain timeout passes.
+    async fn drain(&self, request: DrainRequest) -> Result<DrainResponse, Error> {
+        self.local_hello()?;
+        self.shared.begin_drain(request.except, Some(self.id));
+        let running = self
+            .shared
+            .wait_for_turns(request.wait, self.shared.config.drain_timeout)
+            .await;
+        Ok(DrainResponse {
+            running: u32::try_from(running).unwrap_or(u32::MAX),
+        })
+    }
+
     fn local_hello(&self) -> Result<Hello, Error> {
         let hello = self.hello_info()?;
         match self.peer {
@@ -700,6 +722,7 @@ impl Connection {
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
                 GET_FEATURE.to_owned(),
+                DRAIN_FEATURE.to_owned(),
             ],
             acp: AcpInfo {
                 protocol_version: 1,
@@ -2080,6 +2103,9 @@ async fn run_now(
     origin: TurnOrigin,
     started_by: Option<SessionId>,
 ) -> Result<(SessionId, Option<SessionState>), Error> {
+    if shared.draining() {
+        return Err(errors::host_stopping());
+    }
     let RunRequest {
         agent_id,
         cwd,

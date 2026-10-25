@@ -89,6 +89,7 @@ fn schema() -> Value {
         "host/hello" => hello::HelloRequest,
         "host/challenge" => hello::ChallengeRequest,
         "host/status" => host::StatusRequest,
+        "host/drain" => host::DrainRequest,
         "host/shutdown" => host::ShutdownRequest,
         "agents/list" => agents::ListAgentsRequest,
         "agents/get" => agents::GetAgentRequest,
@@ -183,6 +184,7 @@ fn schema() -> Value {
                 "gitFailed": errors::GIT_FAILED,
                 "uncommittedChanges": errors::UNCOMMITTED_CHANGES,
                 "keyReused": errors::KEY_REUSED,
+                "hostStopping": errors::HOST_STOPPING,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
@@ -196,6 +198,7 @@ fn schema() -> Value {
                 "queue": queue::FEATURE,
                 "getSession": sessions::GET_FEATURE,
                 "requestKeys": turns::REQUEST_KEYS_FEATURE,
+                "drain": host::DRAIN_FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "sessions": {"maxTitle": sessions::MAX_TITLE},

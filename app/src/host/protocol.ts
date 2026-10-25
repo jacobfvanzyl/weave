@@ -1317,6 +1317,37 @@ export interface SessionInfo1 {
   } | null;
 }
 /**
+ * `host/drain`: get ready to stop. From now on the Host starts no new turns (`turn/start`
+ * and `session/run` answer `host_stopping`, and queued prompts wait), and with `wait` it
+ * answers once no turn runs but `except`'s, or when its drain timeout passes. The stop that
+ * follows doesn't wait again. If the asking client goes before the Host stops, the drain
+ * ends. Local clients only.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DrainRequest".
+ */
+export interface DrainRequest {
+  /**
+   * Wait for running turns before answering.
+   */
+  wait?: boolean;
+  /**
+   * The agent process whose turn isn't waited for, from the `WEAVE_AGENT_PROCESS` the
+   * Host gives each agent: the one asking, when an agent stops the Host.
+   */
+  except?: string | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DrainResponse".
+ */
+export interface DrainResponse {
+  /**
+   * Turns still running, but for `except`'s, which stopping cuts off.
+   */
+  running: number;
+}
+/**
  * `host/shutdown`: suspend every open session and exit.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -5714,7 +5745,8 @@ export const HOST_PROTOCOL = {
     "notARepository": -32073,
     "gitFailed": -32074,
     "uncommittedChanges": -32075,
-    "keyReused": -32076
+    "keyReused": -32076,
+    "hostStopping": -32077
   },
   "features": {
     "steer": "turn/steer",
@@ -5727,7 +5759,8 @@ export const HOST_PROTOCOL = {
     "worktrees": "worktrees",
     "queue": "queue",
     "getSession": "sessions/get",
-    "requestKeys": "requestKeys"
+    "requestKeys": "requestKeys",
+    "drain": "drain"
   },
   "files": {
     "maxEntries": 2000
@@ -5757,6 +5790,7 @@ export interface HostRequests {
   "host/hello": { params: HelloRequest; result: HelloResponse };
   "host/challenge": { params: ChallengeRequest; result: ChallengeResponse };
   "host/status": { params: StatusRequest; result: HostStatus };
+  "host/drain": { params: DrainRequest; result: DrainResponse };
   "host/shutdown": { params: ShutdownRequest; result: Empty };
   "agents/list": { params: ListAgentsRequest; result: ListAgentsResponse };
   "agents/get": { params: GetAgentRequest; result: GetAgentResponse };

@@ -44,7 +44,7 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
         );
     }
     // A Host started on demand holds the socket; launchd's takes over from it.
-    let was_running = daemon::stop(paths).await?;
+    let was_running = daemon::stop(paths, false).await?;
     if installed(paths) {
         launchctl(&["bootout", &service_target(paths)?]).ok();
     }

@@ -240,6 +240,7 @@ impl Check for Starts<'_> {
                 spec: spec.clone(),
                 cwd: crate::client::home(),
                 environment: self.shared.config.environment.vars.clone(),
+                process: Launch::new_process(),
             };
             let started = tokio::time::timeout(
                 CHECK_TIMEOUT,

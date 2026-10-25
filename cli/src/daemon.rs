@@ -31,6 +31,8 @@ use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
+use weave_host_protocol::host::DRAIN_FEATURE;
+use weave_host_protocol::host::DrainRequest;
 use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
@@ -332,10 +334,12 @@ enum DaemonCommand {
     Run(RunArgs),
     /// Start the Host in the background, if it isn't running.
     Start,
-    /// Stop the Host and its agents. Threads it had open can be reopened later.
-    Stop,
-    /// Stop the Host if it's running, then start it again: after rebuilding weave.
-    Restart,
+    /// Stop the Host and its agents once running turns end. Threads it had open can be
+    /// reopened later.
+    Stop(StopArgs),
+    /// Stop the Host if it's running, once running turns end, then start it again: after
+    /// rebuilding weave.
+    Restart(StopArgs),
     /// What the Host is running.
     Status,
     /// Run the Host as a service (launchd's on macOS, systemd's on Linux): kept running,
@@ -343,6 +347,13 @@ enum DaemonCommand {
     Install,
     /// Remove the service `install` wrote, stopping the Host.
     Uninstall,
+}
+
+#[derive(Args)]
+struct StopArgs {
+    /// Don't wait for running turns: stop them now. Threads they're in can be reopened later.
+    #[arg(long)]
+    now: bool,
 }
 
 #[derive(Args)]
@@ -370,13 +381,13 @@ pub async fn command(args: DaemonArgs) -> anyhow::Result<()> {
     match args.command {
         DaemonCommand::Run(run) => serve(&paths, run).await,
         DaemonCommand::Start => start(&paths).await,
-        DaemonCommand::Stop => {
-            if !stop(&paths).await? {
+        DaemonCommand::Stop(stop_args) => {
+            if !stop(&paths, stop_args.now).await? {
                 eprintln!("The weave Host isn't running.");
             }
             Ok(())
         }
-        DaemonCommand::Restart => restart(&paths).await,
+        DaemonCommand::Restart(stop_args) => restart(&paths, stop_args.now).await,
         DaemonCommand::Status => status(&paths).await,
         DaemonCommand::Install => service::install(&paths).await,
         DaemonCommand::Uninstall => service::uninstall(&paths).await,
@@ -401,6 +412,12 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     let stopper = daemon.clone();
     tokio::spawn(async move {
         stop_signal().await;
+        // Running turns end first, unless a client drained already; a second signal stops
+        // them now.
+        tokio::select! {
+            _ = stopper.drain() => {}
+            () = stop_signal() => tracing::info!("stopping without waiting for running turns"),
+        }
         stopper.stop();
     });
     tracing::info!(
@@ -494,14 +511,17 @@ async fn start(paths: &DaemonPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Stop the Host if it's running and start it again. An installed service's manager does both,
-/// so a restart asked for from inside the Host, as by an agent, isn't cut off halfway.
-async fn restart(paths: &DaemonPaths) -> anyhow::Result<()> {
+/// Stop the Host if it's running, once its turns end unless `now`, and start it again. An
+/// installed service's manager does both, so a restart asked for from inside the Host, as by
+/// an agent, isn't cut off halfway.
+async fn restart(paths: &DaemonPaths, now: bool) -> anyhow::Result<()> {
     if !service::installed(paths) {
-        stop(paths).await?;
+        stop(paths, now).await?;
         return start(paths).await;
     }
+    let draining = drain(paths, now).await?;
     service::restart(paths).await?;
+    drop(draining);
     drop(wait_until_listening(paths).await?);
     eprintln!(
         "Restarted the weave Host on {}; it logs to {}.",
@@ -511,8 +531,69 @@ async fn restart(paths: &DaemonPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Stop the Host and wait for it to go. Returns whether it was running.
-pub(crate) async fn stop(paths: &DaemonPaths) -> anyhow::Result<bool> {
+/// Have the Host start no new turns and, unless `now`, wait for its running ones to end,
+/// saying so, before it's stopped. The connection returned holds the drain until the Host
+/// stops; none when the Host isn't running or can't drain. A turn of the agent running this,
+/// as when an agent restarts the Host, isn't waited for.
+async fn drain(paths: &DaemonPaths, now: bool) -> anyhow::Result<Option<HostConnection>> {
+    let connection = match control(paths).await {
+        Ok(Some(connection)) => connection,
+        Ok(None) => return Ok(None),
+        // A Host of another version stops on SIGTERM, which drains it as this would.
+        Err(error) if matches!(error.downcast_ref(), Some(ConnectError::Incompatible(_))) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    if !connection
+        .hello()
+        .features
+        .iter()
+        .any(|f| f == DRAIN_FEATURE)
+    {
+        return Ok(Some(connection));
+    }
+    let except = std::env::var(weave_host::AGENT_PROCESS_VARIABLE)
+        .ok()
+        .filter(|process| !process.is_empty());
+    let ready = connection
+        .send(DrainRequest {
+            wait: false,
+            except: except.clone(),
+        })
+        .await?;
+    let turns = |count: u32| match count {
+        1 => "1 running turn".to_owned(),
+        count => format!("{count} running turns"),
+    };
+    if ready.running == 0 {
+        return Ok(Some(connection));
+    }
+    if now {
+        eprintln!("Stopping {} with the Host.", turns(ready.running));
+        return Ok(Some(connection));
+    }
+    eprintln!(
+        "Waiting for {} to end, for up to {} minutes; Ctrl+C or --now stops them now.",
+        turns(ready.running),
+        weave_host::DEFAULT_DRAIN_TIMEOUT.as_secs() / 60
+    );
+    tokio::select! {
+        drained = connection.send(DrainRequest { wait: true, except }) => {
+            let left = drained?.running;
+            if left > 0 {
+                eprintln!("Stopping {} that didn't end in time.", turns(left));
+            }
+        }
+        _ = tokio::signal::ctrl_c() => eprintln!("Stopping them now."),
+    }
+    Ok(Some(connection))
+}
+
+/// Stop the Host, once its running turns end unless `now`, and wait for it to go. Returns
+/// whether it was running.
+pub(crate) async fn stop(paths: &DaemonPaths, now: bool) -> anyhow::Result<bool> {
+    let _draining = drain(paths, now).await?;
     if service::installed(paths) {
         let running = socket::connect(&paths.socket).await.is_ok();
         service::stop(paths)?;

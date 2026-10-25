@@ -58,6 +58,36 @@ pub enum EnvironmentSource {
     Process,
 }
 
+/// The `features` entry for `host/drain`.
+pub const DRAIN_FEATURE: &str = "drain";
+
+/// `host/drain`: get ready to stop. From now on the Host starts no new turns (`turn/start`
+/// and `session/run` answer `host_stopping`, and queued prompts wait), and with `wait` it
+/// answers once no turn runs but `except`'s, or when its drain timeout passes. The stop that
+/// follows doesn't wait again. If the asking client goes before the Host stops, the drain
+/// ends. Local clients only.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[request(method = "host/drain", response = DrainResponse)]
+pub struct DrainRequest {
+    /// Wait for running turns before answering.
+    #[serde(default)]
+    pub wait: bool,
+    /// The agent process whose turn isn't waited for, from the `WEAVE_AGENT_PROCESS` the
+    /// Host gives each agent: the one asking, when an agent stops the Host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub except: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DrainResponse {
+    /// Turns still running, but for `except`'s, which stopping cuts off.
+    pub running: u32,
+}
+
 /// `host/shutdown`: suspend every open session and exit.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
