@@ -11,7 +11,13 @@ with finished history in native terminal scrollback. Both modes must keep workin
 
 In `tui`, rendering follows Codex's look: `tool_call` maps ACP tool kinds onto
 Codex's cells (exec, explored, patch, MCP), `history_cell`, `markdown` and `streaming` the
-rest, each with a compact and a detailed (Ctrl+T) form; `palette` probes the terminal's
+rest, each with a compact and a detailed (Ctrl+T) form; `markdown` draws Mermaid fences as text
+diagrams through `mermaid` (Codex's `codex-mermaid` crate, a bounded subset of five families) and
+TeX math as Unicode through `math` (Codex's pre-pass, which finds `$`, `\(`, `$$` and `\[`
+before CommonMark takes their backslashes), each falling back to its source and turned off by
+`[tui] mermaid` and `math`; their rows copy as their source (`LineSource::drawn`), and in inline
+mode `commit_boundary` holds a table, a Mermaid or math fence and an open display equation out of
+scrollback until it is complete; `palette` probes the terminal's
 colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
 two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
 (after Codex's composer Vim mode) editing the same text in the opt-in Vim composer, and

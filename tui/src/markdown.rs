@@ -2,7 +2,9 @@
 //! (`codex-rs/tui/src/markdown_render.rs`, Apache-2.0): bold and underlined top headings, inline
 //! code and links in the theme's colors, light blue list numbers, green quotes, highlighted code
 //! blocks without their fences, and tables laid out in columns. GitHub's alerts (`> [!NOTE]` and
-//! the rest) are quotes headed by their kind, in its color.
+//! the rest) are quotes headed by their kind, in its color. As in Codex, Mermaid fences are drawn
+//! as diagrams (`mermaid`) and TeX math as Unicode (`math`), in GitHub's ```` ```math ```` fences
+//! too, each falling back to its source, and copying either gives back the source.
 //!
 //! Source line breaks are kept (soft breaks render as breaks), so rendering a prefix of a
 //! message yields a prefix of the full rendering. Streaming relies on that to commit finished
@@ -25,22 +27,65 @@ use unicode_width::UnicodeWidthStr;
 
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use pulldown_cmark::Alignment;
 
 use crate::highlight;
+use crate::math::MathMarkdown;
+use crate::mermaid;
+use crate::mermaid::RenderError;
+use crate::mermaid::Role;
 use crate::style;
 use crate::wrapping::DisplayLine;
+use crate::wrapping::LineSource;
 use crate::wrapping::wrap_sourced;
 
-/// A held fence or display equation past this many bytes renders as its source, so it commits
-/// line by line again.
+/// A Mermaid fence whose block passes this many bytes renders as its source, closed or not, so
+/// streaming commits it line by line again. It is the diagram renderer's own source limit.
 const HELD_SOURCE_LIMIT: usize = 16 * 1024;
 
+/// What agent Markdown is drawn as beyond text, as Codex's `tui.rendering`; `[tui] mermaid` and
+/// `math` turn them off, to show the source instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rendering {
+    pub mermaid: bool,
+    pub math: bool,
+}
+
+impl Default for Rendering {
+    fn default() -> Self {
+        Self {
+            mermaid: true,
+            math: true,
+        }
+    }
+}
+
+static RENDERING: OnceLock<Rendering> = OnceLock::new();
+
+/// Record what to draw, at startup. Only the first call counts.
+pub fn set_rendering(rendering: Rendering) {
+    let _ = RENDERING.set(rendering);
+}
+
+fn rendering() -> Rendering {
+    RENDERING.get().copied().unwrap_or_default()
+}
+
 pub fn render_markdown(source: &str, width: usize) -> Vec<DisplayLine> {
-    let mut renderer = Renderer::new(width);
-    for event in Parser::new_ext(source, options()) {
-        renderer.event(event);
+    render_markdown_with(source, width, rendering())
+}
+
+fn render_markdown_with(source: &str, width: usize, rendering: Rendering) -> Vec<DisplayLine> {
+    // Math is found first, before CommonMark takes the backslashes of `\(` and `\[`; the parser
+    // reads a copy with each formula masked, and its text events carry the rendering.
+    let math = MathMarkdown::new(source, options(), Some(width), rendering.math);
+    let mut renderer = Renderer::new(width, source, rendering);
+    renderer.display_math.clone_from(&math.display_ranges);
+    let parser = Parser::new_ext(&math.markdown, options());
+    for (event, range) in math.events(parser.into_offset_iter()) {
+        renderer.event(event, range);
     }
     renderer.finish()
 }
@@ -54,9 +99,27 @@ fn options() -> Options {
         | Options::ENABLE_GFM
 }
 
-/// Fences whose blocks render differently once they close: Mermaid diagrams.
+/// What a fence holds that is drawn once it closes: a Mermaid diagram or, as on GitHub, a
+/// display equation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Drawing {
+    Mermaid,
+    Math,
+}
+
+impl Drawing {
+    fn of_fence(info: &str) -> Option<Self> {
+        match info.split([',', ' ', '\t']).next() {
+            Some("mermaid") => Some(Self::Mermaid),
+            Some("math") => Some(Self::Math),
+            _ => None,
+        }
+    }
+}
+
+/// Fences whose blocks render differently once they close: Mermaid diagrams and math.
 fn renders_when_closed(info: &str) -> bool {
-    info.split([',', ' ', '\t']).next() == Some("mermaid")
+    Drawing::of_fence(info).is_some()
 }
 
 /// Where a streaming message's committed prefix may end: after its last complete line,
@@ -70,7 +133,6 @@ pub fn commit_boundary(source: &str) -> Option<usize> {
     let mut last_block = 0;
     let mut last_is_code = false;
     let mut held = false;
-    let mut code = Vec::new();
     for (event, range) in Parser::new_ext(complete, options()).into_offset_iter() {
         if depth == 0 && matches!(event, Event::Start(_) | Event::Rule) {
             last_block = range.start;
@@ -79,16 +141,11 @@ pub fn commit_boundary(source: &str) -> Option<usize> {
         }
         match &event {
             Event::Start(Tag::Table(_)) => held = true,
-            Event::Start(Tag::CodeBlock(kind)) => {
-                if let CodeBlockKind::Fenced(info) = kind
-                    && renders_when_closed(info)
-                    && range.len() <= HELD_SOURCE_LIMIT
-                {
-                    held = true;
-                }
-                code.push(range);
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
+                if renders_when_closed(info) && range.len() <= HELD_SOURCE_LIMIT =>
+            {
+                held = true;
             }
-            Event::Code(_) => code.push(range),
             _ => {}
         }
         match event {
@@ -102,51 +159,26 @@ pub fn commit_boundary(source: &str) -> Option<usize> {
         && complete[last_block..]
             .lines()
             .any(|line| line.trim_start().starts_with('|'));
-    let boundary = [
-        held.then_some(last_block),
-        open_display_math(complete, &code),
-    ]
-    .into_iter()
-    .flatten()
-    .min()
-    .unwrap_or(end);
+    // The math renderer says where an unfinished display equation starts; past its own limit
+    // it shows the source, and nothing is held.
+    let math = MathMarkdown::new(complete, options(), None, false).pending_start;
+    let boundary = [held.then_some(last_block), math]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(end);
     (boundary > 0).then_some(boundary)
 }
 
-/// The start of the line where a display equation (`$$` or `\[` first on its line, outside
-/// code) opens and has not closed yet.
-fn open_display_math(source: &str, code: &[Range<usize>]) -> Option<usize> {
-    let line_end = |from: usize| {
-        source[from..]
-            .find('\n')
-            .map_or(source.len(), |at| from + at + 1)
-    };
-    let mut offset = 0;
-    while offset < source.len() {
-        let next = line_end(offset);
-        let line = &source[offset..next];
-        let opener = offset + line.len() - line.trim_start().len();
-        let close = match &source[opener..next] {
-            _ if code.iter().any(|range| range.contains(&opener)) => None,
-            rest if rest.starts_with("$$") => Some("$$"),
-            rest if rest.starts_with("\\[") => Some("\\]"),
-            _ => None,
-        };
-        let Some(close) = close else {
-            offset = next;
-            continue;
-        };
-        let body = opener + 2;
-        match source[body..].find(close) {
-            Some(at) => offset = line_end(body + at),
-            None => return (source.len() - body <= HELD_SOURCE_LIMIT).then_some(offset),
-        }
-    }
-    None
-}
-
-struct Renderer {
+struct Renderer<'s> {
     width: usize,
+    /// The message's source, which event ranges index.
+    source: &'s str,
+    rendering: Rendering,
+    /// Where display equations are in the source, so their rows copy as their TeX.
+    display_math: Vec<Range<usize>>,
+    /// Rows from this one on draw `source[range]`, once the row being filled is flushed.
+    drawing: Option<(usize, Range<usize>)>,
     lines: Vec<DisplayLine>,
     spans: Vec<Span<'static>>,
     /// Inline styles in effect, innermost last.
@@ -164,6 +196,9 @@ struct Renderer {
     /// The open code block's language, and its text so far, highlighted when it ends.
     code_lang: String,
     code: String,
+    /// The open code block's source range, and where its text so far ends.
+    code_range: Range<usize>,
+    code_end: usize,
     link: Option<(String, usize)>,
     blank_before_next_block: bool,
     table: Option<Table>,
@@ -176,10 +211,14 @@ struct Table {
     row: Vec<Line<'static>>,
 }
 
-impl Renderer {
-    fn new(width: usize) -> Self {
+impl<'s> Renderer<'s> {
+    fn new(width: usize, source: &'s str, rendering: Rendering) -> Self {
         Self {
             width,
+            source,
+            rendering,
+            display_math: Vec::new(),
+            drawing: None,
             lines: Vec::new(),
             spans: Vec::new(),
             styles: Vec::new(),
@@ -191,17 +230,25 @@ impl Renderer {
             fenced_code: false,
             code_lang: String::new(),
             code: String::new(),
+            code_range: 0..0,
+            code_end: 0,
             link: None,
             blank_before_next_block: false,
             table: None,
         }
     }
 
-    fn event(&mut self, event: Event<'_>) {
+    fn event(&mut self, event: Event<'_>, range: Range<usize>) {
         match event {
-            Event::Start(tag) => self.start(tag),
+            Event::Start(tag) => self.start(tag, range),
             Event::End(tag) => self.end(tag),
-            Event::Text(text) if self.in_code_block => self.code_text(&text),
+            Event::Text(text) if self.in_code_block => {
+                self.code_text(&text);
+                self.code_end = range.end;
+            }
+            Event::Text(text) if self.display_math.contains(&range) => {
+                self.display(&text, range);
+            }
             Event::Text(text) | Event::InlineHtml(text) => self.text(&text),
             // An HTML block's lines arrive one per event, each with its newline.
             Event::Html(text) => {
@@ -230,7 +277,7 @@ impl Renderer {
         }
     }
 
-    fn start(&mut self, tag: Tag<'_>) {
+    fn start(&mut self, tag: Tag<'_>, range: Range<usize>) {
         match tag {
             Tag::Paragraph => self.start_block(),
             Tag::Heading { level, .. } => {
@@ -263,6 +310,8 @@ impl Renderer {
                 self.fenced_code = matches!(kind, CodeBlockKind::Fenced(_));
                 self.code.clear();
                 self.code_lang.clear();
+                self.code_end = range.start;
+                self.code_range = range;
                 if let CodeBlockKind::Fenced(language) = kind {
                     self.code_lang = language.to_string();
                 }
@@ -328,7 +377,8 @@ impl Renderer {
             Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
                 self.start_block();
             }
-            Tag::HtmlBlock | Tag::MetadataBlock(_) | Tag::TableRow | Tag::TableCell => {}
+            Tag::HtmlBlock => self.start_block(),
+            Tag::MetadataBlock(_) | Tag::TableRow | Tag::TableCell => {}
         }
     }
 
@@ -418,6 +468,32 @@ impl Renderer {
             self.flush();
         }
         let code = std::mem::take(&mut self.code);
+        let drawing = Drawing::of_fence(&self.code_lang).filter(|_| self.fenced_code);
+        if drawing == Some(Drawing::Mermaid) && self.rendering.mermaid {
+            // Only a closed fence is drawn; one too big to draw shows why at once, so what
+            // streaming commits of it stays.
+            let too_big = self.code_range.len() > HELD_SOURCE_LIMIT;
+            if too_big || self.closed_fence() {
+                self.diagram(&code, too_big);
+                return;
+            }
+        }
+        if drawing == Some(Drawing::Math)
+            && self.rendering.math
+            && self.closed_fence()
+            && let Some(layout) = self.math_fence(&code)
+        {
+            let first = self.lines.len();
+            for row in layout.lines() {
+                self.text(row.trim_end());
+                self.flush();
+            }
+            let fence: Arc<str> = format!("```{}\n{code}```", self.code_lang).into();
+            drawn_rows(&mut self.lines[first..], &fence);
+            self.in_code_block = false;
+            self.blank_before_next_block = true;
+            return;
+        }
         if !code.is_empty() {
             let lines = if self.fenced_code {
                 highlight::code_lines(&code, &self.code_lang)
@@ -426,16 +502,137 @@ impl Renderer {
                     .map(|line| Line::from(format!("    {line}")))
                     .collect()
             };
-            for line in lines {
-                for span in line.spans {
-                    let text = span.content.replace('\t', "    ");
-                    self.spans.push(Span::styled(text, span.style));
-                }
-                self.flush();
-            }
+            self.code_lines(lines);
         }
         self.in_code_block = false;
         self.blank_before_next_block = true;
+    }
+
+    /// Whether the code block ended at a closing fence rather than at the end of the message:
+    /// past its text, the block's source ends in at least as many of its fence characters as
+    /// opened it. From Codex's `markdown_render/mermaid.rs`.
+    fn closed_fence(&self) -> bool {
+        let Some(block) = self.source.get(self.code_range.clone()) else {
+            return false;
+        };
+        let Some(marker @ (b'`' | b'~')) = block.as_bytes().first().copied() else {
+            return false;
+        };
+        let opening = block.bytes().take_while(|byte| *byte == marker).count();
+        let Some(rest) = self.source.get(self.code_end..self.code_range.end) else {
+            return false;
+        };
+        rest.trim_end_matches([' ', '\t', '\r', '\n'])
+            .bytes()
+            .rev()
+            .take_while(|byte| *byte == marker)
+            .count()
+            >= opening
+    }
+
+    /// A Mermaid diagram drawn as text, styled from the syntax theme as Codex styles it, or a
+    /// dim reason it can't be and then its highlighted source. A drawn diagram copies as its
+    /// fence.
+    fn diagram(&mut self, code: &str, too_big: bool) {
+        let width = self.width.saturating_sub(self.prefix_width());
+        let drawn = if too_big {
+            Err(RenderError::Limit)
+        } else {
+            mermaid::render_spans(code, width)
+        };
+        let rows = match drawn {
+            Ok(rows) => rows,
+            Err(error) => {
+                let reason = match error {
+                    RenderError::Unsupported => {
+                        "This Mermaid diagram uses features the terminal renderer doesn't support."
+                    }
+                    RenderError::TooWide => {
+                        "This Mermaid diagram doesn't fit the current terminal width."
+                    }
+                    RenderError::Limit => {
+                        "This Mermaid diagram exceeds the terminal renderer's size limits."
+                    }
+                };
+                self.spans.push(Span::styled(reason, dim()));
+                self.flush();
+                self.code_lines(highlight::code_lines(code, &self.code_lang));
+                self.in_code_block = false;
+                self.blank_before_next_block = true;
+                return;
+            }
+        };
+        let node = Style::default().fg(highlight::scope_color(&[
+            "entity.name.type",
+            "support.type",
+            "variable",
+        ])
+        .unwrap_or(Color::Cyan));
+        let edge = highlight::scope_color(&["comment"])
+            .map_or_else(dim, |color| Style::default().fg(color));
+        let first = self.lines.len();
+        for row in rows {
+            for span in row {
+                let style = match span.role {
+                    Role::Node => node,
+                    Role::Edge => edge,
+                    Role::Text => self.style(),
+                };
+                self.spans.push(Span::styled(span.text, style));
+            }
+            self.flush();
+        }
+        let fence: Arc<str> = format!("```{}\n{code}```", self.code_lang).into();
+        drawn_rows(&mut self.lines[first..], &fence);
+        self.in_code_block = false;
+        self.blank_before_next_block = true;
+    }
+
+    /// A ```` ```math ```` fence's equation laid out for display, if it is in the math renderer's
+    /// subset and its rows fit.
+    fn math_fence(&self, code: &str) -> Option<String> {
+        if self.code_range.len() > HELD_SOURCE_LIMIT {
+            return None;
+        }
+        let width = self.width.saturating_sub(self.prefix_width());
+        crate::math::render(code, true)
+            .filter(|layout| layout.lines().all(|row| row.trim_end().width() <= width))
+    }
+
+    /// A display equation, one row per row of its layout. Its rows copy as its TeX, once the
+    /// last of them, which later text on its line may share, is flushed.
+    fn display(&mut self, text: &str, range: Range<usize>) {
+        let first = self.lines.len();
+        // An unfinished equation runs to the end of the message, its last newline included.
+        let mut rows = text.trim_end_matches('\n').split('\n').peekable();
+        while let Some(row) = rows.next() {
+            self.text(row.trim_end());
+            if rows.peek().is_some() {
+                self.flush();
+            }
+        }
+        self.drawing = Some((first, range));
+    }
+
+    /// Emit highlighted code lines, tabs expanded, one row each.
+    fn code_lines(&mut self, lines: Vec<Line<'static>>) {
+        for line in lines {
+            for span in line.spans {
+                let text = span.content.replace('\t', "    ");
+                self.spans.push(Span::styled(text, span.style));
+            }
+            self.flush();
+        }
+    }
+
+    /// Columns the open quotes and list items take before a row's text.
+    fn prefix_width(&self) -> usize {
+        let quotes: usize = self
+            .quote_prefix()
+            .iter()
+            .map(|span| span.content.width())
+            .sum();
+        quotes + self.items.last().copied().unwrap_or(0)
     }
 
     /// Lay a table out in columns, as Codex does: a header, a heavy rule, and the rows, each
@@ -592,6 +789,11 @@ impl Renderer {
             copy_with_marker(&mut rows, &marker);
         }
         self.lines.extend(rows);
+        if let Some((first, range)) = self.drawing.take() {
+            let tex: Arc<str> = self.source.get(range).unwrap_or_default().into();
+            let first = first.min(self.lines.len());
+            drawn_rows(&mut self.lines[first..], &tex);
+        }
     }
 
     fn finish(mut self) -> Vec<DisplayLine> {
@@ -599,6 +801,20 @@ impl Renderer {
             self.flush();
         }
         self.lines
+    }
+}
+
+/// Mark `rows` as drawing `source`, a diagram or a formula: copying any of them gives `source`
+/// once, and Find reads them as shown.
+fn drawn_rows(rows: &mut [DisplayLine], source: &Arc<str>) {
+    for row in rows {
+        let prefix_width = row.source.as_ref().map_or(0, |source| source.prefix_width);
+        row.source = Some(LineSource {
+            text: Arc::clone(source),
+            range: 0..0,
+            prefix_width,
+            drawn: true,
+        });
     }
 }
 
@@ -859,6 +1075,119 @@ mod tests {
         let rows = render_markdown("~gone~", 40);
         let style = span(&rows[0], "gone").style;
         assert!(style.add_modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    const FLOWCHART: &str = "```mermaid\nflowchart LR\n    A[Ask] --> B[Answer]\n```\n";
+
+    #[test]
+    fn closed_mermaid_fences_are_drawn_and_copy_as_their_fence() {
+        let rows = render_markdown(FLOWCHART, 60);
+        let text: Vec<String> = rows.iter().map(|row| row.line.to_string()).collect();
+        assert_eq!(text[1], "│ Ask │  │ Answer │", "{text:#?}");
+        for row in &rows {
+            let source = row.source.as_ref().expect("a source");
+            assert!(source.drawn);
+            assert_eq!(&*source.text, FLOWCHART.trim_end());
+        }
+    }
+
+    #[test]
+    fn find_matches_a_diagram_as_drawn() {
+        let rows = render_markdown(FLOWCHART, 60);
+        let hits = crate::find::find_in_rows(&rows, 0, &crate::find::fold("answer"));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].start(), (1, 11));
+    }
+
+    #[test]
+    fn open_or_disabled_mermaid_fences_show_their_source() {
+        let open = FLOWCHART.trim_end().trim_end_matches('`');
+        assert_eq!(
+            render(open, 60),
+            ["flowchart LR", "    A[Ask] --> B[Answer]"]
+        );
+        let off = Rendering {
+            mermaid: false,
+            ..Rendering::default()
+        };
+        let rows: Vec<String> = render_markdown_with(FLOWCHART, 60, off)
+            .iter()
+            .map(|row| row.line.to_string())
+            .collect();
+        assert_eq!(rows, ["flowchart LR", "    A[Ask] --> B[Answer]"]);
+    }
+
+    #[test]
+    fn mermaid_outside_the_subset_or_too_wide_says_why_then_shows_its_source() {
+        let pie = "```mermaid\npie\n    \"a\" : 1\n```\n";
+        assert_eq!(
+            render(pie, 80),
+            [
+                "This Mermaid diagram uses features the terminal renderer doesn't support.",
+                "pie",
+                "    \"a\" : 1"
+            ]
+        );
+        let narrow = render(FLOWCHART, 16);
+        assert_eq!(narrow[..2], ["This Mermaid", "diagram doesn't"]);
+        assert!(narrow.contains(&"flowchart LR".to_owned()), "{narrow:#?}");
+    }
+
+    #[test]
+    fn mermaid_in_quotes_and_lists_is_drawn_within_their_prefixes() {
+        let source = "> ~~~mermaid\n> graph TD\n>     A --> B\n> ~~~\n\n- Diagram:\n\n  ```mermaid\n  graph LR\n      A --> B\n  ```\n";
+        let text = render(source, 40);
+        assert!(text[0].starts_with("> ┌"), "{text:#?}");
+        let listed = text
+            .iter()
+            .position(|row| row == "- Diagram:")
+            .expect("the item");
+        assert!(text[listed + 2].starts_with("  ┌"), "{text:#?}");
+    }
+
+    #[test]
+    fn math_renders_in_every_delimiter_and_disabled_keeps_its_source() {
+        let source = "Both $\\alpha^2$ and \\(\\beta_1\\).\n\n$$\nx = \\frac{a}{b}\n$$\n";
+        assert_eq!(
+            render(source, 40),
+            ["Both α² and β₁.", "", "    a", "x = ─", "    b"]
+        );
+        let off = Rendering {
+            math: false,
+            ..Rendering::default()
+        };
+        let rows: Vec<String> = render_markdown_with(source, 40, off)
+            .iter()
+            .map(|row| row.line.to_string())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "Both $\\alpha^2$ and \\(\\beta_1\\).",
+                "",
+                "$$",
+                "x = \\frac{a}{b}",
+                "$$"
+            ]
+        );
+    }
+
+    #[test]
+    fn display_math_and_math_fences_copy_as_their_tex() {
+        let display = "$$\nx = \\frac{a}{b}\n$$\n";
+        for row in render_markdown(display, 40) {
+            let source = row.source.expect("a source");
+            assert!(source.drawn);
+            assert_eq!(&*source.text, display.trim_end());
+        }
+        let fence = "```math\n\\frac{1}{3}\n```\n";
+        let rows = render_markdown(fence, 40);
+        let text: Vec<String> = rows.iter().map(|row| row.line.to_string()).collect();
+        assert_eq!(text, ["1", "─", "3"]);
+        assert_eq!(
+            rows[0].source.as_ref().map(|source| &*source.text),
+            Some(fence.trim_end())
+        );
     }
 
     #[test]

@@ -288,6 +288,18 @@ struct Copied {
 impl Copied {
     /// Copy the columns `from..to` of a row showing `source`.
     fn push_source(&mut self, source: &LineSource, from: usize, to: usize) {
+        if source.drawn {
+            // A drawing's rows, however many are selected, copy as its source once.
+            let continued = self
+                .open
+                .as_ref()
+                .is_some_and(|(text, _)| Arc::ptr_eq(text, &source.text));
+            if !continued {
+                self.lines.push(source.text.to_string());
+            }
+            self.open = Some((Arc::clone(&source.text), source.text.len()));
+            return;
+        }
         let shown = &source.text[source.range.clone()];
         let mut column = source.prefix_width;
         let mut selected: Option<(usize, usize)> = None;
@@ -1331,6 +1343,35 @@ mod tests {
         view.handle_mouse(mouse(MouseEventKind::Drag(left), 10, 1), &[]);
         let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 10, 1), &[]);
         assert_eq!(copied.as_deref(), Some("jumps"));
+    }
+
+    #[test]
+    fn copying_a_drawn_diagram_gives_its_fence_once() {
+        let mut view = TranscriptView::new();
+        let fence = "```mermaid\ngraph LR\n    A --> B\n```";
+        view.push(TranscriptCell::message(
+            StreamKind::Agent,
+            format!("Before\n\n{fence}\n\nAfter"),
+            Vec::new(),
+        ));
+        let rows = draw(&view, 12);
+        let last = rows
+            .iter()
+            .rposition(|row| row.contains("After"))
+            .expect("After");
+        assert!(rows[2].contains('┌'), "{rows:#?}");
+
+        let left = MouseButton::Left;
+        view.handle_mouse(mouse(MouseEventKind::Down(left), 0, 0), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Drag(left), 19, last as u16), &[]);
+        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 19, last as u16), &[]);
+        assert_eq!(copied, Some(format!("Before\n\n{fence}\n\nAfter")));
+
+        // Part of the drawing still copies all of its source.
+        view.handle_mouse(mouse(MouseEventKind::Down(left), 4, 3), &[]);
+        view.handle_mouse(mouse(MouseEventKind::Drag(left), 6, 3), &[]);
+        let copied = view.handle_mouse(mouse(MouseEventKind::Up(left), 6, 3), &[]);
+        assert_eq!(copied.as_deref(), Some(fence));
     }
 
     #[test]

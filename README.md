@@ -194,6 +194,8 @@ terminal_title = true  # window title: activity spinner, thread title, project
 vim = true             # the Vim composer for new threads and multi-line drafts (off by default)
 images = "never"       # no image thumbnails; "auto" (default) shows them where the
                        # terminal draws Kitty graphics placeholders (Ghostty, kitty; not in tmux)
+mermaid = false        # show Mermaid diagrams' source instead of drawing them as text (on by default)
+math = false           # show TeX math's source instead of Unicode (on by default)
 
 [daemon]
 enabled = false        # run agents inside each weave rather than the shared daemon

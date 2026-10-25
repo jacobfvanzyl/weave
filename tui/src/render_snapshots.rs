@@ -181,6 +181,18 @@ fn agent_message_alerts() {
     insta::assert_snapshot!(screen(&mut chat));
 }
 
+/// The fake agent's rich Markdown, streamed: diagrams, math, alerts, inline HTML and code, and
+/// what falls back to its source.
+#[test]
+fn agent_message_rich_markdown() {
+    let mut chat = chat();
+    for piece in weave_fake_agent::MARKDOWN.split_inclusive(' ') {
+        send(&mut chat, SessionUpdate::AgentMessageChunk(text(piece)));
+    }
+    finish_turn(&mut chat);
+    insta::assert_snapshot!(screen(&mut chat));
+}
+
 #[test]
 fn update_agent_thought_chunk() {
     let mut chat = chat();

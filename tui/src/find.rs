@@ -48,13 +48,13 @@ struct RowText {
 impl RowText {
     fn of(line: &DisplayLine) -> Self {
         match &line.source {
-            Some(source) => Self {
+            Some(source) if !source.drawn => Self {
                 text: Arc::clone(&source.text),
                 range: source.range.clone(),
                 prefix_width: source.prefix_width,
             },
-            // A row without a source is its own line, as shown.
-            None => {
+            // A row without a source, or a drawing's, is its own line, as shown.
+            _ => {
                 let text: String = line
                     .line
                     .spans
@@ -183,6 +183,7 @@ mod tests {
                         text: Arc::clone(&text),
                         range,
                         prefix_width,
+                        drawn: false,
                     }),
                 }
             })

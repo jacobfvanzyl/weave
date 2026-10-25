@@ -291,6 +291,10 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             terminal_title: launch.config.tui.terminal_title.unwrap_or(true),
             vim: launch.config.tui.vim.unwrap_or(false),
             images: launch.config.tui.images != config::Images::Never,
+            rendering: weave_tui::Rendering {
+                mermaid: launch.config.tui.mermaid.unwrap_or(true),
+                math: launch.config.tui.math.unwrap_or(true),
+            },
             detachable: host.is_shared(),
             reconnect: host.reconnector(),
             dismissed_updates: weave_tui::dismissed_updates_file(),

@@ -289,6 +289,7 @@ impl Strip {
                         text: Arc::from(""),
                         range: 0..0,
                         prefix_width: 0,
+                        drawn: false,
                     }),
                 }
             })

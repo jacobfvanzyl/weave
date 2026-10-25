@@ -79,6 +79,8 @@ use crate::events::ElicitationAsk;
 use crate::events::PermissionAsk;
 use crate::footer::StatusItem;
 use crate::input::Input;
+use crate::markdown;
+use crate::markdown::Rendering;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
 use crate::settings::SettingChange;
@@ -147,6 +149,8 @@ pub struct UiOptions {
     pub vim: bool,
     /// Show pasted images above the composer, where the terminal draws images.
     pub images: bool,
+    /// What agent Markdown is drawn as: Mermaid diagrams and math, or their source.
+    pub rendering: Rendering,
     /// Sessions outlive the TUI, in the weave Host: leaving with Ctrl+D keeps a turn running.
     pub detachable: bool,
     /// How to reach the weave Host again when it goes away; none for one in this process.
@@ -227,10 +231,12 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         terminal_title,
         vim,
         images,
+        rendering,
         detachable,
         reconnect,
         dismissed_updates,
     } = ui;
+    markdown::set_rendering(rendering);
     let Session {
         connection,
         events,

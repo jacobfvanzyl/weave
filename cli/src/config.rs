@@ -86,6 +86,11 @@ pub struct TuiConfig {
     /// that draw images.
     #[serde(default)]
     pub images: Images,
+    /// Mermaid diagrams in agent text drawn as text diagrams; false shows their source
+    /// (default true).
+    pub mermaid: Option<bool>,
+    /// TeX math in agent text shown as Unicode; false shows its source (default true).
+    pub math: Option<bool>,
 }
 
 /// Whether to show images, in terminals that draw them with Kitty graphics placeholders.
@@ -145,14 +150,15 @@ mod tests {
         let config: weave_agents::Config =
             toml::from_str("[tui]\nalternate_screen = \"sometimes\"").expect("the Host's view");
         assert!(section::<TuiConfig>(&config.tui, "tui").is_err());
-        let config: weave_agents::Config =
-            toml::from_str("[tui]\nvim = true\nimages = \"never\"\n[daemon]\nenabled = false")
-                .expect("valid");
+        let config: weave_agents::Config = toml::from_str(
+            "[tui]\nvim = true\nimages = \"never\"\nmermaid = false\n[daemon]\nenabled = false",
+        )
+        .expect("valid");
         let tui: TuiConfig = section(&config.tui, "tui").expect("tui");
         let daemon: DaemonSettings = section(&config.daemon, "daemon").expect("daemon");
         assert_eq!(
-            (tui.vim, tui.images, daemon.enabled),
-            (Some(true), Images::Never, Some(false))
+            (tui.vim, tui.images, tui.mermaid, tui.math, daemon.enabled),
+            (Some(true), Images::Never, Some(false), None, Some(false))
         );
     }
 

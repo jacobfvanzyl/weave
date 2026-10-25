@@ -1,0 +1,130 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+• Here is the rich Markdown agents write.
+
+  ## Diagrams
+
+  A flowchart:
+
+  ┌────────┐  ┌──────────┐  ┌──────────┐  ╭───────╮
+  │ Prompt │  │ ◇ Host   │  │ Agent    │  │ Reply │
+  └┬───────┘  └┬────┬────┘  └┬────┬────┘  ╰┬──────╯
+   │           ▲    │        ▲    │        ▲
+   │           │    │ACP     │    ┆        ┆
+   │           │    │        │    ┆        ┆
+   │           │    │        │    ┆        ┆
+   └───────────┘    │        │    ┆        ┆
+                    │        │    ┆        ┆
+                    └────────┘    ┆        ┆
+                                  ┆        ┆
+                                  └┄┄┄┄┄┄┄┄┘
+
+  A sequence diagram:
+
+            ┌───────┐         ┌───────┐         ┌───────┐
+            │ TUI   │         │ Host  │         │ Agent │
+            └───────┘         └───────┘         └───────┘
+                │ prompt          │                 │
+                ├─────────────────▶                 │
+                │                 │                 │
+                │                 │ session/prompt  │
+                │                 ├─────────────────▶
+                │                 │                 │
+                │                 │ session/update  │
+                │                 ◀┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤
+                │                 │                 │
+                │ event           │                 │
+                ◀┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤                 │
+                │                 │                 │
+
+  One with a subgraph, which not every renderer draws:
+
+  This Mermaid diagram uses features the terminal renderer doesn't
+  support.
+  flowchart TD
+      subgraph Clients
+          T[TUI]
+          P[App]
+      end
+      T --> H[Host]
+      P --> H
+
+  And one that doesn't parse:
+
+  This Mermaid diagram uses features the terminal renderer doesn't
+  support.
+  flowchart LR
+      A[Unclosed --> B
+
+  ## Math
+
+  Inline in dollars, e^{iπ} + 1 = 0, and in parentheses, a² + b² = c².
+
+      -b ± √(b² - 4ac)
+  x = ────────────────
+             2a
+
+   n       n(n+1)
+   ∑  k =  ──────
+  k=1        2
+
+                1
+  ∫₀¹ x²   dx = ─
+                3
+
+  A matrix, $$\begin{pmatrix} a & b \ c & d \end{pmatrix}$$, and an
+  unknown command, $\notacommand{x}$.
+
+  Not math: it costs $5 and $10, and $HOME is your home directory.
+
+  ## Alerts
+
+  > Note
+  > Threads outlive the TUI.
+
+  > Tip
+  > weave --resume finds the thread again.
+
+  > Important
+  > The Host runs the agents.
+
+  > Warning
+  > Quitting the Host ends its threads' turns.
+
+  > Caution
+  > Agent text is untrusted.
+
+  ## The rest
+
+  A claim with a footnote.[^1]
+
+  [image: The Host's diagram] (https://example.com/host.png)
+
+   Keys                            What they do
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   <kbd>Ctrl</kbd>+<kbd>T</kbd>    Detailed view<br>of tool calls
+   <kbd>Esc</kbd>                  Takes back a queued message
+
+  <details>
+  <summary>More</summary>
+
+  Hidden Markdown inside.
+
+  </details>
+
+  fn main() {
+      println!("hello");
+  }
+
+  const answer: number = 42;
+
+  [^1]: The footnote's text.
+── viewport ──
+
+
+›
+
+  Agent

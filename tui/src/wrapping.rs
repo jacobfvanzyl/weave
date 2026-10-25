@@ -30,6 +30,9 @@ pub struct LineSource {
     pub range: Range<usize>,
     /// Columns before the text starts: bullets, indents and gutters, which copying leaves out.
     pub prefix_width: usize,
+    /// The row draws `text` rather than showing it, as a diagram or a formula does: copying
+    /// any of its rows gives `text` once, and Find reads the row as shown.
+    pub drawn: bool,
 }
 
 impl DisplayLine {
@@ -52,6 +55,7 @@ impl DisplayLine {
                 text: text.into(),
                 range,
                 prefix_width: 0,
+                drawn: false,
             }),
         }
     }
@@ -207,6 +211,7 @@ pub fn wrap_sourced(
                     text: Arc::clone(&text),
                     range,
                     prefix_width: line_width(prefix),
+                    drawn: false,
                 }),
             }
         })

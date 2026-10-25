@@ -23,6 +23,8 @@ mod history_cell;
 mod input;
 mod insert_history;
 mod markdown;
+mod math;
+mod mermaid;
 mod notify;
 mod palette;
 mod permission;
@@ -53,6 +55,7 @@ pub use app::Session;
 pub use app::UiOptions;
 pub use app::run;
 pub use footer::StatusItem;
+pub use markdown::Rendering;
 pub use tui::ScreenMode;
 
 /// Where the versions whose update notice the user dismissed are kept.
