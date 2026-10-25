@@ -39,6 +39,8 @@ pub struct HostStatus {
 pub enum Service {
     /// As a launchd user agent, with no idle exit.
     Launchd,
+    /// As a systemd user service, with no idle exit.
+    Systemd,
     /// Started by a client, exiting once idle.
     OnDemand,
     /// Inside a client (`--no-daemon`).

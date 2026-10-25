@@ -209,8 +209,8 @@ environment built from three layers, later layers winning:
    out (10 seconds) and fall back to layer 1 alone, logging why;
 3. the agent's `env` from the config.
 
-A Host started by launchd has almost no environment of its own, so layer 2 gives agents
-the user's `PATH` and other settings. A Host the CLI starts also keeps whatever the
+A Host started by launchd or systemd has almost no environment of its own, so layer 2 gives
+agents the user's `PATH` and other settings. A Host the CLI starts also keeps whatever the
 starting terminal exported. `weave daemon restart` captures again. The environment is never
 written to disk or sent to a client.
 
@@ -945,7 +945,7 @@ worktree.
 ## Host management
 
 **`host/status`** `{}` →
-`{protocol, version, pid, startedAt, service: "launchd" | "onDemand" | "inProcess", environment: "loginShell" | "process", sessions: SessionListing[], remote?: string}`
+`{protocol, version, pid, startedAt, service: "launchd" | "systemd" | "onDemand" | "inProcess", environment: "loginShell" | "process", sessions: SessionListing[], remote?: string}`
 
 `sessions` lists the open sessions. `remote` is the WebSocket's loopback address while the
 Host serves one.
@@ -960,15 +960,32 @@ The Host is the `weave daemon run` process; the CLI keeps the `weave daemon` com
 
 - **On demand.** When no Host is listening, a client command starts one in the background
   as now. That Host exits after 10 minutes with no open session and no client.
-- **As a service.** `weave daemon install` writes a launchd user agent that runs this
-  `weave` binary's `daemon run` at login and restarts it if it exits, with no idle exit,
-  logging to `daemon.log`. `weave daemon uninstall` removes it. While it's installed,
-  `start`, `stop` and `restart` go through `launchctl`, and the CLI never starts a Host of
-  its own. Installing again points the service at the current binary. macOS keeps the
-  processes launchd starts out of `~/Documents`, `~/Desktop` and `~/Downloads` until they're
-  let in, so `install` refuses a binary in one of them, and macOS may ask to let weave in
-  when an agent first works in a session there. A Host directory of its own
-  (`WEAVE_DAEMON_DIR`) gets a service of its own.
+- **As a service.** `weave daemon install` has the computer's service manager run this
+  `weave` binary's `daemon run` and restart it if it exits, with no idle exit, logging to
+  `daemon.log`. `weave daemon uninstall` removes it. While it's installed, `start`, `stop`
+  and `restart` go through the manager, and the CLI never starts a Host of its own.
+  Installing again points the service at the current binary. A Host directory of its own
+  (`WEAVE_DAEMON_DIR`) gets a service of its own. Everything here works over SSH with no
+  terminal, so a Host on another computer is set up and managed through its CLI (ADR 0017).
+  - **macOS** gets a launchd user agent, `local.weave.host`, which runs at login. macOS
+    keeps the processes launchd starts out of `~/Documents`, `~/Desktop` and `~/Downloads`
+    until they're let in, so `install` refuses a binary in one of them, and macOS may ask to
+    let weave in when an agent first works in a session there.
+  - **Linux** gets a systemd user service, `weave-host.service` in
+    `~/.config/systemd/user`, enabled for `default.target`; `restart` is one
+    `systemctl --user restart`, so it completes even when an agent inside the Host asks for
+    it. The user manager runs only while the person is logged in unless lingering is on, so
+    `install` turns it on (`loginctl enable-linger`, which polkit lets a user do for
+    themselves by default) and says how when it can't; then the Host starts at boot and keeps
+    running after the SSH session ends. The unit's `KillMode=mixed` signals the Host alone, which
+    stops its agents itself, and its `TimeoutStopSec` (30 seconds) covers suspending every
+    session. `weave daemon status` says when lingering is off, and when systemd gives the
+    user manager less than that to stop at shutdown (`user@<uid>.service`'s
+    `TimeoutStopUSec`, five seconds on Ubuntu 24.04), with the drop-in that raises it.
+    Tailscale runs as root there, and changes Serve only for root and its operator, so
+    pairing asks for `sudo tailscale set --operator=$USER` once. The socket is in the user's
+    runtime directory, `/run/user/<uid>/weave`, which the CLI finds also from a session that
+    sets no `XDG_RUNTIME_DIR`, as Tailscale SSH doesn't.
 - **In-process.** `--no-daemon` runs a Host inside the client over an in-process channel,
   with journals in memory and traces under the system's temporary directory.
 

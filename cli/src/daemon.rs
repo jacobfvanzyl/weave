@@ -328,7 +328,7 @@ pub struct DaemonArgs {
 
 #[derive(Subcommand)]
 enum DaemonCommand {
-    /// Serve in the foreground until stopped (for launchd, or to watch its log).
+    /// Serve in the foreground until stopped (for launchd or systemd, or to watch its log).
     Run(RunArgs),
     /// Start the Host in the background, if it isn't running.
     Start,
@@ -338,9 +338,10 @@ enum DaemonCommand {
     Restart,
     /// What the Host is running.
     Status,
-    /// Run the Host as a launchd user agent: at login, kept running, with no idle exit.
+    /// Run the Host as a service (launchd's on macOS, systemd's on Linux): kept running,
+    /// with no idle exit.
     Install,
-    /// Remove the launchd user agent `install` wrote, stopping the Host.
+    /// Remove the service `install` wrote, stopping the Host.
     Uninstall,
 }
 
@@ -356,8 +357,12 @@ struct RunArgs {
     config: Option<PathBuf>,
 
     /// Run as launchd's service, as `weave daemon install` sets it up.
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, conflicts_with = "systemd")]
     launchd: bool,
+
+    /// Run as systemd's service, as `weave daemon install` sets it up.
+    #[arg(long, hide = true)]
+    systemd: bool,
 }
 
 pub async fn command(args: DaemonArgs) -> anyhow::Result<()> {
@@ -371,10 +376,7 @@ pub async fn command(args: DaemonArgs) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        DaemonCommand::Restart => {
-            stop(&paths).await?;
-            start(&paths).await
-        }
+        DaemonCommand::Restart => restart(&paths).await,
         DaemonCommand::Status => status(&paths).await,
         DaemonCommand::Install => service::install(&paths).await,
         DaemonCommand::Uninstall => service::uninstall(&paths).await,
@@ -387,6 +389,8 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     let environment = Environment::capture(CAPTURE_TIMEOUT).await;
     let service = if run.launchd {
         Service::Launchd
+    } else if run.systemd {
+        Service::Systemd
     } else {
         Service::OnDemand
     };
@@ -405,9 +409,9 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
         version = env!("CARGO_PKG_VERSION"),
         "weave Host serving"
     );
-    // launchd keeps it running; one started on demand goes when it's no longer used, unless
+    // A service keeps it running; one started on demand goes when it's no longer used, unless
     // paired devices need it, which can't start it again.
-    let idle_exit = if run.launchd {
+    let idle_exit = if run.launchd || run.systemd {
         None
     } else {
         run.idle_exit.map(Duration::from_secs)
@@ -490,6 +494,23 @@ async fn start(paths: &DaemonPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Stop the Host if it's running and start it again. An installed service's manager does both,
+/// so a restart asked for from inside the Host, as by an agent, isn't cut off halfway.
+async fn restart(paths: &DaemonPaths) -> anyhow::Result<()> {
+    if !service::installed(paths) {
+        stop(paths).await?;
+        return start(paths).await;
+    }
+    service::restart(paths).await?;
+    drop(wait_until_listening(paths).await?);
+    eprintln!(
+        "Restarted the weave Host on {}; it logs to {}.",
+        paths.socket.display(),
+        paths.log().display()
+    );
+    Ok(())
+}
+
 /// Stop the Host and wait for it to go. Returns whether it was running.
 pub(crate) async fn stop(paths: &DaemonPaths) -> anyhow::Result<bool> {
     if service::installed(paths) {
@@ -525,22 +546,36 @@ pub(crate) async fn stop(paths: &DaemonPaths) -> anyhow::Result<bool> {
 
 async fn status(paths: &DaemonPaths) -> anyhow::Result<()> {
     let installed = service::installed(paths);
+    let notes = if installed {
+        service::notes(paths)
+    } else {
+        Vec::new()
+    };
     let Some(connection) = control(paths).await? else {
         let service = if installed {
-            "; its launchd service is installed"
+            format!("; its {} service is installed", service::manager_name())
         } else {
-            ""
+            String::new()
         };
         println!(
             "The weave Host isn't running ({}){service}.",
             paths.socket.display()
         );
+        print_notes(&notes);
         return Ok(());
     };
     let status = connection.send(StatusRequest {}).await;
     connection.shutdown().await;
     print!("{}", describe(&status?, paths, now_ms()));
+    print_notes(&notes);
     Ok(())
+}
+
+/// What the person may want to change about the service, each as a paragraph of its own.
+fn print_notes(notes: &[String]) {
+    for note in notes {
+        println!("\n{note}");
+    }
 }
 
 fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
@@ -564,6 +599,7 @@ fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
     };
     let service = match status.service {
         Service::Launchd => "launchd",
+        Service::Systemd => "systemd",
         Service::OnDemand => "on demand",
         Service::InProcess => "in-process",
     };

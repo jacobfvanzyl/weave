@@ -34,7 +34,7 @@ export type Auth =
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "Service".
  */
-export type Service = "launchd" | "onDemand" | "inProcess";
+export type Service = "launchd" | "systemd" | "onDemand" | "inProcess";
 /**
  * Where agents' environment comes from.
  *

@@ -9,6 +9,7 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
 use clap::Subcommand;
+use weave_host::DaemonPaths;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_protocol::devices::Device;
@@ -22,6 +23,7 @@ use weave_host_protocol::host::StatusRequest;
 use crate::daemon;
 use crate::daemon::ago;
 use crate::daemon::now_ms;
+use crate::service;
 
 #[derive(Args)]
 pub struct PairArgs {
@@ -67,7 +69,7 @@ pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
         daemon::capabilities("weave-cli"),
     )
     .await?;
-    let result = offer(&connection, &mut events, args.name).await;
+    let result = offer(&connection, &mut events, args.name, &paths).await;
     connection.shutdown().await;
     result
 }
@@ -76,6 +78,7 @@ async fn offer(
     connection: &HostConnection,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
     name: Option<String>,
+    paths: &DaemonPaths,
 ) -> anyhow::Result<()> {
     let status = connection.send(StatusRequest {}).await?;
     let offer = match connection.send(OfferDeviceRequest { name }).await {
@@ -96,12 +99,14 @@ async fn offer(
          once, for five minutes.",
         grouped(&offer.code)
     );
-    if status.service != Service::Launchd {
+    if !matches!(status.service, Service::Launchd | Service::Systemd) {
         eprintln!(
             "\nThe Host isn't installed as a service, so after this computer restarts your \
              devices can't reach it until something here starts it. `weave daemon install` \
              keeps it running."
         );
+    } else if let Some(note) = service::lingering_note(paths) {
+        eprintln!("\n{note}");
     }
     let expires_in = offer.expires_at.saturating_sub(now_ms());
     let paired = tokio::select! {

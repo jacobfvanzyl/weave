@@ -1371,6 +1371,10 @@ mod tests {
         // Nothing can be created beside it, so writing it out again fails too.
         std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o500))
             .expect("read-only directory");
+        // Unless the directory's mode holds nobody back, as for root in a container.
+        if File::create(sessions.join("probe")).is_ok() {
+            return;
+        }
         journal.append(update("two"));
         journal.append(update("three"));
         journal.flush();

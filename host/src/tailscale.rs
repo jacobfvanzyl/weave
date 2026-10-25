@@ -13,8 +13,8 @@ use serde_json::Value;
 use crate::remote::Serve;
 
 /// Where the Mac app keeps its command, and where Homebrew puts one, when `PATH` has neither,
-/// as for a Host launchd started.
-const CANDIDATES: [&str; 3] = [
+/// as for a Host launchd started. Elsewhere, as on Linux, `PATH` has it.
+const MAC_CANDIDATES: [&str; 3] = [
     "/opt/homebrew/bin/tailscale",
     "/usr/local/bin/tailscale",
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
@@ -33,16 +33,21 @@ pub struct Entry {
     pub funnel: bool,
 }
 
-/// The `tailscale` command, on `PATH` or where the Mac app or Homebrew put it.
+/// The `tailscale` command, on `PATH`, or on macOS where the Mac app or Homebrew put it.
 fn binary() -> PathBuf {
     let on_path = std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
             .map(|dir| dir.join("tailscale"))
             .find(|candidate| candidate.is_file())
     });
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &MAC_CANDIDATES
+    } else {
+        &[]
+    };
     on_path
         .or_else(|| {
-            CANDIDATES
+            candidates
                 .iter()
                 .map(PathBuf::from)
                 .find(|candidate| candidate.is_file())
@@ -78,6 +83,19 @@ async fn tailscale(args: &[&str]) -> Result<String, String> {
         Err(format!(
             "Serve is off for your tailnet; turn it on at {link}"
         ))
+    } else if stdout == "Logged out." || stderr == "Logged out." {
+        Err(
+            "Tailscale is logged out on this computer. Sign it in to your tailnet (`tailscale \
+             up`), then pair again"
+                .to_owned(),
+        )
+    } else if needs_operator(&stderr) {
+        Err(
+            "Tailscale lets only root and its operator change Serve on this computer. Make \
+             yourself its operator, once, with `sudo tailscale set --operator=$USER`, then pair \
+             again"
+                .to_owned(),
+        )
     } else {
         let why = if stderr.is_empty() { stdout } else { stderr };
         Err(format!("`{shown}` failed: {why}"))
@@ -90,6 +108,12 @@ fn enable_link(output: &str) -> Option<String> {
         .split_whitespace()
         .find(|word| word.starts_with("https://login.tailscale.com/"))
         .map(|link| link.trim_end_matches(['.', ',']).to_owned())
+}
+
+/// Whether `tailscale` was refused for not being root, as on Linux, where it says to use
+/// `sudo` or `tailscale set --operator`.
+fn needs_operator(stderr: &str) -> bool {
+    stderr.contains("set --operator")
 }
 
 /// `tailscale serve status --json`.
@@ -295,6 +319,15 @@ mod tests {
         assert!(port_taken(&status, 7341));
         assert!(!port_taken(&status, 7342));
         assert!(!port_taken(&Value::Null, 7341));
+    }
+
+    #[test]
+    fn a_refusal_for_not_being_root_asks_for_the_operator() {
+        let refused = "Access denied: serve config denied\n\nUse 'sudo tailscale serve --bg \
+                       --https=7341 http://127.0.0.1:7341'.\nTo not require root, use 'sudo \
+                       tailscale set --operator=$USER' once.";
+        assert!(needs_operator(refused));
+        assert!(!needs_operator("tailscaled is not running"));
     }
 
     #[test]

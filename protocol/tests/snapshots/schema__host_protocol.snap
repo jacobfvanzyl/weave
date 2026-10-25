@@ -649,6 +649,11 @@ expression: schema()
         },
         {
           "type": "string",
+          "const": "systemd",
+          "description": "As a systemd user service, with no idle exit."
+        },
+        {
+          "type": "string",
           "const": "onDemand",
           "description": "Started by a client, exiting once idle."
         },

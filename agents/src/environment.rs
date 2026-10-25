@@ -126,6 +126,11 @@ mod tests {
 
     use super::*;
 
+    /// Held by each test while it writes its stand-in shells and runs them. On Linux a process
+    /// forked while another test has its shell open for writing keeps it open until it execs,
+    /// and running that shell meanwhile fails with "Text file busy".
+    static SHELLS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// A stand-in shell: `body` runs first, then the `-c` script it was given.
     fn shell(dir: &Path, body: &str) -> PathBuf {
         let path = dir.join("shell");
@@ -137,6 +142,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_shells_variables_come_after_whatever_its_startup_prints() {
+        let _shells = SHELLS.lock().await;
         let dir = tempfile::tempdir().expect("tempdir");
         let shell = shell(
             dir.path(),
@@ -158,6 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_shell_that_hangs_or_fails_is_given_up_on() {
+        let _shells = SHELLS.lock().await;
         let dir = tempfile::tempdir().expect("tempdir");
         let hangs = shell(dir.path(), "sleep 5");
         let error = login_shell(&hangs, Duration::from_millis(100))

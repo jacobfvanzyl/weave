@@ -122,7 +122,9 @@ Host whose agents take MCP over ACP (`daemon_over_acp`).
 Remote clients (WVE-90, ADRs 0010 and 0016, spec `../docs/specs/wve-90-remote-clients.md`) reach
 the Host over a WebSocket (`websocket.rs`) that listens on loopback only, with Tailscale Serve
 the way in from the tailnet. Pairing turns that on (`remote.rs`): a `devices/offer` has the
-Host listen and make its own Serve entry (`tailscale.rs`, through the `tailscale` command), and
+Host listen and make its own Serve entry (`tailscale.rs`, through the `tailscale` command on
+`PATH`, or on macOS where Homebrew or the Mac app put it; on Linux it needs root or the person
+as Tailscale's operator, which the refusal asks for), and
 both stay on while any device is paired, across restarts, until the last is revoked. Loopback
 counts for nothing: every WebSocket connection proves a paired device at hello, signing its
 `host/challenge` with a P-256 key, or pairs with a code `weave pair` offered (`devices.rs`,

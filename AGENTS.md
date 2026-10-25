@@ -9,7 +9,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
 | `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials. |
-| `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and launchd service included. Read `cli/AGENTS.md`. |
+| `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |
 | `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. Read `app/AGENTS.md` before working in it. |
@@ -42,7 +42,7 @@ implementation. Each crate's own guide is the `AGENTS.md` in its directory.
   issue changes.
 - weave launches agents locally.
 - Agents run in the weave Host (WVE-83, WVE-85; `weave daemon`), a per-user process the CLI
-  starts on first use or launchd keeps running, so sessions outlive the TUI: quitting,
+  starts on first use or launchd or systemd keeps running, so sessions outlive the TUI: quitting,
   crashing or rebuilding it and reattaching (`--resume`, `--continue`) finds the session,
   mid-turn if a turn is running. ACP runs only between the Host and its agents, one process
   per open session. Clients speak the Host protocol (`docs/adr/0008-weave-daemon-is-the-host.md`,
@@ -90,6 +90,26 @@ dependency or profile settings, `cargo clean --profile dev` and build again. Nev
 `target/release`: an installed `weave` (`~/.local/bin/weave`) may be a symlink to
 `target/release/weave`, so rebuild it with `cargo build --release` instead, and plain
 `cargo clean` removes it too.
+
+The workspace also builds and passes its tests on Linux, x86_64 and aarch64 (WVE-116), where the
+Host runs as a systemd user service. There's no CI, so check changes to platform code there, in
+Docker on the context memory names (never assume local Docker), with the working tree piped in
+and named volumes for the registry and `target/`; `--platform linux/arm64` runs the same on
+aarch64 where the engine emulates it:
+
+```bash
+git ls-files -z -co --exclude-standard -- . ':!app' ':!trackpad' \
+  | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -T - -czf - \
+  | docker --context <context> run --rm -i -e CARGO_TARGET_DIR=/target \
+      -v weave-linux-cargo:/usr/local/cargo/registry -v weave-linux-target:/target \
+      rust:1.95-trixie sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang git \
+        && mkdir /src && tar xzf - -C /src && cd /src && cargo test && cargo clippy --all-targets'
+```
+
+The service itself needs systemd as PID 1 and a login over SSH: an Ubuntu or Debian image with
+`systemd`, `libpam-systemd`, `dbus-user-session` and `openssh-server`, run with
+`--cgroupns=private --security-opt writable-cgroups=true --tmpfs /run --tmpfs /run/lock` (no
+`--privileged`) and `/sbin/init`, then `ssh <user>@localhost weave daemon install` inside it.
 
 ### Conformance
 

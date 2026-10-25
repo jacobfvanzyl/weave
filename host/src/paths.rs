@@ -7,27 +7,25 @@ const DIR_VARIABLE: &str = "WEAVE_DAEMON_DIR";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DaemonPaths {
-    /// Holds the lock, the log and the journals, and the socket unless it's in
-    /// `$XDG_RUNTIME_DIR`.
+    /// Holds the lock, the log and the journals, and the socket unless it's in the user's
+    /// runtime directory.
     pub dir: PathBuf,
     pub socket: PathBuf,
 }
 
 impl DaemonPaths {
     /// `$WEAVE_DAEMON_DIR`, or else `$XDG_STATE_HOME/weave/daemon` (by default
-    /// `~/.local/state/weave/daemon`) with the socket in `$XDG_RUNTIME_DIR/weave` when that's
-    /// set.
+    /// `~/.local/state/weave/daemon`) with the socket in the user's runtime directory, under
+    /// `weave/`, when they have one.
     pub fn from_env() -> Option<Self> {
         if let Some(dir) = std::env::var_os(DIR_VARIABLE).filter(|dir| !dir.is_empty()) {
             return Some(Self::in_dir(PathBuf::from(dir)));
         }
         let dir = Self::default_dir()?;
-        let socket = std::env::var_os("XDG_RUNTIME_DIR")
-            .filter(|dir| !dir.is_empty())
-            .map_or_else(
-                || dir.join("daemon.sock"),
-                |runtime| PathBuf::from(runtime).join("weave/daemon.sock"),
-            );
+        let socket = runtime_dir().map_or_else(
+            || dir.join("daemon.sock"),
+            |runtime| runtime.join("weave/daemon.sock"),
+        );
         Some(Self { dir, socket })
     }
 
@@ -84,6 +82,31 @@ impl DaemonPaths {
     }
 }
 
+/// `$XDG_RUNTIME_DIR`, or on Linux the directory systemd keeps for the user, which a login
+/// would have set it to: a session that sets nothing, as over Tailscale SSH or `su`, finds
+/// the socket of a Host systemd started all the same.
+fn runtime_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: getuid has no preconditions and can't fail.
+        let uid = unsafe { libc::getuid() };
+        owned_dir(PathBuf::from(format!("/run/user/{uid}")), uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+/// `dir`, if it's a directory `uid` owns.
+#[cfg(any(target_os = "linux", all(unix, test)))]
+fn owned_dir(dir: PathBuf, uid: u32) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(&dir).ok()?;
+    (metadata.is_dir() && metadata.uid() == uid).then_some(dir)
+}
+
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
@@ -95,6 +118,18 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_runtime_directory_counts_only_when_its_the_users() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let uid = std::fs::metadata(dir.path()).expect("metadata").uid();
+        let path = dir.path().to_path_buf();
+        assert_eq!(owned_dir(path.clone(), uid), Some(path.clone()));
+        assert_eq!(owned_dir(path.clone(), uid + 1), None);
+        assert_eq!(owned_dir(path.join("missing"), uid), None);
+    }
 
     #[test]
     fn a_directory_holds_everything() {

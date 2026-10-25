@@ -1,7 +1,7 @@
 # cli
 
-The `weave` binary and its subcommands (`weave-cli`), Host autostart and the launchd service
-included. Read the root `AGENTS.md` first; its Commands section builds and runs it.
+The `weave` binary and its subcommands (`weave-cli`), Host autostart and the launchd and systemd
+services included. Read the root `AGENTS.md` first; its Commands section builds and runs it.
 
 Clients name agents by id, so `-- <command>` works only with `--no-daemon` (the in-process
 Host is given it as agent `command`); for the shared Host, define the agent under
@@ -54,11 +54,21 @@ config and trace) everywhere an agent is involved, `WorkspaceArgs` where a sessi
 (`--approve <kinds>|all`, the rest rejected, through `acp-core`'s `PermissionPolicy`) where a
 turn runs headless. Prompts are positional, before the `--` agent command.
 
-`weave daemon install` runs the Host as a launchd user agent (`cli/src/service.rs`) from
-the binary it's run from, which can't be in `~/Documents`, `~/Desktop` or `~/Downloads`
-(macOS keeps launchd's processes out of them; install a copy such as `~/.local/bin/weave`).
-While it's installed, clients never start a Host and `start`/`stop`/`restart` use
-`launchctl`; `uninstall` removes it. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
+`weave daemon install` runs the Host as a service from the binary it's run from
+(`cli/src/service.rs`, which picks the manager): a launchd user agent on macOS
+(`service/launchd.rs`), whose binary can't be in `~/Documents`, `~/Desktop` or `~/Downloads`
+(macOS keeps launchd's processes out of them; install a copy such as `~/.local/bin/weave`), and
+a systemd user service on Linux (`service/systemd.rs`, `weave-host.service`), which turns
+lingering on so the Host runs from boot and after the person logs out of SSH. While it's
+installed, clients never start a Host and `start`/`stop`/`restart` use `launchctl` or `systemctl
+--user` (a restart is one systemd job, so an agent inside the Host can ask for it); `uninstall`
+removes it. `weave daemon status` adds what may stop a systemd service running when expected
+(`service::notes`: lingering off, a user manager given less time to stop than the unit). A Linux
+Host is set up over SSH, with no terminal needed but for an agent's own sign-in (`ssh -t host
+weave login --agent claude`, which prints a code to paste); `weave pair` there needs
+`sudo tailscale set --operator=$USER` once, and says so. A command run over SSH without a
+terminal doesn't read `~/.profile` on Debian or Ubuntu, so `ssh host weave …` finds weave only on
+the system's `PATH`: link it into `/usr/local/bin`, or name it by path. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
 `weave_host_protocol::PROTOCOL_VERSION` is one it speaks); sessions it had open resume when
 reattached. The Host captures the login shell's environment when it starts, so restart it
 after changing your shell's. Set `WEAVE_DAEMON_DIR` to run a dev Host (socket, lock, log,
