@@ -103,9 +103,10 @@ origins = []                                        # Origin values allowed besi
 - A message is at most 32 MiB; a larger one closes the connection.
 - The Host pings every 20 seconds and closes a connection that hasn't answered 20 seconds later.
 - A connection that hasn't proved a paired device within 30 seconds is closed (4002).
-- **Falling behind.** A WebSocket connection whose unsent messages pass 8 MiB is closed. The
-  client reconnects and attaches after its position, so it misses nothing. The Unix socket keeps
-  buffering, as now.
+- **Falling behind.** A WebSocket connection whose unsent messages pass 8 MiB, beyond the replays
+  it asked for, is closed. Attaching gives the connection room for its replay, which shrinks as
+  the replay is sent, so a long journal reaches a slow client whole. The client reconnects and
+  attaches after its position, so it misses nothing. The Unix socket keeps buffering, as now.
 
 Close codes:
 

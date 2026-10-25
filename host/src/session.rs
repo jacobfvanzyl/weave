@@ -119,7 +119,19 @@ pub(crate) type ClientId = u64;
 pub(crate) struct ClientLink {
     pub(crate) cx: ConnectionTo<HostClient>,
     pub(crate) client_tools: Arc<[String]>,
+    /// Its connection's count of what waits to be sent, where too much closes it (the WebSocket).
+    pub(crate) backlog: Option<Arc<dyn Backlog>>,
 }
+
+/// A connection that closes a client with too much waiting to be sent, as having fallen behind.
+pub(crate) trait Backlog: Send + Sync {
+    /// About `bytes` of replay are on their way. A client asked for them, so they don't count
+    /// towards falling behind: only what it can't keep up with does.
+    fn replaying(&self, bytes: usize);
+}
+
+/// What JSON-RPC adds around a notification's params, with room to spare.
+const NOTIFICATION_ENVELOPE: usize = 64;
 
 /// A connection's `clientId`.
 pub(crate) fn client_id(client: ClientId) -> String {
@@ -218,7 +230,8 @@ pub(crate) enum Command {
     /// Attach a client: answer it, send it the journal after `after`, then what follows.
     Attach {
         client: ClientId,
-        link: ClientLink,
+        /// Boxed, as the largest command by far.
+        link: Box<ClientLink>,
         from: ReplayFrom,
         /// Worth telling the client, such as skipped MCP servers.
         notices: Vec<String>,
@@ -788,7 +801,7 @@ impl Actor {
                 notices,
                 trace,
                 reply,
-            } => self.attach(client, link, from, notices, trace, reply),
+            } => self.attach(client, *link, from, notices, trace, reply),
             Command::Detach { client } => {
                 self.clients.remove(&client);
                 self.client_left(client);
@@ -1009,16 +1022,33 @@ impl Actor {
         let state = self.state(notices, trace);
         reply.send(state, Replay { from, reset });
         let skip = usize::try_from(from).unwrap_or(usize::MAX);
-        for (seq, record) in self.journal.records().iter().enumerate().skip(skip) {
-            let Some(event) = record.entry.event() else {
-                continue;
-            };
-            let notification = SessionEventNotification {
-                session_id: self.root.clone(),
-                seq: u64::try_from(seq).unwrap_or(u64::MAX),
-                at: record.at,
-                event,
-            };
+        let replay: Vec<SessionEventNotification> = self
+            .journal
+            .records()
+            .iter()
+            .enumerate()
+            .skip(skip)
+            .filter_map(|(seq, record)| {
+                Some(SessionEventNotification {
+                    session_id: self.root.clone(),
+                    seq: u64::try_from(seq).unwrap_or(u64::MAX),
+                    at: record.at,
+                    event: record.entry.event()?,
+                })
+            })
+            .collect();
+        // A long journal's replay is sent far faster than a WebSocket carries it.
+        if let Some(backlog) = &link.backlog {
+            let bytes: usize = replay
+                .iter()
+                .map(|notification| {
+                    serde_json::to_vec(notification).map_or(0, |line| line.len())
+                        + NOTIFICATION_ENVELOPE
+                })
+                .sum();
+            backlog.replaying(bytes);
+        }
+        for notification in replay {
             if link.cx.send_notification(notification).is_err() {
                 self.clients.remove(&client);
                 return;

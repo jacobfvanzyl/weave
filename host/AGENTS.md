@@ -127,7 +127,8 @@ which keeps the Host's id and the devices' public keys in `devices.json`, 0600, 
 memory). A remote client can do what a local one can,
 except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`
 (`forbidden`). The Host
-pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent, which
-attaches again after its position. Remote tests (`tests/remote.rs`) use a real
+pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent beyond the
+replays it asked for (a `Backlog`, which an attach tells its replay's size), which attaches again
+after its position. Remote tests (`tests/remote.rs`) use a real
 loopback WebSocket; `../host-client/examples/remote.rs` is the client for trying it by
 hand.

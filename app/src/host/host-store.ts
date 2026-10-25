@@ -86,6 +86,8 @@ type HostEntry = {
   agents: AgentSummary[];
   attempt: number;
   retry?: ReturnType<typeof setTimeout>;
+  /** An attach was cut off by the connection ending before its answer, as a replay that fell behind would be. */
+  attachCut?: boolean;
   /** No more tries until the person asks: the device was revoked, or the Host refuses it or speaks another protocol. */
   stopped: boolean;
 };
@@ -544,8 +546,10 @@ export class HostStore {
       case 'openFailed':
         this.#openAnswered(entry, event);
         return;
-      case 'disconnected':
+      case 'disconnected': {
         if (entry.connection !== connection) return;
+        const attachCut = entry.attachCut;
+        entry.attachCut = false;
         this.#lost(entry);
         switch (event.code) {
           case HOST_PROTOCOL.websocket.closeRevoked:
@@ -555,7 +559,13 @@ export class HostStore {
             this.#halt(entry, 'disconnected', `The Host closed the connection: ${event.reason || "this device isn't authenticated"}.`);
             return;
           case HOST_PROTOCOL.websocket.closeBehind:
-            // Fell behind: catch up after the position, at once.
+            // Fell behind: catch up after the position, at once, unless an attach fell behind
+            // before its answer came, whose position didn't move: then trying again at once
+            // would ask for the same replay, so back off.
+            if (attachCut) {
+              this.#retry(entry);
+              return;
+            }
             entry.attempt = 0;
             void this.#connect(entry);
             return;
@@ -564,6 +574,7 @@ export class HostStore {
             this.#retry(entry);
             return;
         }
+      }
       case 'notification':
         switch (event.method) {
           case 'session/event':
@@ -782,6 +793,11 @@ export class HostStore {
     const followed = [...this.#followed.values()].find(({ hostId, tag }) => hostId === entry.record.hostId && tag === event.tag);
     if (!followed) return;
     followed.tag = undefined;
+    if (event.type === 'openFailed' && failedWith(event.error, CONNECTION_CLOSED)) {
+      // Reconnecting attaches again; the connection's state says it ended.
+      entry.attachCut = true;
+      return;
+    }
     if (event.type === 'openFailed') {
       const agentId = entry.sessions.find(({ info }) => info.sessionId === followed.sessionId)?.agentId;
       this.#error = `Couldn't open the thread: ${this.#explain(event.error, entry, agentId).message}`;

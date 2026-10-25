@@ -157,6 +157,7 @@ use crate::queue::Queue;
 use crate::session;
 use crate::session::Answer;
 use crate::session::AttachReply;
+use crate::session::Backlog;
 use crate::session::ClientId;
 use crate::session::ClientLink;
 use crate::session::Command;
@@ -611,6 +612,15 @@ impl Connection {
             || Arc::from(Vec::new()),
             |hello| Arc::from(hello.capabilities.client_tools.as_slice()),
         )
+    }
+
+    /// The WebSocket's count of what waits to be sent, which an attach tells of its replay; the
+    /// Unix socket has none.
+    fn backlog(&self) -> Option<Arc<dyn Backlog>> {
+        match &self.peer {
+            Peer::Local => None,
+            Peer::Remote(link) => Some(Arc::clone(link) as Arc<dyn Backlog>),
+        }
     }
 
     fn hello_info(&self) -> Result<Hello, Error> {
@@ -1238,10 +1248,11 @@ impl Connection {
         lock(&self.attached).insert(session_id);
         let command = Command::Attach {
             client: self.id,
-            link: ClientLink {
+            link: Box::new(ClientLink {
                 cx,
                 client_tools: self.client_tools(),
-            },
+                backlog: self.backlog(),
+            }),
             from,
             notices: ready.notices,
             trace: ready.trace,
@@ -1533,7 +1544,15 @@ impl Connection {
         self.hello_info()?;
         let link = request.attach.then(|| {
             let client_tools = self.client_tools();
-            (self.id, ClientLink { cx, client_tools })
+            let backlog = self.backlog();
+            (
+                self.id,
+                ClientLink {
+                    cx,
+                    client_tools,
+                    backlog,
+                },
+            )
         });
         let attaching = link.is_some();
         let (session_id, state) = run(&self.shared, request, link).await?;
@@ -2148,7 +2167,7 @@ async fn run_now(
             let (reply, attached) = oneshot::channel();
             session.send(Command::Attach {
                 client,
-                link,
+                link: Box::new(link),
                 from: ReplayFrom::Now,
                 notices,
                 trace,

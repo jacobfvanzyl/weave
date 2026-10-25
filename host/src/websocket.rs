@@ -53,11 +53,13 @@ use crate::Shared;
 use crate::devices::Closer;
 use crate::devices::random_bytes;
 use crate::journal::now_ms;
+use crate::session::Backlog;
 use crate::session::lock;
 
 /// How often the Host pings, and how long a peer has to answer.
 const PING_INTERVAL: Duration = Duration::from_secs(20);
-/// How much may wait to be sent to one connection before it's closed as fallen behind.
+/// How much may wait to be sent to one connection, beyond the replays it asked for, before it's
+/// closed as fallen behind.
 const BEHIND_LIMIT: usize = 8 * 1024 * 1024;
 /// How long a challenge stays good.
 const CHALLENGE_LIFETIME_MS: Timestamp = 30 * 1000;
@@ -73,7 +75,8 @@ pub struct RemoteConfig {
     pub origins: Vec<String>,
     /// How often to ping, and how long a client has to answer.
     pub ping_interval: Duration,
-    /// How much may wait to be sent to one client before it's closed as fallen behind.
+    /// How much may wait to be sent to one client, beyond the replays it asked for, before it's
+    /// closed as fallen behind.
     pub behind_limit: usize,
     /// How long a connection has to prove a paired device.
     pub hello_deadline: Duration,
@@ -99,6 +102,9 @@ pub(crate) struct Link {
     last_pong_ms: AtomicU64,
     /// It has proved a paired device.
     proved: AtomicBool,
+    /// Bytes of replay it asked for that haven't been sent: room beyond the limit, which shrinks
+    /// as the connection sends.
+    replay: AtomicUsize,
 }
 
 impl Link {
@@ -132,6 +138,12 @@ impl Link {
 impl Closer for Link {
     fn close(&self, code: u16) {
         let _ = self.close.send(code);
+    }
+}
+
+impl Backlog for Link {
+    fn replaying(&self, bytes: usize) {
+        self.replay.fetch_add(bytes, Ordering::SeqCst);
     }
 }
 
@@ -249,6 +261,7 @@ async fn connection(shared: Arc<Shared>, stream: TcpStream, config: Arc<RemoteCo
         challenge: Mutex::new(None),
         last_pong_ms: AtomicU64::new(now_ms()),
         proved: AtomicBool::new(false),
+        replay: AtomicUsize::new(0),
     });
     let deadline = {
         let link = Arc::clone(&link);
@@ -330,7 +343,8 @@ impl futures::Sink<String> for Outgoing {
             return Err(io::ErrorKind::BrokenPipe.into());
         };
         let waiting = this.queued.fetch_add(line.len(), Ordering::SeqCst) + line.len();
-        if waiting > this.limit {
+        let replay = this.link.replay.load(Ordering::SeqCst);
+        if waiting > this.limit.saturating_add(replay) {
             this.link.close(CLOSE_BEHIND);
             this.data = None;
             return Err(io::Error::other("the client fell behind"));
@@ -396,6 +410,9 @@ async fn write(
                     Sent::Close(code) => break Some(code),
                 }
                 queued.fetch_sub(length, Ordering::SeqCst);
+                let _ = link.replay.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    Some(left.saturating_sub(length))
+                });
                 match link.close_after_next.swap(0, Ordering::SeqCst) {
                     0 => {}
                     code => break Some(code),
@@ -453,6 +470,7 @@ mod tests {
             challenge: Mutex::new(None),
             last_pong_ms: AtomicU64::new(0),
             proved: AtomicBool::new(false),
+            replay: AtomicUsize::new(0),
         });
         (link, close_rx)
     }
@@ -487,5 +505,28 @@ mod tests {
             outgoing.as_mut().start_send("1".to_owned()).is_err(),
             "and stays closed"
         );
+    }
+
+    #[test]
+    fn a_replay_the_client_asked_for_does_not_count_towards_falling_behind() {
+        let (link, mut close) = link();
+        link.replaying(12);
+        let (data, _data_rx) = mpsc::unbounded_channel();
+        let mut outgoing = Outgoing {
+            data: Some(data),
+            queued: Arc::new(AtomicUsize::new(0)),
+            limit: 10,
+            link,
+        };
+        let mut outgoing = Pin::new(&mut outgoing);
+        for _ in 0..3 {
+            assert!(outgoing.as_mut().start_send("123456".to_owned()).is_ok());
+        }
+        assert!(
+            close.try_recv().is_err(),
+            "18 waiting is within 10 and the replay's 12"
+        );
+        assert!(outgoing.as_mut().start_send("123456".to_owned()).is_err());
+        assert_eq!(close.try_recv().ok(), Some(CLOSE_BEHIND));
     }
 }

@@ -61,6 +61,7 @@ use weave_host_protocol::hello::HelloRequest;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::WatchSessionsRequest;
@@ -576,6 +577,85 @@ async fn remote_clients_do_everything_but_administer_the_host() {
             break;
         }
     }
+    remote.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_replay_many_times_the_limit_arrives_whole() {
+    let world = World::new();
+    let daemon = world.daemon();
+    let limit = 64 * 1024;
+    let config = RemoteConfig {
+        behind_limit: limit,
+        ..RemoteConfig::default()
+    };
+    let url = listen(&daemon, config).await;
+    let (local, mut local_events) = local(&daemon).await;
+    let (device, key) = pair(&local, &url, "iPhone").await;
+
+    // A thread with a long journal: each prompt and the agent's echo of it are twice the limit.
+    let state = local
+        .send(CreateSessionRequest {
+            agent_id: "fake".to_owned(),
+            cwd: world.dir.path().to_path_buf(),
+            additional_directories: Vec::new(),
+            mode: None,
+            policy: None,
+            trace: false,
+        })
+        .await
+        .expect("session/create");
+    for _ in 0..4 {
+        local
+            .send(StartTurnRequest {
+                session_id: state.session_id.clone(),
+                prompt: vec![ContentBlock::from("x".repeat(limit * 2))],
+                key: None,
+            })
+            .await
+            .expect("turn/start");
+        loop {
+            if let HostEvent::Event(notification) = next(&mut local_events).await
+                && let SessionEvent::TurnEnded { .. } = notification.event
+            {
+                break;
+            }
+        }
+    }
+
+    // A phone opening it gets all of it, though it all waits to be sent at once.
+    let (connected, reason) = remote(&url, self::device(&device, &key, None)).await;
+    let (remote, mut events) = connected.expect("connects");
+    let attached = remote
+        .send(AttachSessionRequest {
+            session_id: state.session_id.clone(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+        })
+        .await
+        .expect("session/attach");
+    let head = attached.state.journal.head;
+    let mut replayed = 0;
+    loop {
+        match next(&mut events).await {
+            HostEvent::Event(notification) => {
+                replayed += serde_json::to_vec(&notification).expect("JSON").len();
+                if notification.seq == head {
+                    break;
+                }
+            }
+            HostEvent::Disconnected(_) => panic!("closed: {:?}", reason.get()),
+            _ => {}
+        }
+    }
+    assert!(replayed > 8 * limit, "{replayed} bytes replayed");
+    remote
+        .send(StatusRequest {})
+        .await
+        .expect("still connected");
+    assert_eq!(reason.get(), None);
     remote.shutdown().await;
 }
 

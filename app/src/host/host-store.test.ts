@@ -336,6 +336,33 @@ describe('HostStore reconnecting', () => {
     store.stop();
   });
 
+  it("backs off, and doesn't say the thread couldn't open, when an attach falls behind before its answer (4001)", async () => {
+    let attaches = 0;
+    const host = scriptedHost(() => [], {
+      'session/attach': () => {
+        attaches += 1;
+        if (attaches > 1) return undefined;
+        setTimeout(() => host.close(HOST_PROTOCOL.websocket.closeBehind, 'fell behind; attach again after your position'));
+        return 'silent';
+      },
+    });
+    const store = storeFor(host.connector, { backoff: [60] });
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    // Not again at once, which would ask for the same replay.
+    expect(host.connects.opened).toBe(1);
+    expect(store.snapshot().hosts[0].status).toBe('reconnecting');
+    expect(store.snapshot().error).toBeUndefined();
+
+    await settle(120);
+    expect(host.connects.opened).toBe(2);
+    expect(attaches).toBe(2);
+    expect(store.snapshot().hosts[0].status).toBe('connected');
+    expect(store.snapshot().error).toBeUndefined();
+    store.stop();
+  });
+
   it("says why the Host refused the device's hello, and doesn't try again (4002)", async () => {
     const host = scriptedHost(() => [], {
       'host/hello': () => {
