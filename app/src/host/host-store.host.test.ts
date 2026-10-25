@@ -109,6 +109,14 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
     expect(store.snapshot().session?.transcript.turn.status).toBe('stopped');
   });
 
+  it('keeps the name this device gave a Host when it pairs with it again', async () => {
+    const [paired] = store.snapshot().hosts;
+    await store.actions.renameHost(paired.id, 'Test Host');
+    const { code } = await local.request('devices/offer', {});
+    await store.actions.pairHost({ url: host.url, code, name: 'Test iPhone' });
+    expect(store.snapshot().hosts).toMatchObject([{ id: paired.id, name: 'Test Host', status: 'connected' }]);
+  });
+
   it('forgets a Host and its key', async () => {
     const [paired] = store.snapshot().hosts;
     await store.actions.forgetHost(paired.id);

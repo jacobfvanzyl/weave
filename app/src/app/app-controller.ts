@@ -12,7 +12,7 @@ export type HostStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconne
 export type PairedHost = {
   /** The Host's own id (`host/hello` `host.id`). */
   id: string;
-  /** The name the person confirmed when pairing: the URL's host name. */
+  /** What this device calls it: the URL's host name, until the person renames it. */
   name: string;
   url: string;
   status: HostStatus;
@@ -193,6 +193,8 @@ export type AppActions = {
   /** Pairs with the URL and code `weave pair` shows; `name` is what the Host calls this device. */
   pairHost(input: { url: string; code: string; name?: string }): Promise<void> | void;
   forgetHost(hostId: string): Promise<void> | void;
+  /** Gives a paired Host another name on this device only; rejects saying why not. */
+  renameHost(hostId: string, name: string): Promise<void> | void;
   /** Lists the sessions again, and reconnects at once to Hosts that dropped, as pulling the list down asks. */
   refresh?(): Promise<void> | void;
   reconnectHost(hostId: string): Promise<void> | void;

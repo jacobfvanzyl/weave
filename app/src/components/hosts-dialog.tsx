@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ComputerIcon, Delete02Icon, Link01Icon, RefreshIcon } from '@hugeicons/core-free-icons';
+import { ComputerIcon, Delete02Icon, Edit02Icon, Link01Icon, RefreshIcon } from '@hugeicons/core-free-icons';
 import type { AppController, PairedHost } from '@/app/app-controller';
 import {
   AlertDialog,
@@ -32,12 +32,60 @@ const statusLabel: Record<PairedHost['status'], string> = {
 /** The address `weave pair` shows for a Host's WebSocket. */
 const pairingUrl = (url: string) => url.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
 
+/** Renames a paired Host on this device only. */
+function RenameHostDialog({ host, actions, open, onOpenChange }: {
+  host: PairedHost;
+  actions: AppController['actions'];
+  open: boolean;
+  onOpenChange(open: boolean): void;
+}) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setName(host.name);
+    setError(undefined);
+    // Starts from the name it has when it opens.
+  }, [open]);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='w-[min(28rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
+        <DialogHeader>
+          <DialogTitle>Rename Host</DialogTitle>
+          <DialogDescription>Only this device shows the new name. The Host and your other devices keep their own.</DialogDescription>
+        </DialogHeader>
+        <form aria-label='Rename Host' className='grid gap-3' onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          setError(undefined);
+          try {
+            await actions.renameHost(host.id, name);
+            onOpenChange(false);
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+          } finally {
+            setSaving(false);
+          }
+        }}>
+          <Input aria-label='Name' autoFocus autoCorrect='off' value={name} onChange={(event) => setName(event.target.value)} />
+          {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
+          <DialogFooter>
+            <Button type='submit' disabled={saving || !name.trim()}>{saving ? 'Renaming…' : 'Rename'}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function HostRow({ host, actions, onPairAgain }: {
   host: PairedHost;
   actions: AppController['actions'];
   onPairAgain(url: string): void;
 }) {
   const revoked = host.status === 'revoked';
+  const [renaming, setRenaming] = useState(false);
   return (
     <li className='grid gap-2 rounded-lg border border-border p-3'>
       <div className='flex items-center gap-3'>
@@ -65,6 +113,11 @@ function HostRow({ host, actions, onPairAgain }: {
           </Button>
         )}
         {!revoked && (
+          <Button variant='ghost' size='icon' aria-label={`Rename ${host.name}`} onClick={() => setRenaming(true)}>
+            <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
+          </Button>
+        )}
+        {!revoked && (
           <AlertDialog>
             <AlertDialogTrigger render={<Button variant='ghost' size='icon' aria-label={`Forget ${host.name}`} />}>
               <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
@@ -86,6 +139,7 @@ function HostRow({ host, actions, onPairAgain }: {
         )}
       </div>
       {host.error && <p className='text-muted-foreground'>{host.error}</p>}
+      <RenameHostDialog host={host} actions={actions} open={renaming} onOpenChange={setRenaming} />
     </li>
   );
 }

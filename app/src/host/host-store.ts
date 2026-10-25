@@ -261,6 +261,7 @@ export class HostStore {
     refresh: () => this.refresh(),
     pairHost: (input) => this.#pair(input),
     forgetHost: (hostId) => this.#forget(hostId),
+    renameHost: (hostId, name) => this.#renameHost(hostId, name),
     reconnectHost: async (hostId) => {
       const entry = this.#hosts.get(hostId);
       // A revoked device has no pairing left to connect with.
@@ -1231,7 +1232,6 @@ export class HostStore {
 
   async #pair(input: { url: string; code: string; name?: string }) {
     const url = websocketUrl(input.url);
-    const name = new URL(input.url.trim()).hostname;
     const { keyId, key } = await this.#options.newKey();
     let connection: HostConnection;
     let entry: HostEntry | undefined;
@@ -1254,6 +1254,9 @@ export class HostStore {
       throw new Error('The Host paired no device. Is it a weave Host?');
     }
     const previous = this.#hosts.get(host.id);
+    // A name the person gave the Host outlasts pairing with it again.
+    const renamed = previous && previous.record.name !== new URL(previous.record.url).hostname;
+    const name = renamed ? previous.record.name : new URL(url).hostname;
     if (previous) await this.#forget(host.id);
     entry = this.#entry({ hostId: host.id, name, url, deviceId: device.id, keyId });
     this.#hosts.set(host.id, entry);
@@ -1270,6 +1273,16 @@ export class HostStore {
     this.#hosts.delete(hostId);
     this.#unfollow(hostId);
     await this.#options.keyFor(entry.record.keyId).forget().catch(() => {});
+    await this.#save();
+    this.#changed();
+  }
+
+  async #renameHost(hostId: string, name: string) {
+    const entry = this.#hosts.get(hostId);
+    if (!entry) return;
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("A Host's name can't be empty.");
+    entry.record = { ...entry.record, name: trimmed };
     await this.#save();
     this.#changed();
   }

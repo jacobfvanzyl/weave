@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type MockScenario, useMockController } from '@/app/use-mock-controller';
@@ -163,6 +163,26 @@ describe('on an iPhone', () => {
   });
 });
 
+describe('Hosts', () => {
+  it('renames a Host on this device, and the list says the new name', async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp />);
+    await user.click(screen.getByRole('button', { name: 'Hosts' }));
+    const hosts = await screen.findByRole('dialog', { name: 'Hosts' });
+    await user.click(within(hosts).getByRole('button', { name: 'Rename mac.tail1234.ts.net' }));
+    const rename = await screen.findByRole('dialog', { name: 'Rename Host' });
+    const name = within(rename).getByRole('textbox', { name: 'Name' });
+    await user.clear(name);
+    await user.type(name, 'Studio Mac{Enter}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Rename Host' })).not.toBeInTheDocument());
+    expect(within(hosts).getByText('Studio Mac')).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Hosts' })).not.toBeInTheDocument());
+    expect(screen.getByRole('group', { name: 'weave on Studio Mac' })).toBeInTheDocument();
+  });
+});
+
 describe('on an iPad', () => {
   it('shows the list beside one session', async () => {
     setIdiom('pad');
@@ -172,6 +192,40 @@ describe('on an iPad', () => {
     await user.click(screen.getByText('Diagnose upload failures'));
     expect(screen.getByRole('region', { name: 'Diagnose upload failures' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Needs you' })).toBeInTheDocument();
+  });
+
+  it('drags the list\'s edge, or moves it with the arrow keys, and keeps the width', async () => {
+    setIdiom('pad');
+    localStorage.clear();
+    const user = userEvent.setup();
+    const { unmount } = render(<MockApp />);
+    const edge = () => screen.getByRole('separator', { name: 'Resize threads' });
+    expect(edge()).toHaveAttribute('aria-valuenow', '256');
+
+    // The list ends where the pointer is.
+    fireEvent.pointerDown(edge(), { clientX: 256 });
+    fireEvent.pointerMove(edge(), { clientX: 320 });
+    fireEvent.pointerUp(edge(), { clientX: 320 });
+    expect(edge()).toHaveAttribute('aria-valuenow', '320');
+    fireEvent.pointerMove(edge(), { clientX: 400 });
+    expect(edge()).toHaveAttribute('aria-valuenow', '320');
+    // No narrower than 14rem, and no wider than half the window (1024 pixels) or 30rem.
+    fireEvent.pointerDown(edge(), { clientX: 320 });
+    fireEvent.pointerMove(edge(), { clientX: 100 });
+    expect(edge()).toHaveAttribute('aria-valuenow', '224');
+    fireEvent.pointerMove(edge(), { clientX: 900 });
+    expect(edge()).toHaveAttribute('aria-valuenow', '480');
+    fireEvent.pointerUp(edge());
+
+    edge().focus();
+    await user.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(edge()).toHaveAttribute('aria-valuenow', '448');
+
+    unmount();
+    render(<MockApp />);
+    expect(edge()).toHaveAttribute('aria-valuenow', '448');
+    await user.dblClick(edge());
+    expect(edge()).toHaveAttribute('aria-valuenow', '256');
   });
 });
 

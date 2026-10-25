@@ -64,7 +64,9 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   creates one: a branch, and what to start it from (the default branch unless told otherwise).
   The Host creates it beside the repository there and then, and the session starts in it.
 - **Hosts.** "Hosts" at the foot of the list opens the paired Hosts, with each one's connection
-  state, pairing a Host, and forgetting one, which deletes its key. Hosts are told apart by
+  state, pairing a Host, renaming one, and forgetting one, which deletes its key. A Host's name
+  is this device's own: the URL's host name until the person renames it, which the Host and other
+  devices aren't told; pairing with the same Host again keeps it (WVE-142). Hosts are told apart by
   `host.id`, and each has its own connection and device id. While a Host is unreachable its
   sessions stay in the list, marked as such. A revoked one offers Pair again (see
   [Connections that end](#connections-that-end)).
@@ -104,8 +106,10 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 ### Layout
 
 - **iPad and wider:** the session list as a sidebar, and one session beside it. The sidebar
-  collapses. There are no Panes or docks; a second Pane for views and visuals may come with
-  WVE-96 and WVE-95.
+  collapses, and dragging its edge's grip, or the arrow keys on it, make it wider or narrower,
+  from 14rem to half the window and at most 30rem; a double-click puts back 16rem, and the device
+  keeps the width (WVE-142). There are no Panes or docks; a second Pane for views and visuals may
+  come with WVE-96 and WVE-95.
 - **iPhone:** portrait only, and a navigation stack. The list is the first screen; opening a
   session pushes it, and Back (or a swipe from the left edge) returns to the list.
 - Phone or not follows the device (`data-device-idiom`, set by the native shell), not the

@@ -59,6 +59,7 @@ const idleActions: AppController['actions'] = {
   deleteSession() {},
   pairHost: () => Promise.reject(new Error('The app is still starting.')),
   forgetHost() {},
+  renameHost() {},
   reconnectHost() {},
   send() {},
   removeQueued() {},

@@ -279,6 +279,11 @@ html[data-device-idiom="phone"] [data-sidebar="group-action"] { min-width: 44px;
 /* New session, above the directories' +. */
 html[data-device-idiom="phone"] [data-sidebar="header-action"] { min-width: 44px; min-height: 44px; margin-right: 0.25rem; }
 
+/* While the sidebar's edge is dragged it follows the pointer without easing, and nothing selects. */
+[data-slot="sidebar-wrapper"][data-resizing],
+[data-slot="sidebar-wrapper"][data-resizing] * { cursor: col-resize; -webkit-user-select: none; user-select: none; }
+[data-slot="sidebar-wrapper"][data-resizing] :is([data-slot="sidebar-gap"], [data-slot="sidebar-container"]) { transition: none; }
+
 html[data-device-idiom="phone"] [data-slot="dialog-content"],
 html[data-device-idiom="phone"] [data-slot="alert-dialog-content"] {
   max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 2rem);

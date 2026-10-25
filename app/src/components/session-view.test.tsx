@@ -17,6 +17,7 @@ const actions = (): AppActions => ({
   deleteSession: vi.fn(),
   pairHost: vi.fn(),
   forgetHost: vi.fn(),
+  renameHost: vi.fn(),
   reconnectHost: vi.fn(),
   send: vi.fn(),
   removeQueued: vi.fn(),

@@ -436,6 +436,13 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           },
         }));
       },
+      renameHost(hostId, name) {
+        if (!name.trim()) throw new Error("A Host's name can't be empty.");
+        update((current) => ({
+          ...current,
+          model: { ...current.model, hosts: current.model.hosts.map((host) => host.id === hostId ? { ...host, name: name.trim() } : host) },
+        }));
+      },
       reconnectHost(hostId) {
         update((current) => ({
           ...current,

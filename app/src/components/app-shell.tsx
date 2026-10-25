@@ -7,11 +7,12 @@ import { usePhoneLayout } from '@/app/use-phone-layout';
 import { HostsDialog } from '@/components/hosts-dialog';
 import { SessionList } from '@/components/session-list';
 import { SessionHeader, SessionView } from '@/components/session-view';
+import { ResizableSidebarProvider, SidebarResizeHandle } from '@/components/sidebar-resize';
 import { WaitingBanner } from '@/components/waiting-banner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
-import { Sidebar, SidebarInset, SidebarProvider, useSidebar } from '@/components/ui/sidebar';
+import { Sidebar, SidebarInset, useSidebar } from '@/components/ui/sidebar';
 
 function WaitingBadge({ count }: { count: number }) {
   if (count === 0) return null;
@@ -62,6 +63,7 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
     <>
       <Sidebar collapsible='offcanvas'>
         <SessionList controller={controller} onOpen={() => setOpenMobile(false)} onOpenHosts={onOpenHosts} />
+        <SidebarResizeHandle />
       </Sidebar>
       <SidebarInset className='min-h-0 min-w-0 overflow-hidden'>
         {model.session
@@ -84,7 +86,8 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
 
 /**
  * The app's layout. An iPhone stacks the list and a session; an iPad, or anything wider, shows the
- * list as a sidebar beside one session. Which follows the device, not the window's width.
+ * list as a sidebar beside one session, as wide as its edge is dragged. Which follows the device,
+ * not the window's width.
  */
 export function AppShell({ controller, pairingOffer }: {
   controller: AppController;
@@ -98,10 +101,10 @@ export function AppShell({ controller, pairingOffer }: {
     if (pairingOffer) setHostsOpen(true);
   }, [pairingOffer]);
   return (
-    <SidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
+    <ResizableSidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
       {phone ? <PhoneShell controller={controller} onOpenHosts={openHosts} /> : <SplitShell controller={controller} onOpenHosts={openHosts} />}
       <WaitingBanner controller={controller} />
       <HostsDialog controller={controller} open={hostsOpen} onOpenChange={setHostsOpen} offer={pairingOffer} />
-    </SidebarProvider>
+    </ResizableSidebarProvider>
   );
 }

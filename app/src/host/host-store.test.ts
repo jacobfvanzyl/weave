@@ -274,6 +274,23 @@ describe('HostStore journal times', () => {
 });
 
 describe('HostStore reconnecting', () => {
+  it('renames a Host on this device only, and keeps the name', async () => {
+    const host = scriptedHost(() => []);
+    const storage = memoryStorage([PAIRED]);
+    const store = storeFor(host.connector, { storage });
+    await store.start();
+    await settle();
+    const asked = host.asked.length;
+    await store.actions.renameHost(HOST, '  Studio Mac ');
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, name: 'Studio Mac', url: 'wss://mac' }]);
+    expect(await storage.load()).toEqual([{ ...PAIRED, name: 'Studio Mac' }]);
+    // The Host isn't told: the name is this device's own.
+    expect(host.asked.length).toBe(asked);
+    await expect(store.actions.renameHost(HOST, ' ')).rejects.toThrow("A Host's name can't be empty.");
+    expect(store.snapshot().hosts[0].name).toBe('Studio Mac');
+    store.stop();
+  });
+
   it('forgets the pairing when the Host revokes the device (4000), and says to pair again', async () => {
     const host = scriptedHost(() => []);
     const storage = memoryStorage([PAIRED]);

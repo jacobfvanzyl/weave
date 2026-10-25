@@ -4,7 +4,7 @@ import { Preferences } from '@capacitor/preferences';
 export type PairedHostRecord = {
   /** The Host's own id (`host.id`), which its challenges are bound to. */
   hostId: string;
-  /** What the person confirmed when pairing: the URL's host name. */
+  /** What this device calls the Host: the URL's host name, until the person renames it. */
   name: string;
   /** The Host's WebSocket, `wss://` through Tailscale Serve. */
   url: string;
