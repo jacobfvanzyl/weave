@@ -80,6 +80,11 @@ impl DaemonPaths {
     pub fn mcp_socket(&self) -> PathBuf {
         self.socket.with_file_name("mcp.sock")
     }
+
+    /// The holders of the Host's terminals: their records, sockets and Ghostty's resources.
+    pub fn terminals(&self) -> PathBuf {
+        self.dir.join("terminals")
+    }
 }
 
 /// `$XDG_RUNTIME_DIR`, or on Linux the directory systemd keeps for the user, which a login

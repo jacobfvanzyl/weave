@@ -117,6 +117,20 @@ use weave_host_protocol::sessions::UnwatchSessionsRequest;
 use weave_host_protocol::sessions::WATCH_FEATURE;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::sessions::WatchSessionsResponse;
+use weave_host_protocol::terminals::AttachTerminalRequest;
+use weave_host_protocol::terminals::AttachTerminalResponse;
+use weave_host_protocol::terminals::CloseTerminalRequest;
+use weave_host_protocol::terminals::FEATURE as TERMINALS_FEATURE;
+use weave_host_protocol::terminals::FormatTerminalRequest;
+use weave_host_protocol::terminals::FormatTerminalResponse;
+use weave_host_protocol::terminals::ListTerminalsRequest;
+use weave_host_protocol::terminals::NewTerminalRequest;
+use weave_host_protocol::terminals::SetTerminalLabelRequest;
+use weave_host_protocol::terminals::TerminalResponse;
+use weave_host_protocol::terminals::TerminalsResponse;
+use weave_host_protocol::terminals::UnwatchTerminalsRequest;
+use weave_host_protocol::terminals::WatchTerminalsRequest;
+use weave_host_protocol::terminals::WriteTerminalRequest;
 use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
 use weave_host_protocol::tools::Tool;
 use weave_host_protocol::tools::catalog;
@@ -170,6 +184,8 @@ use crate::session::SessionHandle;
 use crate::session::Snapshot;
 use crate::session::Steer;
 use crate::session::lock;
+use crate::terminals;
+use crate::terminals::Terminals;
 use crate::updates;
 use crate::websocket::Link;
 
@@ -240,6 +256,9 @@ async fn serve_as(
     let result = handlers(&connection, transport).await;
     shared.registry().clients -= 1;
     shared.unwatch(connection.id);
+    if let Some(terminals) = &shared.terminals {
+        terminals.forget(connection.id);
+    }
     shared.lapse_drain(connection.id);
     if let Some(device) = lock(&connection.device).take() {
         shared.devices.disconnected(&device.id, connection.id);
@@ -286,6 +305,7 @@ async fn handlers(
     let on_watch = Arc::clone(connection);
     let on_unwatch = Arc::clone(connection);
     let on_attach = Arc::clone(connection);
+    let on_watch_terminals = Arc::clone(connection);
     Host.builder()
         .name("weave-host")
         .on_receive_request(
@@ -406,6 +426,59 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, release_worktree),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, list_terminals),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: WatchTerminalsRequest, responder, cx: ConnectionTo<HostClient>| {
+                let connection = Arc::clone(&on_watch_terminals);
+                let client = cx.clone();
+                cx.spawn(async move {
+                    let watched = connection.watch_terminals(request).await;
+                    match watched {
+                        Ok((terminals, scope)) => {
+                            terminals.watch(connection.id, client, &scope, |list| {
+                                responder.respond(TerminalsResponse {
+                                    scope: scope.clone(),
+                                    terminals: list,
+                                })
+                            })
+                        }
+                        Err(error) => responder.respond_with_error(error),
+                    }
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, unwatch_terminals),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, new_terminal),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, close_terminal),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, set_terminal_label),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, write_terminal),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, format_terminal),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, attach_terminal),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -723,7 +796,15 @@ impl Connection {
                 REQUEST_KEYS_FEATURE.to_owned(),
                 GET_FEATURE.to_owned(),
                 DRAIN_FEATURE.to_owned(),
-            ],
+            ]
+            .into_iter()
+            .chain(
+                self.shared
+                    .terminals
+                    .is_some()
+                    .then(|| TERMINALS_FEATURE.to_owned()),
+            )
+            .collect(),
             acp: AcpInfo {
                 protocol_version: 1,
                 unstable: vec!["session_compaction".to_owned(), "subagents".to_owned()],
@@ -1096,6 +1177,127 @@ impl Connection {
         self.hello_info()?;
         let closed = self.shared.release(&git::canonical(&request.path)).await?;
         Ok(ReleaseWorktreeResponse { closed })
+    }
+
+    /// The Host's terminals, found, for a client that said hello.
+    async fn terminals(&self) -> Result<Arc<Terminals>, Error> {
+        self.hello_info()?;
+        let terminals = self.shared.terminals.clone().ok_or_else(|| {
+            errors::terminal_unavailable(
+                "this Host has no terminals: weave-holder isn't installed beside it",
+            )
+        })?;
+        terminals.ready().await;
+        Ok(terminals)
+    }
+
+    /// The scope a directory's terminals belong to: the deepest worktree it's in, or the
+    /// directory itself outside a repository, with symlinks resolved.
+    async fn scope_of(&self, directory: &Path) -> Result<PathBuf, Error> {
+        if !directory.is_absolute() || !directory.is_dir() {
+            return Err(Error::invalid_params().data(serde_json::json!(format!(
+                "{} isn't a directory",
+                directory.display()
+            ))));
+        }
+        Ok(self
+            .shared
+            .git
+            .locate(directory)
+            .await
+            .map_or_else(|| git::canonical(directory), |location| location.worktree))
+    }
+
+    async fn list_terminals(
+        &self,
+        request: ListTerminalsRequest,
+    ) -> Result<TerminalsResponse, Error> {
+        let terminals = self.terminals().await?;
+        let scope = self.scope_of(&request.directory).await?;
+        Ok(TerminalsResponse {
+            terminals: terminals.list(&scope),
+            scope,
+        })
+    }
+
+    async fn watch_terminals(
+        &self,
+        request: WatchTerminalsRequest,
+    ) -> Result<(Arc<Terminals>, PathBuf), Error> {
+        let terminals = self.terminals().await?;
+        let scope = self.scope_of(&request.directory).await?;
+        Ok((terminals, scope))
+    }
+
+    async fn unwatch_terminals(&self, request: UnwatchTerminalsRequest) -> Result<Empty, Error> {
+        self.terminals().await?.unwatch(self.id, &request.scope);
+        Ok(Empty {})
+    }
+
+    async fn new_terminal(&self, request: NewTerminalRequest) -> Result<TerminalResponse, Error> {
+        let terminals = self.terminals().await?;
+        let scope = self.scope_of(&request.directory).await?;
+        let start = terminals::Start {
+            id: terminals::new_id(),
+            directory: request.directory,
+            scope,
+            label: request.label,
+            opened_from: request.opened_from,
+            command: request.command.filter(|command| !command.is_empty()),
+            size: request.size.unwrap_or(terminals::DEFAULT_SIZE),
+            env: self.shared.config.environment.vars.clone(),
+        };
+        let terminal = terminals.start(start).await?;
+        Ok(TerminalResponse { terminal })
+    }
+
+    async fn close_terminal(&self, request: CloseTerminalRequest) -> Result<Empty, Error> {
+        self.terminals().await?.close(&request.id).await?;
+        Ok(Empty {})
+    }
+
+    async fn set_terminal_label(
+        &self,
+        request: SetTerminalLabelRequest,
+    ) -> Result<TerminalResponse, Error> {
+        let label = request.label.filter(|label| !label.trim().is_empty());
+        let terminal = self
+            .terminals()
+            .await?
+            .set_label(&request.id, label)
+            .await?;
+        Ok(TerminalResponse { terminal })
+    }
+
+    async fn write_terminal(&self, request: WriteTerminalRequest) -> Result<Empty, Error> {
+        self.terminals()
+            .await?
+            .write(&request.id, &request.text)
+            .await?;
+        Ok(Empty {})
+    }
+
+    async fn format_terminal(
+        &self,
+        request: FormatTerminalRequest,
+    ) -> Result<FormatTerminalResponse, Error> {
+        let content = self
+            .terminals()
+            .await?
+            .format(&request.id, request.format, request.history, request.trim)
+            .await?;
+        Ok(FormatTerminalResponse { content })
+    }
+
+    /// A ticket for the terminal's stream, to the device this client proved, if any.
+    async fn attach_terminal(
+        &self,
+        request: AttachTerminalRequest,
+    ) -> Result<AttachTerminalResponse, Error> {
+        let terminals = self.terminals().await?;
+        let device = lock(&self.device).as_ref().map(|device| device.id.clone());
+        let (ticket, expires_at) = terminals.ticket(&request.id, device)?;
+        Ok(AttachTerminalResponse { ticket, expires_at })
     }
 
     /// `agent_id`'s sessions: the Host's own in the directory first, open ones and then ones

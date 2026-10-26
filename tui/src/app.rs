@@ -487,7 +487,9 @@ impl App {
             HostEvent::Changed(_)
             | HostEvent::DevicePaired(_)
             | HostEvent::SessionUpdated(_)
-            | HostEvent::SessionRemoved(_) => Vec::new(),
+            | HostEvent::SessionRemoved(_)
+            | HostEvent::TerminalUpdated(_)
+            | HostEvent::TerminalRemoved(_) => Vec::new(),
             HostEvent::UpdateAvailable(notification) => {
                 if chat.active_session() == Some(&notification.session_id) {
                     chat.update_available(notification.update);

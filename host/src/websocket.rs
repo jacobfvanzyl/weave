@@ -5,7 +5,8 @@
 //!
 //! One JSON-RPC message per text frame, through the ACP SDK's [`Lines`]. The upgrade must ask
 //! for the `weave-host` subprotocol and carry no `Origin`, the app's, or one the configuration
-//! allows.
+//! allows. An upgrade that asks for `weave-terminal` instead is a terminal's stream, which
+//! `terminals::stream` serves with its ticket in place of a hello.
 //! The Host pings every 20 seconds and closes a connection that doesn't answer by the next
 //! ping, one that proves no device within 30 seconds, and one with more than 8 MiB waiting
 //! to be sent, which then reconnects and attaches after its position. See `docs/specs/wve-90-remote-clients.md`.
@@ -43,6 +44,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use weave_host_protocol::Timestamp;
+use weave_host_protocol::terminals::stream::SUBPROTOCOL as TERMINAL_SUBPROTOCOL;
 use weave_host_protocol::websocket::APP_ORIGIN;
 use weave_host_protocol::websocket::CLOSE_BEHIND;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
@@ -186,28 +188,36 @@ pub(crate) fn serve(
     })
 }
 
-/// Whether an upgrade may go ahead: it asks for the subprotocol, and its `Origin`, if any, is
-/// the app's ([`APP_ORIGIN`]) or one the configuration allows.
-fn admit(request: &Request, origins: &[String]) -> Result<(), (StatusCode, &'static str)> {
-    let asks = request
+/// Which subprotocol an upgrade may go ahead with: it asks for `weave-host`, or for
+/// `weave-terminal`, a terminal's stream, and its `Origin`, if any, is the app's
+/// ([`APP_ORIGIN`]) or one the configuration allows.
+fn admit(
+    request: &Request,
+    origins: &[String],
+) -> Result<&'static str, (StatusCode, &'static str)> {
+    let asked: Vec<String> = request
         .headers()
         .get_all("Sec-WebSocket-Protocol")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
-        .any(|protocol| protocol.trim() == SUBPROTOCOL);
-    if !asks {
+        .map(|protocol| protocol.trim().to_owned())
+        .collect();
+    let Some(protocol) = [SUBPROTOCOL, TERMINAL_SUBPROTOCOL]
+        .into_iter()
+        .find(|known| asked.iter().any(|protocol| protocol == known))
+    else {
         return Err((
             StatusCode::BAD_REQUEST,
             "ask for the weave-host subprotocol",
         ));
-    }
+    };
     match request.headers().get("Origin") {
-        None => Ok(()),
+        None => Ok(protocol),
         Some(origin) => {
             let origin = origin.to_str().unwrap_or_default();
             if origin == APP_ORIGIN || origins.iter().any(|allowed| allowed == origin) {
-                Ok(())
+                Ok(protocol)
             } else {
                 Err((
                     StatusCode::FORBIDDEN,
@@ -225,15 +235,16 @@ fn refusal(status: StatusCode, why: &str) -> ErrorResponse {
 }
 
 async fn connection(shared: Arc<Shared>, stream: TcpStream, config: Arc<RemoteConfig>) {
+    let chosen = Mutex::new(SUBPROTOCOL);
     // tungstenite's upgrade callback returns its HTTP response as the error, unboxed.
     #[allow(clippy::result_large_err)]
     let callback = |request: &Request, mut response: Response| match admit(request, &config.origins)
     {
-        Ok(()) => {
-            response.headers_mut().insert(
-                "Sec-WebSocket-Protocol",
-                HeaderValue::from_static(SUBPROTOCOL),
-            );
+        Ok(protocol) => {
+            *lock(&chosen) = protocol;
+            response
+                .headers_mut()
+                .insert("Sec-WebSocket-Protocol", HeaderValue::from_static(protocol));
             Ok(response)
         }
         Err((status, why)) => {
@@ -253,6 +264,10 @@ async fn connection(shared: Arc<Shared>, stream: TcpStream, config: Arc<RemoteCo
                 return;
             }
         };
+    if *lock(&chosen) == TERMINAL_SUBPROTOCOL {
+        crate::terminals::stream::serve(shared, socket, config).await;
+        return;
+    }
     let (sink, stream) = socket.split();
     let (close, close_rx) = mpsc::unbounded_channel();
     let link = Arc::new(Link {

@@ -127,6 +127,31 @@ it with `Tui::try_copy`. Host tests (`tests/daemon.rs`) give the fake agents an
 in-process bridge (`StdioMcp`) that runs the same `relay` to the Host's real socket, and a
 Host whose agents take MCP over ACP (`daemon_over_acp`).
 
+Terminals (ADR 0022, WVE-152, `terminals/`) are kept alive by an `Owner` outside the Host
+(`owner.rs`): holders (`holder.rs`, `weave-holder` beside the Host's own binary, in
+`DaemonPaths::terminals`), later perhaps Rex blocks. The seam is the holder protocol's messages
+over bounded channels (`Wire`), so nothing above it knows which owner a terminal has, and a slow
+reader holds its owner back rather than the Host buffering.
+
+- **Starting holders:** `systemd-run --user` on Linux when the user's systemd answers, since the
+  Host's `KillMode=mixed` unit would take a child with it; `weave-holder spawn` otherwise. The
+  agents' environment goes in a 0600 env file the holder removes once read.
+- **Finding them again:** `Owner::find` keeps the records whose socket answers and prunes the
+  rest, the first time terminals are asked for (`Terminals::ready`).
+- **The service:** `Terminals` holds one control connection per terminal, subscribed to its
+  events, and asks it `describe` again on Rex's change events, so `terminals/list` and its
+  scope's watchers (`terminals/watch`, the same no-gap watch as sessions') stay current. A
+  terminal's scope is the deepest worktree its directory is in, else the directory, symlinks
+  resolved. `Shared::release` refuses a worktree while one of its terminals runs a command
+  (OSC 133), and otherwise closes them with its sessions.
+- **The stream:** `terminals::stream` serves a `weave-terminal` upgrade on the remote listener.
+  It checks the ticket, connects to the owner afresh, attaches with a snapshot for the owner's
+  codec or VT for another, and relays frames, reading the owner only as fast as the client
+  takes them, so the holder's 4 MiB resync handles a slow device. The size follows the stream
+  that last typed (`Terminals::typed`, `resized`), and clipboard writes go to it alone.
+- **Tests:** `tests/terminals.rs` drives it all through a real client, against a fake owner that
+  leaves out `command` and `opened_from`, and against real holders it builds with cargo.
+
 Remote clients (WVE-90, ADRs 0010 and 0016, spec `../docs/specs/wve-90-remote-clients.md`) reach
 the Host over a WebSocket (`websocket.rs`) that listens on loopback only, with Tailscale Serve
 the way in from the tailnet. Pairing turns that on (`remote.rs`): a `devices/offer` has the

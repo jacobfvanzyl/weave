@@ -45,6 +45,7 @@ pub mod remote;
 mod session;
 pub mod socket;
 pub mod tailscale;
+pub mod terminals;
 mod updates;
 mod websocket;
 
@@ -165,6 +166,9 @@ pub struct DaemonConfig {
     /// How the Host serves remote clients once pairing turns that on; none for a Host that
     /// doesn't, as one inside a client.
     pub remote: Option<RemoteSettings>,
+    /// What keeps terminals alive for clients (ADR 0022); none for a Host without terminals, as
+    /// one inside a client, or one installed without `weave-holder`.
+    pub terminals: Option<Arc<dyn terminals::Owner>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -195,6 +199,7 @@ impl DaemonConfig {
             mcp_socket: None,
             mcp_bridge: bridge_command(),
             remote: None,
+            terminals: None,
         }
     }
 
@@ -207,6 +212,8 @@ impl DaemonConfig {
             traces: paths.dir.join("traces"),
             devices: Some(paths.devices()),
             mcp_socket: Some(paths.mcp_socket()),
+            terminals: terminals::Holders::beside_this_program(paths.terminals())
+                .map(|holders| Arc::new(holders) as Arc<dyn terminals::Owner>),
             ..Self::in_process(None)
         }
     }
@@ -294,6 +301,8 @@ pub(crate) struct Shared {
     watchers: Mutex<BTreeMap<u64, ConnectionTo<HostClient>>>,
     /// The drain before the Host stops, while one is on: no new turns start.
     drain: Mutex<Option<Drain>>,
+    /// Terminals, when the Host has an owner for them.
+    pub(crate) terminals: Option<Arc<terminals::Terminals>>,
 }
 
 /// A drain before the Host stops.
@@ -693,8 +702,21 @@ impl Shared {
             .filter(|(_, summary)| summary.activity != Activity::Idle)
             .map(|(_, summary)| summary.session_id.clone())
             .collect();
-        if !busy.is_empty() {
-            return Err(errors::worktree_busy(&busy, &[]));
+        let (terminals, busy_terminals) = match &self.terminals {
+            Some(terminals) => {
+                terminals.ready().await;
+                terminals.inside(path)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        if !busy.is_empty() || !busy_terminals.is_empty() {
+            return Err(errors::worktree_busy(&busy, &busy_terminals));
+        }
+        if let Some(owner) = &self.terminals {
+            for id in &terminals {
+                // One that ended meanwhile is gone already.
+                let _ = owner.close(id).await;
+            }
         }
         let mut closed = Vec::new();
         for (session, summary) in inside {
@@ -819,6 +841,7 @@ impl Daemon {
             config.journals.as_deref(),
             JOURNAL_RETENTION,
         ));
+        let terminals = config.terminals.clone().map(terminals::Terminals::new);
         Self {
             shared: Arc::new_cyclic(|shared| Shared {
                 admissions,
@@ -837,6 +860,7 @@ impl Daemon {
                 stop,
                 watchers: Mutex::new(BTreeMap::new()),
                 drain: Mutex::new(None),
+                terminals,
             }),
         }
     }

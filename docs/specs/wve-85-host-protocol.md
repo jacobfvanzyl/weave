@@ -946,9 +946,10 @@ worktree.
 
 ## Terminals
 
-Status: Proposed, 2026-10-25 ([WVE-148](https://linear.app/jacobfvanzyl/issue/WVE-148), ADR
-0022). Not built yet. On 2026-10-26 two spikes checked it: a holder in Rust (WVE-149), and the
-app's native renderer on the iPad (WVE-150).
+Status: Built in the Host (WVE-152) and the holder (WVE-151), 2026-10-26, after two spikes
+checked it: a holder in Rust (WVE-149), and the app's native renderer on the iPad (WVE-150).
+ADR 0022; [WVE-148](https://linear.app/jacobfvanzyl/issue/WVE-148). The Host offers it when
+`weave-holder` is installed beside it.
 
 A terminal is a shell on the Host's computer that clients show beside a thread. It belongs to a
 worktree, or to a directory outside a repository. It lives in a holder, a process of its own
@@ -1041,9 +1042,11 @@ set. With `vt`, styles, cursor, modes and the palette are included.
 the Host has no terminal by, and `terminals/new` answers `terminal_unavailable` when no holder
 could be started.
 
-**`terminals/attach`** `{id}` → `{ticket, url}`
+**`terminals/attach`** `{id}` → `{ticket, expiresAt}`
 
-A ticket for the terminal's stream: one use, within 30 seconds, by the device that asked.
+A ticket for the terminal's stream, good once, within 30 seconds. The stream then counts as the
+device that asked, so revoking the device closes it too (4000). A local client's ticket opens a
+stream on the Host's loopback WebSocket.
 
 ### The terminal stream
 

@@ -137,6 +137,7 @@ impl World {
             mcp_socket: None,
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
             remote: None,
+            terminals: None,
         }
     }
 }

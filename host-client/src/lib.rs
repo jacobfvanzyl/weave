@@ -46,6 +46,8 @@ use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
+use weave_host_protocol::terminals::TerminalRemovedNotification;
+use weave_host_protocol::terminals::TerminalUpdatedNotification;
 
 pub use crate::remote::Credentials;
 
@@ -66,6 +68,10 @@ pub enum HostEvent {
     SessionUpdated(Box<SessionUpdatedNotification>),
     /// A session went away, while this client watches the Host's sessions.
     SessionRemoved(SessionRemovedNotification),
+    /// A terminal started or changed, in a scope this client watches.
+    TerminalUpdated(Box<TerminalUpdatedNotification>),
+    /// A terminal ended, in a scope this client watches.
+    TerminalRemoved(TerminalRemovedNotification),
     /// The answer to [`HostHandle::open`], ahead of the events that follow it.
     Opened {
         tag: u64,
@@ -155,6 +161,8 @@ impl HostConnection {
         let on_update = events.clone();
         let on_session_updated = events.clone();
         let on_session_removed = events.clone();
+        let on_terminal_updated = events.clone();
+        let on_terminal_removed = events.clone();
         // Handlers run inside the dispatch loop, in the order messages arrived; each only
         // passes its message on.
         let builder = HostClient
@@ -220,6 +228,21 @@ impl HostConnection {
             .on_receive_notification(
                 async move |notification: SessionRemovedNotification, _cx| {
                     let _ = on_session_removed.send(HostEvent::SessionRemoved(notification));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: TerminalUpdatedNotification, _cx| {
+                    let _ = on_terminal_updated
+                        .send(HostEvent::TerminalUpdated(Box::new(notification)));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: TerminalRemovedNotification, _cx| {
+                    let _ = on_terminal_removed.send(HostEvent::TerminalRemoved(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),
