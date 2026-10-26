@@ -29,6 +29,9 @@ The cache keeps:
 
 Once a build is done, the cache drops the source and Zig's local cache. When the pin moves, it
 removes other commits' builds and other Zigs. A first build takes about two minutes on an M3.
+A `zig build` whose fetch of Ghostty's packages failed is run again, up to three times: a cold
+Zig 0.17 compiles its own build system while it fetches, and on Linux its resolver's 5 s
+deadline can pass meanwhile (`NameServerFailure`, WVE-154).
 
 To move the pin:
 

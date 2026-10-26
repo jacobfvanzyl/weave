@@ -24,6 +24,7 @@ use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 
 use serde::Deserialize;
 use sha2::Digest;
@@ -144,25 +145,27 @@ fn cached_build(pin: &Pin) -> Result<PathBuf> {
     let staging = commit_dir.join(format!("{target}.partial"));
     remove_dir(&staging)?;
     let local_cache = commit_dir.join("zig-local");
-    let mut build = Command::new(&zig);
-    build
-        .current_dir(&src)
-        .env("ZIG_GLOBAL_CACHE_DIR", cache.join("zig-global"))
-        .args([
-            "build",
-            "-Demit-lib-vt",
-            "-Demit-xcframework=false",
-            "-Doptimize=ReleaseFast",
-        ]);
-    if var("TARGET")? != var("HOST")? {
-        build.arg(format!("-Dtarget={}", zig_triple(&var("TARGET")?)?));
-    }
-    build
-        .arg("--prefix")
-        .arg(&staging)
-        .arg("--cache-dir")
-        .arg(&local_cache);
-    status(&mut build, "zig build")?;
+    let target = (var("TARGET")? != var("HOST")?)
+        .then(|| zig_triple(&var("TARGET")?).map(|triple| format!("-Dtarget={triple}")))
+        .transpose()?;
+    zig_build(|| {
+        let mut build = Command::new(&zig);
+        build
+            .current_dir(&src)
+            .env("ZIG_GLOBAL_CACHE_DIR", cache.join("zig-global"))
+            .args([
+                "build",
+                "-Demit-lib-vt",
+                "-Demit-xcframework=false",
+                "-Doptimize=ReleaseFast",
+            ])
+            .args(&target)
+            .arg("--prefix")
+            .arg(&staging)
+            .arg("--cache-dir")
+            .arg(&local_cache);
+        build
+    })?;
     resources(&zig, &src, &staging, &local_cache, &cache)?;
 
     remove_dir(&prefix)?;
@@ -562,6 +565,37 @@ fn remove_dir(path: &Path) -> Result<()> {
 
 fn rename(from: &Path, to: &Path) -> Result<()> {
     fs::rename(from, to).map_err(|error| format!("{} to {}: {error}", from.display(), to.display()))
+}
+
+/// Runs `zig build`, again when fetching Ghostty's packages failed. A cold Zig 0.17 first builds
+/// its own build system, which takes every core for a minute or more on a small machine, while
+/// it fetches the packages; on Linux its resolver gives each lookup 5 seconds, which can pass
+/// meanwhile, and the fetch fails with NameServerFailure (WVE-154). Run again, Zig has that
+/// cached and fetches in a second. Zig reports a fetch's failure at the package's line in a
+/// `build.zig.zon`, which tells it from a compile error.
+fn zig_build(command: impl Fn() -> Command) -> Result<()> {
+    const ATTEMPTS: usize = 3;
+    for attempt in 1..=ATTEMPTS {
+        let output = command()
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| format!("zig build: {error}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        let fetching = stderr
+            .lines()
+            .any(|line| line.contains("build.zig.zon:") && line.contains("error:"));
+        if !fetching || attempt == ATTEMPTS {
+            return Err(format!("zig build failed ({})", output.status));
+        }
+        println!(
+            "cargo:warning=fetching Ghostty's packages failed; trying again with Zig's cache warm"
+        );
+    }
+    Ok(())
 }
 
 fn status(command: &mut Command, what: &str) -> Result<()> {
