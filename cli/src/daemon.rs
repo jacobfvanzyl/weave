@@ -264,11 +264,22 @@ fn start_in_background(paths: &DaemonPaths) -> anyhow::Result<()> {
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    // Its own process group, so the terminal's signals (Ctrl+C, a closing window) miss it.
+    // A session of its own, without this terminal: the terminal's signals (Ctrl+C, a closing
+    // window) miss it, and nothing it runs can take the terminal over, as an interactive shell's
+    // job control did, leaving the shell that started it in the background (WVE-154).
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        // SAFETY: between fork and exec, setsid only makes the child a session leader; it
+        // allocates nothing and takes no lock.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     let mut child = command.spawn().context("starting the weave Host")?;
     // Reap it if it exits while this process still runs.

@@ -76,7 +76,10 @@ terminal doesn't read `~/.profile` on Debian or Ubuntu, so `ssh host weave …` 
 the system's `PATH`: link it into `/usr/local/bin`, or name it by path. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
 `weave_host_protocol::PROTOCOL_VERSION` is one it speaks); sessions it had open resume when
 reattached. The Host captures the login shell's environment when it starts, so restart it
-after changing your shell's. Set `WEAVE_DAEMON_DIR` to run a dev Host (socket, lock, log,
+after changing your shell's. It runs that shell, an interactive one, in a session of its own
+without a terminal, and a Host started in the background has a session of its own too: an
+interactive shell's job control otherwise takes over the terminal that started the Host
+(WVE-154). Set `WEAVE_DAEMON_DIR` to run a dev Host (socket, lock, log,
 journals and traces) beside the installed one; its log is `daemon.log` there, and with
 `XDG_CONFIG_HOME` it reads a config of its own. Builds without debug info
 (`CARGO_PROFILE_DEV_DEBUG=0`) keep `target/` small on a full disk.

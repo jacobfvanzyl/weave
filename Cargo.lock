@@ -4422,6 +4422,7 @@ dependencies = [
  "anyhow",
  "bzip2",
  "flate2",
+ "libc",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -4442,6 +4443,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "pretty_assertions",
  "qrcode",
  "serde",

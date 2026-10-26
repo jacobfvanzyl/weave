@@ -79,18 +79,35 @@ fn user_shell() -> PathBuf {
 
 /// The environment of `shell` started as an interactive login shell, so both its profile and
 /// its rc files run.
+///
+/// The shell runs in a session of its own, without a terminal. An interactive shell's job
+/// control otherwise takes over the terminal of whatever started the Host, and hands it to the
+/// Host's process group when it exits, leaving that terminal's shell in the background, as
+/// `weave daemon restart` did to the terminal it ran in (WVE-154).
 pub async fn login_shell(
     shell: &Path,
     timeout: Duration,
 ) -> anyhow::Result<BTreeMap<String, String>> {
     let script = "printf '%s\\0' __WEAVE_ENVIRONMENT__; env -0";
-    let output = tokio::process::Command::new(shell)
+    let mut command = tokio::process::Command::new(shell);
+    command
         .args(["-l", "-i", "-c", script])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .output();
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    // SAFETY: between fork and exec, setsid only makes the child a session leader; it allocates
+    // nothing and takes no lock.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let output = command.output();
     let output = tokio::time::timeout(timeout, output)
         .await
         .with_context(|| format!("it took longer than {}s", timeout.as_secs()))?
@@ -138,6 +155,31 @@ mod tests {
             .expect("script");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");
         path
+    }
+
+    /// An interactive shell's job control takes over a terminal it can open (WVE-154), so the
+    /// shell gets none: it leads a session of its own.
+    #[tokio::test]
+    async fn the_shell_runs_without_a_terminal() {
+        let _shells = SHELLS.lock().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shell = shell(
+            dir.path(),
+            "leader=no; [ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"$$\" ] && leader=yes\n\
+             terminal=no; (exec 3</dev/tty) 2>/dev/null && terminal=yes\n\
+             export WEAVE_TEST_LEADER=$leader WEAVE_TEST_TERMINAL=$terminal",
+        );
+        let vars = login_shell(&shell, CAPTURE_TIMEOUT)
+            .await
+            .expect("captured");
+        assert_eq!(
+            vars.get("WEAVE_TEST_LEADER").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(
+            vars.get("WEAVE_TEST_TERMINAL").map(String::as_str),
+            Some("no")
+        );
     }
 
     #[tokio::test]
