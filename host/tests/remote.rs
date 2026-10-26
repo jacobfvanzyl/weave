@@ -514,16 +514,20 @@ async fn remote_clients_do_everything_but_administer_the_host() {
             })
             .await
             .map(|_| ()),
-        remote
-            .send(UpdateAgentRequest {
-                agent_id: "claude".to_owned(),
-            })
-            .await
-            .map(|_| ()),
     ] {
         let error = refused.expect_err("forbidden");
         assert!(errors::is(&error, errors::FORBIDDEN), "{error}");
     }
+    // Nor is updating an agent, which only takes it to its newest version. This one runs the
+    // command its configuration gives, so the Host says that's the person's to update.
+    let update = remote
+        .send(UpdateAgentRequest {
+            agent_id: "fake".to_owned(),
+        })
+        .await
+        .expect_err("a configured agent");
+    assert!(!errors::is(&update, errors::FORBIDDEN), "{update}");
+    assert!(update.to_string().contains("yours to do"), "{update}");
     remote.send(StatusRequest {}).await.expect("host/status");
     // Watching the Host's sessions isn't administering it.
     let watched = remote

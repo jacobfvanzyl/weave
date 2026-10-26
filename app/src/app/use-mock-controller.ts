@@ -472,6 +472,11 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         if (!key) return;
         reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
       },
+      updateAgent() {
+        const key = selectedKey();
+        if (!key) return;
+        reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
+      },
       removeQueued(id) {
         const key = selectedKey();
         if (!key) return;

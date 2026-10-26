@@ -1040,12 +1040,12 @@ impl Connection {
         })
     }
 
-    /// `agents/update`: local clients only, as it changes what the Host launches.
+    /// `agents/update`, remote clients' too: it can only take the agent to its newest version.
     async fn update_agent(
         &self,
         request: UpdateAgentRequest,
     ) -> Result<UpdateAgentResponse, Error> {
-        self.local_hello()?;
+        self.hello_info()?;
         let version = updates::update(&self.shared, &request.agent_id).await?;
         Ok(UpdateAgentResponse { version })
     }

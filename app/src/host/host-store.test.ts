@@ -148,6 +148,40 @@ describe('HostStore', () => {
     store.stop();
   });
 
+  it('updates the agent on the Host, then moves the session there', async () => {
+    const host = scriptedHost(() => [{ id: 'claude', name: 'Claude', source: 'preset', version: '0.86.0', installed: true }], {
+      'agents/update': () => ({ result: { version: '0.94.0' } }),
+    });
+    const store = storeFor(host.connector);
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    const updated = store.actions.updateAgent();
+    expect(store.snapshot().session?.updating).toBe(true);
+    await updated;
+    expect(host.asked.filter((method) => method === 'agents/update' || method === 'session/reopen')).toEqual(['agents/update', 'session/reopen']);
+    expect(host.params['agents/update']).toEqual([{ agentId: 'claude' }]);
+    expect(host.params['session/reopen']).toEqual([{ sessionId: SESSION }]);
+    expect(store.snapshot().session).not.toHaveProperty('updating');
+    expect(store.snapshot().error).toBeUndefined();
+    store.stop();
+  });
+
+  it('says where to update an agent when the Host won\'t let a device, and moves nothing', async () => {
+    const host = scriptedHost(() => [{ id: 'claude', name: 'Claude', source: 'preset', version: '0.86.0', installed: true }], {
+      'agents/update': () => ({ error: { code: HOST_PROTOCOL.errors.forbidden, message: 'Remote clients can\'t administer the Host' } }),
+    });
+    const store = storeFor(host.connector);
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    await store.actions.updateAgent();
+    expect(store.snapshot().error).toBe('Remote clients can\'t administer the Host. That\'s done on the Host\'s computer.');
+    expect(host.asked).not.toContain('session/reopen');
+    expect(store.snapshot().session).not.toHaveProperty('updating');
+    store.stop();
+  });
+
   it('shows what waits once the history before it is in, and ends what stopped waiting meanwhile', async () => {
     let attach: () => Answer = () => ({ result: {} });
     const host = scriptedHost(() => [], { 'session/attach': () => attach() });

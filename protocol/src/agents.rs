@@ -169,8 +169,8 @@ pub struct UpdateAvailableNotification {
 
 /// `agents/update`: what `weave update <agent>` does. The Host checks that the newest version
 /// starts and answers `initialize`, then launches it for the agent's new sessions; open ones
-/// move over with `session/reopen`. A version that doesn't start changes nothing. Local
-/// clients only.
+/// move over with `session/reopen`. A version that doesn't start changes nothing. Remote
+/// clients may update agents too: it only ever takes one to its newest version.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "agents/update", response = UpdateAgentResponse)]

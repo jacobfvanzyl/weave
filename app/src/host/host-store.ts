@@ -112,6 +112,7 @@ type Followed = {
   steering: QueuedPrompt[];
   /** A newer version is out (`agents/updateAvailable`, or `SessionState.update`). */
   update?: Omit<AgentUpdateNotice, 'available'>;
+  updating: boolean;
   reopening: boolean;
   /** What waits in it now, as the Host says (`SessionState.pending`, then `pending/added` and `pending/resolved`). */
   pending: PendingRequest[];
@@ -303,6 +304,7 @@ export class HostStore {
       await this.#connection(followed).request('turn/cancel', { sessionId: followed.sessionId });
     }),
     reopenSession: () => this.#report(() => this.#reopen()),
+    updateAgent: () => this.#report(() => this.#updateAgent()),
     respondToPermission: (requestId, optionId) => this.#answer(
       requestId,
       { permission: { outcome: { outcome: 'selected', optionId } } },
@@ -754,6 +756,7 @@ export class HostStore {
       queuePaused: false,
       queued: [],
       steering: [],
+      updating: false,
       reopening: false,
       pending: [],
       pendingShown: false,
@@ -1157,8 +1160,7 @@ export class HostStore {
     return meta(followed.state?.agent.initialize, '_meta', 'steering', 'supported') === true;
   }
 
-  async #reopen() {
-    const followed = this.#selected();
+  async #reopen(followed = this.#selected()) {
     if (!followed) return;
     const connection = this.#connection(followed);
     followed.reopening = true;
@@ -1169,6 +1171,33 @@ export class HostStore {
       followed.reopening = false;
       this.#changed();
     }
+  }
+
+  /**
+   * The Host takes the session's agent to its newest version, then the session moves there, unless
+   * it runs that version already. The session moves even if the person has gone to another.
+   */
+  async #updateAgent() {
+    const followed = this.#selected();
+    const agentId = followed?.update?.agentId;
+    if (!followed || !agentId) return;
+    const connection = this.#connection(followed);
+    followed.updating = true;
+    this.#changed();
+    let version: string;
+    try {
+      ({ version } = await connection.request('agents/update', { agentId }));
+    } catch (error) {
+      throw this.#explain(error, this.#hosts.get(followed.hostId), agentId);
+    } finally {
+      followed.updating = false;
+    }
+    if (version === followed.update?.running) {
+      followed.update = undefined;
+      this.#changed();
+      return;
+    }
+    await this.#reopen(followed);
   }
 
   async #rename(key: string, title: string) {
@@ -1362,6 +1391,7 @@ export class HostStore {
             ...(selected.queuePaused && selected.held.length > 0 ? { queuePaused: true } : {}),
             canAttachImages: selected.state?.agent.initialize.agentCapabilities?.promptCapabilities?.image === true,
             ...(selected.update ? { update: this.#updateNotice(selected.update, this.#hosts.get(selected.hostId)) } : {}),
+            ...(selected.updating ? { updating: true } : {}),
             ...(selected.reopening ? { reopening: true } : {}),
             ...(selected.loading ? { loading: true } : {}),
           }

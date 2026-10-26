@@ -1699,7 +1699,7 @@ expression: schema()
       "required": [
         "agentId"
       ],
-      "description": "`agents/update`: what `weave update <agent>` does. The Host checks that the newest version\nstarts and answers `initialize`, then launches it for the agent's new sessions; open ones\nmove over with `session/reopen`. A version that doesn't start changes nothing. Local\nclients only."
+      "description": "`agents/update`: what `weave update <agent>` does. The Host checks that the newest version\nstarts and answers `initialize`, then launches it for the agent's new sessions; open ones\nmove over with `session/reopen`. A version that doesn't start changes nothing. Remote\nclients may update agents too: it only ever takes one to its newest version."
     },
     "UpdateAgentResponse": {
       "type": "object",

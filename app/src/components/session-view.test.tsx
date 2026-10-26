@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppActions, AppController, OpenSession, PairedHost } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { SessionView } from './session-view';
@@ -24,6 +24,7 @@ const actions = (): AppActions => ({
   resumeQueue: vi.fn(),
   cancelTurn: vi.fn(),
   reopenSession: vi.fn(),
+  updateAgent: vi.fn(),
   respondToPermission: vi.fn(),
   respondToElicitation: vi.fn(),
   setMode: vi.fn(),
@@ -48,6 +49,8 @@ const controller = (session: OpenSession, handlers = actions(), host: Partial<Pa
 const transcript = (...events: AcpTranscriptEvent[]) => events.reduce(reduceAcpEvent, createTranscript('main'));
 
 describe('SessionView', () => {
+  beforeEach(() => localStorage.clear());
+
   it('says while its Host is away, and why when it stopped trying', () => {
     const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
     const { rerender } = render(<SessionView controller={controller(session, actions(), { status: 'reconnecting' })} session={session} />);
@@ -58,15 +61,46 @@ describe('SessionView', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  it('says where to update an agent the Host hasn\'t updated, and offers no move yet', () => {
+  it('updates an agent the Host hasn\'t updated, and moves the thread to it', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
     const session: OpenSession = {
       key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [],
       update: { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' },
     };
-    render(<SessionView controller={controller(session)} session={session} />);
+    const { rerender } = render(<SessionView controller={controller(session, handlers)} session={session} />);
     expect(screen.getByText('claude-agent-acp 0.94.0 is out; this thread runs 0.86.0.')).toBeInTheDocument();
-    expect(screen.getByText('weave update claude')).toBeInTheDocument();
+    expect(screen.queryByText(/weave update/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Move/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Update to 0.94.0' }));
+    expect(handlers.updateAgent).toHaveBeenCalled();
+    const updating = { ...session, updating: true };
+    rerender(<SessionView controller={controller(updating, handlers)} session={updating} />);
+    expect(screen.getByRole('button', { name: 'Updating…' })).toBeDisabled();
+  });
+
+  it('keeps a dismissed update notice hidden in that thread, until there is more to say', async () => {
+    const user = userEvent.setup();
+    const update = { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' };
+    const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [], update };
+    const other: OpenSession = { ...session, key: 'h/other' };
+    const view = render(<SessionView controller={controller(session)} session={session} />);
+    await user.click(screen.getByRole('button', { name: 'Dismiss update notice' }));
+    expect(screen.queryByText(/is out/)).not.toBeInTheDocument();
+
+    // Opened again, as after the app restarts.
+    view.unmount();
+    const { rerender } = render(<SessionView controller={controller(session)} session={session} />);
+    expect(screen.queryByText(/is out/)).not.toBeInTheDocument();
+    rerender(<SessionView controller={controller(other)} session={other} />);
+    expect(screen.getByText(/0\.94\.0 is out/)).toBeInTheDocument();
+
+    const movable = { ...session, update: { ...update, available: '0.94.0' } };
+    rerender(<SessionView controller={controller(movable)} session={movable} />);
+    expect(screen.getByRole('button', { name: 'Move to 0.94.0' })).toBeInTheDocument();
+    const newer = { ...session, update: { ...update, latest: '0.95.0' } };
+    rerender(<SessionView controller={controller(newer)} session={newer} />);
+    expect(screen.getByText(/0\.95\.0 is out/)).toBeInTheDocument();
   });
 
   it('moves the session once the Host launches the newer version', async () => {

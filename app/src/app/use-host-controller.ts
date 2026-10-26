@@ -66,6 +66,7 @@ const idleActions: AppController['actions'] = {
   resumeQueue() {},
   cancelTurn() {},
   reopenSession() {},
+  updateAgent() {},
   respondToPermission() {},
   respondToElicitation() {},
   setMode() {},

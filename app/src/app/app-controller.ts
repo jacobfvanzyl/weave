@@ -141,8 +141,10 @@ export type OpenSession = {
   queuePaused?: boolean;
   /** Whether the agent takes images in prompts. */
   canAttachImages?: boolean;
-  /** A newer version of its agent is out; it is updated on the Host's computer. */
+  /** A newer version of its agent is out. */
   update?: AgentUpdateNotice;
+  /** `updateAgent` is checking that the newest version starts, before the session moves there. */
+  updating?: boolean;
   /** `session/reopen` is moving it to the version its agent's new sessions launch. */
   reopening?: boolean;
   /** Its history is still replaying as it opens; the transcript shows once it's in. */
@@ -206,6 +208,11 @@ export type AppActions = {
   cancelTurn(): Promise<void> | void;
   /** Moves the open session to the version its agent's new sessions launch (`session/reopen`). */
   reopenSession(): Promise<void> | void;
+  /**
+   * Updates the open session's agent on its Host to the newest version (`agents/update`), then
+   * moves the session there, as the TUI's `/update` does.
+   */
+  updateAgent(): Promise<void> | void;
   /** Answers a pending request of the open session, or one of its subagents'. */
   respondToPermission(requestId: string, optionId: string): Promise<void> | void;
   respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;

@@ -264,8 +264,7 @@ request and changes nothing. `version` is what the agent's new sessions launch n
 newest, or the one already there. The Host's spare processes of the agent stop, and its open
 sessions of an older version are told (`agents/updateAvailable`); they keep their process
 until `session/reopen` moves them. Agents the configuration gives a command fail with
-invalid params: updating them is the user's to do. Local clients only; remote clients get
-`forbidden`.
+invalid params: updating them is the user's to do. Remote clients may update agents too.
 
 When any request needs an agent that requires sign-in, it fails with ACP's
 `auth_required` error (code -32000), passed through from the agent, and the client
@@ -1309,8 +1308,7 @@ as it does now.
 Remote clients follow ADR 0010 and [`wve-90-remote-clients.md`](wve-90-remote-clients.md):
 the WebSocket binds loopback only and Tailscale Serve is the way in; every connection proves
 a paired device by signing a challenge; a paired device may do what a local client can,
-except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`, which
-answer `forbidden`.
+except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answer `forbidden`.
 
 ## Clients
 

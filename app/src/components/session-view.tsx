@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowLeft01Icon, Delete02Icon, Edit02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
+import { ArrowLeft01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, OpenSession, PairedHost, SessionSummary } from '@/app/app-controller';
+import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, sessionLabel, waitsForAnswer } from '@/chat/acp-transcript';
 import { ChatPane } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
@@ -128,34 +129,49 @@ function useEdgeSwipe(onSwipe?: () => void) {
 const shortName = (name: string) => name.startsWith('@') && name.includes('/') ? name.slice(name.indexOf('/') + 1) : name;
 
 /**
- * A newer version of the session's agent is out. Remote clients can't update agents, so until the
- * Host has, the notice says where that's done; once its new sessions launch another version, it
- * offers to move this session there (`session/reopen`).
+ * A newer version of the session's agent is out. Update has the Host update the agent and moves
+ * this session over, as the TUI's `/update` does; once the Host's new sessions launch another
+ * version already, Move only moves it (`session/reopen`). Dismissed, it stays hidden in this
+ * session on this device until a newer release, or a version to move to.
  */
-function UpdateNotice({ update, reopening, onMove }: { update: AgentUpdateNotice; reopening?: boolean; onMove(): void }) {
+function UpdateNotice({ update, updating, reopening, onUpdate, onMove, onDismiss }: {
+  update: AgentUpdateNotice;
+  updating?: boolean;
+  reopening?: boolean;
+  onUpdate(): void;
+  onMove(): void;
+  onDismiss(): void;
+}) {
   return (
-    <Alert className='m-2 w-auto'>
+    <Alert className='m-2 w-auto has-data-[slot=alert-action]:pr-8'>
       <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} />
       <AlertTitle>{shortName(update.name)} {update.latest} is out; this thread runs {update.running}.</AlertTitle>
-      {update.available
-        ? (
-          <AlertDescription>
-            The Host has {update.available} for new threads. Moving this one ends its background commands and running subagents,
-            and waits for a running turn.
-          </AlertDescription>
-        )
-        : (
-          <AlertDescription>
-            Update it on the Host's computer with <code>weave update {update.agentId}</code>; this thread can move to it then.
-          </AlertDescription>
+      <AlertDescription>
+        {update.available && (
+          <>
+            The Host has {update.available} for new threads. Moving this one ends its background commands and running
+            subagents, and waits for a running turn.
+          </>
         )}
-      {update.available && (
-        <AlertAction>
-          <Button size='sm' variant='outline' disabled={reopening} onClick={onMove}>
-            {reopening ? 'Moving…' : `Move to ${update.available}`}
-          </Button>
-        </AlertAction>
-      )}
+        <div className='mt-1.5'>
+          {update.available
+            ? (
+              <Button size='sm' variant='outline' disabled={reopening} onClick={onMove}>
+                {reopening ? 'Moving…' : `Move to ${update.available}`}
+              </Button>
+            )
+            : (
+              <Button size='sm' variant='outline' disabled={updating || reopening} onClick={onUpdate}>
+                {updating ? 'Updating…' : reopening ? 'Moving…' : `Update to ${update.latest}`}
+              </Button>
+            )}
+        </div>
+      </AlertDescription>
+      <AlertAction>
+        <Button size='icon-xs' variant='ghost' aria-label='Dismiss update notice' onClick={onDismiss}>
+          <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+        </Button>
+      </AlertAction>
     </Alert>
   );
 }
@@ -191,6 +207,7 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
   const subagent = watching ? findSubagent(session.transcript, watching) : undefined;
   const openSubagent = useCallback((sessionId: string) => setWatching(sessionId), []);
   const swipe = useEdgeSwipe(subagent ? () => setWatching(undefined) : onSwipeBack);
+  const [update, dismissUpdate] = useUpdateNotice(session.key, session.update);
   // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
   const asking = [
     ...(subagent && waitsForAnswer(session.transcript) ? [undefined] : []),
@@ -227,7 +244,16 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
           <AlertDescription>{model.error}</AlertDescription>
         </Alert>
       )}
-      {session.update && <UpdateNotice update={session.update} reopening={session.reopening} onMove={() => void actions.reopenSession()} />}
+      {update && (
+        <UpdateNotice
+          update={update}
+          updating={session.updating}
+          reopening={session.reopening}
+          onUpdate={() => void actions.updateAgent()}
+          onMove={() => void actions.reopenSession()}
+          onDismiss={dismissUpdate}
+        />
+      )}
       {asking.map((sessionId) => {
         const label = sessionId ? sessionLabel(session.transcript, sessionId) : 'Main';
         return (

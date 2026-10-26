@@ -185,10 +185,11 @@ Everything a local client may, except administer the Host. These answer `forbidd
 - `devices/*`;
 - `agents/authenticate`, `agents/logout` and `agents/terminalSignIn`, since an agent's sign-in
   belongs to the Host's computer. As now, only local clients may claim
-  `capabilities.terminalSignIn`;
-- `agents/update` (WVE-93), since it changes what the Host launches. Remote clients still see
-  `agents/updateAvailable` and may `session/reopen` a session onto a version a local client
-  updated to.
+  `capabilities.terminalSignIn`.
+
+`agents/update` (WVE-93) isn't administering the Host: it can only take an agent to its newest
+version, which the Host checks starts, as `weave update` does. So remote clients may update an
+agent and then `session/reopen` their session onto it, as the TUI's `/update` does.
 
 A remote client's turn origin names its device, so transcripts can say where a prompt came
 from: `{"client": {"name": "weave-ios", "id": "c9", "device": "Jaco's iPad"}}`.
