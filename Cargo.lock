@@ -4475,9 +4475,11 @@ name = "weave-holder"
 version = "0.1.0"
 dependencies = [
  "bindgen",
+ "libc",
  "pretty_assertions",
  "serde",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.21",
  "toml",
 ]

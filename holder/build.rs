@@ -10,6 +10,10 @@
 //!   commit) or fetched with git, and Zig from `$ZIG`, from `zig` on PATH when its version is the
 //!   pin's, or downloaded from ziglang.org and checked against the pin's checksum.
 //!
+//! A build into the cache also lays out Ghostty's resources as Ghostty's own (`share/ghostty`
+//! with the shell integration, `share/terminfo` with its terminfo compiled by `tic`), which the
+//! holder embeds (`resources.rs` in `OUT_DIR`) and writes out where its shells can find them.
+//!
 //! The bindings in `src/ffi/bindings.rs` are committed, so building needs no libclang;
 //! `--features bindgen` regenerates them from the headers of the build it links.
 
@@ -51,6 +55,23 @@ struct Download {
 
 type Result<T> = std::result::Result<T, String>;
 
+/// What a cached build holds, written to its `.complete`; a build of another layout is redone.
+/// 2: Ghostty's resources in `share/`.
+const LAYOUT: &str = "2";
+
+/// Prints Ghostty's terminfo source, as `ghostty +terminfo` does (`src/main_build_data.zig`
+/// upstream).
+const GEN_TERMINFO: &str = r#"const std = @import("std");
+const terminfo = @import("terminfo");
+
+pub fn main(init: std.process.Init) !void {
+    var buffer: [1024]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writerStreaming(init.io, &buffer);
+    try terminfo.ghostty.encode(&stdout_writer.interface);
+    try stdout_writer.end();
+}
+"#;
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("weave-holder: {error}");
@@ -81,6 +102,7 @@ fn run() -> Result<()> {
         None => cached_build(&pin)?,
     };
     link(&prefix)?;
+    embed_resources(&prefix)?;
     #[cfg(feature = "bindgen")]
     bindings(&prefix, &manifest)?;
     Ok(())
@@ -93,7 +115,7 @@ fn cached_build(pin: &Pin) -> Result<PathBuf> {
     let commit_dir = cache.join(&pin.ghostty.commit);
     let prefix = commit_dir.join(&target);
     let complete = prefix.join(".complete");
-    if complete.exists() {
+    if fs::read_to_string(&complete).is_ok_and(|layout| layout == LAYOUT) {
         return Ok(prefix);
     }
 
@@ -102,7 +124,7 @@ fn cached_build(pin: &Pin) -> Result<PathBuf> {
     let lock = File::create(cache.join(".lock")).map_err(|error| format!("cache lock: {error}"))?;
     lock.lock()
         .map_err(|error| format!("cache lock: {error}"))?;
-    if complete.exists() {
+    if fs::read_to_string(&complete).is_ok_and(|layout| layout == LAYOUT) {
         return Ok(prefix);
     }
     prune(&cache, pin)?;
@@ -141,14 +163,132 @@ fn cached_build(pin: &Pin) -> Result<PathBuf> {
         .arg("--cache-dir")
         .arg(&local_cache);
     status(&mut build, "zig build")?;
+    resources(&zig, &src, &staging, &local_cache, &cache)?;
 
     remove_dir(&prefix)?;
     rename(&staging, &prefix)?;
-    fs::write(&complete, "").map_err(|error| format!("{}: {error}", complete.display()))?;
+    fs::write(&complete, LAYOUT).map_err(|error| format!("{}: {error}", complete.display()))?;
     // Only the build is kept; the source and Zig's cache of it come back if the pin does.
     remove_dir(&local_cache)?;
     remove_dir(&fetched)?;
     Ok(prefix)
+}
+
+/// Lays out Ghostty's shell integration and its terminfo under `prefix/share`, as Ghostty
+/// installs its own resources.
+fn resources(
+    zig: &Path,
+    src: &Path,
+    prefix: &Path,
+    local_cache: &Path,
+    cache: &Path,
+) -> Result<()> {
+    copy_dir(
+        &src.join("src/shell-integration"),
+        &prefix.join("share/ghostty/shell-integration"),
+    )?;
+    let terminfo = prefix.join("share/terminfo");
+    create_dir(&terminfo)?;
+    create_dir(local_cache)?;
+    let script = local_cache.join("gen-terminfo.zig");
+    fs::write(&script, GEN_TERMINFO).map_err(|error| format!("{}: {error}", script.display()))?;
+    let output = Command::new(zig)
+        .current_dir(src)
+        .env("ZIG_GLOBAL_CACHE_DIR", cache.join("zig-global"))
+        .arg("run")
+        .arg("--cache-dir")
+        .arg(local_cache)
+        .args(["--dep", "terminfo"])
+        .arg(format!("-Mroot={}", script.display()))
+        .arg(format!(
+            "-Mterminfo={}",
+            src.join("src/terminfo/main.zig").display()
+        ))
+        .output()
+        .map_err(|error| format!("generating the terminfo: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "generating the terminfo: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let source = terminfo.join("ghostty.terminfo");
+    fs::write(&source, &output.stdout).map_err(|error| format!("{}: {error}", source.display()))?;
+    status(
+        Command::new("tic")
+            .arg("-x")
+            .arg("-o")
+            .arg(&terminfo)
+            .arg(&source),
+        "compiling the terminfo with tic",
+    )
+}
+
+/// Writes `resources.rs` into `OUT_DIR`: every file under `prefix/share`, embedded, by its path
+/// below `share/`'s parent. A prefix without resources embeds none.
+fn embed_resources(prefix: &Path) -> Result<()> {
+    let mut files = Vec::new();
+    let share = prefix.join("share");
+    if share.is_dir() {
+        walk(prefix, &share, &mut files)?;
+    } else {
+        println!(
+            "cargo:warning={} has no share/; holders will start shells without Ghostty's terminfo or shell integration",
+            prefix.display()
+        );
+    }
+    files.sort();
+    let mut code = String::from(
+        "/// Ghostty's resources, by their path under the resources directory.\n\
+         pub static FILES: &[(&str, &[u8])] = &[\n",
+    );
+    for (relative, absolute) in &files {
+        code.push_str(&format!(
+            "    ({relative:?}, include_bytes!({absolute:?})),\n"
+        ));
+    }
+    code.push_str("];\n");
+    let path = PathBuf::from(var("OUT_DIR")?).join("resources.rs");
+    fs::write(&path, code).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Every file below `dir`, as its path relative to `root` and its absolute path.
+fn walk(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) -> Result<()> {
+    let entries = fs::read_dir(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("{}: {error}", dir.display()))?
+            .path();
+        if path.is_dir() {
+            walk(root, &path, files)?;
+        } else if let Ok(relative) = path.strip_prefix(root) {
+            files.push((
+                relative.to_string_lossy().into_owned(),
+                path.to_string_lossy().into_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    create_dir(to)?;
+    let entries = fs::read_dir(from).map_err(|error| format!("{}: {error}", from.display()))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("{}: {error}", from.display()))?
+            .path();
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if path.is_dir() {
+            copy_dir(&path, &to.join(name))?;
+        } else {
+            fs::copy(&path, to.join(name))
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn cache_dir() -> Result<PathBuf> {

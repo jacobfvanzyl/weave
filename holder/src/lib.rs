@@ -2,4 +2,6 @@
 //! the authoritative screen in libghostty-vt.
 
 mod ffi;
+pub mod launch;
+pub mod resources;
 pub mod vt;
