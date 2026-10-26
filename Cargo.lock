@@ -4474,7 +4474,9 @@ dependencies = [
 name = "weave-holder"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bindgen",
+ "clap",
  "libc",
  "pretty_assertions",
  "serde",

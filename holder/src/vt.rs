@@ -33,7 +33,7 @@ fn check(call: &'static str, code: ffi::GhosttyResult) -> Result<(), Error> {
     }
 }
 
-/// What the formatter writes.
+/// What the formatter writes, as Rex's `format` names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     /// The characters alone.
@@ -41,6 +41,24 @@ pub enum Format {
     /// VT sequences that draw the screen again, with its styles, cursor, modes, palette and
     /// keyboard state, which any terminal can restore from.
     Vt,
+    /// HTML that keeps the styles.
+    Html,
+}
+
+/// How the formatter writes it, as Rex's `format` takes it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Formatting {
+    /// Trailing whitespace trimmed from lines, and trailing blank lines dropped.
+    pub trim: bool,
+    /// Lines the terminal wrapped joined again.
+    pub unwrap: bool,
+}
+
+impl Formatting {
+    pub const TRIMMED: Self = Self {
+        trim: true,
+        unwrap: false,
+    };
 }
 
 /// What writing to the terminal produced besides the screen.
@@ -301,17 +319,18 @@ impl Terminal {
         }
     }
 
-    /// The screen and its history through the formatter, trailing blank lines trimmed.
-    pub fn format(&self, format: Format) -> Result<String, Error> {
-        let styled = format == Format::Vt;
+    /// The screen and its history through the formatter.
+    pub fn format(&self, format: Format, formatting: Formatting) -> Result<String, Error> {
+        let styled = format != Format::Text;
         let options = ffi::GhosttyFormatterTerminalOptions {
             size: size_of::<ffi::GhosttyFormatterTerminalOptions>(),
             emit: match format {
                 Format::Text => ffi::GHOSTTY_FORMATTER_FORMAT_PLAIN,
                 Format::Vt => ffi::GHOSTTY_FORMATTER_FORMAT_VT,
+                Format::Html => ffi::GHOSTTY_FORMATTER_FORMAT_HTML,
             },
-            unwrap: false,
-            trim: true,
+            unwrap: formatting.unwrap,
+            trim: formatting.trim,
             extra: ffi::GhosttyFormatterTerminalExtra {
                 size: size_of::<ffi::GhosttyFormatterTerminalExtra>(),
                 palette: styled,
@@ -688,7 +707,10 @@ mod tests {
     fn formats_what_was_written() {
         let mut terminal = Terminal::new(20, 5).unwrap();
         terminal.write(b"hello\r\n\x1b[1;31mworld\x1b[0m");
-        assert_eq!(terminal.format(Format::Text).unwrap(), "hello\nworld");
+        assert_eq!(
+            terminal.format(Format::Text, Formatting::TRIMMED).unwrap(),
+            "hello\nworld"
+        );
     }
 
     #[test]
@@ -696,13 +718,18 @@ mod tests {
         let mut terminal = Terminal::new(30, 6).unwrap();
         terminal.write(b"one\r\n\x1b[4mtwo\x1b[0m\r\n\x1b]0;title\x07three \x1b[38;5;208mfour");
         let mut restored = Terminal::new(30, 6).unwrap();
-        restored.write(terminal.format(Format::Vt).unwrap().as_bytes());
-        assert_eq!(
-            restored.format(Format::Vt).unwrap(),
-            terminal.format(Format::Vt).unwrap()
+        restored.write(
+            terminal
+                .format(Format::Vt, Formatting::TRIMMED)
+                .unwrap()
+                .as_bytes(),
         );
         assert_eq!(
-            restored.format(Format::Text).unwrap(),
+            restored.format(Format::Vt, Formatting::TRIMMED).unwrap(),
+            terminal.format(Format::Vt, Formatting::TRIMMED).unwrap()
+        );
+        assert_eq!(
+            restored.format(Format::Text, Formatting::TRIMMED).unwrap(),
             "one\ntwo\nthree four"
         );
     }
@@ -716,10 +743,10 @@ mod tests {
         terminal.write(b"\x1b[1;32mprompt\x1b[0m $ ");
         let replica = Terminal::restore(&terminal.snapshot().unwrap()).unwrap();
         assert_eq!(
-            replica.format(Format::Vt).unwrap(),
-            terminal.format(Format::Vt).unwrap()
+            replica.format(Format::Vt, Formatting::TRIMMED).unwrap(),
+            terminal.format(Format::Vt, Formatting::TRIMMED).unwrap()
         );
-        let text = replica.format(Format::Text).unwrap();
+        let text = replica.format(Format::Text, Formatting::TRIMMED).unwrap();
         assert!(text.starts_with("line 1\nline 2\n"), "{text}");
         assert!(text.ends_with("line 200\nprompt $"), "{text}");
     }

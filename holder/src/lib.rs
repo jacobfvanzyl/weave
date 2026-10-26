@@ -3,6 +3,9 @@
 
 pub mod event;
 mod ffi;
+pub mod holder;
 pub mod launch;
+pub mod protocol;
+mod pty;
 pub mod resources;
 pub mod vt;

@@ -65,6 +65,34 @@ install layout.
 
 When Ghostty changes these rules, the pin move brings the change here.
 
+`login(1)` exits 0 whatever the shell exits with, so a command (`-- …`), whose exit code matters,
+runs without it even on macOS.
+
+## The holder
+
+`src/holder.rs` serves one terminal on `<dir>/<id>.sock`, with `<dir>/<id>.json` the record a
+Host finds it again by. Both are removed when the program exits, which ends the holder.
+
+- The record carries the Host's `scope` and `opened_from`, so the Host keeps no registry of its
+  own (ADR 0022).
+- The protocol is in `src/protocol.rs` (framing, Rex's request and answer shapes) and
+  `src/event.rs` (Rex's terminal events and weave's additions).
+- Threads share one lock around the terminal.
+- Each client has an outbox. One that falls 4 MiB behind gets `resync` and a fresh snapshot.
+- Only the socket's owner may connect.
+- Told to stop (SIGTERM, SIGINT, SIGHUP), the holder hangs its program up and ends with it.
+
+The CLI (`src/main.rs`):
+
+- `serve` holds the terminal in the foreground, as `systemd-run --user` runs it on Linux.
+- `spawn` double-forks into a session of its own and returns once the socket answers, as on
+  macOS.
+- Both print the record as a line of JSON when ready, or `{"error": …}`.
+- `--env-file` is a JSON object of the program's environment (the agents', WVE-141), which the
+  holder removes once read.
+
+`tests/holder.rs` runs the real binary with `/bin/sh`, and zsh where there is one.
+
 ## Commands
 
 The workspace's plain `cargo build` and `cargo test` leave the holder out until the Host starts

@@ -2,8 +2,9 @@
 //! one (`src/termio/Exec.zig` and `src/termio/shell_integration.zig` upstream, at the commit
 //! `ghostty.toml` pins).
 //!
-//! - On macOS the shell runs under `login(1)` (`-q` with `~/.hushlogin`), so it's a login shell
-//!   as in Terminal and Ghostty; elsewhere under `/bin/sh -c`.
+//! - On macOS an interactive shell runs under `login(1)` (`-q` with `~/.hushlogin`), so it's a
+//!   login shell as in Terminal and Ghostty; elsewhere under `/bin/sh -c`. `login(1)` exits 0
+//!   whatever the shell exits with, so a command, whose exit code matters, skips it.
 //! - The environment is the one given (the agents', WVE-141) with `TERM=xterm-ghostty` and
 //!   `TERMINFO` naming Ghostty's terminfo, `COLORTERM`, and `TERM_PROGRAM=weave`, not `ghostty`,
 //!   which would promise what weave's clients don't draw, such as Kitty graphics.
@@ -96,7 +97,7 @@ pub fn launch(options: Options) -> Launch {
         env.insert("GHOSTTY_SHELL_FEATURES".into(), SHELL_FEATURES.into());
     }
 
-    let argv = match login {
+    let argv = match login.filter(|_| command.is_none()) {
         // As Ghostty does: login(1) for a login session, then bash only to `exec -l` the shell,
         // which makes it a login shell whatever it is.
         Some(Login { user, hush }) => {
@@ -107,11 +108,7 @@ pub fn launch(options: Options) -> Launch {
             argv.extend(
                 ["-flp", user, "/bin/bash", "--noprofile", "--norc", "-c"].map(String::from),
             );
-            let script = match command {
-                Some(_) => script,
-                None => format!("exec -l {script}"),
-            };
-            argv.push(script);
+            argv.push(format!("exec -l {script}"));
             argv
         }
         None => vec!["/bin/sh".into(), "-c".into(), script],
@@ -391,6 +388,11 @@ mod tests {
         let command = ["npm".to_string(), "run".into(), "dev server".into()];
         let mut options = options("/bin/zsh", Some(&resources));
         options.command = Some(&command);
+        // Without login(1) even on macOS, which would hide the command's exit code.
+        options.login = Some(Login {
+            user: "me",
+            hush: false,
+        });
         let launch = launch(options);
         assert_eq!(
             launch.argv,

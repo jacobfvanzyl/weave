@@ -21,6 +21,8 @@ workspace = true
 bindgen = ["dep:bindgen"]
 
 [dependencies]
+base64 = { workspace = true }
+clap = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

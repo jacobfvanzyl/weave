@@ -2,6 +2,7 @@
 //! a terminal's events (`terminal.*` in <https://www.superlogical.com/rex/docs/reference/events>),
 //! so a Rex block can later stand in for a holder (ADR 0022). weave's additions come last.
 
+use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -74,7 +75,7 @@ pub struct Process {
     pub name: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Size {
     pub cols: u16,
     pub rows: u16,
