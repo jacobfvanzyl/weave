@@ -8645,11 +8645,18 @@ expression: schema()
         },
         "restore": {
           "$ref": "#/$defs/TerminalRestore"
+        },
+        "restoreBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "How many bytes of restore follow, in [`RESTORE`] frames, before the output does."
         }
       },
       "required": [
         "terminal",
-        "restore"
+        "restore",
+        "restoreBytes"
       ],
       "description": "The Host's first text frame: the terminal, and how the restore that follows comes."
     },
@@ -8776,10 +8783,16 @@ expression: schema()
               "properties": {
                 "restore": {
                   "$ref": "#/$defs/TerminalRestore"
+                },
+                "restoreBytes": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
                 }
               },
               "required": [
-                "restore"
+                "restore",
+                "restoreBytes"
               ]
             }
           },
@@ -8787,7 +8800,7 @@ expression: schema()
             "resync"
           ],
           "additionalProperties": false,
-          "description": "The client fell behind: a new restore follows and replaces its screen."
+          "description": "The client fell behind: a new restore of `restore_bytes` follows and replaces its\nscreen."
         },
         {
           "type": "object",

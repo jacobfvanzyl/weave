@@ -755,6 +755,14 @@ async fn a_stream_relays_a_holders_terminal_to_a_ticket() {
     .await;
     assert_eq!(received.messages[0]["restore"], "snapshot");
     assert_eq!(received.messages[0]["terminal"]["id"], terminal.id.as_str());
+    let restore_bytes = received.messages[0]["restoreBytes"]
+        .as_u64()
+        .expect("restoreBytes");
+    read_until(&mut socket, &mut received, |received| {
+        received.restore.len() as u64 >= restore_bytes
+    })
+    .await;
+    assert_eq!(received.restore.len() as u64, restore_bytes);
 
     // Input reaches the shell, and its output comes back.
     type_(&mut socket, "echo stream-$((1+1))\r").await;

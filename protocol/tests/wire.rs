@@ -1647,6 +1647,7 @@ fn terminals() {
             "opened": round_trip(&stream::Opened {
                 terminal: terminal(),
                 restore: stream::Restore::Snapshot,
+                restore_bytes: 153_412,
             }),
             "messages": [
                 round_trip(&stream::Message::Bell {}),
@@ -1659,7 +1660,10 @@ fn terminals() {
                     progress: Some(40),
                 }),
                 round_trip(&stream::Message::Clipboard { text: "hello".to_owned() }),
-                round_trip(&stream::Message::Resync { restore: stream::Restore::Vt }),
+                round_trip(&stream::Message::Resync {
+                    restore: stream::Restore::Vt,
+                    restore_bytes: 2_048,
+                }),
                 round_trip(&stream::Message::Exited { exit_code: 0 }),
             ],
             "client": round_trip(&stream::ClientMessage::Resize(TerminalSize { cols: 60, rows: 35 })),

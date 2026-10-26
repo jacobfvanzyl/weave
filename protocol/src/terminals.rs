@@ -367,6 +367,8 @@ pub mod stream {
     pub struct Opened {
         pub terminal: Terminal,
         pub restore: Restore,
+        /// How many bytes of restore follow, in [`RESTORE`] frames, before the output does.
+        pub restore_bytes: u64,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,9 +404,11 @@ pub mod stream {
         Clipboard {
             text: String,
         },
-        /// The client fell behind: a new restore follows and replaces its screen.
+        /// The client fell behind: a new restore of `restore_bytes` follows and replaces its
+        /// screen.
         Resync {
             restore: Restore,
+            restore_bytes: u64,
         },
         /// The program ended; the Host closes the stream after it.
         Exited {

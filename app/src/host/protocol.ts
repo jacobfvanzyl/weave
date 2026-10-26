@@ -1024,6 +1024,7 @@ export type TerminalStreamMessage =
   | {
       resync: {
         restore: TerminalRestore;
+        restoreBytes: number;
       };
     }
   | {
@@ -6086,6 +6087,10 @@ export interface TerminalSize1 {
 export interface TerminalStreamOpened {
   terminal: HostTerminal;
   restore: TerminalRestore;
+  /**
+   * How many bytes of restore follow, in [`RESTORE`] frames, before the output does.
+   */
+  restoreBytes: number;
 }
 
 /** Versions, the WebSocket's subprotocol and close codes, error codes, features and client tools. */

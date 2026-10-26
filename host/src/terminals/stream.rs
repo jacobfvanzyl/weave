@@ -82,11 +82,15 @@ pub(crate) async fn serve(shared: Arc<Shared>, mut socket: Socket, config: Arc<R
         Ok((control, incoming)) => control
             .call("attach", json!({"restore": restore_name(restore)}))
             .await
-            .map(|_| (control, incoming)),
+            .map(|answer| (control, incoming, answer)),
         Err(error) => Err(error),
     };
-    let (control, incoming) = match attached {
-        Ok(attached) => attached,
+    let (control, incoming, restore_bytes) = match attached {
+        Ok((control, incoming, answer)) => (
+            control,
+            incoming,
+            answer["snapshot_bytes"].as_u64().unwrap_or_default(),
+        ),
         Err(error) => {
             tracing::info!(%error, "a terminal stream couldn't attach");
             close(&mut socket, CLOSE_EXITED, "the terminal ended").await;
@@ -106,9 +110,11 @@ pub(crate) async fn serve(shared: Arc<Shared>, mut socket: Socket, config: Arc<R
     {
         tracing::debug!(%error, "couldn't size a terminal for its first stream");
     }
-    let opened = terminals
-        .get(&id)
-        .map(|terminal| Opened { terminal, restore });
+    let opened = terminals.get(&id).map(|terminal| Opened {
+        terminal,
+        restore,
+        restore_bytes,
+    });
     let relay = match opened {
         Ok(opened) => {
             let text = serde_json::to_string(&opened).unwrap_or_default();
@@ -277,6 +283,7 @@ impl Link<'_> {
                     }
                     "resync" => Some(Message::Resync {
                         restore: self.restore,
+                        restore_bytes: payload["snapshot_bytes"].as_u64().unwrap_or_default(),
                     }),
                     "child_exited" => {
                         let exit_code = payload["exit_code"]
