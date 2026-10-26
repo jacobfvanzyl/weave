@@ -960,6 +960,12 @@ The concepts and names follow Rex's block model, in this protocol's casing. Its 
 `program_status`, and its terminal events all have counterparts here, so a Rex block can later
 stand in for a holder.
 
+A terminal's owner keeps it alive: a holder, or later a Rex block. The Host reaches owners
+through one interface, of which the holder protocol is the first implementation, and nothing
+above that interface depends on which owner a terminal has. What weave adds to Rex's model
+(`scope` aside) is optional, and clients work without it: `openedFrom`, `command`, and the snapshot
+restore.
+
 These methods are feature `terminals`. Remote clients may use them, since a client that can
 start an agent in a directory can already run anything there.
 
@@ -973,7 +979,7 @@ type Terminal = {
   pwd?: string;          // the directory the shell reports (OSC 7), as a path: the Host drops the URL's scheme and host
   process?: {foreground: {pid: number; name: string}};
   size: {cols: number; rows: number};
-  command?: {running: boolean; exitCode?: number};  // OSC 133: one running, or how the last ended
+  command?: {running: boolean; exitCode?: number};  // OSC 133: one running, or how the last ended; weave's, absent where the owner doesn't report it
   programStatus: ProgramStatus[];                   // OSC 7501's records, as Rex keeps them
   startedAt: number;
 };
@@ -1050,6 +1056,11 @@ Opening the stream:
 2. The Host answers with `{"terminal": Terminal, "restore": "snapshot" | "vt"}`:
    * `snapshot` when the holder's codec is the client's;
    * otherwise `vt`, the formatter's VT of the visible screen, without history.
+
+   `vt` is a path of its own, not an error. It's the restore whenever the owner's libghostty-vt
+   isn't the client's, as a Rex block's would usually be. After a `vt` restore, a client carries
+   on with output, input and resizes as after a snapshot, and lacks only the history from before
+   it attached.
 3. Then the stream starts.
 
 Binary frames carry a kind byte and a payload, the same kinds as the holder's own frames, so the
@@ -1084,9 +1095,10 @@ Output, restores and input:
 
 Size and replies:
 
-* The last device to type sets the terminal's size, and the others clip. While it's the last, its
-  own resizes (a rotation, a keyboard rising) apply at once. Another device's size applies when
-  it next sends input.
+* Size is the owner's policy, and a client's `resize` is a request. A holder's policy: the last
+  device to type sets the terminal's size, and the others clip. While it's the last, its own
+  resizes (a rotation, a keyboard rising) apply at once. Another device's size applies when it
+  next sends input. A Rex block would follow Rex's own rule.
 * The client's libghostty-vt answers nothing. Only the holder replies to the program's queries.
 
 ### Holders
