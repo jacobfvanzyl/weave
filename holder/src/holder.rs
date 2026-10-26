@@ -135,6 +135,8 @@ struct Client {
     ready: Condvar,
     attached: AtomicBool,
     subscribed: AtomicBool,
+    /// It restores from the formatter's VT rather than a snapshot: another codec's client.
+    vt: AtomicBool,
 }
 
 impl Client {
@@ -405,7 +407,7 @@ fn read_pty(holder: &Holder, drained: &mpsc::Sender<()>) {
 /// Sends output to every attached client, resynchronizing those too far behind.
 fn send_output(inner: &mut Inner, bytes: &[u8]) {
     let frame = protocol::frame(protocol::OUTPUT, bytes);
-    let mut snapshot: Option<Vec<u8>> = None;
+    let mut restores = Restores::default();
     for client in &inner.clients {
         if !client.attached.load(Ordering::Relaxed) {
             continue;
@@ -415,27 +417,63 @@ fn send_output(inner: &mut Inner, bytes: &[u8]) {
             client.push(frame.clone());
             continue;
         }
-        // What it wasn't sent is in a fresh snapshot, this output included.
+        // What it wasn't sent is in a fresh restore, this output included.
         {
             let mut outbox = lock(&client.outbox);
             outbox.frames.clear();
             outbox.bytes = 0;
         }
-        if snapshot.is_none() {
-            snapshot = inner.terminal.snapshot().ok();
-        }
-        if let Some(snapshot) = &snapshot {
+        let vt = client.vt.load(Ordering::Relaxed);
+        if let Some(restore) = restores.get(&inner.terminal, vt) {
             client.push(protocol::json(&Event::Resync {
                 codec: vt::codec().unwrap_or_default(),
-                snapshot_bytes: snapshot.len(),
+                restore: restore_name(vt).to_owned(),
+                snapshot_bytes: restore.len(),
             }));
-            send_snapshot(client, snapshot);
+            send_restore(client, restore);
         }
     }
 }
 
-fn send_snapshot(client: &Client, snapshot: &[u8]) {
-    for chunk in snapshot.chunks(protocol::SNAPSHOT_CHUNK) {
+/// The restores clients get, each made once however many clients need it.
+#[derive(Default)]
+struct Restores {
+    snapshot: Option<Option<Vec<u8>>>,
+    vt: Option<Option<Vec<u8>>>,
+}
+
+impl Restores {
+    fn get(&mut self, terminal: &Terminal, vt: bool) -> Option<&Vec<u8>> {
+        if vt {
+            self.vt
+                .get_or_insert_with(|| restore(terminal, true).ok())
+                .as_ref()
+        } else {
+            self.snapshot
+                .get_or_insert_with(|| restore(terminal, false).ok())
+                .as_ref()
+        }
+    }
+}
+
+/// What a client restores the terminal from: a snapshot, or for a client of another codec the
+/// formatter's VT of the visible screen.
+fn restore(terminal: &Terminal, vt: bool) -> Result<Vec<u8>, vt::Error> {
+    if vt {
+        terminal
+            .format(Format::Vt, Formatting::RESTORE)
+            .map(String::into_bytes)
+    } else {
+        terminal.snapshot()
+    }
+}
+
+fn restore_name(vt: bool) -> &'static str {
+    if vt { "vt" } else { "snapshot" }
+}
+
+fn send_restore(client: &Client, restore: &[u8]) {
+    for chunk in restore.chunks(protocol::SNAPSHOT_CHUNK) {
         client.push(protocol::frame(protocol::SNAPSHOT, chunk));
     }
 }
@@ -500,15 +538,37 @@ fn block_stop_signals() {
 
 /// Told to stop (by systemd, launchd or a person), the holder hangs its program up and ends with
 /// it, as a terminal window does when it closes.
-fn signal_thread(holder: &Holder) {
+fn signal_thread(holder: &Arc<Holder>) {
     let set = stop_signals();
     loop {
         let mut signal = 0;
         if unsafe { libc::sigwait(&set, &mut signal) } == 0 {
-            holder.pty.hang_up();
+            hang_up(holder);
         }
     }
 }
+
+/// Hangs the program up, again each second for `HANG_UP_TRIES` seconds while it hasn't exited,
+/// as one that was starting may have missed the first, and then kills it.
+fn hang_up(holder: &Arc<Holder>) {
+    holder.pty.hang_up();
+    let holder = Arc::clone(holder);
+    std::thread::spawn(move || {
+        for _ in 0..HANG_UP_TRIES {
+            std::thread::sleep(Duration::from_secs(1));
+            if lock(&holder.inner).exit_code.is_some() {
+                return;
+            }
+            holder.pty.hang_up();
+        }
+        if lock(&holder.inner).exit_code.is_none() {
+            holder.pty.kill();
+        }
+    });
+}
+
+/// How many more times a hang-up is tried, a second apart, before the program is killed.
+const HANG_UP_TRIES: u32 = 5;
 
 fn accept(holder: &Arc<Holder>, listener: &UnixListener) {
     let owner = unsafe { libc::getuid() };
@@ -528,6 +588,7 @@ fn accept(holder: &Arc<Holder>, listener: &UnixListener) {
             }),
             ready: Condvar::new(),
             attached: AtomicBool::new(false),
+            vt: AtomicBool::new(false),
             subscribed: AtomicBool::new(false),
         });
         lock(&holder.inner).clients.push(client.clone());
@@ -565,7 +626,7 @@ fn write_client(client: &Client, mut stream: UnixStream) {
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
-fn read_client(holder: &Holder, client: &Arc<Client>, mut stream: UnixStream) {
+fn read_client(holder: &Arc<Holder>, client: &Arc<Client>, mut stream: UnixStream) {
     while let Ok(Some((kind, payload))) = protocol::read_frame(&mut stream) {
         match kind {
             protocol::INPUT => holder.write_pty(&payload),
@@ -602,6 +663,16 @@ struct FormatArgs {
     trim: bool,
     #[serde(default)]
     unwrap: bool,
+    /// The history above the screen too.
+    #[serde(default)]
+    history: bool,
+}
+
+#[derive(Deserialize)]
+struct AttachArgs {
+    /// `snapshot`, the default, or `vt` for a client of another codec.
+    #[serde(default)]
+    restore: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -624,7 +695,7 @@ fn args<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T, Failure> {
     serde_json::from_value(args).map_err(|error| Failure::bad_request(error.to_string()))
 }
 
-fn handle(holder: &Holder, client: &Client, request: Request) {
+fn handle(holder: &Arc<Holder>, client: &Client, request: Request) {
     let Request {
         id,
         method,
@@ -646,25 +717,39 @@ fn handle(holder: &Holder, client: &Client, request: Request) {
             client.subscribed.store(true, Ordering::Relaxed);
             Ok(holder.describe(&inner))
         }
-        "attach" => {
-            // Under the lock, so the answer, the snapshot and every later output reach this
+        "attach" => match args::<AttachArgs>(raw) {
+            // Under the lock, so the answer, the restore and every later output reach this
             // client in that order.
-            match inner.terminal.snapshot() {
-                Ok(snapshot) => {
-                    client.subscribed.store(true, Ordering::Relaxed);
-                    client.attached.store(true, Ordering::Relaxed);
-                    let result = json!({
-                        "codec": lock(&holder.record).codec,
-                        "snapshot_bytes": snapshot.len(),
-                        "terminal": holder.describe(&inner),
-                    });
-                    answer(client, id, Ok(result));
-                    send_snapshot(client, &snapshot);
-                    return;
+            Ok(args) => {
+                let vt = match args.restore.as_deref().unwrap_or("snapshot") {
+                    "snapshot" => Ok(false),
+                    "vt" => Ok(true),
+                    other => Err(Failure::bad_request(format!("no restore {other}"))),
+                };
+                match vt.and_then(|vt| {
+                    restore(&inner.terminal, vt)
+                        .map(|restore| (vt, restore))
+                        .map_err(|error| Failure::bad_request(error.to_string()))
+                }) {
+                    Ok((vt, restore)) => {
+                        client.subscribed.store(true, Ordering::Relaxed);
+                        client.attached.store(true, Ordering::Relaxed);
+                        client.vt.store(vt, Ordering::Relaxed);
+                        let result = json!({
+                            "codec": lock(&holder.record).codec,
+                            "restore": restore_name(vt),
+                            "snapshot_bytes": restore.len(),
+                            "terminal": holder.describe(&inner),
+                        });
+                        answer(client, id, Ok(result));
+                        send_restore(client, &restore);
+                        return;
+                    }
+                    Err(failure) => Err(failure),
                 }
-                Err(error) => Err(Failure::bad_request(error.to_string())),
             }
-        }
+            Err(failure) => Err(failure),
+        },
         "format" => args::<FormatArgs>(raw).and_then(|args| {
             let format = match args.format.as_deref().unwrap_or("text") {
                 "text" | "plain" => Format::Text,
@@ -675,6 +760,7 @@ fn handle(holder: &Holder, client: &Client, request: Request) {
             let formatting = Formatting {
                 trim: args.trim,
                 unwrap: args.unwrap,
+                history: args.history,
             };
             inner
                 .terminal
@@ -731,7 +817,7 @@ fn handle(holder: &Holder, client: &Client, request: Request) {
             json!({"label": args.label})
         }),
         "close" => {
-            holder.pty.hang_up();
+            hang_up(holder);
             Ok(json!({}))
         }
         other => Err(Failure {

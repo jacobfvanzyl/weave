@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&FormatTerminalRequest\n{\n    id: \"t-5f3a\".to_owned(), format: TerminalFormat::Vt, history: true, trim:\n    false,\n})"
+---
+{
+  "method": "terminals/format",
+  "params": {
+    "id": "t-5f3a",
+    "format": "vt",
+    "history": true
+  }
+}

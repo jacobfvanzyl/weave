@@ -52,12 +52,22 @@ pub struct Formatting {
     pub trim: bool,
     /// Lines the terminal wrapped joined again.
     pub unwrap: bool,
+    /// The history above the screen too; without it, the visible screen alone.
+    pub history: bool,
 }
 
 impl Formatting {
+    /// Everything, trimmed, as tests compare terminals.
     pub const TRIMMED: Self = Self {
         trim: true,
         unwrap: false,
+        history: true,
+    };
+    /// The visible screen as VT, untrimmed, which a fresh terminal restores the screen from.
+    pub const RESTORE: Self = Self {
+        trim: false,
+        unwrap: false,
+        history: false,
     };
 }
 
@@ -351,6 +361,15 @@ impl Terminal {
             },
             selection: ptr::null(),
         };
+        let mut options = options;
+        let screen = if formatting.history {
+            None
+        } else {
+            self.screen_selection()?
+        };
+        if let Some(screen) = &screen {
+            options.selection = screen;
+        }
         let mut formatter: ffi::GhosttyFormatter = ptr::null_mut();
         check("ghostty_formatter_terminal_new", unsafe {
             ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw, options)
@@ -363,6 +382,42 @@ impl Terminal {
         unsafe { ffi::ghostty_formatter_free(formatter) };
         formatted?;
         Ok(String::from_utf8_lossy(&take(out, len)).into_owned())
+    }
+
+    /// The visible screen, from its first cell to its last, for the formatter.
+    fn screen_selection(&self) -> Result<Option<ffi::GhosttySelection>, Error> {
+        let size = self.size();
+        if size.cols == 0 || size.rows == 0 {
+            return Ok(None);
+        }
+        let start = self.grid_ref(0, 0)?;
+        let end = self.grid_ref(size.cols - 1, u32::from(size.rows) - 1)?;
+        Ok(Some(ffi::GhosttySelection {
+            size: size_of::<ffi::GhosttySelection>(),
+            start,
+            end,
+            rectangle: false,
+        }))
+    }
+
+    /// The cell at `x`, `y` of the active screen.
+    fn grid_ref(&self, x: u16, y: u32) -> Result<ffi::GhosttyGridRef, Error> {
+        let point = ffi::GhosttyPoint {
+            tag: ffi::GHOSTTY_POINT_TAG_ACTIVE,
+            value: ffi::GhosttyPointValue {
+                coordinate: ffi::GhosttyPointCoordinate { x, y },
+            },
+        };
+        let mut grid_ref = ffi::GhosttyGridRef {
+            size: size_of::<ffi::GhosttyGridRef>(),
+            node: ptr::null_mut(),
+            x: 0,
+            y: 0,
+        };
+        check("ghostty_terminal_grid_ref", unsafe {
+            ffi::ghostty_terminal_grid_ref(self.raw, point, &mut grid_ref)
+        })?;
+        Ok(grid_ref)
     }
 
     /// The whole terminal as a snapshot, which a libghostty-vt of the same codec restores.
@@ -749,6 +804,34 @@ mod tests {
         let text = replica.format(Format::Text, Formatting::TRIMMED).unwrap();
         assert!(text.starts_with("line 1\nline 2\n"), "{text}");
         assert!(text.ends_with("line 200\nprompt $"), "{text}");
+    }
+
+    #[test]
+    fn the_visible_screen_leaves_the_history_out_and_restores_from_vt() {
+        let mut terminal = Terminal::new(20, 4).unwrap();
+        for line in 1..=50 {
+            terminal.write(format!("line {line}\r\n").as_bytes());
+        }
+        terminal.write(b"\x1b[1;32mlast\x1b[0m");
+        let screen = Formatting {
+            history: false,
+            ..Formatting::TRIMMED
+        };
+        assert_eq!(
+            terminal.format(Format::Text, screen).unwrap(),
+            "line 48\nline 49\nline 50\nlast"
+        );
+        let mut restored = Terminal::new(20, 4).unwrap();
+        restored.write(
+            terminal
+                .format(Format::Vt, Formatting::RESTORE)
+                .unwrap()
+                .as_bytes(),
+        );
+        assert_eq!(
+            restored.format(Format::Text, Formatting::TRIMMED).unwrap(),
+            "line 48\nline 49\nline 50\nlast"
+        );
     }
 
     #[test]

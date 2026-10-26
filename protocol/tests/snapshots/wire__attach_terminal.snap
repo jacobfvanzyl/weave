@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "json!({\n    \"request\": message(&AttachTerminalRequest { id: \"t-5f3a\".to_owned() }),\n    \"response\":\n    round_trip(&AttachTerminalResponse\n    { ticket: \"k2Vx\".to_owned(), expires_at: 1_760_180_030_000, }),\n})"
+---
+{
+  "request": {
+    "method": "terminals/attach",
+    "params": {
+      "id": "t-5f3a"
+    }
+  },
+  "response": {
+    "ticket": "k2Vx",
+    "expiresAt": 1760180030000
+  }
+}

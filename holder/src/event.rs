@@ -62,9 +62,11 @@ pub enum Event {
     LabelChanged {
         label: Option<String>,
     },
-    /// weave's: the client fell behind, so a fresh snapshot follows and replaces its screen.
+    /// weave's: the client fell behind, so a fresh restore follows and replaces its screen: a
+    /// snapshot, or for a client attached with `restore: "vt"` the formatter's VT.
     Resync {
         codec: String,
+        restore: String,
         snapshot_bytes: usize,
     },
 }

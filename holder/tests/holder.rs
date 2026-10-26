@@ -563,3 +563,43 @@ fn zsh_reports_its_commands_and_directory_through_ghosttys_integration() {
     let describe = client.request("describe", json!({}));
     assert_eq!(describe["result"]["integration"], "zsh");
 }
+
+#[test]
+fn a_client_of_another_codec_restores_from_vt() {
+    let holder = serve();
+    let mut client = holder.connect();
+    client.attach();
+    client.type_("echo before-$((2*21))\r");
+    client.until("the echo", |client| client.screen().contains("before-42"));
+
+    let mut other = holder.connect();
+    let answer = other.request("attach", json!({"restore": "vt"}));
+    assert_eq!(answer["result"]["restore"], "vt");
+    let len = answer["result"]["snapshot_bytes"].as_u64().unwrap() as usize;
+    let mut vt = Vec::new();
+    let deadline = Instant::now() + WAIT;
+    while vt.len() < len {
+        match other.next(deadline) {
+            Some(Frame::Snapshot(bytes)) => vt.extend(bytes),
+            Some(frame) => other.take(frame),
+            None => panic!("the restore stopped at {} of {len} bytes", vt.len()),
+        }
+    }
+    // A fresh terminal of the holder's size, as a client of another codec makes one.
+    let mut replica = Terminal::new(80, 24).unwrap();
+    replica.write(&vt);
+    other.replica = Some(replica);
+    assert!(other.screen().contains("before-42"), "{}", other.screen());
+    other.type_("echo after-$((2*22))\r");
+    other.until("live output after the restore", |client| {
+        client.screen().contains("after-44")
+    });
+
+    let visible = client.request("format", json!({"format": "text", "trim": true}));
+    assert!(
+        visible["result"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("after-44")
+    );
+}

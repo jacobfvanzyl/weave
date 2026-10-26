@@ -1,0 +1,87 @@
+---
+source: protocol/tests/wire.rs
+expression: "json!({\n    \"open\":\n    round_trip(&stream::Open\n    {\n        ticket: \"k2Vx\".to_owned(), size: TerminalSize { cols: 60, rows: 40 },\n        codec:\n        \"ghostty fb13fa9602f47590ccfaaea4cd8e178fac2ec8cc snapshot 1\".to_owned(),\n    }), \"opened\":\n    round_trip(&stream::Opened\n    { terminal: terminal(), restore: stream::Restore::Snapshot, }),\n    \"messages\":\n    [round_trip(&stream::Message::Bell {}),\n    round_trip(&stream::Message::Notification\n    { title: \"Done\".to_owned(), body: \"Tests passed\".to_owned(), }),\n    round_trip(&stream::Message::Progress\n    { state: \"set\".to_owned(), progress: Some(40), }),\n    round_trip(&stream::Message::Clipboard { text: \"hello\".to_owned() }),\n    round_trip(&stream::Message::Resync { restore: stream::Restore::Vt }),\n    round_trip(&stream::Message::Exited { exit_code: 0 }),], \"client\":\n    round_trip(&stream::ClientMessage::Resize(TerminalSize\n    { cols: 60, rows: 35 })),\n})"
+---
+{
+  "open": {
+    "ticket": "k2Vx",
+    "size": {
+      "cols": 60,
+      "rows": 40
+    },
+    "codec": "ghostty fb13fa9602f47590ccfaaea4cd8e178fac2ec8cc snapshot 1"
+  },
+  "opened": {
+    "terminal": {
+      "id": "t-5f3a",
+      "scope": "/Users/jaco/Projects/weave",
+      "label": "dev server",
+      "openedFrom": "s-1",
+      "title": "npm run dev",
+      "pwd": "/Users/jaco/Projects/weave/app",
+      "process": {
+        "foreground": {
+          "pid": 4242,
+          "name": "node"
+        }
+      },
+      "size": {
+        "cols": 100,
+        "rows": 30
+      },
+      "command": {
+        "running": true,
+        "command": "npm run dev"
+      },
+      "programStatus": [
+        {
+          "id": "build",
+          "state": "blocked",
+          "kind": "question",
+          "app": "vite",
+          "msg": "Port 5174 is taken; use 5175?"
+        }
+      ],
+      "startedAt": 1760180000000
+    },
+    "restore": "snapshot"
+  },
+  "messages": [
+    {
+      "bell": {}
+    },
+    {
+      "notification": {
+        "title": "Done",
+        "body": "Tests passed"
+      }
+    },
+    {
+      "progress": {
+        "state": "set",
+        "progress": 40
+      }
+    },
+    {
+      "clipboard": {
+        "text": "hello"
+      }
+    },
+    {
+      "resync": {
+        "restore": "vt"
+      }
+    },
+    {
+      "exited": {
+        "exitCode": 0
+      }
+    }
+  ],
+  "client": {
+    "resize": {
+      "cols": 60,
+      "rows": 35
+    }
+  }
+}

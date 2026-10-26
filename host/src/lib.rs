@@ -694,7 +694,7 @@ impl Shared {
             .map(|(_, summary)| summary.session_id.clone())
             .collect();
         if !busy.is_empty() {
-            return Err(errors::worktree_busy(&busy));
+            return Err(errors::worktree_busy(&busy, &[]));
         }
         let mut closed = Vec::new();
         for (session, summary) in inside {

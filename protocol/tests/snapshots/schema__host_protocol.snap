@@ -167,6 +167,42 @@ expression: schema()
     "worktrees/release": {
       "params": "ReleaseWorktreeRequest",
       "result": "ReleaseWorktreeResponse"
+    },
+    "terminals/list": {
+      "params": "ListTerminalsRequest",
+      "result": "TerminalsResponse"
+    },
+    "terminals/watch": {
+      "params": "WatchTerminalsRequest",
+      "result": "TerminalsResponse"
+    },
+    "terminals/unwatch": {
+      "params": "UnwatchTerminalsRequest",
+      "result": "Empty"
+    },
+    "terminals/new": {
+      "params": "NewTerminalRequest",
+      "result": "TerminalResponse"
+    },
+    "terminals/close": {
+      "params": "CloseTerminalRequest",
+      "result": "Empty"
+    },
+    "terminals/setLabel": {
+      "params": "SetTerminalLabelRequest",
+      "result": "TerminalResponse"
+    },
+    "terminals/write": {
+      "params": "WriteTerminalRequest",
+      "result": "Empty"
+    },
+    "terminals/format": {
+      "params": "FormatTerminalRequest",
+      "result": "FormatTerminalResponse"
+    },
+    "terminals/attach": {
+      "params": "AttachTerminalRequest",
+      "result": "AttachTerminalResponse"
     }
   },
   "x-weave-notifications": {
@@ -178,7 +214,15 @@ expression: schema()
     "pending/added": "PendingAddedNotification",
     "pending/resolved": "PendingResolvedNotification",
     "agents/updateAvailable": "UpdateAvailableNotification",
-    "devices/paired": "DevicePairedNotification"
+    "devices/paired": "DevicePairedNotification",
+    "terminals/updated": "TerminalUpdatedNotification",
+    "terminals/removed": "TerminalRemovedNotification"
+  },
+  "x-weave-terminal-stream": {
+    "open": "TerminalStreamOpen",
+    "opened": "TerminalStreamOpened",
+    "message": "TerminalStreamMessage",
+    "clientMessage": "TerminalStreamClientMessage"
   },
   "x-weave-constants": {
     "protocol": {
@@ -192,6 +236,15 @@ expression: schema()
       "closeRevoked": 4000,
       "closeBehind": 4001,
       "closeUnauthenticated": 4002
+    },
+    "terminalStream": {
+      "subprotocol": "weave-terminal",
+      "ticketLifetimeMs": 30000,
+      "restore": 1,
+      "output": 3,
+      "input": 16,
+      "closeTicket": 4010,
+      "closeExited": 4011
     },
     "errors": {
       "unauthenticated": -32060,
@@ -211,7 +264,9 @@ expression: schema()
       "gitFailed": -32074,
       "uncommittedChanges": -32075,
       "keyReused": -32076,
-      "hostStopping": -32077
+      "hostStopping": -32077,
+      "unknownTerminal": -32078,
+      "terminalUnavailable": -32079
     },
     "features": {
       "steer": "turn/steer",
@@ -225,7 +280,8 @@ expression: schema()
       "queue": "queue",
       "getSession": "sessions/get",
       "requestKeys": "requestKeys",
-      "drain": "drain"
+      "drain": "drain",
+      "terminals": "terminals"
     },
     "files": {
       "maxEntries": 2000
@@ -6134,6 +6190,487 @@ expression: schema()
         }
       }
     },
+    "ListTerminalsRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "description": "Any directory: its scope is the deepest worktree it's in, or the directory itself\noutside a repository."
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "description": "`terminals/list`: the terminals of the scope `directory` is in, oldest first."
+    },
+    "TerminalsResponse": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "terminals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostTerminal"
+          }
+        }
+      },
+      "required": [
+        "scope",
+        "terminals"
+      ]
+    },
+    "HostTerminal": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Permanent and opaque: a holder's, or later a Rex block's."
+        },
+        "scope": {
+          "type": "string",
+          "description": "The worktree it belongs to, or its directory outside a repository; symlinks resolved."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The person's name for it."
+        },
+        "openedFrom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The session it was opened from, whose clients show it by default."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the program titled it (OSC 0 and 2)."
+        },
+        "pwd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The directory the shell last reported (OSC 7), as a path on the Host's computer."
+        },
+        "process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalProcesses"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "$ref": "#/$defs/TerminalSize"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "weave's, from OSC 133: whether a command runs, or how the last one ended. Absent where\nthe owner doesn't report it."
+        },
+        "programStatus": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProgramStatus"
+          },
+          "description": "The program's status records (OSC 7501), as Rex keeps them."
+        },
+        "startedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "size",
+        "startedAt"
+      ],
+      "description": "A terminal as clients see it. `HostTerminal` in the schema, apart from ACP's `Terminal`, an\nagent's Host-run terminal."
+    },
+    "TerminalProcesses": {
+      "type": "object",
+      "properties": {
+        "foreground": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalProcess"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The process group in the terminal's foreground: the shell, or the command it runs."
+        }
+      }
+    },
+    "TerminalProcess": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pid",
+        "name"
+      ]
+    },
+    "TerminalSize": {
+      "type": "object",
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ]
+    },
+    "TerminalCommand": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "type": "boolean"
+        },
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The command line, while it runs, when the shell said it."
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "description": "How the last command ended."
+        }
+      },
+      "required": [
+        "running"
+      ]
+    },
+    "ProgramStatus": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`build/test`; absent for the root record."
+        },
+        "state": {
+          "$ref": "#/$defs/ProgramState"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlockedKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "progress": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "0 to 100."
+        },
+        "app": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "msg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "description": "An OSC 7501 record, with `title` and `msg` decoded."
+    },
+    "ProgramState": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "working",
+        "done",
+        "blocked",
+        "error"
+      ]
+    },
+    "BlockedKind": {
+      "type": "string",
+      "enum": [
+        "permission",
+        "question",
+        "auth"
+      ]
+    },
+    "WatchTerminalsRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "description": "`terminals/watch`: a scope's terminals as `terminals/list` gives them, then a\n[`TerminalUpdatedNotification`] or [`TerminalRemovedNotification`] for every change in that\nscope, until the connection ends or the client sends `terminals/unwatch`."
+    },
+    "UnwatchTerminalsRequest": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "description": "`terminals/unwatch`: stop what `terminals/watch` sends for `scope`."
+    },
+    "NewTerminalRequest": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "openedFrom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "command": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "A command and its arguments, run under a login shell instead of an interactive one."
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its first size; 80×24 when absent. The first client to attach usually sets it again."
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "description": "`terminals/new`: a terminal in `directory`, belonging to its scope. A holder starts the\nperson's login shell there, or runs `command` under it, as Ghostty starts a shell."
+    },
+    "TerminalResponse": {
+      "type": "object",
+      "properties": {
+        "terminal": {
+          "$ref": "#/$defs/HostTerminal"
+        }
+      },
+      "required": [
+        "terminal"
+      ]
+    },
+    "CloseTerminalRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "`terminals/close`: hang up the terminal's program, which ends it."
+    },
+    "SetTerminalLabelRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "`terminals/setLabel`: name the terminal, or clear its name."
+    },
+    "WriteTerminalRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "description": "`terminals/write`: text as if typed, for clients that don't attach. `\\r` is Enter."
+    },
+    "FormatTerminalRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/$defs/TerminalFormat",
+          "default": "text"
+        },
+        "history": {
+          "type": "boolean",
+          "description": "The history above the screen too."
+        },
+        "trim": {
+          "type": "boolean",
+          "description": "Trailing whitespace and blank lines trimmed."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "`terminals/format`: the terminal's visible screen through the formatter, or with its history."
+    },
+    "TerminalFormat": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "text",
+          "description": "The characters alone."
+        },
+        {
+          "type": "string",
+          "const": "vt",
+          "description": "VT sequences with styles, cursor, modes and palette, which a terminal restores from."
+        }
+      ]
+    },
+    "FormatTerminalResponse": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ]
+    },
+    "AttachTerminalRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "`terminals/attach`: a ticket for the terminal's stream, good once, for\n[`stream::TICKET_LIFETIME_MS`], to the device that asked."
+    },
+    "AttachTerminalResponse": {
+      "type": "object",
+      "properties": {
+        "ticket": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ticket",
+        "expiresAt"
+      ]
+    },
     "SessionEventNotification": {
       "type": "object",
       "properties": {
@@ -8041,6 +8578,258 @@ expression: schema()
         "device"
       ],
       "description": "`devices/paired`: a device took the offer this connection made."
+    },
+    "TerminalUpdatedNotification": {
+      "type": "object",
+      "properties": {
+        "terminal": {
+          "$ref": "#/$defs/HostTerminal"
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "description": "`terminals/updated`, to clients watching its scope: a terminal started or changed."
+    },
+    "TerminalRemovedNotification": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "description": "How its program ended, when the Host saw it."
+        }
+      },
+      "required": [
+        "id",
+        "scope"
+      ],
+      "description": "`terminals/removed`, to clients watching its scope: a terminal ended."
+    },
+    "TerminalStreamOpen": {
+      "type": "object",
+      "properties": {
+        "ticket": {
+          "type": "string"
+        },
+        "size": {
+          "$ref": "#/$defs/TerminalSize",
+          "description": "The client's size, which is the terminal's once the client types."
+        },
+        "codec": {
+          "type": "string",
+          "description": "The Ghostty commit and snapshot format the client's libghostty-vt decodes, as\n`weave-holder --version` names its own."
+        }
+      },
+      "required": [
+        "ticket",
+        "size",
+        "codec"
+      ],
+      "description": "The client's first text frame."
+    },
+    "TerminalStreamOpened": {
+      "type": "object",
+      "properties": {
+        "terminal": {
+          "$ref": "#/$defs/HostTerminal"
+        },
+        "restore": {
+          "$ref": "#/$defs/TerminalRestore"
+        }
+      },
+      "required": [
+        "terminal",
+        "restore"
+      ],
+      "description": "The Host's first text frame: the terminal, and how the restore that follows comes."
+    },
+    "TerminalRestore": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "snapshot",
+          "description": "A libghostty snapshot of the client's codec, history included."
+        },
+        {
+          "type": "string",
+          "const": "vt",
+          "description": "The formatter's VT of the screen, without history, for a client of another codec."
+        }
+      ]
+    },
+    "TerminalStreamMessage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "updated": {
+              "$ref": "#/$defs/HostTerminal"
+            }
+          },
+          "required": [
+            "updated"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "bell": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "bell"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "notification": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "body"
+              ]
+            }
+          },
+          "required": [
+            "notification"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "progress": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "description": "`remove`, `set`, `error`, `indeterminate` or `pause`.",
+                  "type": "string"
+                },
+                "progress": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                }
+              },
+              "required": [
+                "state"
+              ]
+            }
+          },
+          "required": [
+            "progress"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "clipboard": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ]
+            }
+          },
+          "required": [
+            "clipboard"
+          ],
+          "additionalProperties": false,
+          "description": "To the device that last typed only."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "resync": {
+              "type": "object",
+              "properties": {
+                "restore": {
+                  "$ref": "#/$defs/TerminalRestore"
+                }
+              },
+              "required": [
+                "restore"
+              ]
+            }
+          },
+          "required": [
+            "resync"
+          ],
+          "additionalProperties": false,
+          "description": "The client fell behind: a new restore follows and replaces its screen."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exited": {
+              "type": "object",
+              "properties": {
+                "exitCode": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              },
+              "required": [
+                "exitCode"
+              ]
+            }
+          },
+          "required": [
+            "exited"
+          ],
+          "additionalProperties": false,
+          "description": "The program ended; the Host closes the stream after it."
+        }
+      ],
+      "description": "The Host's later text frames."
+    },
+    "TerminalStreamClientMessage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "resize": {
+              "$ref": "#/$defs/TerminalSize"
+            }
+          },
+          "required": [
+            "resize"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "The client's text frames after [`Open`]."
     }
   }
 }

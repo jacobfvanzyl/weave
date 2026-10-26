@@ -25,6 +25,7 @@ use weave_host_protocol::host;
 use weave_host_protocol::pending;
 use weave_host_protocol::queue;
 use weave_host_protocol::sessions;
+use weave_host_protocol::terminals;
 use weave_host_protocol::tools;
 use weave_host_protocol::turns;
 use weave_host_protocol::websocket;
@@ -126,6 +127,15 @@ fn schema() -> Value {
         "worktrees/create" => worktrees::CreateWorktreeRequest,
         "worktrees/remove" => worktrees::RemoveWorktreeRequest,
         "worktrees/release" => worktrees::ReleaseWorktreeRequest,
+        "terminals/list" => terminals::ListTerminalsRequest,
+        "terminals/watch" => terminals::WatchTerminalsRequest,
+        "terminals/unwatch" => terminals::UnwatchTerminalsRequest,
+        "terminals/new" => terminals::NewTerminalRequest,
+        "terminals/close" => terminals::CloseTerminalRequest,
+        "terminals/setLabel" => terminals::SetTerminalLabelRequest,
+        "terminals/write" => terminals::WriteTerminalRequest,
+        "terminals/format" => terminals::FormatTerminalRequest,
+        "terminals/attach" => terminals::AttachTerminalRequest,
     };
     let notifications = notifications! { generator, inlined;
         "session/event" => events::SessionEventNotification,
@@ -137,7 +147,16 @@ fn schema() -> Value {
         "pending/resolved" => pending::PendingResolvedNotification,
         "agents/updateAvailable" => agents::UpdateAvailableNotification,
         "devices/paired" => devices::DevicePairedNotification,
+        "terminals/updated" => terminals::TerminalUpdatedNotification,
+        "terminals/removed" => terminals::TerminalRemovedNotification,
     };
+    // A terminal's stream speaks frames of its own, not JSON-RPC (`terminals::stream`).
+    let stream = json!({
+        "open": define::<terminals::stream::Open>(&mut generator, &mut inlined),
+        "opened": define::<terminals::stream::Opened>(&mut generator, &mut inlined),
+        "message": define::<terminals::stream::Message>(&mut generator, &mut inlined),
+        "clientMessage": define::<terminals::stream::ClientMessage>(&mut generator, &mut inlined),
+    });
     let mut definitions = generator.take_definitions(true);
     definitions.extend(inlined);
     // Two types with one name come out as `Name` and `Name2`, by the order they were met, and a
@@ -156,6 +175,7 @@ fn schema() -> Value {
         "type": "object",
         "x-weave-requests": requests,
         "x-weave-notifications": notifications,
+        "x-weave-terminal-stream": stream,
         "x-weave-constants": {
             "protocol": {"version": PROTOCOL_VERSION, "oldestSupported": OLDEST_SUPPORTED_VERSION},
             "websocket": {
@@ -165,6 +185,15 @@ fn schema() -> Value {
                 "closeRevoked": websocket::CLOSE_REVOKED,
                 "closeBehind": websocket::CLOSE_BEHIND,
                 "closeUnauthenticated": websocket::CLOSE_UNAUTHENTICATED,
+            },
+            "terminalStream": {
+                "subprotocol": terminals::stream::SUBPROTOCOL,
+                "ticketLifetimeMs": terminals::stream::TICKET_LIFETIME_MS,
+                "restore": terminals::stream::RESTORE,
+                "output": terminals::stream::OUTPUT,
+                "input": terminals::stream::INPUT,
+                "closeTicket": terminals::stream::CLOSE_TICKET,
+                "closeExited": terminals::stream::CLOSE_EXITED,
             },
             "errors": {
                 "unauthenticated": errors::UNAUTHENTICATED,
@@ -185,6 +214,8 @@ fn schema() -> Value {
                 "uncommittedChanges": errors::UNCOMMITTED_CHANGES,
                 "keyReused": errors::KEY_REUSED,
                 "hostStopping": errors::HOST_STOPPING,
+                "unknownTerminal": errors::UNKNOWN_TERMINAL,
+                "terminalUnavailable": errors::TERMINAL_UNAVAILABLE,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
@@ -199,6 +230,7 @@ fn schema() -> Value {
                 "getSession": sessions::GET_FEATURE,
                 "requestKeys": turns::REQUEST_KEYS_FEATURE,
                 "drain": host::DRAIN_FEATURE,
+                "terminals": terminals::FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "sessions": {"maxTitle": sessions::MAX_TITLE},

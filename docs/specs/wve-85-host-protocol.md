@@ -1037,6 +1037,10 @@ Text as if typed, for clients that don't attach.
 The visible screen through libghostty-vt's formatter, with its history too when `history` is
 set. With `vt`, styles, cursor, modes and the palette are included.
 
+**`terminals/attach`**, **`terminals/close`** and the others answer `unknown_terminal` for an id
+the Host has no terminal by, and `terminals/new` answers `terminal_unavailable` when no holder
+could be started.
+
 **`terminals/attach`** `{id}` → `{ticket, url}`
 
 A ticket for the terminal's stream: one use, within 30 seconds, by the device that asked.
@@ -1079,7 +1083,11 @@ Text frames from the Host:
 * `{"notification": {"title", "body"}}`;
 * `{"progress": {"state", "progress"}}`;
 * `{"clipboard": {"text"}}`, only to the device that last typed;
-* `{"exited": {"exitCode"}}`, after which the Host closes the stream.
+* `{"resync": {"restore"}}`: the client fell behind, and a new restore follows in `0x01` frames
+  and replaces its screen;
+* `{"exited": {"exitCode"}}`, after which the Host closes the stream (4011).
+
+A stream whose ticket is missing, used, late or another device's is closed with 4010.
 
 Text frames from the client: `{"resize": {"cols", "rows"}}`.
 
@@ -1138,8 +1146,12 @@ The holder protocol:
   `title_changed`, `bell`, `process_changed`, `desktop_notification`, `progress_report`,
   `clipboard_written`, `program_status_changed` and `program_status_removed`. The holder adds
   `command_changed` (OSC 133), `size_changed`, `label_changed` and `resync`.
-* `attach` answers `{codec, snapshot_bytes, terminal}`, then sends the snapshot and all later
-  output, in order.
+* `attach` takes `restore`: `snapshot`, the default, or `vt` for a client of another codec, which
+  gets the formatter's VT of the visible screen, and its resyncs too. It answers
+  `{codec, restore, snapshot_bytes, terminal}`, then sends the restore and all later output, in
+  order.
+* `format` takes `format` (`text`, `vt` or `html`), `trim`, `unwrap` and `history`; without
+  `history`, the visible screen alone.
 * Each attached client has an outbox of its own. One that falls 4 MiB behind gets `resync` and a
   fresh snapshot.
 * It is versioned in `hello`. A Host speaks the version of every holder still running, since a

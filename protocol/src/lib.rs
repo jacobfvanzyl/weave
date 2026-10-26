@@ -20,6 +20,8 @@
 //! - [`pending`]: permission requests and elicitations waiting on a person, and client tool
 //!   calls waiting on a client.
 //! - [`tools`]: client tools, which an attached client runs for the agent.
+//! - [`terminals`]: terminals on the Host's computer, which clients show beside a thread, and
+//!   their streams.
 //! - [`host`]: the Host's status, and stopping it.
 //!
 //! Remote clients follow `docs/specs/wve-90-remote-clients.md`.
@@ -36,6 +38,7 @@ pub mod policy;
 pub mod queue;
 mod role;
 pub mod sessions;
+pub mod terminals;
 pub mod tools;
 pub mod turns;
 pub mod worktrees;

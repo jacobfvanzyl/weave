@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&WatchTerminalsRequest\n{ directory: \"/Users/jaco/Projects/weave/app\".into(), })"
+---
+{
+  "method": "terminals/watch",
+  "params": {
+    "directory": "/Users/jaco/Projects/weave/app"
+  }
+}

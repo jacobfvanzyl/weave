@@ -1,0 +1,41 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&TerminalsResponse\n{ scope: \"/Users/jaco/Projects/weave\".into(), terminals: vec![terminal()], })"
+---
+{
+  "scope": "/Users/jaco/Projects/weave",
+  "terminals": [
+    {
+      "id": "t-5f3a",
+      "scope": "/Users/jaco/Projects/weave",
+      "label": "dev server",
+      "openedFrom": "s-1",
+      "title": "npm run dev",
+      "pwd": "/Users/jaco/Projects/weave/app",
+      "process": {
+        "foreground": {
+          "pid": 4242,
+          "name": "node"
+        }
+      },
+      "size": {
+        "cols": 100,
+        "rows": 30
+      },
+      "command": {
+        "running": true,
+        "command": "npm run dev"
+      },
+      "programStatus": [
+        {
+          "id": "build",
+          "state": "blocked",
+          "kind": "question",
+          "app": "vite",
+          "msg": "Port 5174 is taken; use 5175?"
+        }
+      ],
+      "startedAt": 1760180000000
+    }
+  ]
+}

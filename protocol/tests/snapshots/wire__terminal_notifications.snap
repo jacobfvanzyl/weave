@@ -1,0 +1,51 @@
+---
+source: protocol/tests/wire.rs
+expression: "json!([message(&TerminalUpdatedNotification { terminal: terminal() }),\nmessage(&TerminalRemovedNotification\n{\n    id: \"t-5f3a\".to_owned(), scope: \"/Users/jaco/Projects/weave\".into(),\n    exit_code: Some(0),\n}),])"
+---
+[
+  {
+    "method": "terminals/updated",
+    "params": {
+      "terminal": {
+        "id": "t-5f3a",
+        "scope": "/Users/jaco/Projects/weave",
+        "label": "dev server",
+        "openedFrom": "s-1",
+        "title": "npm run dev",
+        "pwd": "/Users/jaco/Projects/weave/app",
+        "process": {
+          "foreground": {
+            "pid": 4242,
+            "name": "node"
+          }
+        },
+        "size": {
+          "cols": 100,
+          "rows": 30
+        },
+        "command": {
+          "running": true,
+          "command": "npm run dev"
+        },
+        "programStatus": [
+          {
+            "id": "build",
+            "state": "blocked",
+            "kind": "question",
+            "app": "vite",
+            "msg": "Port 5174 is taken; use 5175?"
+          }
+        ],
+        "startedAt": 1760180000000
+      }
+    }
+  },
+  {
+    "method": "terminals/removed",
+    "params": {
+      "id": "t-5f3a",
+      "scope": "/Users/jaco/Projects/weave",
+      "exitCode": 0
+    }
+  }
+]

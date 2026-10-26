@@ -1519,3 +1519,150 @@ fn unknown_event_kinds_and_fields_are_tolerated() {
         .expect("an unknown kind still parses");
     assert_eq!(entry.kind, FileKind::Other);
 }
+
+fn terminal() -> weave_host_protocol::terminals::Terminal {
+    use weave_host_protocol::terminals::BlockedKind;
+    use weave_host_protocol::terminals::ProgramState;
+    use weave_host_protocol::terminals::ProgramStatus;
+    use weave_host_protocol::terminals::Terminal;
+    use weave_host_protocol::terminals::TerminalCommand;
+    use weave_host_protocol::terminals::TerminalProcess;
+    use weave_host_protocol::terminals::TerminalProcesses;
+    use weave_host_protocol::terminals::TerminalSize;
+    Terminal {
+        id: "t-5f3a".to_owned(),
+        scope: "/Users/jaco/Projects/weave".into(),
+        label: Some("dev server".to_owned()),
+        opened_from: Some(agent_client_protocol::schema::v1::SessionId::new("s-1")),
+        title: Some("npm run dev".to_owned()),
+        pwd: Some("/Users/jaco/Projects/weave/app".into()),
+        process: Some(TerminalProcesses {
+            foreground: Some(TerminalProcess {
+                pid: 4242,
+                name: "node".to_owned(),
+            }),
+        }),
+        size: TerminalSize {
+            cols: 100,
+            rows: 30,
+        },
+        command: Some(TerminalCommand {
+            running: true,
+            command: Some("npm run dev".to_owned()),
+            exit_code: None,
+        }),
+        program_status: vec![ProgramStatus {
+            id: Some("build".to_owned()),
+            state: ProgramState::Blocked,
+            kind: Some(BlockedKind::Question),
+            progress: None,
+            app: Some("vite".to_owned()),
+            title: None,
+            msg: Some("Port 5174 is taken; use 5175?".to_owned()),
+        }],
+        started_at: 1_760_180_000_000,
+    }
+}
+
+#[test]
+fn terminals() {
+    use weave_host_protocol::terminals::AttachTerminalRequest;
+    use weave_host_protocol::terminals::AttachTerminalResponse;
+    use weave_host_protocol::terminals::FormatTerminalRequest;
+    use weave_host_protocol::terminals::NewTerminalRequest;
+    use weave_host_protocol::terminals::TerminalFormat;
+    use weave_host_protocol::terminals::TerminalRemovedNotification;
+    use weave_host_protocol::terminals::TerminalSize;
+    use weave_host_protocol::terminals::TerminalUpdatedNotification;
+    use weave_host_protocol::terminals::TerminalsResponse;
+    use weave_host_protocol::terminals::WatchTerminalsRequest;
+    use weave_host_protocol::terminals::stream;
+
+    insta::assert_json_snapshot!(
+        "watch_terminals_request",
+        message(&WatchTerminalsRequest {
+            directory: "/Users/jaco/Projects/weave/app".into(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "terminals_response",
+        round_trip(&TerminalsResponse {
+            scope: "/Users/jaco/Projects/weave".into(),
+            terminals: vec![terminal()],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "new_terminal_request",
+        message(&NewTerminalRequest {
+            directory: "/Users/jaco/Projects/weave/app".into(),
+            label: Some("dev server".to_owned()),
+            opened_from: Some(agent_client_protocol::schema::v1::SessionId::new("s-1")),
+            command: Some(vec!["npm".to_owned(), "run".to_owned(), "dev".to_owned()]),
+            size: Some(TerminalSize {
+                cols: 100,
+                rows: 30
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "format_terminal_request",
+        message(&FormatTerminalRequest {
+            id: "t-5f3a".to_owned(),
+            format: TerminalFormat::Vt,
+            history: true,
+            trim: false,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "attach_terminal",
+        json!({
+            "request": message(&AttachTerminalRequest { id: "t-5f3a".to_owned() }),
+            "response": round_trip(&AttachTerminalResponse {
+                ticket: "k2Vx".to_owned(),
+                expires_at: 1_760_180_030_000,
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "terminal_notifications",
+        json!([
+            message(&TerminalUpdatedNotification {
+                terminal: terminal()
+            }),
+            message(&TerminalRemovedNotification {
+                id: "t-5f3a".to_owned(),
+                scope: "/Users/jaco/Projects/weave".into(),
+                exit_code: Some(0),
+            }),
+        ])
+    );
+    insta::assert_json_snapshot!(
+        "terminal_stream",
+        json!({
+            "open": round_trip(&stream::Open {
+                ticket: "k2Vx".to_owned(),
+                size: TerminalSize { cols: 60, rows: 40 },
+                codec: "ghostty fb13fa9602f47590ccfaaea4cd8e178fac2ec8cc snapshot 1".to_owned(),
+            }),
+            "opened": round_trip(&stream::Opened {
+                terminal: terminal(),
+                restore: stream::Restore::Snapshot,
+            }),
+            "messages": [
+                round_trip(&stream::Message::Bell {}),
+                round_trip(&stream::Message::Notification {
+                    title: "Done".to_owned(),
+                    body: "Tests passed".to_owned(),
+                }),
+                round_trip(&stream::Message::Progress {
+                    state: "set".to_owned(),
+                    progress: Some(40),
+                }),
+                round_trip(&stream::Message::Clipboard { text: "hello".to_owned() }),
+                round_trip(&stream::Message::Resync { restore: stream::Restore::Vt }),
+                round_trip(&stream::Message::Exited { exit_code: 0 }),
+            ],
+            "client": round_trip(&stream::ClientMessage::Resize(TerminalSize { cols: 60, rows: 35 })),
+        })
+    );
+}

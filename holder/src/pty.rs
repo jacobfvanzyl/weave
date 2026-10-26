@@ -147,9 +147,23 @@ impl Pty {
         (group > 0).then_some(group)
     }
 
-    /// Hangs up the program's session, as closing a terminal window does.
+    /// Hangs up the program, as closing a terminal window does: SIGHUP to the session's leader
+    /// and to the foreground process group, which an interactive shell under `login(1)` has to
+    /// itself.
     pub fn hang_up(&self) {
-        unsafe { libc::kill(-self.child, libc::SIGHUP) };
+        self.signal(libc::SIGHUP);
+    }
+
+    /// Kills what `hang_up` reaches, for a program that won't hang up.
+    pub fn kill(&self) {
+        self.signal(libc::SIGKILL);
+    }
+
+    fn signal(&self, signal: libc::c_int) {
+        unsafe { libc::kill(-self.child, signal) };
+        if let Some(group) = self.foreground().filter(|group| *group != self.child) {
+            unsafe { libc::kill(-group, signal) };
+        }
     }
 
     /// Waits for the program to exit, and says how: its exit code, or 128 and the signal.

@@ -1,0 +1,21 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&NewTerminalRequest\n{\n    directory: \"/Users/jaco/Projects/weave/app\".into(), label:\n    Some(\"dev server\".to_owned()), opened_from:\n    Some(agent_client_protocol::schema::v1::SessionId::new(\"s-1\")), command:\n    Some(vec![\"npm\".to_owned(), \"run\".to_owned(), \"dev\".to_owned()]), size:\n    Some(TerminalSize { cols: 100, rows: 30 }),\n})"
+---
+{
+  "method": "terminals/new",
+  "params": {
+    "directory": "/Users/jaco/Projects/weave/app",
+    "label": "dev server",
+    "openedFrom": "s-1",
+    "command": [
+      "npm",
+      "run",
+      "dev"
+    ],
+    "size": {
+      "cols": 100,
+      "rows": 30
+    }
+  }
+}

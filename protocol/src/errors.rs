@@ -42,6 +42,10 @@ pub const UNCOMMITTED_CHANGES: i32 = -32075;
 pub const KEY_REUSED: i32 = -32076;
 /// The Host is draining before it stops, and starts no new turns.
 pub const HOST_STOPPING: i32 = -32077;
+/// No terminal has that id.
+pub const UNKNOWN_TERMINAL: i32 = -32078;
+/// The terminal's holder couldn't be started or reached; the message says why.
+pub const TERMINAL_UNAVAILABLE: i32 = -32079;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -119,16 +123,33 @@ pub fn not_target() -> Error {
     )
 }
 
-pub fn worktree_busy(sessions: &[SessionId]) -> Error {
+/// A session in the worktree runs a turn or waits on a request, or a terminal in it runs a
+/// command; `data` names them.
+pub fn worktree_busy(sessions: &[SessionId], terminals: &[String]) -> Error {
     let ids: Vec<String> = sessions.iter().map(ToString::to_string).collect();
-    Error::new(
-        WORKTREE_BUSY,
-        format!(
+    let mut busy = Vec::new();
+    if !ids.is_empty() {
+        busy.push(format!(
             "a thread in this worktree is running a turn or waiting on a request: {}",
             ids.join(", ")
-        ),
-    )
-    .data(serde_json::json!({"sessions": ids}))
+        ));
+    }
+    if !terminals.is_empty() {
+        busy.push(format!(
+            "a terminal in this worktree is running a command: {}",
+            terminals.join(", ")
+        ));
+    }
+    Error::new(WORKTREE_BUSY, busy.join("; "))
+        .data(serde_json::json!({"sessions": ids, "terminals": terminals}))
+}
+
+pub fn unknown_terminal(id: &str) -> Error {
+    Error::new(UNKNOWN_TERMINAL, format!("no terminal {id}"))
+}
+
+pub fn terminal_unavailable(why: impl Into<String>) -> Error {
+    Error::new(TERMINAL_UNAVAILABLE, why)
 }
 
 pub fn not_a_repository(path: &Path) -> Error {
