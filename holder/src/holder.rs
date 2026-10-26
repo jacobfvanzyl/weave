@@ -429,6 +429,7 @@ fn send_output(inner: &mut Inner, bytes: &[u8]) {
                 codec: vt::codec().unwrap_or_default(),
                 restore: restore_name(vt).to_owned(),
                 snapshot_bytes: restore.len(),
+                size: inner.terminal.size(),
             }));
             send_restore(client, restore);
         }

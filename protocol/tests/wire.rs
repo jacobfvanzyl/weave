@@ -1663,7 +1663,9 @@ fn terminals() {
                 round_trip(&stream::Message::Resync {
                     restore: stream::Restore::Vt,
                     restore_bytes: 2_048,
+                    size: TerminalSize { cols: 60, rows: 35 },
                 }),
+                round_trip(&stream::Message::Resized(TerminalSize { cols: 100, rows: 30 })),
                 round_trip(&stream::Message::Exited { exit_code: 0 }),
             ],
             "client": round_trip(&stream::ClientMessage::Resize(TerminalSize { cols: 60, rows: 35 })),

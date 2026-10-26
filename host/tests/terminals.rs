@@ -864,6 +864,16 @@ async fn the_last_device_to_type_sets_the_size() {
 
     let mut ipad = stream(&url, &attach().await, (120, 40), "x").await;
     wait_for_size(120, 40).await;
+    // The first stream's restore is made at its own size.
+    let mut on_ipad = Received::default();
+    read_until(&mut ipad, &mut on_ipad, |received| {
+        !received.messages.is_empty()
+    })
+    .await;
+    assert_eq!(
+        on_ipad.messages[0]["terminal"]["size"],
+        json!({"cols": 120, "rows": 40})
+    );
     // Another device joining doesn't resize it, nor does its rotating.
     let mut phone = stream(&url, &attach().await, (50, 30), "x").await;
     send_text(&mut phone, json!({"resize": {"cols": 30, "rows": 50}})).await;
@@ -872,12 +882,34 @@ async fn the_last_device_to_type_sets_the_size() {
     // Once it types, it does.
     type_(&mut phone, "true\r").await;
     wait_for_size(30, 50).await;
+    // Every stream hears the new size, in order with the output.
+    read_until(&mut ipad, &mut on_ipad, |received| {
+        received
+            .messages
+            .iter()
+            .any(|message| message["resized"] == json!({"cols": 30, "rows": 50}))
+    })
+    .await;
     // And while it's the last to type, its own resizes apply at once.
     send_text(&mut phone, json!({"resize": {"cols": 50, "rows": 30}})).await;
     wait_for_size(50, 30).await;
     // Until the iPad types again.
     type_(&mut ipad, "true\r").await;
     wait_for_size(120, 40).await;
+
+    // A holder outlives the Host, so the test ends its terminal.
+    client
+        .connection
+        .send(CloseTerminalRequest {
+            id: terminal.id.clone(),
+        })
+        .await
+        .expect("terminals/close");
+    let mut on_phone = Received::default();
+    read_until(&mut phone, &mut on_phone, |received| {
+        received.close.is_some()
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1025,7 +1025,11 @@ export type TerminalStreamMessage =
       resync: {
         restore: TerminalRestore;
         restoreBytes: number;
+        size: TerminalSize;
       };
+    }
+  | {
+      resized: TerminalSize;
     }
   | {
       exited: {
@@ -6079,7 +6083,8 @@ export interface TerminalSize1 {
   rows: number;
 }
 /**
- * The Host's first text frame: the terminal, and how the restore that follows comes.
+ * The Host's first text frame: the terminal as the restore has it, so a VT restore is drawn
+ * at its `size`, and how the restore that follows comes.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "TerminalStreamOpened".

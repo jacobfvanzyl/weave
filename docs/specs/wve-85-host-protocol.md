@@ -1060,7 +1060,9 @@ Opening the stream:
    client's libghostty-vt was built from, and its snapshot format. libghostty-vt reports the same
    version at every commit, so only the commit tells two builds apart.
 2. The Host answers with `{"terminal": Terminal, "restore": "snapshot" | "vt", "restoreBytes"}`,
-   `restoreBytes` saying how much restore follows before the output does:
+   `restoreBytes` saying how much restore follows before the output does, and `terminal` being
+   the terminal as the restore has it, so a `vt` restore is drawn at its `size`. The Host sizes
+   the terminal for the stream, if it's to, before the restore is made:
    * `snapshot` when the holder's codec is the client's;
    * otherwise `vt`, the formatter's VT of the visible screen, without history.
 
@@ -1086,8 +1088,10 @@ Text frames from the Host:
 * `{"notification": {"title", "body"}}`;
 * `{"progress": {"state", "progress"}}`;
 * `{"clipboard": {"text"}}`, only to the device that last typed;
-* `{"resync": {"restore", "restoreBytes"}}`: the client fell behind, and a new restore follows in
-  `0x01` frames and replaces its screen;
+* `{"resync": {"restore", "restoreBytes", "size"}}`: the client fell behind, and a new restore
+  follows in `0x01` frames and replaces its screen, a `vt` one drawn at `size`;
+* `{"resized": {"cols", "rows"}}`: the terminal took a new size at this point in the output, so
+  the client's screen takes it where the owner's did;
 * `{"exited": {"exitCode"}}`, after which the Host closes the stream (4011).
 
 A stream whose ticket is missing, used, late or another device's is closed with 4010.
@@ -1152,11 +1156,11 @@ The holder protocol:
 * `attach` takes `restore`: `snapshot`, the default, or `vt` for a client of another codec, which
   gets the formatter's VT of the visible screen, and its resyncs too. It answers
   `{codec, restore, snapshot_bytes, terminal}`, then sends the restore and all later output, in
-  order.
+  order, with each `size_changed` where the terminal took the size.
 * `format` takes `format` (`text`, `vt` or `html`), `trim`, `unwrap` and `history`; without
   `history`, the visible screen alone.
-* Each attached client has an outbox of its own. One that falls 4 MiB behind gets `resync` and a
-  fresh snapshot.
+* Each attached client has an outbox of its own. One that falls 4 MiB behind gets `resync`, with
+  the terminal's `size`, and a fresh snapshot.
 * It is versioned in `hello`. A Host speaks the version of every holder still running, since a
   holder keeps the weave it started with until its shell exits.
 

@@ -359,7 +359,8 @@ pub mod stream {
         pub codec: String,
     }
 
-    /// The Host's first text frame: the terminal, and how the restore that follows comes.
+    /// The Host's first text frame: the terminal as the restore has it, so a VT restore is drawn
+    /// at its `size`, and how the restore that follows comes.
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
     #[cfg_attr(feature = "schema", schemars(rename = "TerminalStreamOpened"))]
@@ -405,11 +406,15 @@ pub mod stream {
             text: String,
         },
         /// The client fell behind: a new restore of `restore_bytes` follows and replaces its
-        /// screen.
+        /// screen, a VT one drawn at `size`.
         Resync {
             restore: Restore,
             restore_bytes: u64,
+            size: TerminalSize,
         },
+        /// The terminal took a new size here, in order with the output, so the client's screen
+        /// takes it at the same point as the owner's.
+        Resized(TerminalSize),
         /// The program ended; the Host closes the stream after it.
         Exited {
             exit_code: i32,

@@ -6,8 +6,9 @@
 //! client of the owner's codec and the formatter's VT for another. From then on the owner's
 //! restore and output frames reach the client unchanged, read from the owner only as fast as
 //! the client takes them, so a slow client falls behind in the owner, which resynchronizes it.
-//! Input goes the other way, and the size follows the device that last typed. Clipboard writes
-//! go to that device alone; bells, notifications and progress to every stream.
+//! Input goes the other way, and the size follows the device that last typed. The size reaches
+//! the client in order with the output, as the owner took it. Clipboard writes go to that device
+//! alone; bells, notifications and progress to every stream.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -24,6 +25,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message as Frame;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use weave_host_protocol::terminals::Terminal;
 use weave_host_protocol::terminals::TerminalSize;
 use weave_host_protocol::terminals::stream::CLOSE_EXITED;
 use weave_host_protocol::terminals::stream::CLOSE_TICKET;
@@ -78,6 +80,16 @@ pub(crate) async fn serve(shared: Arc<Shared>, mut socket: Socket, config: Arc<R
     } else {
         Restore::Vt
     };
+
+    // The stream joins, and sizes the terminal if it's to, before it attaches, so the restore is
+    // made at the size it opens with. Later sizes come in order with the output.
+    let stream = shared.next_client.fetch_add(1, Ordering::Relaxed);
+    if let Some(size) = terminals.join(&id, stream, open.size)
+        && let Err(error) = terminals.resize(&id, size).await
+    {
+        tracing::debug!(%error, "couldn't size a terminal for its first stream");
+    }
+    let updates = terminals.updates();
     let attached = match terminals.connect(&id).await {
         Ok((control, incoming)) => control
             .call("attach", json!({"restore": restore_name(restore)}))
@@ -85,57 +97,46 @@ pub(crate) async fn serve(shared: Arc<Shared>, mut socket: Socket, config: Arc<R
             .map(|answer| (control, incoming, answer)),
         Err(error) => Err(error),
     };
-    let (control, incoming, restore_bytes) = match attached {
-        Ok((control, incoming, answer)) => (
-            control,
-            incoming,
-            answer["snapshot_bytes"].as_u64().unwrap_or_default(),
-        ),
+    // The terminal as the restore has it.
+    let attached = attached.and_then(|(control, incoming, answer)| {
+        let terminal =
+            super::describe(&answer["terminal"]).map_or_else(|| terminals.get(&id), Ok)?;
+        let opened = Opened {
+            terminal,
+            restore,
+            restore_bytes: answer["snapshot_bytes"].as_u64().unwrap_or_default(),
+        };
+        Ok((control, incoming, opened))
+    });
+    let (control, incoming, opened) = match attached {
+        Ok(attached) => attached,
         Err(error) => {
             tracing::info!(%error, "a terminal stream couldn't attach");
+            terminals.leave(&id, stream);
             close(&mut socket, CLOSE_EXITED, "the terminal ended").await;
             return;
         }
     };
 
-    let stream = shared.next_client.fetch_add(1, Ordering::Relaxed);
     let (closer, closed) = mpsc::unbounded_channel();
     if let Some(device) = &ticket.device {
         shared
             .devices
             .connected(device, stream, Arc::new(StreamCloser(closer.clone())));
     }
-    if let Some(size) = terminals.join(&id, stream, open.size)
-        && let Err(error) = terminals.resize(&id, size).await
-    {
-        tracing::debug!(%error, "couldn't size a terminal for its first stream");
-    }
-    let opened = terminals.get(&id).map(|terminal| Opened {
-        terminal,
-        restore,
-        restore_bytes,
-    });
-    let relay = match opened {
-        Ok(opened) => {
-            let text = serde_json::to_string(&opened).unwrap_or_default();
-            if socket.send(Frame::text(text)).await.is_ok() {
-                let link = Link {
-                    terminals: &terminals,
-                    id: &id,
-                    stream,
-                    control: &control,
-                    restore,
-                };
-                link.relay(socket, incoming, closed, config.ping_interval)
-                    .await
-            } else {
-                None
-            }
-        }
-        Err(_) => {
-            close(&mut socket, CLOSE_EXITED, "the terminal ended").await;
-            None
-        }
+    let text = serde_json::to_string(&opened).unwrap_or_default();
+    let relay = if socket.send(Frame::text(text)).await.is_ok() {
+        let link = Link {
+            terminals: &terminals,
+            id: &id,
+            stream,
+            control: &control,
+            restore,
+        };
+        link.relay(socket, incoming, updates, closed, config.ping_interval)
+            .await
+    } else {
+        None
     };
     if let Some(code) = relay {
         tracing::debug!(code, "a terminal stream closed");
@@ -192,11 +193,11 @@ impl Link<'_> {
         &self,
         socket: Socket,
         mut incoming: mpsc::Receiver<Incoming>,
+        mut updates: broadcast::Receiver<Terminal>,
         mut closed: mpsc::UnboundedReceiver<u16>,
         ping_interval: Duration,
     ) -> Option<u16> {
         let (mut sink, mut frames) = socket.split();
-        let mut updates = self.terminals.updates();
         let mut pings =
             tokio::time::interval_at(tokio::time::Instant::now() + ping_interval, ping_interval);
         let mut answered = true;
@@ -284,7 +285,16 @@ impl Link<'_> {
                     "resync" => Some(Message::Resync {
                         restore: self.restore,
                         restore_bytes: payload["snapshot_bytes"].as_u64().unwrap_or_default(),
+                        size: size(&payload["size"])
+                            .or_else(|| {
+                                self.terminals
+                                    .get(self.id)
+                                    .ok()
+                                    .map(|terminal| terminal.size)
+                            })
+                            .unwrap_or(super::DEFAULT_SIZE),
                     }),
+                    "size_changed" => size(&payload).map(Message::Resized),
                     "child_exited" => {
                         let exit_code = payload["exit_code"]
                             .as_i64()
@@ -334,6 +344,13 @@ fn binary(kind: u8, payload: &[u8]) -> Frame {
     bytes.push(kind);
     bytes.extend_from_slice(payload);
     Frame::binary(bytes)
+}
+
+fn size(payload: &Value) -> Option<TerminalSize> {
+    Some(TerminalSize {
+        cols: u16::try_from(payload["cols"].as_u64()?).ok()?,
+        rows: u16::try_from(payload["rows"].as_u64()?).ok()?,
+    })
 }
 
 fn text(payload: &Value, key: &str) -> String {

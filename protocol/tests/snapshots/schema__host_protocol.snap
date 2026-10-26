@@ -8658,7 +8658,7 @@ expression: schema()
         "restore",
         "restoreBytes"
       ],
-      "description": "The Host's first text frame: the terminal, and how the restore that follows comes."
+      "description": "The Host's first text frame: the terminal as the restore has it, so a VT restore is drawn\nat its `size`, and how the restore that follows comes."
     },
     "TerminalRestore": {
       "oneOf": [
@@ -8788,11 +8788,15 @@ expression: schema()
                   "type": "integer",
                   "format": "uint64",
                   "minimum": 0
+                },
+                "size": {
+                  "$ref": "#/$defs/TerminalSize"
                 }
               },
               "required": [
                 "restore",
-                "restoreBytes"
+                "restoreBytes",
+                "size"
               ]
             }
           },
@@ -8800,7 +8804,20 @@ expression: schema()
             "resync"
           ],
           "additionalProperties": false,
-          "description": "The client fell behind: a new restore of `restore_bytes` follows and replaces its\nscreen."
+          "description": "The client fell behind: a new restore of `restore_bytes` follows and replaces its\nscreen, a VT one drawn at `size`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "resized": {
+              "$ref": "#/$defs/TerminalSize"
+            }
+          },
+          "required": [
+            "resized"
+          ],
+          "additionalProperties": false,
+          "description": "The terminal took a new size here, in order with the output, so the client's screen\ntakes it at the same point as the owner's."
         },
         {
           "type": "object",

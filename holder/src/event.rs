@@ -68,6 +68,8 @@ pub enum Event {
         codec: String,
         restore: String,
         snapshot_bytes: usize,
+        /// The terminal's size, which a VT restore is drawn at.
+        size: Size,
     },
 }
 
