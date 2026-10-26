@@ -144,7 +144,7 @@ export type TerminalSummary = {
   title?: string;
   /** The directory the shell last reported. */
   pwd?: string;
-  /** The session it was opened from, by id, whose threads show it by default. */
+  /** The session it was opened from, by id, whose thread puts it in front by default. */
   openedFrom?: string;
   /** The foreground process: the shell, or the command it runs. */
   process?: string;
@@ -182,8 +182,8 @@ export type OpenSession = {
   /** Its history is still replaying as it opens; the transcript shows once it's in. */
   loading?: boolean;
   /**
-   * The terminals of its worktree, or of its directory outside one, oldest first, kept up to date;
-   * none until its Host lists them, or on a Host without terminals.
+   * The terminals of its worktree, or of its directory outside one, kept up to date: a tab each,
+   * in every thread of the worktree. None until its Host lists them, or on a Host without them.
    */
   terminals?: TerminalSummary[];
 };

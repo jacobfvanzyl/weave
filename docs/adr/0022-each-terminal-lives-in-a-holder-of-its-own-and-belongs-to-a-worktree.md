@@ -9,7 +9,7 @@ A thread in the app should be able to open terminals on the Host's computer, in 
 
 A holder keeps each terminal alive. A holder is a process of weave's own, one per terminal, that keeps the terminal's PTY, its shell and an authoritative libghostty-vt, and outlives the Host and every client. A crash takes only its own terminal with it. The Host starts holders outside its own process tree and finds them again by their sockets, keeping no list of its own, so a restart or update of the Host leaves every shell running.
 
-A terminal belongs to the worktree it was opened in, or to its directory outside a repository, as a code editor's terminals belong to its folder rather than to a tab. Every thread in the worktree lists it. It remembers the thread it was opened from, which shows it by default, and it starts in that thread's directory.
+A terminal belongs to the worktree it was opened in, or to its directory outside a repository, as a code editor's terminals belong to its folder rather than to an open file. Every thread in the worktree shows it, as a tab of its own: tabs and terminals are one to one, so a terminal opened on one device is a tab on every device, and closing its tab ends it. It remembers the thread it was opened from, which puts it in front by default, and it starts in that thread's directory.
 
 Where a terminal shows is each device's choice (ADR 0018): which terminals sit beside which thread, and how they're arranged, is kept on the device. The Host keeps no panes or layout. It is the gateway between a device and a holder, since a paired device can reach nothing else on the Host's computer.
 

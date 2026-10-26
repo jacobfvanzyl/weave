@@ -41,7 +41,7 @@ pub struct Terminal {
     /// The person's name for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// The session it was opened from, whose clients show it by default.
+    /// The session it was opened from, whose clients put it in front by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_from: Option<SessionId>,
     /// What the program titled it (OSC 0 and 2).

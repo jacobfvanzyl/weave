@@ -11,6 +11,8 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
     private static let inputFrame: UInt8 = 0x10
     /// The Host's own limit on a message.
     private static let maxMessage = 32 * 1024 * 1024
+    /// How long the view's grid holds still before the Host hears it.
+    private static let settle: TimeInterval = 0.15
     private static let maxRestore = 64 * 1024 * 1024
 
     typealias Size = (cols: Int, rows: Int)
@@ -35,6 +37,7 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
     /// The view's grid, and the one the Host last heard.
     private var grid: Size
     private var sentGrid: Size
+    private var pendingResize: DispatchWorkItem?
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var opened = false
@@ -73,6 +76,7 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
     func stop() {
         guard !ended else { return }
         ended = true
+        pendingResize?.cancel()
         task?.cancel(with: .normalClosure, reason: nil)
         // The session holds its delegate until it's invalidated.
         session?.invalidateAndCancel()
@@ -88,12 +92,20 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
         task?.send(.data(frame)) { _ in }
     }
 
-    /// Asks for the view's grid. The Host decides: the last device to type sets the size.
+    /// Asks for the view's grid. The Host decides: the last device to type sets the size. A drag,
+    /// a rotation or the keyboard sliding in passes through many grids, so it asks for the one the
+    /// view settles on.
     func resize(to grid: Size) {
         self.grid = grid
+        pendingResize?.cancel()
         guard opened, !ended, grid != sentGrid else { return }
-        sentGrid = grid
-        sendJSON(["resize": ["cols": grid.cols, "rows": grid.rows]])
+        let resize = DispatchWorkItem { [weak self] in
+            guard let self, self.opened, !self.ended, self.grid != self.sentGrid else { return }
+            self.sentGrid = self.grid
+            self.sendJSON(["resize": ["cols": self.grid.cols, "rows": self.grid.rows]])
+        }
+        pendingResize = resize
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settle, execute: resize)
     }
 
     private func sendJSON(_ value: [String: Any]) {

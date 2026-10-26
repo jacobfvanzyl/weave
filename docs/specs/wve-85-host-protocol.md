@@ -952,9 +952,9 @@ ADR 0022; [WVE-148](https://linear.app/jacobfvanzyl/issue/WVE-148). The Host off
 `weave-holder` is installed beside it.
 
 A terminal is a shell on the Host's computer that clients show beside a thread. It belongs to a
-worktree, or to a directory outside a repository. It lives in a holder, a process of its own
-that outlives the Host. Where it shows is each client's choice, so nothing here describes panes
-or layout.
+worktree, or to a directory outside a repository, and every thread in it shows the terminal. It
+lives in a holder, a process of its own that outlives the Host. Where it shows is each client's
+choice, so nothing here describes panes or layout.
 
 The concepts and names follow Rex's block model, in this protocol's casing. Its terminal methods
 `format`, `write` and `resize`, its properties `pwd`, `title`, `process`, `size` and
@@ -975,7 +975,7 @@ type Terminal = {
   id: string;            // permanent and opaque: a holder's, or later a Rex block's
   scope: string;         // the worktree it belongs to, or its directory outside a repository
   label?: string;        // the person's name for it
-  openedFrom?: string;   // the session it was opened from, which shows it by default
+  openedFrom?: string;   // the session it was opened from, which puts it in front by default
   title?: string;        // OSC 0 and 2
   pwd?: string;          // the directory the shell reports (OSC 7), as a path: the Host drops the URL's scheme and host
   process?: {foreground: {pid: number; name: string}};

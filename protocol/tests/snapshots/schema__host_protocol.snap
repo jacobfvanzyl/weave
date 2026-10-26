@@ -6248,7 +6248,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The session it was opened from, whose clients show it by default."
+          "description": "The session it was opened from, whose clients put it in front by default."
         },
         "title": {
           "type": [

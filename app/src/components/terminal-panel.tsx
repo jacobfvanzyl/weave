@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { Cancel01Icon, Delete02Icon, Edit02Icon, Maximize01Icon, Minimize01Icon, MoreHorizontalIcon, PlusSignIcon } from '@hugeicons/core-free-icons';
+import { ArrowDown01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, Maximize01Icon, Minimize01Icon, MoreHorizontalIcon, PlusSignIcon } from '@hugeicons/core-free-icons';
 import type { TerminalSummary, TerminalTicket } from '@/app/app-controller';
 import { FONT_SIZE, terminalName, terminalState } from '@/terminal/terminal-layout';
 import { type TerminalNotice, useNativeTerminal } from '@/terminal/use-native-terminal';
@@ -22,7 +22,8 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -31,24 +32,34 @@ import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 
 export type TerminalPanelProps = {
+  /** The worktree's terminals, a tab each. */
   tabs: TerminalSummary[];
-  /** The worktree's terminals without a tab here. */
-  others: TerminalSummary[];
   active?: TerminalSummary;
   fontSize: number;
-  /** iPad: whether it takes the thread's whole width; none on the iPhone, where it does always. */
-  wide?: boolean;
+  /**
+   * `beside` the thread or `wide` over its width, on the iPad, where the tabs share the thread's
+   * top rail; or a `pane` the iPhone swaps the thread's chat for, under its header.
+   */
+  placement: 'beside' | 'wide' | 'pane';
+  /** What the rail shows before the tabs and after them, at full width, where the thread's header doesn't show. */
+  leading?: ReactNode;
+  trailing?: ReactNode;
   onSelect(id: string): void;
-  onOpen(id: string): void;
-  /** Closes a terminal's tab here, leaving the terminal running. */
-  onCloseTab(id: string): void;
-  onNew(): Promise<void>;
-  /** Ends a terminal, for every device. */
-  onEnd(id: string): Promise<void>;
+  /** Starts a terminal, which is a tab on every device. */
+  onNew(): void;
+  /** A terminal is starting. */
+  starting?: boolean;
+  /** Why the last one didn't start. */
+  startError?: string;
+  /** A terminal just started here, which takes the keyboard once attached. */
+  focus?: string;
+  onFocused?(): void;
+  /** Ends a terminal, which closes its tab on every device. */
+  onClose(id: string): Promise<void>;
   onRename(id: string, label?: string): Promise<void>;
   onWide?(wide: boolean): void;
   onFontSize(size: number): void;
-  /** Hides the panel, or closes the iPhone's sheet. */
+  /** Hides the panel. */
   onDone(): void;
   attach(id: string): Promise<TerminalTicket>;
 };
@@ -67,6 +78,37 @@ function StateMark({ terminal }: { terminal: TerminalSummary }) {
       <span aria-hidden='true' className={cn('size-1.5 rounded-full', color, (state.kind === 'running' || (state.kind === 'status' && state.state === 'working')) && 'animate-pulse')} />
       <span className='sr-only'>{state.text}</span>
     </span>
+  );
+}
+
+/** The iPhone's tabs, which a portrait screen has no room for: a picker in the pane's own rail. */
+function TerminalPicker({ tabs, active, onSelect }: {
+  tabs: TerminalSummary[];
+  active?: TerminalSummary;
+  onSelect(id: string): void;
+}) {
+  const name = active ? terminalName(active) : undefined;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={
+        <Button size='sm' variant='ghost' className='min-w-0 flex-1 justify-start'
+          aria-label={name ? `Terminals, showing ${name}` : 'Terminals'} disabled={tabs.length === 0} />
+      }>
+        {active && <StateMark terminal={active} />}
+        <span className='min-w-0 truncate'>{name ?? 'No terminals'}</span>
+        <HugeiconsIcon data-icon='inline-end' icon={ArrowDown01Icon} strokeWidth={2} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='start'>
+        <DropdownMenuRadioGroup value={active?.id} onValueChange={(id) => onSelect(String(id))}>
+          {tabs.map((terminal) => (
+            <DropdownMenuRadioItem key={terminal.id} value={terminal.id} closeOnClick>
+              <StateMark terminal={terminal} />
+              {terminalName(terminal)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -170,15 +212,16 @@ function TerminalSurface({ terminal, fontSize, attach, focusOnAttach, onFocused,
 
 /**
  * A thread's terminals: a tab for each, the one in front drawn natively beneath the page. On the
- * iPad it sits beside the thread, or takes its width; on the iPhone it's a sheet over it.
+ * iPad it sits beside the thread, or takes its width, its tabs in the thread's top rail; on the
+ * iPhone it takes the chat's place under the thread's header.
  */
 export function TerminalPanel(props: TerminalPanelProps) {
-  const { tabs, others, active, fontSize, wide, onSelect, onOpen, onCloseTab, onNew, onEnd, onRename, onWide, onFontSize, onDone, attach } = props;
+  const { tabs, active, fontSize, placement, leading, trailing, onSelect, onNew, starting, startError, focus, onFocused, onClose, onRename, onWide, onFontSize, onDone, attach } = props;
+  const rail = placement !== 'pane';
   const [renaming, setRenaming] = useState(false);
-  const [ending, setEnding] = useState(false);
+  // The terminal whose tab is closing, which ends it, once confirmed.
+  const [closing, setClosing] = useState<TerminalSummary>();
   const [error, setError] = useState<string>();
-  const [creating, setCreating] = useState(false);
-  const [focusNext, setFocusNext] = useState<string>();
   const [notice, setNotice] = useState<string>();
   useEffect(() => {
     if (!notice) return;
@@ -193,43 +236,44 @@ export function TerminalPanel(props: TerminalPanelProps) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
-  const create = () => report(async () => {
-    setCreating(true);
-    try {
-      await onNew();
-      setFocusNext('new');
-    } finally {
-      setCreating(false);
-    }
-  });
 
   return (
     <section aria-label='Terminals' data-slot='terminal-panel' className='flex min-h-0 min-w-0 flex-1 flex-col'>
-      <div className='flex h-9 shrink-0 items-center gap-1 border-b border-border bg-title-bar px-1.5'>
-        {wide === undefined && <Button size='sm' variant='ghost' onClick={onDone}>Done</Button>}
-        <div role='tablist' aria-label='Terminals' className='flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto'>
-          {tabs.map((terminal) => {
-            const selected = terminal.id === active?.id;
-            const name = terminalName(terminal);
-            return (
-              <div key={terminal.id} role='tab' aria-selected={selected} tabIndex={selected ? 0 : -1}
-                className={cn('flex h-7 max-w-48 shrink-0 cursor-default items-center gap-1.5 rounded-md px-2 text-xs',
-                  selected ? 'bg-background font-medium text-foreground' : 'text-muted-foreground')}
-                onClick={() => onSelect(terminal.id)}
-                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(terminal.id); }}>
-                <StateMark terminal={terminal} />
-                <span className='min-w-0 truncate'>{name}</span>
-                {selected && (
-                  <Button size='icon-xs' variant='ghost' aria-label={`Close the tab of ${name}`} className='-mr-1'
-                    onClick={(event) => { event.stopPropagation(); onCloseTab(terminal.id); }}>
-                    <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <Button size='icon' variant='ghost' aria-label='New terminal' disabled={creating} onClick={() => void create()}>
+      <div data-slot={rail ? 'terminal-rail' : 'terminal-bar'}
+        className={cn('flex shrink-0 items-center gap-1 border-b border-border bg-title-bar px-1.5',
+          rail
+            // The thread's top rail goes on over the terminals, at its height (`SessionHeader`).
+            ? 'h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] pt-[env(safe-area-inset-top)]'
+            : 'h-9',
+          leading && 'pl-[max(env(safe-area-inset-left),0.5rem)]')}>
+        {leading}
+        {rail
+          ? (
+            <div role='tablist' aria-label='Terminals' className='flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto'>
+              {tabs.map((terminal) => {
+                const selected = terminal.id === active?.id;
+                const name = terminalName(terminal);
+                return (
+                  <div key={terminal.id} role='tab' aria-selected={selected} tabIndex={selected ? 0 : -1}
+                    className={cn('flex h-7 max-w-48 shrink-0 cursor-default items-center gap-1.5 rounded-md px-2 text-xs',
+                      selected ? 'bg-background font-medium text-foreground' : 'text-muted-foreground')}
+                    onClick={() => onSelect(terminal.id)}
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(terminal.id); }}>
+                    <StateMark terminal={terminal} />
+                    <span className='min-w-0 truncate'>{name}</span>
+                    {selected && (
+                      <Button size='icon-xs' variant='ghost' aria-label={`Close ${name}`} className='-mr-1'
+                        onClick={(event) => { event.stopPropagation(); setClosing(terminal); }}>
+                        <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )
+          : <TerminalPicker tabs={tabs} active={active} onSelect={onSelect} />}
+        <Button size='icon' variant='ghost' aria-label='New terminal' disabled={starting} onClick={onNew}>
           <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
         </Button>
         <DropdownMenu>
@@ -243,48 +287,31 @@ export function TerminalPanel(props: TerminalPanelProps) {
                   <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
                   Rename terminal…
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onCloseTab(active.id)}>
-                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-                  Close tab
-                </DropdownMenuItem>
-                <DropdownMenuItem variant='destructive' onClick={() => setEnding(true)}>
+                <DropdownMenuItem variant='destructive' onClick={() => setClosing(active)}>
                   <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-                  End terminal…
+                  Close terminal…
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             )}
-            {others.length > 0 && (
-              <>
-                {active && <DropdownMenuSeparator />}
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>Also in this worktree</DropdownMenuLabel>
-                  {others.map((terminal) => (
-                    <DropdownMenuItem key={terminal.id} onClick={() => onOpen(terminal.id)}>
-                      <StateMark terminal={terminal} />
-                      Open {terminalName(terminal)}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-              </>
-            )}
-            {(active || others.length > 0) && <DropdownMenuSeparator />}
+            {active && <DropdownMenuSeparator />}
             <DropdownMenuGroup>
               <DropdownMenuItem disabled={fontSize >= FONT_SIZE.max} onClick={() => onFontSize(fontSize + FONT_SIZE.step)}>Larger text</DropdownMenuItem>
               <DropdownMenuItem disabled={fontSize <= FONT_SIZE.min} onClick={() => onFontSize(fontSize - FONT_SIZE.step)}>Smaller text</DropdownMenuItem>
-              {onWide && wide !== undefined && (
-                <DropdownMenuItem onClick={() => onWide(!wide)}>
-                  <HugeiconsIcon icon={wide ? Minimize01Icon : Maximize01Icon} strokeWidth={2} />
-                  {wide ? 'Beside the thread' : 'Full width'}
+              {onWide && rail && (
+                <DropdownMenuItem onClick={() => onWide(placement !== 'wide')}>
+                  <HugeiconsIcon icon={placement === 'wide' ? Minimize01Icon : Maximize01Icon} strokeWidth={2} />
+                  {placement === 'wide' ? 'Beside the thread' : 'Full width'}
                 </DropdownMenuItem>
               )}
-              {wide !== undefined && <DropdownMenuItem onClick={onDone}>Hide terminals</DropdownMenuItem>}
+              {rail && <DropdownMenuItem onClick={onDone}>Hide terminals</DropdownMenuItem>}
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+        {trailing}
       </div>
-      {error && (
+      {(error || startError) && (
         <Alert variant='destructive' className='m-2 w-auto'>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{error ?? startError}</AlertDescription>
         </Alert>
       )}
       {notice && (
@@ -293,28 +320,36 @@ export function TerminalPanel(props: TerminalPanelProps) {
       {active
         ? (
           <TerminalSurface key='surface' terminal={active} fontSize={fontSize} attach={attach}
-            focusOnAttach={focusNext !== undefined} onFocused={() => setFocusNext(undefined)}
+            focusOnAttach={focus === active.id} onFocused={() => onFocused?.()}
             onNotice={(next) => setNotice(next.kind === 'clipboard'
               ? `${terminalName(active)} copied text to the clipboard.`
               : [next.title, next.body].filter(Boolean).join(': ') || `${terminalName(active)} sent a notification.`)} />
         )
         : (
+          // The pane shows only with a terminal, or while one starts.
           <div className='flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground'>
-            <p>No terminal is open beside this thread.</p>
-            <Button size='sm' variant='outline' disabled={creating} onClick={() => void create()}>New terminal</Button>
-            {others.length > 0 && <p>Or open one of this worktree's from the menu.</p>}
+            {startError
+              ? <Button size='sm' variant='outline' onClick={onNew}>Try again</Button>
+              : <><Spinner className='size-4' /> Starting a terminal…</>}
           </div>
         )}
       <RenameTerminalDialog terminal={active} open={renaming} onOpenChange={setRenaming} onRename={onRename} />
-      <AlertDialog open={ending} onOpenChange={setEnding}>
+      <AlertDialog open={closing !== undefined} onOpenChange={(open) => { if (!open) setClosing(undefined); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>End {active ? terminalName(active) : 'the terminal'}?</AlertDialogTitle>
-            <AlertDialogDescription>Its shell and whatever runs in it stop, on every device.</AlertDialogDescription>
+            <AlertDialogTitle>Close {closing ? terminalName(closing) : 'the terminal'}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its shell and whatever runs in it stop, and its tab closes on every device.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant='destructive' onClick={() => { if (active) void report(() => onEnd(active.id)); }}>End</AlertDialogAction>
+            <AlertDialogAction variant='destructive' onClick={() => {
+              setClosing(undefined);
+              if (closing) void report(() => onClose(closing.id));
+            }}>
+              Close terminal
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

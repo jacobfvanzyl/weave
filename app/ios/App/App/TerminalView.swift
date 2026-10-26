@@ -24,10 +24,12 @@ private final class TerminalPointerRecognizer: UIGestureRecognizer {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { send(touches, event, 1); state = .cancelled }
 }
 
-/// Esc, Ctrl, Tab and the arrows above the software keyboard, which has none of them. Ctrl
-/// applies to the next key, from the bar or the keyboard. Arrows repeat while held.
+/// Esc, Ctrl, Tab and the arrows above the software keyboard, which has none of them, and a key
+/// that hides the keyboard, which the iPhone's lacks. Ctrl applies to the next key, from the bar or
+/// the keyboard. Arrows repeat while held.
 final class TerminalKeyBar: UIInputView {
     var onKey: ((String) -> Void)?
+    var onHide: (() -> Void)?
     var control = false { didSet { update() } }
     private let controlButton = UIButton(type: .system)
     private var repeating: Timer?
@@ -70,6 +72,14 @@ final class TerminalKeyBar: UIInputView {
             }
             stack.addArrangedSubview(button)
         }
+        let hide = UIButton(type: .system)
+        var configuration = UIButton.Configuration.gray()
+        configuration.image = UIImage(systemName: "keyboard.chevron.compact.down")
+        configuration.cornerStyle = .medium
+        hide.configuration = configuration
+        hide.accessibilityLabel = "Hide keyboard"
+        hide.addAction(UIAction { [weak self] _ in self?.onHide?() }, for: .touchUpInside)
+        stack.addArrangedSubview(hide)
         update()
     }
     required init?(coder: NSCoder) { fatalError("Not a storyboard view") }
@@ -127,6 +137,8 @@ final class TerminalView: UITextView {
         accessibilityLabel = "Terminal"
         terminal.writeInput = { [weak self] data in self?.stream?.send(input: data) }
         keyBar.onKey = { [weak self] key in self?.barKey(key) }
+        // Tapping the terminal brings the keyboard back.
+        keyBar.onHide = { [weak self] in _ = self?.resignFirstResponder() }
         let pan = UIPanGestureRecognizer(target: self, action: #selector(scrollTerminal(_:)))
         pan.minimumNumberOfTouches = 2
         pan.allowedScrollTypesMask = .all

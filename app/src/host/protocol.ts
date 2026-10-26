@@ -4743,7 +4743,7 @@ export interface HostTerminal {
    */
   label?: string | null;
   /**
-   * The session it was opened from, whose clients show it by default.
+   * The session it was opened from, whose clients put it in front by default.
    */
   openedFrom?: SessionId | null;
   /**

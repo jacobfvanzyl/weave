@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ComponentProps, type CSSProperties } from 'react';
 import { clampSidebarWidth, SIDEBAR_WIDTH, storedSidebarWidth, storeSidebarWidth, widestSidebar } from '@/app/sidebar-width';
+import { ResizeHandle } from '@/components/resize-handle';
 import { SidebarProvider, useSidebar } from '@/components/ui/sidebar';
-import { cn } from '@/lib/utils';
 
 type SidebarWidth = {
   width: number;
@@ -11,9 +11,6 @@ type SidebarWidth = {
 };
 
 const SidebarWidthContext = createContext<SidebarWidth | null>(null);
-
-/** Arrow keys move the sidebar's edge by this much. */
-const KEY_STEP = 16;
 
 /**
  * `SidebarProvider`, with the sidebar as wide as the person dragged it (`SidebarResizeHandle`),
@@ -54,39 +51,12 @@ export function SidebarResizeHandle() {
   const { isMobile } = useSidebar();
   if (!context || isMobile) return null;
   const { width, resizing, resize, setResizing } = context;
-  const end = () => setResizing(false);
   return (
-    <div role='separator' aria-orientation='vertical' aria-label='Resize threads' tabIndex={0}
-      aria-valuemin={SIDEBAR_WIDTH.min} aria-valuemax={widestSidebar(window.innerWidth)} aria-valuenow={width}
-      data-slot='sidebar-resize-handle' data-resizing={resizing || undefined}
-      className={cn(
-        'group/resize absolute inset-y-0 right-0 z-20 w-4 translate-x-1/2 cursor-col-resize touch-none select-none outline-none',
-        'group-data-[collapsible=offcanvas]:hidden',
-        'after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 after:transition-colors',
-        'hover:after:bg-muted-foreground/50 focus-visible:after:bg-ring data-resizing:after:bg-ring',
-      )}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        setResizing(true);
-      }}
+    <ResizeHandle label='Resize threads' edge='right' width={width} min={SIDEBAR_WIDTH.min}
+      max={widestSidebar(window.innerWidth)} initial={SIDEBAR_WIDTH.initial} resizing={resizing}
+      onResizing={setResizing}
       // The sidebar starts at the window's left edge, so its width is where the pointer is.
-      onPointerMove={(event) => { if (resizing) resize(event.clientX); }}
-      onPointerUp={end}
-      onPointerCancel={end}
-      onLostPointerCapture={end}
-      onDoubleClick={() => resize(SIDEBAR_WIDTH.initial)}
-      onKeyDown={(event) => {
-        const step = event.key === 'ArrowLeft' ? -KEY_STEP : event.key === 'ArrowRight' ? KEY_STEP : 0;
-        if (!step) return;
-        event.preventDefault();
-        resize(width + step);
-      }}>
-      <span aria-hidden className={cn(
-        'absolute top-1/2 left-1/2 z-10 h-10 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-muted-foreground/40 transition-colors',
-        'group-hover/resize:bg-muted-foreground group-focus-visible/resize:bg-ring group-data-resizing/resize:bg-ring',
-      )} />
-    </div>
+      onPointer={resize} onResize={resize}
+      className='group-data-[collapsible=offcanvas]:hidden' />
   );
 }
