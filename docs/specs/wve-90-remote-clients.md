@@ -95,8 +95,10 @@ origins = []                                        # Origin values allowed besi
 | Transport | Framing | Authentication |
 | --- | --- | --- |
 | WebSocket on `listen` | One JSON-RPC message per text frame | `device`, or `pair` once |
+| WebSocket on `listen`, subprotocol `weave-terminal` (proposed, WVE-148) | One terminal's stream ([Terminals](wve-85-host-protocol.md#the-terminal-stream)) | A ticket from `terminals/attach` |
 
-- The upgrade must offer the subprotocol `weave-host`. Others are refused before any message.
+- The upgrade must offer the subprotocol `weave-host`, or `weave-terminal` for a terminal's
+  stream. Others are refused before any message.
 - `Origin`: none is accepted, since native clients send none, and so is the app's,
   `capacitor://localhost`, which its web view sends (WVE-91; seen from the iOS simulator on
   2026-10-20) and no web page can. Any other value must equal one in `[remote] origins`

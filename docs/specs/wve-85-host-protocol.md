@@ -944,6 +944,199 @@ request; otherwise its open sessions close. `weave worktrees pre-remove` asks it
 `pre-remove` hook, so `wt remove`, `wt merge` and `wt step prune` stop while a session needs the
 worktree.
 
+## Terminals
+
+Status: Proposed, 2026-10-25 ([WVE-148](https://linear.app/jacobfvanzyl/issue/WVE-148), ADR
+0022). Not built yet. On 2026-10-26 two spikes checked it: a holder in Rust (WVE-149), and the
+app's native renderer on the iPad (WVE-150).
+
+A terminal is a shell on the Host's computer that clients show beside a thread. It belongs to a
+worktree, or to a directory outside a repository. It lives in a holder, a process of its own
+that outlives the Host. Where it shows is each client's choice, so nothing here describes panes
+or layout.
+
+The concepts and names follow Rex's block model, in this protocol's casing. Its terminal methods
+`format`, `write` and `resize`, its properties `pwd`, `title`, `process`, `size` and
+`program_status`, and its terminal events all have counterparts here, so a Rex block can later
+stand in for a holder.
+
+These methods are feature `terminals`. Remote clients may use them, since a client that can
+start an agent in a directory can already run anything there.
+
+```ts
+type Terminal = {
+  id: string;            // permanent and opaque: a holder's, or later a Rex block's
+  scope: string;         // the worktree it belongs to, or its directory outside a repository
+  label?: string;        // the person's name for it
+  openedFrom?: string;   // the session it was opened from, which shows it by default
+  title?: string;        // OSC 0 and 2
+  pwd?: string;          // the directory the shell reports (OSC 7), as a path: the Host drops the URL's scheme and host
+  process?: {foreground: {pid: number; name: string}};
+  size: {cols: number; rows: number};
+  command?: {running: boolean; exitCode?: number};  // OSC 133: one running, or how the last ended
+  programStatus: ProgramStatus[];                   // OSC 7501's records, as Rex keeps them
+  startedAt: number;
+};
+
+type ProgramStatus = {
+  id?: string;           // "build/test"; absent for the root record
+  state: "idle" | "working" | "done" | "blocked" | "error";
+  kind?: "permission" | "question" | "auth";
+  progress?: number;     // 0 to 100
+  app?: string;
+  title?: string;        // decoded from base64
+  msg?: string;          // decoded from base64
+};
+```
+
+**`terminals/list`** `{directory}` → `{scope, terminals: Terminal[]}`
+
+The terminals of the worktree `directory` is in (the deepest, as for `worktrees/list`), or of
+`directory` itself outside a repository, oldest first.
+
+**`terminals/watch`** `{directory}` → `{scope, terminals: Terminal[]}`, then notifications
+until **`terminals/unwatch`** `{scope}`:
+
+- `terminals/updated` `{terminal}`: one started or a property changed;
+- `terminals/removed` `{id, scope, exitCode?}`: one ended.
+
+**`terminals/new`** `{directory, label?, openedFrom?, command?: string[]}` → `{terminal}`
+
+A holder starts the person's login shell in `directory`, or runs `command` under it, as Ghostty
+starts a shell:
+
+- in the agents' environment ([Environment](#environment));
+- under `login -flp` on macOS, as Ghostty does, and `/bin/sh -c` on Linux;
+- with `TERM=xterm-ghostty` and Ghostty's terminfo, and `COLORTERM=truecolor`;
+- with `TERM_PROGRAM=weave`, not `ghostty`, which would promise features the app doesn't draw,
+  such as Kitty graphics;
+- with Ghostty's shell integration injected for zsh, bash, fish, elvish and nushell. Apple's
+  `/bin/bash` is left alone, since it is too old for it.
+
+The terminal belongs to `directory`'s worktree. Its size is that of the first client to attach,
+80×24 until one does. Invalid params when `directory` isn't a directory.
+
+**`terminals/close`** `{id}` → `{}`
+
+Hangs up the shell's process group. The holder ends once the shell exits.
+
+**`terminals/setLabel`** `{id, label}` → `{terminal}`
+
+**`terminals/write`** `{id, text}` → `{}`
+
+Text as if typed, for clients that don't attach.
+
+**`terminals/format`** `{id, format: "text" | "vt", history?, trim?}` → `{content}`
+
+The visible screen through libghostty-vt's formatter, with its history too when `history` is
+set. With `vt`, styles, cursor, modes and the palette are included.
+
+**`terminals/attach`** `{id}` → `{ticket, url}`
+
+A ticket for the terminal's stream: one use, within 30 seconds, by the device that asked.
+
+### The terminal stream
+
+Each attached terminal streams over a WebSocket of its own, beside the client's connection, on
+the Host's remote listener. It uses subprotocol `weave-terminal` and the same `Origin` rules
+([WVE-90](wve-90-remote-clients.md#transport)).
+
+Opening the stream:
+
+1. The client's first text frame is
+   `{"ticket", "size": {"cols", "rows"}, "codec"}`. `codec` names the Ghostty commit the
+   client's libghostty-vt was built from, and its snapshot format. libghostty-vt reports the same
+   version at every commit, so only the commit tells two builds apart.
+2. The Host answers with `{"terminal": Terminal, "restore": "snapshot" | "vt"}`:
+   * `snapshot` when the holder's codec is the client's;
+   * otherwise `vt`, the formatter's VT of the visible screen, without history.
+3. Then the stream starts.
+
+Binary frames carry a kind byte and a payload, the same kinds as the holder's own frames, so the
+Host passes them on unchanged:
+
+| Kind | From | Payload |
+| --- | --- | --- |
+| `0x01` | Host | The restore. A snapshot is one byte stream in chunks, in which the client's decoder finds the ready prefix and the history pages itself |
+| `0x03` | Host | Output, the program's bytes unchanged |
+| `0x10` | Client | Input: keys, mouse and paste, encoded by the client's libghostty-vt from the terminal's current modes |
+
+Text frames from the Host:
+
+* `{"updated": Terminal}`;
+* `{"bell": {}}`;
+* `{"notification": {"title", "body"}}`;
+* `{"progress": {"state", "progress"}}`;
+* `{"clipboard": {"text"}}`, only to the device that last typed;
+* `{"exited": {"exitCode"}}`, after which the Host closes the stream.
+
+Text frames from the client: `{"resize": {"cols", "rows"}}`.
+
+Output, restores and input:
+
+* Output follows the restore, in order. A client draws once its decoder reaches the ready prefix,
+  and adds the history pages as the rest arrives.
+* A stream whose unsent output passes 4 MiB is resynchronized: the Host drops what it hasn't sent
+  and restores the stream again from a fresh snapshot.
+* A client keeps the stream's bytes out of slow paths. The app's native plugin holds the
+  WebSocket itself, since base64 through the web view's bridge held a spike to 5 to 10 MiB/s
+  (WVE-150).
+
+Size and replies:
+
+* The last device to type sets the terminal's size, and the others clip. While it's the last, its
+  own resizes (a rotation, a keyboard rising) apply at once. Another device's size applies when
+  it next sends input.
+* The client's libghostty-vt answers nothing. Only the holder replies to the program's queries.
+
+### Holders
+
+Each terminal has a holder, `weave-holder`, a process that keeps its PTY, its shell and the
+authoritative libghostty-vt.
+
+Where holders are and how they run:
+
+* A holder's record and socket are under the Host's directory (`DaemonPaths`), in `terminals/`,
+  so a Host beside the installed one has terminals of its own.
+* The Host starts holders outside its own process tree. On Linux each runs in a systemd unit of
+  its own, through `systemd-run --user`. A `setsid` and a double fork aren't enough there:
+  stopping the Host's unit kills them with its cgroup (WVE-149). On macOS a holder runs in a
+  session of its own.
+* `weave-holder` is installed beside `weave`, never on a removable volume. launchd can't open a
+  binary on one without the person's consent.
+* The Host finds holders again by their sockets after it restarts, and removes the records of
+  holders that don't answer. A killed holder leaves its record and socket behind.
+* A holder ends when its shell exits, after telling the Hosts attached to it.
+
+The holder protocol:
+
+* Each frame is a big-endian u32 length, then a kind byte and the payload:
+  * `0x00`: JSON, either way;
+  * `0x01`: snapshot bytes, from the holder;
+  * `0x03`: output, from the holder;
+  * `0x10`: input, to the holder.
+* Requests are `{"id", "method", "args"}`, as Rex's server API takes them. Answers are
+  `{"id", "result"}` or `{"id", "error": {"code", "message"}}`, with Rex's codes `bad_request`
+  and `method_not_found`. Events are `{"type", "payload"}`.
+* Its methods are Rex's terminal methods under Rex's names: `format` (`text`, `vt` or `html`,
+  with `trim` and `unwrap`), `write`, `resize`, `process`, `pwd`, `title`, `size`,
+  `program_status`, `set_label`, `attach` and `close`. The holder adds `hello` (its protocol
+  version and codec), `describe` and `subscribe`.
+* Its events are Rex's terminal events, with Rex's payloads: `child_exited`, `pwd_changed`,
+  `title_changed`, `bell`, `process_changed`, `desktop_notification`, `progress_report`,
+  `clipboard_written`, `program_status_changed` and `program_status_removed`. The holder adds
+  `command_changed` (OSC 133), `size_changed`, `label_changed` and `resync`.
+* `attach` answers `{codec, snapshot_bytes, terminal}`, then sends the snapshot and all later
+  output, in order.
+* Each attached client has an outbox of its own. One that falls 4 MiB behind gets `resync` and a
+  fresh snapshot.
+* It is versioned in `hello`. A Host speaks the version of every holder still running, since a
+  holder keeps the weave it started with until its shell exits.
+
+When terminals are built, `worktrees/remove` and `worktrees/release` also refuse with
+`worktree_busy` while a terminal in the worktree runs a command (`data.terminals`), and
+otherwise close its terminals along with its sessions.
+
 ## Host management
 
 **`host/status`** `{}` →

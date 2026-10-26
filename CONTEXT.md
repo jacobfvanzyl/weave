@@ -101,6 +101,20 @@ _Avoid_: project, workspace
 One of a repository's working trees, which threads can run in. It belongs to the person rather than to any thread, and outlives the threads in it.
 _Avoid_: checkout, sandbox, workspace
 
+### Terminals
+
+**Terminal**:
+A shell on the Host's computer that belongs to a worktree, or to a directory outside a repository, and outlives the threads and clients that show it.
+_Avoid_: pane, block, console, PTY
+
+**Holder**:
+The process that keeps one terminal alive, apart from the Host, and is the authority on what its screen holds.
+_Avoid_: terminal service, terminal server, multiplexer
+
+**Host-run terminal**:
+A command an agent runs on the Host's computer through ACP's terminal methods. It belongs to the agent's tool call, not to a worktree.
+_Avoid_: terminal (the person's), client terminal
+
 ### Turns
 
 **Prompt**:
