@@ -12,6 +12,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |
+| `holder/` | The holder (`weave-holder`, ADR 0022): keeps one terminal's PTY, shell and screen alive for the Host, with libghostty-vt, which it builds with Zig at the commit `ghostty.toml` pins. Read `holder/AGENTS.md`. |
 | `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
 | `scripts/` | `update-hosts`: rebuild weave in release and restart the installed Host, here and on the person's other computers over SSH. |
@@ -84,6 +85,11 @@ cargo fmt
 ./target/debug/weave --no-daemon -- ./target/debug/weave-fake-agent   # scripted agent
 ```
 
+Plain `cargo build` and `cargo test` leave out `weave-holder` until the Host starts holders
+(WVE-152). Name it with `-p weave-holder`, or use `--workspace`. Its first build fetches the
+pinned Ghostty with git and builds libghostty-vt into `~/.cache/weave/ghostty`, once per pin.
+Unless `$ZIG` or `PATH` has the pinned Zig, it downloads that first. See `holder/AGENTS.md`.
+
 `scripts/update-hosts [--now] [HOST...]` rebuilds the release here and restarts the Host
 (`~/.local/bin/weave` points at `target/release/weave`), then copies this working tree to each
 host over SSH (by default those in `$WEAVE_HOSTS`), builds it there in `~/.cache/weave/build`,
@@ -107,9 +113,11 @@ aarch64 where the engine emulates it:
 git ls-files -z -co --exclude-standard -- . ':!app' ':!trackpad' \
   | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -T - -czf - \
   | docker --context <context> run --rm -i -e CARGO_TARGET_DIR=/target \
+      -e WEAVE_GHOSTTY_CACHE=/target/ghostty \
       -v weave-linux-cargo:/usr/local/cargo/registry -v weave-linux-target:/target \
       rust:1.95-trixie sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang git \
-        && mkdir /src && tar xzf - -C /src && cd /src && cargo test && cargo clippy --all-targets'
+        && mkdir /src && tar xzf - -C /src && cd /src \
+        && cargo test --workspace && cargo clippy --workspace --all-targets'
 ```
 
 Under that emulation two `host/tests/remote.rs` tests with 100–200 ms deadlines time out; for

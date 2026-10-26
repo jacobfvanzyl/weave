@@ -1,5 +1,9 @@
 [workspace]
-members = ["acp-core", "agents", "cli", "fake-agent", "host", "host-client", "protocol", "tui"]
+members = ["acp-core", "agents", "cli", "fake-agent", "holder", "host", "host-client", "protocol", "tui"]
+# weave-holder builds libghostty-vt with Zig (holder/AGENTS.md), so plain `cargo build` and
+# `cargo test` leave it out until the Host starts holders (WVE-152); `-p weave-holder` or
+# `--workspace` include it.
+default-members = ["acp-core", "agents", "cli", "fake-agent", "host", "host-client", "protocol", "tui"]
 resolver = "3"
 
 [workspace.package]
@@ -22,6 +26,8 @@ weave-tui = { path = "tui" }
 agent-client-protocol = { version = "=3.0.0", features = ["process", "unstable_mcp_over_acp", "unstable_session_compaction", "unstable_subagents"] }
 anyhow = "1"
 base64 = "0.22"
+# weave-holder's libghostty-vt bindings, regenerated with its `bindgen` feature.
+bindgen = "0.72"
 # Unpacking ACP registry agents' binary archives, as Codex unpacks its downloads.
 bzip2 = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
