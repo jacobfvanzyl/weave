@@ -13,8 +13,9 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
   and never ACP or MCP; ACP's content arrives as the Host protocol's payload.
 - Use the glossary's terms (`../CONTEXT.md`): sessions, Hosts, directories, turns, steers,
   pending requests. Alpha's Threads, Connections, Workspaces and archiving are gone.
-- Portal, terminals, Workspaces, the Host Browser, the Client Browser and Electron stay in
-  history. Bring something back only when an issue asks for it.
+- Portal, Workspaces, the Host Browser, the Client Browser and Electron stay in history. Bring
+  something back only when an issue asks for it. Terminals came back in WVE-153 (ADR 0022): a
+  worktree's terminals in a panel beside a thread, drawn natively.
 
 ## Layout
 
@@ -25,8 +26,10 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
 | `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls and their terminals, plans, subagents, elicitations; the recorded journals its tests read (`fixtures/journals`). |
 | `src/components` | The shell (`app-shell.tsx`), the session list and view, the banner and dialogs; `ui` and `ai-elements` are shadcn and AI Elements components. |
 | `src/markdown` | What agent Markdown renders as beyond Streamdown's defaults (WVE-122), kept inert: no script, no fetch, no navigation without consent. `MessageResponse` (`src/components/ai-elements/message.tsx`) puts it together. |
-| `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout) and `DeviceKeyPlugin.swift` (Secure Enclave keys). |
+| `src/terminal` | Terminals beside a thread (WVE-153): the native plugin's bridge, the hook that lays a surface out and keeps it attached, and the layout this device keeps for each thread (`terminal-layout.ts`). The panel is `src/components/terminal-panel.tsx`. |
+| `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout, the web view over the native terminals), `DeviceKeyPlugin.swift` (Secure Enclave keys), and the native terminal: `NativeTerminalPlugin.swift`, `TerminalStream.swift` (the stream's WebSocket), `TerminalView.swift` (keyboard, key bar, selection) and `WeaveTerminalRenderer.mm` (libghostty-vt and CoreText). `ios/App/Native/` is generated and ignored; `ios/App/Tests/` holds the renderer's tests. |
 | `scripts/ios.ts` | Builds, installs and launches the iOS app. |
+| `scripts/ghostty.ts` | Puts libghostty-vt for iOS, its headers and the terminal fonts in `ios/App/Native/`, built once per Ghostty pin (`../holder/ghostty.toml`); `ios.ts build` runs it first. |
 
 The UI reads one `AppController`: `useHostController` from the paired Hosts, or
 `useMockController` from fixtures with `?mock=`. Keep components free of I/O: they take the
@@ -46,6 +49,8 @@ bun run dev                  # http://localhost:5174/?mock=session&idiom=phone
 bun run cap:sync             # build and copy into the iOS project
 bun run ios:build            # signed build for any iOS device; --unsigned to only compile
 bun run ios:install -- --device <udid>   # install and launch it (`xcrun devicectl list devices`)
+bun run native:test          # the native terminal's renderer, built for macOS, and its codec against the holder's
+bun scripts/terminal-check.ts            # the native terminal in a simulator against a dev Host, with screenshots
 bun scripts/protocol-types.ts            # regenerate src/host/protocol.ts from the Host's schema
 bun scripts/record-journals.ts [name…]   # record the transcript tests' journals from a dev Host
 ```
@@ -54,15 +59,16 @@ The `*.host.test.ts` files run the client against a dev Host (`src/host/testing/
 the debug `weave` and fake agent in a directory of their own, never the installed Host, with the
 fake agent as `fake`, as `fake-minimal` (no steering, no images) and as `fake-auth` (needs
 signing in). They skip unless those binaries are built: `(cd .. && cargo build -p weave-cli
--p weave-fake-agent)`. They run in Vitest's `node` environment, since happy-dom's WebSocket fails
-the Host's upgrade.
+-p weave-fake-agent -p weave-holder)`; the holder gives the dev Host terminals. They run in
+Vitest's `node` environment, since happy-dom's WebSocket fails the Host's upgrade.
 
 The transcript's tests read journals recorded from a dev Host (`src/chat/fixtures/journals/`).
 Record them again with `scripts/record-journals.ts` after the Host or fake agent changes what it
 journals, and review the snapshot's diff.
 
 `?mock=` picks a fixture scenario (`list`, `session`, `running`, `unreachable`, `banner`,
-`empty`, and `markdown`, the fake agent's rich Markdown reply); `?idiom=phone` or `?idiom=pad`
+`empty`, `markdown`, the fake agent's rich Markdown reply, and `terminals`, a thread with its
+worktree's terminals); `?idiom=phone` or `?idiom=pad`
 stands in for the device in a browser, since the layout follows the device, not the window's width. A debug build takes the scenario as a launch argument
 instead: `xcrun simctl launch <device> com.veezee.weave --mock running`.
 

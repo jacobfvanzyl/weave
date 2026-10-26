@@ -557,3 +557,90 @@ describe('HostStore reconnecting', () => {
     store.stop();
   });
 });
+
+describe('HostStore terminals', () => {
+  const hello = (features: string[]) => () => ({
+    result: { protocol: 2, clientId: 'c1', host: { id: HOST, version: '0', pid: 1, startedAt: 0 }, features, acp: { protocolVersion: 1 }, device: { id: 'd-1', name: 'iPad' } },
+  });
+  const terminal = (id: string, extra: Record<string, unknown> = {}) => ({ id, scope: '/work', size: { cols: 80, rows: 24 }, startedAt: 1, ...extra });
+
+  it("lists the open thread's terminals and keeps them up to date, until it's left", async () => {
+    const host = scriptedHost(() => [], {
+      'host/hello': hello([HOST_PROTOCOL.features.terminals]),
+      'terminals/watch': () => ({ result: { scope: '/work', terminals: [terminal('t-1', { openedFrom: SESSION, command: { running: true, command: 'cargo test' } })] } }),
+      'terminals/new': (params) => ({ result: { terminal: terminal('t-3', { openedFrom: (params as { openedFrom: string }).openedFrom }) } }),
+      'terminals/attach': () => ({ result: { ticket: 'k2Vx', expiresAt: 30_000 } }),
+      'terminals/setLabel': (params) => ({ result: { terminal: terminal('t-3', { label: (params as { label?: string }).label }) } }),
+    });
+    const store = storeFor(host.connector);
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    expect(store.snapshot().hosts[0].canTerminals).toBe(true);
+    expect(host.params['terminals/watch']).toEqual([{ directory: '/work' }]);
+    expect(store.snapshot().session?.terminals).toEqual([
+      { id: 't-1', scope: '/work', openedFrom: SESSION, size: { cols: 80, rows: 24 }, command: { running: true, command: 'cargo test' }, startedAt: 1 },
+    ]);
+
+    // Another client's terminal in the worktree, a change, and one of another worktree's.
+    host.notify('terminals/updated', { terminal: terminal('t-2', { title: 'nvim' }) });
+    host.notify('terminals/updated', { terminal: terminal('t-1', { command: { running: false, exitCode: 1 } }) });
+    host.notify('terminals/updated', { terminal: { ...terminal('t-9'), scope: '/elsewhere' } });
+    await settle();
+    expect(store.snapshot().session?.terminals?.map(({ id, title, command }) => ({ id, title, command }))).toEqual([
+      { id: 't-1', title: undefined, command: { running: false, exitCode: 1 } },
+      { id: 't-2', title: 'nvim', command: undefined },
+    ]);
+    host.notify('terminals/removed', { id: 't-1', scope: '/work', exitCode: 0 });
+    await settle();
+    expect(store.snapshot().session?.terminals?.map(({ id }) => id)).toEqual(['t-2']);
+
+    // A new one is the open thread's, in its directory.
+    expect(await store.actions.newTerminal()).toBe('t-3');
+    expect(host.params['terminals/new']).toEqual([{ directory: '/work', openedFrom: SESSION }]);
+    expect(store.snapshot().session?.terminals?.map(({ id }) => id)).toEqual(['t-2', 't-3']);
+    // Its stream is on the Host's own listener.
+    expect(await store.actions.attachTerminal('t-3')).toEqual({ url: 'wss://mac', ticket: 'k2Vx' });
+    await store.actions.renameTerminal('t-3', '  tests ');
+    expect(store.snapshot().session?.terminals?.find(({ id }) => id === 't-3')?.label).toBe('tests');
+    await store.actions.renameTerminal('t-3', '');
+    expect(host.params['terminals/setLabel']).toEqual([{ id: 't-3', label: 'tests' }, { id: 't-3' }]);
+
+    store.actions.selectSession(undefined);
+    await settle();
+    expect(host.params['terminals/unwatch']).toEqual([{ scope: '/work' }]);
+    store.stop();
+  });
+
+  it("doesn't ask a Host without terminals for them", async () => {
+    const host = scriptedHost(() => []);
+    const store = storeFor(host.connector);
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    expect(host.asked).not.toContain('terminals/watch');
+    expect(store.snapshot().hosts[0].canTerminals).toBeUndefined();
+    expect(store.snapshot().session).not.toHaveProperty('terminals');
+    store.stop();
+  });
+
+  it("says a worktree's terminals keep it, as its threads do", async () => {
+    const busy = (data: unknown) => () => ({ error: { code: HOST_PROTOCOL.errors.worktreeBusy, message: 'busy', data } });
+    const removal = async (data: unknown) => {
+      const host = scriptedHost(() => [], { 'worktrees/remove': busy(data) });
+      const store = storeFor(host.connector);
+      await store.start();
+      await settle();
+      const removed = store.actions.removeWorktree({ hostId: HOST, path: '/work.feature' });
+      await expect(removed).rejects.toThrow();
+      store.stop();
+      return removed.catch((error: Error) => error.message);
+    };
+    expect(await removal({ sessions: [SESSION], terminals: [] }))
+      .toBe('A thread in it is running a turn or waiting on you. Let it finish, or stop it, first.');
+    expect(await removal({ sessions: [], terminals: ['t-1'] }))
+      .toBe('A terminal in it is running a command. Let it finish, or stop it, first.');
+    expect(await removal({ sessions: [SESSION], terminals: ['t-1'] }))
+      .toBe('A thread in it is running a turn or waiting on you, and a terminal in it is running a command. Let them finish, or stop them, first.');
+  });
+});

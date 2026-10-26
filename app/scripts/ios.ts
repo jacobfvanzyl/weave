@@ -1,4 +1,5 @@
-// Builds the iOS app, and installs and launches it on a device.
+// Builds the iOS app, and installs and launches it on a device. A build first puts libghostty-vt
+// in place (`scripts/ghostty.ts`).
 //
 //   bun scripts/ios.ts build [--device <udid> | --simulator <name>] [--unsigned]
 //   bun scripts/ios.ts install --device <udid>
@@ -49,6 +50,8 @@ const builtApp = async () => {
 
 switch (command) {
   case 'build':
+    // libghostty-vt and the terminal fonts, from the holder's Ghostty pin (WVE-153).
+    await run(['bun', resolve(import.meta.dir, 'ghostty.ts')]);
     await run([
       ...xcodebuild(),
       ...(simulator ? [] : unsigned ? ['CODE_SIGNING_ALLOWED=NO'] : ['-allowProvisioningUpdates']),

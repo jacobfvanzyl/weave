@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowLeft01Icon, Cancel01Icon, Delete02Icon, Edit02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
+import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, OpenSession, PairedHost, SessionSummary } from '@/app/app-controller';
+import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, sessionLabel, waitsForAnswer } from '@/chat/acp-transcript';
 import { ChatPane } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { DeleteSessionDialog } from '@/components/delete-session-dialog';
 import { PathLabel } from '@/components/path-label';
+import { TerminalPanel } from '@/components/terminal-panel';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
+import { closeTab, openTab, selectTab } from '@/terminal/terminal-layout';
+import { useThreadTerminals } from '@/terminal/use-thread-terminals';
 
 /** The bar above a session, and above the empty state when none is open. */
 export function SessionHeader({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
@@ -176,6 +181,18 @@ function UpdateNotice({ update, updating, reopening, onUpdate, onMove, onDismiss
   );
 }
 
+/** Shows and hides the thread's terminals, with how many tabs it has while they're hidden. */
+function TerminalsButton({ shown, count, onToggle }: { shown: boolean; count: number; onToggle(): void }) {
+  const counted = !shown && count > 0;
+  return (
+    <Button size={counted ? 'sm' : 'icon'} variant='ghost' aria-pressed={shown} onClick={onToggle}
+      aria-label={shown ? 'Hide terminals' : counted ? `Show terminals, ${count} open` : 'Show terminals'}>
+      <HugeiconsIcon icon={ComputerTerminal01Icon} strokeWidth={2} />
+      {counted && count}
+    </Button>
+  );
+}
+
 /** The session's Host isn't connected: the transcript catches up once it is. */
 function ConnectionNotice({ host }: { host: PairedHost }) {
   const text = host.status === 'connecting'
@@ -201,12 +218,21 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
   const summary = model.sessions.find(({ key }) => key === session.key);
   const host = model.hosts.find(({ id }) => id === summary?.hostId);
   const others = Math.max(0, (summary?.clients ?? 0) - 1);
+  const phone = usePhoneLayout();
+  const sessionId = summary?.sessionId ?? session.key.slice(session.key.indexOf('/') + 1);
+  const terminals = useThreadTerminals(session.key, sessionId, session.terminals);
+  const canTerminals = Boolean(host?.canTerminals && session.terminals);
+  const terminalsShown = canTerminals && terminals.thread.shown;
+  // The iPhone shows them as a sheet over the thread; the iPad beside it, or over its width.
+  const sheet = phone && terminalsShown;
+  const wide = !phone && terminals.thread.wide;
   // A subagent whose own transcript shows instead of the session's.
   const [watching, setWatching] = useState<string>();
   useEffect(() => setWatching(undefined), [session.key]);
   const subagent = watching ? findSubagent(session.transcript, watching) : undefined;
   const openSubagent = useCallback((sessionId: string) => setWatching(sessionId), []);
-  const swipe = useEdgeSwipe(subagent ? () => setWatching(undefined) : onSwipeBack);
+  const hideTerminals = () => terminals.change((thread) => ({ ...thread, shown: false }));
+  const swipe = useEdgeSwipe(sheet ? hideTerminals : subagent ? () => setWatching(undefined) : onSwipeBack);
   const [update, dismissUpdate] = useUpdateNotice(session.key, session.update);
   // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
   const asking = [
@@ -217,90 +243,136 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
   ];
   return (
     <section aria-label={summary?.title || 'New thread'} data-slot='session-view' className='flex min-h-0 min-w-0 flex-1 flex-col' {...swipe}>
-      <SessionHeader leading={leading}>
-        <div className='min-w-0 flex-1 py-1.5'>
-          <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New thread'}</h2>
-          {summary && (
-            <p className='flex min-w-0 items-center gap-1 text-[0.6875rem] text-muted-foreground'>
-              <span className='shrink-0'>{summary.agentName}</span>
-              <span aria-hidden='true'>·</span>
-              <PathLabel path={summary.cwd} />
-              {model.hosts.length > 1 && host && <span className='shrink-0'>· {host.name}</span>}
-            </p>
+      <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col', sheet && 'hidden')}>
+        <SessionHeader leading={leading}>
+          <div className='min-w-0 flex-1 py-1.5'>
+            <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New thread'}</h2>
+            {summary && (
+              <p className='flex min-w-0 items-center gap-1 text-[0.6875rem] text-muted-foreground'>
+                <span className='shrink-0'>{summary.agentName}</span>
+                <span aria-hidden='true'>·</span>
+                <PathLabel path={summary.cwd} />
+                {model.hosts.length > 1 && host && <span className='shrink-0'>· {host.name}</span>}
+              </p>
+            )}
+          </div>
+          <ActivityIndicator activity={summary?.activity} />
+          {others > 0 && (
+            <Badge variant='outline' aria-label={`${others} other ${others === 1 ? 'client' : 'clients'} attached`} title='Other clients attached'>
+              <HugeiconsIcon icon={UserMultiple02Icon} strokeWidth={2} />
+              {others}
+            </Badge>
           )}
-        </div>
-        <ActivityIndicator activity={summary?.activity} />
-        {others > 0 && (
-          <Badge variant='outline' aria-label={`${others} other ${others === 1 ? 'client' : 'clients'} attached`} title='Other clients attached'>
-            <HugeiconsIcon icon={UserMultiple02Icon} strokeWidth={2} />
-            {others}
-          </Badge>
-        )}
-        {summary && <SessionMenu session={summary} actions={actions} canRename={host?.canRename} />}
-      </SessionHeader>
-      {host && host.status !== 'connected' && <ConnectionNotice host={host} />}
-      {model.error && (
-        <Alert variant='destructive' className='m-2 w-auto'>
-          <AlertDescription>{model.error}</AlertDescription>
-        </Alert>
-      )}
-      {update && (
-        <UpdateNotice
-          update={update}
-          updating={session.updating}
-          reopening={session.reopening}
-          onUpdate={() => void actions.updateAgent()}
-          onMove={() => void actions.reopenSession()}
-          onDismiss={dismissUpdate}
-        />
-      )}
-      {asking.map((sessionId) => {
-        const label = sessionId ? sessionLabel(session.transcript, sessionId) : 'Main';
-        return (
-          <Alert key={sessionId ?? 'main'} className='m-2 mb-0 w-auto border-warning/40' data-slot='asking-notice'>
-            <AlertTitle>{label} is waiting for you</AlertTitle>
-            <AlertAction>
-              <Button size='sm' variant='outline' aria-label={`Show ${label}`} onClick={() => setWatching(sessionId)}>Show</Button>
-            </AlertAction>
+          {canTerminals && (
+            <TerminalsButton shown={terminalsShown} count={terminals.tabs.length}
+              onToggle={() => terminals.change((thread) => ({ ...thread, shown: !thread.shown }))} />
+          )}
+          {summary && <SessionMenu session={summary} actions={actions} canRename={host?.canRename} />}
+        </SessionHeader>
+        {host && host.status !== 'connected' && <ConnectionNotice host={host} />}
+        {model.error && (
+          <Alert variant='destructive' className='m-2 w-auto'>
+            <AlertDescription>{model.error}</AlertDescription>
           </Alert>
-        );
-      })}
-      {subagent
-        ? (
-          <>
-            <div data-slot='subagent-bar' className='flex min-h-9 shrink-0 items-center gap-2 border-b bg-muted/40 px-2 text-xs'>
-              <Button size='sm' variant='ghost' onClick={() => setWatching(undefined)}>
-                <HugeiconsIcon data-icon='inline-start' icon={ArrowLeft01Icon} strokeWidth={2} />
-                Main
-              </Button>
-              <span className='min-w-0 truncate font-semibold'>{sessionLabel(session.transcript, subagent.sessionId)}</span>
-              {subagent.description && <span className='min-w-0 truncate text-muted-foreground'>{subagent.description}</span>}
-              {subagent.state && <Badge variant='outline' className='ml-auto shrink-0'>{subagent.state.replace('_', ' ')}</Badge>}
-            </div>
-            <ChatPane
-              key={`${session.key}/${subagent.sessionId}`}
-              model={subagent.transcript}
-              root={session.transcript}
-              actions={actions}
-              readOnly
-              onOpenSubagent={openSubagent}
-            />
-          </>
-        )
-        : (
-          <ChatPane
-            key={session.key}
-            draftKey={session.key}
-            model={session.transcript}
-            actions={actions}
-            queued={session.queued}
-            queuePaused={session.queuePaused}
-            canSteer={session.canSteer}
-            canAttachImages={session.canAttachImages}
-            loading={session.loading}
-            onOpenSubagent={openSubagent}
+        )}
+        {update && (
+          <UpdateNotice
+            update={update}
+            updating={session.updating}
+            reopening={session.reopening}
+            onUpdate={() => void actions.updateAgent()}
+            onMove={() => void actions.reopenSession()}
+            onDismiss={dismissUpdate}
           />
         )}
+        {asking.map((sessionId) => {
+          const label = sessionId ? sessionLabel(session.transcript, sessionId) : 'Main';
+          return (
+            <Alert key={sessionId ?? 'main'} className='m-2 mb-0 w-auto border-warning/40' data-slot='asking-notice'>
+              <AlertTitle>{label} is waiting for you</AlertTitle>
+              <AlertAction>
+                <Button size='sm' variant='outline' aria-label={`Show ${label}`} onClick={() => setWatching(sessionId)}>Show</Button>
+              </AlertAction>
+            </Alert>
+          );
+        })}
+        <div className='flex min-h-0 min-w-0 flex-1'>
+          <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col', terminalsShown && wide && 'hidden')}>
+            {subagent
+              ? (
+                <>
+                  <div data-slot='subagent-bar' className='flex min-h-9 shrink-0 items-center gap-2 border-b bg-muted/40 px-2 text-xs'>
+                    <Button size='sm' variant='ghost' onClick={() => setWatching(undefined)}>
+                      <HugeiconsIcon data-icon='inline-start' icon={ArrowLeft01Icon} strokeWidth={2} />
+                      Main
+                    </Button>
+                    <span className='min-w-0 truncate font-semibold'>{sessionLabel(session.transcript, subagent.sessionId)}</span>
+                    {subagent.description && <span className='min-w-0 truncate text-muted-foreground'>{subagent.description}</span>}
+                    {subagent.state && <Badge variant='outline' className='ml-auto shrink-0'>{subagent.state.replace('_', ' ')}</Badge>}
+                  </div>
+                  <ChatPane
+                    key={`${session.key}/${subagent.sessionId}`}
+                    model={subagent.transcript}
+                    root={session.transcript}
+                    actions={actions}
+                    readOnly
+                    onOpenSubagent={openSubagent}
+                  />
+                </>
+              )
+              : (
+                <ChatPane
+                  key={session.key}
+                  draftKey={session.key}
+                  model={session.transcript}
+                  actions={actions}
+                  queued={session.queued}
+                  queuePaused={session.queuePaused}
+                  canSteer={session.canSteer}
+                  canAttachImages={session.canAttachImages}
+                  loading={session.loading}
+                  onOpenSubagent={openSubagent}
+                />
+              )}
+          </div>
+          {terminalsShown && !phone && (
+            <div data-slot='terminal-side' className={cn('flex min-h-0 min-w-0', wide ? 'flex-1' : 'w-1/2 border-l border-border')}>
+              {terminalPanel()}
+            </div>
+          )}
+        </div>
+      </div>
+      {sheet && (
+        <div data-slot='terminal-sheet' className='flex min-h-0 min-w-0 flex-1 flex-col pt-[env(safe-area-inset-top)]'>
+          {terminalPanel()}
+        </div>
+      )}
     </section>
   );
+
+  function terminalPanel() {
+    const list = session.terminals ?? [];
+    return (
+      <TerminalPanel
+        tabs={terminals.tabs}
+        others={terminals.others}
+        active={terminals.active}
+        fontSize={terminals.fontSize}
+        wide={phone ? undefined : wide}
+        onSelect={(id) => terminals.change((thread) => selectTab(thread, id))}
+        onOpen={(id) => terminals.change((thread) => openTab(thread, id))}
+        onCloseTab={(id) => terminals.change((thread) => closeTab(thread, id, list, sessionId))}
+        onNew={async () => {
+          const id = await actions.newTerminal();
+          terminals.change((thread) => openTab(thread, id));
+        }}
+        onEnd={(id) => actions.closeTerminal(id)}
+        onRename={(id, label) => actions.renameTerminal(id, label)}
+        onWide={(next) => terminals.change((thread) => ({ ...thread, wide: next }))}
+        onFontSize={terminals.setFontSize}
+        onDone={hideTerminals}
+        attach={actions.attachTerminal}
+      />
+    );
+  }
 }

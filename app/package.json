@@ -11,6 +11,8 @@
     "check": "bun run test && bun run build",
     "cap:sync": "bun run build && bun --bun run cap sync ios",
     "ios:open": "bun --bun run cap open ios",
+    "ghostty": "bun scripts/ghostty.ts",
+    "native:test": "bun scripts/native-tests.ts",
     "ios:build": "bun scripts/ios.ts build",
     "ios:install": "bun scripts/ios.ts install"
   },

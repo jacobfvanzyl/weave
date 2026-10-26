@@ -12,12 +12,13 @@ import {
   type RepositoryListing,
   type SessionGit,
   type SessionSummary,
+  type TerminalSummary,
   sessionKey,
 } from './app-controller';
 import { SessionReadState } from './session-read-state';
 
 /** Fixture states for UI work and tests until the app talks to a Host (WVE-100). */
-export const MOCK_SCENARIOS = ['list', 'session', 'running', 'unreachable', 'banner', 'empty', 'markdown'] as const;
+export const MOCK_SCENARIOS = ['list', 'session', 'running', 'unreachable', 'banner', 'empty', 'markdown', 'terminals'] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const mockScenarioFromLocation = (search = location.search): MockScenario => {
@@ -40,7 +41,7 @@ const AGENTS: AgentChoice[] = [
 const steers = (agentId: string) => agentId !== 'gemini';
 
 const hosts = (now: number, unreachable: boolean): PairedHost[] => [
-  { id: MAC, name: 'mac.tail1234.ts.net', url: 'https://mac.tail1234.ts.net:7341', status: 'connected', canBrowse: true, canRename: true, canWorktree: true },
+  { id: MAC, name: 'mac.tail1234.ts.net', url: 'https://mac.tail1234.ts.net:7341', status: 'connected', canBrowse: true, canRename: true, canWorktree: true, canTerminals: true },
   {
     id: SERVER,
     name: 'build.tail1234.ts.net',
@@ -142,11 +143,55 @@ const sessions = (now: number): SessionSummary[] => [
   summary(SERVER, 'upload-failures', '/srv/odin', 'Diagnose upload failures', 'codex', 45, now),
 ];
 
+/**
+ * The Mac's terminals: in the main worktree, one the `steer-tui` thread opened running its tests,
+ * one another thread opened, and one nobody did, without the fields only a holder reports, as a
+ * Rex block's would be; and one in the reconnect worktree whose last command failed.
+ */
+const terminals = (now: number): TerminalSummary[] => [
+  {
+    id: 't-tests',
+    scope: WEAVE,
+    label: 'tests',
+    pwd: `${WEAVE}/tui`,
+    openedFrom: 'steer-tui',
+    process: 'cargo',
+    size: { cols: 100, rows: 30 },
+    command: { running: true, command: 'cargo test -p weave-tui' },
+    programStatus: [{ state: 'working', app: 'cargo', title: 'Testing', progress: 60 }],
+    startedAt: now - 20 * MINUTE,
+  },
+  {
+    id: 't-editor',
+    scope: WEAVE,
+    title: 'nvim protocol/src/terminals.rs',
+    pwd: `${WEAVE}/protocol`,
+    openedFrom: 'protocol-spec',
+    process: 'nvim',
+    size: { cols: 120, rows: 40 },
+    command: { running: true, command: 'nvim src/terminals.rs' },
+    startedAt: now - 10 * MINUTE,
+  },
+  { id: 't-block', scope: WEAVE, pwd: `${WEAVE}/app`, size: { cols: 80, rows: 24 }, startedAt: now - 5 * MINUTE },
+  {
+    id: 't-reconnect',
+    scope: RECONNECT,
+    pwd: RECONNECT,
+    openedFrom: 'fix-reconnect',
+    process: 'zsh',
+    size: { cols: 80, rows: 24 },
+    command: { running: false, exitCode: 101 },
+    startedAt: now - 3 * MINUTE,
+  },
+];
+
 type MockState = {
   model: AppModel;
   transcripts: Record<string, AcpTranscript>;
   queued: Record<string, QueuedPrompt[]>;
   repositories: MockRepositories;
+  /** By Host. */
+  terminals: Record<string, TerminalSummary[]>;
 };
 
 /** The `markdown` scenario's thread, which shows the fake agent's rich Markdown reply. */
@@ -160,7 +205,7 @@ const transcriptFor = (session: SessionSummary): AcpTranscript => {
 
 const initialState = (scenario: MockScenario, now: number): MockState => {
   if (scenario === 'empty') {
-    return { model: { hosts: [], sessions: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {} };
+    return { model: { hosts: [], sessions: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {} };
   }
   const list = scenario === 'markdown'
     ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain }), ...sessions(now)]
@@ -171,7 +216,9 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
       ? sessionKey(MAC, 'protocol-spec')
       : scenario === 'markdown'
         ? sessionKey(MAC, MARKDOWN)
-        : undefined;
+        : scenario === 'terminals'
+          ? sessionKey(MAC, 'steer-tui')
+          : undefined;
   return {
     model: {
       hosts: hosts(now, scenario === 'unreachable'),
@@ -183,6 +230,7 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
     transcripts: {},
     queued: scenario === 'running' ? { [sessionKey(MAC, 'protocol-spec')]: [{ id: 'q1', text: 'Then regenerate the fixtures.' }] } : {},
     repositories: repositories(),
+    terminals: { [MAC]: terminals(now) },
   };
 };
 
@@ -297,11 +345,19 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         canSteer: steers(selected.agentId),
         queued: state.current.queued[selected.key] ?? [],
         canAttachImages: true,
+        ...(model.hosts.find(({ id }) => id === selected.hostId)?.canTerminals
+          ? { terminals: (state.current.terminals[selected.hostId] ?? []).filter(({ scope }) => scope === (selected.git?.worktree ?? selected.cwd)) }
+          : {}),
       }
     : undefined;
 
   const actions = useMemo<AppController['actions']>(() => {
     const selectedKey = () => state.current.model.selectedKey;
+    const selectedSession = () => state.current.model.sessions.find(({ key }) => key === selectedKey());
+    const setTerminals = (hostId: string, change: (terminals: TerminalSummary[]) => TerminalSummary[]) => update((current) => ({
+      ...current,
+      terminals: { ...current.terminals, [hostId]: change(current.terminals[hostId] ?? []) },
+    }));
     const selectSession = (key?: string) => {
       readState.current.focus(key);
       update((current) => ({ ...current, model: { ...current.model, selectedKey: key } }));
@@ -520,6 +576,38 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
               ? { ...option, currentValue: Boolean(value) }
               : { ...option, currentValue: String(value) });
         reduce(key, { type: 'session/update', update: { sessionUpdate: 'config_option_update', configOptions } });
+      },
+      async newTerminal() {
+        const session = selectedSession();
+        if (!session) throw new Error('No thread is open.');
+        const id = localId('terminal');
+        setTerminals(session.hostId, (list) => [...list, {
+          id,
+          scope: session.git?.worktree ?? session.cwd,
+          pwd: session.cwd,
+          openedFrom: session.sessionId,
+          process: 'zsh',
+          size: { cols: 80, rows: 24 },
+          command: { running: false },
+          startedAt: Date.now(),
+        }]);
+        return id;
+      },
+      async closeTerminal(id) {
+        const session = selectedSession();
+        if (session) setTerminals(session.hostId, (list) => list.filter((terminal) => terminal.id !== id));
+      },
+      async renameTerminal(id, label) {
+        const session = selectedSession();
+        if (!session) return;
+        setTerminals(session.hostId, (list) => list.map((terminal) => {
+          if (terminal.id !== id) return terminal;
+          const { label: _previous, ...rest } = terminal;
+          return label?.trim() ? { ...rest, label: label.trim() } : rest;
+        }));
+      },
+      async attachTerminal() {
+        throw new Error('The mock has no Host to stream terminals from.');
       },
     };
     // The actions read the latest state through refs, so they never change.

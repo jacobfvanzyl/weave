@@ -1,4 +1,4 @@
-import type { CreateElicitationResponse } from '@/host/protocol';
+import type { CreateElicitationResponse, ProgramStatus } from '@/host/protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 /**
@@ -23,6 +23,8 @@ export type PairedHost = {
   canRename?: boolean;
   /** Whether it lists, makes and removes git worktrees (`worktrees`). */
   canWorktree?: boolean;
+  /** Whether it has terminals to show beside a thread (`terminals`). */
+  canTerminals?: boolean;
 };
 
 /** Where in a git repository a session's directory is. */
@@ -127,6 +129,36 @@ export type AgentUpdateNotice = {
   available?: string;
 };
 
+/**
+ * A terminal on a Host's computer (ADR 0022). It belongs to a worktree, or to a directory outside
+ * a repository, rather than to a thread, and lasts until its shell exits. `openedFrom`, `command`
+ * and `programStatus` are weave's, which another owner (a Rex block) may not report.
+ */
+export type TerminalSummary = {
+  id: string;
+  /** The worktree it belongs to, or its directory outside a repository. */
+  scope: string;
+  /** The person's name for it. */
+  label?: string;
+  /** What the program titled it. */
+  title?: string;
+  /** The directory the shell last reported. */
+  pwd?: string;
+  /** The session it was opened from, by id, whose threads show it by default. */
+  openedFrom?: string;
+  /** The foreground process: the shell, or the command it runs. */
+  process?: string;
+  size: { cols: number; rows: number };
+  /** Whether a command runs, which, and how the last one ended. */
+  command?: { running: boolean; command?: string; exitCode?: number };
+  /** The program's status (OSC 7501), the root record first. */
+  programStatus?: ProgramStatus[];
+  startedAt: number;
+};
+
+/** Where a terminal's stream is, and a ticket for it, good once and for a little while. */
+export type TerminalTicket = { url: string; ticket: string };
+
 /** The session on screen. */
 export type OpenSession = {
   key: string;
@@ -149,6 +181,11 @@ export type OpenSession = {
   reopening?: boolean;
   /** Its history is still replaying as it opens; the transcript shows once it's in. */
   loading?: boolean;
+  /**
+   * The terminals of its worktree, or of its directory outside one, oldest first, kept up to date;
+   * none until its Host lists them, or on a Host without terminals.
+   */
+  terminals?: TerminalSummary[];
 };
 
 export type AppModel = {
@@ -218,6 +255,14 @@ export type AppActions = {
   respondToElicitation(requestId: string, response: CreateElicitationResponse): Promise<void> | void;
   setMode(modeId: string): Promise<void> | void;
   setConfigOption(optionId: string, value: string | boolean): Promise<void> | void;
+  /** Starts a terminal in the open session's directory, opened from it; resolves to its id. */
+  newTerminal(): Promise<string>;
+  /** Hangs a terminal's program up, which ends it on every device. */
+  closeTerminal(id: string): Promise<void>;
+  /** Names a terminal on every device, or without a label clears its name. */
+  renameTerminal(id: string, label?: string): Promise<void>;
+  /** A ticket for a terminal of the open session's Host, and where its stream is. */
+  attachTerminal(id: string): Promise<TerminalTicket>;
 };
 
 export type AppController = { model: AppModel; actions: AppActions };

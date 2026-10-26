@@ -18,6 +18,13 @@
 		A13FC1412F00000100A00001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A13FC1402F00000100A00001 /* PrivacyInfo.xcprivacy */; };
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 		D15C0E012F00000100A00001 /* DeviceKeyPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15C0E022F00000100A00001 /* DeviceKeyPlugin.swift */; };
+		F15A01500000000000000001 /* NativeTerminalPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15A01500000000000000002 /* NativeTerminalPlugin.swift */; };
+		F15A01500000000000000003 /* WeaveTerminalRenderer.mm in Sources */ = {isa = PBXBuildFile; fileRef = F15A01500000000000000004 /* WeaveTerminalRenderer.mm */; };
+		F15A01500000000000000007 /* ghostty-vt.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = F15A01500000000000000008 /* ghostty-vt.xcframework */; };
+		F15A01500000000000000009 /* TerminalFonts in Resources */ = {isa = PBXBuildFile; fileRef = F15A0150000000000000000A /* TerminalFonts */; };
+		F15A0150000000000000000B /* GHOSTTY-LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = F15A0150000000000000000C /* GHOSTTY-LICENSE */; };
+		F15A0150000000000000000D /* TerminalStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15A0150000000000000000E /* TerminalStream.swift */; };
+		F15A0150000000000000000F /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15A01500000000000000010 /* TerminalView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +40,15 @@
 		A13FC1402F00000100A00001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		D15C0E022F00000100A00001 /* DeviceKeyPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyPlugin.swift; sourceTree = "<group>"; };
+		F15A01500000000000000002 /* NativeTerminalPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalPlugin.swift; sourceTree = "<group>"; };
+		F15A01500000000000000004 /* WeaveTerminalRenderer.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WeaveTerminalRenderer.mm; sourceTree = "<group>"; };
+		F15A01500000000000000005 /* WeaveTerminalRenderer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WeaveTerminalRenderer.h; sourceTree = "<group>"; };
+		F15A01500000000000000006 /* NativeTerminal-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NativeTerminal-Bridging-Header.h"; sourceTree = "<group>"; };
+		F15A01500000000000000008 /* ghostty-vt.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "ghostty-vt.xcframework"; path = "Native/ghostty-vt.xcframework"; sourceTree = SOURCE_ROOT; };
+		F15A0150000000000000000A /* TerminalFonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TerminalFonts; path = Native/TerminalFonts; sourceTree = SOURCE_ROOT; };
+		F15A0150000000000000000C /* GHOSTTY-LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "GHOSTTY-LICENSE"; path = "Native/GHOSTTY-LICENSE"; sourceTree = SOURCE_ROOT; };
+		F15A0150000000000000000E /* TerminalStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalStream.swift; sourceTree = "<group>"; };
+		F15A01500000000000000010 /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -42,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */,
+				F15A01500000000000000007 /* ghostty-vt.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,6 +87,15 @@
 			children = (
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				D15C0E022F00000100A00001 /* DeviceKeyPlugin.swift */,
+				F15A01500000000000000002 /* NativeTerminalPlugin.swift */,
+				F15A0150000000000000000E /* TerminalStream.swift */,
+				F15A01500000000000000010 /* TerminalView.swift */,
+				F15A01500000000000000005 /* WeaveTerminalRenderer.h */,
+				F15A01500000000000000004 /* WeaveTerminalRenderer.mm */,
+				F15A01500000000000000006 /* NativeTerminal-Bridging-Header.h */,
+				F15A01500000000000000008 /* ghostty-vt.xcframework */,
+				F15A0150000000000000000A /* TerminalFonts */,
+				F15A0150000000000000000C /* GHOSTTY-LICENSE */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				A13FC1402F00000100A00001 /* PrivacyInfo.xcprivacy */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
@@ -155,6 +181,8 @@
 				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
+				F15A01500000000000000009 /* TerminalFonts in Resources */,
+				F15A0150000000000000000B /* GHOSTTY-LICENSE in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -168,6 +196,10 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				D15C0E012F00000100A00001 /* DeviceKeyPlugin.swift in Sources */,
+				F15A01500000000000000001 /* NativeTerminalPlugin.swift in Sources */,
+				F15A0150000000000000000D /* TerminalStream.swift in Sources */,
+				F15A0150000000000000000F /* TerminalView.swift in Sources */,
+				F15A01500000000000000003 /* WeaveTerminalRenderer.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -319,6 +351,16 @@
 				MARKETING_VERSION = 1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.veezee.weave;
+				SWIFT_OBJC_BRIDGING_HEADER = "App/NativeTerminal-Bridging-Header.h";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Native/include",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
@@ -343,6 +385,16 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.veezee.weave;
+				SWIFT_OBJC_BRIDGING_HEADER = "App/NativeTerminal-Bridging-Header.h";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Native/include",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lc++",
+				);
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;

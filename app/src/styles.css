@@ -305,3 +305,20 @@ html[data-device-idiom="phone"] [data-streamdown="mermaid-block"] [data-streamdo
   @apply gap-1 border-border bg-background/80 p-1 supports-[backdrop-filter]:bg-background/70 supports-[backdrop-filter]:backdrop-blur-sm;
 }
 [data-streamdown="mermaid-block-actions"] > button { @apply rounded p-1.5 hover:bg-muted; }
+
+/* A native terminal (WVE-153) draws beneath the web view, and shows through its own element and
+   that element's ancestors, after e30f6e93. Sibling panes and overlays keep their backgrounds. */
+html:has([data-native-layered]),
+body:has([data-native-layered]),
+body :has([data-native-layered]),
+[data-native-layered] {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* A backdrop blur can't sample the native layer beneath; overlays keep their scrim only. */
+body:has([data-native-layered]) [data-slot$='-overlay'],
+body:has([data-native-layered]) [data-slot$='-content'] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}

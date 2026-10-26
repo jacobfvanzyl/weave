@@ -8,8 +8,9 @@ the holder protocol (`../docs/specs/wve-85-host-protocol.md`, "Holders"). Read t
 ## libghostty-vt
 
 `ghostty.toml` pins the Ghostty commit and the Zig that builds it. The app's terminals (WVE-153)
-build their xcframework from the same pin, since the holder and the app decode each other's
-snapshots.
+build their xcframework from the same pin (`app/scripts/ghostty.ts`, into the same cache), since
+the app decodes the holder's snapshots. A pin move is checked there too, with
+`bun run native:test` in `app/`, which also compares the two codecs.
 
 `build.rs` links `libghostty-vt.a` statically from the first of:
 

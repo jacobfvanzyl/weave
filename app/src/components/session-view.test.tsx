@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppActions, AppController, OpenSession, PairedHost } from '@/app/app-controller';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppActions, AppController, OpenSession, PairedHost, TerminalSummary } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { SessionView } from './session-view';
 
@@ -29,6 +29,10 @@ const actions = (): AppActions => ({
   respondToElicitation: vi.fn(),
   setMode: vi.fn(),
   setConfigOption: vi.fn(),
+  newTerminal: vi.fn(),
+  closeTerminal: vi.fn(),
+  renameTerminal: vi.fn(),
+  attachTerminal: vi.fn(),
 });
 
 const controller = (session: OpenSession, handlers = actions(), host: Partial<PairedHost> = {}): AppController => ({
@@ -199,5 +203,72 @@ describe('SessionView', () => {
     await user.click(await screen.findByRole('menuitem', { name: 'Rename thread…' }));
     await user.click(await screen.findByRole('button', { name: 'Rename' }));
     expect(await screen.findByText("Couldn't rename it: a title is at most 200 characters.")).toBeInTheDocument();
+  });
+
+  describe('terminals', () => {
+    const size = { cols: 80, rows: 24 };
+    const worktree: TerminalSummary[] = [
+      { id: 't-mine', scope: '/work/project', openedFrom: 'main', label: 'tests', size, startedAt: 1 },
+      { id: 't-other', scope: '/work/project', openedFrom: 'other', title: 'nvim', size, startedAt: 2 },
+    ];
+    const opened = (key: string, terminals = worktree): OpenSession => ({ key, transcript: createTranscript('main'), canSteer: true, queued: [], terminals });
+    const tabNames = () => within(screen.getByRole('tablist', { name: 'Terminals' })).getAllByRole('tab').map((tab) => tab.textContent);
+
+    afterEach(() => { delete document.documentElement.dataset.deviceIdiom; });
+
+    it("shows the worktree's terminals beside the thread, those it opened by default, as this device left them", async () => {
+      const user = userEvent.setup();
+      const handlers = actions();
+      vi.mocked(handlers.newTerminal).mockResolvedValue('t-new');
+      const view = (open: OpenSession) => {
+        const given = controller(open, handlers, { canTerminals: true });
+        given.model.sessions[0].sessionId = open.key.slice(2);
+        return <SessionView controller={given} session={open} />;
+      };
+      const { rerender } = render(view(opened('h/main')));
+      expect(screen.queryByRole('region', { name: 'Terminals' })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Show terminals, 1 open' }));
+      expect(tabNames()).toEqual(['tests']);
+
+      // Another thread of the worktree shows its own, and can open this one's too.
+      rerender(view(opened('h/other')));
+      expect(screen.queryByRole('region', { name: 'Terminals' })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Show terminals, 1 open' }));
+      expect(tabNames()).toEqual(['nvim']);
+      await user.click(screen.getByRole('button', { name: 'Terminal actions' }));
+      await user.click(await screen.findByRole('menuitem', { name: 'Open tests' }));
+      expect(tabNames()).toEqual(['tests', 'nvim']);
+
+      // The first thread is as it was left, and a terminal made from it opens there.
+      rerender(view(opened('h/main')));
+      expect(tabNames()).toEqual(['tests']);
+      await user.click(screen.getByRole('button', { name: 'New terminal' }));
+      expect(handlers.newTerminal).toHaveBeenCalled();
+      rerender(view(opened('h/main', [...worktree, { id: 't-new', scope: '/work/project', openedFrom: 'main', size, startedAt: 3 }])));
+      expect(tabNames()).toEqual(['project', 'tests']);
+      expect(within(screen.getByRole('tablist', { name: 'Terminals' })).getByRole('tab', { selected: true })).toHaveTextContent('project');
+
+      await user.click(screen.getByRole('button', { name: 'Hide terminals' }));
+      expect(screen.queryByRole('region', { name: 'Terminals' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Show terminals, 2 open' })).toBeInTheDocument();
+    });
+
+    it('covers the thread with a sheet on the iPhone, until Done', async () => {
+      document.documentElement.dataset.deviceIdiom = 'phone';
+      const user = userEvent.setup();
+      const session = opened('h/main');
+      render(<SessionView controller={controller(session, actions(), { canTerminals: true })} session={session} />);
+      await user.click(screen.getByRole('button', { name: 'Show terminals, 1 open' }));
+      expect(document.querySelector('[data-slot="terminal-sheet"]')).toContainElement(screen.getByRole('region', { name: 'Terminals' }));
+      expect(screen.queryByRole('menuitem', { name: 'Full width' })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+      expect(screen.queryByRole('region', { name: 'Terminals' })).not.toBeInTheDocument();
+    });
+
+    it('offers none on a Host without terminals', () => {
+      const session = opened('h/main');
+      render(<SessionView controller={controller(session)} session={session} />);
+      expect(screen.queryByRole('button', { name: /terminals/ })).not.toBeInTheDocument();
+    });
   });
 });

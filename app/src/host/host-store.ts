@@ -19,6 +19,8 @@ import type {
   RepositoryListing,
   SessionGit,
   SessionSummary,
+  TerminalSummary,
+  TerminalTicket,
   WorktreeRemoval,
 } from '@/app/app-controller';
 import { sessionKey } from '@/app/app-controller';
@@ -35,6 +37,7 @@ import {
   type ClientInfo,
   type ContentBlock,
   type GitLocation,
+  type HostTerminal,
   type PendingRequest,
   type PendingResolvedNotification,
   type QueuedPrompt as HostQueuedPrompt,
@@ -128,6 +131,8 @@ type Followed = {
   loading: boolean;
   /** Clients that prompted it, by client id, for naming who runs a client tool. */
   clients: Map<string, string>;
+  /** Its worktree's terminals while it's on screen (`terminals/watch`), and the scope they're of. */
+  terminals?: { scope: string; list: HostTerminal[] };
 };
 
 type PendingKind<K extends PendingRequest['kind']> = Extract<PendingRequest, { kind: K }>;
@@ -142,6 +147,28 @@ const describe = (error: unknown) => error instanceof Error ? error.message : St
 
 const failedWith = (error: unknown, code: number) => error instanceof HostError && error.code === code;
 
+const terminalSummary = (terminal: HostTerminal): TerminalSummary => ({
+  id: terminal.id,
+  scope: terminal.scope,
+  ...(terminal.label ? { label: terminal.label } : {}),
+  ...(terminal.title ? { title: terminal.title } : {}),
+  ...(terminal.pwd ? { pwd: terminal.pwd } : {}),
+  ...(terminal.openedFrom ? { openedFrom: terminal.openedFrom } : {}),
+  ...(terminal.process?.foreground?.name ? { process: terminal.process.foreground.name } : {}),
+  size: terminal.size,
+  ...(terminal.command
+    ? {
+        command: {
+          running: terminal.command.running,
+          ...(terminal.command.command ? { command: terminal.command.command } : {}),
+          ...(terminal.command.exitCode !== undefined && terminal.command.exitCode !== null ? { exitCode: terminal.command.exitCode } : {}),
+        },
+      }
+    : {}),
+  ...(terminal.programStatus?.length ? { programStatus: terminal.programStatus } : {}),
+  startedAt: terminal.startedAt,
+});
+
 const sessionGit = (git: GitLocation): SessionGit => ({
   repo: git.repo,
   worktree: git.worktree,
@@ -149,6 +176,18 @@ const sessionGit = (git: GitLocation): SessionGit => ({
 });
 
 /** What failed, and why as the Host says it: its error's text, when it gave one, says more than its message. */
+/** Why a worktree can't go: its threads at work, its terminals running commands, or both. */
+const busyWorktree = (error: unknown) => {
+  const data = error instanceof HostError ? error.data as { sessions?: unknown[]; terminals?: unknown[] } | undefined : undefined;
+  const threads = (data?.sessions?.length ?? 0) > 0 || !data?.terminals?.length;
+  const terminals = (data?.terminals?.length ?? 0) > 0;
+  const busy = [
+    ...(threads ? ['a thread in it is running a turn or waiting on you'] : []),
+    ...(terminals ? ['a terminal in it is running a command'] : []),
+  ].join(', and ');
+  return `${busy.charAt(0).toUpperCase()}${busy.slice(1)}. Let ${threads && terminals ? 'them' : 'it'} finish, or stop ${threads && terminals ? 'them' : 'it'}, first.`;
+};
+
 const failed = (what: string, error: unknown) =>
   new Error(`${what}: ${error instanceof HostError && typeof error.data === 'string' ? error.data : describe(error)}`);
 
@@ -328,6 +367,25 @@ export class HostStore {
         ? { sessionId: followed.sessionId, configId, type: 'boolean', value }
         : { sessionId: followed.sessionId, configId, value });
     }),
+    newTerminal: () => this.#newTerminal(),
+    closeTerminal: async (id) => {
+      const followed = this.#terminalsOf();
+      try {
+        await this.#connection(followed).request('terminals/close', { id });
+      } catch (error) {
+        throw failed("Couldn't close the terminal", error);
+      }
+    },
+    renameTerminal: async (id, label) => {
+      const followed = this.#terminalsOf();
+      try {
+        const { terminal } = await this.#connection(followed).request('terminals/setLabel', { id, ...(label?.trim() ? { label: label.trim() } : {}) });
+        this.#terminalUpdated(followed.hostId, terminal);
+      } catch (error) {
+        throw failed("Couldn't rename the terminal", error);
+      }
+    },
+    attachTerminal: (id) => this.#attachTerminal(id),
   };
 
   /** Runs an action whose failure the person reads in the model's error, not from a caller. */
@@ -638,6 +696,18 @@ export class HostStore {
             if (followed) this.#apply(followed, [{ type: 'elicitation/completed', notification: event.params.notification }]);
             return;
           }
+          case 'terminals/updated':
+            this.#terminalUpdated(entry.record.hostId, event.params.terminal);
+            return;
+          case 'terminals/removed': {
+            const { id, scope } = event.params;
+            for (const followed of this.#followed.values()) {
+              if (followed.hostId !== entry.record.hostId || followed.terminals?.scope !== scope) continue;
+              followed.terminals = { scope, list: followed.terminals.list.filter((terminal) => terminal.id !== id) };
+            }
+            this.#changed();
+            return;
+          }
           case 'agents/updateAvailable': {
             const { sessionId, agentId, name, running, latest } = event.params;
             const followed = this.#followed.get(sessionKey(entry.record.hostId, sessionId));
@@ -768,6 +838,10 @@ export class HostStore {
   /** Stops receiving a session. One nobody has prompted closes, as the TUI leaves it. */
   #leave(followed: Followed) {
     const connection = this.#hosts.get(followed.hostId)?.connection;
+    if (followed.terminals) {
+      void connection?.request('terminals/unwatch', { scope: followed.terminals.scope }).catch(() => {});
+      followed.terminals = undefined;
+    }
     const blank = followed.state?.blank ?? false;
     void connection?.request('session/detach', { sessionId: followed.sessionId, close: blank ? 'ifUnused' : 'never' }).catch(() => {});
     if (blank) this.#followed.delete(sessionKey(followed.hostId, followed.sessionId));
@@ -851,6 +925,66 @@ export class HostStore {
     }
     this.#changed();
     if (!running) void this.#sendQueued(followed);
+    void this.#watchTerminals(followed);
+  }
+
+  /** Lists the open session's terminals, and keeps the list up to date while it's on screen. */
+  async #watchTerminals(followed: Followed) {
+    const connection = this.#hosts.get(followed.hostId)?.connection;
+    const cwd = followed.state?.cwd;
+    if (!connection || !cwd || !connection.supports(HOST_PROTOCOL.features.terminals)) return;
+    try {
+      const { scope, terminals } = await connection.request('terminals/watch', { directory: cwd });
+      if (this.#selected() !== followed || this.#hosts.get(followed.hostId)?.connection !== connection) {
+        void connection.request('terminals/unwatch', { scope }).catch(() => {});
+        return;
+      }
+      followed.terminals = { scope, list: terminals };
+      this.#changed();
+    } catch {
+      // The thread shows without its terminals.
+    }
+  }
+
+  #terminalUpdated(hostId: string, terminal: HostTerminal) {
+    for (const followed of this.#followed.values()) {
+      if (followed.hostId !== hostId || followed.terminals?.scope !== terminal.scope) continue;
+      const { list } = followed.terminals;
+      const index = list.findIndex(({ id }) => id === terminal.id);
+      followed.terminals = {
+        scope: terminal.scope,
+        list: index === -1 ? [...list, terminal] : list.map((current, at) => at === index ? terminal : current),
+      };
+    }
+    this.#changed();
+  }
+
+  /** The open session, for a request about its terminals, or why there's none. */
+  #terminalsOf(): Followed {
+    const followed = this.#selected();
+    if (!followed?.state) throw new Error('No thread is open.');
+    return followed;
+  }
+
+  async #newTerminal(): Promise<string> {
+    const followed = this.#terminalsOf();
+    const connection = this.#connection(followed);
+    try {
+      const { terminal } = await connection.request('terminals/new', { directory: followed.state!.cwd, openedFrom: followed.sessionId });
+      this.#terminalUpdated(followed.hostId, terminal);
+      return terminal.id;
+    } catch (error) {
+      throw failed("Couldn't start a terminal", error);
+    }
+  }
+
+  async #attachTerminal(id: string): Promise<TerminalTicket> {
+    const followed = this.#terminalsOf();
+    const entry = this.#hosts.get(followed.hostId);
+    const connection = this.#connection(followed);
+    const { ticket } = await connection.request('terminals/attach', { id });
+    // The stream is on the listener the Host's connection is.
+    return { url: entry!.record.url, ticket };
   }
 
   /** Shows what waits in a session, once its replay is done. */
@@ -1025,9 +1159,7 @@ export class HostStore {
       return { outcome: 'removed', ...(removed.branch ? { branch: removed.branch } : {}), branchDeleted: removed.branchDeleted ?? false };
     } catch (error) {
       if (failedWith(error, HOST_PROTOCOL.errors.uncommittedChanges)) return { outcome: 'hasChanges' };
-      if (failedWith(error, HOST_PROTOCOL.errors.worktreeBusy)) {
-        throw new Error('A thread in it is running a turn or waiting on you. Let it finish, or stop it, first.');
-      }
+      if (failedWith(error, HOST_PROTOCOL.errors.worktreeBusy)) throw new Error(busyWorktree(error));
       throw failed("Couldn't remove the worktree", error);
     }
   }
@@ -1337,6 +1469,7 @@ export class HostStore {
         ...(entry.connection?.supports(HOST_PROTOCOL.features.listFiles) ? { canBrowse: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.rename) ? { canRename: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.worktrees) ? { canWorktree: true } : {}),
+        ...(entry.connection?.supports(HOST_PROTOCOL.features.terminals) ? { canTerminals: true } : {}),
       });
       agents[record.hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
@@ -1394,6 +1527,7 @@ export class HostStore {
             ...(selected.updating ? { updating: true } : {}),
             ...(selected.reopening ? { reopening: true } : {}),
             ...(selected.loading ? { loading: true } : {}),
+            ...(selected.terminals ? { terminals: selected.terminals.list.map(terminalSummary) } : {}),
           }
         : undefined,
       unread: this.#read.unread(),

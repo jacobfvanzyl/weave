@@ -71,6 +71,10 @@ const idleActions: AppController['actions'] = {
   respondToElicitation() {},
   setMode() {},
   setConfigOption() {},
+  newTerminal: () => Promise.reject(new Error('The app is still starting.')),
+  closeTerminal: () => Promise.reject(new Error('The app is still starting.')),
+  renameTerminal: () => Promise.reject(new Error('The app is still starting.')),
+  attachTerminal: () => Promise.reject(new Error('The app is still starting.')),
 };
 
 /** The app's controller backed by its paired Hosts (`HostStore`). */

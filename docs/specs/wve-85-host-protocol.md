@@ -945,8 +945,9 @@ worktree.
 
 ## Terminals
 
-Status: Built in the Host (WVE-152) and the holder (WVE-151), 2026-10-26, after two spikes
-checked it: a holder in Rust (WVE-149), and the app's native renderer on the iPad (WVE-150).
+Status: Built in the Host (WVE-152), the holder (WVE-151) and the app (WVE-153), 2026-10-26,
+after two spikes checked it: a holder in Rust (WVE-149), and the app's native renderer on the iPad
+(WVE-150).
 ADR 0022; [WVE-148](https://linear.app/jacobfvanzyl/issue/WVE-148). The Host offers it when
 `weave-holder` is installed beside it.
 
