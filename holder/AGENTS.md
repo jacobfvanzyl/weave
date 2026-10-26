@@ -95,8 +95,8 @@ The CLI (`src/main.rs`):
 
 ## Commands
 
-The workspace's plain `cargo build` and `cargo test` leave the holder out until the Host starts
-holders (WVE-152), so name it:
+The holder builds and tests with the workspace. The Host finds it beside its own binary (WVE-152),
+and `scripts/update-hosts` installs it there.
 
 ```bash
 cargo test -p weave-holder

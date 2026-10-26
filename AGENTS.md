@@ -85,13 +85,15 @@ cargo fmt
 ./target/debug/weave --no-daemon -- ./target/debug/weave-fake-agent   # scripted agent
 ```
 
-Plain `cargo build` and `cargo test` leave out `weave-holder` until the Host starts holders
-(WVE-152). Name it with `-p weave-holder`, or use `--workspace`. Its first build fetches the
-pinned Ghostty with git and builds libghostty-vt into `~/.cache/weave/ghostty`, once per pin.
-Unless `$ZIG` or `PATH` has the pinned Zig, it downloads that first. See `holder/AGENTS.md`.
+`weave-holder`, which keeps the Host's terminals (ADR 0022), builds with the rest. Its first
+build on a computer fetches the pinned Ghostty with git and builds libghostty-vt into
+`~/.cache/weave/ghostty`, once per pin, which needs the network and takes a couple of minutes.
+Unless `$ZIG` or `PATH` has the pinned Zig, it downloads that first. See `holder/AGENTS.md`. The
+Host offers terminals only when `weave-holder` sits beside its own binary.
 
-`scripts/update-hosts [--now] [HOST...]` rebuilds the release here and restarts the Host
-(`~/.local/bin/weave` points at `target/release/weave`), then copies this working tree to each
+`scripts/update-hosts [--now] [HOST...]` rebuilds the release here, `weave-holder` included, and
+restarts the Host (`~/.local/bin/weave` points at `target/release/weave`, beside the holder), then
+copies this working tree to each
 host over SSH (by default those in `$WEAVE_HOSTS`), builds it there in `~/.cache/weave/build`,
 installs rustup first if needed, and restarts that Host too; `--hosts-only` leaves this one alone.
 
@@ -117,7 +119,7 @@ git ls-files -z -co --exclude-standard -- . ':!app' ':!trackpad' \
       -v weave-linux-cargo:/usr/local/cargo/registry -v weave-linux-target:/target \
       rust:1.95-trixie sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang git \
         && mkdir /src && tar xzf - -C /src && cd /src \
-        && cargo test --workspace && cargo clippy --workspace --all-targets'
+        && cargo test && cargo clippy --all-targets'
 ```
 
 Under that emulation two `host/tests/remote.rs` tests with 100–200 ms deadlines time out; for

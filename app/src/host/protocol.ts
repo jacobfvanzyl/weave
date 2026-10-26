@@ -716,6 +716,21 @@ export type RequestPermissionOutcome =
     });
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ProgramState".
+ */
+export type ProgramState = "idle" | "working" | "done" | "blocked" | "error";
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "BlockedKind".
+ */
+export type BlockedKind = "permission" | "question" | "auth";
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalFormat".
+ */
+export type TerminalFormat = "text" | "vt";
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SessionEvent".
  */
 export type SessionEvent =
@@ -968,6 +983,63 @@ export type CompactionStatus = "in_progress" | "completed" | "failed" | "cancell
  * via the `definition` "Resolution".
  */
 export type Resolution = "answered" | "cancelled" | "withdrawn";
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalRestore".
+ */
+export type TerminalRestore = "snapshot" | "vt";
+/**
+ * The Host's later text frames.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalStreamMessage".
+ */
+export type TerminalStreamMessage =
+  | {
+      updated: HostTerminal;
+    }
+  | {
+      bell: {};
+    }
+  | {
+      notification: {
+        title: string;
+        body: string;
+      };
+    }
+  | {
+      progress: {
+        /**
+         * `remove`, `set`, `error`, `indeterminate` or `pause`.
+         */
+        state: string;
+        progress?: number | null;
+      };
+    }
+  | {
+      clipboard: {
+        text: string;
+      };
+    }
+  | {
+      resync: {
+        restore: TerminalRestore;
+      };
+    }
+  | {
+      exited: {
+        exitCode: number;
+      };
+    };
+/**
+ * The client's text frames after [`Open`].
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalStreamClientMessage".
+ */
+export type TerminalStreamClientMessage = {
+  resize: TerminalSize;
+};
 
 /**
  * The weave Host protocol (docs/specs/wve-85-host-protocol.md), generated from protocol/.
@@ -4625,6 +4697,253 @@ export interface ReleaseWorktreeResponse {
   closed?: SessionId[];
 }
 /**
+ * `terminals/list`: the terminals of the scope `directory` is in, oldest first.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListTerminalsRequest".
+ */
+export interface ListTerminalsRequest {
+  /**
+   * Any directory: its scope is the deepest worktree it's in, or the directory itself
+   * outside a repository.
+   */
+  directory: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalsResponse".
+ */
+export interface TerminalsResponse {
+  scope: string;
+  terminals: HostTerminal[];
+}
+/**
+ * A terminal as clients see it. `HostTerminal` in the schema, apart from ACP's `Terminal`, an
+ * agent's Host-run terminal.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "HostTerminal".
+ */
+export interface HostTerminal {
+  /**
+   * Permanent and opaque: a holder's, or later a Rex block's.
+   */
+  id: string;
+  /**
+   * The worktree it belongs to, or its directory outside a repository; symlinks resolved.
+   */
+  scope: string;
+  /**
+   * The person's name for it.
+   */
+  label?: string | null;
+  /**
+   * The session it was opened from, whose clients show it by default.
+   */
+  openedFrom?: SessionId | null;
+  /**
+   * What the program titled it (OSC 0 and 2).
+   */
+  title?: string | null;
+  /**
+   * The directory the shell last reported (OSC 7), as a path on the Host's computer.
+   */
+  pwd?: string | null;
+  process?: TerminalProcesses | null;
+  size: TerminalSize;
+  /**
+   * weave's, from OSC 133: whether a command runs, or how the last one ended. Absent where
+   * the owner doesn't report it.
+   */
+  command?: TerminalCommand | null;
+  /**
+   * The program's status records (OSC 7501), as Rex keeps them.
+   */
+  programStatus?: ProgramStatus[];
+  startedAt: number;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalProcesses".
+ */
+export interface TerminalProcesses {
+  /**
+   * The process group in the terminal's foreground: the shell, or the command it runs.
+   */
+  foreground?: TerminalProcess | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalProcess".
+ */
+export interface TerminalProcess {
+  pid: number;
+  name: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalSize".
+ */
+export interface TerminalSize {
+  cols: number;
+  rows: number;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalCommand".
+ */
+export interface TerminalCommand {
+  running: boolean;
+  /**
+   * The command line, while it runs, when the shell said it.
+   */
+  command?: string | null;
+  /**
+   * How the last command ended.
+   */
+  exitCode?: number | null;
+}
+/**
+ * An OSC 7501 record, with `title` and `msg` decoded.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ProgramStatus".
+ */
+export interface ProgramStatus {
+  /**
+   * `build/test`; absent for the root record.
+   */
+  id?: string | null;
+  state: ProgramState;
+  kind?: BlockedKind | null;
+  /**
+   * 0 to 100.
+   */
+  progress?: number | null;
+  app?: string | null;
+  title?: string | null;
+  msg?: string | null;
+}
+/**
+ * `terminals/watch`: a scope's terminals as `terminals/list` gives them, then a
+ * [`TerminalUpdatedNotification`] or [`TerminalRemovedNotification`] for every change in that
+ * scope, until the connection ends or the client sends `terminals/unwatch`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "WatchTerminalsRequest".
+ */
+export interface WatchTerminalsRequest {
+  directory: string;
+}
+/**
+ * `terminals/unwatch`: stop what `terminals/watch` sends for `scope`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UnwatchTerminalsRequest".
+ */
+export interface UnwatchTerminalsRequest {
+  scope: string;
+}
+/**
+ * `terminals/new`: a terminal in `directory`, belonging to its scope. A holder starts the
+ * person's login shell there, or runs `command` under it, as Ghostty starts a shell.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "NewTerminalRequest".
+ */
+export interface NewTerminalRequest {
+  directory: string;
+  label?: string | null;
+  openedFrom?: SessionId | null;
+  /**
+   * A command and its arguments, run under a login shell instead of an interactive one.
+   */
+  command?: string[] | null;
+  /**
+   * Its first size; 80×24 when absent. The first client to attach usually sets it again.
+   */
+  size?: TerminalSize | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalResponse".
+ */
+export interface TerminalResponse {
+  terminal: HostTerminal;
+}
+/**
+ * `terminals/close`: hang up the terminal's program, which ends it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CloseTerminalRequest".
+ */
+export interface CloseTerminalRequest {
+  id: string;
+}
+/**
+ * `terminals/setLabel`: name the terminal, or clear its name.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SetTerminalLabelRequest".
+ */
+export interface SetTerminalLabelRequest {
+  id: string;
+  label?: string | null;
+}
+/**
+ * `terminals/write`: text as if typed, for clients that don't attach. `\r` is Enter.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "WriteTerminalRequest".
+ */
+export interface WriteTerminalRequest {
+  id: string;
+  text: string;
+}
+/**
+ * `terminals/format`: the terminal's visible screen through the formatter, or with its history.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "FormatTerminalRequest".
+ */
+export interface FormatTerminalRequest {
+  id: string;
+  format?: "text" | "vt";
+  /**
+   * The history above the screen too.
+   */
+  history?: boolean;
+  /**
+   * Trailing whitespace and blank lines trimmed.
+   */
+  trim?: boolean;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "FormatTerminalResponse".
+ */
+export interface FormatTerminalResponse {
+  content: string;
+}
+/**
+ * `terminals/attach`: a ticket for the terminal's stream, good once, for
+ * [`stream::TICKET_LIFETIME_MS`], to the device that asked.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AttachTerminalRequest".
+ */
+export interface AttachTerminalRequest {
+  id: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AttachTerminalResponse".
+ */
+export interface AttachTerminalResponse {
+  ticket: string;
+  expiresAt: number;
+}
+/**
  * `session/event`: one journaled event, in order.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -5713,6 +6032,61 @@ export interface UpdateAvailableNotification {
 export interface DevicePairedNotification {
   device: Device;
 }
+/**
+ * `terminals/updated`, to clients watching its scope: a terminal started or changed.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalUpdatedNotification".
+ */
+export interface TerminalUpdatedNotification {
+  terminal: HostTerminal;
+}
+/**
+ * `terminals/removed`, to clients watching its scope: a terminal ended.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalRemovedNotification".
+ */
+export interface TerminalRemovedNotification {
+  id: string;
+  scope: string;
+  /**
+   * How its program ended, when the Host saw it.
+   */
+  exitCode?: number | null;
+}
+/**
+ * The client's first text frame.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalStreamOpen".
+ */
+export interface TerminalStreamOpen {
+  ticket: string;
+  size: TerminalSize1;
+  /**
+   * The Ghostty commit and snapshot format the client's libghostty-vt decodes, as
+   * `weave-holder --version` names its own.
+   */
+  codec: string;
+}
+/**
+ * The client's size, which is the terminal's once the client types.
+ */
+export interface TerminalSize1 {
+  cols: number;
+  rows: number;
+}
+/**
+ * The Host's first text frame: the terminal, and how the restore that follows comes.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TerminalStreamOpened".
+ */
+export interface TerminalStreamOpened {
+  terminal: HostTerminal;
+  restore: TerminalRestore;
+}
 
 /** Versions, the WebSocket's subprotocol and close codes, error codes, features and client tools. */
 export const HOST_PROTOCOL = {
@@ -5727,6 +6101,15 @@ export const HOST_PROTOCOL = {
     "closeRevoked": 4000,
     "closeBehind": 4001,
     "closeUnauthenticated": 4002
+  },
+  "terminalStream": {
+    "subprotocol": "weave-terminal",
+    "ticketLifetimeMs": 30000,
+    "restore": 1,
+    "output": 3,
+    "input": 16,
+    "closeTicket": 4010,
+    "closeExited": 4011
   },
   "errors": {
     "unauthenticated": -32060,
@@ -5746,7 +6129,9 @@ export const HOST_PROTOCOL = {
     "gitFailed": -32074,
     "uncommittedChanges": -32075,
     "keyReused": -32076,
-    "hostStopping": -32077
+    "hostStopping": -32077,
+    "unknownTerminal": -32078,
+    "terminalUnavailable": -32079
   },
   "features": {
     "steer": "turn/steer",
@@ -5760,7 +6145,8 @@ export const HOST_PROTOCOL = {
     "queue": "queue",
     "getSession": "sessions/get",
     "requestKeys": "requestKeys",
-    "drain": "drain"
+    "drain": "drain",
+    "terminals": "terminals"
   },
   "files": {
     "maxEntries": 2000
@@ -5827,6 +6213,15 @@ export interface HostRequests {
   "worktrees/create": { params: CreateWorktreeRequest; result: CreateWorktreeResponse };
   "worktrees/remove": { params: RemoveWorktreeRequest; result: RemoveWorktreeResponse };
   "worktrees/release": { params: ReleaseWorktreeRequest; result: ReleaseWorktreeResponse };
+  "terminals/list": { params: ListTerminalsRequest; result: TerminalsResponse };
+  "terminals/watch": { params: WatchTerminalsRequest; result: TerminalsResponse };
+  "terminals/unwatch": { params: UnwatchTerminalsRequest; result: Empty };
+  "terminals/new": { params: NewTerminalRequest; result: TerminalResponse };
+  "terminals/close": { params: CloseTerminalRequest; result: Empty };
+  "terminals/setLabel": { params: SetTerminalLabelRequest; result: TerminalResponse };
+  "terminals/write": { params: WriteTerminalRequest; result: Empty };
+  "terminals/format": { params: FormatTerminalRequest; result: FormatTerminalResponse };
+  "terminals/attach": { params: AttachTerminalRequest; result: AttachTerminalResponse };
 }
 
 /** What each notification the Host sends carries. */
@@ -5840,6 +6235,8 @@ export interface HostNotifications {
   "pending/resolved": PendingResolvedNotification;
   "agents/updateAvailable": UpdateAvailableNotification;
   "devices/paired": DevicePairedNotification;
+  "terminals/updated": TerminalUpdatedNotification;
+  "terminals/removed": TerminalRemovedNotification;
 }
 
 export type HostMethod = keyof HostRequests;

@@ -1,9 +1,5 @@
 [workspace]
 members = ["acp-core", "agents", "cli", "fake-agent", "holder", "host", "host-client", "protocol", "tui"]
-# weave-holder builds libghostty-vt with Zig (holder/AGENTS.md), so plain `cargo build` and
-# `cargo test` leave it out until the Host starts holders (WVE-152); `-p weave-holder` or
-# `--workspace` include it.
-default-members = ["acp-core", "agents", "cli", "fake-agent", "host", "host-client", "protocol", "tui"]
 resolver = "3"
 
 [workspace.package]

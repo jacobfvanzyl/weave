@@ -3,8 +3,10 @@
 #
 #   scripts/update-hosts [--now] [--hosts-only] [HOST...]
 #
-# Here, `cargo build --release` in this checkout, with ~/.local/bin/weave pointing at
-# target/release/weave (or given a copy of it), then `weave daemon restart`. Then on each
+# Here, `cargo build --release` of weave and weave-holder in this checkout, with
+# ~/.local/bin/weave pointing at target/release/weave (or given a copy of it, and then a copy of
+# weave-holder beside it, where the Host looks for it), then `weave daemon restart`. Terminals
+# already running keep the holder they started with. Then on each
 # HOST (by default the ones in $WEAVE_HOSTS, separated by spaces): this working tree, less
 # the app and the trackpad, replaces ~/.cache/weave/build/src there, and the same script builds
 # it with its target directory beside it, so builds after the first are incremental, copies
@@ -64,15 +66,24 @@ update_here() {
 
   step "Building weave (release) on $where"
   local target="${target_dir:-$repo/target}"
-  (cd "$repo" && CARGO_TARGET_DIR="$target" cargo build --release -p weave-cli)
+  (cd "$repo" && CARGO_TARGET_DIR="$target" cargo build --release -p weave-cli -p weave-holder)
 
   local built="$target/release/weave"
   local installed="$HOME/.local/bin/weave"
-  if [ "$(resolve "$installed")" != "$(resolve "$built")" ] && ! cmp -s "$built" "$installed"; then
-    mkdir -p "$(dirname "$installed")"
-    install -m 755 "$built" "$(dirname "$installed")/.weave.new"
-    mv -f "$(dirname "$installed")/.weave.new" "$installed"
-    echo "Copied it to $installed."
+  if [ "$(resolve "$installed")" != "$(resolve "$built")" ]; then
+    # A copy of weave, so weave-holder is copied beside it; a link finds it in the build.
+    local name
+    for name in weave weave-holder; do
+      local from="$target/release/$name"
+      local to
+      to="$(dirname "$installed")/$name"
+      if ! cmp -s "$from" "$to"; then
+        mkdir -p "$(dirname "$to")"
+        install -m 755 "$from" "$(dirname "$to")/.$name.new"
+        mv -f "$(dirname "$to")/.$name.new" "$to"
+        echo "Copied $name to $to."
+      fi
+    done
   fi
 
   step "Restarting the weave Host on $where"
