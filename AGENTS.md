@@ -91,11 +91,12 @@ build on a computer fetches the pinned Ghostty with git and builds libghostty-vt
 Unless `$ZIG` or `PATH` has the pinned Zig, it downloads that first. See `holder/AGENTS.md`. The
 Host offers terminals only when `weave-holder` sits beside its own binary.
 
-`scripts/update-hosts [--now] [HOST...]` rebuilds the release here, `weave-holder` included, and
-restarts the Host (`~/.local/bin/weave` points at `target/release/weave`, beside the holder), then
-copies this working tree to each
-host over SSH (by default those in `$WEAVE_HOSTS`), builds it there in `~/.cache/weave/build`,
-installs rustup first if needed, and restarts that Host too; `--hosts-only` leaves this one alone.
+`scripts/update-hosts [--now] [--here | --hosts-only] [HOST...]` rebuilds the release here,
+`weave-holder` included, and restarts the Host (`~/.local/bin/weave` points at
+`target/release/weave`, beside the holder), then copies this working tree to the hosts in
+`$WEAVE_HOSTS` over SSH, builds it there in `~/.cache/weave/build`, installs rustup first if
+needed, and restarts that Host too. Named HOSTs are the only ones it updates, this computer too
+with `--here`; `--hosts-only` leaves this one alone.
 
 Keep only the latest debug build in `target/debug`, which otherwise grows with every rebuild
 and can fill the disk: clear `target/debug/incremental` (old incremental sessions pile up

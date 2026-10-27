@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # Rebuild weave in release and restart its Host: on this computer, then on others over SSH.
 #
-#   scripts/update-hosts [--now] [--hosts-only] [HOST...]
+#   scripts/update-hosts [--now] [--here | --hosts-only] [HOST...]
+#
+# Without HOSTs, this computer and then the hosts in $WEAVE_HOSTS (separated by spaces). Named
+# HOSTs are the only ones updated, this computer only with --here; --hosts-only leaves this
+# computer alone either way.
 #
 # Here, `cargo build --release` of weave and weave-holder in this checkout, with
 # ~/.local/bin/weave pointing at target/release/weave (or given a copy of it, and then a copy of
 # weave-holder beside it, where the Host looks for it), then `weave daemon restart`. Terminals
-# already running keep the holder they started with. Then on each
-# HOST (by default the ones in $WEAVE_HOSTS, separated by spaces): this working tree, less
-# the app and the trackpad, replaces ~/.cache/weave/build/src there, and the same script builds
-# it with its target directory beside it, so builds after the first are incremental, copies
-# the binary over ~/.local/bin/weave and restarts the Host. A host without rustup gets it in
+# already running keep the holder they started with. On each HOST, this working tree, less the
+# app and the trackpad, replaces ~/.cache/weave/build/src there, and the same script builds it
+# with its target directory beside it, so builds after the first are incremental, copies the
+# binary over ~/.local/bin/weave and restarts the Host. A host without rustup gets it in
 # ~/.cargo, leaving its shell's files alone; the toolchain comes from rust-toolchain.toml.
-# Restarts wait for running turns, unless --now. --hosts-only leaves this computer's Host
-# alone.
+# Restarts wait for running turns, unless --now.
 #
 # Each host runs `scripts/update-hosts --here-only [--now] --target-dir DIR` from its copy.
 
@@ -21,11 +23,13 @@ set -euo pipefail
 
 now=""
 mode=all # all, hosts (--hosts-only) or here (--here-only)
+also_here=""
 target_dir=""
 hosts=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --now) now="--now" ;;
+    --here) also_here=1 ;;
     --hosts-only) mode=hosts ;;
     --here-only) mode=here ;;
     --target-dir) target_dir="$2"; shift ;;
@@ -35,7 +39,10 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-if [ "$mode" != here ] && [ ${#hosts[@]} -eq 0 ] && [ -n "${WEAVE_HOSTS:-}" ]; then
+if [ "$mode" = all ] && [ ${#hosts[@]} -gt 0 ] && [ -z "$also_here" ]; then
+  # Named hosts are the ones asked for; this computer too only with --here.
+  mode=hosts
+elif [ "$mode" != here ] && [ ${#hosts[@]} -eq 0 ] && [ -n "${WEAVE_HOSTS:-}" ]; then
   read -r -a hosts <<<"$WEAVE_HOSTS"
 fi
 
