@@ -163,9 +163,9 @@ number. Links open in your browser only after you choose to.
 The transcript looks like Codex's: commands as `• Ran cmd` with their first lines of
 output, reads and searches grouped as `• Explored`, edits as numbered, tinted diffs, and
 code highlighted with Catppuccin themes. Fullscreen, the agent's work folds as it does in the
-app: each tool call to a card, its title and status on one shaded row, and two or more calls in a
-row, with the thinking between them, into one row such as `• Ran 9 commands, 2 edits · 2m 17s`,
-saying how many failed. While a turn runs, its latest work is one `• Working` row with the step
+app: tool calls in a row, with the thinking between them, into one shaded row such as
+`• Ran 9 commands, 2 edits · 2m 17s`, a lone call too, saying how many failed, and each call
+in it to a card, its title and status on one row. While a turn runs, its latest work is one `• Working` row with the step
 it's on. Click a row to open it; Ctrl+T shows everything open. Colors adapt to your terminal's background, which
 weave asks the terminal for at startup.
 

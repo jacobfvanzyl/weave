@@ -2,8 +2,8 @@
 //! them (WVE-140, after WVE-91's `app/src/chat/transcript-runs.ts`).
 //!
 //! An uninterrupted run of tool calls, with the agent's thinking between them, folds into one
-//! row once it holds two tool calls; anything else ends it. While a turn runs, its latest run is
-//! one row however short. A row is closed until clicked, and the detailed view (Ctrl+T) shows
+//! row once it holds a tool call, a lone one too; anything else ends it. While a turn runs, its
+//! latest run is one row however short. A row is closed until clicked, and the detailed view (Ctrl+T) shows
 //! every run open. Inline mode doesn't fold: its cells go to scrollback as each call finishes.
 
 use std::ops::AddAssign;
@@ -257,9 +257,9 @@ impl Summary {
         self.step.is_none()
     }
 
-    /// Whether the run folds once it's over: two tool calls or more.
+    /// Whether the run folds once it's over: whenever it holds a tool call.
     pub fn folds(&self) -> bool {
-        self.tally.calls() >= 2
+        self.tally.calls() > 0
     }
 
     fn took(&self) -> Option<Duration> {
@@ -319,7 +319,7 @@ impl Summary {
 }
 
 /// `spans` cut to `width` columns, ending in `…` where they were cut.
-fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+pub fn fit(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     let total: usize = spans.iter().map(|span| span.content.width()).sum();
     if total <= width {
         return spans;
@@ -489,7 +489,11 @@ mod tests {
         summary.add(&Part::Message, Times::at(200_000));
         assert_eq!(summary.took(), Some(Duration::from_millis(137_000)));
         assert_eq!(summary.step.as_deref(), Some("Do it"));
-        assert!(!summary.folds());
+        // A lone call folds as well; thinking alone doesn't.
+        assert!(summary.folds());
+        let mut thinking = Summary::default();
+        thinking.add(&Part::Thought, Times::at(3_000));
+        assert!(!thinking.folds());
 
         // Undated, it leaves the time out.
         let mut undated = Summary::default();

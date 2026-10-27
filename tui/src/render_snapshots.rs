@@ -940,7 +940,7 @@ fn fullscreen_run_running() {
     insta::assert_snapshot!(both_views(&mut chat, 12, 24));
 }
 
-/// One tool call, with thinking before it, doesn't fold.
+/// One tool call, with thinking before it, folds as a run of more would.
 #[test]
 fn fullscreen_lone_tool_call() {
     let mut chat = fullscreen_chat();

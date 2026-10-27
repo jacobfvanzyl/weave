@@ -6,8 +6,9 @@ state, composer. The `weave` binary in `../cli` runs it. Read the root `AGENTS.m
 The TUI shows one session at a time. Like Codex, it runs fullscreen by default: on the
 alternate screen, `weave` owns the transcript (`transcript.rs`: retained cells that
 reflow, scrolling, selection and copy, and Find, matched by `find.rs`), and folds the agent's
-work as the app does (WVE-140): each tool call to a one-row card (`ToolCallCell::card`: title and
-status, as the app's), and each run of them into one row (`runs.rs`): `ChatWidget` holds the
+work as the app does (WVE-140): each run of tool calls into one row, a lone call too (`runs.rs`),
+and each call in it to a one-row card (`ToolCallCell::card`: title and status, as the app's):
+`ChatWidget` holds the
 latest run until something other than a tool call or thought ends it, draws it live (one `Working`
 row while the turn's latest), and dates entries with the journal's times (`handle_journal_event`).
 Cards and run rows share a fill fainter than a prompt's (`style::work_row`); a click opens one
@@ -57,7 +58,9 @@ their turn origin's `clientId`. When the Host goes away, the app reconnects thro
 CLI's `Reconnector` (which never starts a Host) and attaches again after its position, so
 only what it missed arrives, and `/reload`s itself if the new Host speaks another protocol
 version; `subagents` shows ACP subagents as Codex shows its own, each child session in a chat of its
-own that the parent routes updates to. `ChatWidget` stays free of I/O: it turns
+own that the parent routes updates to; the fullscreen transcript's compact view draws their rows in
+the parent as one line each, the title alone on a run row's fill (`event_row`), and Ctrl+T and
+inline mode in full. `ChatWidget` stays free of I/O: it turns
 Host events (`events.rs`), keys and mouse input into transcript cells and `AppCommand`s
 (answers to pending requests included), so it is tested without a terminal, in both screen
 modes. Terminal mechanics (`custom_terminal`, `insert_history`) are tested on a vt100

@@ -2,7 +2,8 @@
 //! (`codex-rs/tui/src/multi_agents.rs`, `app/agent_navigation.rs`, Apache-2.0): rows in the
 //! parent's transcript for what happens to each child (`• Spawned`, `• Sent input to`,
 //! `• Completed`), a `/subagents` picker with a dot that is green while a child works, and
-//! Alt+Left / Alt+Right to watch another agent's transcript.
+//! Alt+Left / Alt+Right to watch another agent's transcript. The fullscreen transcript's
+//! compact view draws each row as its title alone, as a run's row is drawn.
 //!
 //! Each child is its own session with its own updates, kept in a chat of its own; the parent
 //! only knows its label, controls and current work state.
@@ -27,6 +28,7 @@ use weave_acp_core::schema::SubagentUpdate;
 
 use crate::chat::ChatWidget;
 use crate::history_cell::dim;
+use crate::runs;
 use crate::status::format_elapsed;
 use crate::style;
 use crate::wrapping::DisplayLine;
@@ -187,31 +189,58 @@ impl Event {
     }
 }
 
+impl Event {
+    fn verb(&self) -> &'static str {
+        match self {
+            Self::Spawned { .. } => "Spawned ",
+            Self::Resumed => "Resumed ",
+            Self::Completed { .. } => "Completed ",
+            Self::Interrupted => "Interrupted ",
+            Self::Stopped { .. } => "Stopped ",
+            Self::Finished => "Finished ",
+            Self::Unknown => "Lost track of ",
+            Self::SentInput { .. } => "Sent input to ",
+            Self::MessageFrom { .. } => "Message from ",
+        }
+    }
+
+    /// What the row says under its title: a description, a message or a reply, or why.
+    fn detail(&self) -> Option<String> {
+        match self {
+            Self::Spawned { description } => description.clone(),
+            Self::Completed { reply } => {
+                reply.as_deref().map(|reply| preview(reply, REPLY_PREVIEW))
+            }
+            Self::Stopped { reason } => Some(format!("Because {reason}")),
+            Self::SentInput { text } => Some(preview(text, PROMPT_PREVIEW)),
+            Self::MessageFrom { text } => Some(preview(text, REPLY_PREVIEW)),
+            Self::Resumed | Self::Interrupted | Self::Finished | Self::Unknown => None,
+        }
+    }
+}
+
+fn event_title(label: &str, event: &Event) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(event.verb(), Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(label.to_owned(), label_style()),
+    ]
+}
+
+/// The row the fullscreen transcript's compact view shows for `event`: its title alone, on
+/// the fill of a run's row.
+pub fn event_row(label: &str, event: &Event, width: usize) -> DisplayLine {
+    let title = runs::fit(event_title(label, event), width.saturating_sub(2));
+    let mut row = DisplayLine::whole(Line::from(title)).prefixed(&[Span::styled("• ", dim())]);
+    row.line.style = style::work_row();
+    row
+}
+
 /// A row in the parent's transcript, as Codex's: `• Spawned Robie` with details under `└`.
 pub fn event_lines(label: &str, event: &Event, width: usize) -> Vec<DisplayLine> {
-    let (verb, after, detail): (&str, &str, Option<String>) = match event {
-        Event::Spawned { description } => ("Spawned ", "", description.clone()),
-        Event::Resumed => ("Resumed ", "", None),
-        Event::Completed { reply } => (
-            "Completed ",
-            "",
-            reply.as_deref().map(|reply| preview(reply, REPLY_PREVIEW)),
-        ),
-        Event::Interrupted => ("Interrupted ", "", None),
-        Event::Stopped { reason } => ("Stopped ", "", Some(format!("Because {reason}"))),
-        Event::Finished => ("Finished ", "", None),
-        Event::Unknown => ("Lost track of ", "", None),
-        Event::SentInput { text } => ("Sent input to ", "", Some(preview(text, PROMPT_PREVIEW))),
-        Event::MessageFrom { text } => ("Message from ", "", Some(preview(text, REPLY_PREVIEW))),
-    };
-    let title = Line::from(vec![
-        Span::styled("• ", dim()),
-        Span::styled(verb, Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(label.to_owned(), label_style()),
-        Span::raw(after),
-    ]);
-    let mut lines = vec![DisplayLine::whole(title)];
-    if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+    let mut title = vec![Span::styled("• ", dim())];
+    title.extend(event_title(label, event));
+    let mut lines = vec![DisplayLine::whole(Line::from(title))];
+    if let Some(detail) = event.detail().filter(|detail| !detail.is_empty()) {
         let first = Line::from(Span::styled("  └ ", dim()));
         let rest = Line::from("    ");
         lines.extend(wrap_sourced(&Line::from(detail), width, &first, &rest));
@@ -413,6 +442,23 @@ mod tests {
         assert_eq!(
             text(&message_lines(true, "Main", "Check Windows too.", 60)),
             ["• From Main", "  └ Check Windows too."]
+        );
+    }
+
+    #[test]
+    fn a_row_is_its_title_alone_on_a_runs_fill() {
+        let spawned = Event::Spawned {
+            description: Some("Investigates test failures".into()),
+        };
+        let row = event_row("Robie", &spawned, 60);
+        assert_eq!(row.line.to_string(), "• Spawned Robie");
+        assert_eq!(row.line.style, style::work_row());
+        let sent = Event::SentInput {
+            text: "Read-only investigation of the parser".into(),
+        };
+        assert_eq!(
+            event_row("Robie", &sent, 16).line.to_string(),
+            "• Sent input to…"
         );
     }
 

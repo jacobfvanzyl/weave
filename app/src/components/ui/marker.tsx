@@ -59,8 +59,10 @@ function MarkerContent({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
       data-slot="marker-content"
+      // A separator's text shrinks to wrap rather than keeping its width on one line
+      // (`flex-none`), which a compaction's summary took thousands of pixels past the transcript.
       className={cn(
-        "min-w-0 wrap-break-word group-data-[variant=separator]/marker:flex-none group-data-[variant=separator]/marker:text-center *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
+        "min-w-0 wrap-break-word group-data-[variant=separator]/marker:flex-initial group-data-[variant=separator]/marker:text-center *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
         className
       )}
       {...props}

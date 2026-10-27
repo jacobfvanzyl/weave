@@ -15,22 +15,24 @@ const outline = (entries: TranscriptEntry[], running = false) => transcriptItems
   item.kind === 'entry' ? item.entry.id : `[${item.entries.map(({ id }) => id).join(' ')}]${item.working ? '*' : ''}`);
 
 describe('transcriptItems', () => {
-  it('folds an uninterrupted run of two or more tool calls, with the thinking between them', () => {
+  it('folds an uninterrupted run of tool calls, with the thinking between them', () => {
     expect(outline([message('ask', 'user'), tool('a'), message('hm', 'assistant', 'thought'), tool('b'), message('done', 'assistant')]))
       .toEqual(['ask', '[a hm b]', 'done']);
   });
 
-  it('leaves a lone tool call, and anything the agent says ends a run', () => {
+  it('folds a lone tool call too, and anything the agent says ends a run', () => {
     expect(outline([tool('a'), message('so', 'assistant'), tool('b'), tool('c'), message('ok', 'assistant'), tool('d')]))
-      .toEqual(['a', 'so', '[b c]', 'ok', 'd']);
+      .toEqual(['[a]', 'so', '[b c]', 'ok', '[d]']);
+    // Thinking alone isn't a run.
+    expect(outline([message('hm', 'assistant', 'thought'), message('so', 'assistant')])).toEqual(['hm', 'so']);
   });
 
   it('makes the running turn\'s latest run its activity, however short', () => {
     expect(outline([message('ask', 'user'), tool('a')], true)).toEqual(['ask', '[a]*']);
     expect(outline([message('ask', 'user'), tool('a'), tool('b'), message('so', 'assistant'), tool('c')], true))
       .toEqual(['ask', '[a b]', 'so', '[c]*']);
-    // Once the turn ends, a lone tool call is itself again.
-    expect(outline([message('ask', 'user'), tool('a')])).toEqual(['ask', 'a']);
+    // Once the turn ends, a lone tool call stays a run.
+    expect(outline([message('ask', 'user'), tool('a')])).toEqual(['ask', '[a]']);
   });
 
   it('says the agent is working on a prompt it hasn\'t answered yet', () => {

@@ -37,7 +37,7 @@ describe('the transcript', () => {
     expect(screen.getByText('Steered into the turn')).toBeInTheDocument();
   });
 
-  it('shows subagents as rows that open their own work', async () => {
+  it('shows subagents as one-line rows that open their own work', async () => {
     const user = userEvent.setup();
     const openSubagent = vi.fn();
     const model = transcript(
@@ -48,10 +48,11 @@ describe('the transcript', () => {
     );
     render(<ChatPane model={model} actions={actions()} onOpenSubagent={openSubagent} />);
     const rows = screen.getAllByText((_, element) => element?.getAttribute('data-slot') === 'subagent-row');
+    // What happened and to whom, without the description, the message or the reply.
     expect(rows.map((row) => row.textContent)).toEqual([
-      '•SpawnedRobieCounts files',
-      '•Sent input toRobieCount them.',
-      '•CompletedRobieThere are 12.',
+      'SpawnedRobie',
+      'Sent input toRobie',
+      'CompletedRobie',
     ]);
     await user.click(within(rows[2]).getByRole('button', { name: "Show Robie's work" }));
     expect(openSubagent).toHaveBeenCalledWith('main:robie');
@@ -81,7 +82,9 @@ describe('the transcript', () => {
       { type: 'terminal/output', terminalId: 'term-1', data: '\u001b[31merror\u001b[0m: it broke\r\n' },
       { type: 'terminal/exit', terminalId: 'term-1', status: { exitCode: 2 } },
     )} actions={actions()} />);
-    // Closed, even failed, until tapped.
+    // A lone call is a run of its own; it and the call are closed, even failed, until tapped.
+    expect(screen.queryByLabelText('Terminal output')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Worked/ }));
     expect(screen.queryByLabelText('Terminal output')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Run make/ }));
     expect(screen.getByLabelText('Terminal output')).toHaveTextContent(/^error: it broke$/);

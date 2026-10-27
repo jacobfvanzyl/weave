@@ -23,7 +23,7 @@ const isWork = (entry: TranscriptEntry): entry is WorkEntry => entry.kind === 't
 
 /**
  * The transcript as it shows. An uninterrupted run of tool calls, with the thinking between them,
- * folds into one row once it holds two tool calls; anything else the agent says ends it. While a
+ * folds into one row once it holds a tool call, a lone one too; anything else the agent says ends it. While a
  * turn runs, the run at the end is its activity however short, and so is a prompt the agent hasn't
  * answered yet.
  */
@@ -35,7 +35,7 @@ export function transcriptItems(entries: TranscriptEntry[], running: boolean): T
     const [first] = run;
     if (!first) return;
     const working = running && latest;
-    if (working || run.filter(({ kind }) => kind === 'tool').length >= 2) {
+    if (working || run.some(({ kind }) => kind === 'tool')) {
       items.push({ kind: 'work', id: `work-${first.id}`, entries: run, working, ...times(run, before) });
     } else {
       items.push(...run.map((entry) => ({ kind: 'entry' as const, entry })));

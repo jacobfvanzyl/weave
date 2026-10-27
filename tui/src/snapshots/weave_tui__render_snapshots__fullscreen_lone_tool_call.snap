@@ -7,11 +7,7 @@ expression: "both_views(&mut chat, 22, 22)"
 › Fix the flaky parser test
 
 
-• Running the tests
-
-  They should pass now.
-
-• cargo test -p parser                                        completed
+• Ran 1 command · 31s
 
 • They pass.
 
@@ -22,13 +18,18 @@ expression: "both_views(&mut chat, 22, 22)"
 
 
 
+
+
+
+
 ›
 
   Agent
 ── detailed ──
-
 › Fix the flaky parser test
 
+
+• Ran 1 command · 31s
 
 • Running the tests
 
@@ -42,7 +43,6 @@ expression: "both_views(&mut chat, 22, 22)"
 • They pass.
 
   Worked for 2m 20s • 12:00
-
   Full transcript · ⌃t to return
 
 ›

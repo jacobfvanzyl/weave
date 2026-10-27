@@ -81,8 +81,9 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   - Delete session, confirmed: the agent and the Host forget it.
 - **Transcript:** Alpha's ACP transcript and its views (`src/chat`), fed from the session's
   journal (see [The transcript](#the-transcript)).
-- **Subagents** show as rows in their parent's transcript, as the TUI shows them (`• Spawned
-  Robie`, `• Completed Robie` with its reply, the messages between them). Tapping a subagent's
+- **Subagents** show as rows in their parent's transcript, as the TUI shows them: one line each,
+  on the fill of a run's card, saying what happened and to whom (`Spawned Robie`, `Sent input to
+  Robie`, `Completed Robie`), without the description, message or reply. Tapping a subagent's
   name shows its own transcript in place of the session's, under a bar naming it with a way back
   to Main; a subagent's transcript has no composer.
 - **Agent updates.** When a newer version of the session's agent is out
@@ -226,9 +227,9 @@ How the work shows (`src/chat/transcript-runs.ts`):
 
 - **Tool calls** start closed, whatever their status, and open when tapped: a card a little
   lighter than the chat, its title and status on one line. The agent's raw input and output
-  aren't shown.
-- **Runs of work.** Two or more tool calls in a row, with the thinking between them, fold into
-  one closed card drawn as a tool call's is: "Worked for 2m 17s · 9 commands, 2 edits", and
+  aren't shown. Each is in a run, so these cards show once a run is opened.
+- **Runs of work.** Tool calls in a row, with the thinking between them, fold into one closed
+  card drawn as a tool call's is, a lone call too: "Worked for 2m 17s · 9 commands, 2 edits", and
   "1 failed" when one did. The TUI shades its rows for both the same way (WVE-140).
   Anything else the agent says ends a run. A tool call waiting on the person shows below the row
   while it's closed.

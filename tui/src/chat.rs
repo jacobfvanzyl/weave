@@ -487,7 +487,8 @@ struct MessageShape {
 }
 
 impl MessageShape {
-    fn lines(&self, width: usize) -> Vec<DisplayLine> {
+    /// Its lines, or as one `row` without the message where it is to or from a subagent.
+    fn lines(&self, width: usize, row: bool) -> Vec<DisplayLine> {
         if !self.to_subagent {
             return subagents::message_lines(!self.outgoing, &self.label, &self.text, width);
         }
@@ -497,7 +498,21 @@ impl MessageShape {
         } else {
             subagents::Event::MessageFrom { text }
         };
-        subagents::event_lines(&self.label, &event, width)
+        subagent_event_lines(&self.label, &event, width, row)
+    }
+}
+
+/// A subagent's row in its parent's transcript: as one `row`, its title alone, or in full.
+fn subagent_event_lines(
+    label: &str,
+    event: &subagents::Event,
+    width: usize,
+    row: bool,
+) -> Vec<DisplayLine> {
+    if row {
+        vec![subagents::event_row(label, event, width)]
+    } else {
+        subagents::event_lines(label, event, width)
     }
 }
 
@@ -1799,10 +1814,13 @@ impl ChatWidget {
         }
     }
 
+    /// What happened to a subagent, as a row: its title alone in the fullscreen transcript's
+    /// compact view, and in full in the detailed one and inline.
     fn push_subagent_event(&mut self, label: &str, event: subagents::Event) {
         let label = label.to_owned();
-        self.push_cell(TranscriptCell::new(move |width| {
-            subagents::event_lines(&label, &event, width)
+        let fullscreen = self.transcript.is_some();
+        self.push_cell(TranscriptCell::with_detail(move |width, detail| {
+            subagent_event_lines(&label, &event, width, fullscreen && !detail)
         }));
     }
 
@@ -1908,9 +1926,12 @@ impl ChatWidget {
         if self.messages.is_empty() {
             return;
         }
+        let fullscreen = self.transcript.is_some();
         for entry in std::mem::take(&mut self.messages) {
             let shape = self.message_shape(&entry);
-            self.push_cell(TranscriptCell::new(move |width| shape.lines(width)));
+            self.push_cell(TranscriptCell::with_detail(move |width, detail| {
+                shape.lines(width, fullscreen && !detail)
+            }));
         }
     }
 
@@ -3475,8 +3496,8 @@ impl ChatWidget {
         }
     }
 
-    /// End the fullscreen transcript's latest run: it folds into one row once it holds two tool
-    /// calls, and its entries stay as they are otherwise.
+    /// End the fullscreen transcript's latest run: it folds into one row once it holds a tool
+    /// call, and its entries stay as they are otherwise.
     fn end_run(&mut self) {
         let Some(view) = &mut self.transcript else {
             return;
@@ -3561,7 +3582,10 @@ impl ChatWidget {
         }
         for entry in &self.messages {
             live.push(DisplayLine::default());
-            live.lines.extend(self.message_shape(entry).lines(width));
+            live.lines.extend(
+                self.message_shape(entry)
+                    .lines(width, fullscreen && !detail),
+            );
         }
         if let Some(stream) = &self.stream {
             if fullscreen {
@@ -3687,7 +3711,7 @@ impl ChatWidget {
     }
 
     /// The latest run's row, when it shows as one: while it's the running turn's activity,
-    /// however short, and once it holds two tool calls.
+    /// however short, and once it holds a tool call.
     fn live_run_row(&self, width: usize) -> Option<DisplayLine> {
         let summary = self.live_run_summary();
         let working = self.run_working();
@@ -5711,11 +5735,19 @@ mod tests {
         let mut chat = fullscreen_chat();
         submit(&mut chat, "count");
         ten_line_command(&mut chat);
-        // The call shows as its card, and clicked open, as drawn compactly.
+        // The lone call folds into its run's row. Opened, the run shows the call's card, and the
+        // card clicked open shows the call as drawn compactly.
         let compact = screen_rows(&chat, 60, 30);
-        let card = row_starting(&compact, "• seq 1 10 ");
-        assert!(compact[card].ends_with(" completed"), "{compact:#?}");
-        assert!(!compact.iter().any(|row| row.contains("+7 lines")));
+        let run = row_starting(&compact, "• Ran 1 command");
+        assert!(
+            !compact.iter().any(|row| row.contains("seq 1 10")),
+            "{compact:#?}"
+        );
+        click_at(&mut chat, 6, run);
+        let opened = screen_rows(&chat, 60, 30);
+        let card = row_starting(&opened, "• seq 1 10 ");
+        assert!(opened[card].ends_with(" completed"), "{opened:#?}");
+        assert!(!opened.iter().any(|row| row.contains("+7 lines")));
         click_at(&mut chat, 6, card);
         let open = screen_rows(&chat, 60, 30);
         assert_eq!(open[card + 1], "• Ran seq 1 10", "{open:#?}");
@@ -5724,6 +5756,8 @@ mod tests {
                 .any(|row| row.trim() == "+7 lines (⌃t to view transcript)")
         );
         click_at(&mut chat, 6, card);
+        assert_eq!(screen_rows(&chat, 60, 30), opened);
+        click_at(&mut chat, 6, run);
         assert_eq!(screen_rows(&chat, 60, 30), compact);
 
         let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
@@ -6022,15 +6056,21 @@ mod tests {
             robie.clone(),
             SessionUpdate::AgentMessageChunk(ContentChunk::new("There are 12 files.".into())),
         )));
+        // Each is one row with its title alone; the detailed view (Ctrl+T) has the rest.
         let rows = screen_rows(&chat, 60, 20);
-        for row in [
-            "• Spawned Robie",
-            "  └ Counts the files",
-            "• Sent input to Robie",
-            "  └ Count them",
-        ] {
+        for row in ["• Spawned Robie", "• Sent input to Robie"] {
             assert!(rows.contains(&row.to_owned()), "{row:?} in {rows:?}");
         }
+        for detail in ["Counts the files", "Count them"] {
+            assert!(!rows.iter().any(|row| row.contains(detail)), "{rows:?}");
+        }
+        chat.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        let rows = screen_rows(&chat, 60, 20);
+        for row in ["  └ Counts the files", "  └ Count them"] {
+            assert!(rows.contains(&row.to_owned()), "{row:?} in {rows:?}");
+        }
+        chat.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        let rows = screen_rows(&chat, 60, 20);
         assert!(!rows.iter().any(|row| row.contains("12 files")), "{rows:?}");
         assert!(
             rows.iter().any(|row| row.contains("1 subagent running")),
@@ -6064,10 +6104,7 @@ mod tests {
         )));
         let rows = screen_rows(&chat, 60, 20);
         assert!(rows.contains(&"• Completed Robie".to_owned()), "{rows:?}");
-        assert!(
-            rows.contains(&"  └ There are 12 files.".to_owned()),
-            "{rows:?}"
-        );
+        assert!(!rows.iter().any(|row| row.contains("12 files")), "{rows:?}");
 
         // `/subagents` opens the picker here rather than going to the agent.
         chat.handle_paste("/subagents");
