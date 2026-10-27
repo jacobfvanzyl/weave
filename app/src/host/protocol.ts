@@ -2211,7 +2211,7 @@ export interface FileEntry {
 }
 /**
  * `sessions/list`. Without an agent: the sessions the Host has a journal for, across
- * agents, most recently active first. With one: that agent's, the Host's own in `cwd` first,
+ * agents, most recently active first. With one: that agent's in `cwd`, the Host's own first,
  * then the agent's own listing, paged by its cursor. Blank sessions are never listed.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema

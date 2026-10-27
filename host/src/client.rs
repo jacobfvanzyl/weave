@@ -1955,7 +1955,8 @@ async fn agent_sessions(
 
     let mut sessions = Vec::new();
     let mut agents_own = listed.sessions;
-    agents_own.retain(|info| !blank.contains(&info.session_id));
+    // An agent may list more than `cwd` asks: Claude's lists the repository's other worktrees.
+    agents_own.retain(|info| !blank.contains(&info.session_id) && in_scope(&info.cwd));
     if request.cursor.is_none() {
         for mut listing in leading.iter().cloned() {
             // The agent may save the title only once a turn ends; the Host has seen it.

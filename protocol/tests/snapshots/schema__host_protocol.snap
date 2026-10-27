@@ -1933,7 +1933,7 @@ expression: schema()
           ]
         }
       },
-      "description": "`sessions/list`. Without an agent: the sessions the Host has a journal for, across\nagents, most recently active first. With one: that agent's, the Host's own in `cwd` first,\nthen the agent's own listing, paged by its cursor. Blank sessions are never listed."
+      "description": "`sessions/list`. Without an agent: the sessions the Host has a journal for, across\nagents, most recently active first. With one: that agent's in `cwd`, the Host's own first,\nthen the agent's own listing, paged by its cursor. Blank sessions are never listed."
     },
     "ListSessionsResponse": {
       "type": "object",

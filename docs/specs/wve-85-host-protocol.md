@@ -361,7 +361,8 @@ type SessionState = {
 - With `agentId`: that agent's sessions. The Host's own sessions of it in `cwd` lead the
   first page: open ones, then suspended ones within the idle grace of their last activity.
   The agent's own ACP `session/list` follows, paged by its cursor, without the sessions
-  already listed.
+  already listed or any outside `cwd`, which an agent may add (Claude's lists the
+  repository's other worktrees).
 - Blank sessions are never listed.
 
 ```ts

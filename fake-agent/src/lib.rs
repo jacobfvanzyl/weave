@@ -127,6 +127,9 @@ pub struct FakeAgentConfig {
     pub require_auth: bool,
     /// Sessions per `session/list` page.
     pub page_size: usize,
+    /// List sessions in every directory, whatever `session/list`'s `cwd` asks, as Claude's
+    /// adapter lists a repository's other worktrees with the one asked for.
+    pub list_every_directory: bool,
     /// Advertise only what every agent must support, to check a client gates the rest.
     pub minimal: bool,
     /// Advertise MCP servers over ACP (`mcpCapabilities.acp`, from the draft MCP-over-ACP RFD).
@@ -145,6 +148,7 @@ impl Default for FakeAgentConfig {
             state_path: None,
             require_auth: false,
             page_size: 20,
+            list_every_directory: false,
             minimal: false,
             mcp_over_acp: false,
             stdio_mcp: StdioMcp::default(),
@@ -165,6 +169,7 @@ impl FakeAgentConfig {
                 .ok()
                 .and_then(|size| size.parse().ok())
                 .unwrap_or(defaults.page_size),
+            list_every_directory: false,
             minimal: std::env::var("WEAVE_FAKE_AGENT_MINIMAL").is_ok_and(|value| value == "1"),
             mcp_over_acp: std::env::var("WEAVE_FAKE_AGENT_MCP_ACP").is_ok_and(|value| value == "1"),
             stdio_mcp: StdioMcp::default(),
@@ -397,10 +402,14 @@ pub async fn serve_with(
                 if let Err(error) = state.require_auth() {
                     return responder.respond_with_error(error);
                 }
+                let cwd = request
+                    .cwd
+                    .as_ref()
+                    .filter(|_| !state.config.list_every_directory);
                 let mut sessions: Vec<&StoredSession> = state
                     .sessions
                     .iter()
-                    .filter(|session| request.cwd.as_ref().is_none_or(|cwd| *cwd == session.cwd))
+                    .filter(|session| cwd.is_none_or(|cwd| *cwd == session.cwd))
                     .collect();
                 sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
                 let Some(start) = request

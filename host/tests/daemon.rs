@@ -261,6 +261,21 @@ impl World {
         Daemon::new(config)
     }
 
+    /// A Host whose agents list their sessions in every directory whatever `cwd` asks, as
+    /// Claude's lists a repository's other worktrees.
+    fn daemon_listing_every_directory(&self) -> Daemon {
+        let mut config = self.config(
+            false,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            false,
+        );
+        config.launcher = fake_agents_tuned(self.dir.path().join("agent-state.json"), |config| {
+            config.list_every_directory = true;
+        });
+        Daemon::new(config)
+    }
+
     fn config(
         &self,
         journals: bool,
@@ -1652,6 +1667,20 @@ async fn open_sessions_lead_the_list_so_continue_finds_them() {
         .expect("session/close");
     wait_for(|| daemon.status().sessions.len() == 1).await;
     assert_eq!(other.list(&world).await, [open, closed]);
+}
+
+#[tokio::test]
+async fn continue_finds_no_session_in_another_directory_though_the_agent_lists_it() {
+    let world = World::new();
+    let daemon = world.daemon_listing_every_directory();
+    let mut client = world.client(&daemon).await;
+    // A session open in another worktree, which the agent lists here too.
+    let worktree = world.cwd().join("worktree");
+    std::fs::create_dir(&worktree).expect("another directory");
+    client.session_in(&world, &worktree).await;
+    assert_eq!(client.list(&world).await, Vec::<SessionId>::new());
+    let here = client.session_in(&world, &world.cwd()).await.session_id;
+    assert_eq!(client.list(&world).await, [here]);
 }
 
 #[tokio::test]
