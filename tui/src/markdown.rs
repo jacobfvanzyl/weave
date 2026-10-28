@@ -40,6 +40,7 @@ use crate::mermaid::Role;
 use crate::style;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::LineSource;
+use crate::wrapping::wrap_line;
 use crate::wrapping::wrap_linked;
 
 /// A Mermaid fence whose block passes this many bytes renders as its source, closed or not, so
@@ -658,25 +659,33 @@ impl<'s> Renderer<'s> {
     }
 
     /// Lay a table out in columns, as Codex does: a header, a heavy rule, and the rows, each
-    /// cell padded by a space. A table too wide for the screen lists its rows instead.
+    /// cell padded by a space. A table wider than the screen wraps its widest cells within their
+    /// columns ([`column_widths`]), with a light rule between rows once any takes several lines;
+    /// one that can't fit even so lists its rows instead.
     fn end_table(&mut self, table: Table) {
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or_default();
-        let widths: Vec<usize> = (0..columns)
+        let cells = |column: usize| table.rows.iter().filter_map(move |row| row.get(column));
+        let natural: Vec<usize> = (0..columns)
+            .map(|column| cells(column).map(Line::width).max().unwrap_or_default())
+            .collect();
+        let longest_word: Vec<usize> = (0..columns)
             .map(|column| {
-                table
-                    .rows
-                    .iter()
-                    .filter_map(|row| row.get(column))
-                    .map(Line::width)
+                cells(column)
+                    .flat_map(|cell| cell.spans.iter())
+                    .flat_map(|span| span.content.split_whitespace())
+                    .map(UnicodeWidthStr::width)
                     .max()
                     .unwrap_or_default()
-                    + 2
             })
             .collect();
         let quote = self.quote_prefix();
         let quote_width: usize = quote.iter().map(|span| span.content.width()).sum();
-        let total = quote_width + widths.iter().sum::<usize>() + 2 * columns.saturating_sub(1);
-        if total > self.width {
+        // Each cell's padding, and two spaces between columns.
+        let room = self
+            .width
+            .checked_sub(quote_width + 2 * columns + 2 * columns.saturating_sub(1));
+        let Some(widths) = room.and_then(|room| column_widths(&natural, &longest_word, room))
+        else {
             for row in table.rows {
                 let mut spans = Vec::new();
                 for (index, cell) in row.into_iter().enumerate() {
@@ -689,36 +698,66 @@ impl<'s> Renderer<'s> {
                 self.flush();
             }
             return;
-        }
-        for (index, row) in table.rows.into_iter().enumerate() {
-            let mut spans = quote.clone();
+        };
+        let rows: Vec<Vec<Vec<Line<'static>>>> = table
+            .rows
+            .iter()
+            .map(|row| {
+                widths
+                    .iter()
+                    .enumerate()
+                    .map(|(column, width)| {
+                        row.get(column)
+                            .map(|cell| wrap_line(cell, *width))
+                            .unwrap_or_default()
+                    })
+                    .collect()
+            })
+            .collect();
+        let height =
+            |row: &Vec<Vec<Line<'static>>>| row.iter().map(Vec::len).max().unwrap_or(0).max(1);
+        let wrapped = rows.iter().skip(1).any(|row| height(row) > 1);
+        let rule = |mark: &str| {
+            let mut rule = quote.clone();
             for (column, width) in widths.iter().enumerate() {
                 if column > 0 {
-                    spans.push(Span::raw("  "));
+                    rule.push(Span::raw("  "));
                 }
-                let cell = row.get(column).cloned().unwrap_or_default();
-                let free = width - 2 - cell.width();
-                let (before, after) = match table.alignments.get(column) {
-                    Some(Alignment::Right) => (free, 0),
-                    Some(Alignment::Center) => (free / 2, free - free / 2),
-                    _ => (0, free),
-                };
-                spans.push(Span::raw(" ".repeat(before + 1)));
-                spans.extend(cell.spans);
-                if column + 1 < widths.len() {
-                    spans.push(Span::raw(" ".repeat(after + 1)));
-                }
+                rule.push(Span::styled(mark.repeat(width + 2), dim()));
             }
-            self.lines.push(DisplayLine::whole(Line::from(spans)));
-            if index == 0 {
-                let mut rule = quote.clone();
+            DisplayLine::plain(Line::from(rule))
+        };
+        let count = rows.len();
+        for (index, row) in rows.iter().enumerate() {
+            for line in 0..height(row) {
+                let mut spans = quote.clone();
                 for (column, width) in widths.iter().enumerate() {
                     if column > 0 {
-                        rule.push(Span::raw("  "));
+                        spans.push(Span::raw("  "));
                     }
-                    rule.push(Span::styled("━".repeat(*width), dim()));
+                    let cell = row
+                        .get(column)
+                        .and_then(|lines| lines.get(line))
+                        .cloned()
+                        .unwrap_or_default();
+                    let free = width.saturating_sub(cell.width());
+                    let (before, after) = match table.alignments.get(column) {
+                        Some(Alignment::Right) => (free, 0),
+                        Some(Alignment::Center) => (free / 2, free - free / 2),
+                        _ => (0, free),
+                    };
+                    spans.push(Span::raw(" ".repeat(before + 1)));
+                    spans.extend(cell.spans);
+                    if column + 1 < widths.len() {
+                        spans.push(Span::raw(" ".repeat(after + 1)));
+                    }
                 }
-                self.lines.push(DisplayLine::plain(Line::from(rule)));
+                self.lines.push(DisplayLine::whole(Line::from(spans)));
+            }
+            if index == 0 {
+                self.lines.push(rule("━"));
+            } else if wrapped && index + 1 < count {
+                self.lines.push(rule("─"));
             }
         }
     }
@@ -949,6 +988,63 @@ fn dim() -> Style {
     Style::default().add_modifier(Modifier::DIM)
 }
 
+/// Past this many cells, a word in a table cell breaks rather than the table listing its rows.
+const LONGEST_UNBROKEN_WORD: usize = 20;
+
+/// Each column's width, without its padding, for a table in `room` cells: as wide as its widest
+/// cell when they all fit. Otherwise columns narrower than an even share keep their width and
+/// the rest share what's left by their widths, none narrower than its longest word (up to
+/// [`LONGEST_UNBROKEN_WORD`]). `None` when even that doesn't fit.
+fn column_widths(natural: &[usize], longest_word: &[usize], room: usize) -> Option<Vec<usize>> {
+    if natural.iter().sum::<usize>() <= room {
+        return Some(natural.to_vec());
+    }
+    let minimum: Vec<usize> = natural
+        .iter()
+        .zip(longest_word)
+        .map(|(natural, word)| (*word).min(LONGEST_UNBROKEN_WORD).min(*natural).max(1))
+        .collect();
+    if minimum.iter().sum::<usize>() > room {
+        return None;
+    }
+    let mut widths = natural.to_vec();
+    let mut open: Vec<usize> = (0..natural.len()).collect();
+    let mut left = room;
+    loop {
+        let share = left / open.len().max(1);
+        let (fits, wide): (Vec<usize>, Vec<usize>) =
+            open.iter().partition(|column| natural[**column] <= share);
+        if fits.is_empty() {
+            break;
+        }
+        left -= fits.iter().map(|column| natural[*column]).sum::<usize>();
+        open = wide;
+    }
+    let open_width: usize = open.iter().map(|column| natural[*column]).sum();
+    for column in &open {
+        widths[*column] = (left * natural[*column] / open_width.max(1)).max(minimum[*column]);
+    }
+    // Rounding, and minimums above a column's share, leave it a little off.
+    while widths.iter().sum::<usize>() > room {
+        let column = (0..widths.len())
+            .filter(|column| widths[*column] > minimum[*column])
+            .max_by_key(|column| widths[*column] - minimum[*column])?;
+        widths[column] -= 1;
+    }
+    while widths.iter().sum::<usize>() < room {
+        let Some(column) = open
+            .iter()
+            .copied()
+            .filter(|column| widths[*column] < natural[*column])
+            .max_by_key(|column| natural[*column] - widths[*column])
+        else {
+            break;
+        };
+        widths[column] += 1;
+    }
+    Some(widths)
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -1009,6 +1105,44 @@ mod tests {
             render(source, 10),
             ["Name |", "Size", "a.rs | 12", "lib.rs |", "3400"]
         );
+    }
+
+    #[test]
+    fn a_table_too_wide_wraps_its_widest_cells_within_their_columns() {
+        let source = "| Piece | Picking QC version |\n|---|---|\n\
+            | Stable identities | Add a `meta.sampleIds` list alongside `data`, which keeps its shape. |\n\
+            | Commands | `put_sample` adds or replaces a sample. |\n\
+            | Flutter | A Dart copy of the commands. |\n";
+        assert_eq!(
+            render(source, 50),
+            [
+                " Piece                Picking QC version",
+                "━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                " Stable identities    Add a meta.sampleIds list",
+                "                      alongside data, which keeps",
+                "                      its shape.",
+                "───────────────────  ─────────────────────────────",
+                " Commands             put_sample adds or replaces",
+                "                      a sample.",
+                "───────────────────  ─────────────────────────────",
+                " Flutter              A Dart copy of the",
+                "                      commands.",
+            ]
+        );
+    }
+
+    #[test]
+    fn columns_share_the_room_by_width_and_keep_their_longest_words_whole() {
+        // Everything fits.
+        assert_eq!(column_widths(&[5, 10], &[5, 4], 20), Some(vec![5, 10]));
+        // The narrow column keeps its width; the wide one takes the rest.
+        assert_eq!(column_widths(&[17, 200], &[10, 12], 60), Some(vec![17, 43]));
+        // Two wide ones share it by their widths.
+        assert_eq!(column_widths(&[100, 300], &[8, 8], 40), Some(vec![10, 30]));
+        // Never narrower than the longest word, up to a point.
+        assert_eq!(column_widths(&[30, 300], &[25, 8], 40), Some(vec![20, 20]));
+        // Nothing fits: rows are listed instead.
+        assert_eq!(column_widths(&[30, 30], &[12, 12], 20), None);
     }
 
     #[test]
