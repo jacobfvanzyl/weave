@@ -457,8 +457,11 @@ Host sends everything and `replay.reset` is true; the client clears its transcri
 
 **`session/detach`** `{sessionId, close?: "never" | "ifUnused"}` → `{}`
 
-The client stops receiving the session. With `ifUnused`, the session closes now if nothing
-else needs it, as the TUI does when it leaves a blank session.
+The client stops receiving the session. With `ifUnused`, the session closes as soon as nothing
+needs it: now, or once its turn ends and its pending requests resolve, rather than after the
+idle grace. Another client attached keeps it open as before, and one attaching first takes the
+close back. The TUI asks for it when it leaves a session for another, quits a blank one, or
+quits with `/exit` or Ctrl+C (WVE-159).
 
 **`session/close`** `{sessionId}` → `{}`
 

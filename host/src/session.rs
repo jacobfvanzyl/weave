@@ -581,6 +581,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         reported: Reported::default(),
         blank,
         idle_since: None,
+        close_when_unused: false,
         stopping: None,
         waiting: Vec::new(),
     };
@@ -746,6 +747,9 @@ struct Actor {
     blank: Arc<AtomicBool>,
     /// When nothing last needed the session; it closes once that's the idle grace ago.
     idle_since: Option<Instant>,
+    /// A client that left asked for the session to close once nothing needs it, rather than
+    /// after the idle grace; one attaching takes that back.
+    close_when_unused: bool,
     stopping: Option<Ending>,
     /// Told once the session has stopped.
     waiting: Vec<oneshot::Sender<()>>,
@@ -783,6 +787,9 @@ impl Actor {
             }
             if self.stopping.is_none() && self.reopens.is_empty() {
                 self.advance();
+            }
+            if self.close_when_unused && self.is_idle() {
+                self.stop(Ending::Closed("closed".to_owned()));
             }
             if let Some(ending) = self.stopping.take() {
                 self.finish(ending).await;
@@ -887,6 +894,9 @@ impl Actor {
                     self.waiting.push(done);
                     self.stop(Ending::Closed("closed".to_owned()));
                 } else {
+                    // Still needed by its turn or a request, it closes once it isn't. Another
+                    // client attached decides for itself.
+                    self.close_when_unused = self.clients.is_empty();
                     let _ = done.send(());
                 }
             }
@@ -1026,6 +1036,7 @@ impl Actor {
         trace: Option<PathBuf>,
         reply: AttachReply,
     ) {
+        self.close_when_unused = false;
         // What the agent sent before the request that brought this client here was answered
         // (a load's replay, say) goes into the journal first.
         while let Ok(event) = self.events.try_recv() {

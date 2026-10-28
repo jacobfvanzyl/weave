@@ -145,6 +145,9 @@ const QUIT_WINDOW: Duration = Duration::from_secs(2);
 const NEW_COMMAND: &str = "new";
 /// The slash command that restarts the TUI in place, handled here too.
 const RELOAD_COMMAND: &str = "reload";
+/// The slash commands that quit, closing the session if nothing else needs it.
+const EXIT_COMMAND: &str = "exit";
+const QUIT_COMMAND: &str = "quit";
 /// The slash command that renames the session through the Host, in place of any the agent has.
 const RENAME_COMMAND: &str = "rename";
 /// Starts the Host's paused queue again.
@@ -230,7 +233,10 @@ pub enum AppCommand {
     /// Something needs the user, such as a finished turn or an approval; the app raises a
     /// desktop notification when the terminal isn't focused.
     Notify(String),
+    /// Quit, leaving the session open in the weave Host: Ctrl+D.
     Quit,
+    /// Quit, closing the session if nothing else needs it: `/exit`, `/quit`, Ctrl+C twice.
+    Exit,
     /// Quit and start this TUI again in place, reattaching to the session: `/reload`.
     Reload,
     /// Reattach to the session shown, after reconnecting to the weave Host, catching up from
@@ -965,6 +971,14 @@ impl ChatWidget {
         self.active_session
             .as_ref()
             .filter(|_| !self.resumable && !self.opening)
+    }
+
+    /// The session to close as the TUI quits, once nothing else needs it: a blank one, which
+    /// has nothing to come back to, or the active one when the person is `done` with it and its
+    /// agent can open it again (`reopenable`).
+    pub fn session_to_close(&self, done: bool, reopenable: bool) -> Option<&SessionId> {
+        self.blank_session()
+            .or_else(|| self.active_session.as_ref().filter(|_| done && reopenable))
     }
 
     /// The weave Host went away, and the client waits for it to come back: like a
@@ -1760,6 +1774,7 @@ impl ChatWidget {
                 RELOAD_COMMAND,
                 "Restart this TUI, picking up a rebuilt weave, and reattach",
             ),
+            (EXIT_COMMAND, "Quit and close this thread (also /quit)"),
         ];
         if self.renamable {
             own.push((
@@ -3168,6 +3183,21 @@ impl ChatWidget {
                 }
                 return vec![AppCommand::Reload];
             }
+            if [EXIT_COMMAND, QUIT_COMMAND]
+                .iter()
+                .any(|command| text.trim() == format!("/{command}"))
+            {
+                if self.turn.is_some() && !self.detachable {
+                    self.push_cell(TranscriptCell::info(
+                        "The agent runs inside this weave (--no-daemon), so quitting now would \
+                         stop its turn; quit once it ends",
+                    ));
+                    return Vec::new();
+                }
+                // A turn still running carries on in the weave Host, which closes the session
+                // once it ends.
+                return vec![AppCommand::Exit];
+            }
             if self.updatable
                 && let Some(argument) = text
                     .trim()
@@ -3268,7 +3298,7 @@ impl ChatWidget {
         }
         let now = Instant::now();
         if self.quit_armed_until.is_some_and(|until| now < until) {
-            return vec![AppCommand::Quit];
+            return vec![AppCommand::Exit];
         }
         self.quit_armed_until = Some(now + QUIT_WINDOW);
         Vec::new()
@@ -4735,7 +4765,7 @@ mod tests {
             .iter()
             .map(|command| command.name.as_str())
             .collect();
-        assert_eq!(names, ["new", "reload", "review"]);
+        assert_eq!(names, ["new", "reload", "exit", "review"]);
         assert_eq!(
             chat.commands[0].description,
             "Start a new thread in this directory"
@@ -5112,7 +5142,34 @@ mod tests {
         let mut chat = chat();
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(chat.handle_key(ctrl_c).is_empty());
-        assert_eq!(chat.handle_key(ctrl_c), [AppCommand::Quit]);
+        assert_eq!(chat.handle_key(ctrl_c), [AppCommand::Exit]);
+    }
+
+    #[test]
+    fn exit_and_ctrl_c_close_the_thread_and_ctrl_d_leaves_it_open() {
+        let mut chat = chat();
+        assert_eq!(submit(&mut chat, "/exit"), [AppCommand::Exit]);
+        assert_eq!(submit(&mut chat, "/quit"), [AppCommand::Exit]);
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert_eq!(chat.handle_key(ctrl_d), [AppCommand::Quit]);
+        // Mid-turn, the turn carries on in the weave Host, which closes the thread after it.
+        submit(&mut chat, "do it");
+        assert!(submit(&mut chat, "/exit").is_empty());
+        let mut chat = chat.with_detach(true);
+        assert_eq!(submit(&mut chat, "/exit"), [AppCommand::Exit]);
+    }
+
+    #[test]
+    fn quitting_closes_a_blank_thread_or_one_done_with_that_can_open_again() {
+        let mut chat = chat();
+        let s1 = SessionId::from("s1");
+        assert_eq!(chat.session_to_close(false, false), Some(&s1));
+        submit(&mut chat, "hello");
+        // Ctrl+D leaves it open.
+        assert_eq!(chat.session_to_close(false, true), None);
+        assert_eq!(chat.session_to_close(true, true), Some(&s1));
+        // An agent that can neither load nor resume it couldn't open it again.
+        assert_eq!(chat.session_to_close(true, false), None);
     }
 
     fn rows(chat: &ChatWidget, width: u16) -> Vec<String> {

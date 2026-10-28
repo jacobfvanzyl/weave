@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
+use weave_acp_core::schema::AgentCapabilities;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::Error;
 use weave_acp_core::schema::InitializeResponse;
@@ -315,6 +316,8 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         focused: true,
         shells: HashMap::new(),
         reload: false,
+        closing: false,
+        reopenable: reopenable(&agent.agent_capabilities),
         opens: HashMap::new(),
         next_tag: 1,
         position: None,
@@ -332,17 +335,21 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     chat.push_header(agent_version.as_deref(), &notices);
     let result = app.run(&mut tui, &mut chat, events, startup).await;
     tui.exit();
-    // A blank session has nothing to come back to, so it closes now and its agent stops,
-    // rather than when the Host's grace for it ends. A reload reattaches to it instead.
-    if !app.reload
-        && let Some(session_id) = chat.blank_session().cloned()
-    {
+    // A blank session has nothing to come back to, and one the person is done with
+    // (`/exit`, Ctrl+C) opens again from the agent's history, so either closes once nothing
+    // else needs it and its agent stops, rather than when the Host's grace for it ends. A
+    // reload reattaches instead, and Ctrl+D leaves it open.
+    let closing = chat
+        .session_to_close(app.closing, app.reopenable)
+        .filter(|_| !app.reload)
+        .cloned();
+    if let Some(session_id) = closing {
         let close = app.handle.send(DetachSessionRequest {
             session_id,
             close: CloseWhen::IfUnused,
         });
         if let Ok(Err(error)) = tokio::time::timeout(CLOSE_ON_QUIT_TIMEOUT, close).await {
-            tracing::debug!(%error, "couldn't close the blank session");
+            tracing::debug!(%error, "couldn't close the session");
         }
     }
     app.connection.shutdown().await;
@@ -374,6 +381,10 @@ struct App {
     shells: HashMap<String, oneshot::Sender<()>>,
     /// Quitting to start again in place (`/reload`).
     reload: bool,
+    /// Quitting done with the session: `/exit` or Ctrl+C rather than Ctrl+D.
+    closing: bool,
+    /// The session's agent can open it again once it's closed, by loading or resuming it.
+    reopenable: bool,
     /// Sessions being opened, by the tag their answer comes back with.
     opens: HashMap<u64, OpenKind>,
     next_tag: u64,
@@ -740,6 +751,7 @@ impl App {
     /// whether its turns can be steered (the Host takes `turn/steer`, and the agent takes
     /// steering).
     fn agent_changed(&mut self, chat: &mut ChatWidget, agent: &SessionAgent) {
+        self.reopenable = reopenable(&agent.initialize.agent_capabilities);
         self.prompt_capabilities = agent
             .initialize
             .agent_capabilities
@@ -1149,6 +1161,10 @@ impl App {
                     }
                 }
                 AppCommand::Quit => return true,
+                AppCommand::Exit => {
+                    self.closing = true;
+                    return true;
+                }
                 AppCommand::Reload => {
                     self.reload = true;
                     return true;
@@ -1389,6 +1405,11 @@ impl App {
             });
         }
     }
+}
+
+/// Whether an agent can open a closed session again: by loading it, or resuming it.
+fn reopenable(capabilities: &AgentCapabilities) -> bool {
+    capabilities.load_session || capabilities.session_capabilities.resume.is_some()
 }
 
 /// A pending request, as the chat shows it; client tool calls it doesn't.

@@ -1649,6 +1649,46 @@ async fn sessions_list_with_their_activity_and_close_when_left() {
     wait_for(|| daemon.status().sessions.is_empty()).await;
 }
 
+/// Left with `ifUnused` while its turn runs, a session closes when the turn ends rather than
+/// after the idle grace, unless a client attaches before then (WVE-159).
+#[tokio::test]
+async fn a_session_left_mid_turn_closes_when_its_turn_ends_unless_one_attaches() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let leave = |session_id: &SessionId| DetachSessionRequest {
+        session_id: session_id.clone(),
+        close: CloseWhen::IfUnused,
+    };
+    let open = |session_id: &SessionId| {
+        daemon
+            .status()
+            .sessions
+            .iter()
+            .any(|session| &session.info.session_id == session_id)
+    };
+
+    let left = client.create(&world).await;
+    client.prompt(&left, "slow 3").await;
+    client.connection.send(leave(&left)).await.expect("detach");
+    // Its turn carries on, and then it closes.
+    assert!(open(&left));
+    wait_for(|| !open(&left)).await;
+
+    let taken_back = client.create(&world).await;
+    client.prompt(&taken_back, "slow 3").await;
+    client
+        .connection
+        .send(leave(&taken_back))
+        .await
+        .expect("detach");
+    let mut other = world.client(&daemon).await;
+    other.attach(&taken_back).await;
+    other.until_turn_ends(&mut Seen::default(), None).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(open(&taken_back));
+}
+
 #[tokio::test]
 async fn a_client_signs_in_through_the_host_and_retries() {
     let world = World::new();

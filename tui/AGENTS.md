@@ -57,8 +57,11 @@ the Host's, every client's prompts in it (`set_queue`, then `queued`/`unqueued` 
 state covering a replay), the Host starts them, and Esc takes this client's own back with
 `queue/remove`, leaving the rest paused, which `/queue` resumes; messages sent while a session
 opens are kept here and go to the Host once it's open (`send_kept_messages`);
-`/new`, `/reload`, `/rename`, `/subagents` and `/update` are the TUI's own slash commands,
-offered with the agent's and handled locally (`/reload` ends the TUI and the CLI execs its own
+`/new`, `/reload`, `/exit` (`/quit` too), `/rename`, `/subagents` and `/update` are the TUI's
+own slash commands, offered with the agent's and handled locally (`/exit` and Ctrl+C twice quit
+closing the thread once nothing else needs it, if its agent can load or resume it again, while
+Ctrl+D quits leaving it open in the weave Host (WVE-159);
+`/reload` ends the TUI and the CLI execs its own
 binary again with `--resume`; `/rename <title>`, offered when the Host lists `session/rename`,
 sends that in place of the agent's own `/rename`, and the `renamed` event titles the session;
 `/update`, in `updates.rs`, runs `agents/update` and then `session/reopen`, or opens a new

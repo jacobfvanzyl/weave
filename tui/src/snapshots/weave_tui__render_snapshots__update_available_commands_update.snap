@@ -1,6 +1,5 @@
 ---
 source: tui/src/render_snapshots.rs
-assertion_line: 292
 expression: screen(&mut chat)
 ---
 ── transcript ──
@@ -12,5 +11,6 @@ expression: screen(&mut chat)
 
 › /new     Start a new thread in this directory
   /reload  Restart this TUI, picking up a rebuilt weave, and reattach
+  /exit    Quit and close this thread (also /quit)
   /review  Review the current changes
   /test    Run the test suite

@@ -454,7 +454,7 @@ const SESSION_IN_DAEMON: &[(&str, &str)] = &[
     ("⌃o", "Settings"),
     ("⌃r", "Threads"),
     ("esc", "Interrupt"),
-    ("⌃c", "Quit"),
+    ("⌃c", "Close and quit"),
     ("⌃d", "Leave it running"),
 ];
 
