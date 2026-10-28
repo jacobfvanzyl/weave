@@ -16,11 +16,18 @@
 //! | a thought's `**Heading**` line names the work in progress | codex-acp reasoning summaries |
 //! | a `model_config` option that is a toggle (a boolean, or an On/Off select) names a model
 //! setting, such as "Fast mode", shown while it's on | codex-acp, claude-agent-acp |
+//! | a form's string titled "Other" and keyed `<choice>_custom` answers that choice in place of
+//! a pick, or is one more of a multi-select's | claude-agent-acp (`AskUserQuestion`) |
+//! | a form's string whose `_meta.codex` has `role: "user_note"` and a `questionId` naming a
+//! choice is a note sent with its pick | codex-acp (`request_user_input`) |
 //!
 //! Output of commands agents run themselves is an advertised `_meta` extension, handled in
 //! `weave_acp_core` (`terminal_meta`, [`weave_acp_core::extension_terminal_id`]).
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
+use weave_acp_core::schema::ElicitationPropertySchema;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionConfigOptionCategory;
 
@@ -116,6 +123,47 @@ pub fn model_toggles_on(options: &[SessionConfigOption]) -> Vec<String> {
         .collect()
 }
 
+/// How a choice's free-text companion goes with its pick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Companion {
+    /// The text answers in place of a pick, or joins a multi-select's picks.
+    Replaces,
+    /// The text is a note sent with the pick.
+    Note,
+}
+
+/// The choice that the form field `name` is the free-text companion of, and how, where it
+/// follows one of the agents' conventions. A field that doesn't stays a field of its own.
+pub fn companion_of(
+    name: &str,
+    property: &ElicitationPropertySchema,
+    properties: &BTreeMap<String, ElicitationPropertySchema>,
+) -> Option<(String, Companion)> {
+    let ElicitationPropertySchema::String(string) = property else {
+        return None;
+    };
+    if string.one_of.is_some() || string.enum_values.is_some() {
+        return None;
+    }
+    let is_choice = |key: &str| match properties.get(key) {
+        Some(ElicitationPropertySchema::String(choice)) => {
+            choice.one_of.is_some() || choice.enum_values.is_some()
+        }
+        Some(ElicitationPropertySchema::Array(_)) => true,
+        _ => false,
+    };
+    if string.title.as_deref() == Some("Other")
+        && let Some(choice) = name.strip_suffix("_custom")
+        && is_choice(choice)
+    {
+        return Some((choice.to_owned(), Companion::Replaces));
+    }
+    let codex = string.meta.as_ref()?.get("codex")?;
+    let choice = codex.get("questionId")?.as_str()?;
+    (codex.get("role")?.as_str()? == "user_note" && is_choice(choice))
+        .then(|| (choice.to_owned(), Companion::Note))
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -195,5 +243,45 @@ mod tests {
             Some("Inspecting the parser")
         );
         assert_eq!(thought_heading("no heading here"), None);
+    }
+
+    #[test]
+    fn a_choices_other_or_note_is_its_companion() {
+        let properties: BTreeMap<String, ElicitationPropertySchema> =
+            serde_json::from_value(json!({
+                "pick": { "type": "string", "oneOf": [{ "const": "a", "title": "A" }] },
+                "many": { "type": "array", "items": { "anyOf": [{ "const": "a", "title": "A" }] } },
+                "pick_custom": { "type": "string", "title": "Other" },
+                "many_custom": { "type": "string", "title": "Other" },
+                "pick_note1": {
+                    "type": "string",
+                    "_meta": { "codex": { "questionId": "pick", "role": "user_note" } }
+                },
+                "name_custom": { "type": "string", "title": "Other" },
+                "pick_other": { "type": "string", "title": "Something else" },
+                "stray_note": {
+                    "type": "string",
+                    "_meta": { "codex": { "questionId": "missing", "role": "user_note" } }
+                }
+            }))
+            .expect("properties");
+        let companion = |name: &str| companion_of(name, &properties[name], &properties);
+        assert_eq!(
+            companion("pick_custom"),
+            Some(("pick".to_owned(), Companion::Replaces))
+        );
+        assert_eq!(
+            companion("many_custom"),
+            Some(("many".to_owned(), Companion::Replaces))
+        );
+        assert_eq!(
+            companion("pick_note1"),
+            Some(("pick".to_owned(), Companion::Note))
+        );
+        // Without a choice to go with, or another title, a field stays its own.
+        assert_eq!(companion("name_custom"), None);
+        assert_eq!(companion("pick_other"), None);
+        assert_eq!(companion("stray_note"), None);
+        assert_eq!(companion("pick"), None);
     }
 }

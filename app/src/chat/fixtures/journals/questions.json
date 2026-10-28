@@ -1,0 +1,428 @@
+{
+  "name": "questions",
+  "state": {
+    "sessionId": "fake-18e2aaf261fb52f8",
+    "agent": {
+      "id": "fake",
+      "name": "Fake Agent",
+      "initialize": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "loadSession": true,
+          "promptCapabilities": {
+            "image": true,
+            "audio": true,
+            "embeddedContext": true
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false,
+            "acp": false
+          },
+          "sessionCapabilities": {
+            "list": {},
+            "delete": {},
+            "additionalDirectories": {},
+            "resume": {},
+            "close": {}
+          },
+          "auth": {
+            "logout": {}
+          }
+        },
+        "authMethods": [
+          {
+            "id": "token",
+            "name": "Token",
+            "description": "Sign in immediately"
+          },
+          {
+            "type": "terminal",
+            "id": "terminal-login",
+            "name": "Terminal login",
+            "description": "Confirm sign-in in a terminal",
+            "args": [
+              "--login"
+            ],
+            "env": {
+              "WEAVE_FAKE_LOGIN": "1"
+            }
+          }
+        ],
+        "agentInfo": {
+          "name": "weave-fake-agent",
+          "title": "Fake Agent",
+          "version": "0.1.0"
+        },
+        "_meta": {
+          "steering": {
+            "supported": true
+          }
+        }
+      }
+    },
+    "cwd": "/work/project",
+    "additionalDirectories": [],
+    "state": "open",
+    "activity": "idle",
+    "clients": 1,
+    "blank": true,
+    "policy": {
+      "approve": [
+        "edit",
+        "execute",
+        "read"
+      ],
+      "otherwise": "ask"
+    },
+    "modes": {
+      "currentModeId": "ask",
+      "availableModes": [
+        {
+          "id": "ask",
+          "name": "Ask"
+        },
+        {
+          "id": "code",
+          "name": "Code"
+        }
+      ]
+    },
+    "configOptions": [
+      {
+        "id": "mode",
+        "name": "Mode",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "ask",
+        "options": [
+          {
+            "value": "ask",
+            "name": "Ask"
+          },
+          {
+            "value": "code",
+            "name": "Code"
+          }
+        ]
+      },
+      {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "small",
+        "options": [
+          {
+            "group": "fast",
+            "name": "Fast",
+            "options": [
+              {
+                "value": "small",
+                "name": "Small"
+              }
+            ]
+          },
+          {
+            "group": "smart",
+            "name": "Smart",
+            "options": [
+              {
+                "value": "large",
+                "name": "Large"
+              },
+              {
+                "value": "huge",
+                "name": "Huge"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "verbose",
+        "name": "Verbose",
+        "type": "boolean",
+        "currentValue": false
+      }
+    ],
+    "turns": [],
+    "pending": [],
+    "subagents": [],
+    "journal": {
+      "id": "1793183559653",
+      "head": 1
+    },
+    "notices": []
+  },
+  "events": [
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 1,
+      "at": 1793183559654,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [
+              {
+                "name": "read",
+                "description": "Read a file through the client",
+                "input": {
+                  "hint": "absolute path"
+                }
+              },
+              {
+                "name": "write",
+                "description": "Write a file through the client",
+                "input": {
+                  "hint": "absolute path, then text"
+                }
+              },
+              {
+                "name": "run",
+                "description": "Run a shell command in a client terminal",
+                "input": {
+                  "hint": "shell command"
+                }
+              },
+              {
+                "name": "kill-after",
+                "description": "Run a command and kill it after a delay",
+                "input": {
+                  "hint": "milliseconds, then command"
+                }
+              },
+              {
+                "name": "plan",
+                "description": "Show a plan that progresses"
+              },
+              {
+                "name": "slow",
+                "description": "Stream chunks slowly",
+                "input": {
+                  "hint": "number of chunks"
+                }
+              },
+              {
+                "name": "markdown",
+                "description": "Write diagrams, math, alerts and other rich Markdown"
+              },
+              {
+                "name": "ask",
+                "description": "Ask a few questions with a form"
+              },
+              {
+                "name": "questions",
+                "description": "Ask as Claude's and Codex's adapters do, with Other and a note",
+                "input": {
+                  "hint": "claude or codex, to ask only that one"
+                }
+              },
+              {
+                "name": "connect",
+                "description": "Connect an account through a URL"
+              },
+              {
+                "name": "mcp",
+                "description": "List the MCP servers this session has"
+              },
+              {
+                "name": "think",
+                "description": "Reason out loud, then answer"
+              },
+              {
+                "name": "work",
+                "description": "Think, then make five tool calls a moment apart",
+                "input": {
+                  "hint": "fail, to fail one"
+                }
+              },
+              {
+                "name": "compact",
+                "description": "Compact the context, keeping a summary"
+              },
+              {
+                "name": "delegate",
+                "description": "Delegate to two subagents"
+              },
+              {
+                "name": "delegate-legacy",
+                "description": "Delegate in the subagent RFD's earlier draft"
+              },
+              {
+                "name": "switch-mode",
+                "description": "Switch modes on the agent's own initiative"
+              },
+              {
+                "name": "withdraw",
+                "description": "Ask permission, then withdraw the request"
+              },
+              {
+                "name": "extension",
+                "description": "Send the client an extension request and notification"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 2,
+      "at": 1793183559671,
+      "event": {
+        "kind": "turnStarted",
+        "sessionId": "fake-18e2aaf261fb52f8",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "/questions"
+          }
+        ],
+        "origin": {
+          "client": {
+            "name": "weave-tui",
+            "id": "c1"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 3,
+      "at": 1793183559674,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "/questions",
+            "updatedAt": "2026-10-28T10:32:39.672853Z"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 4,
+      "at": 1793183559714,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Claude's questions: question_0_custom=MySQL "
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 5,
+      "at": 1793183559714,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "8, question_1=[Tests Lint], "
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 6,
+      "at": 1793183559714,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "question_1_custom=Benchmarks. Codex's questions: "
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 7,
+      "at": 1793183559714,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "deploy_target=Staging, deploy_target_note=After the "
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 8,
+      "at": 1793183559714,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "5pm freeze."
+            }
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 9,
+      "at": 1793183559714,
+      "event": {
+        "kind": "update",
+        "notification": {
+          "sessionId": "fake-18e2aaf261fb52f8",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "used": 162,
+            "size": 200000
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "fake-18e2aaf261fb52f8",
+      "seq": 10,
+      "at": 1793183559714,
+      "event": {
+        "kind": "turnEnded",
+        "sessionId": "fake-18e2aaf261fb52f8",
+        "response": {
+          "stopReason": "end_turn"
+        }
+      }
+    }
+  ]
+}

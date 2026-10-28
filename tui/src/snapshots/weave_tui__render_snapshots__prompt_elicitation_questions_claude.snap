@@ -1,0 +1,21 @@
+---
+source: tui/src/render_snapshots.rs
+expression: "questions_form(\"claude\", &[KeyCode::Down, KeyCode::Down], \"MySQL\")"
+---
+  Agent asks: Please answer the following questions.
+› Database
+    Which database should the service use?
+    1. ( ) Postgres
+           Relational, with the tooling the team has
+    2. ( ) SQLite
+           One file, no server
+  ›    (•) Other: MySQL
+  Checks
+    Which checks should run before each commit?
+    1. [ ] Tests
+    2. [ ] Lint
+           cargo clippy
+    3. [ ] Format
+       [ ] Other:
+    Submit    Decline    Cancel
+  ↑↓ move · space pick · ⌫ clear · enter on a button · esc cancel

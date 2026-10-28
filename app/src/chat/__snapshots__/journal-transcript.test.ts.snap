@@ -177,6 +177,11 @@ plan: [completed] Inspect the code; [completed] Make the change; [completed] Ver
 assistant: All steps are done."
 `;
 
+exports[`transcripts from recorded journals > shows the questions journal the same live and replayed 1`] = `
+"user (from the TUI): /questions
+assistant: Claude's questions: question_0_custom=MySQL 8, question_1=[Tests Lint], question_1_custom=Benchmarks. Codex's questions: deploy_target=Staging, deploy_target_note=After the 5pm freeze."
+`;
+
 exports[`transcripts from recorded journals > shows the reopen journal the same live and replayed 1`] = `
 "user (from the TUI): hello before the reopen
 assistant: You said: hello before the reopen

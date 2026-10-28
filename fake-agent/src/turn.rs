@@ -76,6 +76,7 @@ use agent_client_protocol::schema::v1::WaitForTerminalExitRequest;
 use agent_client_protocol::schema::v1::WriteTextFileRequest;
 
 use crate::lock;
+use crate::questions::question_forms;
 use crate::state::Cancellation;
 use crate::state::State;
 use crate::state::now;
@@ -146,6 +147,7 @@ impl Turn {
             "slow" => self.slow(cx, rest.parse().unwrap_or(20)).await?,
             "markdown" => self.markdown(cx).await?,
             "ask" => self.ask(cx).await?,
+            "questions" => self.questions(cx, rest).await?,
             "connect" => self.connect(cx).await?,
             "mcp" => self.list_mcp_servers(cx).await?,
             "tool" => self.call_tool(cx, rest).await?,
@@ -585,6 +587,58 @@ impl Turn {
             ElicitationAction::Decline => self.say(cx, "You declined to answer.").await,
             _ => self.say(cx, "You dismissed the question.").await,
         }
+    }
+
+    /// The questions agents ask through forms, in their adapters' shapes ([`question_forms`]).
+    /// `claude` or `codex` asks only that one.
+    async fn questions(&self, cx: &ConnectionTo<Client>, which: &str) -> Result<(), Error> {
+        let supported = self
+            .client
+            .elicitation
+            .as_ref()
+            .is_some_and(|elicitation| elicitation.form.is_some());
+        if !supported {
+            return self
+                .say(cx, "The client does not offer form elicitation.")
+                .await;
+        }
+        let mut replies = Vec::new();
+        for form in question_forms() {
+            if !which.is_empty() && which != form.name {
+                continue;
+            }
+            let adapter = form.adapter;
+            let request = CreateElicitationRequest::new(
+                ElicitationFormMode::new(
+                    ElicitationSessionScope::new(self.session_id.clone()),
+                    form.schema,
+                ),
+                form.message,
+            );
+            let reply = match cx.send_request(request).block_task().await?.action {
+                ElicitationAction::Accept(accepted) => {
+                    let content = accepted.content.unwrap_or_default();
+                    let answers = content
+                        .iter()
+                        .map(|(name, value)| format!("{name}={}", describe(value)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{adapter}'s questions: {answers}.")
+                }
+                ElicitationAction::Decline => format!("You declined {adapter}'s questions."),
+                _ => format!("You dismissed {adapter}'s questions."),
+            };
+            replies.push(reply);
+        }
+        if replies.is_empty() {
+            return self
+                .say(
+                    cx,
+                    "Ask `questions`, `questions claude` or `questions codex`.",
+                )
+                .await;
+        }
+        self.say(cx, &replies.join(" ")).await
     }
 
     /// URL elicitation, completed out of band a moment after the user consents.

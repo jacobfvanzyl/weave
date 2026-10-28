@@ -474,6 +474,51 @@ fn prompt_elicitation_form() {
     }));
 }
 
+/// The fake agent's questions, as Claude's and Codex's adapters ask them, after `keys`.
+fn questions_form(name: &str, keys: &[KeyCode], typed: &str) -> String {
+    let form = weave_fake_agent::question_forms()
+        .into_iter()
+        .find(|form| form.name == name)
+        .expect("the fake agent asks it");
+    let request = CreateElicitationRequest::new(
+        ElicitationFormMode::new(ElicitationSessionScope::new("s1"), form.schema),
+        form.message,
+    );
+    let mut view = ElicitationView::new(&request, "Agent").expect("form");
+    for code in keys {
+        view.handle_key(KeyEvent::new(*code, KeyModifiers::NONE));
+    }
+    view.handle_paste(typed);
+    render_view(view.desired_height(WIDTH), |area, buf| {
+        view.render(area, buf);
+    })
+}
+
+#[test]
+fn prompt_elicitation_questions_claude() {
+    // Other typed in place of the first question's options.
+    insta::assert_snapshot!(questions_form(
+        "claude",
+        &[KeyCode::Down, KeyCode::Down],
+        "MySQL"
+    ));
+}
+
+#[test]
+fn prompt_elicitation_questions_codex() {
+    // A pick, and a note going with it.
+    insta::assert_snapshot!(questions_form(
+        "codex",
+        &[
+            KeyCode::Char('1'),
+            KeyCode::Down,
+            KeyCode::Down,
+            KeyCode::Down
+        ],
+        "after the freeze"
+    ));
+}
+
 #[test]
 fn prompt_elicitation_url() {
     let request = CreateElicitationRequest::new(

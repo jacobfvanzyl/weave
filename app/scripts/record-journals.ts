@@ -8,7 +8,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { HostConnection, type HostEvent } from '../src/host/connection';
-import type { ContentBlock, SessionEventNotification, SessionState } from '../src/host/protocol';
+import type { ContentBlock, ElicitationContentValue, PendingRequest, SessionEventNotification, SessionState } from '../src/host/protocol';
+import { formAnswer, formCompanions } from '../src/chat/elicitation-conventions';
+import { formElicitation } from '../src/chat/acp-transcript';
 import { devHostAvailable, startDevHost, unixConnector, type DevHost } from '../src/host/testing/dev-host';
 
 const out = resolve(import.meta.dirname, '../src/chat/fixtures/journals');
@@ -28,6 +30,8 @@ type Session = {
   prompt(words: string | ContentBlock[]): Promise<void>;
   /** Waits until the journal has been quiet for `ms`. */
   quiet(ms?: number): Promise<void>;
+  /** The next form elicitation the session waits on, answered as the app answers it with these choices. */
+  answerForm(choices: { values: Partial<Record<string, ElicitationContentValue>>; otherChosen?: string[] }): Promise<void>;
   events: SessionEventNotification[];
 };
 
@@ -73,10 +77,23 @@ const scripts: Record<string, Script> = {
     await session.local.request('session/close', { sessionId: session.id });
     await session.quiet();
   },
+  // Claude's and Codex's questions, each with its free text (WVE-155).
+  questions: async (session) => {
+    const ended = session.prompt('/questions');
+    // Claude's: Other typed in place of a pick, and picks with Other beside them.
+    await session.answerForm({
+      values: { question_0_custom: 'MySQL 8', question_1: ['Tests', 'Lint'], question_1_custom: 'Benchmarks' },
+      otherChosen: ['question_0'],
+    });
+    // Codex's: a pick, and a note with it.
+    await session.answerForm({ values: { deploy_target: 'Staging', deploy_target_note: 'After the 5pm freeze' } });
+    await ended;
+  },
 };
 
 async function record(host: DevHost, name: string, script: Script): Promise<Recording> {
   const events: SessionEventNotification[] = [];
+  const pending: PendingRequest[] = [];
   let opened: SessionState | undefined;
   let failed: Error | undefined;
   const local = await HostConnection.connect({
@@ -87,6 +104,7 @@ async function record(host: DevHost, name: string, script: Script): Promise<Reco
       if (event.type === 'opened') opened = event.session.state;
       else if (event.type === 'openFailed') failed = event.error;
       else if (event.type === 'notification' && event.method === 'session/event') events.push(event.params);
+      else if (event.type === 'notification' && event.method === 'pending/added') pending.push(event.params.pending);
     },
   });
   try {
@@ -111,6 +129,19 @@ async function record(host: DevHost, name: string, script: Script): Promise<Reco
       local,
       events,
       quiet,
+      async answerForm({ values, otherChosen = [] }) {
+        const deadline = Date.now() + 20_000;
+        let asked: PendingRequest | undefined;
+        while (!(asked = pending.shift())) {
+          if (Date.now() > deadline) throw new Error(`${name}: no form was asked`);
+          await Bun.sleep(20);
+        }
+        const form = asked.kind === 'elicitation' ? formElicitation(asked.request) : undefined;
+        if (!form) throw new Error(`${name}: expected a form elicitation, got a ${asked.kind} request`);
+        const schema = form.requestedSchema;
+        const content = formAnswer(schema, formCompanions(schema), values, new Set(otherChosen));
+        await local.request('pending/answer', { sessionId: state.sessionId, pendingId: asked.id, elicitation: { action: 'accept', content } });
+      },
       async prompt(words) {
         const before = events.length;
         await local.request('turn/start', { sessionId: state.sessionId, prompt: typeof words === 'string' ? text(words) : words });

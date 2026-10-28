@@ -4,9 +4,13 @@ expression: "render_view(view.desired_height(WIDTH), |area, buf|\n{ view.render(
 ---
   Agent asks: Where should this deploy?
   Deployment
-› Environment *  ◂ (none) ▸
-  Notify team    [x] yes
-  Regions        [ ] eu  [ ] us
-  Replicas       2
+› Environment *
+  › 1. ( ) Staging
+    2. ( ) Production
+  Notify team  [x] yes
+  Regions
+    1. [ ] eu
+    2. [ ] us
+  Replicas     2
     Submit    Decline    Cancel
-  tab next · ←→ change · space toggle · enter on a button · esc cancel
+  ↑↓ move · space pick · ⌫ clear · enter on a button · esc cancel

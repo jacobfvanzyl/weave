@@ -36,7 +36,12 @@ request's text, ahead of `working`; `done` or `error` from a live turn's end unt
 types or the terminal regains focus; `idle` after a cancel; `error` while the thread can't go
 on; cleared on exit), while `notify` reports the thread's directory with OSC 7 and gives the
 shell's back on exit (ADR 0018), each written only when it changes; `highlight` wraps syntect and
-two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
+two-face; `footer` and `status` are the bottom pane; `elicitation` draws forms and URL
+elicitations there, each choice a numbered list of its options with their descriptions (Space,
+a digit or Enter picks; picking again, Backspace or Delete clears unless it's required), with
+the free text an agent's question carries (`conventions::companion_of`: Claude's Other, which
+answers in place of a pick or joins a multi-select's, and Codex's note, sent with the pick) as
+its last row, typed into in place, and the answer the fields the agent asked for (WVE-155); `composer` is the input, with `vim`
 (after Codex's composer Vim mode) editing the same text in the opt-in Vim composer, and
 `thumbnails` the draft's pasted images above it and, in the fullscreen transcript, each
 message's under its text, drawn through `graphics` (the Kitty graphics protocol's Unicode

@@ -13,6 +13,7 @@
 //! | `slow <n>` | `n` message chunks, slowly, honoring cancellation |
 //! | `markdown` | [`MARKDOWN`], streamed a few words at a time |
 //! | `ask` | a form elicitation using every field type |
+//! | `questions [claude\|codex]` | form elicitations in the shapes Claude's and Codex's adapters ask in, each with its free-text companion |
 //! | `connect` | a URL elicitation, completed shortly after consent |
 //! | `mcp` | lists the MCP servers the session was given |
 //! | `tool <name> <json>` | calls a tool on the session's `weave` MCP server, over ACP (`mcp/message`) or stdio |
@@ -36,6 +37,7 @@
 //! state file, sessions and sign-in survive across processes.
 
 mod mcp;
+mod questions;
 mod state;
 mod steering;
 mod turn;
@@ -100,6 +102,8 @@ use agent_client_protocol::schema::v1::UnstructuredCommandInput;
 
 pub use crate::mcp::StdioMcp;
 pub use crate::mcp::StdioPipes;
+pub use crate::questions::QuestionForm;
+pub use crate::questions::question_forms;
 use crate::state::Settings;
 use crate::state::State;
 use crate::state::StoredSession;
@@ -606,6 +610,11 @@ fn advertise_commands(cx: &ConnectionTo<Client>, session_id: &SessionId) -> Resu
             None,
         ),
         command("ask", "Ask a few questions with a form", None),
+        command(
+            "questions",
+            "Ask as Claude's and Codex's adapters do, with Other and a note",
+            Some("claude or codex, to ask only that one"),
+        ),
         command("connect", "Connect an account through a URL", None),
         command("mcp", "List the MCP servers this session has", None),
         command("think", "Reason out loud, then answer", None),

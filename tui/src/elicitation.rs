@@ -3,6 +3,11 @@
 //! The spec requires naming the requesting agent, letting the user review and edit form
 //! answers before sending, offering distinct decline and cancel actions, and, for URLs,
 //! showing the full URL with its host before consent, never opening it without consent.
+//!
+//! A choice is a list of its options, which the person can pick and take back. The free text
+//! an agent's question carries beside its options (`conventions::companion_of`) is the
+//! choice's last row, typed into in place: Claude's Other answers instead of a pick, or joins
+//! a multi-select's, and Codex's note goes with the pick. The answer is the fields asked for.
 
 use std::collections::BTreeMap;
 
@@ -24,9 +29,12 @@ use weave_acp_core::schema::ElicitationId;
 use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationPropertySchema;
 use weave_acp_core::schema::ElicitationSchema;
+use weave_acp_core::schema::EnumOption;
 use weave_acp_core::schema::MultiSelectItems;
 use weave_acp_core::schema::StringFormat;
 
+use crate::conventions;
+use crate::conventions::Companion;
 use crate::history_cell::dim;
 use crate::style;
 use crate::wrapping::wrap_with_prefix;
@@ -79,22 +87,35 @@ impl ElicitationView {
 
     pub fn desired_height(&self, width: u16) -> u16 {
         let lines = match self {
-            Self::Form(form) => form.lines(usize::from(width)).0.len(),
+            Self::Form(form) => form.lines(usize::from(width)).lines.len(),
             Self::Url(url) => url.lines(usize::from(width)).len(),
         };
         u16::try_from(lines).unwrap_or(u16::MAX)
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer) -> Option<Position> {
-        let (lines, cursor) = match self {
+        let FormLines {
+            lines,
+            cursor,
+            focus,
+        } = match self {
             Self::Form(form) => form.lines(usize::from(area.width)),
-            Self::Url(url) => (url.lines(usize::from(area.width)), None),
+            Self::Url(url) => FormLines {
+                lines: url.lines(usize::from(area.width)),
+                cursor: None,
+                focus: 0,
+            },
         };
-        for (line, y) in lines.iter().zip(area.y..area.bottom()) {
+        // A form taller than its room scrolls to keep the focus in view, with a line below it.
+        let height = usize::from(area.height);
+        let skip = (focus + 2)
+            .saturating_sub(height)
+            .min(lines.len().saturating_sub(height));
+        for (line, y) in lines.iter().skip(skip).zip(area.y..area.bottom()) {
             buf.set_line(area.x, y, line, area.width);
         }
         cursor.and_then(|(row, column)| {
-            let y = area.y + u16::try_from(row).ok()?;
+            let y = area.y + u16::try_from(row.checked_sub(skip)?).ok()?;
             (y < area.bottom()).then(|| Position::new(area.x + column, y))
         })
     }
@@ -167,18 +188,50 @@ enum FieldKind {
     },
     Toggle(Option<bool>),
     Choice {
-        options: Vec<(String, String)>,
-        selected: Option<usize>,
+        options: Vec<Choice>,
+        picked: Option<Pick>,
+        other: Option<Other>,
     },
     Multi {
-        options: Vec<(String, String)>,
+        options: Vec<Choice>,
         chosen: Vec<bool>,
-        cursor: usize,
+        other: Option<Other>,
         min_items: Option<u64>,
         max_items: Option<u64>,
     },
     /// A property type this client cannot render.
     Unsupported(String),
+}
+
+/// One of a choice's options.
+struct Choice {
+    value: String,
+    title: String,
+    description: Option<String>,
+}
+
+/// A choice's free-text companion ([`conventions::companion_of`]), drawn as its last row.
+struct Other {
+    /// The field the agent asked for it as.
+    name: String,
+    title: String,
+    text: String,
+    companion: Companion,
+}
+
+impl Other {
+    /// What was typed, unless it's blank.
+    fn typed(&self) -> Option<&str> {
+        (!self.text.trim().is_empty()).then_some(self.text.as_str())
+    }
+}
+
+/// What a single choice has picked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pick {
+    Option(usize),
+    /// Its Other row, whose text answers in place of an option.
+    Other,
 }
 
 struct Field {
@@ -188,6 +241,8 @@ struct Field {
     required: bool,
     kind: FieldKind,
     error: Option<String>,
+    /// The row a choice has focused: an option, or its Other row after them.
+    row: usize,
 }
 
 const BUTTONS: [&str; 3] = ["Submit", "Decline", "Cancel"];
@@ -201,14 +256,47 @@ pub struct FormView {
     focus: usize,
 }
 
+/// A form's lines, where the terminal cursor goes (row and column) while text is typed, and
+/// the line the focus is on.
+struct FormLines {
+    lines: Vec<Line<'static>>,
+    cursor: Option<(usize, u16)>,
+    focus: usize,
+}
+
 impl FormView {
     pub fn new(agent: &str, message: &str, schema: &ElicitationSchema) -> Self {
         let required = schema.required.clone().unwrap_or_default();
-        let fields = schema
-            .properties
-            .iter()
-            .map(|(name, property)| field(name, property, required.contains(name)))
-            .collect();
+        // A choice's companion joins it as its last row, rather than being a field of its own.
+        let mut companions: BTreeMap<String, Other> = BTreeMap::new();
+        let mut fields = Vec::new();
+        for (name, property) in &schema.properties {
+            let companion = conventions::companion_of(name, property, &schema.properties)
+                .filter(|(choice, _)| !required.contains(name) && !companions.contains_key(choice));
+            if let (Some((choice, companion)), ElicitationPropertySchema::String(string)) =
+                (companion, property)
+            {
+                companions.insert(
+                    choice,
+                    Other {
+                        name: name.clone(),
+                        // Its description is the adapter's, for a client that draws it apart.
+                        title: string.title.clone().unwrap_or_else(|| name.clone()),
+                        text: string.default.clone().unwrap_or_default(),
+                        companion,
+                    },
+                );
+                continue;
+            }
+            fields.push(field(name, property, required.contains(name)));
+        }
+        for field in &mut fields {
+            if let FieldKind::Choice { other, .. } | FieldKind::Multi { other, .. } =
+                &mut field.kind
+            {
+                *other = companions.remove(&field.name);
+            }
+        }
         Self {
             agent: agent.to_owned(),
             message: message.to_owned(),
@@ -219,17 +307,36 @@ impl FormView {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<ElicitationOutcome> {
-        let stops = self.fields.len() + BUTTONS.len();
         match key.code {
             KeyCode::Esc => return Some(ElicitationOutcome::Cancel),
-            KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % stops,
-            KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + stops - 1) % stops,
+            KeyCode::Tab => self.focus_by(1),
+            KeyCode::BackTab => self.focus_by(-1),
+            // Through a choice's rows, and on to the fields beside it past either end.
+            KeyCode::Down => {
+                if !self.fields.get_mut(self.focus).is_some_and(Field::row_down) {
+                    self.focus_by(1);
+                }
+            }
+            KeyCode::Up => {
+                if !self.fields.get_mut(self.focus).is_some_and(Field::row_up) {
+                    self.focus_by(-1);
+                    if let Some(field) = self.fields.get_mut(self.focus) {
+                        field.row = field.rows() - 1;
+                    }
+                }
+            }
             KeyCode::Enter => match self.focus.checked_sub(self.fields.len()) {
                 Some(0) => return self.submit(),
                 Some(1) => return Some(ElicitationOutcome::Decline),
                 Some(_) => return Some(ElicitationOutcome::Cancel),
-                // Enter in a field moves on, so a stray Enter never submits half a form.
-                None => self.focus += 1,
+                // Enter in a field picks the option it's on and moves on, so a stray Enter never
+                // submits half a form.
+                None => {
+                    if let Some(field) = self.fields.get_mut(self.focus) {
+                        field.enter();
+                    }
+                    self.focus_by(1);
+                }
             },
             KeyCode::Left | KeyCode::Right if self.focus >= self.fields.len() => {
                 let button = self.focus - self.fields.len();
@@ -249,15 +356,18 @@ impl FormView {
         None
     }
 
+    /// Focus the field or button `step` stops away, wrapping, on its first row.
+    fn focus_by(&mut self, step: isize) {
+        let stops = self.fields.len() + BUTTONS.len();
+        self.focus = (self.focus + stops).saturating_add_signed(step) % stops;
+        if let Some(field) = self.fields.get_mut(self.focus) {
+            field.row = 0;
+        }
+    }
+
     fn paste(&mut self, text: &str) {
         if let Some(field) = self.fields.get_mut(self.focus) {
-            match &mut field.kind {
-                FieldKind::Text { value, .. } | FieldKind::Number { value, .. } => {
-                    value.push_str(&text.replace(['\r', '\n'], " "));
-                    field.error = None;
-                }
-                _ => {}
-            }
+            field.paste(&text.replace(['\r', '\n'], " "));
         }
     }
 
@@ -266,14 +376,21 @@ impl FormView {
         let mut content = BTreeMap::new();
         let mut first_invalid = None;
         for (index, field) in self.fields.iter_mut().enumerate() {
+            let other = field.other_value();
             match field.value() {
                 Ok(Some(value)) => {
                     content.insert(field.name.clone(), value);
                     field.error = None;
                 }
-                Ok(None) if field.required => field.error = Some("required".to_owned()),
+                // An Other that answers in place of a pick answers the question.
+                Ok(None) if field.required && !field.answered_by_other() => {
+                    field.error = Some("required".to_owned());
+                }
                 Ok(None) => field.error = None,
                 Err(error) => field.error = Some(error),
+            }
+            if let Some((name, value)) = other {
+                content.insert(name, value);
             }
             if field.error.is_some() && first_invalid.is_none() {
                 first_invalid = Some(index);
@@ -282,28 +399,45 @@ impl FormView {
         match first_invalid {
             Some(index) => {
                 self.focus = index;
+                if let Some(field) = self.fields.get_mut(index) {
+                    field.row = 0;
+                }
                 None
             }
             None => Some(ElicitationOutcome::Accept(Some(content))),
         }
     }
 
-    /// Lines and, when a text field is focused, the cursor's (row, column).
-    fn lines(&self, width: usize) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    fn lines(&self, width: usize) -> FormLines {
         let mut lines = heading(&self.agent, &self.message, width);
         if let Some(title) = &self.title {
             lines.push(Line::from(Span::styled(format!("  {title}"), dim())));
         }
+        // Choices are lists under their titles; other fields line up beside their labels.
         let label_width = self
             .fields
             .iter()
+            .filter(|field| !field.is_list())
             .map(|field| field.title.width() + usize::from(field.required) * 2)
             .max()
             .unwrap_or(0)
             .min(24);
         let mut cursor = None;
+        let mut focus = 0;
         for (index, field) in self.fields.iter().enumerate() {
             let focused = index == self.focus;
+            if focused {
+                focus = lines.len();
+            }
+            if field.is_list() {
+                let list = field.list_lines(focused, width, lines.len());
+                if focused {
+                    focus = list.focus;
+                    cursor = list.cursor;
+                }
+                lines.extend(list.lines);
+                continue;
+            }
             let marker = if field.required { " *" } else { "" };
             let label = format!(
                 "{}{}{marker}",
@@ -343,42 +477,66 @@ impl FormView {
             }
         }
         let focused_button = self.focus.checked_sub(self.fields.len());
+        if focused_button.is_some() {
+            focus = lines.len();
+        }
         lines.push(buttons(&BUTTONS, focused_button));
         lines.push(Line::from(Span::styled(
-            "  tab next · ←→ change · space toggle · enter on a button · esc cancel",
+            "  ↑↓ move · space pick · ⌫ clear · enter on a button · esc cancel",
             dim(),
         )));
-        (lines, cursor)
+        FormLines {
+            lines,
+            cursor,
+            focus,
+        }
     }
+}
+
+fn options_of(options: &[EnumOption]) -> Vec<Choice> {
+    options
+        .iter()
+        .map(|option| Choice {
+            value: option.value.clone(),
+            title: option.title.clone(),
+            description: option.description.clone(),
+        })
+        .collect()
+}
+
+fn plain_options(values: &[String]) -> Vec<Choice> {
+    values
+        .iter()
+        .map(|value| Choice {
+            value: value.clone(),
+            title: value.clone(),
+            description: None,
+        })
+        .collect()
 }
 
 fn field(name: &str, property: &ElicitationPropertySchema, required: bool) -> Field {
     let (title, description, kind) = match property {
         ElicitationPropertySchema::String(string) => {
-            let options: Option<Vec<(String, String)>> = string
+            let options = string
                 .one_of
-                .as_ref()
-                .map(|options| {
-                    options
-                        .iter()
-                        .map(|option| (option.value.clone(), option.title.clone()))
-                        .collect()
-                })
-                .or_else(|| {
-                    string.enum_values.as_ref().map(|values| {
-                        values
-                            .iter()
-                            .map(|value| (value.clone(), value.clone()))
-                            .collect()
-                    })
-                });
+                .as_deref()
+                .map(options_of)
+                .or_else(|| string.enum_values.as_deref().map(plain_options));
             let kind = match options {
                 Some(options) => {
-                    let selected = string
+                    let picked = string
                         .default
                         .as_ref()
-                        .and_then(|default| options.iter().position(|(value, _)| value == default));
-                    FieldKind::Choice { options, selected }
+                        .and_then(|default| {
+                            options.iter().position(|option| &option.value == default)
+                        })
+                        .map(Pick::Option);
+                    FieldKind::Choice {
+                        options,
+                        picked,
+                        other: None,
+                    }
                 }
                 None => FieldKind::Text {
                     value: string.default.clone().unwrap_or_default(),
@@ -422,23 +580,15 @@ fn field(name: &str, property: &ElicitationPropertySchema, required: bool) -> Fi
             FieldKind::Toggle(boolean.default),
         ),
         ElicitationPropertySchema::Array(multi) => {
-            let options: Vec<(String, String)> = match &multi.items {
-                MultiSelectItems::String(items) => items
-                    .values
-                    .iter()
-                    .map(|value| (value.clone(), value.clone()))
-                    .collect(),
-                MultiSelectItems::Titled(items) => items
-                    .options
-                    .iter()
-                    .map(|option| (option.value.clone(), option.title.clone()))
-                    .collect(),
+            let options = match &multi.items {
+                MultiSelectItems::String(items) => plain_options(&items.values),
+                MultiSelectItems::Titled(items) => options_of(&items.options),
                 _ => Vec::new(),
             };
             let defaults = multi.default.clone().unwrap_or_default();
             let chosen = options
                 .iter()
-                .map(|(value, _)| defaults.contains(value))
+                .map(|option| defaults.contains(&option.value))
                 .collect();
             (
                 multi.title.clone(),
@@ -446,7 +596,7 @@ fn field(name: &str, property: &ElicitationPropertySchema, required: bool) -> Fi
                 FieldKind::Multi {
                     options,
                     chosen,
-                    cursor: 0,
+                    other: None,
                     min_items: multi.min_items,
                     max_items: multi.max_items,
                 },
@@ -464,57 +614,222 @@ fn field(name: &str, property: &ElicitationPropertySchema, required: bool) -> Fi
         required,
         kind,
         error: None,
+        row: 0,
     }
 }
 
+/// Type into `text`; returns whether the key was for it.
+fn edit_text(text: &mut String, key: KeyEvent) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char('u') if ctrl => text.clear(),
+        KeyCode::Char(ch) if !ctrl => text.push(ch),
+        KeyCode::Backspace => {
+            text.pop();
+        }
+        _ => return false,
+    }
+    true
+}
+
 impl Field {
-    fn edit(&mut self, key: KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    /// A choice, drawn as a list of its options.
+    fn is_list(&self) -> bool {
+        matches!(
+            self.kind,
+            FieldKind::Choice { .. } | FieldKind::Multi { .. }
+        )
+    }
+
+    fn rows(&self) -> usize {
+        match &self.kind {
+            FieldKind::Choice { options, other, .. } | FieldKind::Multi { options, other, .. } => {
+                (options.len() + usize::from(other.is_some())).max(1)
+            }
+            _ => 1,
+        }
+    }
+
+    fn row_down(&mut self) -> bool {
+        let down = self.row + 1 < self.rows();
+        if down {
+            self.row += 1;
+        }
+        down
+    }
+
+    fn row_up(&mut self) -> bool {
+        let up = self.row > 0;
+        if up {
+            self.row -= 1;
+        }
+        up
+    }
+
+    /// The companion on the focused row, if that's where the focus is.
+    fn other_row(&mut self) -> Option<&mut Other> {
         match &mut self.kind {
-            FieldKind::Text { value, .. } | FieldKind::Number { value, .. } => match key.code {
-                KeyCode::Char('u') if ctrl => value.clear(),
-                KeyCode::Char(ch) if !ctrl => value.push(ch),
-                KeyCode::Backspace => {
-                    value.pop();
-                }
-                _ => return,
+            FieldKind::Choice { options, other, .. } | FieldKind::Multi { options, other, .. }
+                if self.row >= options.len() =>
+            {
+                other.as_mut()
+            }
+            _ => None,
+        }
+    }
+
+    /// Enter on a single choice's row picks it: an option, or an Other holding text.
+    fn enter(&mut self) {
+        if let FieldKind::Choice {
+            options,
+            picked,
+            other,
+        } = &mut self.kind
+        {
+            if self.row < options.len() {
+                *picked = Some(Pick::Option(self.row));
+            } else if other.as_ref().is_some_and(|other| {
+                other.companion == Companion::Replaces && other.typed().is_some()
+            }) {
+                *picked = Some(Pick::Other);
+            }
+            self.error = None;
+        }
+    }
+
+    fn paste(&mut self, text: &str) {
+        match &mut self.kind {
+            FieldKind::Text { value, .. } | FieldKind::Number { value, .. } => {
+                value.push_str(text);
+            }
+            _ => match self.other_row() {
+                Some(other) => other.text.push_str(text),
+                None => return,
             },
-            FieldKind::Toggle(value) => match key.code {
-                KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right => {
-                    *value = Some(!value.unwrap_or(false))
-                }
-                _ => return,
-            },
-            FieldKind::Choice { options, selected } => {
-                let count = options.len();
-                if count == 0 {
+        }
+        self.typed_other();
+        self.error = None;
+    }
+
+    /// After typing on a single choice's Other row: its text answers in place of an option
+    /// while it holds any, as Claude's Other does.
+    fn typed_other(&mut self) {
+        if let FieldKind::Choice {
+            options,
+            picked,
+            other: Some(other),
+        } = &mut self.kind
+            && self.row >= options.len()
+            && other.companion == Companion::Replaces
+        {
+            if other.typed().is_some() {
+                *picked = Some(Pick::Other);
+            } else if *picked == Some(Pick::Other) {
+                *picked = None;
+            }
+        }
+    }
+
+    fn edit(&mut self, key: KeyEvent) {
+        let clear = matches!(key.code, KeyCode::Backspace | KeyCode::Delete);
+        if let Some(other) = self.other_row() {
+            if edit_text(&mut other.text, key) {
+                self.typed_other();
+                self.error = None;
+            }
+            return;
+        }
+        // Space or a row's digit picks; picking what's picked again clears it, as Backspace and
+        // Delete do, unless an answer is required.
+        let target = |count: usize, row: usize| match key.code {
+            KeyCode::Char(' ') => Some(row),
+            KeyCode::Char(digit @ '1'..='9') => {
+                Some(digit as usize - '1' as usize).filter(|index| *index < count)
+            }
+            _ => None,
+        };
+        let optional = !self.required;
+        match &mut self.kind {
+            FieldKind::Text { value, .. } | FieldKind::Number { value, .. } => {
+                if !edit_text(value, key) {
                     return;
                 }
-                *selected = Some(match (key.code, *selected) {
-                    (KeyCode::Right | KeyCode::Char(' '), None) | (KeyCode::Left, None) => 0,
-                    (KeyCode::Right | KeyCode::Char(' '), Some(index)) => (index + 1) % count,
-                    (KeyCode::Left, Some(index)) => (index + count - 1) % count,
-                    _ => return,
-                });
             }
+            FieldKind::Toggle(value) => match key.code {
+                KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right => {
+                    *value = Some(!value.unwrap_or(false));
+                }
+                _ if clear && optional => *value = None,
+                _ => return,
+            },
+            FieldKind::Choice {
+                options, picked, ..
+            } => match target(options.len(), self.row) {
+                Some(index) => {
+                    self.row = index;
+                    *picked = if *picked == Some(Pick::Option(index)) && optional {
+                        None
+                    } else {
+                        Some(Pick::Option(index))
+                    };
+                }
+                None if clear && optional => *picked = None,
+                None => return,
+            },
             FieldKind::Multi {
-                options,
-                chosen,
-                cursor,
-                ..
-            } => match key.code {
-                KeyCode::Left => *cursor = cursor.saturating_sub(1),
-                KeyCode::Right => *cursor = (*cursor + 1).min(options.len().saturating_sub(1)),
-                KeyCode::Char(' ') => {
-                    if let Some(item) = chosen.get_mut(*cursor) {
+                options, chosen, ..
+            } => match target(options.len(), self.row) {
+                Some(index) => {
+                    self.row = index;
+                    if let Some(item) = chosen.get_mut(index) {
                         *item = !*item;
                     }
                 }
-                _ => return,
+                None if clear => {
+                    if let Some(item) = chosen.get_mut(self.row) {
+                        *item = false;
+                    }
+                }
+                None => return,
             },
             FieldKind::Unsupported(_) => return,
         }
         self.error = None;
+    }
+
+    /// The companion's value to send beside the field's own, when it has one: an Other that
+    /// answers in place of the pick only while chosen, a multi-select's Other and a note when
+    /// they hold text.
+    fn other_value(&self) -> Option<(String, ElicitationContentValue)> {
+        let (other, sent) = match &self.kind {
+            FieldKind::Choice {
+                picked,
+                other: Some(other),
+                ..
+            } => (
+                other,
+                other.companion == Companion::Note || *picked == Some(Pick::Other),
+            ),
+            FieldKind::Multi {
+                other: Some(other), ..
+            } => (other, true),
+            _ => return None,
+        };
+        let text = other.typed().filter(|_| sent)?;
+        Some((
+            other.name.clone(),
+            ElicitationContentValue::String(text.to_owned()),
+        ))
+    }
+
+    fn answered_by_other(&self) -> bool {
+        let replaces = match &self.kind {
+            FieldKind::Choice { other, .. } | FieldKind::Multi { other, .. } => other
+                .as_ref()
+                .is_some_and(|other| other.companion == Companion::Replaces),
+            _ => false,
+        };
+        replaces && self.other_value().is_some()
     }
 
     /// The value to send: `None` when left empty.
@@ -584,9 +899,14 @@ impl Field {
                 }))
             }
             FieldKind::Toggle(value) => Ok(value.map(ElicitationContentValue::Boolean)),
-            FieldKind::Choice { options, selected } => Ok(selected
-                .and_then(|index| options.get(index))
-                .map(|(value, _)| ElicitationContentValue::String(value.clone()))),
+            FieldKind::Choice {
+                options, picked, ..
+            } => Ok(match picked {
+                Some(Pick::Option(index)) => options
+                    .get(*index)
+                    .map(|option| ElicitationContentValue::String(option.value.clone())),
+                Some(Pick::Other) | None => None,
+            }),
             FieldKind::Multi {
                 options,
                 chosen,
@@ -598,9 +918,10 @@ impl Field {
                     .iter()
                     .zip(chosen)
                     .filter(|(_, chosen)| **chosen)
-                    .map(|((value, _), _)| value.clone())
+                    .map(|(option, _)| option.value.clone())
                     .collect();
-                let count = values.len() as u64;
+                // A multi-select's Other is one more of its items.
+                let count = values.len() as u64 + u64::from(self.answered_by_other());
                 if min_items.is_some_and(|min| count < min) {
                     return Err(format!("choose at least {}", min_items.unwrap_or_default()));
                 }
@@ -613,44 +934,129 @@ impl Field {
         }
     }
 
+    /// A choice under its title, one numbered row per option with its description dimmed
+    /// under it, as a permission request lists its options, and its companion last, which
+    /// takes typing. `start` is the line it starts on.
+    fn list_lines(&self, focused: bool, width: usize, start: usize) -> FormLines {
+        let (options, other) = match &self.kind {
+            FieldKind::Choice { options, other, .. } | FieldKind::Multi { options, other, .. } => {
+                (options.as_slice(), other.as_ref())
+            }
+            _ => (&[][..], None),
+        };
+        let marker = if self.required { " *" } else { "" };
+        let title = Line::from(Span::styled(
+            format!(
+                "{}{}{marker}",
+                if focused { "› " } else { "  " },
+                self.title
+            ),
+            focus_style(focused),
+        ));
+        let indent = Line::from("    ");
+        let mut lines = wrap_with_prefix(&title, width, &Line::default(), &indent);
+        let mut focus = start;
+        let mut cursor = None;
+        let dimmed = |text: &str| Line::from(Span::styled(text.to_owned(), dim()));
+        if let Some(description) = &self.description {
+            lines.extend(wrap_with_prefix(
+                &dimmed(description),
+                width,
+                &indent,
+                &indent,
+            ));
+        }
+        if let Some(error) = &self.error {
+            lines.push(Line::from(Span::styled(
+                format!("    {error}"),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        let digits = options.len().max(1).to_string().len();
+        let lead = |on: bool| if on { "  › " } else { "    " };
+        for (index, option) in options.iter().enumerate() {
+            let on = focused && self.row == index;
+            let mark = match &self.kind {
+                FieldKind::Choice { picked, .. } if *picked == Some(Pick::Option(index)) => "(•)",
+                FieldKind::Choice { .. } => "( )",
+                FieldKind::Multi { chosen, .. } if chosen.get(index) == Some(&true) => "[x]",
+                _ => "[ ]",
+            };
+            let first = Line::from(format!("{}{:>digits$}. ", lead(on), index + 1));
+            let hanging = Line::from(" ".repeat(first.width() + 4));
+            let row = Line::from(format!("{mark} {}", option.title));
+            if on {
+                focus = start + lines.len();
+            }
+            lines.extend(
+                wrap_with_prefix(&row, width, &first, &hanging)
+                    .into_iter()
+                    .map(|line| {
+                        if on {
+                            line.style(style::selection())
+                        } else {
+                            line
+                        }
+                    }),
+            );
+            if let Some(description) = &option.description {
+                lines.extend(wrap_with_prefix(
+                    &dimmed(description),
+                    width,
+                    &hanging,
+                    &hanging,
+                ));
+            }
+        }
+        if let Some(other) = other {
+            let on = focused && self.row >= options.len();
+            let mark = match (&self.kind, other.companion) {
+                (_, Companion::Note) => "",
+                (FieldKind::Choice { picked, .. }, _) if *picked == Some(Pick::Other) => "(•) ",
+                (FieldKind::Choice { .. }, _) => "( ) ",
+                _ if other.typed().is_some() => "[x] ",
+                _ => "[ ] ",
+            };
+            let label = format!("{}{:digits$}  {mark}{}: ", lead(on), "", other.title);
+            if on {
+                focus = start + lines.len();
+                cursor = Some((
+                    focus,
+                    u16::try_from(label.width() + other.text.width()).unwrap_or(0),
+                ));
+            }
+            let row = Line::from(vec![Span::raw(label), Span::raw(other.text.clone())]);
+            lines.push(if on {
+                row.style(style::selection())
+            } else {
+                row
+            });
+        }
+        FormLines {
+            lines,
+            cursor,
+            focus,
+        }
+    }
+
     fn value_spans(&self, focused: bool) -> Vec<Span<'static>> {
         match &self.kind {
             FieldKind::Text { value, .. } | FieldKind::Number { value, .. } => {
                 vec![Span::raw(value.clone())]
             }
-            FieldKind::Toggle(value) => vec![Span::raw(match value {
-                Some(true) => "[x] yes",
-                Some(false) => "[ ] no",
-                None => "[ ] (unset)",
-            })],
-            FieldKind::Choice { options, selected } => {
-                let current = selected
-                    .and_then(|index| options.get(index))
-                    .map_or("(none)".to_owned(), |(_, title)| title.clone());
-                vec![Span::styled(
-                    format!("◂ {current} ▸"),
-                    selected_style(focused),
-                )]
-            }
-            FieldKind::Multi {
-                options,
-                chosen,
-                cursor,
-                ..
-            } => options
-                .iter()
-                .zip(chosen)
-                .enumerate()
-                .map(|(index, ((_, title), chosen))| {
-                    let mark = if *chosen { "[x]" } else { "[ ]" };
-                    let style = selected_style(focused && index == *cursor);
-                    Span::styled(format!("{mark} {title}  "), style)
-                })
-                .collect(),
+            FieldKind::Toggle(value) => vec![Span::styled(
+                match value {
+                    Some(true) => "[x] yes",
+                    Some(false) => "[ ] no",
+                    None => "[ ] (unset)",
+                },
+                selected_style(focused),
+            )],
             FieldKind::Unsupported(kind) => vec![Span::styled(
                 format!("({kind} fields are not supported)"),
                 dim(),
             )],
+            FieldKind::Choice { .. } | FieldKind::Multi { .. } => Vec::new(),
         }
     }
 }
@@ -874,8 +1280,8 @@ mod tests {
         let mut view = FormView::new("Agent", "Who are you?", &schema());
         type_text(&mut view, "36");
         view.handle_key(key(KeyCode::Tab));
-        view.handle_key(key(KeyCode::Right)); // color: Red
-        view.handle_key(key(KeyCode::Right)); // color: Blue
+        view.handle_key(key(KeyCode::Char('1'))); // color: Red
+        view.handle_key(key(KeyCode::Char('2'))); // color: Blue
         view.handle_key(key(KeyCode::Tab));
         type_text(&mut view, "Ada");
         view.handle_key(key(KeyCode::Tab));
@@ -901,6 +1307,188 @@ mod tests {
                 ("news".to_owned(), ElicitationContentValue::Boolean(false)),
             ])
         );
+    }
+
+    /// What the form sends from its Submit button.
+    fn sent(view: &mut FormView) -> BTreeMap<String, ElicitationContentValue> {
+        view.focus = view.fields.len();
+        match view.handle_key(key(KeyCode::Enter)) {
+            Some(ElicitationOutcome::Accept(Some(content))) => content,
+            outcome => panic!("expected acceptance, got {outcome:?}"),
+        }
+    }
+
+    fn text(value: &str) -> ElicitationContentValue {
+        ElicitationContentValue::String(value.to_owned())
+    }
+
+    fn form(name: &str) -> FormView {
+        let form = weave_fake_agent::question_forms()
+            .into_iter()
+            .find(|form| form.name == name)
+            .expect("the fake agent asks it");
+        FormView::new("Agent", form.message, &form.schema)
+    }
+
+    #[test]
+    fn an_optional_pick_or_yes_no_can_be_taken_back_and_a_required_pick_only_changed() {
+        let options = || vec![EnumOption::new("a", "A"), EnumOption::new("b", "B")];
+        let schema = ElicitationSchema::new()
+            .property(
+                "color",
+                StringPropertySchema::new().one_of(options()),
+                false,
+            )
+            .property("env", StringPropertySchema::new().one_of(options()), true)
+            .property(
+                "news",
+                BooleanPropertySchema::new().default_value(true),
+                false,
+            );
+        let mut view = FormView::new("Agent", "?", &schema);
+        // Picking the picked option again clears it, and so does Backspace.
+        view.handle_key(key(KeyCode::Char('1')));
+        view.handle_key(key(KeyCode::Char('1')));
+        assert_eq!(view.fields[0].value(), Ok(None));
+        view.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(view.fields[0].value(), Ok(Some(text("a"))));
+        view.handle_key(key(KeyCode::Backspace));
+        assert_eq!(view.fields[0].value(), Ok(None));
+        view.handle_key(key(KeyCode::Tab));
+        view.handle_key(key(KeyCode::Char('2')));
+        view.handle_key(key(KeyCode::Char('2')));
+        view.handle_key(key(KeyCode::Delete));
+        assert_eq!(view.fields[1].value(), Ok(Some(text("b"))));
+        view.handle_key(key(KeyCode::Tab));
+        view.handle_key(key(KeyCode::Backspace));
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([("env".to_owned(), text("b"))])
+        );
+    }
+
+    #[test]
+    fn enter_picks_the_option_it_is_on_and_moves_on() {
+        let mut view = form("codex");
+        view.handle_key(key(KeyCode::Down));
+        view.handle_key(key(KeyCode::Enter));
+        assert_eq!(view.focus, 1);
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([("deploy_target".to_owned(), text("Production"))])
+        );
+    }
+
+    #[test]
+    fn claudes_other_answers_in_place_of_a_pick_and_an_option_in_place_of_it() {
+        let mut view = form("claude");
+        // Each question's Other is its last row, not a field of its own.
+        assert_eq!(view.fields.len(), 2);
+        view.handle_key(key(KeyCode::Down));
+        view.handle_key(key(KeyCode::Down));
+        type_text(&mut view, "MySQL 8");
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([("question_0_custom".to_owned(), text("MySQL 8"))])
+        );
+        view.focus = 0;
+        view.fields[0].row = 0;
+        view.handle_key(key(KeyCode::Char('1')));
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([("question_0".to_owned(), text("Postgres"))])
+        );
+        // The text was kept, and choosing Other again sends it.
+        view.focus = 0;
+        view.fields[0].row = 2;
+        view.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([("question_0_custom".to_owned(), text("MySQL 8"))])
+        );
+        // Erased, it answers nothing.
+        view.focus = 0;
+        view.fields[0].row = 2;
+        view.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(sent(&mut view), BTreeMap::new());
+    }
+
+    #[test]
+    fn claudes_other_joins_a_multi_selects_picks() {
+        let mut view = form("claude");
+        view.handle_key(key(KeyCode::Tab));
+        view.handle_key(key(KeyCode::Char('1')));
+        view.handle_key(key(KeyCode::Char('2')));
+        view.handle_key(key(KeyCode::Down));
+        view.handle_key(key(KeyCode::Down));
+        view.paste("Bench\nmarks");
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([
+                (
+                    "question_1".to_owned(),
+                    ElicitationContentValue::StringArray(vec!["Tests".into(), "Lint".into()])
+                ),
+                ("question_1_custom".to_owned(), text("Bench marks")),
+            ])
+        );
+    }
+
+    #[test]
+    fn codexs_note_goes_with_the_pick() {
+        let mut view = form("codex");
+        assert_eq!(view.fields.len(), 1);
+        // The question is required: a note alone doesn't answer it.
+        view.fields[0].row = 3;
+        type_text(&mut view, "after 5pm");
+        view.focus = view.fields.len();
+        assert_eq!(view.handle_key(key(KeyCode::Enter)), None);
+        assert_eq!(view.fields[0].error.as_deref(), Some("required"));
+        view.handle_key(key(KeyCode::Char('3')));
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([
+                ("deploy_target".to_owned(), text("None of the above")),
+                ("deploy_target_note".to_owned(), text("after 5pm")),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_companion_of_no_choice_stays_a_field_of_its_own() {
+        let schema = ElicitationSchema::new()
+            .property("name", StringPropertySchema::new().title("Name"), false)
+            .property(
+                "name_custom",
+                StringPropertySchema::new().title("Other"),
+                false,
+            );
+        let mut view = FormView::new("Agent", "?", &schema);
+        assert_eq!(view.fields.len(), 2);
+        view.handle_key(key(KeyCode::Tab));
+        type_text(&mut view, "x");
+        assert_eq!(
+            sent(&mut view),
+            BTreeMap::from([("name_custom".to_owned(), text("x"))])
+        );
+    }
+
+    #[test]
+    fn a_tall_form_scrolls_to_keep_the_focus_in_view() {
+        let mut view = ElicitationView::Form(form("claude"));
+        let area = Rect::new(0, 0, 60, 8);
+        let mut buf = Buffer::empty(area);
+        // The Checks question's Other row, near the end.
+        for _ in 0..6 {
+            view.handle_key(key(KeyCode::Down));
+        }
+        let cursor = view
+            .render(area, &mut buf)
+            .expect("the Other row takes typing");
+        let row: String = (0..area.width)
+            .map(|x| buf[(x, cursor.y)].symbol().to_owned())
+            .collect();
+        assert!(row.contains("[ ] Other:"), "{row:?}");
     }
 
     #[test]

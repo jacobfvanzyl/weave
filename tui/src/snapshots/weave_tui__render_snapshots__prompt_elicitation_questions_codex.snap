@@ -1,0 +1,15 @@
+---
+source: tui/src/render_snapshots.rs
+expression: "questions_form(\"codex\",\n&[KeyCode::Char('1'), KeyCode::Down, KeyCode::Down, KeyCode::Down],\n\"after the freeze\")"
+---
+  Agent asks: Codex needs your input to continue.
+› Where should this deploy? *
+    Deploy
+    1. (•) Staging
+           The shared staging cluster
+    2. ( ) Production
+    3. ( ) None of the above
+           Provide a different answer in the note field.
+  ›    Additional answer or note: after the freeze
+    Submit    Decline    Cancel
+  ↑↓ move · space pick · ⌫ clear · enter on a button · esc cancel

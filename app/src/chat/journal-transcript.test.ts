@@ -101,7 +101,7 @@ const shown = ({ turn: _turn, entries, subagents, ...rest }: AcpTranscript): unk
 describe('transcripts from recorded journals', () => {
   it('records the journals the tests read', () => {
     expect(Object.keys(recordings).sort()).toEqual(
-      ['cancel', 'close', 'compact', 'delegate', 'image', 'markdown', 'modes', 'notice', 'plan', 'reopen', 'run', 'steer', 'think', 'write'],
+      ['cancel', 'close', 'compact', 'delegate', 'image', 'markdown', 'modes', 'notice', 'plan', 'questions', 'reopen', 'run', 'steer', 'think', 'write'],
     );
   });
 
