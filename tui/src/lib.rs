@@ -29,6 +29,7 @@ mod mermaid;
 mod notify;
 mod palette;
 mod permission;
+mod program_status;
 #[cfg(test)]
 mod render_snapshots;
 mod runs;

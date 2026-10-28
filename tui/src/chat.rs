@@ -96,6 +96,7 @@ use crate::history_cell::home_relative;
 use crate::permission::Decision;
 use crate::permission::PermissionView;
 use crate::permission::Subject;
+use crate::program_status;
 use crate::runs;
 use crate::runs::Part;
 use crate::runs::Summary;
@@ -306,6 +307,14 @@ struct Stashed {
 struct PendingPermission {
     request: PermissionAsk,
     view: PermissionView,
+    /// What its notification says.
+    notice: String,
+}
+
+/// How a turn ended, for the terminal's program status: what it finished, or why it failed.
+enum Ended {
+    Done(String),
+    Failed(String),
 }
 
 struct PendingElicitation {
@@ -382,7 +391,10 @@ pub struct ChatWidget {
     cost: Option<(f64, String)>,
     /// The session's title, as the agent last reported it.
     title: Option<String>,
-    disconnected: bool,
+    /// Why the session can't go on: its agent exited, or the connection to the Host closed.
+    disconnected: Option<String>,
+    /// How the latest turn ended, until the person types here or comes back to the terminal.
+    ended: Option<Ended>,
     /// Waiting for the weave Host to come back.
     reconnecting: bool,
     /// Said once the next session opens, as when a new one took the place of one left.
@@ -568,7 +580,8 @@ impl ChatWidget {
             context: None,
             cost: None,
             title: None,
-            disconnected: false,
+            disconnected: None,
+            ended: None,
             reconnecting: false,
             opened_note: None,
             quit_armed_until: None,
@@ -777,6 +790,7 @@ impl ChatWidget {
         self.subagent_picker = None;
         self.messages.clear();
         self.turn = None;
+        self.ended = None;
         self.queued.clear();
         self.queue_paused = false;
         self.commands.clear();
@@ -959,18 +973,17 @@ impl ChatWidget {
         self.finish_live_cells();
         self.drop_pending_requests();
         self.turn = None;
-        self.disconnected = true;
+        let note = "Lost the weave Host; reconnecting when it's back";
+        self.disconnected = Some(note.to_owned());
         self.reconnecting = true;
-        self.push_cell(TranscriptCell::info(
-            "Lost the weave Host; reconnecting when it's back",
-        ));
+        self.push_cell(TranscriptCell::info(note));
     }
 
     /// Connected to the weave Host again: reattach to the session shown, catching up from
     /// where the transcript is. A blank session didn't outlast the Host it was in, so a new
     /// one takes its place.
     pub fn reconnected(&mut self) -> Vec<AppCommand> {
-        self.disconnected = false;
+        self.disconnected = None;
         self.reconnecting = false;
         if self.blank_session().is_some() {
             self.opened_note = Some("Reconnected to the weave Host".to_owned());
@@ -1075,7 +1088,11 @@ impl ChatWidget {
             self.report_info("/update is already running");
             return Vec::new();
         }
-        let Some(session_id) = self.active_session.clone().filter(|_| !self.disconnected) else {
+        let Some(session_id) = self
+            .active_session
+            .clone()
+            .filter(|_| self.disconnected.is_none())
+        else {
             return Vec::new();
         };
         let name = self
@@ -1249,6 +1266,47 @@ impl ChatWidget {
             Some(indicator) => format!("{indicator} {names}"),
             None => names,
         }
+    }
+
+    /// What the terminal's program status (OSC 7501) says about the active session: waiting on
+    /// the person ahead of working, and how the latest turn ended until they've seen it.
+    pub fn program_status(&self) -> Option<program_status::Status> {
+        self.active_session.as_ref()?;
+        let (state, msg) = if let Some(reason) = &self.disconnected {
+            (program_status::State::Error, Some(reason.clone()))
+        } else if let Some(pending) = self.permissions.front() {
+            (
+                program_status::State::Blocked(program_status::Kind::Permission),
+                Some(pending.notice.clone()),
+            )
+        } else if let Some(pending) = self.elicitations.front() {
+            let kind = match pending.request.request.mode {
+                ElicitationMode::Url(_) => program_status::Kind::Auth,
+                _ => program_status::Kind::Question,
+            };
+            (
+                program_status::State::Blocked(kind),
+                Some(pending.request.request.message.clone()),
+            )
+        } else if self.turn.is_some() {
+            (program_status::State::Working, None)
+        } else {
+            match &self.ended {
+                Some(Ended::Done(notice)) => (program_status::State::Done, Some(notice.clone())),
+                Some(Ended::Failed(notice)) => (program_status::State::Error, Some(notice.clone())),
+                None => (program_status::State::Idle, None),
+            }
+        };
+        Some(program_status::Status {
+            state,
+            msg,
+            title: self.title.clone(),
+        })
+    }
+
+    /// The terminal has focus again, so the person has seen how the turn ended.
+    pub fn focus_gained(&mut self) {
+        self.ended = None;
     }
 
     /// Run `command` from shell mode: shown live as `Running`, then `You ran`, with its
@@ -1461,8 +1519,9 @@ impl ChatWidget {
                     self.finish_live_cells();
                     self.drop_pending_requests();
                     self.turn = None;
-                    self.disconnected = true;
-                    self.push_error(&format!("Thread ended: {reason}"));
+                    let error = format!("Thread ended: {reason}");
+                    self.push_error(&error);
+                    self.disconnected = Some(error);
                 }
                 Vec::new()
             }
@@ -1482,12 +1541,13 @@ impl ChatWidget {
                 self.finish_live_cells();
                 self.drop_pending_requests();
                 self.turn = None;
-                self.disconnected = true;
                 let reason = error.map_or_else(
                     || "the connection closed".to_owned(),
                     |error| error.to_string(),
                 );
-                self.push_error(&format!("Disconnected: {reason}"));
+                let error = format!("Disconnected: {reason}");
+                self.push_error(&error);
+                self.disconnected = Some(error);
                 Vec::new()
             }
             // Shown as the opening notices are.
@@ -2234,8 +2294,11 @@ impl ChatWidget {
             None => subject.question.clone(),
         };
         let view = PermissionView::new(subject, request.request.options.clone());
-        self.permissions
-            .push_back(PendingPermission { request, view });
+        self.permissions.push_back(PendingPermission {
+            request,
+            view,
+            notice: notice.clone(),
+        });
         Some(notice)
     }
 
@@ -2285,6 +2348,14 @@ impl ChatWidget {
             Ok(_) => Some("The turn stopped early".to_owned()),
             Err(error) => Some(format!("Turn failed: {error}")),
         };
+        // A cancelled turn has nothing to show for it.
+        self.ended = notice.clone().map(|notice| {
+            if failed {
+                Ended::Failed(notice)
+            } else {
+                Ended::Done(notice)
+            }
+        });
         match result {
             Ok(response) => {
                 if response.stop_reason == StopReason::EndTurn
@@ -2332,6 +2403,7 @@ impl ChatWidget {
     }
 
     pub fn handle_paste(&mut self, text: &str) -> Vec<AppCommand> {
+        self.ended = None;
         if self
             .viewed_mut()
             .is_some_and(|(view, live)| view.find_paste(text, &live))
@@ -2518,6 +2590,7 @@ impl ChatWidget {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<AppCommand> {
+        self.ended = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // Find's query takes every key while it's typed, Ctrl+C included, as in Codex.
         if self.find_key(key) {
@@ -2702,14 +2775,14 @@ impl ChatWidget {
             };
         }
         if ctrl && key.code == KeyCode::Char('o') {
-            if !self.disconnected {
+            if self.disconnected.is_none() {
                 self.settings = Some(SettingsPicker::new());
             }
             return Vec::new();
         }
         if key.code == KeyCode::BackTab {
             return settings::next_mode(&self.config_options, self.modes.as_ref())
-                .filter(|_| !self.disconnected)
+                .filter(|_| self.disconnected.is_none())
                 .map(AppCommand::ChangeSetting)
                 .into_iter()
                 .collect();
@@ -3122,7 +3195,7 @@ impl ChatWidget {
             }
             // A new session here, as the picker's `n` opens; a turn still running in the one
             // left carries on in the weave Host.
-            if text.trim() == format!("/{NEW_COMMAND}") && !self.disconnected {
+            if text.trim() == format!("/{NEW_COMMAND}") && self.disconnected.is_none() {
                 return vec![AppCommand::OpenSession {
                     target: SessionTarget::New,
                     title: None,
@@ -3133,7 +3206,9 @@ impl ChatWidget {
             self.watching = None;
         }
         match action {
-            ComposerAction::Submit(text) if self.disconnected || self.active_session.is_none() => {
+            ComposerAction::Submit(text)
+                if self.disconnected.is_some() || self.active_session.is_none() =>
+            {
                 self.composer.insert_str(&text);
                 Vec::new()
             }
@@ -3829,7 +3904,7 @@ impl ChatWidget {
     fn footer(&self, width: u16, now: Instant) -> Line<'static> {
         let mode = if self.reconnecting {
             FooterMode::Reconnecting
-        } else if self.disconnected {
+        } else if self.disconnected.is_some() {
             FooterMode::Disconnected
         } else if self.quit_armed_until.is_some_and(|until| now < until) {
             FooterMode::QuitReminder
@@ -4314,6 +4389,11 @@ mod tests {
     use weave_acp_core::schema::AvailableCommandInput;
     use weave_acp_core::schema::AvailableCommandsUpdate;
     use weave_acp_core::schema::ContentChunk;
+    use weave_acp_core::schema::CreateElicitationRequest;
+    use weave_acp_core::schema::ElicitationFormMode;
+    use weave_acp_core::schema::ElicitationSchema;
+    use weave_acp_core::schema::ElicitationSessionScope;
+    use weave_acp_core::schema::ElicitationUrlMode;
     use weave_acp_core::schema::SessionConfigOptionCategory;
     use weave_acp_core::schema::SessionConfigOptionValue;
     use weave_acp_core::schema::SessionConfigSelectOption;
@@ -4322,6 +4402,7 @@ mod tests {
     use crate::vim::Vim;
     use weave_acp_core::schema::SessionInfo;
     use weave_acp_core::schema::SessionNotification;
+    use weave_acp_core::schema::StringPropertySchema;
     use weave_acp_core::schema::Terminal;
     use weave_acp_core::schema::TerminalExitStatus;
     use weave_acp_core::schema::TextContent;
@@ -5111,6 +5192,124 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Answered on another client"))
         );
+    }
+
+    fn status_of(chat: &ChatWidget) -> (program_status::State, Option<String>) {
+        let status = chat.program_status().expect("a session is open");
+        (status.state, status.msg)
+    }
+
+    fn elicitation(id: &str, mode: ElicitationMode) -> ChatEvent {
+        ChatEvent::ElicitationRequested(ElicitationAsk {
+            id: id.to_owned(),
+            request: CreateElicitationRequest::new(mode, "Which one?"),
+        })
+    }
+
+    #[test]
+    fn the_program_status_follows_the_turn_and_what_waits_on_the_person() {
+        use program_status::Kind;
+        use program_status::State;
+        let unopened = ChatWidget::new(
+            "Agent".into(),
+            PathBuf::from("/repo"),
+            SessionAbilities {
+                list: true,
+                delete: true,
+            },
+            60,
+        );
+        assert_eq!(unopened.program_status(), None);
+        let mut chat = chat();
+        assert_eq!(status_of(&chat), (State::Idle, None));
+        submit(&mut chat, "write it");
+        assert_eq!(status_of(&chat), (State::Working, None));
+        chat.handle_agent_event(permission("p1"));
+        let (state, msg) = status_of(&chat);
+        assert_eq!(state, State::Blocked(Kind::Permission));
+        assert!(msg.is_some_and(|msg| msg.contains("Write a.rs")));
+        // Another client answering moves it on, as this one would.
+        chat.handle_agent_event(ChatEvent::RequestResolved {
+            id: "p1".to_owned(),
+            outcome: Resolution::Answered,
+            elsewhere: true,
+        });
+        assert_eq!(status_of(&chat), (State::Working, None));
+        let form = ElicitationMode::Form(ElicitationFormMode::new(
+            ElicitationSessionScope::new("s1"),
+            ElicitationSchema::new().property("name", StringPropertySchema::new(), true),
+        ));
+        chat.handle_agent_event(elicitation("e1", form));
+        assert_eq!(
+            status_of(&chat),
+            (State::Blocked(Kind::Question), Some("Which one?".into()))
+        );
+        let url = ElicitationMode::Url(ElicitationUrlMode::new(
+            ElicitationSessionScope::new("s1"),
+            "u1",
+            "https://example.com/login",
+        ));
+        chat.handle_agent_event(ChatEvent::RequestResolved {
+            id: "e1".to_owned(),
+            outcome: Resolution::Answered,
+            elsewhere: true,
+        });
+        chat.handle_agent_event(elicitation("e2", url));
+        assert_eq!(status_of(&chat).0, State::Blocked(Kind::Auth));
+        chat.handle_agent_event(ChatEvent::RequestResolved {
+            id: "e2".to_owned(),
+            outcome: Resolution::Answered,
+            elsewhere: true,
+        });
+        chat.handle_agent_event(text_chunk("Wrote a.rs"));
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        assert_eq!(status_of(&chat), (State::Done, Some("Wrote a.rs".into())));
+        // Done until the person is back: typing here, or the terminal's focus.
+        chat.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(status_of(&chat), (State::Idle, None));
+        submit(&mut chat, "again");
+        chat.handle_agent_event(turn_ended(StopReason::EndTurn));
+        assert_eq!(status_of(&chat).0, State::Done);
+        chat.focus_gained();
+        assert_eq!(status_of(&chat), (State::Idle, None));
+    }
+
+    #[test]
+    fn a_cancelled_turn_is_idle_and_a_failed_turn_or_thread_an_error() {
+        use program_status::State;
+        let mut chat = chat();
+        submit(&mut chat, "write it");
+        chat.handle_agent_event(turn_ended(StopReason::Cancelled));
+        assert_eq!(status_of(&chat), (State::Idle, None));
+        submit(&mut chat, "write it");
+        chat.handle_agent_event(ChatEvent::TurnEnded {
+            session_id: "s1".into(),
+            result: Err(Error::internal_error()),
+            replayed: false,
+        });
+        let (state, msg) = status_of(&chat);
+        assert_eq!(state, State::Error);
+        assert!(msg.is_some_and(|msg| msg.starts_with("Turn failed")));
+        chat.handle_paste("next");
+        assert_eq!(status_of(&chat), (State::Idle, None));
+        // A turn the replay ends is history.
+        chat.handle_agent_event(ChatEvent::TurnEnded {
+            session_id: "s1".into(),
+            result: Ok(PromptResponse::new(StopReason::EndTurn)),
+            replayed: true,
+        });
+        assert_eq!(status_of(&chat), (State::Idle, None));
+        chat.handle_agent_event(ChatEvent::SessionEnded {
+            session_id: "s1".into(),
+            reason: "the agent exited".into(),
+        });
+        assert_eq!(
+            status_of(&chat),
+            (State::Error, Some("Thread ended: the agent exited".into()))
+        );
+        // It stays an error whatever the person does.
+        chat.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(status_of(&chat).0, State::Error);
     }
 
     #[test]

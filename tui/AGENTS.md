@@ -28,7 +28,14 @@ scrollback until it is complete; web links (`links`, after Codex's `terminal_hyp
 beside their rows as columns (`DisplayLine::links`) and become OSC 8 only in the fullscreen buffer
 and the inline history writer, showing just their label where the terminal is known to open them
 outside a multiplexer; `palette` probes the terminal's
-colors (OSC 10/11) and `style` derives surfaces from them; `highlight` wraps syntect and
+colors (OSC 10/11) and `style` derives surfaces from them; the same probe asks whether the
+terminal takes OSC 7501 (Rex's [Program Status](https://www.superlogical.com/rex/docs/build/program-status)),
+and if it answers, `program_status` reports the thread there as one record with `app=weave`
+and the thread's title (`ChatWidget::program_status`: `blocked`, with `kind` and the waiting
+request's text, ahead of `working`; `done` or `error` from a live turn's end until the person
+types or the terminal regains focus; `idle` after a cancel; `error` while the thread can't go
+on; cleared on exit), while `notify` reports the thread's directory with OSC 7 and gives the
+shell's back on exit (ADR 0018), each written only when it changes; `highlight` wraps syntect and
 two-face; `footer` and `status` are the bottom pane; `composer` is the input, with `vim`
 (after Codex's composer Vim mode) editing the same text in the opt-in Vim composer, and
 `thumbnails` the draft's pasted images above it and, in the fullscreen transcript, each
@@ -71,4 +78,5 @@ For live TUI checks inside cmux, split a pane
 (`cmux new-split right`), drive it with `cmux send`/`cmux send-key`, and read it with
 `cmux read-screen --scrollback`. `cmux send` splits escape sequences, so simulate mouse
 input under a private tmux server instead (`tmux -L <name> send-keys -H <bytes>`), with
-`SSH_CONNECTION` set so copying goes to OSC 52 rather than your clipboard.
+`SSH_CONNECTION` set so copying goes to OSC 52 rather than your clipboard. In Rex,
+`rex block call -s SESSION -b BLOCK program_status` and `pwd` show what the TUI reported.

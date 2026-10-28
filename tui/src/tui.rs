@@ -8,6 +8,8 @@ use std::io;
 use std::io::Stdout;
 use std::io::Write;
 use std::io::stdout;
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use base64::Engine;
@@ -51,6 +53,9 @@ use crate::notify;
 use crate::notify::NotifyMethod;
 use crate::palette;
 use crate::palette::Palette;
+use crate::program_status;
+use crate::program_status::Status;
+use crate::program_status::Support;
 use crate::vim::CursorShape;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::wrap_line;
@@ -90,6 +95,12 @@ pub struct Tui {
     title: Option<String>,
     /// The cursor shape last set, while weave has changed it from the terminal's own.
     cursor_shape: Option<CursorShape>,
+    /// The terminal takes program status reports (OSC 7501), as it said at startup.
+    program_status: Option<Support>,
+    /// The status last reported.
+    status: Option<Status>,
+    /// The working directory last reported (OSC 7).
+    directory: Option<PathBuf>,
     /// The terminal draws images, as it said at startup.
     graphics: Option<Graphics>,
     /// The images weave holds in the terminal, and the ones it should from the next frame.
@@ -104,12 +115,18 @@ impl Tui {
         install_panic_hook(mode);
         // Ask the terminal about itself before anything else reads input.
         let ask = images && Graphics::worth_asking(|name| std::env::var(name).ok());
-        let replies = palette::probe(if ask { crate::graphics::QUERY } else { b"" });
+        let mut questions = program_status::QUERY.to_vec();
+        if ask {
+            questions.extend_from_slice(crate::graphics::QUERY);
+        }
+        let replies = palette::probe(&questions);
         let palette = Palette::from_replies(&replies);
         tracing::info!(?palette, "terminal palette");
         palette::set(palette);
         let graphics = ask.then(|| Graphics::from_replies(&replies)).flatten();
         tracing::info!(?graphics, "terminal graphics");
+        let program_status = Support::from_replies(&replies);
+        tracing::info!(?program_status, "terminal program status");
         highlight::warm_up();
         if mode == ScreenMode::Fullscreen {
             // Entered before the keyboard flags are pushed: some terminals keep a separate
@@ -137,6 +154,9 @@ impl Tui {
             notify: NotifyMethod::detect(),
             title: None,
             cursor_shape: None,
+            program_status,
+            status: None,
+            directory: None,
             graphics,
             images: Images::default(),
             wanted_images: Vec::new(),
@@ -229,6 +249,31 @@ impl Tui {
         sequence.push_str(&notify::title_sequence(title));
         self.write_raw(&sequence);
         self.title = Some(title.to_owned());
+    }
+
+    /// Report what the thread is doing to a terminal that takes it, or clear the report with
+    /// `None`.
+    pub fn set_program_status(&mut self, status: Option<Status>) {
+        let Some(support) = &self.program_status else {
+            return;
+        };
+        if status == self.status {
+            return;
+        }
+        let sequence = support.sequence(status.as_ref());
+        self.write_raw(&sequence);
+        self.status = status;
+    }
+
+    /// Report `directory` as the terminal's working directory.
+    pub fn set_directory(&mut self, directory: &Path) {
+        if self.directory.as_deref() == Some(directory) {
+            return;
+        }
+        if let Some(sequence) = notify::directory_sequence(directory) {
+            self.write_raw(&sequence);
+        }
+        self.directory = Some(directory.to_owned());
     }
 
     fn write_raw(&mut self, sequence: &str) {
@@ -381,6 +426,13 @@ impl Tui {
         if self.title.take().is_some() {
             let sequence = format!("{}{}", notify::title_sequence(""), notify::POP_TITLE);
             self.write_raw(&sequence);
+        }
+        // The thread's status goes with weave, and the directory goes back to the shell's.
+        self.set_program_status(None);
+        if self.directory.is_some()
+            && let Ok(directory) = std::env::current_dir()
+        {
+            self.set_directory(&directory);
         }
         if self.overlay_from.take().is_some() {
             let _ = execute!(stdout(), DisableMouseReporting, LeaveAlternateScreen);

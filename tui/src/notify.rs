@@ -1,10 +1,15 @@
-//! Desktop notifications and the terminal title, after openai/codex `codex-rs/tui/src/
-//! notifications/` and `terminal_title.rs` (Apache-2.0).
+//! Desktop notifications, the terminal title and its working directory, after openai/codex
+//! `codex-rs/tui/src/notifications/` and `terminal_title.rs` (Apache-2.0).
 //!
 //! Notifications go out as OSC 9 on terminals that show them (Ghostty, iTerm2, kitty,
 //! WezTerm, Warp), wrapped for tmux, and as a bell elsewhere. The title is set with OSC 0
 //! from sanitized text; the shell's own title is pushed at startup and popped on exit where
-//! the terminal keeps a title stack.
+//! the terminal keeps a title stack. The directory is the thread's, reported with OSC 7 as a
+//! `file://` URL, so a multiplexer opens new panes there (ADR 0018).
+
+use std::path::Path;
+
+use url::Url;
 
 /// Longest title, in characters, as Codex bounds it.
 const MAX_TITLE_CHARS: usize = 120;
@@ -66,6 +71,37 @@ fn method_from_env(var: impl Fn(&str) -> Option<String>) -> NotifyMethod {
 /// The bytes that set the window title to `title`.
 pub fn title_sequence(title: &str) -> String {
     format!("\x1b]0;{}\x07", sanitize(title, MAX_TITLE_CHARS))
+}
+
+/// The bytes that report `directory` as the terminal's working directory, on this computer.
+pub fn directory_sequence(directory: &Path) -> Option<String> {
+    directory_sequence_on(directory, &hostname().unwrap_or_default())
+}
+
+fn directory_sequence_on(directory: &Path, host: &str) -> Option<String> {
+    // Percent-encoded, as OSC 7 expects.
+    let url = Url::from_file_path(directory).ok()?;
+    Some(format!("\x1b]7;file://{host}{}\x07", url.path()))
+}
+
+#[cfg(unix)]
+fn hostname() -> Option<String> {
+    let mut name = [0_u8; 256];
+    // SAFETY: writes at most `name.len()` bytes into a live stack buffer.
+    let failed = unsafe { libc::gethostname(name.as_mut_ptr().cast(), name.len()) } != 0;
+    if failed {
+        return None;
+    }
+    let end = name.iter().position(|byte| *byte == 0)?;
+    std::str::from_utf8(&name[..end])
+        .ok()
+        .filter(|host| host.bytes().all(|byte| byte.is_ascii_graphic()))
+        .map(str::to_owned)
+}
+
+#[cfg(not(unix))]
+fn hostname() -> Option<String> {
+    None
 }
 
 /// `text` safe to put in an OSC string: control and formatting characters dropped,
@@ -139,5 +175,17 @@ mod tests {
         assert_eq!(NotifyMethod::Bell.sequence("hi"), "\x07");
         assert_eq!(title_sequence("a\u{202e}b"), "\x1b]0;ab\x07");
         assert_eq!(sanitize("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn the_directory_goes_out_as_a_file_url_naming_this_computer() {
+        assert_eq!(
+            directory_sequence_on(Path::new("/Users/me/My Repo/ü#"), "mac.local").as_deref(),
+            Some("\x1b]7;file://mac.local/Users/me/My%20Repo/%C3%BC%23\x07")
+        );
+        assert_eq!(
+            directory_sequence_on(Path::new("relative"), "mac.local"),
+            None
+        );
     }
 }

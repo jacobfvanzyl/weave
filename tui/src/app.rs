@@ -407,12 +407,17 @@ impl App {
             if self.terminal_title {
                 tui.set_title(&chat.terminal_title(Instant::now()));
             }
+            tui.set_program_status(chat.program_status());
+            if chat.active_session().is_some() {
+                tui.set_directory(&self.cwd);
+            }
             draw(tui, chat)?;
             tui.set_cursor_shape(chat.cursor_shape());
             let commands = tokio::select! {
                 event = input.next() => match event {
                     Some(Ok(Event::FocusGained)) => {
                         self.focused = true;
+                        chat.focus_gained();
                         Vec::new()
                     }
                     Some(Ok(Event::FocusLost)) => {
