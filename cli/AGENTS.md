@@ -23,13 +23,21 @@ other origins) that `weave daemon run` reads (a restart picks up a change).
 ./target/debug/weave run --approve read,edit "fix the tests" --agent <id>   # headless, in the Host
 ./target/debug/weave run --detach "…"     # leave it running; prints the session id
 ./target/debug/weave run --continue "…"   # or --resume <id>, as the TUI names sessions
-./target/debug/weave sessions             # open in the Host; also cancel <id>, close <id>
+./target/debug/weave threads              # open in the Host; also read, prompt, steer, cancel, close <id>
+./target/debug/weave threads prompt <id> "address the review"   # or pipe it in; steer joins a running turn
 ./target/debug/weave daemon status        # also start, stop, restart, run (foreground), install, uninstall
 ./target/debug/weave pair                 # a QR code and code another device pairs with
 ./target/debug/weave devices              # paired devices; also revoke <id>
 ./target/debug/weave update --dry-run     # newer agent adapters; without --dry-run, check and use them
 ./target/debug/weave worktrees install-hook   # have worktrunk ask the Host before removing a worktree
 ```
+
+`weave threads` (`cli/src/sessions.rs`; alias `sessions`) acts on any thread without attaching,
+as Rex's CLI does on its blocks, so scripts and agents' shells compose threads (ADR 0023):
+`read` gives how a thread lists and its latest turn on stderr and the agent's last message on
+stdout (`--json` for `sessions/get`), `prompt` is `queue/add`, and `steer` is `turn/steer`,
+failing when no turn runs. Their turns' origin is the CLI's, a client's, so no thread hears how
+they end, even when an agent ran it; an agent's Host tools do that.
 
 `weave worktrees pre-remove` is worktrunk's `pre-remove` hook (`cli/src/worktrees.rs`): run in the
 worktree being removed, it asks a running Host for `worktrees/release` and exits non-zero while a

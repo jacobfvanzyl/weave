@@ -3710,7 +3710,8 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
     assert_eq!(
         latest.origin,
         TurnOrigin::Session {
-            session_id: caller.clone()
+            session_id: caller.clone(),
+            report: false,
         }
     );
     let listed = client
@@ -3747,7 +3748,8 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
     assert_eq!(
         seen.origins.first().map(|(origin, _)| origin.clone()),
         Some(TurnOrigin::Session {
-            session_id: caller.clone()
+            session_id: caller.clone(),
+            report: false,
         })
     );
     assert!(seen.agent.contains("Chunk 3 of 3."));
@@ -3790,34 +3792,13 @@ async fn a_delegated_session_approves_no_more_than_the_session_that_started_it()
 }
 
 #[tokio::test]
-async fn an_agent_reads_any_session_but_acts_only_on_those_it_started() {
+async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_ended() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
     let caller = client.create(&world).await;
-    let persons = client.session_in(&world, &world.cwd()).await.session_id;
-
-    let said = client
-        .call_tool(
-            &caller,
-            "prompt_session",
-            &format!(r#"{{"sessionId": "{persons}", "prompt": "hi"}}"#),
-        )
-        .await
-        .agent;
-    assert!(
-        said.contains("prompt_session failed:") && said.contains("isn't one this thread started"),
-        "{said}"
-    );
-    for tool in ["steer_session", "cancel_session_turn"] {
-        let arguments = if tool == "steer_session" {
-            format!(r#"{{"sessionId": "{persons}", "prompt": "hi"}}"#)
-        } else {
-            format!(r#"{{"sessionId": "{persons}"}}"#)
-        };
-        let said = client.call_tool(&caller, tool, &arguments).await.agent;
-        assert!(said.contains(&format!("{tool} failed:")), "{said}");
-    }
+    let mut person = world.client(&daemon).await;
+    let persons = person.session_in(&world, &world.cwd()).await.session_id;
 
     // Reading answers as sessions/get does.
     let said = client
@@ -3849,6 +3830,72 @@ async fn an_agent_reads_any_session_but_acts_only_on_those_it_started() {
                 .iter()
                 .any(|session| session["info"]["sessionId"] == persons.to_string())),
         "{listed}"
+    );
+
+    // It steers and cancels a turn the person began in a thread it didn't start.
+    person.prompt(&persons, "slow 30").await;
+    let said = client
+        .call_tool(
+            &caller,
+            "steer_session",
+            &format!(r#"{{"sessionId": "{persons}", "prompt": "and the docs"}}"#),
+        )
+        .await
+        .agent;
+    assert!(said.contains("steer_session answered:"), "{said}");
+    let said = client
+        .call_tool(
+            &caller,
+            "cancel_session_turn",
+            &format!(r#"{{"sessionId": "{persons}"}}"#),
+        )
+        .await
+        .agent;
+    assert!(said.contains("cancel_session_turn answered: {}"), "{said}");
+    let mut seen = Seen::default();
+    person.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.ended, Some(StopReason::Cancelled));
+
+    // It prompts that thread, and hears how the turn it began there ended.
+    let mut seen = client
+        .call_tool(
+            &caller,
+            "prompt_session",
+            &format!(r#"{{"sessionId": "{persons}", "prompt": "slow 3"}}"#),
+        )
+        .await;
+    assert!(
+        seen.agent.contains("prompt_session answered:"),
+        "{}",
+        seen.agent
+    );
+    let latest = client.get(&persons).await.latest_turn.expect("a turn");
+    assert_eq!(
+        latest.origin,
+        TurnOrigin::Session {
+            session_id: caller.clone(),
+            report: false,
+        }
+    );
+    let told = client.told(&mut seen).await;
+    assert!(told.contains("finished its turn"), "{told}");
+    assert!(told.contains("Chunk 3 of 3."), "{told}");
+
+    // The report's turn tells the person's thread nothing back: no turns go to and fro.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let latest = client.get(&persons).await.latest_turn.expect("a turn");
+    assert_eq!(
+        latest.prompt,
+        vec![ContentBlock::from("slow 3".to_owned())],
+        "{latest:?}"
+    );
+    let reported = client.get(&caller).await.latest_turn.expect("a turn");
+    assert_eq!(
+        reported.origin,
+        TurnOrigin::Session {
+            session_id: persons.clone(),
+            report: true,
+        }
     );
 }
 
@@ -3995,6 +4042,7 @@ async fn a_caller_closed_meanwhile_is_taken_up_again_to_hear_how_its_delegated_t
         .expect("session/close");
     let from_delegated = TurnOrigin::Session {
         session_id: delegated.clone(),
+        report: true,
     };
     tokio::time::timeout(WAIT, async {
         loop {

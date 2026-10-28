@@ -6,8 +6,9 @@
 //!   steer; it answers with the tool's result.
 //! - Host tools, which the Host answers itself, for the calling session. Each is a Host protocol
 //!   method seen from inside the session, answered by the same code (ADR 0020): no tool does
-//!   what no client request can. They need no client, so they work in headless sessions. Some
-//!   start and follow delegated sessions: sessions of their own that the calling session starts.
+//!   what no client request can. They need no client, so they work in headless sessions. They
+//!   read and act on any session on the Host (ADR 0023), and start delegated sessions: sessions
+//!   of their own that the calling session starts.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -32,13 +33,13 @@ pub const READ_SESSION: &str = "read_session";
 /// The Host tool that starts a delegated session with a turn, as `session/run` does.
 pub const START_SESSION: &str = "start_session";
 
-/// The Host tool that sends a delegated session a prompt, as `queue/add` does.
+/// The Host tool that sends a session a prompt, as `queue/add` does.
 pub const PROMPT_SESSION: &str = "prompt_session";
 
-/// The Host tool that steers a delegated session's running turn, as `turn/steer` does.
+/// The Host tool that steers a session's running turn, as `turn/steer` does.
 pub const STEER_SESSION: &str = "steer_session";
 
-/// The Host tool that cancels a delegated session's running turn, as `turn/cancel` does.
+/// The Host tool that cancels a session's running turn, as `turn/cancel` does.
 pub const CANCEL_SESSION_TURN: &str = "cancel_session_turn";
 
 /// The tool kinds a permission policy names, for the tools that take one.
@@ -128,8 +129,8 @@ pub fn host_catalog() -> Vec<Tool> {
             title: "Read a thread".to_owned(),
             description: "Read one thread of the weave Host: how it lists, and its latest \
                           turn: the prompt, whether it is still running, how it ended, and the \
-                          agent's last message in it. Use it to read a delegated thread's full \
-                          answer, or a thread a person started. Answers with the Host's \
+                          agent's last message in it. Use it to read the full answer of a \
+                          thread you prompted, or any other thread. Answers with the Host's \
                           sessions/get result as JSON."
                 .to_owned(),
             input_schema: json!({
@@ -148,7 +149,7 @@ pub fn host_catalog() -> Vec<Tool> {
                           has started; when the turn ends, you'll get a message saying how it \
                           ended, with the start of the agent's answer, so don't wait or poll for \
                           it. It can approve only the tool kinds your own thread approves. Give \
-                          sessionId to prompt a thread you started before instead of a new one."
+                          sessionId to prompt an existing thread instead of a new one."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -159,8 +160,8 @@ pub fn host_catalog() -> Vec<Tool> {
                         it needs to know, since it doesn't see this conversation."},
                     "cwd": {"type": "string", "description": "The absolute directory it works \
                         in; yours when absent."},
-                    "sessionId": {"type": "string", "description": "A thread you started \
-                        before, to prompt instead of starting one."},
+                    "sessionId": {"type": "string", "description": "An existing thread, to \
+                        prompt instead of starting one."},
                     "approve": {
                         "type": "array",
                         "items": {"type": "string", "enum": TOOL_KINDS},
@@ -182,11 +183,11 @@ pub fn host_catalog() -> Vec<Tool> {
         },
         Tool {
             name: PROMPT_SESSION.to_owned(),
-            title: "Prompt a thread you started".to_owned(),
-            description: "Send a prompt to a thread you started with start_session: it starts \
-                          a turn at once if none runs, or waits in the thread's queue for the \
-                          running one to end. When the turn ends, you'll get a message saying \
-                          how it ended."
+            title: "Prompt a thread".to_owned(),
+            description: "Send a prompt to any open thread of the weave Host, one you started \
+                          or another: it starts a turn at once if none runs, or waits in the \
+                          thread's queue for the running one to end. When the turn ends, you'll \
+                          get a message saying how it ended."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -201,10 +202,10 @@ pub fn host_catalog() -> Vec<Tool> {
         },
         Tool {
             name: STEER_SESSION.to_owned(),
-            title: "Steer a thread you started".to_owned(),
-            description: "Send a message into the running turn of a thread you started, to \
-                          correct or add to what it's doing, without starting another turn. If \
-                          no turn runs, nothing is sent: use prompt_session instead."
+            title: "Steer a thread".to_owned(),
+            description: "Send a message into the running turn of any thread of the weave Host, \
+                          to correct or add to what it's doing, without starting another turn. \
+                          If no turn runs, nothing is sent: use prompt_session instead."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -219,8 +220,8 @@ pub fn host_catalog() -> Vec<Tool> {
         Tool {
             name: CANCEL_SESSION_TURN.to_owned(),
             title: "Cancel a thread's turn".to_owned(),
-            description: "Stop the running turn of a thread you started. The thread stays, \
-                          and can be prompted again."
+            description: "Stop the running turn of any thread of the weave Host. The thread \
+                          stays, and can be prompted again."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",

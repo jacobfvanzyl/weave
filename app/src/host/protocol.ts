@@ -171,6 +171,11 @@ export type TurnOrigin =
   | {
       session: {
         sessionId: SessionId;
+        /**
+         * The Host's report on that session, of how a turn this session's agent began there
+         * ended or that it waits on a person. Nobody hears how a report's turn ends.
+         */
+        report?: boolean;
       };
     };
 /**
@@ -3030,6 +3035,11 @@ export interface QueuedPrompt {
     | {
         session: {
           sessionId: SessionId;
+          /**
+           * The Host's report on that session, of how a turn this session's agent began there
+           * ended or that it waits on a person. Nobody hears how a report's turn ends.
+           */
+          report?: boolean;
         };
       };
   queuedAt: number;

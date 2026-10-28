@@ -557,9 +557,10 @@ the session, as when a closed session is opened again. A client that remembers
 `origin` is `{"client": {"name": "weave-tui", "id": "c7"}}` for a client's prompt, with the
 connection's `clientId` so a client recognizes its own (a remote client's adds its paired
 device's name as `device`), `{"run": {}}` for a headless run, or
-`{"session": {"sessionId": "s-2"}}` for a prompt from another session: a delegated session's
-turn its starting session's agent began, or the Host's message about a delegated session to the
-session that started it (see [Delegated sessions](#delegated-sessions)). Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
+`{"session": {"sessionId": "s-2"}}` for a prompt from another session, whose agent began the
+turn through a Host tool, or `{"session": {"sessionId": "s-2", "report": true}}` for the Host's
+report on session `s-2` to the session whose agent began a turn there (see
+[Delegated sessions](#delegated-sessions)). Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
 updates. Terminal output an agent reports in `_meta` (`terminal_output_delta`) becomes
 `terminalOutput` and `terminalExit` events and is stripped from the update, so each chunk
 arrives once.
@@ -792,6 +793,8 @@ protocol method seen from inside the session, with the same parameters less what
 session supplies, and is answered by the same code as the client request
 ([ADR 0020](../adr/0020-agents-reach-the-host-as-clients-do-and-act-only-on-threads-they-start.md)).
 No Host tool does what no client request can, so a new capability lands in the protocol first.
+They read and act on any session on the Host, as a client can
+([ADR 0023](../adr/0023-agents-act-on-any-thread-and-the-hosts-reports-tell-nobody-back.md)).
 They need no client, so they work in headless sessions too. A tool's answer is its method's
 answer as JSON text, or a tool error saying why the method failed.
 
@@ -801,12 +804,12 @@ answer as JSON text, or a tool error saying why the method failed.
 - `list_sessions {agentId?, cwd?, repo?}`: `sessions/list`.
 - `read_session {sessionId}`: `sessions/get`.
 - `start_session {agentId, prompt, cwd?, sessionId?, approve?, otherwise?, key?}`: `session/run`,
-  starting a delegated session, or prompting one this session started when `sessionId` names
-  it. `prompt` is text; `cwd` defaults to the calling session's directory; `approve` and
-  `otherwise` are the policy asked for, within the ceiling.
-- `prompt_session {sessionId, prompt, key?}`: `queue/add` for a session this session started.
-- `steer_session {sessionId, prompt}`: `turn/steer` for a session this session started.
-- `cancel_session_turn {sessionId}`: `turn/cancel` for a session this session started.
+  starting a delegated session, or prompting the session `sessionId` names. `prompt` is text;
+  `cwd` defaults to the calling session's directory; `approve` and `otherwise` are the policy
+  asked for, within the ceiling.
+- `prompt_session {sessionId, prompt, key?}`: `queue/add`.
+- `steer_session {sessionId, prompt}`: `turn/steer`.
+- `cancel_session_turn {sessionId}`: `turn/cancel`.
 
 ### Delegated sessions
 
@@ -815,33 +818,35 @@ its own, with its own journal and agent process, which clients list and attach t
 It isn't a subagent session.
 
 - **Who started it.** Its journal's header records the session that started it, which listings,
-  `sessions/get` and `SessionState` give as `startedBy`. Turns that session's agent starts in it
-  have the origin `{"session": {"sessionId": <the starting session>}}`.
-- **Reach.** An agent reads any session on its Host (`list_sessions`, `read_session`), but
-  starts, prompts, steers and cancels only the sessions it started, and theirs. Others fail as a
-  tool error saying so.
+  `sessions/get` and `SessionState` give as `startedBy`. Turns a session's agent begins in
+  another session, delegated or not, have the origin `{"session": {"sessionId": <the calling
+  session>}}`.
+- **Reach.** An agent reads and acts on any session on its Host, delegated or not: it lists,
+  reads, prompts, steers and cancels any of them (ADR 0023, which replaced ADR 0020's rule that
+  it act only on the sessions it started).
 - **The policy ceiling.** A delegated session approves only tool kinds the starting session's
   policy approves too, and rejects what isn't approved if either policy rejects it. The Host
   narrows a request for more, and the tool's answer says what policy the session got. A session
   started without `approve` or `otherwise` gets the starting session's policy. An open delegated
   session keeps its policy when prompted again, as `session/run` keeps an open session's.
-- **Pending requests stay with people.** A delegated session's permission requests and
-  elicitations are pending requests like any other, which its attached clients answer, or its
-  policy. When one appears during a turn the starting session's agent began, the Host tells the
-  starting session, which can tell the person; the calling agent can't answer it.
-- **Following.** When a turn the starting session's agent began ends, the Host tells the starting
+- **Pending requests stay with people.** A session's permission requests and elicitations are
+  pending requests like any other, which its attached clients answer, or its policy. When one
+  appears during a turn another session's agent began, the Host reports it to that session,
+  which can tell the person; the calling agent can't answer it.
+- **Reports.** When a turn another session's agent began ends, the Host reports it to that
   session: how it ended and the start of the agent's last message, as a message with the origin
-  `{"session": {"sessionId": <the delegated session>}}`. It steers the message into the starting
-  session's running turn, or else adds it to that session's queue, which starts a turn if none
-  runs. A starting session that isn't open is taken up again for it, under its own policy, as
-  `session/run` takes a session up. Only turns whose origin names a session that started this
-  one, or started the one that did, are followed: the turn such a message starts in the starting
-  session tells the delegated session nothing back. A starting session that can't be taken up, such as one
-  deleted, isn't told, and the delegated session's journal says so in a `notice`.
+  `{"session": {"sessionId": <the session reported on>, "report": true}}`. It steers the report
+  into the calling session's running turn, or else adds it to that session's queue, which starts
+  a turn if none runs. A calling session that isn't open is taken up again for it, under its own
+  policy, as `session/run` takes a session up. A report's turn reports nothing back, so two
+  sessions never trade reports. A calling session that can't be taken up, such as one deleted,
+  isn't told, and the reported session's journal says so in a `notice`. Turns a client sends
+  are reported to nobody, even when an agent's shell ran the client.
 - **Limits.** A session may start sessions only `depth` levels below a session a person started
-  (1 by default: a delegated session can't start one), and may have at most `running`
+  (1 by default: a delegated session can't start one), and may have at most `running` of its
   delegated sessions running a turn or waiting on a request at once (3 by default), from the
-  configuration's `[delegation]`. A tool call past either fails as a tool error saying so.
+  configuration's `[delegation]`. Neither limits prompting sessions it didn't start. A tool call
+  past either fails as a tool error saying so.
 
 ## Files
 

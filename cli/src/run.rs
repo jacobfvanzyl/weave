@@ -255,7 +255,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
 }
 
 /// The prompt from the arguments, or stdin when there are none or just `-`.
-fn prompt_text(words: &[String]) -> anyhow::Result<String> {
+pub(crate) fn prompt_text(words: &[String]) -> anyhow::Result<String> {
     let from_stdin = words.is_empty() || words == ["-"];
     let text = if from_stdin {
         if std::io::stdin().is_terminal() {
@@ -276,7 +276,7 @@ fn prompt_text(words: &[String]) -> anyhow::Result<String> {
     Ok(text)
 }
 
-fn describe_stop(reason: StopReason) -> &'static str {
+pub(crate) fn describe_stop(reason: StopReason) -> &'static str {
     match reason {
         StopReason::Cancelled => "cancelled",
         StopReason::MaxTokens => "the agent reached its token limit",

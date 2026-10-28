@@ -60,7 +60,7 @@ const clientNames: Record<string, string> = { 'weave-tui': 'the TUI', 'weave-app
 
 /**
  * Where another client's prompt came from: its device, its client, a headless run, or another
- * session: the session whose agent started this one, or one this session's agent started.
+ * session: one whose agent prompted this one, or one the Host reports on.
  */
 export function originLabel(origin: TurnOrigin): string {
   if ('run' in origin) return 'a headless run';

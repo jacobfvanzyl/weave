@@ -958,6 +958,7 @@ fn delegated_sessions() {
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
+                    report: false,
                 },
                 started_at: 1_760_180_000_000,
                 running: false,
@@ -975,6 +976,7 @@ fn delegated_sessions() {
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
+                    report: false,
                 },
                 started_at: 1_760_180_000_000,
                 running: true,
@@ -1114,6 +1116,25 @@ fn events() {
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
+                    report: false,
+                },
+                queued_id: None,
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_turn_started_by_a_report",
+        message(&event(
+            47,
+            SessionEvent::TurnStarted {
+                session_id: "s-1".into(),
+                prompt: vec![text(
+                    "[weave] Thread s-2 (codex) finished its turn. Its agent's last message:\n\n\
+                     Ported 14 tests; all pass."
+                )],
+                origin: TurnOrigin::Session {
+                    session_id: "s-2".into(),
+                    report: true,
                 },
                 queued_id: None,
             },

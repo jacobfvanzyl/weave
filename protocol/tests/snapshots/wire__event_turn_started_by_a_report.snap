@@ -1,0 +1,28 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&event(47, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt:\n    vec![text(\"[weave] Thread s-2 (codex) finished its turn. Its agent's last message:\\n\\n\\\n                     Ported 14 tests; all pass.\")],\n    origin: TurnOrigin::Session { session_id: \"s-2\".into(), report: true, },\n    queued_id: None,\n},))"
+---
+{
+  "method": "session/event",
+  "params": {
+    "sessionId": "s-1",
+    "seq": 47,
+    "at": 1760180001234,
+    "event": {
+      "kind": "turnStarted",
+      "sessionId": "s-1",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "[weave] Thread s-2 (codex) finished its turn. Its agent's last message:\n\nPorted 14 tests; all pass."
+        }
+      ],
+      "origin": {
+        "session": {
+          "sessionId": "s-2",
+          "report": true
+        }
+      }
+    }
+  }
+}

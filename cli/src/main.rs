@@ -69,7 +69,8 @@ struct Cli {
 enum Command {
     /// Run one prompt in a headless thread in the weave Host, printing the reply.
     Run(run::RunArgs),
-    /// Threads open in the weave Host: list them, stop a turn, or close one.
+    /// Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close
+    /// one.
     #[command(name = "threads", alias = "sessions")]
     Sessions(sessions::SessionsArgs),
     /// Git worktrees: what worktrunk asks the weave Host before it removes one.

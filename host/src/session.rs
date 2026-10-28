@@ -935,8 +935,13 @@ impl Actor {
             Some(TurnOrigin::Run {}) => Err(
                 "This turn came from a headless run, so no person's device is attached.".to_owned(),
             ),
-            Some(TurnOrigin::Session { .. }) => Err(
+            Some(TurnOrigin::Session { report: false, .. }) => Err(
                 "This turn came from another thread's agent, so no person's device is attached."
+                    .to_owned(),
+            ),
+            Some(TurnOrigin::Session { report: true, .. }) => Err(
+                "This turn is the Host's report on another thread, so no person's device is \
+                 attached."
                     .to_owned(),
             ),
             Some(TurnOrigin::Client { id, .. }) => self
@@ -1521,16 +1526,14 @@ impl Actor {
     }
 
     /// The session whose agent began the session's running turn through a Host tool, which
-    /// hears how it goes: one that started this session, or started the one that did. A turn
-    /// from the Host's message about another session, a delegated one of this session's, comes
-    /// from a session that didn't start this one, and tells it nothing back.
+    /// hears how it goes (ADR 0023). A report's turn tells nobody back, so two sessions never
+    /// trade reports.
     fn caller(&self) -> Option<SessionId> {
         match &self.turns.get(&self.root)?.origin {
-            TurnOrigin::Session { session_id }
-                if host_tools::reaches(&self.shared, session_id, &self.root).is_ok() =>
-            {
-                Some(session_id.clone())
-            }
+            TurnOrigin::Session {
+                session_id,
+                report: false,
+            } => Some(session_id.clone()),
             _ => None,
         }
     }

@@ -1,6 +1,5 @@
 ---
 source: protocol/tests/wire.rs
-assertion_line: 1460
 expression: round_trip(&host_catalog())
 ---
 [
@@ -50,7 +49,7 @@ expression: round_trip(&host_catalog())
   {
     "name": "read_session",
     "title": "Read a thread",
-    "description": "Read one thread of the weave Host: how it lists, and its latest turn: the prompt, whether it is still running, how it ended, and the agent's last message in it. Use it to read a delegated thread's full answer, or a thread a person started. Answers with the Host's sessions/get result as JSON.",
+    "description": "Read one thread of the weave Host: how it lists, and its latest turn: the prompt, whether it is still running, how it ended, and the agent's last message in it. Use it to read the full answer of a thread you prompted, or any other thread. Answers with the Host's sessions/get result as JSON.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -68,7 +67,7 @@ expression: round_trip(&host_catalog())
   {
     "name": "start_session",
     "title": "Start a thread with another agent",
-    "description": "Hand work to another agent: start a thread with it in the weave Host and send it a prompt. It works on its own, in a thread people can watch and answer from their weave clients. This answers once its turn has started; when the turn ends, you'll get a message saying how it ended, with the start of the agent's answer, so don't wait or poll for it. It can approve only the tool kinds your own thread approves. Give sessionId to prompt a thread you started before instead of a new one.",
+    "description": "Hand work to another agent: start a thread with it in the weave Host and send it a prompt. It works on its own, in a thread people can watch and answer from their weave clients. This answers once its turn has started; when the turn ends, you'll get a message saying how it ended, with the start of the agent's answer, so don't wait or poll for it. It can approve only the tool kinds your own thread approves. Give sessionId to prompt an existing thread instead of a new one.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -86,7 +85,7 @@ expression: round_trip(&host_catalog())
         },
         "sessionId": {
           "type": "string",
-          "description": "A thread you started before, to prompt instead of starting one."
+          "description": "An existing thread, to prompt instead of starting one."
         },
         "approve": {
           "type": "array",
@@ -131,8 +130,8 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "prompt_session",
-    "title": "Prompt a thread you started",
-    "description": "Send a prompt to a thread you started with start_session: it starts a turn at once if none runs, or waits in the thread's queue for the running one to end. When the turn ends, you'll get a message saying how it ended.",
+    "title": "Prompt a thread",
+    "description": "Send a prompt to any open thread of the weave Host, one you started or another: it starts a turn at once if none runs, or waits in the thread's queue for the running one to end. When the turn ends, you'll get a message saying how it ended.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -160,8 +159,8 @@ expression: round_trip(&host_catalog())
   },
   {
     "name": "steer_session",
-    "title": "Steer a thread you started",
-    "description": "Send a message into the running turn of a thread you started, to correct or add to what it's doing, without starting another turn. If no turn runs, nothing is sent: use prompt_session instead.",
+    "title": "Steer a thread",
+    "description": "Send a message into the running turn of any thread of the weave Host, to correct or add to what it's doing, without starting another turn. If no turn runs, nothing is sent: use prompt_session instead.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -184,7 +183,7 @@ expression: round_trip(&host_catalog())
   {
     "name": "cancel_session_turn",
     "title": "Cancel a thread's turn",
-    "description": "Stop the running turn of a thread you started. The thread stays, and can be prompted again.",
+    "description": "Stop the running turn of any thread of the weave Host. The thread stays, and can be prompted again.",
     "inputSchema": {
       "type": "object",
       "properties": {

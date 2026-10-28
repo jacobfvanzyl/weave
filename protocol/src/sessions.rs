@@ -111,11 +111,16 @@ pub enum TurnOrigin {
     },
     /// A headless run.
     Run {},
-    /// Another session: the delegated session's starting session, whose agent began the turn
-    /// through a Host tool, or the delegated session the Host's message to its starting session
-    /// is about.
+    /// Another session: one whose agent began the turn through a Host tool, or, in a report,
+    /// the session the Host reports on (ADR 0023).
     #[serde(rename_all = "camelCase")]
-    Session { session_id: SessionId },
+    Session {
+        session_id: SessionId,
+        /// The Host's report on that session, of how a turn this session's agent began there
+        /// ended or that it waits on a person. Nobody hears how a report's turn ends.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        report: bool,
+    },
 }
 
 /// A turn running now.

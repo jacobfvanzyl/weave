@@ -3,12 +3,12 @@
 //! by the same code as the client request; its answer is the method's, as JSON text, or a tool
 //! error saying why the method failed.
 //!
-//! Some start and follow delegated sessions: sessions of their own that the calling session
-//! starts. An agent reads any session, but acts only on the sessions it started and theirs; a
-//! delegated session approves nothing the calling session's policy doesn't; `[delegation]` caps
-//! how deep sessions start sessions and how many of one session's run at once. When a turn the
-//! calling session's agent began ends, or waits on a person, the Host tells the calling session
-//! ([`tell`]): into its running turn, or else through its queue.
+//! An agent reads and acts on any session on its Host (ADR 0023). Some tools start delegated
+//! sessions: sessions of their own that the calling session starts, which approve nothing the
+//! calling session's policy doesn't; `[delegation]` caps how deep sessions start sessions and
+//! how many of one session's run at once. When a turn the calling session's agent began ends,
+//! or waits on a person, the Host reports it to the calling session ([`tell`]): into its running
+//! turn, or else through its queue.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,7 +76,7 @@ pub(crate) async fn call(
         START_SESSION => start(shared, caller, arguments).await,
         PROMPT_SESSION => prompt(shared, caller, arguments).await,
         STEER_SESSION => steer(shared, caller, arguments).await,
-        CANCEL_SESSION_TURN => cancel(shared, caller, arguments),
+        CANCEL_SESSION_TURN => cancel(shared, arguments),
         _ => Err(format!("The Host doesn't answer {tool}.")),
     };
     match answered {
@@ -123,8 +123,8 @@ struct Started {
     policy: PermissionPolicy,
 }
 
-/// `start_session`: `session/run` for a delegated session of the caller's, a new one or one it
-/// started before.
+/// `start_session`: `session/run`, for a new delegated session of the caller's or for any
+/// session again.
 async fn start(
     shared: &Arc<Shared>,
     caller: &SessionHandle,
@@ -137,7 +137,11 @@ async fn start(
         .map_err(|error| why(&error))?
         .delegation;
     match &arguments.session_id {
-        Some(target) => reaches(shared, &me.session_id, target)?,
+        Some(target) => {
+            if one_more(shared, &me.session_id, target) {
+                room(shared, &me.session_id, limits.running())?;
+            }
+        }
         None => {
             let depth = depth(shared, &me.session_id);
             if depth >= limits.depth() {
@@ -148,14 +152,8 @@ async fn start(
                     limits.depth()
                 ));
             }
+            room(shared, &me.session_id, limits.running())?;
         }
-    }
-    let busy = arguments
-        .session_id
-        .as_ref()
-        .is_some_and(|target| is_busy(shared, target));
-    if !busy {
-        room(shared, &me.session_id, limits.running())?;
     }
     let asked = PermissionPolicy {
         approve: arguments
@@ -177,6 +175,7 @@ async fn start(
     };
     let origin = TurnOrigin::Session {
         session_id: me.session_id.clone(),
+        report: false,
     };
     let (session_id, _) =
         client::run_as(shared, request, None, origin, Some(me.session_id.clone()))
@@ -198,7 +197,7 @@ struct PromptArguments {
     key: Option<String>,
 }
 
-/// `prompt_session`: `queue/add` for a session the caller started.
+/// `prompt_session`: `queue/add`.
 async fn prompt(
     shared: &Arc<Shared>,
     caller: &SessionHandle,
@@ -206,8 +205,7 @@ async fn prompt(
 ) -> Result<String, String> {
     let arguments: PromptArguments = parse(arguments)?;
     let me = caller.summary().session_id;
-    reaches(shared, &me, &arguments.session_id)?;
-    if !is_busy(shared, &arguments.session_id) {
+    if one_more(shared, &me, &arguments.session_id) {
         let limits = shared
             .load_config()
             .map_err(|error| why(&error))?
@@ -219,7 +217,11 @@ async fn prompt(
         prompt: vec![ContentBlock::from(arguments.prompt)],
         key: arguments.key,
     };
-    answer(client::add_queued(shared, request, TurnOrigin::Session { session_id: me }).await)
+    let origin = TurnOrigin::Session {
+        session_id: me,
+        report: false,
+    };
+    answer(client::add_queued(shared, request, origin).await)
 }
 
 #[derive(Deserialize)]
@@ -229,30 +231,27 @@ struct SteerArguments {
     prompt: String,
 }
 
-/// `steer_session`: `turn/steer` for a session the caller started.
+/// `steer_session`: `turn/steer`.
 async fn steer(
     shared: &Arc<Shared>,
     caller: &SessionHandle,
     arguments: &Map<String, Value>,
 ) -> Result<String, String> {
     let arguments: SteerArguments = parse(arguments)?;
-    let me = caller.summary().session_id;
-    reaches(shared, &me, &arguments.session_id)?;
     let request = SteerTurnRequest {
         session_id: arguments.session_id,
         prompt: vec![ContentBlock::from(arguments.prompt)],
     };
-    answer(client::steer_turn(shared, request, TurnOrigin::Session { session_id: me }).await)
+    let origin = TurnOrigin::Session {
+        session_id: caller.summary().session_id,
+        report: false,
+    };
+    answer(client::steer_turn(shared, request, origin).await)
 }
 
-/// `cancel_session_turn`: `turn/cancel` for a session the caller started.
-fn cancel(
-    shared: &Arc<Shared>,
-    caller: &SessionHandle,
-    arguments: &Map<String, Value>,
-) -> Result<String, String> {
+/// `cancel_session_turn`: `turn/cancel`.
+fn cancel(shared: &Arc<Shared>, arguments: &Map<String, Value>) -> Result<String, String> {
     let request: CancelTurnRequest = parse(arguments)?;
-    reaches(shared, &caller.summary().session_id, &request.session_id)?;
     answer(client::cancel_turn(shared, request))
 }
 
@@ -264,26 +263,6 @@ fn starter(shared: &Shared, session_id: &SessionId) -> Option<SessionId> {
         Some(session) => session.summary().started_by,
         None => registry.known.get(&root)?.started_by.clone(),
     }
-}
-
-/// Whether `caller` started `target`, or a session it started did, and so on down.
-pub(crate) fn reaches(
-    shared: &Shared,
-    caller: &SessionId,
-    target: &SessionId,
-) -> Result<(), String> {
-    let mut current = target.clone();
-    for _ in 0..MAX_CHAIN {
-        match starter(shared, &current) {
-            Some(parent) if parent == *caller => return Ok(()),
-            Some(parent) => current = parent,
-            None => break,
-        }
-    }
-    Err(format!(
-        "Thread {target} isn't one this thread started, so it can only be read \
-         (read_session), not prompted, steered or cancelled."
-    ))
 }
 
 /// How many levels below a session a person started `session_id` is.
@@ -308,6 +287,12 @@ fn is_busy(shared: &Shared, session_id: &SessionId) -> bool {
         .is_some_and(|session| session.summary().activity != Activity::Idle)
 }
 
+/// Whether a turn in `target` would have one more of `caller`'s delegated sessions running than
+/// now: `target` is one `caller` started, and it is idle.
+fn one_more(shared: &Shared, caller: &SessionId, target: &SessionId) -> bool {
+    starter(shared, target).as_ref() == Some(caller) && !is_busy(shared, target)
+}
+
 /// Whether `caller` may have one more delegated session running than now.
 fn room(shared: &Shared, caller: &SessionId, running: u32) -> Result<(), String> {
     let busy = shared
@@ -330,7 +315,7 @@ fn room(shared: &Shared, caller: &SessionId, running: u32) -> Result<(), String>
     ))
 }
 
-/// What a person must answer in a delegated session.
+/// What a person must answer in a session another session's agent began a turn in.
 pub(crate) enum Asks {
     /// Permission for a tool call, by its title when it has one.
     Permission(Option<String>),
@@ -338,7 +323,7 @@ pub(crate) enum Asks {
     Elicitation(String),
 }
 
-/// A session as its starting session is told of it: its title, agent and id.
+/// A session as a report names it: its title, agent and id.
 fn name(listing: &SessionListing) -> String {
     let id = &listing.info.session_id;
     match &listing.info.title {
@@ -347,8 +332,8 @@ fn name(listing: &SessionListing) -> String {
     }
 }
 
-/// What a delegated session's starting session is told when a turn its agent began ends: how,
-/// and the start of the agent's last message.
+/// The report on a session to the session whose agent began a turn there, when the turn ends:
+/// how, and the start of the agent's last message.
 pub(crate) fn ended_text(listing: &SessionListing, latest: Option<&LatestTurn>) -> String {
     let how = match latest {
         Some(LatestTurn {
@@ -381,8 +366,8 @@ pub(crate) fn ended_text(listing: &SessionListing, latest: Option<&LatestTurn>) 
     text
 }
 
-/// What a delegated session's starting session is told when a person must answer something in a
-/// turn its agent began.
+/// The report on a session to the session whose agent began a turn there, when a person must
+/// answer something in it.
 pub(crate) fn waiting_text(listing: &SessionListing, asks: &Asks) -> String {
     let what = match asks {
         Asks::Permission(Some(title)) => format!("asks permission for “{title}”"),
@@ -396,13 +381,14 @@ pub(crate) fn waiting_text(listing: &SessionListing, asks: &Asks) -> String {
     )
 }
 
-/// Tell the session `caller` something about `about`, a delegated session of its: into its
-/// running turn if its agent takes steers, otherwise through its queue, which starts its next
-/// turn. A caller that isn't open is taken up again for it. One that can't be is left untold,
-/// and `about`'s journal says so.
+/// Report on `about` to the session `caller`, whose agent began a turn there: into its running
+/// turn if its agent takes steers, otherwise through its queue, which starts its next turn. A
+/// caller that isn't open is taken up again for it. One that can't be is left untold, and
+/// `about`'s journal says so.
 pub(crate) async fn tell(shared: Arc<Shared>, caller: SessionId, about: SessionId, text: String) {
     let origin = TurnOrigin::Session {
         session_id: about.clone(),
+        report: true,
     };
     let prompt = vec![ContentBlock::from(text)];
     let open = match open(&shared, &caller).await {
@@ -432,12 +418,12 @@ pub(crate) async fn tell(shared: Arc<Shared>, caller: SessionId, about: SessionI
         Err(why) => Err(why),
     };
     if let Err(why) = open {
-        tracing::warn!(%caller, %about, %why, "couldn't tell a session about the one it started");
+        tracing::warn!(%caller, %about, %why, "couldn't report on a session to its caller");
         if let Some(session) = shared.registry().live(&about) {
             let _ = session.send(Command::Notice {
                 text: format!(
-                    "The thread that started this one, {caller}, couldn't be told how its turn \
-                     went: {why}"
+                    "Thread {caller}, whose agent began this turn, couldn't be told how it went: \
+                     {why}"
                 ),
             });
         }

@@ -80,8 +80,12 @@ A thread an agent starts under another one. It shares its parent's journal and a
 _Avoid_: subthread
 
 **Delegated thread**:
-A thread of its own, with its own journal and agent, that another thread's agent started through the Host. It records the thread that started it, which hears how its turns end.
+A thread of its own, with its own journal and agent, that another thread's agent started through the Host. It records the thread that started it.
 _Avoid_: child thread, spawned thread, subagent
+
+**Report**:
+The Host's message to a thread about a turn that thread's agent began in another thread: how the turn ended, or that it waits on a person.
+_Avoid_: notification, callback
 
 **Attach**:
 A client's relationship with an open thread: it receives the thread's events and pending requests, and keeps the thread open while it lasts.

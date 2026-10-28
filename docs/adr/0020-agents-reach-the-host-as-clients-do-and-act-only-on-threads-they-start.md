@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; which threads an agent acts on is superseded by ADR 0023
 date: 2026-10-23
 ---
 

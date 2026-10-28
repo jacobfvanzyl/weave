@@ -2546,6 +2546,10 @@ expression: schema()
               "properties": {
                 "sessionId": {
                   "$ref": "#/$defs/SessionId"
+                },
+                "report": {
+                  "description": "The Host's report on that session, of how a turn this session's agent began there\nended or that it waits on a person. Nobody hears how a report's turn ends.",
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -2557,7 +2561,7 @@ expression: schema()
             "session"
           ],
           "additionalProperties": false,
-          "description": "Another session: the delegated session's starting session, whose agent began the turn\nthrough a Host tool, or the delegated session the Host's message to its starting session\nis about."
+          "description": "Another session: one whose agent began the turn through a Host tool, or, in a report,\nthe session the Host reports on (ADR 0023)."
         }
       ],
       "description": "Who started a turn."
