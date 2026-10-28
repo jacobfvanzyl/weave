@@ -40,6 +40,22 @@ impl Launch {
     pub(crate) fn new_process() -> String {
         format!("a-{}", crate::devices::random_id(8))
     }
+
+    /// What the agent starts with over the Host's own environment: the Host's agent
+    /// environment, `PWD`, the agent's own settings, and its process's name. Its Host-run
+    /// terminals start with it too.
+    pub fn agent_environment(&self) -> BTreeMap<String, String> {
+        let mut env = self.environment.clone();
+        env.insert("PWD".to_owned(), self.cwd.display().to_string());
+        env.extend(
+            self.spec
+                .env
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
+        env.insert(AGENT_PROCESS_VARIABLE.to_owned(), self.process.clone());
+        env
+    }
 }
 
 /// Starts an agent and connects to it, uninitialized, tracing its protocol into whatever
@@ -159,16 +175,7 @@ impl Instance {
 /// command's own. The SDK can't set a child's directory, so `sh` changes to it and then
 /// becomes the agent.
 fn in_directory(launch: &Launch) -> AgentSpec {
-    let mut env = launch.environment.clone();
-    env.insert("PWD".to_owned(), launch.cwd.display().to_string());
-    env.extend(
-        launch
-            .spec
-            .env
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone())),
-    );
-    env.insert(AGENT_PROCESS_VARIABLE.to_owned(), launch.process.clone());
+    let env = launch.agent_environment();
     if cfg!(not(unix)) {
         return AgentSpec {
             env,

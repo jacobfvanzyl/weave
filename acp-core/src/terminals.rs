@@ -1,9 +1,11 @@
-//! The `terminal/*` methods: commands the agent runs in the client's environment.
+//! The `terminal/*` methods: commands the agent runs in the client's environment, the one the
+//! agent itself was started in, so they find the same tools its own commands do.
 //!
 //! Each command runs in its own process group with stdout and stderr merged into one
 //! byte-limited buffer. Output and exit are also reported as [`AgentEvent`]s so a UI can show
 //! them live, and keep showing them after the agent releases the terminal.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -49,6 +51,9 @@ pub(crate) struct Terminals {
     events: UnboundedSender<AgentEvent>,
     /// Working directory of each session, the default for its commands.
     session_dirs: Arc<Mutex<HashMap<SessionId, PathBuf>>>,
+    /// What the agent was started with over this process's environment, which commands
+    /// start with too.
+    environment: BTreeMap<String, String>,
     live: Mutex<HashMap<TerminalId, Arc<TerminalProcess>>>,
 }
 
@@ -65,10 +70,12 @@ impl Terminals {
     pub(crate) fn new(
         events: UnboundedSender<AgentEvent>,
         session_dirs: Arc<Mutex<HashMap<SessionId, PathBuf>>>,
+        environment: BTreeMap<String, String>,
     ) -> Self {
         Self {
             events,
             session_dirs,
+            environment,
             live: Mutex::new(HashMap::new()),
         }
     }
@@ -86,6 +93,11 @@ impl Terminals {
             None => lock(&self.session_dirs).get(&request.session_id).cloned(),
         };
         let mut command = build_command(&request.command, &request.args);
+        // The agent's environment, with `PWD` where the command runs, then the request's.
+        command.envs(&self.environment);
+        if let Some(cwd) = &cwd {
+            command.current_dir(cwd).env("PWD", cwd);
+        }
         command
             .envs(
                 request
@@ -97,9 +109,6 @@ impl Terminals {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(false);
-        if let Some(cwd) = &cwd {
-            command.current_dir(cwd);
-        }
         #[cfg(unix)]
         command.process_group(0);
         let mut child = command.spawn().map_err(|error| {
@@ -412,7 +421,52 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    use agent_client_protocol::schema::v1::EnvVariable;
+
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn commands_start_in_the_agents_environment_with_the_requests_over_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session = SessionId::new("s1");
+        let session_dirs = Arc::new(Mutex::new(HashMap::from([(
+            session.clone(),
+            dir.path().to_path_buf(),
+        )])));
+        let (events, _events) = tokio::sync::mpsc::unbounded_channel();
+        let environment = BTreeMap::from([
+            ("WEAVE_TEST_AGENT".to_owned(), "agent".to_owned()),
+            ("WEAVE_TEST_BOTH".to_owned(), "agent".to_owned()),
+            ("PWD".to_owned(), "/where/the/agent/started".to_owned()),
+        ]);
+        let terminals = Terminals::new(events, session_dirs, environment);
+        let created = terminals
+            .create(
+                CreateTerminalRequest::new(
+                    session.clone(),
+                    "echo \"$WEAVE_TEST_AGENT $WEAVE_TEST_BOTH $PWD\"",
+                )
+                .env(vec![EnvVariable::new("WEAVE_TEST_BOTH", "request")]),
+            )
+            .expect("created");
+        let terminal_id = created.terminal_id;
+        terminals
+            .wait_for_exit(&WaitForTerminalExitRequest::new(
+                session.clone(),
+                terminal_id.clone(),
+            ))
+            .expect("a terminal")
+            .await
+            .expect("exited");
+        let output = terminals
+            .output(&TerminalOutputRequest::new(session, terminal_id))
+            .expect("output");
+        assert_eq!(
+            output.output,
+            format!("agent request {}\n", dir.path().display())
+        );
+    }
 
     #[test]
     fn truncation_keeps_the_newest_bytes_at_a_character_boundary() {

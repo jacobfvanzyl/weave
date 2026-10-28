@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -252,7 +253,8 @@ impl AgentConnection {
             }
             traces.record(direction, line);
         });
-        Self::connect(agent, options).await
+        // Its terminals start in the environment it does.
+        Self::connect_in(agent, options, spec.env.clone()).await
     }
 
     /// Connect over any transport, such as an in-process agent in tests.
@@ -260,9 +262,23 @@ impl AgentConnection {
         transport: impl ConnectTo<Client> + 'static,
         options: ClientOptions,
     ) -> Result<(Self, mpsc::UnboundedReceiver<AgentEvent>), SpawnError> {
+        Self::connect_in(transport, options, BTreeMap::new()).await
+    }
+
+    /// [`Self::connect`], starting the commands the agent runs in client terminals with
+    /// `environment` over this process's own: what the agent itself was started with.
+    pub async fn connect_in(
+        transport: impl ConnectTo<Client> + 'static,
+        options: ClientOptions,
+        environment: BTreeMap<String, String>,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<AgentEvent>), SpawnError> {
         let (events, mut event_rx) = mpsc::unbounded_channel();
         let session_dirs = Arc::new(Mutex::new(HashMap::new()));
-        let terminals = Arc::new(Terminals::new(events.clone(), Arc::clone(&session_dirs)));
+        let terminals = Arc::new(Terminals::new(
+            events.clone(),
+            Arc::clone(&session_dirs),
+            environment,
+        ));
 
         let notifications = events.clone();
         let earlier_drafts = events.clone();

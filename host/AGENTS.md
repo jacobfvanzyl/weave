@@ -60,7 +60,8 @@ pre-remove`. The Host never removes a worktree on its own. Tests run git with
 clients as `terminalOutput`/`terminalExit` events; the Host strips agents' `_meta` terminal
 output after turning it into the same events, so each chunk arrives once. The Host resolves
 agents by id (`../agents`) and starts them in the session's directory with its own
-environment over the login shell's (`instance.rs`); an agent started for no session (to
+environment over the login shell's (`instance.rs`), which their Host-run terminals start in too
+(`Launch::agent_environment`, handed to `acp-core`); an agent started for no session (to
 answer `agents/get`, sign-in or listing) is a spare the next session for that agent and
 directory takes, stopped after a minute unused. New sessions start in the agent's configured
 `mode` (`modes.rs`). When a session of a preset or registry agent opens, `updates.rs` looks for

@@ -216,6 +216,11 @@ written to disk or sent to a client. Over all three, each agent process gets
 `WEAVE_AGENT_PROCESS`, a name of its own, so a `weave` it runs can say which turn is its own
 (see `host/drain`).
 
+Commands an agent runs in Host-run terminals (`terminal/create`) start in the agent's
+environment too, `WEAVE_AGENT_PROCESS` included, with `PWD` set to the terminal's directory
+and the request's `env` over it, as ACP has it. They find the tools the agent's own commands
+find, which a Host under launchd or systemd wouldn't give them on its own (WVE-141).
+
 ### Methods
 
 **`agents/list`** `{includeRegistry?: bool, refresh?: bool}` →

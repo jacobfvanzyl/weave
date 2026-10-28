@@ -134,17 +134,19 @@ fn fake_agents_tuned(
     state: PathBuf,
     tune: impl Fn(&mut FakeAgentConfig) + Send + Sync + 'static,
 ) -> Launcher {
-    Arc::new(move |_launch: &Launch, options: ClientOptions, _traces| {
+    Arc::new(move |launch: &Launch, options: ClientOptions, _traces| {
         let mut config = FakeAgentConfig {
             state_path: Some(state.clone()),
             stdio_mcp: in_process_bridge(),
             ..FakeAgentConfig::default()
         };
         tune(&mut config);
+        // In-process, but with the environment a process would start with, for its terminals.
+        let environment = launch.agent_environment();
         Box::pin(async move {
             let (client, agent) = Channel::duplex();
             tokio::spawn(weave_fake_agent::serve_with(agent, config));
-            AgentConnection::connect(client, options)
+            AgentConnection::connect_in(client, options, environment)
                 .await
                 .map_err(|error| Error::internal_error().data(error.to_string()))
         })
@@ -1567,6 +1569,43 @@ async fn command_output_reaches_clients_and_is_replayed() {
     let mut seen = Seen::default();
     late.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.terminal, "from-the-host\n");
+}
+
+/// A command in a Host-run terminal finds what the agent's own would: a tool on the login
+/// shell's `PATH` that the Host's own lacks, as under launchd or systemd (WVE-141).
+#[cfg(unix)]
+#[tokio::test]
+async fn host_run_terminals_start_in_the_agents_environment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = World::new();
+    let bin = world.dir.path().join("login-bin");
+    std::fs::create_dir(&bin).expect("bin");
+    let tool = bin.join("weave-login-tool");
+    std::fs::write(&tool, "#!/bin/sh\necho \"found by $WEAVE_AGENT_PROCESS\"\n").expect("tool");
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    let mut config = world.config(
+        false,
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        false,
+    );
+    config.environment.vars.insert(
+        "PATH".to_owned(),
+        format!("{}:/usr/bin:/bin", bin.display()),
+    );
+    let daemon = Daemon::new(config);
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client.prompt(&session_id, "run weave-login-tool").await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    // Its agent's process name too, so a `weave daemon restart` there knows its own turn.
+    assert!(
+        seen.terminal.starts_with("found by a-"),
+        "{:?}",
+        seen.terminal
+    );
 }
 
 #[tokio::test]

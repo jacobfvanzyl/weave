@@ -4,7 +4,10 @@ ACP for the Host (`weave-acp-core`): agent launch, the ACP connection, client-si
 the protocol trace. No UI. Read the root `AGENTS.md` first, its SDK rules above all.
 
 Keep protocol behavior in `acp-core`. Client services (`fs/*`, `terminal/*`) live there
-and are advertised per `ClientOptions`; never advertise one that isn't answered. Real
+and are advertised per `ClientOptions`; never advertise one that isn't answered. Commands in
+client terminals start in the environment the agent was started with (`AgentSpec::env`, or
+what `AgentConnection::connect_in` is given), with `PWD` at their directory and the request's
+`env` over it. Real
 adapters may not call them (Claude's runs its own tools), so the fake agent is what
 exercises them: integration tests connect it in-process over `Channel::duplex`, and its
 prompt scripts (`/run`, `/write`, `/read`, `/kill-after`, `/plan`, `/slow`, `/compact`,
