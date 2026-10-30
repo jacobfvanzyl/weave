@@ -61,6 +61,7 @@ impl TestHost {
         let listening = socket::listen(&paths).expect("listen");
         let mut config = DaemonConfig::in_process(Some(config_file));
         config.journals = Some(paths.journals());
+        config.devices = Some(paths.devices());
         config.traces = dir.path().join("traces");
         config.launcher = launcher;
         let daemon = Daemon::new(config);

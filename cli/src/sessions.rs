@@ -87,6 +87,10 @@ struct PromptArgs {
 
     /// The prompt; read from stdin when omitted or `-`.
     prompt: Vec<String>,
+
+    /// Print the Host's answer (`queue/add`, or `turn/steer`) as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 pub async fn command(args: SessionsArgs) -> anyhow::Result<()> {
@@ -150,7 +154,11 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 None => eprintln!("No turns yet."),
             }
         }
-        SessionsCommand::Prompt(PromptArgs { session_id, prompt }) => {
+        SessionsCommand::Prompt(PromptArgs {
+            session_id,
+            prompt,
+            json,
+        }) => {
             let prompt = prompt_text(&prompt)?;
             find(&open(connection).await?, &session_id)?;
             let queued = connection
@@ -161,13 +169,19 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 })
                 .await
                 .context("prompting the thread")?;
-            if queued.started {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&queued)?);
+            } else if queued.started {
                 eprintln!("Started a turn in {session_id}.");
             } else {
                 eprintln!("Queued for {session_id}, after the turn it's running.");
             }
         }
-        SessionsCommand::Steer(PromptArgs { session_id, prompt }) => {
+        SessionsCommand::Steer(PromptArgs {
+            session_id,
+            prompt,
+            json,
+        }) => {
             let prompt = prompt_text(&prompt)?;
             find(&open(connection).await?, &session_id)?;
             let steered = connection
@@ -177,7 +191,11 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 })
                 .await
                 .context("steering the thread")?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&steered)?);
+            }
             match steered.outcome {
+                SteerOutcome::Steered if json => {}
                 SteerOutcome::Steered => eprintln!("Steered the turn in {session_id}."),
                 SteerOutcome::NotRunning => bail!(
                     "no turn is running in {session_id}, so nothing was sent; `weave threads \

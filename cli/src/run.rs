@@ -2,8 +2,10 @@
 //!
 //! The session's permission requests are answered by its policy: the tool kinds given with
 //! `--approve` are allowed once, everything else is rejected, and elicitations are dismissed,
-//! since nobody is there to answer. The reply streams to stdout until the turn ends; with
-//! `--detach` the turn is left running in the Host, to attach to later with `weave --resume`.
+//! since nobody is there to answer. The reply streams to stdout until the turn ends, or with
+//! `--json` the session's journal events (`session/event`) as JSON lines; with `--detach` the
+//! turn is left running in the Host, to attach to later with `weave --resume`, and the thread's
+//! id, or with `--json` the Host's answer (`session/run`), is printed.
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -15,10 +17,12 @@ use anyhow::bail;
 use clap::Args;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::PromptResponse;
+use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_host_client::HostEvent;
 use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::events::SessionEventNotification;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::DetachSessionRequest;
@@ -62,7 +66,8 @@ pub struct RunArgs {
     #[arg(long)]
     detach: bool,
 
-    /// Print every ACP session update as a JSON line instead of the reply's text.
+    /// Print the thread's journal events (`session/event`) as JSON lines instead of the reply's
+    /// text; with --detach, the Host's answer (`session/run`).
     #[arg(long)]
     json: bool,
 
@@ -153,7 +158,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             return Err(error).context("starting the run");
         }
     };
-    let session_id = response.session_id;
+    let session_id = response.session_id.clone();
     for notice in response.state.iter().flat_map(|state| &state.notices) {
         eprintln!("weave: {notice}");
     }
@@ -166,7 +171,11 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     }
     if args.detach {
         connection.shutdown().await;
-        println!("{session_id}");
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&response)?);
+        } else {
+            println!("{session_id}");
+        }
         eprintln!(
             "Running in the weave Host; attach with: {}",
             reopen_command(&launch.agent, &session_id.to_string())
@@ -198,12 +207,8 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         };
         match event {
             Some(HostEvent::Event(notification)) if notification.session_id == session_id => {
+                out.event(&session_id, &notification)?;
                 match notification.event {
-                    SessionEvent::Update { notification }
-                        if notification.session_id == session_id =>
-                    {
-                        out.update(&notification.update)?;
-                    }
                     SessionEvent::TurnEnded {
                         session_id: ended,
                         response,
@@ -300,8 +305,8 @@ pub(crate) fn describe_stop(reason: StopReason) -> &'static str {
     }
 }
 
-/// The reply as it streams: text to stdout, tool calls noted on stderr; or every update as
-/// JSON.
+/// The reply as it streams: text to stdout, tool calls noted on stderr; or every journal event
+/// as a JSON line.
 struct Output {
     json: bool,
     /// Whether the last thing written to stdout ended its line.
@@ -316,12 +321,26 @@ impl Output {
         }
     }
 
-    fn update(&mut self, update: &SessionUpdate) -> anyhow::Result<()> {
-        let mut stdout = std::io::stdout().lock();
+    fn event(
+        &mut self,
+        session_id: &SessionId,
+        notification: &SessionEventNotification,
+    ) -> anyhow::Result<()> {
         if self.json {
-            writeln!(stdout, "{}", serde_json::to_string(update)?)?;
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "{}", serde_json::to_string(notification)?)?;
             return Ok(stdout.flush()?);
         }
+        match &notification.event {
+            SessionEvent::Update { notification } if notification.session_id == *session_id => {
+                self.update(&notification.update)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn update(&mut self, update: &SessionUpdate) -> anyhow::Result<()> {
+        let mut stdout = std::io::stdout().lock();
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if let ContentBlock::Text(text) = &chunk.content {

@@ -1384,6 +1384,11 @@ except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answe
   Host (never starting one) for `worktrees/release`, failing while a session in the worktree is
   busy, for worktrunk's `pre-remove` hooks; `weave worktrees install-hook` adds it to
   worktrunk's user config when asked.
+- With `--json`, what a command reports is the protocol's own types (WVE-108): `daemon status`
+  prints `host/status`'s answer, `threads list` its sessions, `threads read` `sessions/get`'s,
+  `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the paired devices, `run
+  --detach` `session/run`'s, and `run` its session's `session/event` notifications as JSON
+  lines.
 - The exit status says how a command went, for scripts (WVE-108): 0, it worked, or the turn ended
   (`end_turn`); 1, any other error; 2, bad arguments; 3, the Host couldn't be reached (not
   running, for a command that never starts one; didn't start; or went away); 4, the turn failed

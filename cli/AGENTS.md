@@ -39,6 +39,15 @@ stdout (`--json` for `sessions/get`), `prompt` is `queue/add`, and `steer` is `t
 failing when no turn runs. Their turns' origin is the CLI's, a client's, so no thread hears how
 they end, even when an agent ran it; an agent's Host tools do that.
 
+What a command reports, it prints with `--json` as the Host protocol's own types, so scripts
+follow the protocol's versioning rather than a shape kept for the CLI: `daemon status`
+(`host/status`'s `HostStatus`; nothing on stdout when the Host isn't running, and the service's
+notes on stderr), `threads list` (`SessionListing`s), `threads read` (`sessions/get`), `threads
+prompt` (`queue/add`, with the turn's journal position) and `steer` (`turn/steer`), `devices`
+(`Device`s), `run --detach` (`session/run`), and `run`, whose thread's journal events
+(`session/event`) stream as JSON lines. CLI tests check each parses as the type it claims
+(`tests/json.rs`).
+
 The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
 the turn ended (`end_turn`); 1, any other error; 2, arguments clap refused; 3, the weave Host
 couldn't be reached: not running, for a command that never starts one (`threads read`, `daemon

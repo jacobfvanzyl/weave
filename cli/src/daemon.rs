@@ -358,12 +358,19 @@ enum DaemonCommand {
     /// rebuilding weave.
     Restart(StopArgs),
     /// What the Host is running.
-    Status,
+    Status(StatusArgs),
     /// Run the Host as a service (launchd's on macOS, systemd's on Linux): kept running,
     /// with no idle exit.
     Install,
     /// Remove the service `install` wrote, stopping the Host.
     Uninstall,
+}
+
+#[derive(Args)]
+struct StatusArgs {
+    /// Print the Host's answer (`host/status`) as JSON; nothing when it isn't running.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -405,7 +412,9 @@ pub async fn command(args: DaemonArgs) -> anyhow::Result<ExitCode> {
             Ok(())
         }
         DaemonCommand::Restart(stop_args) => restart(&paths, stop_args.now).await,
-        DaemonCommand::Status => return status(&paths).await.map(ExitCode::from),
+        DaemonCommand::Status(StatusArgs { json }) => {
+            return status(&paths, json).await.map(ExitCode::from);
+        }
         DaemonCommand::Install => service::install(&paths).await,
         DaemonCommand::Uninstall => service::uninstall(&paths).await,
     };
@@ -644,8 +653,9 @@ pub(crate) async fn stop(paths: &DaemonPaths, now: bool) -> anyhow::Result<bool>
 }
 
 /// `weave daemon status`: [`Status::Unreachable`] when the Host isn't running, as `systemctl
-/// status` exits 3 for a unit that isn't active.
-async fn status(paths: &DaemonPaths) -> anyhow::Result<Status> {
+/// status` exits 3 for a unit that isn't active. With `json`, stdout has only the Host's answer,
+/// and what's said about the service goes to stderr.
+async fn status(paths: &DaemonPaths, json: bool) -> anyhow::Result<Status> {
     let installed = service::installed(paths);
     let notes = if installed {
         service::notes(paths)
@@ -658,24 +668,39 @@ async fn status(paths: &DaemonPaths) -> anyhow::Result<Status> {
         } else {
             String::new()
         };
-        println!(
+        let said = format!(
             "The weave Host isn't running ({}){service}.",
             paths.socket.display()
         );
-        print_notes(&notes);
+        if json {
+            eprintln!("{said}");
+        } else {
+            println!("{said}");
+        }
+        print_notes(&notes, json);
         return Ok(Status::Unreachable);
     };
     let status = connection.send(StatusRequest {}).await;
     connection.shutdown().await;
-    print!("{}", describe(&status?, paths, now_ms()));
-    print_notes(&notes);
+    let status = status?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        print!("{}", describe(&status, paths, now_ms()));
+    }
+    print_notes(&notes, json);
     Ok(Status::Success)
 }
 
-/// What the person may want to change about the service, each as a paragraph of its own.
-fn print_notes(notes: &[String]) {
+/// What the person may want to change about the service, each as a paragraph of its own: on
+/// stderr when stdout is JSON.
+fn print_notes(notes: &[String], json: bool) {
     for note in notes {
-        println!("\n{note}");
+        if json {
+            eprintln!("\n{note}");
+        } else {
+            println!("\n{note}");
+        }
     }
 }
 
