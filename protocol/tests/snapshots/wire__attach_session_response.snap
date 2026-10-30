@@ -76,7 +76,8 @@ expression: "round_trip(&AttachSessionResponse\n{ state: state(), replay: Replay
           "name": "weave-tui",
           "id": "c7"
         }
-      }
+      },
+      "turnId": "t-7"
     }
   ],
   "queue": [

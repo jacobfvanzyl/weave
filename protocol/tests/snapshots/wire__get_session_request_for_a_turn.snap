@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&GetSessionRequest\n{ session_id: \"s-2\".into(), turn_id: Some(\"q-3\".to_owned()), })"
+---
+{
+  "method": "sessions/get",
+  "params": {
+    "sessionId": "s-2",
+    "turnId": "q-3"
+  }
+}

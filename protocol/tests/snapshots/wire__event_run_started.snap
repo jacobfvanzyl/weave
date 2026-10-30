@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(46, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"fix the tests\")], origin:\n    TurnOrigin::Run {},\n},))"
+expression: "message(&event(46, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"fix the tests\")], origin:\n    TurnOrigin::Run {}, queued_id: None, turn_id: Some(\"t-1\".to_owned()),\n},))"
 ---
 {
   "method": "session/event",
@@ -19,7 +19,8 @@ expression: "message(&event(46, SessionEvent::TurnStarted\n{\n    session_id: \"
       ],
       "origin": {
         "run": {}
-      }
+      },
+      "turnId": "t-1"
     }
   }
 }

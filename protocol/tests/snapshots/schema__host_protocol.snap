@@ -266,7 +266,8 @@ expression: schema()
       "keyReused": -32076,
       "hostStopping": -32077,
       "unknownTerminal": -32078,
-      "terminalUnavailable": -32079
+      "terminalUnavailable": -32079,
+      "unknownTurn": -32080
     },
     "features": {
       "steer": "turn/steer",
@@ -281,7 +282,8 @@ expression: schema()
       "getSession": "sessions/get",
       "requestKeys": "requestKeys",
       "drain": "drain",
-      "terminals": "terminals"
+      "terminals": "terminals",
+      "turnIds": "turnIds"
     },
     "files": {
       "maxEntries": 2000
@@ -302,7 +304,8 @@ expression: schema()
       "startSession": "start_session",
       "promptSession": "prompt_session",
       "steerSession": "steer_session",
-      "cancelSessionTurn": "cancel_session_turn"
+      "cancelSessionTurn": "cancel_session_turn",
+      "listAgents": "list_agents"
     }
   },
   "$defs": {
@@ -1926,6 +1929,17 @@ expression: schema()
           ],
           "description": "Only the sessions in this repository's worktrees, given by any directory in it. Without\nan agent only (feature `worktrees`)."
         },
+        "activity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Activity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only the open sessions doing this. Without an agent only (feature `turnIds`)."
+        },
         "cursor": {
           "type": [
             "string",
@@ -1960,12 +1974,19 @@ expression: schema()
       "properties": {
         "sessionId": {
           "$ref": "#/$defs/SessionId"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "This turn rather than the latest, a queued one included; it fails with `unknown_turn`\nwhen the session's journal has no such turn (feature `turnIds`)."
         }
       },
       "required": [
         "sessionId"
       ],
-      "description": "`sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists\nit, with its latest turn, read without opening it or attaching."
+      "description": "`sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists\nit, with its latest turn, or the turn asked for, read without opening it or attaching."
     },
     "GetSessionResponse": {
       "type": "object",
@@ -1981,7 +2002,8 @@ expression: schema()
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "The latest turn, or the one asked for."
         }
       },
       "required": [
@@ -1991,6 +2013,17 @@ expression: schema()
     "LatestTurn": {
       "type": "object",
       "properties": {
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its id, unless the Host journaled it before it gave ids."
+        },
+        "state": {
+          "$ref": "#/$defs/TurnState",
+          "description": "Where it is (feature `turnIds`)."
+        },
         "prompt": {
           "type": "array",
           "items": {
@@ -2003,7 +2036,8 @@ expression: schema()
         "startedAt": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "description": "When it started; for a queued turn, when it was queued."
         },
         "running": {
           "type": "boolean"
@@ -2039,12 +2073,50 @@ expression: schema()
         }
       },
       "required": [
+        "state",
         "prompt",
         "origin",
         "startedAt",
         "running"
       ],
-      "description": "A session's latest turn, as its journal records it."
+      "description": "A session's latest turn, or one asked for by id, as its journal records it."
+    },
+    "TurnState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "cancelled"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "queued",
+          "description": "Its prompt waits in the session's queue."
+        },
+        {
+          "type": "string",
+          "const": "waiting",
+          "description": "It runs, and a permission request or elicitation in it waits for a person."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "It ended as the agent meant it to (`end_turn`)."
+        },
+        {
+          "type": "string",
+          "const": "stopped",
+          "description": "It stopped short: the agent's token limit, a refusal, too many model requests."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "It failed, or ended unexplained."
+        }
+      ],
+      "description": "Where a turn is: waiting to start, running, waiting on a person, or how it ended. The\nendings match the exit statuses of `weave run` and `weave threads follow`."
     },
     "ContentBlock": {
       "oneOf": [
@@ -3405,6 +3477,13 @@ expression: schema()
         },
         "origin": {
           "$ref": "#/$defs/TurnOrigin"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its id (feature `turnIds`)."
         }
       },
       "required": [
@@ -5410,6 +5489,13 @@ expression: schema()
         "sessionId": {
           "$ref": "#/$defs/SessionId"
         },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The id of the turn it started (feature `turnIds`)."
+        },
         "state": {
           "anyOf": [
             {
@@ -5460,6 +5546,13 @@ expression: schema()
           "format": "uint64",
           "minimum": 0,
           "description": "The position of the turn's `turnStarted` event."
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The turn's id (feature [`TURN_IDS_FEATURE`])."
         }
       },
       "required": [
@@ -5499,6 +5592,13 @@ expression: schema()
           "format": "uint64",
           "minimum": 0,
           "description": "The position of the message's `turnSteered` event, when it was steered."
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The id of the turn it joined, when it was steered (feature [`TURN_IDS_FEATURE`])."
         }
       },
       "required": [
@@ -5562,7 +5662,8 @@ expression: schema()
       "type": "object",
       "properties": {
         "queuedId": {
-          "type": "string"
+          "type": "string",
+          "description": "The prompt's id, which is also its turn's ([`crate::turns::TurnId`])."
         },
         "seq": {
           "type": "integer",
@@ -6749,6 +6850,13 @@ expression: schema()
                 "null"
               ],
               "description": "The queued prompt it started from, which has left the queue."
+            },
+            "turnId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The turn's id (feature `turnIds`): its `queuedId` when it has one."
             },
             "kind": {
               "type": "string",

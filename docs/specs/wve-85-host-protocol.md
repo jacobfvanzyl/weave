@@ -155,7 +155,11 @@ request with `unauthenticated`.
   (see [Request keys](#request-keys)), and `sessions/get` (WVE-106): `sessions/get`, with
   delegated sessions' `startedBy` and the `session` turn origin (see
   [Delegated sessions](#delegated-sessions)), and `session/observe` (WVE-108):
-  `session/attach`'s `observe`.
+  `session/attach`'s `observe`, and `turnIds` (WVE-108): turn ids in `turnStarted`,
+  `SessionState.turns` and the answers of `turn/start`, `turn/steer` and `session/run`,
+  `sessions/get`'s `turnId` and `LatestTurn`'s `turnId` and `state`, `sessions/list`'s
+  `activity`, the `unknown_turn` error and the `list_agents` Host tool (see
+  [Turn ids](#turn-ids)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -237,7 +241,7 @@ type AgentSummary = {
   source: "preset" | "config" | "registry";
   version?: string;        // the preset's version launched (built-in or locked), or the registry's
   installed: boolean;      // false for a registry agent not yet downloaded
-  description?: string;
+  description?: string;    // the registry's, or `[agents.<id>] description`
 };
 ```
 
@@ -342,7 +346,7 @@ type SessionState = {
   policy: PermissionPolicy;                    // { approve: ToolKind[], otherwise: "ask" | "reject" }
   modes?: SessionModeState;
   configOptions: SessionConfigOption[];
-  turns: { sessionId: string; startedAt: number; origin: TurnOrigin }[];
+  turns: { sessionId: string; startedAt: number; origin: TurnOrigin; turnId?: string }[];
   queue?: QueuedPrompt[];                      // prompts waiting for the next turns; see Queue
   queuePaused?: "cancelled" | "failed" | "interrupted";   // why the queue waits
   pending: PendingRequest[];
@@ -357,7 +361,7 @@ type SessionState = {
 
 ### Methods
 
-**`sessions/list`** `{agentId?, cwd?, repo?, cursor?}` → `{sessions: SessionListing[], nextCursor?}`
+**`sessions/list`** `{agentId?, cwd?, repo?, activity?, cursor?}` → `{sessions: SessionListing[], nextCursor?}`
 
 - Without `agentId`: the sessions the Host has a journal for, across agents (open,
   suspended and closed), most recently active first. No agent is started. Paging isn't
@@ -385,20 +389,25 @@ type SessionListing = {
 };
 ```
 
-`repo` with `agentId` fails with invalid params: an agent's own listing goes by directory.
+`activity` (feature `turnIds`) lists only the open sessions doing that, `idle`, `running` or
+`waiting`, so a caller finds the sessions waiting on a person without reading each. `repo` or
+`activity` with `agentId` fails with invalid params: an agent's own listing goes by directory.
 
-**`sessions/get`** `{sessionId}` → `{session: SessionListing, latestTurn?: LatestTurn}`
+**`sessions/get`** `{sessionId, turnId?}` → `{session: SessionListing, latestTurn?: LatestTurn}`
 
 Feature `sessions/get`. One session the Host has a journal for, open or not, as `sessions/list`
 lists it, with its latest turn, read from its journal without opening it or attaching. Remote
 clients may use it. A session the Host has no record of, or a blank one, fails with
-`unknown_session`.
+`unknown_session`. With `turnId` (feature `turnIds`), `latestTurn` is that turn instead, a
+queued one included; one the session's journal has no turn by fails with `unknown_turn`.
 
 ```ts
 type LatestTurn = {
+  turnId?: string;             // absent for turns journaled before the Host gave ids
+  state: "queued" | "running" | "waiting" | "ended" | "stopped" | "cancelled" | "failed";
   prompt: ContentBlock[];
   origin: TurnOrigin;
-  startedAt: number;
+  startedAt: number;           // for a queued turn, when it was queued
   running: boolean;
   response?: PromptResponse;   // how it ended, once it has
   error?: Error;               // why it failed
@@ -407,7 +416,11 @@ type LatestTurn = {
 ```
 
 `message` is the text of the agent's last message in the turn: its message chunks since the
-last tool call, thought or other message.
+last tool call, thought or other message. `state` says where the turn is in one field, as A2A's
+task states do: `queued` while its prompt waits in the queue, `running`, `waiting` while it runs
+and a permission request or elicitation in it waits for a person (a client tool call doesn't
+count), and once over, `ended` (`end_turn`), `stopped` (another stop reason), `cancelled` or
+`failed`, which match the CLI's exit statuses.
 
 **`sessions/watch`** `{}` → `{sessions: SessionListing[]}`
 
@@ -551,7 +564,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `event.kind` | Fields | Written when |
 | --- | --- | --- |
 | `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this session or a subagent session; `notification.sessionId` says which), or a client changes a mode or config option |
-| `turnStarted` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin`, `queuedId?` | a turn starts; `queuedId` names the queued prompt it started from |
+| `turnStarted` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin`, `queuedId?`, `turnId?` | a turn starts; `queuedId` names the queued prompt it started from, `turnId` the turn |
 | `turnSteered` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin` | a steer joins the running turn (`turn/steer`) |
 | `turnEnded` | `sessionId`, `response?`: ACP `PromptResponse`, `error?`: JSON-RPC error | a turn ends |
 | `terminalOutput` | `terminalId`, `data` | a command the Host runs for the agent writes output |
@@ -600,7 +613,7 @@ catches up from its position (WVE-90).
 
 ## Turns
 
-**`turn/start`** `{sessionId, prompt: ContentBlock[], key?}` → `{seq}`
+**`turn/start`** `{sessionId, prompt: ContentBlock[], key?}` → `{seq, turnId?}`
 
 Sends the prompt to the agent and answers once the turn has started, with the position of
 its `turnStarted` event. The session must be open, but the client needn't be attached.
@@ -610,7 +623,7 @@ with the `queue` feature offers `queue/add` too, which starts a turn or queues t
 behind the running one (see [Queue](#queue)).
 
 **`turn/steer`** `{sessionId, prompt: ContentBlock[]}` →
-`{outcome: "steered", seq} | {outcome: "notRunning"}`
+`{outcome: "steered", seq, turnId?} | {outcome: "notRunning"}`
 
 Feature `turn/steer`. Sends a steer: a message for the session's running turn, which joins
 it instead of starting another. The agent must take steering: claude-agent-acp and codex-acp
@@ -619,7 +632,8 @@ advertise `_meta.steering.supported` in their `initialize` response, which clien
 ACP RFD. With an agent that doesn't, a steer for a running turn fails with method not
 found.
 
-- `steered`: the agent took it. It's journaled as `turnSteered` at `seq`, after the updates
+- `steered`: the agent took it, joining the turn `turnId`. It's journaled as `turnSteered` at
+  `seq`, after the updates
   the agent sent before taking it, so every client and every replay shows it where it joined
   the turn. The client that sent it shows it then too. The turn ends as usual, once the agent
   has answered it.
@@ -639,13 +653,26 @@ Cancels the session's running turn (ACP `session/cancel`) and cancels its pendin
 requests.
 
 **`session/run`** `{agentId, cwd, sessionId?, additionalDirectories?, prompt, policy, attach?, trace?, key?}` →
-`{sessionId, state?: SessionState}`
+`{sessionId, turnId?, state?: SessionState}`
 
 Opens a session (`sessionId`, as attaching would, or a new one) and starts a turn in it
 without the client having to stay. An open session keeps its own policy. With `attach`, the
 client is attached before the prompt is sent, so it sees the whole turn, and `state` is
 returned. Nobody can sign in at a terminal for a headless session, so the Host doesn't
-offer agents terminal sign-in for one.
+offer agents terminal sign-in for one. `turnId` names the turn it started; a repeat under its
+key names it too.
+
+### Turn ids
+
+Feature `turnIds` (WVE-108). A turn goes by the id of the prompt that started it: its `queuedId`
+when it came through the queue, so `queue/add` names the turn before it starts, or else one the
+Host gives it, unique in the session like queued ids. `turnStarted` carries it, as do
+`SessionState.turns`, `LatestTurn`, and the answers of `turn/start`, `turn/steer` (the turn it
+joined) and `session/run`. A caller waits for the turn it started by following the session
+until that turn's `turnEnded`, or reads it with `sessions/get`'s `turnId`, rather than working
+from journal positions. Turns journaled by a Host that gave no ids have none, apart from queued
+ones, which go by their `queuedId`. This is A2A's `taskId`, which weave borrows without
+speaking A2A (`docs/research/a2a-and-agents-controlling-threads.md`).
 
 ### Queue
 
@@ -684,7 +711,8 @@ type QueuedPrompt = {
 - **At startup** the Host takes up the suspended headless sessions whose queue holds prompts
   and isn't paused, so their queue runs with nobody attached.
 
-**`queue/add`** `{sessionId, prompt: ContentBlock[], key?}` → `{queuedId, seq, started}`
+**`queue/add`** `{sessionId, prompt: ContentBlock[], key?}` → `{queuedId, seq, started}`, where
+`queuedId` is also the id of the turn it starts (see [Turn ids](#turn-ids))
 
 Adds a prompt to the end of the session's queue, with the client's origin. Any client may add
 to an open session's queue, attached or not (`session_not_open` otherwise). `sessionId` must be
@@ -812,12 +840,16 @@ answer as JSON text, or a tool error saying why the method failed.
 - `rename_session {title}`: `session/rename` for the calling session. The `renamed` event it
   journals has no `by`. A title that `session/rename` would refuse comes back as a tool error
   saying why.
-- `list_sessions {agentId?, cwd?, repo?}`: `sessions/list`.
-- `read_session {sessionId}`: `sessions/get`.
+- `list_agents {}`: `agents/list`, so an agent chooses whom to hand work to. A configured
+  agent's optional `description` (`[agents.<id>] description`) says what it's for, the part of
+  an A2A Agent Card worth having here.
+- `list_sessions {agentId?, cwd?, repo?, activity?}`: `sessions/list`.
+- `read_session {sessionId, turnId?}`: `sessions/get`.
 - `start_session {agentId, prompt, cwd?, sessionId?, approve?, otherwise?, key?}`: `session/run`,
   starting a delegated session, or prompting the session `sessionId` names. `prompt` is text;
   `cwd` defaults to the calling session's directory; `approve` and `otherwise` are the policy
-  asked for, within the ceiling.
+  asked for, within the ceiling. It answers with the session, the turn it started (`turnId`)
+  and the policy it runs under.
 - `prompt_session {sessionId, prompt, key?}`: `queue/add`.
 - `steer_session {sessionId, prompt}`: `turn/steer`.
 - `cancel_session_turn {sessionId}`: `turn/cancel`.
@@ -1290,6 +1322,7 @@ returns the agent's error unchanged.
 | -32075 | `uncommitted_changes` | the worktree has changes that removing it would lose |
 | -32076 | `key_reused` | the request key was used for another request (see [Request keys](#request-keys)) |
 | -32077 | `host_stopping` | the Host is draining before it stops and starts no new turns (see `host/drain`) |
+| -32080 | `unknown_turn` | the session's journal has no turn by that id (see [Turn ids](#turn-ids)) |
 
 ## Versioning
 
@@ -1395,8 +1428,8 @@ except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answe
 - With `--json`, what a command reports is the protocol's own types (WVE-108): `daemon status`
   prints `host/status`'s answer, `threads list` its sessions, `threads read` `sessions/get`'s,
   `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the paired devices, `run
-  --detach` `session/run`'s, and `run` its session's `session/event` notifications as JSON
-  lines.
+  --detach` `session/run`'s, and `run` and `threads prompt --wait` their session's
+  `session/event` notifications as JSON lines.
 - With no terminal, as over SSH, nothing prompts: `weave login` needs `--method`, and a sign-in
   that runs in a terminal says to use `ssh -t`. `weave daemon install` and `status` say how to
   have a command over SSH find `weave` when the login shell, run as sshd runs one, doesn't.
@@ -1405,12 +1438,23 @@ except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answe
   <id> [--after <seq>] [--until-turn-ends] [--json]` observes an open session (`observe`),
   printing its events after `seq`, or from now, as `weave run` prints its own; with
   `--until-turn-ends` it exits when the next turn to start ends, or without `--after` the one
-  running, with that turn's exit status.
+  running, with that turn's exit status. `--turn <id>` follows that turn from its start to its
+  end, at once for one that has ended. `weave threads prompt --wait` prompts and follows the
+  turn so; `threads read --turn <id>` reads it; `threads list --activity <activity>` lists the
+  open sessions doing that.
+- Waiting for a turn (`follow --until-turn-ends` or `--turn`, `prompt --wait`, `run`) stops when
+  it waits on a person, exiting 7 with the session left open for someone to answer, unless
+  `--keep-waiting`; and at `--timeout <duration>`, exiting 8, with the turn going on. Either way
+  it says how to follow the turn again. `--key` on `threads prompt` and `run` is the request
+  key, so a script retrying after a dropped connection starts nothing twice and follows the
+  same turn; a `run` repeated once its session has closed exits as its turn went.
 - The exit status says how a command went, for scripts (WVE-108): 0, it worked, or the turn ended
   (`end_turn`); 1, any other error; 2, bad arguments; 3, the Host couldn't be reached (not
   running, for a command that never starts one; didn't start; or went away); 4, the turn failed
-  or its session closed under it; 5, the turn was cancelled; 6, it stopped short otherwise.
-  `weave daemon status` exits 3 when the Host isn't running.
+  or its session closed under it; 5, the turn was cancelled; 6, it stopped short otherwise; 7,
+  the turn waits on a person; 8, waiting timed out. `weave daemon status` exits 3 when the Host
+  isn't running. The turn's outcome is in the status deliberately, unlike the A2A CLI, which
+  keeps outcomes out of its exit codes: scripts composing sessions branch on it.
 
 ## Crates
 

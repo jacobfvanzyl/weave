@@ -13,6 +13,17 @@ use serde::Serialize;
 
 use crate::Empty;
 
+/// A turn, by the id of the prompt that started it: the prompt's `queuedId` when it came
+/// through the queue (so it's known before the turn starts), else one the Host gives it. Unique
+/// in its session. Turns a Host journaled before it gave ids have none.
+pub type TurnId = String;
+
+/// The [`crate::hello::HelloResponse::features`] entry of a Host that names turns: [`TurnId`]s
+/// in `turnStarted` events, running turns and the answers that start or join a turn,
+/// `sessions/get`'s `turnId`, the [`crate::sessions::TurnState`] of the turn it reads, and
+/// `sessions/list`'s `activity`.
+pub const TURN_IDS_FEATURE: &str = "turnIds";
+
 /// `turn/start`: send a prompt. Answered once the turn has started. The session must be
 /// open; it may be a subagent session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
@@ -33,6 +44,9 @@ pub struct StartTurnRequest {
 pub struct StartTurnResponse {
     /// The position of the turn's `turnStarted` event.
     pub seq: u64,
+    /// The turn's id (feature [`TURN_IDS_FEATURE`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
 }
 
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that takes request keys: the
@@ -68,6 +82,9 @@ pub struct SteerTurnResponse {
     /// The position of the message's `turnSteered` event, when it was steered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
+    /// The id of the turn it joined, when it was steered (feature [`TURN_IDS_FEATURE`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

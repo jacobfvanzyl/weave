@@ -558,6 +558,7 @@ impl App {
                 prompt,
                 origin,
                 queued_id,
+                ..
             } => {
                 // The queue a session's state gave covers the replay.
                 let mut commands = Vec::new();
@@ -1066,6 +1067,7 @@ impl App {
                         agent_id: Some(self.agent_id.clone()),
                         cwd: (!all_directories).then(|| self.cwd.clone()),
                         repo: None,
+                        activity: None,
                         cursor: cursor.clone(),
                     };
                     let append = cursor.is_some();

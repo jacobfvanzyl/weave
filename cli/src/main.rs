@@ -9,6 +9,7 @@ mod service;
 mod sessions;
 mod smoke;
 mod start;
+mod turn;
 mod update;
 mod worktrees;
 

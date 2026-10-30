@@ -1,7 +1,8 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&RunResponse { session_id: \"s-2\".into(), state: None, })"
+expression: "round_trip(&RunResponse\n{ session_id: \"s-2\".into(), turn_id: Some(\"t-1\".to_owned()), state: None, })"
 ---
 {
-  "sessionId": "s-2"
+  "sessionId": "s-2",
+  "turnId": "t-1"
 }

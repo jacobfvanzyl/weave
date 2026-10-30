@@ -138,6 +138,7 @@ use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::UnwatchSessionsRequest;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::sessions::WatchSessionsResponse;
@@ -284,6 +285,7 @@ fn state() -> SessionState {
                 id: "c7".to_owned(),
                 device: None,
             },
+            turn_id: Some("t-7".to_owned()),
         }],
         queue: vec![queued()],
         queue_paused: None,
@@ -596,6 +598,7 @@ fn sessions() {
             agent_id: Some("claude".to_owned()),
             cwd: Some("/repo".into()),
             repo: None,
+            activity: None,
             cursor: None,
         })
     );
@@ -756,6 +759,7 @@ fn sessions() {
         "run_response",
         round_trip(&RunResponse {
             session_id: "s-2".into(),
+            turn_id: Some("t-1".to_owned()),
             state: None,
         })
     );
@@ -918,7 +922,10 @@ fn turns() {
     );
     insta::assert_json_snapshot!(
         "start_turn_response",
-        round_trip(&StartTurnResponse { seq: 42 })
+        round_trip(&StartTurnResponse {
+            seq: 42,
+            turn_id: Some("t-4".to_owned()),
+        })
     );
     insta::assert_json_snapshot!(
         "cancel_turn_request",
@@ -938,6 +945,7 @@ fn turns() {
         round_trip(&SteerTurnResponse {
             outcome: SteerOutcome::Steered,
             seq: Some(43),
+            turn_id: Some("t-4".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
@@ -945,6 +953,7 @@ fn turns() {
         round_trip(&SteerTurnResponse {
             outcome: SteerOutcome::NotRunning,
             seq: None,
+            turn_id: None,
         })
     );
 }
@@ -961,6 +970,14 @@ fn delegated_sessions() {
         "get_session_request",
         message(&GetSessionRequest {
             session_id: "s-2".into(),
+            turn_id: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "get_session_request_for_a_turn",
+        message(&GetSessionRequest {
+            session_id: "s-2".into(),
+            turn_id: Some("q-3".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
@@ -968,6 +985,8 @@ fn delegated_sessions() {
         round_trip(&GetSessionResponse {
             session: delegated.clone(),
             latest_turn: Some(LatestTurn {
+                turn_id: Some("t-1".to_owned()),
+                state: TurnState::Ended,
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
@@ -986,6 +1005,8 @@ fn delegated_sessions() {
         round_trip(&GetSessionResponse {
             session: delegated,
             latest_turn: Some(LatestTurn {
+                turn_id: Some("t-1".to_owned()),
+                state: TurnState::Waiting,
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
@@ -1089,6 +1110,7 @@ fn events() {
                     device: None,
                 },
                 queued_id: None,
+                turn_id: Some("t-1".to_owned()),
             },
         ))
     );
@@ -1105,6 +1127,7 @@ fn events() {
                     device: Some("Jaco's iPad".to_owned()),
                 },
                 queued_id: None,
+                turn_id: Some("t-1".to_owned()),
             },
         ))
     );
@@ -1117,6 +1140,7 @@ fn events() {
                 prompt: vec![text("then update the docs")],
                 origin: tui(),
                 queued_id: Some("q-3".to_owned()),
+                turn_id: Some("q-3".to_owned()),
             },
         ))
     );
@@ -1132,6 +1156,7 @@ fn events() {
                     report: false,
                 },
                 queued_id: None,
+                turn_id: Some("t-1".to_owned()),
             },
         ))
     );
@@ -1150,6 +1175,7 @@ fn events() {
                     report: true,
                 },
                 queued_id: None,
+                turn_id: Some("t-1".to_owned()),
             },
         ))
     );
@@ -1276,6 +1302,7 @@ fn events() {
                 prompt: vec![text("fix the tests")],
                 origin: TurnOrigin::Run {},
                 queued_id: None,
+                turn_id: Some("t-1".to_owned()),
             },
         ))
     );

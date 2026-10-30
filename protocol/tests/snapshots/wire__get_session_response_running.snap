@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&GetSessionResponse\n{\n    session: delegated, latest_turn:\n    Some(LatestTurn\n    {\n        prompt: vec![text(\"port the parser's tests to the new runner\")],\n        origin: TurnOrigin::Session { session_id: \"s-1\".into(), }, started_at:\n        1_760_180_000_000, running: true, response: None, error: None,\n        message: None,\n    }),\n})"
+expression: "round_trip(&GetSessionResponse\n{\n    session: delegated, latest_turn:\n    Some(LatestTurn\n    {\n        turn_id: Some(\"t-1\".to_owned()), state: TurnState::Waiting, prompt:\n        vec![text(\"port the parser's tests to the new runner\")], origin:\n        TurnOrigin::Session { session_id: \"s-1\".into(), report: false, },\n        started_at: 1_760_180_000_000, running: true, response: None, error:\n        None, message: None,\n    }),\n})"
 ---
 {
   "session": {
@@ -24,6 +24,8 @@ expression: "round_trip(&GetSessionResponse\n{\n    session: delegated, latest_t
     "startedBy": "s-1"
   },
   "latestTurn": {
+    "turnId": "t-1",
+    "state": "waiting",
     "prompt": [
       {
         "type": "text",

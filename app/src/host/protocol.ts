@@ -214,6 +214,14 @@ export type AuthenticationRequired = -32000;
  */
 export type ResourceNotFound = -32002;
 /**
+ * Where a turn is: waiting to start, running, waiting on a person, or how it ended. The
+ * endings match the exit statuses of `weave run` and `weave threads follow`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TurnState".
+ */
+export type TurnState = ("running" | "cancelled") | "queued" | "waiting" | "ended" | "stopped" | "failed";
+/**
  * Resource content that can be embedded in a message.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -751,6 +759,10 @@ export type SessionEvent =
        * The queued prompt it started from, which has left the queue.
        */
       queuedId?: string | null;
+      /**
+       * The turn's id (feature `turnIds`): its `queuedId` when it has one.
+       */
+      turnId?: string | null;
       kind: "turnStarted";
     }
   | {
@@ -2230,6 +2242,10 @@ export interface ListSessionsRequest {
    * an agent only (feature `worktrees`).
    */
   repo?: string | null;
+  /**
+   * Only the open sessions doing this. Without an agent only (feature `turnIds`).
+   */
+  activity?: Activity | null;
   cursor?: string | null;
 }
 /**
@@ -2242,13 +2258,18 @@ export interface ListSessionsResponse {
 }
 /**
  * `sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists
- * it, with its latest turn, read without opening it or attaching.
+ * it, with its latest turn, or the turn asked for, read without opening it or attaching.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "GetSessionRequest".
  */
 export interface GetSessionRequest {
   sessionId: SessionId;
+  /**
+   * This turn rather than the latest, a queued one included; it fails with `unknown_turn`
+   * when the session's journal has no such turn (feature `turnIds`).
+   */
+  turnId?: string | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -2256,17 +2277,31 @@ export interface GetSessionRequest {
  */
 export interface GetSessionResponse {
   session: SessionListing;
+  /**
+   * The latest turn, or the one asked for.
+   */
   latestTurn?: LatestTurn | null;
 }
 /**
- * A session's latest turn, as its journal records it.
+ * A session's latest turn, or one asked for by id, as its journal records it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "LatestTurn".
  */
 export interface LatestTurn {
+  /**
+   * Its id, unless the Host journaled it before it gave ids.
+   */
+  turnId?: string | null;
+  /**
+   * Where it is (feature `turnIds`).
+   */
+  state: ("running" | "cancelled") | "queued" | "waiting" | "ended" | "stopped" | "failed";
   prompt: ContentBlock[];
   origin: TurnOrigin;
+  /**
+   * When it started; for a queued turn, when it was queued.
+   */
   startedAt: number;
   running: boolean;
   /**
@@ -3008,6 +3043,10 @@ export interface RunningTurn {
   sessionId: string;
   startedAt: number;
   origin: TurnOrigin;
+  /**
+   * Its id (feature `turnIds`).
+   */
+  turnId?: string | null;
 }
 /**
  * A prompt waiting in a session's queue.
@@ -4289,6 +4328,10 @@ export interface PermissionPolicy1 {
 export interface RunResponse {
   sessionId: SessionId;
   /**
+   * The id of the turn it started (feature `turnIds`).
+   */
+  turnId?: string | null;
+  /**
    * When attached.
    */
   state?: SessionState | null;
@@ -4317,6 +4360,10 @@ export interface StartTurnResponse {
    * The position of the turn's `turnStarted` event.
    */
   seq: number;
+  /**
+   * The turn's id (feature [`TURN_IDS_FEATURE`]).
+   */
+  turnId?: string | null;
 }
 /**
  * `turn/steer`: a message for the session's running turn, which joins it rather than
@@ -4341,6 +4388,10 @@ export interface SteerTurnResponse {
    * The position of the message's `turnSteered` event, when it was steered.
    */
   seq?: number | null;
+  /**
+   * The id of the turn it joined, when it was steered (feature [`TURN_IDS_FEATURE`]).
+   */
+  turnId?: string | null;
 }
 /**
  * `turn/cancel`: cancel the session's running turn and its pending requests.
@@ -4379,6 +4430,9 @@ export interface AddQueuedRequest {
  * via the `definition` "AddQueuedResponse".
  */
 export interface AddQueuedResponse {
+  /**
+   * The prompt's id, which is also its turn's ([`crate::turns::TurnId`]).
+   */
   queuedId: string;
   /**
    * The position of its `turnStarted` when it started a turn at once, otherwise of its
@@ -6157,7 +6211,8 @@ export const HOST_PROTOCOL = {
     "keyReused": -32076,
     "hostStopping": -32077,
     "unknownTerminal": -32078,
-    "terminalUnavailable": -32079
+    "terminalUnavailable": -32079,
+    "unknownTurn": -32080
   },
   "features": {
     "steer": "turn/steer",
@@ -6172,7 +6227,8 @@ export const HOST_PROTOCOL = {
     "getSession": "sessions/get",
     "requestKeys": "requestKeys",
     "drain": "drain",
-    "terminals": "terminals"
+    "terminals": "terminals",
+    "turnIds": "turnIds"
   },
   "files": {
     "maxEntries": 2000
@@ -6193,7 +6249,8 @@ export const HOST_PROTOCOL = {
     "startSession": "start_session",
     "promptSession": "prompt_session",
     "steerSession": "steer_session",
-    "cancelSessionTurn": "cancel_session_turn"
+    "cancelSessionTurn": "cancel_session_turn",
+    "listAgents": "list_agents"
   }
 } as const;
 

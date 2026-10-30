@@ -90,6 +90,7 @@ use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::UnwatchSessionsRequest;
 use weave_host_protocol::sessions::WATCH_FEATURE;
 use weave_host_protocol::sessions::WatchSessionsRequest;
@@ -102,6 +103,7 @@ use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::SteerTurnResponse;
+use weave_host_protocol::turns::TURN_IDS_FEATURE;
 use weave_host_protocol::worktrees::CreateWorktreeRequest;
 use weave_host_protocol::worktrees::CreateWorktreeResponse;
 use weave_host_protocol::worktrees::Divergence;
@@ -194,7 +196,7 @@ impl World {
         std::fs::write(
             dir.path().join("config.toml"),
             "[agents.fake]\ncommand = \"fake-agent\"\nmode = \"code\"\n\n\
-             [agents.other]\ncommand = \"other-agent\"\n",
+             [agents.other]\ndescription = \"Another fake agent\"\ncommand = \"other-agent\"\n",
         )
         .expect("config");
         Self { dir }
@@ -398,6 +400,8 @@ struct Seen {
     renamed: Vec<(String, Option<TurnOrigin>)>,
     /// Each turn's origin, and the queued prompt it started from.
     origins: Vec<(TurnOrigin, Option<String>)>,
+    /// Each turn's id.
+    turn_ids: Vec<Option<String>>,
     /// Prompts that joined the queue, by id, and those taken out.
     queued: Vec<String>,
     unqueued: Vec<String>,
@@ -513,6 +517,7 @@ impl TestClient {
                 agent_id: Some("fake".to_owned()),
                 cwd: Some(world.cwd()),
                 repo: None,
+                activity: None,
                 cursor: None,
             })
             .await
@@ -736,10 +741,12 @@ impl Seen {
                 prompt,
                 origin,
                 queued_id,
+                turn_id,
                 ..
             } => {
                 self.started += 1;
                 self.origins.push((origin, queued_id));
+                self.turn_ids.push(turn_id);
                 for block in &prompt {
                     self.user.push_str(&text(block));
                 }
@@ -937,6 +944,7 @@ async fn steering_with_no_turn_running_sends_nothing() {
     let not_running = SteerTurnResponse {
         outcome: SteerOutcome::NotRunning,
         seq: None,
+        turn_id: None,
     };
     assert_eq!(client.steer(&session_id, "hi").await, not_running);
 
@@ -1429,6 +1437,7 @@ async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_
                 agent_id: None,
                 cwd: None,
                 repo: None,
+                activity: None,
                 cursor: None,
             })
             .await
@@ -1542,6 +1551,7 @@ async fn deleting_a_session_whose_directory_is_gone_forgets_it_in_the_host() {
             agent_id: Some("fake".to_owned()),
             cwd: Some(worktree),
             repo: None,
+            activity: None,
             cursor: None,
         })
         .await
@@ -3599,6 +3609,9 @@ async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_a
             .expect("session/run");
         let rerun = client.connection.send(run).await.expect("repeat");
         assert_eq!(rerun.session_id, ran.session_id);
+        // A repeat names the turn the first started, so its caller can follow it.
+        assert!(first.turn_id.is_some() && ran.turn_id.is_some());
+        assert_eq!(rerun.turn_id, ran.turn_id);
         daemon.shutdown().await;
         (session_id, first, queued, ran.session_id)
     };
@@ -3646,6 +3659,173 @@ async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_a
         !client.hears_a_turn_start().await,
         "a repeat started a turn"
     );
+}
+
+#[tokio::test]
+async fn a_turn_goes_by_its_prompts_id_and_reads_as_queued_running_or_how_it_ended() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    assert!(
+        client
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|f| f == TURN_IDS_FEATURE)
+    );
+    let session_id = client.create(&world).await;
+    let first = client.queue(&session_id, "slow 3").await;
+    let second = client.queue(&session_id, "and then this").await;
+    let read = async |client: &TestClient, turn_id: &str| {
+        client
+            .connection
+            .send(GetSessionRequest {
+                session_id: session_id.clone(),
+                turn_id: Some(turn_id.to_owned()),
+            })
+            .await
+            .map(|got| got.latest_turn.expect("the turn"))
+    };
+    let running = read(&client, &first.queued_id).await.expect("running");
+    assert_eq!(running.state, TurnState::Running);
+    assert_eq!(running.turn_id.as_ref(), Some(&first.queued_id));
+    let queued = read(&client, &second.queued_id).await.expect("queued");
+    assert_eq!(queued.state, TurnState::Queued);
+    assert!(!queued.running);
+    // A running turn is named in the session's state, and only open sessions running one list
+    // as running.
+    let attached = client.attach(&session_id).await;
+    assert_eq!(
+        attached
+            .state
+            .turns
+            .first()
+            .and_then(|turn| turn.turn_id.as_ref()),
+        Some(&first.queued_id)
+    );
+    let doing = async |client: &TestClient, activity| {
+        client
+            .connection
+            .send(ListSessionsRequest {
+                activity: Some(activity),
+                ..ListSessionsRequest::default()
+            })
+            .await
+            .expect("sessions/list")
+            .sessions
+            .into_iter()
+            .map(|listing| listing.info.session_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        doing(&client, Activity::Running).await,
+        std::slice::from_ref(&session_id)
+    );
+    assert!(doing(&client, Activity::Idle).await.is_empty());
+    let refused = client
+        .connection
+        .send(ListSessionsRequest {
+            agent_id: Some("fake".to_owned()),
+            activity: Some(Activity::Idle),
+            ..ListSessionsRequest::default()
+        })
+        .await
+        .expect_err("an activity with an agent");
+    assert_eq!(refused.code, Error::invalid_params().code);
+
+    let mut seen = Seen::default();
+    client.until_turns_end(&mut seen, 2).await;
+    // Attaching again replayed the first turn's start.
+    seen.turn_ids.dedup();
+    assert_eq!(
+        seen.turn_ids,
+        [
+            Some(first.queued_id.clone()),
+            Some(second.queued_id.clone())
+        ]
+    );
+    let ended = read(&client, &second.queued_id).await.expect("ended");
+    assert_eq!(ended.state, TurnState::Ended);
+    assert_eq!(ended.message.as_deref(), Some("You said: and then this"));
+    assert_eq!(
+        read(&client, &first.queued_id).await.expect("ended").state,
+        TurnState::Ended
+    );
+    assert_eq!(
+        doing(&client, Activity::Idle).await,
+        std::slice::from_ref(&session_id)
+    );
+
+    // turn/start gives its turn an id of the Host's.
+    let started = client
+        .connection
+        .send(StartTurnRequest {
+            session_id: session_id.clone(),
+            prompt: vec![ContentBlock::from("hello".to_owned())],
+            key: None,
+        })
+        .await
+        .expect("turn/start");
+    let turn_id = started.turn_id.expect("an id");
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.turn_ids.last(), Some(&Some(turn_id.clone())));
+    assert_eq!(
+        client
+            .get(&session_id)
+            .await
+            .latest_turn
+            .and_then(|latest| latest.turn_id),
+        Some(turn_id)
+    );
+    let unknown = read(&client, "q-none").await.expect_err("no such turn");
+    assert!(errors::is(&unknown, errors::UNKNOWN_TURN));
+
+    // A closed session's turns read from its journal.
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+    assert_eq!(
+        read(&client, &second.queued_id).await.expect("ended").state,
+        TurnState::Ended
+    );
+}
+
+#[tokio::test]
+async fn a_turn_asking_a_person_reads_as_waiting() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    client
+        .prompt(
+            &session_id,
+            &format!("write {} never", world.cwd().join("never.txt").display()),
+        )
+        .await;
+    client.asked(&mut Seen::default()).await;
+    let latest = client.get(&session_id).await.latest_turn.expect("a turn");
+    assert_eq!(latest.state, TurnState::Waiting);
+    assert!(latest.running);
+}
+
+#[tokio::test]
+async fn an_agent_lists_the_agents_it_can_hand_work_to() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client.create(&world).await;
+    let listed = client.call_tool(&caller, "list_agents", "{}").await;
+    let answer = tool_answer(&listed.agent, "list_agents");
+    let other = answer["agents"]
+        .as_array()
+        .and_then(|agents| agents.iter().find(|agent| agent["id"] == "other"))
+        .unwrap_or_else(|| panic!("other in {answer}"));
+    assert_eq!(other["description"], "Another fake agent");
 }
 
 #[tokio::test]
@@ -3794,6 +3974,7 @@ impl TestClient {
         self.connection
             .send(GetSessionRequest {
                 session_id: session_id.clone(),
+                turn_id: None,
             })
             .await
             .expect("sessions/get")

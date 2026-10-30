@@ -25,7 +25,8 @@ other origins) that `weave daemon run` reads (a restart picks up a change).
 ./target/debug/weave run --continue "…"   # or --resume <id>, as the TUI names sessions
 ./target/debug/weave threads              # open in the Host; also read, prompt, steer, cancel, close <id>
 ./target/debug/weave threads prompt <id> "address the review"   # or pipe it in; steer joins a running turn
-./target/debug/weave threads follow <id> --after <seq> --until-turn-ends   # wait for that turn
+./target/debug/weave threads prompt <id> --wait --timeout 10m "…"   # and wait for the reply
+./target/debug/weave threads follow <id> --turn <turn>   # wait for that turn, as prompt or run --detach named it
 ./target/debug/weave threads watch        # every thread as it changes, as JSON lines
 ./target/debug/weave daemon status        # also start, stop, restart, run (foreground), install, uninstall
 ./target/debug/weave pair                 # a QR code and code another device pairs with
@@ -37,21 +38,32 @@ other origins) that `weave daemon run` reads (a restart picks up a change).
 `weave threads` (`cli/src/sessions.rs`; alias `sessions`) acts on any thread without attaching,
 as Rex's CLI does on its blocks, so scripts and agents' shells compose threads (ADR 0023):
 `read` gives how a thread lists and its latest turn on stderr and the agent's last message on
-stdout (`--json` for `sessions/get`), `prompt` is `queue/add`, and `steer` is `turn/steer`,
-failing when no turn runs. Their turns' origin is the CLI's, a client's, so no thread hears how
-they end, even when an agent ran it; an agent's Host tools do that. `watch` prints
+stdout (`--json` for `sessions/get`; `--turn` for a turn other than the latest), `prompt` is
+`queue/add`, and `steer` is `turn/steer`, failing when no turn runs. Their turns' origin is the
+CLI's, a client's, so no thread hears how they end, even when an agent ran it; an agent's Host
+tools do that. `list --activity` lists the threads idle, running or waiting. `watch` prints
 `sessions/watch` as JSON lines, and `follow` observes an open thread (`session/attach` with
 `observe`): it isn't one of its clients, so it keeps no thread open and closes none, and prints
-what happens after `--after` (`prompt --json`'s `seq` less one), or from now, as `run` prints;
-`--until-turn-ends` exits with that turn's status.
+what happens after `--after`, or from now, as `run` prints; `--until-turn-ends` exits with that
+turn's status. A turn goes by its prompt's id (the protocol's turn ids): `prompt` names it, as
+`run --detach` does, and `follow --turn <id>` prints that turn from its start to its end, at once
+for one that has ended; `prompt --wait` is `prompt` and then that.
+
+Waiting for a turn (`cli/src/turn.rs`: `follow --until-turn-ends` or `--turn`, `prompt --wait`,
+`run`) borrows from A2A (`docs/research/a2a-and-agents-controlling-threads.md`): it stops when
+the turn waits on a person, a permission request or a question, since a script or an agent's
+shell can't answer it, unless `--keep-waiting`; and at `--timeout`. Either way the turn goes on,
+the thread stays open, and stderr says how to follow it again. `--key` on `prompt` and `run` is
+the request key, so a retry after a dropped connection starts nothing twice and waits for the
+same turn; a `run` repeated after its thread closed exits as its turn went.
 
 What a command reports, it prints with `--json` as the Host protocol's own types, so scripts
 follow the protocol's versioning rather than a shape kept for the CLI: `daemon status`
 (`host/status`'s `HostStatus`; nothing on stdout when the Host isn't running, and the service's
 notes on stderr), `threads list` (`SessionListing`s), `threads read` (`sessions/get`), `threads
-prompt` (`queue/add`, with the turn's journal position) and `steer` (`turn/steer`), `devices`
-(`Device`s), `run --detach` (`session/run`), and `run`, whose thread's journal events
-(`session/event`) stream as JSON lines. CLI tests check each parses as the type it claims
+prompt` (`queue/add`, whose `queuedId` is the turn's id) and `steer` (`turn/steer`), `devices`
+(`Device`s), `run --detach` (`session/run`), and `run` and `prompt --wait`, whose thread's
+journal events (`session/event`) stream as JSON lines. CLI tests check each parses as the type it claims
 (`tests/json.rs`).
 
 The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
@@ -59,7 +71,10 @@ the turn ended (`end_turn`); 1, any other error; 2, arguments clap refused; 3, t
 couldn't be reached: not running, for a command that never starts one (`threads read`, `daemon
 status`), didn't start, or went away; 4, the turn failed, or its thread closed under it; 5, the
 turn was cancelled; 6, it stopped short otherwise (a token limit, a refusal, too many model
-requests). `threads list` with no Host lists none and exits 0. An error that exits other than 1
+requests); 7, the turn waits on a person; 8, waiting timed out. `threads list` with no Host lists
+none and exits 0. How the turn went is in the status on purpose, though the A2A CLI keeps a
+task's outcome out of its exit codes (and uses 4 for sign-in, 5 for timeouts): scripts and agents
+composing threads branch on it, and 3 alone says the Host wasn't reached. Keep it so. An error that exits other than 1
 is made with `exit::fail` or `exit::unreachable`, which keep its message and causes. CLI tests
 (`tests/`) run `weave` against a Host inside the test (`tests/support`), with the fake agent
 in-process, whose `stop <reason>` and `fail` scripts end turns each way.

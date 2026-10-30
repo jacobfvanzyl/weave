@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"hello\")], origin:\n    TurnOrigin::Client { name: \"weave-tui\".to_owned(), id: \"c7\".to_owned(), },\n},))"
+expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"hello\")], origin:\n    TurnOrigin::Client\n    { name: \"weave-tui\".to_owned(), id: \"c7\".to_owned(), device: None, },\n    queued_id: None, turn_id: Some(\"t-1\".to_owned()),\n},))"
 ---
 {
   "method": "session/event",
@@ -22,7 +22,8 @@ expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"
           "name": "weave-tui",
           "id": "c7"
         }
-      }
+      },
+      "turnId": "t-1"
     }
   }
 }

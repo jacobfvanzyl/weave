@@ -5020,6 +5020,7 @@ mod tests {
             Ok(SteerTurnResponse {
                 outcome: SteerOutcome::NotRunning,
                 seq: None,
+                turn_id: None,
             })
         };
         let mut chat = chat();

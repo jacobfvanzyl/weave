@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&GetSessionResponse\n{\n    session: delegated.clone(), latest_turn:\n    Some(LatestTurn\n    {\n        prompt: vec![text(\"port the parser's tests to the new runner\")],\n        origin: TurnOrigin::Session { session_id: \"s-1\".into(), }, started_at:\n        1_760_180_000_000, running: false, response:\n        Some(PromptResponse::new(StopReason::EndTurn)), error: None, message:\n        Some(\"Ported 14 tests; all pass.\".to_owned()),\n    }),\n})"
+expression: "round_trip(&GetSessionResponse\n{\n    session: delegated.clone(), latest_turn:\n    Some(LatestTurn\n    {\n        turn_id: Some(\"t-1\".to_owned()), state: TurnState::Ended, prompt:\n        vec![text(\"port the parser's tests to the new runner\")], origin:\n        TurnOrigin::Session { session_id: \"s-1\".into(), report: false, },\n        started_at: 1_760_180_000_000, running: false, response:\n        Some(PromptResponse::new(StopReason::EndTurn)), error: None, message:\n        Some(\"Ported 14 tests; all pass.\".to_owned()),\n    }),\n})"
 ---
 {
   "session": {
@@ -24,6 +24,8 @@ expression: "round_trip(&GetSessionResponse\n{\n    session: delegated.clone(), 
     "startedBy": "s-1"
   },
   "latestTurn": {
+    "turnId": "t-1",
+    "state": "ended",
     "prompt": [
       {
         "type": "text",

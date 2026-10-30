@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(47, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt:\n    vec![text(\"[weave] Thread s-2 (codex) finished its turn. Its agent's last message:\\n\\n\\\n                     Ported 14 tests; all pass.\")],\n    origin: TurnOrigin::Session { session_id: \"s-2\".into(), report: true, },\n    queued_id: None,\n},))"
+expression: "message(&event(47, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt:\n    vec![text(\"[weave] Thread s-2 (codex) finished its turn. Its agent's last message:\\n\\n\\\n                     Ported 14 tests; all pass.\")],\n    origin: TurnOrigin::Session { session_id: \"s-2\".into(), report: true, },\n    queued_id: None, turn_id: Some(\"t-1\".to_owned()),\n},))"
 ---
 {
   "method": "session/event",
@@ -22,7 +22,8 @@ expression: "message(&event(47, SessionEvent::TurnStarted\n{\n    session_id: \"
           "sessionId": "s-2",
           "report": true
         }
-      }
+      },
+      "turnId": "t-1"
     }
   }
 }

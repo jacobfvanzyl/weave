@@ -1135,7 +1135,7 @@ impl Daemon {
     pub async fn run(&self, request: RunRequest) -> Result<SessionId, Error> {
         client::run(&self.shared, request, None)
             .await
-            .map(|(session_id, _)| session_id)
+            .map(|answer| answer.session_id)
     }
 }
 

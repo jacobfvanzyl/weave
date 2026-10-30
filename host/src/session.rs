@@ -88,8 +88,10 @@ use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::SteerTurnResponse;
+use weave_host_protocol::turns::TurnId;
 use weave_host_protocol::worktrees::GitLocation;
 
 use crate::Agent;
@@ -250,8 +252,8 @@ pub(crate) enum Command {
         prompt: Vec<ContentBlock>,
         /// The request key it came under, journaled with its turn.
         key: Option<String>,
-        /// The position of the turn's `turnStarted`, once it has started.
-        reply: oneshot::Sender<Result<u64, Error>>,
+        /// The position of the turn's `turnStarted` and its id, once it has started.
+        reply: oneshot::Sender<Result<(u64, TurnId), Error>>,
     },
     /// `queue/add`: a prompt for the end of the queue, or a turn now if nothing runs or waits.
     Enqueue {
@@ -271,8 +273,9 @@ pub(crate) enum Command {
         by: TurnOrigin,
         done: oneshot::Sender<()>,
     },
-    /// The session's latest turn, for `sessions/get`.
+    /// The session's latest turn, or the one `turn_id` names, for `sessions/get`.
     LatestTurn {
+        turn_id: Option<TurnId>,
         reply: oneshot::Sender<Option<LatestTurn>>,
     },
     /// A message for the running turn; see [`Steer`].
@@ -594,6 +597,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
 }
 
 struct Turn {
+    id: TurnId,
     started_ms: u64,
     origin: TurnOrigin,
     /// Who sent its latest prompt or steer, which client tool calls go to.
@@ -843,7 +847,17 @@ impl Actor {
                 key,
                 reply,
             } => {
-                let started = self.prompt(origin.clone(), session_id, prompt, None, key);
+                let turn_id = crate::queue::new_id();
+                let started = self
+                    .prompt(
+                        origin.clone(),
+                        session_id,
+                        prompt,
+                        None,
+                        turn_id.clone(),
+                        key,
+                    )
+                    .map(|seq| (seq, turn_id));
                 // Prompting the session resumes its queue, after this turn.
                 if started.is_ok() {
                     self.resume(origin);
@@ -876,8 +890,8 @@ impl Actor {
                 self.resume(by);
                 let _ = done.send(());
             }
-            Command::LatestTurn { reply } => {
-                let _ = reply.send(journal::latest_turn(self.journal.records(), &self.root));
+            Command::LatestTurn { turn_id, reply } => {
+                let _ = reply.send(self.turn(turn_id.as_deref()));
             }
             Command::Steer(steer) => self.steer(steer),
             Command::Cancel { session_id } => self.cancel(&session_id),
@@ -1131,6 +1145,7 @@ impl Actor {
                     session_id: session_id.clone(),
                     started_at: turn.started_ms,
                     origin: turn.origin.clone(),
+                    turn_id: Some(turn.id.clone()),
                 })
                 .collect(),
             queue: self.queue.prompts.iter().cloned().collect(),
@@ -1148,14 +1163,15 @@ impl Actor {
         }
     }
 
-    /// Start a turn in `session_id` with `prompt`: from the queue when `queued_id` names the
-    /// queued prompt, under the request key `key` when there is one.
+    /// Start the turn `turn_id` in `session_id` with `prompt`: from the queue when `queued_id`
+    /// names the queued prompt, under the request key `key` when there is one.
     fn prompt(
         &mut self,
         origin: TurnOrigin,
         session_id: SessionId,
         prompt: Vec<ContentBlock>,
         queued_id: Option<String>,
+        turn_id: TurnId,
         key: Option<String>,
     ) -> Result<u64, Error> {
         if self.turns.contains_key(&session_id) {
@@ -1172,11 +1188,13 @@ impl Actor {
             prompt,
             origin: Some(origin.clone()),
             queued_id,
+            turn_id: Some(turn_id.clone()),
             key,
         });
         self.turns.insert(
             session_id,
             Turn {
+                id: turn_id,
                 started_ms: at,
                 latest: origin.clone(),
                 origin,
@@ -1202,7 +1220,14 @@ impl Actor {
             && !self.shared.draining();
         if free {
             let root = self.root.clone();
-            let seq = self.prompt(origin, root, prompt, Some(queued_id.clone()), key)?;
+            let seq = self.prompt(
+                origin,
+                root,
+                prompt,
+                Some(queued_id.clone()),
+                queued_id.clone(),
+                key,
+            )?;
             return Ok(AddQueuedResponse {
                 queued_id,
                 seq,
@@ -1261,6 +1286,7 @@ impl Actor {
             root,
             next.prompt.clone(),
             Some(next.id.clone()),
+            next.id.clone(),
             None,
         );
         if let Err(error) = started {
@@ -1308,9 +1334,10 @@ impl Actor {
                          the Host won't see it end"
                     );
                 }
-                if let Some(turn) = self.turns.get_mut(&steer.session_id) {
+                let turn_id = self.turns.get_mut(&steer.session_id).map(|turn| {
                     turn.latest = steer.origin.clone();
-                }
+                    turn.id.clone()
+                });
                 let (seq, _) = self.record(Entry::TurnSteered {
                     session_id: steer.session_id,
                     prompt: steer.prompt,
@@ -1319,6 +1346,7 @@ impl Actor {
                 Ok(SteerTurnResponse {
                     outcome: weave_host_protocol::turns::SteerOutcome::Steered,
                     seq: Some(seq),
+                    turn_id,
                 })
             }
             Ok(SteerOutcome::PromptRequired) => Ok(not_running()),
@@ -1595,7 +1623,7 @@ impl Actor {
         }
         // The session whose agent began the turn hears how it ended.
         if let Some(caller) = caller {
-            let latest = journal::latest_turn(self.journal.records(), &self.root);
+            let latest = journal::turn(self.journal.records(), &self.root, None);
             let listing = lock(&self.summary).listing();
             let text = host_tools::ended_text(&listing, latest.as_ref());
             tokio::spawn(host_tools::tell(
@@ -1646,6 +1674,22 @@ impl Actor {
             .retain(|_, link| link.cx.send_notification(notification.clone()).is_ok());
         self.observers
             .retain(|_, link| link.cx.send_notification(notification.clone()).is_ok());
+    }
+
+    /// The session's latest turn, or the one `turn_id` names, as its journal records it, and
+    /// waiting while a person must answer something in it.
+    fn turn(&self, turn_id: Option<&str>) -> Option<LatestTurn> {
+        let mut turn = journal::turn(self.journal.records(), &self.root, turn_id)?;
+        let asks_a_person = self.pending.iter().any(|pending| {
+            matches!(
+                pending.request,
+                PendingRequest::Permission(_) | PendingRequest::Elicitation(_)
+            )
+        });
+        if turn.state == TurnState::Running && asks_a_person {
+            turn.state = TurnState::Waiting;
+        }
+        Some(turn)
     }
 
     fn activity(&self) -> Activity {
@@ -2034,6 +2078,7 @@ fn not_running() -> SteerTurnResponse {
     SteerTurnResponse {
         outcome: weave_host_protocol::turns::SteerOutcome::NotRunning,
         seq: None,
+        turn_id: None,
     }
 }
 

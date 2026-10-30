@@ -46,6 +46,8 @@ pub const HOST_STOPPING: i32 = -32077;
 pub const UNKNOWN_TERMINAL: i32 = -32078;
 /// The terminal's holder couldn't be started or reached; the message says why.
 pub const TERMINAL_UNAVAILABLE: i32 = -32079;
+/// The session's journal has no turn with that id.
+pub const UNKNOWN_TURN: i32 = -32080;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -150,6 +152,13 @@ pub fn unknown_terminal(id: &str) -> Error {
 
 pub fn terminal_unavailable(why: impl Into<String>) -> Error {
     Error::new(TERMINAL_UNAVAILABLE, why)
+}
+
+pub fn unknown_turn(session_id: &str, turn_id: &str) -> Error {
+    Error::new(
+        UNKNOWN_TURN,
+        format!("thread {session_id} has no turn {turn_id}"),
+    )
 }
 
 pub fn not_a_repository(path: &Path) -> Error {

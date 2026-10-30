@@ -1,7 +1,8 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&StartTurnResponse { seq: 42 })"
+expression: "round_trip(&StartTurnResponse { seq: 42, turn_id: Some(\"t-4\".to_owned()), })"
 ---
 {
-  "seq": 42
+  "seq": 42,
+  "turnId": "t-4"
 }

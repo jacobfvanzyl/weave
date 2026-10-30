@@ -42,6 +42,9 @@ pub const STEER_SESSION: &str = "steer_session";
 /// The Host tool that cancels a session's running turn, as `turn/cancel` does.
 pub const CANCEL_SESSION_TURN: &str = "cancel_session_turn";
 
+/// The Host tool that lists the agents threads can run, as `agents/list` does.
+pub const LIST_AGENTS: &str = "list_agents";
+
 /// The tool kinds a permission policy names, for the tools that take one.
 const TOOL_KINDS: [&str; 10] = [
     "read",
@@ -119,8 +122,25 @@ pub fn host_catalog() -> Vec<Tool> {
                     "cwd": {"type": "string", "description": "Only threads in this absolute \
                         directory."},
                     "repo": {"type": "string", "description": "Only threads in this git \
-                        repository's worktrees, given by any directory in it. Not with agentId."}
+                        repository's worktrees, given by any directory in it. Not with agentId."},
+                    "activity": {"type": "string", "enum": ["idle", "running", "waiting"],
+                        "description": "Only the open threads doing this: idle, running a \
+                        turn, or waiting on a person. Not with agentId."}
                 },
+                "additionalProperties": false
+            }),
+        },
+        Tool {
+            name: LIST_AGENTS.to_owned(),
+            title: "List agents".to_owned(),
+            description: "List the agents the weave Host can start threads with: each one's \
+                          id, name, and what it's for when its configuration says, and which \
+                          is the default. Use it to choose an agent for start_session. Answers \
+                          with the Host's agents/list result as JSON."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
                 "additionalProperties": false
             }),
         },
@@ -128,14 +148,19 @@ pub fn host_catalog() -> Vec<Tool> {
             name: READ_SESSION.to_owned(),
             title: "Read a thread".to_owned(),
             description: "Read one thread of the weave Host: how it lists, and its latest \
-                          turn: the prompt, whether it is still running, how it ended, and the \
-                          agent's last message in it. Use it to read the full answer of a \
-                          thread you prompted, or any other thread. Answers with the Host's \
-                          sessions/get result as JSON."
+                          turn, or the one turnId names: the prompt, its state (queued, \
+                          running, waiting on a person, or how it ended), and the agent's last \
+                          message in it. Use it to read the full answer of a thread you \
+                          prompted, or any other thread. Answers with the Host's sessions/get \
+                          result as JSON."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
-                "properties": {"sessionId": session_id},
+                "properties": {
+                    "sessionId": session_id,
+                    "turnId": {"type": "string", "description": "Optional: a turn of the \
+                        thread, as prompt_session (its queuedId) or start_session gave it."}
+                },
                 "required": ["sessionId"],
                 "additionalProperties": false
             }),
@@ -154,8 +179,8 @@ pub fn host_catalog() -> Vec<Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "agentId": {"type": "string", "description": "The agent to start, such as \
-                        claude or codex; list_sessions shows which agents threads run."},
+                    "agentId": {"type": "string", "description": "The agent to start; \
+                        list_agents says which there are and what each is for."},
                     "prompt": {"type": "string", "description": "What to ask of it: everything \
                         it needs to know, since it doesn't see this conversation."},
                     "cwd": {"type": "string", "description": "The absolute directory it works \
@@ -187,7 +212,8 @@ pub fn host_catalog() -> Vec<Tool> {
             description: "Send a prompt to any open thread of the weave Host, one you started \
                           or another: it starts a turn at once if none runs, or waits in the \
                           thread's queue for the running one to end. When the turn ends, you'll \
-                          get a message saying how it ended."
+                          get a message saying how it ended. Its answer's queuedId names the \
+                          turn, for read_session."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",

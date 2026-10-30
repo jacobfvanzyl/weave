@@ -33,6 +33,7 @@
 //! terminal = false
 //!
 //! [agents.local]             # …or define an agent
+//! description = "Reviews Rust changes" # what it's for, for agents choosing whom to hand work to
 //! command = "/usr/local/bin/my-agent"
 //! args = ["--acp"]
 //! env = { LOG = "debug" }
@@ -134,6 +135,9 @@ impl DelegationConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
+    /// What the agent is for, which agents choosing one to hand work to read
+    /// (`list_agents`), and `agents/list` gives.
+    pub description: Option<String>,
     /// Required unless the name is a preset or an ACP registry agent.
     pub command: Option<String>,
     #[serde(default)]

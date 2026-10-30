@@ -264,6 +264,7 @@ async fn establish(
                     agent_id: Some(launch.agent_id().to_owned()),
                     cwd: Some(launch.cwd.clone()),
                     repo: None,
+                    activity: None,
                     cursor: None,
                 })
                 .await?;
@@ -289,6 +290,7 @@ async fn establish(
                     agent_id: Some(launch.agent_id().to_owned()),
                     cwd: Some(launch.cwd.clone()),
                     repo: None,
+                    activity: None,
                     cursor: None,
                 })
                 .await?;

@@ -149,6 +149,7 @@ mod tests {
                 prompt: Vec::new(),
                 origin: None,
                 queued_id: Some("carried".to_owned()),
+                turn_id: Some("carried".to_owned()),
                 key: None,
             }),
             record(Entry::Unqueued {

@@ -41,21 +41,44 @@ expression: round_trip(&host_catalog())
         "repo": {
           "type": "string",
           "description": "Only threads in this git repository's worktrees, given by any directory in it. Not with agentId."
+        },
+        "activity": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "running",
+            "waiting"
+          ],
+          "description": "Only the open threads doing this: idle, running a turn, or waiting on a person. Not with agentId."
         }
       },
       "additionalProperties": false
     }
   },
   {
+    "name": "list_agents",
+    "title": "List agents",
+    "description": "List the agents the weave Host can start threads with: each one's id, name, and what it's for when its configuration says, and which is the default. Use it to choose an agent for start_session. Answers with the Host's agents/list result as JSON.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "read_session",
     "title": "Read a thread",
-    "description": "Read one thread of the weave Host: how it lists, and its latest turn: the prompt, whether it is still running, how it ended, and the agent's last message in it. Use it to read the full answer of a thread you prompted, or any other thread. Answers with the Host's sessions/get result as JSON.",
+    "description": "Read one thread of the weave Host: how it lists, and its latest turn, or the one turnId names: the prompt, its state (queued, running, waiting on a person, or how it ended), and the agent's last message in it. Use it to read the full answer of a thread you prompted, or any other thread. Answers with the Host's sessions/get result as JSON.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "sessionId": {
           "type": "string",
           "description": "The thread's id, as list_sessions or start_session gave it."
+        },
+        "turnId": {
+          "type": "string",
+          "description": "Optional: a turn of the thread, as prompt_session (its queuedId) or start_session gave it."
         }
       },
       "required": [
@@ -73,7 +96,7 @@ expression: round_trip(&host_catalog())
       "properties": {
         "agentId": {
           "type": "string",
-          "description": "The agent to start, such as claude or codex; list_sessions shows which agents threads run."
+          "description": "The agent to start; list_agents says which there are and what each is for."
         },
         "prompt": {
           "type": "string",
@@ -131,7 +154,7 @@ expression: round_trip(&host_catalog())
   {
     "name": "prompt_session",
     "title": "Prompt a thread",
-    "description": "Send a prompt to any open thread of the weave Host, one you started or another: it starts a turn at once if none runs, or waits in the thread's queue for the running one to end. When the turn ends, you'll get a message saying how it ended.",
+    "description": "Send a prompt to any open thread of the weave Host, one you started or another: it starts a turn at once if none runs, or waits in the thread's queue for the running one to end. When the turn ends, you'll get a message saying how it ended. Its answer's queuedId names the turn, for read_session.",
     "inputSchema": {
       "type": "object",
       "properties": {

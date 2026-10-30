@@ -98,6 +98,7 @@ use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::GET_FEATURE;
 use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::GetSessionResponse;
+use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
 use weave_host_protocol::sessions::OBSERVE_FEATURE;
@@ -109,7 +110,6 @@ use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionRemovedNotification;
-use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
@@ -143,6 +143,7 @@ use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::StartTurnResponse;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::SteerTurnResponse;
+use weave_host_protocol::turns::TURN_IDS_FEATURE;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_host_protocol::worktrees::CreateWorktreeRequest;
@@ -798,6 +799,7 @@ impl Connection {
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
                 GET_FEATURE.to_owned(),
+                TURN_IDS_FEATURE.to_owned(),
                 DRAIN_FEATURE.to_owned(),
                 OBSERVE_FEATURE.to_owned(),
             ]
@@ -904,57 +906,7 @@ impl Connection {
 
     async fn list_agents(&self, request: ListAgentsRequest) -> Result<ListAgentsResponse, Error> {
         self.hello_info()?;
-        let config = self.shared.load_config()?;
-        let mut agents: Vec<AgentSummary> = Vec::new();
-        let local = |id: &str, source| AgentSummary {
-            id: id.to_owned(),
-            name: id.to_owned(),
-            source,
-            version: None,
-            installed: true,
-            description: None,
-        };
-        for id in self.shared.config.agents.keys() {
-            agents.push(local(id, AgentSource::Config));
-        }
-        for id in config.known_agents() {
-            if agents.iter().any(|agent| agent.id == id) {
-                continue;
-            }
-            let defined = config
-                .agents
-                .get(&id)
-                .is_some_and(|agent| agent.command.is_some());
-            let mut summary = local(&id, AgentSource::Config);
-            if let Some(preset) = weave_acp_core::Preset::find(&id).filter(|_| !defined) {
-                summary.source = AgentSource::Preset;
-                summary.version = Some(config.lock.version_of(preset));
-            }
-            agents.push(summary);
-        }
-        if request.include_registry {
-            let cache = self.shared.registry_cache()?;
-            let loaded = weave_agents::registry::load(&cache, request.refresh)
-                .await
-                .map_err(|error| Error::internal_error().data(format!("{error:#}")))?;
-            for agent in &loaded.registry.agents {
-                if agents.iter().any(|known| known.id == agent.id) {
-                    continue;
-                }
-                agents.push(AgentSummary {
-                    id: agent.id.clone(),
-                    name: agent.name.clone(),
-                    source: AgentSource::Registry,
-                    version: Some(agent.version.clone()),
-                    installed: weave_agents::registry::is_installed(&cache, agent),
-                    description: (!agent.description.is_empty()).then(|| agent.description.clone()),
-                });
-            }
-        }
-        Ok(ListAgentsResponse {
-            agents,
-            default_agent: config.default_agent,
-        })
+        list_agents(&self.shared, request).await
     }
 
     async fn get_agent(&self, request: GetAgentRequest) -> Result<GetAgentResponse, Error> {
@@ -1688,7 +1640,12 @@ impl Connection {
             "turn/start",
             digest,
             Some(&root),
-            |work| work.started.then_some(StartTurnResponse { seq: work.seq }),
+            |work| {
+                work.started.then_some(StartTurnResponse {
+                    seq: work.seq,
+                    turn_id: work.turn_id,
+                })
+            },
             StartTurnResponse::clone,
             async |key| {
                 let session = self.live(&session_id)?;
@@ -1700,8 +1657,11 @@ impl Connection {
                     key,
                     reply,
                 })?;
-                let seq = started.await.map_err(|_| session::ended())??;
-                Ok(StartTurnResponse { seq })
+                let (seq, turn_id) = started.await.map_err(|_| session::ended())??;
+                Ok(StartTurnResponse {
+                    seq,
+                    turn_id: Some(turn_id),
+                })
             },
         )
         .await
@@ -1791,15 +1751,74 @@ impl Connection {
             )
         });
         let attaching = link.is_some();
-        let (session_id, state) = run(&self.shared, request, link).await?;
+        let answer = run(&self.shared, request, link).await?;
         if attaching {
-            lock(&self.attached).insert(session_id.clone());
+            lock(&self.attached).insert(answer.session_id.clone());
         }
-        Ok(RunResponse {
-            session_id,
-            state: state.map(Box::new),
-        })
+        Ok(answer)
     }
+}
+
+/// `agents/list`, for a client or a Host tool: presets and configured agents, described as
+/// their configuration describes them, and registry agents when asked.
+pub(crate) async fn list_agents(
+    shared: &Arc<Shared>,
+    request: ListAgentsRequest,
+) -> Result<ListAgentsResponse, Error> {
+    let config = shared.load_config()?;
+    let mut agents: Vec<AgentSummary> = Vec::new();
+    let local = |id: &str, source| AgentSummary {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        source,
+        version: None,
+        installed: true,
+        description: config
+            .agents
+            .get(id)
+            .and_then(|agent| agent.description.clone()),
+    };
+    for id in shared.config.agents.keys() {
+        agents.push(local(id, AgentSource::Config));
+    }
+    for id in config.known_agents() {
+        if agents.iter().any(|agent| agent.id == id) {
+            continue;
+        }
+        let defined = config
+            .agents
+            .get(&id)
+            .is_some_and(|agent| agent.command.is_some());
+        let mut summary = local(&id, AgentSource::Config);
+        if let Some(preset) = weave_acp_core::Preset::find(&id).filter(|_| !defined) {
+            summary.source = AgentSource::Preset;
+            summary.version = Some(config.lock.version_of(preset));
+        }
+        agents.push(summary);
+    }
+    if request.include_registry {
+        let cache = shared.registry_cache()?;
+        let loaded = weave_agents::registry::load(&cache, request.refresh)
+            .await
+            .map_err(|error| Error::internal_error().data(format!("{error:#}")))?;
+        for agent in &loaded.registry.agents {
+            if agents.iter().any(|known| known.id == agent.id) {
+                continue;
+            }
+            agents.push(AgentSummary {
+                id: agent.id.clone(),
+                name: agent.name.clone(),
+                source: AgentSource::Registry,
+                version: Some(agent.version.clone()),
+                installed: weave_agents::registry::is_installed(&cache, agent),
+                description: (!agent.description.is_empty()).then(|| agent.description.clone()),
+            });
+        }
+    }
+    Ok(ListAgentsResponse {
+        agents,
+        default_agent: config.default_agent,
+    })
 }
 
 /// `queue/add` from `origin`, for a client or a Host tool.
@@ -1898,14 +1917,22 @@ pub(crate) async fn list_sessions(
                 Some(dir) => Some(shared.git.repository(dir).await?.primary),
                 None => None,
             };
+            let mut sessions = shared.listings(request.cwd.as_deref(), repo.as_deref());
+            if let Some(activity) = request.activity {
+                sessions.retain(|listing| listing.activity == Some(activity));
+            }
             Ok(ListSessionsResponse {
-                sessions: shared.listings(request.cwd.as_deref(), repo.as_deref()),
+                sessions,
                 next_cursor: None,
             })
         }
         Some(_) if request.repo.is_some() => {
             Err(Error::invalid_params()
                 .data("sessions/list takes a repository only without an agent"))
+        }
+        Some(_) if request.activity.is_some() => {
+            Err(Error::invalid_params()
+                .data("sessions/list takes an activity only without an agent"))
         }
         Some(agent_id) => agent_sessions(shared, &agent_id, request).await,
     }
@@ -2053,11 +2080,14 @@ pub(crate) async fn get_session(
             return Err(unknown());
         }
         let (reply, latest) = oneshot::channel();
-        session.send(Command::LatestTurn { reply })?;
+        session.send(Command::LatestTurn {
+            turn_id: request.turn_id.clone(),
+            reply,
+        })?;
         let latest_turn = latest.await.map_err(|_| session::ended())?;
         return Ok(GetSessionResponse {
             session: session.summary().listing(),
-            latest_turn,
+            latest_turn: asked_for(&request, latest_turn)?,
         });
     }
     let recorded = recorded.ok_or_else(unknown)?;
@@ -2070,10 +2100,25 @@ pub(crate) async fn get_session(
         .unwrap_or_default();
     let mut session = dormant(&request.session_id, &agent_id, &recorded);
     session.info.title = journal::shown_title(&records);
+    let latest_turn = journal::turn(&records, &request.session_id, request.turn_id.as_deref());
     Ok(GetSessionResponse {
-        latest_turn: journal::latest_turn(&records, &request.session_id),
+        latest_turn: asked_for(&request, latest_turn)?,
         session,
     })
+}
+
+/// The turn `sessions/get` found: an error when it asked for one by id and there's none.
+fn asked_for(
+    request: &GetSessionRequest,
+    found: Option<LatestTurn>,
+) -> Result<Option<LatestTurn>, Error> {
+    match (&request.turn_id, found) {
+        (Some(turn_id), None) => Err(errors::unknown_turn(
+            &request.session_id.to_string(),
+            turn_id,
+        )),
+        (_, found) => Ok(found),
+    }
 }
 
 /// A session a stopped Host left, or one closed since, as listings show it.
@@ -2260,7 +2305,7 @@ pub(crate) async fn run(
     shared: &Arc<Shared>,
     request: RunRequest,
     link: Option<(ClientId, ClientLink)>,
-) -> Result<(SessionId, Option<SessionState>), Error> {
+) -> Result<RunResponse, Error> {
     run_as(shared, request, link, TurnOrigin::Run {}, None).await
 }
 
@@ -2272,14 +2317,14 @@ pub(crate) async fn run_as(
     link: Option<(ClientId, ClientLink)>,
     origin: TurnOrigin,
     started_by: Option<SessionId>,
-) -> Result<(SessionId, Option<SessionState>), Error> {
+) -> Result<RunResponse, Error> {
     let digest = admissions::digest(&RunRequest {
         key: None,
         ..request.clone()
     });
     let session_id = request.session_id.clone();
     let key = request.key.clone();
-    let answer = keyed(
+    keyed(
         shared,
         key,
         "session/run",
@@ -2288,24 +2333,17 @@ pub(crate) async fn run_as(
         |work| {
             Some(RunResponse {
                 session_id: work.session_id,
+                turn_id: work.turn_id,
                 state: None,
             })
         },
         |answer: &RunResponse| RunResponse {
-            session_id: answer.session_id.clone(),
             state: None,
+            ..answer.clone()
         },
-        async |key| {
-            let (session_id, state) =
-                run_now(shared, request, link, key, origin, started_by).await?;
-            Ok(RunResponse {
-                session_id,
-                state: state.map(Box::new),
-            })
-        },
+        async |key| run_now(shared, request, link, key, origin, started_by).await,
     )
-    .await?;
-    Ok((answer.session_id, answer.state.map(|state| *state)))
+    .await
 }
 
 /// [`run_as`], under `key` when there is one.
@@ -2316,7 +2354,7 @@ async fn run_now(
     key: Option<String>,
     origin: TurnOrigin,
     started_by: Option<SessionId>,
-) -> Result<(SessionId, Option<SessionState>), Error> {
+) -> Result<RunResponse, Error> {
     if shared.draining() {
         return Err(errors::host_stopping());
     }
@@ -2427,8 +2465,12 @@ async fn run_now(
         key,
         reply,
     })?;
-    started.await.map_err(|_| session::ended())??;
-    Ok((root, state))
+    let (_, turn_id) = started.await.map_err(|_| session::ended())??;
+    Ok(RunResponse {
+        session_id: root,
+        turn_id: Some(turn_id),
+        state: state.map(Box::new),
+    })
 }
 
 /// Open a session the Host doesn't have open in `instance`: resume it from the journal a

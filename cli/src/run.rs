@@ -16,19 +16,22 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
 use weave_acp_core::schema::ContentBlock;
-use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
-use weave_host_client::HostEvent;
+use weave_host_client::HostConnection;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::events::SessionEventNotification;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::DetachSessionRequest;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::turns::CancelTurnRequest;
+use weave_host_protocol::turns::TurnId;
 
 use crate::args::AgentArgs;
 use crate::args::ApproveArgs;
@@ -41,6 +44,13 @@ use crate::exit::Status;
 use crate::recent::Recent;
 use crate::start::StartMode;
 use crate::start::choose;
+use crate::turn::Follower;
+use crate::turn::Outcome;
+use crate::turn::Pick;
+use crate::turn::Print;
+use crate::turn::WaitArgs;
+use crate::turn::report;
+use crate::turn::sleep_until;
 
 #[derive(Args)]
 pub struct RunArgs {
@@ -66,13 +76,21 @@ pub struct RunArgs {
     #[arg(long)]
     detach: bool,
 
+    /// A name of your choosing, such as a UUID: running again with it, after a dropped
+    /// connection, starts nothing twice and follows the turn the first run started.
+    #[arg(long)]
+    key: Option<String>,
+
+    #[command(flatten)]
+    waiting: WaitArgs,
+
     /// Print the thread's journal events (`session/event`) as JSON lines instead of the reply's
     /// text; with --detach, the Host's answer (`session/run`).
     #[arg(long)]
     json: bool,
 
     /// Run the agent in this process rather than the weave Host.
-    #[arg(long, conflicts_with = "detach")]
+    #[arg(long, conflicts_with_all = ["detach", "timeout"])]
     no_daemon: bool,
 }
 
@@ -116,6 +134,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                     agent_id: Some(launch.agent_id().to_owned()),
                     cwd: Some(launch.cwd.clone()),
                     repo: None,
+                    activity: None,
                     cursor: None,
                 })
                 .await;
@@ -143,7 +162,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         policy,
         attach: !args.detach,
         trace: launch.trace,
-        key: None,
+        key: args.key.clone(),
     };
     let response = match connection.send(request).await {
         Ok(response) => {
@@ -180,14 +199,64 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             "Running in the weave Host; attach with: {}",
             reopen_command(&launch.agent, &session_id.to_string())
         );
+        if let Some(turn) = &response.turn_id {
+            eprintln!("`weave threads follow {session_id} --turn {turn}` waits for its turn.");
+        }
         return Ok(ExitCode::SUCCESS);
     }
 
+    // A repeat under the same key attached nothing: follow the thread instead, from the start
+    // of the turn the first run started.
+    let (state, print) = match response.state {
+        Some(state) => {
+            let head = state.journal.head;
+            (*state, Print::After(head))
+        }
+        None => {
+            if let Some(over) = ended_turn(&connection, &session_id, response.turn_id.clone()).await
+            {
+                connection.shutdown().await;
+                host.finish().await;
+                if let Some(message) = over.message.filter(|_| !args.json) {
+                    println!("{message}");
+                }
+                return Ok(Status::of_state(over.state).into());
+            }
+            let observed = connection
+                .send(AttachSessionRequest {
+                    session_id: session_id.clone(),
+                    after: None,
+                    agent_id: None,
+                    cwd: None,
+                    trace: false,
+                    observe: true,
+                })
+                .await;
+            match observed {
+                Ok(observed) => (observed.state, Print::Turn),
+                Err(error) => {
+                    connection.shutdown().await;
+                    host.finish().await;
+                    return Err(error).context("following the thread");
+                }
+            }
+        }
+    };
+    let pick = match &response.turn_id {
+        Some(turn) => Pick::Turn(turn.clone()),
+        None => Pick::After(state.journal.head),
+    };
+    // A Host in this process ends with it, and the turn too, so it waits through everything.
+    let in_process = matches!(target, Target::InProcess);
+    let mut follower =
+        Follower::new(&state, pick, print).until_ends(args.waiting.keep_waiting || in_process);
+    let deadline = args.waiting.deadline();
     let mut out = Output::new(args.json);
     let mut cancelling = false;
-    let outcome: anyhow::Result<PromptResponse> = loop {
+    let outcome: anyhow::Result<Outcome> = loop {
         let event = tokio::select! {
             event = events.recv() => event,
+            () = sleep_until(deadline) => break Ok(Outcome::TimedOut),
             _ = tokio::signal::ctrl_c() => {
                 if cancelling {
                     break Err(exit::fail(
@@ -205,72 +274,62 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                 continue;
             }
         };
-        match event {
-            Some(HostEvent::Event(notification)) if notification.session_id == session_id => {
-                out.event(&session_id, &notification)?;
-                match notification.event {
-                    SessionEvent::TurnEnded {
-                        session_id: ended,
-                        response,
-                        error,
-                    } if ended == session_id => {
-                        break match (response, error) {
-                            (Some(response), _) => Ok(response),
-                            (None, Some(error)) => Err(exit::fail(Status::TurnFailed, error)),
-                            (None, None) => Err(exit::fail(
-                                Status::TurnFailed,
-                                anyhow::anyhow!("the turn ended unexplained"),
-                            )),
-                        };
-                    }
-                    SessionEvent::Closed { reason } => {
-                        break Err(exit::fail(
-                            Status::TurnFailed,
-                            anyhow::anyhow!("the thread ended: {reason}"),
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-            // A new session's policy answers what the agent asks. A session that asks its
-            // clients instead (continued with --resume) waits for one that can answer.
-            Some(HostEvent::PendingAdded(_)) => {
-                eprintln!("weave: the agent is waiting on you; answer it in the TUI");
-            }
-            Some(HostEvent::Disconnected(Some(error))) => {
-                break Err(exit::unreachable(anyhow::anyhow!(
-                    "lost the weave Host: {error}"
-                )));
-            }
-            Some(HostEvent::Disconnected(None)) | None => {
-                break Err(exit::unreachable(anyhow::anyhow!("lost the weave Host")));
-            }
-            _ => {}
+        // A new session's policy answers what the agent asks. A session that asks its clients
+        // instead (continued with --resume) waits for one that can answer, and this stops
+        // waiting then, unless asked to wait on.
+        match follower.handle(event, &mut out) {
+            Ok(Some(outcome)) => break Ok(outcome),
+            Ok(None) => {}
+            Err(error) => break Err(error),
         }
     };
     out.finish()?;
-    // Done with it: close it rather than leave it idle in the Host.
+    // Done with it: close it rather than leave it idle in the Host, unless its turn goes on.
+    let goes_on = matches!(&outcome, Ok(Outcome::Waiting(_) | Outcome::TimedOut));
     let _ = connection
         .send(DetachSessionRequest {
             session_id: session_id.clone(),
-            close: CloseWhen::IfUnused,
+            close: if goes_on {
+                CloseWhen::Never
+            } else {
+                CloseWhen::IfUnused
+            },
         })
         .await;
     connection.shutdown().await;
     host.finish().await;
-    let response = outcome?;
-    eprintln!(
-        "weave: thread {session_id}; continue it with {}",
-        reopen_command(&launch.agent, &session_id.to_string())
-    );
-    let status = Status::of_stop(response.stop_reason);
-    if status != Status::Success {
+    let outcome = outcome?;
+    if matches!(
+        outcome,
+        Outcome::Ended {
+            response: Some(_),
+            ..
+        }
+    ) {
         eprintln!(
-            "weave: the turn stopped: {}",
-            describe_stop(response.stop_reason)
+            "weave: thread {session_id}; continue it with {}",
+            reopen_command(&launch.agent, &session_id.to_string())
         );
     }
+    let status = report(outcome, &session_id, follower.turn(), args.json, false)?;
     Ok(status.into())
+}
+
+/// The turn `turn_id` of the thread, once it's over: a repeated run's, whose thread may have
+/// closed since, so there's nothing to follow.
+async fn ended_turn(
+    connection: &HostConnection,
+    session_id: &SessionId,
+    turn_id: Option<TurnId>,
+) -> Option<LatestTurn> {
+    let got = connection
+        .send(GetSessionRequest {
+            session_id: session_id.clone(),
+            turn_id: Some(turn_id?),
+        })
+        .await
+        .ok()?;
+    got.latest_turn.filter(|turn| turn.state.is_over())
 }
 
 /// The prompt from the arguments, or stdin when there are none or just `-`.
@@ -354,6 +413,10 @@ impl Output {
             _ => {}
         }
         Ok(stdout.flush()?)
+    }
+
+    pub(crate) fn is_json(&self) -> bool {
+        self.json
     }
 
     pub(crate) fn finish(&mut self) -> anyhow::Result<()> {

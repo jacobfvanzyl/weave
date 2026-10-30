@@ -65,6 +65,7 @@ pub struct AddQueuedRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AddQueuedResponse {
+    /// The prompt's id, which is also its turn's ([`crate::turns::TurnId`]).
     pub queued_id: QueuedId,
     /// The position of its `turnStarted` when it started a turn at once, otherwise of its
     /// `queued` event.

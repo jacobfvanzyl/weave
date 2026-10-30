@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"s-2\".into(), prompt:\n    vec![text(\"port the parser's tests to the new runner\")], origin:\n    TurnOrigin::Session { session_id: \"s-1\".into(), }, queued_id: None,\n},))"
+expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"s-2\".into(), prompt:\n    vec![text(\"port the parser's tests to the new runner\")], origin:\n    TurnOrigin::Session { session_id: \"s-1\".into(), report: false, },\n    queued_id: None, turn_id: Some(\"t-1\".to_owned()),\n},))"
 ---
 {
   "method": "session/event",
@@ -21,7 +21,8 @@ expression: "message(&event(41, SessionEvent::TurnStarted\n{\n    session_id: \"
         "session": {
           "sessionId": "s-1"
         }
-      }
+      },
+      "turnId": "t-1"
     }
   }
 }

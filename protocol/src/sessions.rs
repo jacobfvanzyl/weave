@@ -34,6 +34,7 @@ use crate::pending::PendingRequest;
 use crate::policy::PermissionPolicy;
 use crate::queue::QueuePause;
 use crate::queue::QueuedPrompt;
+use crate::turns::TurnId;
 use crate::worktrees::GitLocation;
 
 /// A session's journal, by an id that changes only when the Host starts a new journal for
@@ -132,6 +133,9 @@ pub struct RunningTurn {
     pub session_id: SessionId,
     pub started_at: Timestamp,
     pub origin: TurnOrigin,
+    /// Its id (feature `turnIds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
 }
 
 /// An open session as a client attached to it sees it; notifications keep it up to date.
@@ -231,6 +235,9 @@ pub struct ListSessionsRequest {
     /// an agent only (feature `worktrees`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<PathBuf>,
+    /// Only the open sessions doing this. Without an agent only (feature `turnIds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<Activity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
@@ -248,13 +255,17 @@ pub struct ListSessionsResponse {
 pub const GET_FEATURE: &str = "sessions/get";
 
 /// `sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists
-/// it, with its latest turn, read without opening it or attaching.
+/// it, with its latest turn, or the turn asked for, read without opening it or attaching.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "sessions/get", response = GetSessionResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct GetSessionRequest {
     pub session_id: SessionId,
+    /// This turn rather than the latest, a queued one included; it fails with `unknown_turn`
+    /// when the session's journal has no such turn (feature `turnIds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
@@ -262,17 +273,54 @@ pub struct GetSessionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct GetSessionResponse {
     pub session: SessionListing,
+    /// The latest turn, or the one asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_turn: Option<LatestTurn>,
 }
 
-/// A session's latest turn, as its journal records it.
+/// Where a turn is: waiting to start, running, waiting on a person, or how it ended. The
+/// endings match the exit statuses of `weave run` and `weave threads follow`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum TurnState {
+    /// Its prompt waits in the session's queue.
+    Queued,
+    Running,
+    /// It runs, and a permission request or elicitation in it waits for a person.
+    Waiting,
+    /// It ended as the agent meant it to (`end_turn`).
+    Ended,
+    /// It stopped short: the agent's token limit, a refusal, too many model requests.
+    Stopped,
+    Cancelled,
+    /// It failed, or ended unexplained.
+    Failed,
+}
+
+impl TurnState {
+    /// Whether the turn is over.
+    pub fn is_over(self) -> bool {
+        matches!(
+            self,
+            Self::Ended | Self::Stopped | Self::Cancelled | Self::Failed
+        )
+    }
+}
+
+/// A session's latest turn, or one asked for by id, as its journal records it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LatestTurn {
+    /// Its id, unless the Host journaled it before it gave ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
+    /// Where it is (feature `turnIds`).
+    pub state: TurnState,
     pub prompt: Vec<ContentBlock>,
     pub origin: TurnOrigin,
+    /// When it started; for a queued turn, when it was queued.
     pub started_at: Timestamp,
     pub running: bool,
     /// How it ended, once it has.
@@ -543,6 +591,9 @@ pub struct RunRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RunResponse {
     pub session_id: SessionId,
+    /// The id of the turn it started (feature `turnIds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
     /// When attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<Box<SessionState>>,

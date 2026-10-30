@@ -23,6 +23,7 @@ use crate::queue::QueuedId;
 use crate::sessions::Activity;
 use crate::sessions::SessionAgent;
 use crate::sessions::TurnOrigin;
+use crate::turns::TurnId;
 use crate::worktrees::GitLocation;
 
 /// `session/event`: one journaled event, in order.
@@ -60,6 +61,9 @@ pub enum SessionEvent {
         /// The queued prompt it started from, which has left the queue.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         queued_id: Option<QueuedId>,
+        /// The turn's id (feature `turnIds`): its `queuedId` when it has one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<TurnId>,
     },
     /// A message joined the running turn (`turn/steer`).
     TurnSteered {

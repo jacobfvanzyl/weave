@@ -216,6 +216,7 @@ fn schema() -> Value {
                 "hostStopping": errors::HOST_STOPPING,
                 "unknownTerminal": errors::UNKNOWN_TERMINAL,
                 "terminalUnavailable": errors::TERMINAL_UNAVAILABLE,
+                "unknownTurn": errors::UNKNOWN_TURN,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
@@ -231,6 +232,7 @@ fn schema() -> Value {
                 "requestKeys": turns::REQUEST_KEYS_FEATURE,
                 "drain": host::DRAIN_FEATURE,
                 "terminals": terminals::FEATURE,
+                "turnIds": turns::TURN_IDS_FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "sessions": {"maxTitle": sessions::MAX_TITLE},
@@ -244,6 +246,7 @@ fn schema() -> Value {
                 "promptSession": tools::PROMPT_SESSION,
                 "steerSession": tools::STEER_SESSION,
                 "cancelSessionTurn": tools::CANCEL_SESSION_TURN,
+                "listAgents": tools::LIST_AGENTS,
             },
         },
         "$defs": definitions,

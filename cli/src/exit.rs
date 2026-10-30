@@ -1,13 +1,19 @@
 //! The status `weave` exits with, which tells a script how a command went without reading what
 //! it printed: whether it worked, couldn't reach the weave Host, or ran a turn that failed, was
-//! cancelled or stopped short (WVE-108). An error that isn't any of those exits with 1, and
-//! arguments clap refuses with 2.
+//! cancelled or stopped short, or that it stopped waiting for a turn that waits on a person or
+//! took too long (WVE-108). An error that isn't any of those exits with 1, and arguments clap
+//! refuses with 2.
+//!
+//! How the turn went is in the status on purpose, unlike the A2A CLI's convention of keeping a
+//! task's outcome out of it (`docs/research/a2a-and-agents-controlling-threads.md`): scripts and
+//! agents composing threads branch on it, and 3 alone says the Host wasn't reached.
 
 use std::error::Error;
 use std::fmt;
 use std::process::ExitCode;
 
 use weave_acp_core::schema::StopReason;
+use weave_host_protocol::sessions::TurnState;
 
 /// What `weave`'s exit status says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +32,11 @@ pub enum Status {
     /// The turn stopped short otherwise: the agent's token limit, a refusal, too many model
     /// requests.
     Stopped = 6,
+    /// The turn waits on a person, to answer a permission request or a question; it goes on
+    /// once someone does.
+    Waiting = 7,
+    /// It stopped waiting for the turn at `--timeout`; the turn goes on.
+    TimedOut = 8,
 }
 
 impl Status {
@@ -35,6 +46,17 @@ impl Status {
             StopReason::EndTurn => Self::Success,
             StopReason::Cancelled => Self::Cancelled,
             _ => Self::Stopped,
+        }
+    }
+
+    /// How a turn that's over, in `state`, went.
+    pub fn of_state(state: TurnState) -> Self {
+        match state {
+            TurnState::Ended | TurnState::Queued | TurnState::Running => Self::Success,
+            TurnState::Waiting => Self::Waiting,
+            TurnState::Stopped => Self::Stopped,
+            TurnState::Cancelled => Self::Cancelled,
+            TurnState::Failed => Self::TurnFailed,
         }
     }
 
@@ -114,6 +136,14 @@ mod tests {
         let failed = fail(Status::TurnFailed, error);
         assert_eq!(format!("{failed:#}"), "connecting: refused");
         assert_eq!(Status::of_error(&failed), Status::TurnFailed);
+    }
+
+    #[test]
+    fn a_turn_thats_over_exits_with_how_it_went() {
+        assert_eq!(Status::of_state(TurnState::Ended), Status::Success);
+        assert_eq!(Status::of_state(TurnState::Stopped), Status::Stopped);
+        assert_eq!(Status::of_state(TurnState::Cancelled), Status::Cancelled);
+        assert_eq!(Status::of_state(TurnState::Failed), Status::TurnFailed);
     }
 
     #[test]

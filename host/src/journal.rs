@@ -50,7 +50,11 @@ use weave_host_protocol::queue::QueuedPrompt;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::TurnState;
+use weave_host_protocol::turns::TurnId;
 use weave_host_protocol::worktrees::GitLocation;
+
+use crate::queue::Queue;
 
 const VERSION: u32 = 1;
 
@@ -144,6 +148,10 @@ pub(crate) enum Entry {
         /// The queued prompt it started from.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         queued_id: Option<QueuedId>,
+        /// The turn's id; absent from journals of Hosts that gave none, whose queued turns go
+        /// by their `queued_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<TurnId>,
         /// The request key it was started under, which a repeat finds it by.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
@@ -318,12 +326,14 @@ impl Entry {
                 prompt,
                 origin,
                 queued_id,
+                turn_id,
                 ..
             } => SessionEvent::TurnStarted {
                 session_id: session_id.clone(),
                 prompt: prompt.clone(),
                 origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
                 queued_id: queued_id.clone(),
+                turn_id: turn_id.clone().or_else(|| queued_id.clone()),
             },
             Self::TurnSteered {
                 session_id,
@@ -671,17 +681,59 @@ pub(crate) fn started_by(records: &[Record]) -> Option<SessionId> {
     }
 }
 
-/// The latest turn of `root` in `records`: its prompt, how it ended once it has, and the
-/// agent's last message in it, its message chunks since the last tool call, thought or other
-/// message.
-pub(crate) fn latest_turn(records: &[Record], root: &SessionId) -> Option<LatestTurn> {
-    let start = records.iter().rposition(|record| {
-        matches!(&record.entry, Entry::TurnStarted { session_id, .. } if session_id == root)
-    })?;
-    let Entry::TurnStarted { prompt, origin, .. } = &records[start].entry else {
+/// The turn of `root` in `records` that `turn_id` names, or without one the latest: its prompt,
+/// where it is, and the agent's last message in it, its message chunks since the last tool
+/// call, thought or other message. A turn still queued is found in the queue the records leave.
+/// Whether it waits on a person isn't journaled: an open session's caller says so.
+pub(crate) fn turn(
+    records: &[Record],
+    root: &SessionId,
+    turn_id: Option<&str>,
+) -> Option<LatestTurn> {
+    let start = records.iter().rposition(|record| match &record.entry {
+        Entry::TurnStarted {
+            session_id,
+            turn_id: id,
+            queued_id,
+            ..
+        } if session_id == root => turn_id.is_none_or(|wanted| {
+            id.as_ref()
+                .or(queued_id.as_ref())
+                .is_some_and(|id| id == wanted)
+        }),
+        _ => false,
+    });
+    let Some(start) = start else {
+        let wanted = turn_id?;
+        let queued = Queue::from_records(records)
+            .prompts
+            .into_iter()
+            .find(|prompt| prompt.id == wanted)?;
+        return Some(LatestTurn {
+            turn_id: Some(queued.id),
+            state: TurnState::Queued,
+            prompt: queued.prompt,
+            origin: queued.origin,
+            started_at: queued.queued_at,
+            running: false,
+            response: None,
+            error: None,
+            message: None,
+        });
+    };
+    let Entry::TurnStarted {
+        prompt,
+        origin,
+        turn_id: id,
+        queued_id,
+        ..
+    } = &records[start].entry
+    else {
         return None;
     };
     let mut turn = LatestTurn {
+        turn_id: id.clone().or_else(|| queued_id.clone()),
+        state: TurnState::Running,
         prompt: prompt.clone(),
         origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
         started_at: records[start].at,
@@ -724,12 +776,26 @@ pub(crate) fn latest_turn(records: &[Record], root: &SessionId) -> Option<Latest
                     .clone()
                     .or_else(|| stop_reason.map(PromptResponse::new));
                 turn.error.clone_from(error);
+                turn.state = ended(turn.response.as_ref(), turn.error.as_ref());
+                break;
             }
             _ => {}
         }
     }
     turn.message = (!message.is_empty()).then_some(message);
     Some(turn)
+}
+
+/// How a turn that ended with `response`, or failed with `error`, stands.
+fn ended(response: Option<&PromptResponse>, error: Option<&Error>) -> TurnState {
+    match (response, error) {
+        (_, Some(_)) | (None, None) => TurnState::Failed,
+        (Some(response), None) => match response.stop_reason {
+            StopReason::EndTurn => TurnState::Ended,
+            StopReason::Cancelled => TurnState::Cancelled,
+            _ => TurnState::Stopped,
+        },
+    }
 }
 
 /// The record of `session_id`'s journal in `dir`, if it has one.
@@ -879,12 +945,14 @@ pub(crate) fn find_key(records: &[Record], key: &str) -> Option<KeyedWork> {
             Entry::TurnStarted {
                 key: Some(found),
                 queued_id,
+                turn_id,
                 session_id,
                 ..
             } if found == key => Some(KeyedWork {
                 seq: u64::try_from(seq).unwrap_or(u64::MAX),
                 session_id: session_id.clone(),
                 queued_id: queued_id.clone(),
+                turn_id: turn_id.clone().or_else(|| queued_id.clone()),
                 started: true,
             }),
             Entry::Queued {
@@ -898,6 +966,7 @@ pub(crate) fn find_key(records: &[Record], key: &str) -> Option<KeyedWork> {
                     _ => None,
                 })?,
                 queued_id: Some(queued_id.clone()),
+                turn_id: Some(queued_id.clone()),
                 started: false,
             }),
             _ => None,
@@ -911,6 +980,8 @@ pub(crate) struct KeyedWork {
     /// The session the turn started in, a subagent session's when it was one's.
     pub(crate) session_id: SessionId,
     pub(crate) queued_id: Option<QueuedId>,
+    /// The turn it started, or will once its queued prompt starts.
+    pub(crate) turn_id: Option<TurnId>,
     pub(crate) started: bool,
 }
 
@@ -1112,6 +1183,7 @@ mod tests {
             prompt: vec![ContentBlock::from("hi".to_owned())],
             origin: None,
             queued_id: None,
+            turn_id: Some("t1".to_owned()),
             key: Some("k1".to_owned()),
         });
         assert_eq!(seq, 1);
@@ -1136,6 +1208,7 @@ mod tests {
                 seq: 1,
                 session_id: id.clone(),
                 queued_id: None,
+                turn_id: Some("t1".to_owned()),
                 started: true,
             })
         );
@@ -1168,19 +1241,21 @@ mod tests {
     }
 
     #[test]
-    fn the_latest_turn_says_how_it_ended_and_the_agents_last_message() {
+    fn a_turn_says_where_it_is_and_the_agents_last_message() {
         use weave_acp_core::schema::ToolCall;
         let record = |entry: Entry| Record { entry, at: 9 };
         let id = SessionId::new("s1");
         let chunk = |text: &str| update(text);
-        let started = |prompt: &str| Entry::TurnStarted {
-            session_id: id.clone(),
-            at_ms: 9,
-            prompt: vec![ContentBlock::from(prompt.to_owned())],
-            origin: None,
-            queued_id: None,
-            key: None,
-        };
+        let started =
+            |prompt: &str, turn_id: Option<&str>, queued_id: Option<&str>| Entry::TurnStarted {
+                session_id: id.clone(),
+                at_ms: 9,
+                prompt: vec![ContentBlock::from(prompt.to_owned())],
+                origin: None,
+                queued_id: queued_id.map(str::to_owned),
+                turn_id: turn_id.map(str::to_owned),
+                key: None,
+            };
         let tool = Entry::Update {
             notification: Box::new(SessionNotification::new(
                 "s1",
@@ -1189,19 +1264,28 @@ mod tests {
         };
         let mut records = vec![
             record(header("s1")),
-            record(started("first")),
+            // A Host that gave turns no ids journaled this one.
+            record(started("first", None, None)),
             record(chunk("Done before.")),
             record(Entry::turn_ended(
                 id.clone(),
                 &Ok(PromptResponse::new(StopReason::EndTurn)),
             )),
-            record(started("second")),
+            record(started("second", Some("q-2"), Some("q-2"))),
             record(chunk("Let me look. ")),
             record(tool),
             record(chunk("Found it")),
             record(chunk(" in a.rs.")),
+            record(Entry::Queued {
+                queued_id: "q-3".to_owned(),
+                prompt: vec![ContentBlock::from("third".to_owned())],
+                origin: TurnOrigin::Run {},
+                key: None,
+            }),
         ];
-        let running = latest_turn(&records, &id).expect("a turn");
+        let running = turn(&records, &id, None).expect("a turn");
+        assert_eq!(running.turn_id.as_deref(), Some("q-2"));
+        assert_eq!(running.state, TurnState::Running);
         assert!(running.running);
         assert_eq!(
             running.prompt,
@@ -1212,13 +1296,65 @@ mod tests {
             id.clone(),
             &Ok(PromptResponse::new(StopReason::Cancelled)),
         )));
-        let ended = latest_turn(&records, &id).expect("a turn");
+        records.push(record(started("third", Some("q-3"), Some("q-3"))));
+        records.push(record(chunk("Third.")));
+        let ended = turn(&records, &id, Some("q-2")).expect("the second turn");
         assert!(!ended.running);
+        assert_eq!(ended.state, TurnState::Cancelled);
         assert_eq!(
             ended.response.map(|response| response.stop_reason),
             Some(StopReason::Cancelled)
         );
-        assert_eq!(latest_turn(&records[..1], &id), None);
+        // The next turn's message isn't the second's.
+        assert_eq!(ended.message.as_deref(), Some("Found it in a.rs."));
+        assert_eq!(
+            turn(&records, &id, None).and_then(|latest| latest.turn_id),
+            Some("q-3".to_owned())
+        );
+        assert_eq!(turn(&records, &id, Some("q-9")), None);
+        assert_eq!(turn(&records[..1], &id, None), None);
+    }
+
+    #[test]
+    fn a_queued_turn_is_found_in_the_queue_until_it_starts() {
+        let record = |entry: Entry| Record { entry, at: 5 };
+        let id = SessionId::new("s1");
+        let records = vec![
+            record(header("s1")),
+            record(Entry::Queued {
+                queued_id: "q-1".to_owned(),
+                prompt: vec![ContentBlock::from("later".to_owned())],
+                origin: TurnOrigin::Run {},
+                key: None,
+            }),
+        ];
+        let queued = turn(&records, &id, Some("q-1")).expect("queued");
+        assert_eq!(queued.state, TurnState::Queued);
+        assert!(!queued.running);
+        assert_eq!(queued.started_at, 5);
+        assert_eq!(turn(&records, &id, None), None);
+    }
+
+    #[test]
+    fn an_ended_turn_states_how() {
+        let response = |reason| Some(PromptResponse::new(reason));
+        assert_eq!(
+            ended(response(StopReason::EndTurn).as_ref(), None),
+            TurnState::Ended
+        );
+        assert_eq!(
+            ended(response(StopReason::MaxTokens).as_ref(), None),
+            TurnState::Stopped
+        );
+        assert_eq!(
+            ended(response(StopReason::Refusal).as_ref(), None),
+            TurnState::Stopped
+        );
+        assert_eq!(
+            ended(None, Some(&Error::internal_error())),
+            TurnState::Failed
+        );
+        assert_eq!(ended(None, None), TurnState::Failed);
     }
 
     #[test]

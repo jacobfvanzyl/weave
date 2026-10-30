@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(49, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"then update the docs\")],\n    origin: tui(), queued_id: Some(\"q-3\".to_owned()),\n},))"
+expression: "message(&event(49, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"then update the docs\")],\n    origin: tui(), queued_id: Some(\"q-3\".to_owned()), turn_id:\n    Some(\"q-3\".to_owned()),\n},))"
 ---
 {
   "method": "session/event",
@@ -23,7 +23,8 @@ expression: "message(&event(49, SessionEvent::TurnStarted\n{\n    session_id: \"
           "id": "c7"
         }
       },
-      "queuedId": "q-3"
+      "queuedId": "q-3",
+      "turnId": "q-3"
     }
   }
 }

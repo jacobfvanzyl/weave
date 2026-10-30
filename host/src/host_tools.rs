@@ -24,6 +24,7 @@ use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::ToolKind;
+use weave_host_protocol::agents::ListAgentsRequest;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::policy::Unapproved;
 use weave_host_protocol::queue::AddQueuedRequest;
@@ -32,10 +33,12 @@ use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::RunRequest;
+use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::tools::CANCEL_SESSION_TURN;
 use weave_host_protocol::tools::ClientToolResult;
+use weave_host_protocol::tools::LIST_AGENTS;
 use weave_host_protocol::tools::LIST_SESSIONS;
 use weave_host_protocol::tools::PROMPT_SESSION;
 use weave_host_protocol::tools::READ_SESSION;
@@ -45,6 +48,7 @@ use weave_host_protocol::tools::STEER_SESSION;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
+use weave_host_protocol::turns::TurnId;
 
 use crate::Shared;
 use crate::client;
@@ -69,6 +73,7 @@ pub(crate) async fn call(
             Ok(request) => answer(client::list_sessions(shared, request).await),
             Err(why) => Err(why),
         },
+        LIST_AGENTS => answer(client::list_agents(shared, ListAgentsRequest::default()).await),
         READ_SESSION => match parse::<GetSessionRequest>(arguments) {
             Ok(request) => answer(client::get_session(shared, request).await),
             Err(why) => Err(why),
@@ -119,6 +124,9 @@ struct StartArguments {
 #[serde(rename_all = "camelCase")]
 struct Started {
     session_id: SessionId,
+    /// The turn it started, for read_session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_id: Option<TurnId>,
     /// The policy the session runs under, within the calling session's.
     policy: PermissionPolicy,
 }
@@ -177,16 +185,23 @@ async fn start(
         session_id: me.session_id.clone(),
         report: false,
     };
-    let (session_id, _) =
-        client::run_as(shared, request, None, origin, Some(me.session_id.clone()))
-            .await
-            .map_err(|error| why(&error))?;
+    let RunResponse {
+        session_id,
+        turn_id,
+        ..
+    } = client::run_as(shared, request, None, origin, Some(me.session_id.clone()))
+        .await
+        .map_err(|error| why(&error))?;
     // An open session it prompted again keeps its own policy.
     let policy = shared
         .registry()
         .live(&session_id)
         .map_or(policy, |session| session.summary().policy);
-    to_text(&Started { session_id, policy })
+    to_text(&Started {
+        session_id,
+        turn_id,
+        policy,
+    })
 }
 
 #[derive(Deserialize)]
