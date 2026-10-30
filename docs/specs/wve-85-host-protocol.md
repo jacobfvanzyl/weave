@@ -1384,6 +1384,11 @@ except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answe
   Host (never starting one) for `worktrees/release`, failing while a session in the worktree is
   busy, for worktrunk's `pre-remove` hooks; `weave worktrees install-hook` adds it to
   worktrunk's user config when asked.
+- The exit status says how a command went, for scripts (WVE-108): 0, it worked, or the turn ended
+  (`end_turn`); 1, any other error; 2, bad arguments; 3, the Host couldn't be reached (not
+  running, for a command that never starts one; didn't start; or went away); 4, the turn failed
+  or its session closed under it; 5, the turn was cancelled; 6, it stopped short otherwise.
+  `weave daemon status` exits 3 when the Host isn't running.
 
 ## Crates
 

@@ -7,6 +7,7 @@ use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,6 +47,8 @@ use crate::args::AgentChoice;
 use crate::args::COMMAND_AGENT;
 use crate::args::HostLaunch;
 use crate::args::WorkspaceArgs;
+use crate::exit;
+use crate::exit::Status;
 use crate::service;
 
 /// A background Host exits once nothing has been open or connected for this long.
@@ -217,16 +220,17 @@ pub(crate) async fn open(paths: &DaemonPaths) -> anyhow::Result<socket::Transpor
         Ok(transport) => return Ok(transport),
         Err(error) if not_running(&error) => {}
         Err(error) => {
-            return Err(error).with_context(|| format!("connecting to {}", paths.socket.display()));
+            return Err(exit::unreachable(error)
+                .context(format!("connecting to {}", paths.socket.display())));
         }
     }
     if service::installed(paths) {
-        bail!(
+        return Err(exit::unreachable(anyhow::anyhow!(
             "the weave Host's service is installed but not running; start it with `weave \
              daemon start`"
-        );
+        )));
     }
-    start_in_background(paths)?;
+    start_in_background(paths).map_err(exit::unreachable)?;
     wait_until_listening(paths).await
 }
 
@@ -295,9 +299,10 @@ pub(crate) async fn wait_until_listening(paths: &DaemonPaths) -> anyhow::Result<
             Ok(transport) => return Ok(transport),
             Err(error) if not_running(&error) && Instant::now() < deadline => {}
             Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("the weave Host didn't start; see {}", paths.log().display())
-                });
+                return Err(exit::unreachable(error).context(format!(
+                    "the weave Host didn't start; see {}",
+                    paths.log().display()
+                )));
             }
         }
     }
@@ -321,7 +326,8 @@ pub(crate) async fn control(paths: &DaemonPaths) -> anyhow::Result<Option<HostCo
         Ok(transport) => transport,
         Err(error) if not_running(&error) => return Ok(None),
         Err(error) => {
-            return Err(error).with_context(|| format!("connecting to {}", paths.socket.display()));
+            return Err(exit::unreachable(error)
+                .context(format!("connecting to {}", paths.socket.display())));
         }
     };
     let (connection, _events) = HostConnection::connect(
@@ -387,9 +393,9 @@ struct RunArgs {
     systemd: bool,
 }
 
-pub async fn command(args: DaemonArgs) -> anyhow::Result<()> {
+pub async fn command(args: DaemonArgs) -> anyhow::Result<ExitCode> {
     let paths = paths()?;
-    match args.command {
+    let done = match args.command {
         DaemonCommand::Run(run) => serve(&paths, run).await,
         DaemonCommand::Start => start(&paths).await,
         DaemonCommand::Stop(stop_args) => {
@@ -399,10 +405,11 @@ pub async fn command(args: DaemonArgs) -> anyhow::Result<()> {
             Ok(())
         }
         DaemonCommand::Restart(stop_args) => restart(&paths, stop_args.now).await,
-        DaemonCommand::Status => status(&paths).await,
+        DaemonCommand::Status => return status(&paths).await.map(ExitCode::from),
         DaemonCommand::Install => service::install(&paths).await,
         DaemonCommand::Uninstall => service::uninstall(&paths).await,
-    }
+    };
+    done.map(|()| ExitCode::SUCCESS)
 }
 
 async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
@@ -636,7 +643,9 @@ pub(crate) async fn stop(paths: &DaemonPaths, now: bool) -> anyhow::Result<bool>
     Ok(true)
 }
 
-async fn status(paths: &DaemonPaths) -> anyhow::Result<()> {
+/// `weave daemon status`: [`Status::Unreachable`] when the Host isn't running, as `systemctl
+/// status` exits 3 for a unit that isn't active.
+async fn status(paths: &DaemonPaths) -> anyhow::Result<Status> {
     let installed = service::installed(paths);
     let notes = if installed {
         service::notes(paths)
@@ -654,13 +663,13 @@ async fn status(paths: &DaemonPaths) -> anyhow::Result<()> {
             paths.socket.display()
         );
         print_notes(&notes);
-        return Ok(());
+        return Ok(Status::Unreachable);
     };
     let status = connection.send(StatusRequest {}).await;
     connection.shutdown().await;
     print!("{}", describe(&status?, paths, now_ms()));
     print_notes(&notes);
-    Ok(())
+    Ok(Status::Success)
 }
 
 /// What the person may want to change about the service, each as a paragraph of its own.

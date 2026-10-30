@@ -129,6 +129,7 @@ impl Turn {
         let rest = rest.trim();
         // Advertised commands arrive as `/name …`; bare names work too.
         let command = command.strip_prefix('/').unwrap_or(command);
+        let mut stop = None;
         match command {
             "read" => self.read(cx, rest).await?,
             "write" => self.write(cx, rest).await?,
@@ -160,6 +161,15 @@ impl Turn {
             "switch-mode" => self.switch_mode(cx).await?,
             "withdraw" => self.withdraw(cx).await?,
             "extension" => self.extension(cx).await?,
+            "stop" => {
+                stop = Some(match rest {
+                    "refusal" => StopReason::Refusal,
+                    "max-tokens" => StopReason::MaxTokens,
+                    "max-turn-requests" => StopReason::MaxTurnRequests,
+                    _ => StopReason::EndTurn,
+                });
+            }
+            "fail" => return Err(Error::internal_error().data("the turn failed, as asked")),
             _ => {
                 let attachments = describe_attachments(&request.prompt);
                 self.say(cx, &format!("You said: {text}{attachments}"))
@@ -182,7 +192,7 @@ impl Turn {
         let stop_reason = if self.cancel.is_cancelled() {
             StopReason::Cancelled
         } else {
-            StopReason::EndTurn
+            stop.unwrap_or(StopReason::EndTurn)
         };
         Ok(PromptResponse::new(stop_reason))
     }

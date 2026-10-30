@@ -31,5 +31,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+agent-client-protocol = { workspace = true }
+weave-fake-agent = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

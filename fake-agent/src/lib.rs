@@ -26,6 +26,8 @@
 //! | `switch-mode` | an agent-initiated mode change (`current_mode_update`, `config_option_update`) |
 //! | `withdraw` | a permission request withdrawn with `$/cancel_request` |
 //! | `extension` | a `_`-prefixed request (expects "method not found") and notification |
+//! | `stop refusal\|max-tokens\|max-turn-requests` | ends the turn with that stop reason (not advertised) |
+//! | `fail` | fails the prompt with an internal error (not advertised) |
 //!
 //! Echoed prompts also list any non-text content blocks they carried.
 //! | anything else | echoes the prompt |

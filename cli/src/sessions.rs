@@ -3,6 +3,7 @@
 //! included (ADR 0023).
 
 use anyhow::Context;
+use anyhow::anyhow;
 use anyhow::bail;
 use clap::Args;
 use clap::Subcommand;
@@ -26,6 +27,7 @@ use crate::daemon::ago;
 use crate::daemon::control;
 use crate::daemon::now_ms;
 use crate::daemon::paths;
+use crate::exit;
 use crate::run::describe_stop;
 use crate::run::prompt_text;
 
@@ -106,9 +108,9 @@ pub async fn command(args: SessionsArgs) -> anyhow::Result<()> {
             | SessionsCommand::Prompt(_)
             | SessionsCommand::Steer(_)
             | SessionsCommand::Cancel(_)
-            | SessionsCommand::Close(_) => {
-                bail!("the weave Host isn't running, so no threads are open")
-            }
+            | SessionsCommand::Close(_) => Err(exit::unreachable(anyhow!(
+                "the weave Host isn't running, so no threads are open"
+            ))),
         };
     };
     let result = run(&connection, command).await;

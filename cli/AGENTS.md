@@ -39,6 +39,16 @@ stdout (`--json` for `sessions/get`), `prompt` is `queue/add`, and `steer` is `t
 failing when no turn runs. Their turns' origin is the CLI's, a client's, so no thread hears how
 they end, even when an agent ran it; an agent's Host tools do that.
 
+The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
+the turn ended (`end_turn`); 1, any other error; 2, arguments clap refused; 3, the weave Host
+couldn't be reached: not running, for a command that never starts one (`threads read`, `daemon
+status`), didn't start, or went away; 4, the turn failed, or its thread closed under it; 5, the
+turn was cancelled; 6, it stopped short otherwise (a token limit, a refusal, too many model
+requests). `threads list` with no Host lists none and exits 0. An error that exits other than 1
+is made with `exit::fail` or `exit::unreachable`, which keep its message and causes. CLI tests
+(`tests/`) run `weave` against a Host inside the test (`tests/support`), with the fake agent
+in-process, whose `stop <reason>` and `fail` scripts end turns each way.
+
 `weave worktrees pre-remove` is worktrunk's `pre-remove` hook (`cli/src/worktrees.rs`): run in the
 worktree being removed, it asks a running Host for `worktrees/release` and exits non-zero while a
 session there runs a turn or waits on the person, which stops `wt remove`, `wt merge` and `wt step

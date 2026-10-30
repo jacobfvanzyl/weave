@@ -2,6 +2,7 @@ mod args;
 mod config;
 mod daemon;
 mod devices;
+mod exit;
 mod recent;
 mod run;
 mod service;
@@ -31,6 +32,7 @@ use crate::args::SessionArgs;
 use crate::args::WorkspaceArgs;
 use crate::config::AlternateScreen;
 use crate::daemon::Target;
+use crate::exit::Status;
 use crate::recent::Recent;
 use crate::start::SignedIn;
 
@@ -125,8 +127,17 @@ struct LogoutArgs {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<ExitCode> {
-    let mut cli = Cli::parse();
+async fn main() -> ExitCode {
+    match command(Cli::parse()).await {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("Error: {error:?}");
+            Status::of_error(&error).into()
+        }
+    }
+}
+
+async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command.take() {
         Some(Command::Run(args)) => {
             log_to_stderr("warn");
@@ -143,7 +154,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         Some(Command::Daemon(args)) => {
             // A Host's stderr is its log, agents' stderr included, as `--log-file` has it.
             log_to_stderr("info,agent_stderr=debug");
-            daemon::command(args).await.map(|()| ExitCode::SUCCESS)
+            daemon::command(args).await
         }
         Some(Command::Pair(args)) => {
             log_to_stderr("warn");

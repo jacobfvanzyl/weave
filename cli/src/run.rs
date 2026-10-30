@@ -32,6 +32,8 @@ use crate::args::SessionArgs;
 use crate::args::WorkspaceArgs;
 use crate::args::reopen_command;
 use crate::daemon::Target;
+use crate::exit;
+use crate::exit::Status;
 use crate::recent::Recent;
 use crate::start::StartMode;
 use crate::start::choose;
@@ -179,7 +181,10 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
             event = events.recv() => event,
             _ = tokio::signal::ctrl_c() => {
                 if cancelling {
-                    break Err(anyhow::anyhow!("abandoned before the agent stopped"));
+                    break Err(exit::fail(
+                        Status::Cancelled,
+                        anyhow::anyhow!("abandoned before the agent stopped"),
+                    ));
                 }
                 cancelling = true;
                 eprintln!("\nweave: cancelling (Ctrl-C again to leave it)");
@@ -206,12 +211,18 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                     } if ended == session_id => {
                         break match (response, error) {
                             (Some(response), _) => Ok(response),
-                            (None, Some(error)) => Err(error.into()),
-                            (None, None) => Err(anyhow::anyhow!("the turn ended unexplained")),
+                            (None, Some(error)) => Err(exit::fail(Status::TurnFailed, error)),
+                            (None, None) => Err(exit::fail(
+                                Status::TurnFailed,
+                                anyhow::anyhow!("the turn ended unexplained"),
+                            )),
                         };
                     }
                     SessionEvent::Closed { reason } => {
-                        break Err(anyhow::anyhow!("the thread ended: {reason}"));
+                        break Err(exit::fail(
+                            Status::TurnFailed,
+                            anyhow::anyhow!("the thread ended: {reason}"),
+                        ));
                     }
                     _ => {}
                 }
@@ -222,10 +233,12 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                 eprintln!("weave: the agent is waiting on you; answer it in the TUI");
             }
             Some(HostEvent::Disconnected(Some(error))) => {
-                break Err(anyhow::anyhow!("lost the weave Host: {error}"));
+                break Err(exit::unreachable(anyhow::anyhow!(
+                    "lost the weave Host: {error}"
+                )));
             }
             Some(HostEvent::Disconnected(None)) | None => {
-                break Err(anyhow::anyhow!("lost the weave Host"));
+                break Err(exit::unreachable(anyhow::anyhow!("lost the weave Host")));
             }
             _ => {}
         }
@@ -245,13 +258,14 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         "weave: thread {session_id}; continue it with {}",
         reopen_command(&launch.agent, &session_id.to_string())
     );
-    match response.stop_reason {
-        StopReason::EndTurn => Ok(ExitCode::SUCCESS),
-        reason => {
-            eprintln!("weave: the turn stopped: {}", describe_stop(reason));
-            Ok(ExitCode::FAILURE)
-        }
+    let status = Status::of_stop(response.stop_reason);
+    if status != Status::Success {
+        eprintln!(
+            "weave: the turn stopped: {}",
+            describe_stop(response.stop_reason)
+        );
     }
+    Ok(status.into())
 }
 
 /// The prompt from the arguments, or stdin when there are none or just `-`.
