@@ -85,6 +85,7 @@ fn chat_with(
         config_options,
         reopened: None,
         notices: Vec::new(),
+        title: None,
     });
     chat
 }
@@ -603,6 +604,7 @@ fn fullscreen_chat() -> ChatWidget {
         config_options: Vec::new(),
         reopened: None,
         notices: Vec::new(),
+        title: None,
     });
     chat
 }
@@ -680,6 +682,7 @@ fn with_update(mut chat: ChatWidget) -> ChatWidget {
         config_options: Vec::new(),
         reopened: Some(Reopened::Loaded),
         notices: Vec::new(),
+        title: None,
     });
     chat.update_available(weave_host_protocol::agents::AgentUpdate {
         agent_id: "claude".into(),

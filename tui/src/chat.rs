@@ -829,6 +829,11 @@ impl ChatWidget {
                 self.push_cell(TranscriptCell::info("Thread: new thread"));
             }
         }
+        // The Host's title is current as the session opens; titles in the replay that follows
+        // apply over it in order.
+        if opened.title.is_some() {
+            self.title = opened.title;
+        }
         self.settle();
         self.opening = false;
         self.stashed = None;
@@ -1828,6 +1833,7 @@ impl ChatWidget {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            title: None,
         });
         chat
     }
@@ -4431,6 +4437,7 @@ mod tests {
     use crate::vim;
     use crate::vim::Vim;
     use weave_acp_core::schema::SessionInfo;
+    use weave_acp_core::schema::SessionInfoUpdate;
     use weave_acp_core::schema::SessionNotification;
     use weave_acp_core::schema::StringPropertySchema;
     use weave_acp_core::schema::Terminal;
@@ -4463,6 +4470,7 @@ mod tests {
             config_options: options,
             reopened: None,
             notices: Vec::new(),
+            title: None,
         });
         chat
     }
@@ -4519,6 +4527,7 @@ mod tests {
             config_options: Vec::new(),
             reopened,
             notices: Vec::new(),
+            title: None,
         });
         chat
     }
@@ -4714,6 +4723,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            title: None,
         });
         chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
             "and the rest.".into(),
@@ -4828,6 +4838,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Resumed),
             notices: Vec::new(),
+            title: None,
         });
         // The transcript stays as it was, with what happened and that it's back.
         let history = history(&mut chat);
@@ -4854,6 +4865,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            title: None,
         });
         assert_eq!(reopened.blank_session(), None);
     }
@@ -5683,6 +5695,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            title: None,
         });
         assert_eq!(
             history(&mut chat),
@@ -5714,6 +5727,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            title: None,
         });
         assert_eq!(history(&mut chat), ["", "• Thread: new thread"]);
         let footer = rows(&chat, 80).pop().unwrap_or_default();
@@ -5745,6 +5759,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            title: None,
         });
         assert_eq!(history(&mut chat), ["", "• Run it"]);
     }
@@ -5861,6 +5876,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            title: None,
         });
         chat
     }
@@ -6545,6 +6561,35 @@ mod tests {
     }
 
     #[test]
+    fn a_reopened_session_takes_its_title_from_the_host_when_its_replay_has_none() {
+        // A closed session's new journal keeps its title in no event, as `--continue` finds it.
+        let mut chat = chat_with(Vec::new());
+        chat.begin_session("s2".into(), None);
+        chat.session_ready(OpenedSession {
+            session_id: "s2".into(),
+            modes: None,
+            config_options: Vec::new(),
+            reopened: Some(Reopened::Loaded),
+            notices: Vec::new(),
+            title: Some("Parser fixes".into()),
+        });
+        let s2 = |update| ChatEvent::SessionUpdate(SessionNotification::new("s2", update));
+        chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+            "Earlier reply".into(),
+        ))));
+        chat.replay_finished();
+        assert_eq!(chat.terminal_title(Instant::now()), "Parser fixes · repo");
+        // A title the agent gives later still replaces it.
+        chat.handle_agent_event(s2(SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title("Parser and lexer fixes".to_owned()),
+        )));
+        assert_eq!(
+            chat.terminal_title(Instant::now()),
+            "Parser and lexer fixes · repo"
+        );
+    }
+
+    #[test]
     fn bang_runs_a_shell_command_that_ctrl_c_stops() {
         let mut chat = chat();
         chat.handle_key(key(KeyCode::Char('!')));
@@ -6907,6 +6952,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            title: None,
         });
         chat
     }
@@ -6938,6 +6984,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            title: None,
         });
         // The agent's own `/rename` gives way to this client's.
         chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
@@ -6980,6 +7027,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            title: None,
         });
         assert_eq!(
             submit(&mut chat, "/rename Parser fixes"),
@@ -7098,6 +7146,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            title: None,
         });
         let shown = said(&mut chat);
         assert!(

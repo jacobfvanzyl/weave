@@ -24,6 +24,9 @@ pub struct OpenedSession {
     pub reopened: Option<Reopened>,
     /// Worth telling the user, such as skipped MCP servers or a mode it couldn't start in.
     pub notices: Vec<String>,
+    /// The title the Host shows for it as it opens. A closed session's new journal holds it in
+    /// no event, so its replay can't give it.
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +53,7 @@ impl OpenedSession {
             config_options: state.config_options.clone(),
             reopened,
             notices: state.notices.clone(),
+            title: state.title.clone(),
         }
     }
 }
