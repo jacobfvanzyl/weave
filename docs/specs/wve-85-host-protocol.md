@@ -1397,6 +1397,9 @@ except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answe
   `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the paired devices, `run
   --detach` `session/run`'s, and `run` its session's `session/event` notifications as JSON
   lines.
+- With no terminal, as over SSH, nothing prompts: `weave login` needs `--method`, and a sign-in
+  that runs in a terminal says to use `ssh -t`. `weave daemon install` and `status` say how to
+  have a command over SSH find `weave` when the login shell, run as sshd runs one, doesn't.
 - `weave threads watch` prints `sessions/watch` as JSON lines, each `{method, params}`: a
   `sessions/updated` for each session at first, then each notification. `weave threads follow
   <id> [--after <seq>] [--until-turn-ends] [--json]` observes an open session (`observe`),

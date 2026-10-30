@@ -106,7 +106,11 @@ Host is set up over SSH, with no terminal needed but for an agent's own sign-in 
 weave login --agent claude`, which prints a code to paste); `weave pair` there needs
 `sudo tailscale set --operator=$USER` once, and says so. A command run over SSH without a
 terminal doesn't read `~/.profile` on Debian or Ubuntu, so `ssh host weave …` finds weave only on
-the system's `PATH`: link it into `/usr/local/bin`, or name it by path. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
+the system's `PATH`: link it into `/usr/local/bin`, or name it by path. On macOS, zsh reads only
+`~/.zshenv` for it, so put `~/.local/bin` on `PATH` there. `daemon install`, and `daemon status`
+with a service installed, say so when the login shell, run as sshd runs a command, doesn't find
+weave (`service::ssh_note`). With no terminal nothing prompts: `weave login` then needs
+`--method`, and names the methods, and a sign-in that runs in a terminal says to use `ssh -t`. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
 `weave_host_protocol::PROTOCOL_VERSION` is one it speaks); sessions it had open resume when
 reattached. The Host captures the login shell's environment when it starts, so restart it
 after changing your shell's. It runs that shell, an interactive one, in a session of its own

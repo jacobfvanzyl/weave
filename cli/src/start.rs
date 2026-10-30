@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -310,7 +311,7 @@ pub async fn sign_in_through(
         .await?;
     let name = got.agent.name.clone();
     let methods = &got.initialize.auth_methods;
-    let chosen = pick_method(&name, methods, method)?;
+    let chosen = pick_method(&name, methods, method, in_terminal())?;
     match chosen {
         AuthMethod::Terminal(terminal) => {
             let login = handle
@@ -355,7 +356,7 @@ pub async fn sign_in(
         || spec.command.clone(),
         |info| info.title.clone().unwrap_or_else(|| info.name.clone()),
     );
-    match pick_method(&name, &agent.auth_methods, method)? {
+    match pick_method(&name, &agent.auth_methods, method, in_terminal())? {
         AuthMethod::Terminal(terminal) => {
             run_terminal_sign_in(spec, terminal)?;
             Ok(SignedIn::Reconnect)
@@ -368,11 +369,18 @@ pub async fn sign_in(
     }
 }
 
-/// `method`, or the one the user chooses from `methods`.
+/// Whether there's a person at a terminal to ask, rather than a script or an SSH command run
+/// without one.
+fn in_terminal() -> bool {
+    std::io::stdin().is_terminal()
+}
+
+/// `method`, or the one the user chooses from `methods`, when there's a `terminal` to ask in.
 fn pick_method<'a>(
     name: &str,
     methods: &'a [AuthMethod],
     method: Option<&str>,
+    terminal: bool,
 ) -> anyhow::Result<&'a AuthMethod> {
     if methods.is_empty() {
         bail!("{name} requires sign-in but offers no sign-in methods; sign in with its own CLI");
@@ -382,7 +390,18 @@ fn pick_method<'a>(
             .iter()
             .find(|candidate| candidate.id().to_string() == id)
             .with_context(|| format!("{name} has no sign-in method {id:?}")),
-        None => choose_method(name, methods),
+        None if terminal => choose_method(name, methods),
+        None => {
+            let ids = methods
+                .iter()
+                .map(|method| format!("{} ({})", method.id(), method.name()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "{name} needs you to sign in, and with no terminal to choose how in, name the \
+                 method: --method <id>, one of {ids}"
+            )
+        }
     }
 }
 
@@ -447,6 +466,11 @@ fn run_command(
         .chain(args.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(" ");
+    if !in_terminal() {
+        bail!(
+            "signing in runs {line}, which needs a terminal; over SSH, give it one with `ssh -t`"
+        );
+    }
     eprintln!("Running {line} to sign in…");
     let status = std::process::Command::new(command)
         .args(args)
@@ -465,6 +489,27 @@ mod tests {
     use weave_host::DaemonPaths;
 
     use super::*;
+
+    #[test]
+    fn without_a_terminal_signing_in_names_its_method_rather_than_asking() {
+        use weave_acp_core::schema::AuthMethodAgent;
+
+        let methods = [
+            AuthMethod::Agent(AuthMethodAgent::new("token", "Token")),
+            AuthMethod::Terminal(AuthMethodTerminal::new("login", "Log in")),
+        ];
+        let error = pick_method("Fake", &methods, None, false)
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(error.contains("--method"), "{error}");
+        assert!(error.contains("token (Token), login (Log in)"), "{error}");
+        let named = pick_method("Fake", &methods, Some("login"), false).map(AuthMethod::id);
+        assert_eq!(
+            named.ok().map(ToString::to_string),
+            Some("login".to_owned())
+        );
+    }
 
     /// A journal header as the Host writes one.
     fn record(paths: &DaemonPaths, session_id: &str, choice: &str, cwd: &str) {

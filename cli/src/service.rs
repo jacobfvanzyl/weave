@@ -9,7 +9,9 @@
 mod launchd;
 mod systemd;
 
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -71,9 +73,13 @@ pub fn installed(paths: &DaemonPaths) -> bool {
 
 pub async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     match manager()? {
-        Manager::Launchd => launchd::install(paths).await,
-        Manager::Systemd => systemd::install(paths).await,
+        Manager::Launchd => launchd::install(paths).await?,
+        Manager::Systemd => systemd::install(paths).await?,
     }
+    if let Some(note) = ssh_note() {
+        eprintln!("\n{note}");
+    }
+    Ok(())
 }
 
 pub async fn uninstall(paths: &DaemonPaths) -> anyhow::Result<()> {
@@ -116,13 +122,72 @@ pub async fn restart(paths: &DaemonPaths) -> anyhow::Result<()> {
     }
 }
 
-/// What may keep the installed service from running when the person expects it to: each a
-/// paragraph that says how to change it.
+/// What may keep the installed service from running, or from being managed over SSH, when the
+/// person expects it to: each a paragraph that says how to change it.
 pub fn notes(paths: &DaemonPaths) -> Vec<String> {
-    match Manager::here() {
+    let mut notes = match Manager::here() {
         Some(Manager::Systemd) => systemd::notes(paths),
         Some(Manager::Launchd) | None => Vec::new(),
+    };
+    notes.extend(ssh_note());
+    notes
+}
+
+/// The `PATH` sshd gives a command before the user's shell adds to it.
+const SSH_PATH: &str = if cfg!(target_os = "macos") {
+    "/usr/bin:/bin:/usr/sbin:/sbin"
+} else {
+    "/usr/local/bin:/usr/bin:/bin"
+};
+
+/// Whether `ssh <this computer> weave …` finds weave, as ADR 0017's management over SSH needs,
+/// and if not, how to have it. The login shell runs as sshd runs a command: without a login or
+/// a terminal, from sshd's `PATH`, so it reads `~/.zshenv` but not `~/.zprofile` or
+/// `~/.zshrc`, and bash on Debian or Ubuntu stops early in `~/.bashrc`. None when it finds
+/// weave, or the shell can't be run to tell.
+pub fn ssh_note() -> Option<String> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|shell| !shell.is_empty())?;
+    let mut command = std::process::Command::new(&shell);
+    command
+        .args(["-c", "command -v weave"])
+        .env_clear()
+        .env("PATH", SSH_PATH)
+        .env("SSH_CLIENT", "127.0.0.1 22 22")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for name in ["HOME", "USER", "LOGNAME", "SHELL"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
     }
+    if command.status().ok()?.success() {
+        return None;
+    }
+    let weave = std::env::current_exe().ok()?;
+    Some(ssh_advice(&shell, &weave))
+}
+
+/// How to have a command over SSH find `weave`, for a login `shell`.
+fn ssh_advice(shell: &str, weave: &Path) -> String {
+    let name = Path::new(shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(shell);
+    let fix = match (name, weave.parent()) {
+        ("zsh", Some(dir)) => format!(
+            "add `export PATH=\"{}:$PATH\"` to ~/.zshenv, which zsh reads for a command over SSH",
+            dir.display()
+        ),
+        _ => "link it into /usr/local/bin".to_owned(),
+    };
+    format!(
+        "A command over SSH (`ssh <this computer> weave …`) doesn't find weave: {name} runs it \
+         without a login, on sshd's PATH. To have it, {fix}; or name it by path, {}.",
+        weave.display()
+    )
 }
 
 /// Whether the installed service keeps running after the person logs out and after this
@@ -182,5 +247,27 @@ fn user_id(paths: &DaemonPaths) -> anyhow::Result<u32> {
     {
         let _ = paths;
         bail!("no user id on this platform")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_command_over_ssh_is_told_where_weave_is_for_its_shell() {
+        let weave = Path::new("/Users/me/.local/bin/weave");
+        let zsh = ssh_advice("/bin/zsh", weave);
+        assert!(
+            zsh.contains("add `export PATH=\"/Users/me/.local/bin:$PATH\"` to ~/.zshenv"),
+            "{zsh}"
+        );
+        assert!(
+            zsh.ends_with("by path, /Users/me/.local/bin/weave."),
+            "{zsh}"
+        );
+        let bash = ssh_advice("/usr/bin/bash", weave);
+        assert!(bash.contains("link it into /usr/local/bin"), "{bash}");
+        assert!(bash.contains("bash runs it without a login"), "{bash}");
     }
 }
