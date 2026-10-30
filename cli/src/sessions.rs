@@ -1,33 +1,47 @@
 //! `weave threads`: the threads open in the weave Host, and reading, prompting, steering,
 //! stopping or closing one without attaching to it, from a shell or a script, any agent's
-//! included (ADR 0023).
+//! included (ADR 0023); and watching them all, or following one, as they change (WVE-108).
 
+use std::io::Write;
+use std::process::ExitCode;
+
+use agent_client_protocol::JsonRpcMessage;
 use anyhow::Context;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::Args;
 use clap::Subcommand;
+use tokio::sync::mpsc::UnboundedReceiver;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::StopReason;
 use weave_host_client::HostConnection;
+use weave_host_client::HostEvent;
+use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::sessions::Activity;
+use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CloseSessionRequest;
 use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::LatestTurn;
+use weave_host_protocol::sessions::OBSERVE_FEATURE;
 use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::sessions::WATCH_FEATURE;
+use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
 
 use crate::daemon::ago;
-use crate::daemon::control;
+use crate::daemon::control_with_events;
 use crate::daemon::now_ms;
 use crate::daemon::paths;
 use crate::exit;
+use crate::exit::Status;
+use crate::run::Output;
 use crate::run::describe_stop;
 use crate::run::prompt_text;
 
@@ -55,6 +69,12 @@ enum SessionsCommand {
     /// Close a thread for every client: its turn ends and its agent stops. `weave --resume`
     /// can still reopen it from the agent's history.
     Close(SessionArg),
+    /// Print the Host's threads as they open, change and close, as JSON lines: a
+    /// `sessions/updated` for each at first, then one for every change, until stopped.
+    Watch,
+    /// Follow an open thread as it goes, without being one of its clients: the agent's reply
+    /// as text, or with --json its journal events (`session/event`) as JSON lines.
+    Follow(FollowArgs),
 }
 
 #[derive(Args, Default)]
@@ -93,33 +113,59 @@ struct PromptArgs {
     json: bool,
 }
 
-pub async fn command(args: SessionsArgs) -> anyhow::Result<()> {
+#[derive(Args)]
+struct FollowArgs {
+    #[arg(value_name = "THREAD_ID")]
+    session_id: String,
+
+    /// Start after this position in its journal, as `threads prompt --json` gives one, rather
+    /// than with what happens next.
+    #[arg(long, value_name = "SEQ")]
+    after: Option<u64>,
+
+    /// Stop when a turn ends, exiting as `weave run` does for it: the next turn to start, or
+    /// without --after, the one running now.
+    #[arg(long)]
+    until_turn_ends: bool,
+
+    /// Print its journal events as JSON lines.
+    #[arg(long)]
+    json: bool,
+}
+
+pub async fn command(args: SessionsArgs) -> anyhow::Result<ExitCode> {
     let paths = paths()?;
     let command = args
         .command
         .unwrap_or_else(|| SessionsCommand::List(ListArgs::default()));
-    let Some(connection) = control(&paths).await? else {
+    let Some((connection, events)) = control_with_events(&paths).await? else {
         return match command {
             SessionsCommand::List(ListArgs { json: true }) => {
                 println!("[]");
-                Ok(())
+                Ok(ExitCode::SUCCESS)
             }
             SessionsCommand::List(_) => {
                 println!("The weave Host isn't running, so no threads are open.");
-                Ok(())
+                Ok(ExitCode::SUCCESS)
             }
             SessionsCommand::Read(_)
             | SessionsCommand::Prompt(_)
             | SessionsCommand::Steer(_)
             | SessionsCommand::Cancel(_)
-            | SessionsCommand::Close(_) => Err(exit::unreachable(anyhow!(
+            | SessionsCommand::Close(_)
+            | SessionsCommand::Watch
+            | SessionsCommand::Follow(_) => Err(exit::unreachable(anyhow!(
                 "the weave Host isn't running, so no threads are open"
             ))),
         };
     };
-    let result = run(&connection, command).await;
+    let result = match command {
+        SessionsCommand::Watch => watch(&connection, events).await,
+        SessionsCommand::Follow(args) => follow(&connection, events, args).await,
+        command => run(&connection, command).await.map(|()| Status::Success),
+    };
     connection.shutdown().await;
-    result
+    result.map(ExitCode::from)
 }
 
 async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::Result<()> {
@@ -227,8 +273,157 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 .context("closing the thread")?;
             eprintln!("Closed {session_id}; weave --resume {session_id} reopens it.");
         }
+        SessionsCommand::Watch | SessionsCommand::Follow(_) => {}
     }
     Ok(())
+}
+
+/// `weave threads watch`: `sessions/watch`, a line a notification, until the Host goes or
+/// whatever reads the lines does.
+async fn watch(
+    connection: &HostConnection,
+    mut events: UnboundedReceiver<HostEvent>,
+) -> anyhow::Result<Status> {
+    offers(connection, WATCH_FEATURE)?;
+    let watched = connection
+        .send(WatchSessionsRequest {})
+        .await
+        .context("watching the threads")?;
+    for session in watched.sessions {
+        if !line(&SessionUpdatedNotification { session })? {
+            return Ok(Status::Success);
+        }
+    }
+    loop {
+        let printed = match events.recv().await {
+            Some(HostEvent::SessionUpdated(updated)) => line(&*updated)?,
+            Some(HostEvent::SessionRemoved(removed)) => line(&removed)?,
+            Some(HostEvent::Disconnected(_)) | None => {
+                return Err(exit::unreachable(anyhow!("lost the weave Host")));
+            }
+            Some(_) => true,
+        };
+        if !printed {
+            return Ok(Status::Success);
+        }
+    }
+}
+
+/// `weave threads follow`: observe the thread (`session/attach` with `observe`), printing what
+/// happens in it after `--after`, or from now.
+async fn follow(
+    connection: &HostConnection,
+    mut events: UnboundedReceiver<HostEvent>,
+    args: FollowArgs,
+) -> anyhow::Result<Status> {
+    offers(connection, OBSERVE_FEATURE)?;
+    let session_id = SessionId::new(args.session_id);
+    let observed = connection
+        .send(AttachSessionRequest {
+            session_id: session_id.clone(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+            observe: true,
+        })
+        .await
+        .context("following the thread")?;
+    // The whole journal follows; what came before the point asked for is skipped.
+    let skip_to = args.after.unwrap_or(observed.state.journal.head);
+    // Followed from now, the turn running is the one to wait for.
+    let mut started = args.after.is_none()
+        && observed
+            .state
+            .turns
+            .iter()
+            .any(|turn| turn.session_id == session_id);
+    let mut out = Output::new(args.json);
+    let status = loop {
+        match events.recv().await {
+            Some(HostEvent::Event(notification))
+                if notification.session_id == session_id && notification.seq > skip_to =>
+            {
+                out.event(&session_id, &notification)?;
+                match notification.event {
+                    SessionEvent::TurnStarted {
+                        session_id: started_in,
+                        ..
+                    } if started_in == session_id => started = true,
+                    SessionEvent::TurnEnded {
+                        session_id: ended_in,
+                        response,
+                        error,
+                    } if ended_in == session_id && started && args.until_turn_ends => {
+                        break match (response, error) {
+                            (Some(response), _) => {
+                                let status = Status::of_stop(response.stop_reason);
+                                if status != Status::Success && !args.json {
+                                    eprintln!(
+                                        "weave: the turn stopped: {}",
+                                        describe_stop(response.stop_reason)
+                                    );
+                                }
+                                status
+                            }
+                            (None, error) => {
+                                if let Some(error) = error {
+                                    eprintln!("weave: the turn failed: {error}");
+                                }
+                                Status::TurnFailed
+                            }
+                        };
+                    }
+                    SessionEvent::Closed { reason } => {
+                        eprintln!("weave: the thread closed: {reason}");
+                        break if args.until_turn_ends {
+                            Status::TurnFailed
+                        } else {
+                            Status::Success
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            Some(HostEvent::PendingAdded(added))
+                if added.session_id == session_id && !args.json =>
+            {
+                eprintln!("weave: the agent is waiting on you; answer it in the TUI or the app");
+            }
+            Some(HostEvent::Disconnected(_)) | None => {
+                return Err(exit::unreachable(anyhow!("lost the weave Host")));
+            }
+            Some(_) => {}
+        }
+    };
+    out.finish()?;
+    Ok(status)
+}
+
+/// Fail unless the Host offers `feature`, as one older than this weave may not.
+fn offers(connection: &HostConnection, feature: &str) -> anyhow::Result<()> {
+    if connection.hello().features.iter().any(|f| f == feature) {
+        return Ok(());
+    }
+    bail!(
+        "the weave Host running is older than this weave and can't do that; `weave daemon \
+         restart` runs this one's"
+    )
+}
+
+/// Print `notification` as a line of JSON, `{"method", "params"}`. False once nothing reads
+/// stdout any more, as when a pipe's reader has gone.
+fn line(notification: &impl JsonRpcMessage) -> anyhow::Result<bool> {
+    let message = notification
+        .to_untyped_message()
+        .map_err(|error| anyhow!("{error}"))?;
+    let text = serde_json::json!({"method": message.method, "params": message.params});
+    let mut stdout = std::io::stdout().lock();
+    match writeln!(stdout, "{text}").and_then(|()| stdout.flush()) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// The threads open in the Host.

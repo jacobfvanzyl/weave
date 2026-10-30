@@ -1208,6 +1208,7 @@ impl App {
                         agent_id: Some(self.agent_id.clone()),
                         cwd: Some(self.cwd.clone()),
                         trace: self.trace,
+                        observe: false,
                     };
                     if let Err(error) = self.request_open(Open::Attach(request), OpenKind::Reattach)
                     {
@@ -1247,6 +1248,7 @@ impl App {
                     agent_id: Some(self.agent_id.clone()),
                     cwd: Some(cwd.unwrap_or_else(|| self.cwd.clone())),
                     trace: self.trace,
+                    observe: false,
                 })
             }
         };

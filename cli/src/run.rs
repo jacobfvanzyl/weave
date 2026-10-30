@@ -306,22 +306,22 @@ pub(crate) fn describe_stop(reason: StopReason) -> &'static str {
 }
 
 /// The reply as it streams: text to stdout, tool calls noted on stderr; or every journal event
-/// as a JSON line.
-struct Output {
+/// as a JSON line. `weave threads follow` prints a thread it follows the same way.
+pub(crate) struct Output {
     json: bool,
     /// Whether the last thing written to stdout ended its line.
     at_line_start: bool,
 }
 
 impl Output {
-    fn new(json: bool) -> Self {
+    pub(crate) fn new(json: bool) -> Self {
         Self {
             json,
             at_line_start: true,
         }
     }
 
-    fn event(
+    pub(crate) fn event(
         &mut self,
         session_id: &SessionId,
         notification: &SessionEventNotification,
@@ -356,7 +356,7 @@ impl Output {
         Ok(stdout.flush()?)
     }
 
-    fn finish(&mut self) -> anyhow::Result<()> {
+    pub(crate) fn finish(&mut self) -> anyhow::Result<()> {
         if !self.json && !self.at_line_start {
             println!();
         }

@@ -83,6 +83,7 @@ use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::GetSessionResponse;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::OBSERVE_FEATURE;
 use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::SessionListing;
@@ -487,6 +488,7 @@ impl TestClient {
                 agent_id: None,
                 cwd: None,
                 trace: false,
+                observe: false,
             })
             .await?;
         self.position = Some(JournalPosition {
@@ -1689,6 +1691,83 @@ async fn a_session_left_mid_turn_closes_when_its_turn_ends_unless_one_attaches()
     assert!(open(&taken_back));
 }
 
+/// An observer is sent what clients are without being one: it isn't counted, keeps no session
+/// open, closes none by leaving, and never opens one that's closed (WVE-108).
+#[tokio::test]
+async fn an_observer_follows_a_session_without_holding_it() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let session_id = client.create(&world).await;
+    let open = || {
+        daemon
+            .status()
+            .sessions
+            .iter()
+            .any(|session| session.info.session_id == session_id)
+    };
+    let observe = AttachSessionRequest {
+        session_id: session_id.clone(),
+        after: None,
+        agent_id: None,
+        cwd: None,
+        trace: false,
+        observe: true,
+    };
+    let leave = DetachSessionRequest {
+        session_id: session_id.clone(),
+        close: CloseWhen::IfUnused,
+    };
+
+    let mut observer = world.client(&daemon).await;
+    assert!(
+        observer
+            .connection
+            .hello()
+            .features
+            .iter()
+            .any(|feature| feature == OBSERVE_FEATURE)
+    );
+    let observed = observer
+        .connection
+        .send(observe.clone())
+        .await
+        .expect("observe");
+    assert_eq!(observed.state.clients, 1);
+    client.prompt(&session_id, "slow 2").await;
+    let mut seen = Seen::default();
+    observer.until_turn_ends(&mut seen, None).await;
+    assert_eq!((seen.started, seen.ended), (1, Some(StopReason::EndTurn)));
+    assert!(seen.agent.contains("Chunk 2 of 2"), "{seen:?}");
+
+    // Leaving closes nothing, though it asks to.
+    observer
+        .connection
+        .send(leave.clone())
+        .await
+        .expect("detach");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(open());
+
+    // Observing again, it doesn't keep the session open once the client leaves.
+    observer
+        .connection
+        .send(observe.clone())
+        .await
+        .expect("observe");
+    client.connection.send(leave).await.expect("detach");
+    wait_for(|| !open()).await;
+
+    // Closed, it isn't opened again for an observer.
+    let error = observer
+        .connection
+        .send(observe)
+        .await
+        .expect_err("a closed session");
+    assert!(errors::is(&error, errors::SESSION_NOT_OPEN), "{error}");
+    assert!(!open());
+}
+
 #[tokio::test]
 async fn a_client_signs_in_through_the_host_and_retries() {
     let world = World::new();
@@ -1868,6 +1947,7 @@ async fn a_session_opens_only_with_its_own_agent_and_says_where_it_works() {
             agent_id: Some("other".to_owned()),
             cwd: None,
             trace: false,
+            observe: false,
         })
         .await
         .expect_err("another agent's session");

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use agent_client_protocol::Channel;
 use agent_client_protocol::Error;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc::UnboundedReceiver;
 use weave_acp_core::AgentConnection;
 use weave_fake_agent::FakeAgentConfig;
 use weave_host::Daemon;
@@ -21,6 +22,10 @@ use weave_host::DaemonConfig;
 use weave_host::DaemonPaths;
 use weave_host::Launcher;
 use weave_host::socket;
+use weave_host_client::HostConnection;
+use weave_host_client::HostEvent;
+use weave_host_protocol::hello::ClientCapabilities;
+use weave_host_protocol::hello::ClientInfo;
 
 pub struct TestHost {
     pub dir: tempfile::TempDir,
@@ -84,6 +89,34 @@ impl TestHost {
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_background();
         }
+    }
+
+    /// Run `future` on the Host's runtime, as a client of it beside `weave` does.
+    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.runtime
+            .as_ref()
+            .expect("the Host is running")
+            .block_on(future)
+    }
+
+    /// A protocol client of the Host, for what `weave` doesn't do.
+    pub fn client(&self) -> (HostConnection, UnboundedReceiver<HostEvent>) {
+        self.block_on(async {
+            let transport = socket::connect(&self.paths.socket).await.expect("connect");
+            HostConnection::connect(
+                transport,
+                ClientInfo {
+                    name: "test".to_owned(),
+                    version: "0".to_owned(),
+                },
+                ClientCapabilities {
+                    terminal_sign_in: false,
+                    client_tools: Vec::new(),
+                },
+            )
+            .await
+            .expect("hello")
+        })
     }
 
     /// The directory sessions run in.

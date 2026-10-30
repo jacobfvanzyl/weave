@@ -639,6 +639,7 @@ async fn a_replay_many_times_the_limit_arrives_whole() {
             agent_id: None,
             cwd: None,
             trace: false,
+            observe: false,
         })
         .await
         .expect("session/attach");

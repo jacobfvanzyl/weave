@@ -145,7 +145,7 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Some(Command::Sessions(args)) => {
             log_to_stderr("warn");
-            sessions::command(args).await.map(|()| ExitCode::SUCCESS)
+            sessions::command(args).await
         }
         Some(Command::Worktrees(args)) => {
             log_to_stderr("warn");

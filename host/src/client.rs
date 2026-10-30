@@ -100,6 +100,7 @@ use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::GetSessionResponse;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::OBSERVE_FEATURE;
 use weave_host_protocol::sessions::RENAME_FEATURE;
 use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionRequest;
@@ -510,6 +511,7 @@ async fn handlers(
                                 ready,
                                 client,
                                 ReplayFrom::Start,
+                                false,
                                 AttachReply::Created(responder),
                             );
                             Ok(())
@@ -535,6 +537,7 @@ async fn handlers(
                                 ready,
                                 client,
                                 from,
+                                request.observe,
                                 AttachReply::Attached(responder),
                             );
                             Ok(())
@@ -796,6 +799,7 @@ impl Connection {
                 REQUEST_KEYS_FEATURE.to_owned(),
                 GET_FEATURE.to_owned(),
                 DRAIN_FEATURE.to_owned(),
+                OBSERVE_FEATURE.to_owned(),
             ]
             .into_iter()
             .chain(
@@ -1398,6 +1402,10 @@ impl Connection {
                 trace,
             });
         }
+        // An observer follows a session that's open; it never opens one.
+        if request.observe {
+            return Err(errors::session_not_open(&session_id.to_string()));
+        }
         let agent_id = recorded_agent
             .or_else(|| request.agent_id.clone())
             .ok_or_else(|| errors::unknown_session(&session_id.to_string()))?;
@@ -1467,6 +1475,7 @@ impl Connection {
         ready: Ready,
         cx: ConnectionTo<HostClient>,
         from: ReplayFrom,
+        observer: bool,
         reply: AttachReply,
     ) {
         let session_id = ready.session.summary().session_id;
@@ -1477,6 +1486,7 @@ impl Connection {
                 cx,
                 client_tools: self.client_tools(),
                 backlog: self.backlog(),
+                observer,
             }),
             from,
             notices: ready.notices,
@@ -1776,6 +1786,7 @@ impl Connection {
                     cx,
                     client_tools,
                     backlog,
+                    observer: false,
                 },
             )
         });

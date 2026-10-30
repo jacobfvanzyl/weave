@@ -657,6 +657,19 @@ fn sessions() {
             agent_id: None,
             cwd: None,
             trace: false,
+            observe: false,
+        })
+    );
+    // A script following a session observes it.
+    insta::assert_json_snapshot!(
+        "attach_session_request_observing",
+        message(&AttachSessionRequest {
+            session_id: "s-1".into(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+            observe: true,
         })
     );
     insta::assert_json_snapshot!(

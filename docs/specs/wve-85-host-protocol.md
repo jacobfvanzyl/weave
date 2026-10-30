@@ -154,7 +154,8 @@ request with `unauthenticated`.
   `requestKeys` (WVE-107): the `key` that `session/run`, `turn/start` and `queue/add` take
   (see [Request keys](#request-keys)), and `sessions/get` (WVE-106): `sessions/get`, with
   delegated sessions' `startedBy` and the `session` turn origin (see
-  [Delegated sessions](#delegated-sessions)).
+  [Delegated sessions](#delegated-sessions)), and `session/observe` (WVE-108):
+  `session/attach`'s `observe`.
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -434,7 +435,7 @@ otherwise in the agent's configured `mode`. `policy` defaults to asking. Extra d
 the agent can't accept are dropped and reported in `notices`. With `trace`, the Host writes
 the agent's protocol trace under its own directory and says where in `trace`.
 
-**`session/attach`** `{sessionId, after?: {journal, seq}, agentId?, cwd?, trace?}` →
+**`session/attach`** `{sessionId, after?: {journal, seq}, agentId?, cwd?, trace?, observe?}` →
 `SessionState & {replay: {from: number, reset: boolean}}`
 
 Attaches the client to a session, opening it first if needed:
@@ -454,6 +455,13 @@ After the response, the Host sends the session's events after `after`, in order,
 live events as they happen. `replay.from` is the first position it sends. When `after`
 names another journal (the session was closed and opened again since) or is missing, the
 Host sends everything and `replay.reset` is true; the client clears its transcript first.
+
+With `observe` (feature `session/observe`, WVE-108), the client observes the session, as a
+script following it does: it is sent the response, the replay, live events and pending requests
+as a client is, but isn't one. It attaches only to an open session, failing with
+`session_not_open` rather than opening one; it isn't counted in `clients`; it doesn't keep the
+session needed, and its `session/detach` closes nothing whatever `close` says; and it is never
+sent a client tool to run.
 
 **`session/detach`** `{sessionId, close?: "never" | "ifUnused"}` → `{}`
 
@@ -1389,6 +1397,12 @@ except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answe
   `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the paired devices, `run
   --detach` `session/run`'s, and `run` its session's `session/event` notifications as JSON
   lines.
+- `weave threads watch` prints `sessions/watch` as JSON lines, each `{method, params}`: a
+  `sessions/updated` for each session at first, then each notification. `weave threads follow
+  <id> [--after <seq>] [--until-turn-ends] [--json]` observes an open session (`observe`),
+  printing its events after `seq`, or from now, as `weave run` prints its own; with
+  `--until-turn-ends` it exits when the next turn to start ends, or without `--after` the one
+  running, with that turn's exit status.
 - The exit status says how a command went, for scripts (WVE-108): 0, it worked, or the turn ended
   (`end_turn`); 1, any other error; 2, bad arguments; 3, the Host couldn't be reached (not
   running, for a command that never starts one; didn't start; or went away); 4, the turn failed

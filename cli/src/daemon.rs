@@ -322,6 +322,15 @@ pub(crate) async fn wait_until_stopped(paths: &DaemonPaths) -> anyhow::Result<()
 
 /// A connection for managing the Host, if it's running.
 pub(crate) async fn control(paths: &DaemonPaths) -> anyhow::Result<Option<HostConnection>> {
+    Ok(control_with_events(paths)
+        .await?
+        .map(|(connection, _events)| connection))
+}
+
+/// A connection to the Host, if it's running, and what it sends.
+pub(crate) async fn control_with_events(
+    paths: &DaemonPaths,
+) -> anyhow::Result<Option<(HostConnection, UnboundedReceiver<HostEvent>)>> {
     let transport = match socket::connect(&paths.socket).await {
         Ok(transport) => transport,
         Err(error) if not_running(&error) => return Ok(None),
@@ -330,13 +339,13 @@ pub(crate) async fn control(paths: &DaemonPaths) -> anyhow::Result<Option<HostCo
                 .context(format!("connecting to {}", paths.socket.display())));
         }
     };
-    let (connection, _events) = HostConnection::connect(
+    let connected = HostConnection::connect(
         transport,
         client_info("weave-cli"),
         capabilities("weave-cli"),
     )
     .await?;
-    Ok(Some(connection))
+    Ok(Some(connected))
 }
 
 #[derive(Args)]

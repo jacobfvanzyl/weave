@@ -232,6 +232,7 @@ async fn establish(
         agent_id: Some(launch.agent_id().to_owned()),
         cwd: Some(launch.cwd.clone()),
         trace: launch.trace,
+        observe: false,
     };
     let created = async |handle: &HostHandle| {
         handle.send(create()).await.map(|state| OpenedSession {

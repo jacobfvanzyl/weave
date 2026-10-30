@@ -121,6 +121,9 @@ pub(crate) struct ClientLink {
     pub(crate) client_tools: Arc<[String]>,
     /// Its connection's count of what waits to be sent, where too much closes it (the WebSocket).
     pub(crate) backlog: Option<Arc<dyn Backlog>>,
+    /// It observes the session (`session/attach`'s `observe`): it's sent what clients are, but
+    /// isn't one of them.
+    pub(crate) observer: bool,
 }
 
 /// A connection that closes a client with too much waiting to be sent, as having fallen behind.
@@ -558,6 +561,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         commands,
         journal,
         clients: BTreeMap::new(),
+        observers: BTreeMap::new(),
         children: Vec::new(),
         turns: HashMap::new(),
         queue,
@@ -711,6 +715,9 @@ struct Actor {
     commands: mpsc::UnboundedReceiver<Command>,
     journal: Journal,
     clients: BTreeMap<ClientId, ClientLink>,
+    /// Observers, sent what clients are: they don't count as clients, don't keep the session
+    /// open or close it, and run no client tools.
+    observers: BTreeMap<ClientId, ClientLink>,
     /// Subagent sessions the agent reported under this one, in order.
     children: Vec<SessionId>,
     /// Turns running, by session: this one's, or a subagent's.
@@ -825,6 +832,7 @@ impl Actor {
                 reply,
             } => self.attach(client, *link, from, notices, trace, reply),
             Command::Detach { client } => {
+                self.observers.remove(&client);
                 self.clients.remove(&client);
                 self.client_left(client);
             }
@@ -886,6 +894,10 @@ impl Actor {
                 reply,
             } => {
                 let _ = reply.send(self.answer(&pending_id, by, answer));
+            }
+            // An observer leaving closes nothing.
+            Command::Close { client, done } if self.observers.remove(&client).is_some() => {
+                let _ = done.send(());
             }
             Command::Close { client, done } => {
                 self.clients.remove(&client);
@@ -1036,7 +1048,9 @@ impl Actor {
         trace: Option<PathBuf>,
         reply: AttachReply,
     ) {
-        self.close_when_unused = false;
+        if !link.observer {
+            self.close_when_unused = false;
+        }
         // What the agent sent before the request that brought this client here was answered
         // (a load's replay, say) goes into the journal first.
         while let Ok(event) = self.events.try_recv() {
@@ -1050,7 +1064,11 @@ impl Actor {
             ReplayFrom::After(_) | ReplayFrom::Start => (1, true),
             ReplayFrom::Now => (self.journal.head().saturating_add(1), false),
         };
-        self.clients.insert(client, link.clone());
+        if link.observer {
+            self.observers.insert(client, link.clone());
+        } else {
+            self.clients.insert(client, link.clone());
+        }
         let state = self.state(notices, trace);
         reply.send(state, Replay { from, reset });
         let skip = usize::try_from(from).unwrap_or(usize::MAX);
@@ -1083,6 +1101,7 @@ impl Actor {
         for notification in replay {
             if link.cx.send_notification(notification).is_err() {
                 self.clients.remove(&client);
+                self.observers.remove(&client);
                 return;
             }
         }
@@ -1621,9 +1640,11 @@ impl Actor {
         (seq, at)
     }
 
-    /// Send to every attached client, dropping clients that have gone.
+    /// Send to every attached client and observer, dropping those that have gone.
     fn broadcast<N: JsonRpcNotification + Clone>(&mut self, notification: &N) {
         self.clients
+            .retain(|_, link| link.cx.send_notification(notification.clone()).is_ok());
+        self.observers
             .retain(|_, link| link.cx.send_notification(notification.clone()).is_ok());
     }
 

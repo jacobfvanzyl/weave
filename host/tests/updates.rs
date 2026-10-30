@@ -347,6 +347,7 @@ async fn a_session_start_looks_once_an_hour_in_the_background_and_tells_every_cl
             agent_id: None,
             cwd: None,
             trace: false,
+            observe: false,
         })
         .await
         .expect("session/attach");
@@ -501,6 +502,7 @@ async fn an_idle_session_moves_to_the_new_version_keeping_its_id_and_journal() {
             agent_id: None,
             cwd: None,
             trace: false,
+            observe: false,
         })
         .await
         .expect("session/attach");

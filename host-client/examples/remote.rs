@@ -225,6 +225,7 @@ async fn attach(session_id: &str, mut prompt: Option<&str>) {
                 agent_id: None,
                 cwd: None,
                 trace: false,
+                observe: false,
             })
             .await
             .expect("session/attach");

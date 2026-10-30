@@ -355,6 +355,9 @@ pub struct CreateSessionRequest {
     pub trace: bool,
 }
 
+/// The Host offers [`AttachSessionRequest::observe`], in `features`.
+pub const OBSERVE_FEATURE: &str = "session/observe";
+
 /// `session/attach`: attach to a session, opening it first if it isn't open. The session's
 /// events after `after` follow the response, then live ones.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
@@ -374,6 +377,11 @@ pub struct AttachSessionRequest {
     pub cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub trace: bool,
+    /// Receive the session as an observer ([`OBSERVE_FEATURE`]), as a script following it does:
+    /// only an open session, which this doesn't open; not one of its `clients`, so it never keeps
+    /// the session open or closes it, and is never sent a client tool to run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observe: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]

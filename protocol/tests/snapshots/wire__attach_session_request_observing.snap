@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AttachSessionRequest\n{\n    session_id: \"s-1\".into(), after: None, agent_id: None, cwd: None, trace:\n    false, observe: true,\n})"
+---
+{
+  "method": "session/attach",
+  "params": {
+    "sessionId": "s-1",
+    "observe": true
+  }
+}

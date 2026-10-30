@@ -4045,6 +4045,12 @@ export interface AttachSessionRequest {
    */
   cwd?: string | null;
   trace?: boolean;
+  /**
+   * Receive the session as an observer ([`OBSERVE_FEATURE`]), as a script following it does:
+   * only an open session, which this doesn't open; not one of its `clients`, so it never keeps
+   * the session open or closes it, and is never sent a client tool to run.
+   */
+  observe?: boolean;
 }
 /**
  * An event's place in a session's journal: where a client catches up after.

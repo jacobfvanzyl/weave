@@ -19,6 +19,7 @@ weave-host = { workspace = true }
 weave-host-client = { workspace = true }
 weave-host-protocol = { workspace = true }
 weave-tui = { workspace = true }
+agent-client-protocol = { workspace = true }
 anyhow = { workspace = true }
 qrcode = { workspace = true }
 clap = { workspace = true }
@@ -31,7 +32,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-agent-client-protocol = { workspace = true }
 weave-fake-agent = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
