@@ -31,6 +31,8 @@ other origins) that `weave daemon run` reads (a restart picks up a change).
 ./target/debug/weave daemon status        # also start, stop, restart, run (foreground), install, uninstall
 ./target/debug/weave pair                 # a QR code and code another device pairs with
 ./target/debug/weave devices              # paired devices; also revoke <id>
+./target/debug/weave hosts add studio     # pair with another of your Hosts over SSH, both ways (--one-way)
+./target/debug/weave hosts                # peer Hosts, and whether each can be reached; also remove
 ./target/debug/weave update --dry-run     # newer agent adapters; without --dry-run, check and use them
 ./target/debug/weave worktrees install-hook   # have worktrunk ask the Host before removing a worktree
 ```

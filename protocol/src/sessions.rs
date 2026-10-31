@@ -117,6 +117,12 @@ pub enum TurnOrigin {
     #[serde(rename_all = "camelCase")]
     Session {
         session_id: SessionId,
+        /// The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        /// What this Host calls that Host: the name it paired with, for clients to show.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_name: Option<String>,
         /// The Host's report on that session, of how a turn this session's agent began there
         /// ended or that it waits on a person. Nobody hears how a report's turn ends.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -190,6 +196,9 @@ pub struct SessionState {
     /// The session whose agent started it, for a delegated session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<SessionId>,
+    /// The peer Host the session that started it is on, when it isn't this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by_host: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -217,6 +226,9 @@ pub struct SessionListing {
     /// The session whose agent started it, for a delegated session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<SessionId>,
+    /// The peer Host the session that started it is on, when it isn't this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by_host: Option<String>,
 }
 
 /// `sessions/list`. Without an agent: the sessions the Host has a journal for, across
@@ -567,7 +579,13 @@ pub struct ReopenSessionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
     pub agent_id: AgentId,
+    /// Absolute, or under the Host's home as `~/…` (feature `peers`), for a client that doesn't
+    /// know where the home is on the Host's computer.
     pub cwd: PathBuf,
+    /// The repository `cwd` has to be a checkout of (feature `peers`), by its remote as
+    /// [`crate::worktrees::GitLocation::remote`] gives it, such as `github.com/owner/name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -584,6 +602,10 @@ pub struct RunRequest {
     /// id alone; a client that asked to attach attaches with `session/attach`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// A peer Host's only (feature `peers`): the session on it whose agent asks, which the
+    /// turn's origin names, and a new session's `startedBy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
@@ -597,4 +619,8 @@ pub struct RunResponse {
     /// When attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<Box<SessionState>>,
+    /// The policy the session runs under (feature `peers`): the one asked for, or an open
+    /// session's own. Absent from a repeat under a request key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PermissionPolicy>,
 }

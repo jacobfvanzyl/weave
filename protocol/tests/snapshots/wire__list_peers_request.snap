@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListPeersRequest { check: true })"
+---
+{
+  "method": "peers/list",
+  "params": {
+    "check": true
+  }
+}

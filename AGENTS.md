@@ -5,10 +5,10 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | Path | Ownership |
 | --- | --- |
 | `protocol/` | The Host protocol (`weave-host-protocol`): wire types, roles, error codes and versions, with golden snapshots, the JSON Schema the app's TypeScript comes from (`tests/schema.rs`, feature `schema`), and the permission policy. No I/O. Specs in `docs/specs/`. |
-| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, and the WebSocket and paired devices of remote clients. No UI. Read `host/AGENTS.md`. |
+| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and its peer Hosts. No UI. Read `host/AGENTS.md`. |
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
-| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials. |
+| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them. |
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |

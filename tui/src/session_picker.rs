@@ -327,6 +327,7 @@ pub(crate) fn listing(info: weave_acp_core::schema::SessionInfo) -> SessionListi
         last_activity_at: None,
         git: None,
         started_by: None,
+        started_by_host: None,
     }
 }
 

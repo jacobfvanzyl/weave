@@ -159,7 +159,10 @@ request with `unauthenticated`.
   `SessionState.turns` and the answers of `turn/start`, `turn/steer` and `session/run`,
   `sessions/get`'s `turnId` and `LatestTurn`'s `turnId` and `state`, `sessions/list`'s
   `activity`, the `unknown_turn` error and the `list_agents` Host tool (see
-  [Turn ids](#turn-ids)).
+  [Turn ids](#turn-ids)), and `peers` (WVE-109): `peers/*`, the `caller` a peer Host gives
+  `session/run`, `queue/add` and `turn/steer`, `session/run`'s `policy`, `startedByHost`, the
+  `session` turn origin's `host`, the `peer_unavailable` error, and the Host tools' `host` and
+  `list_hosts` (see [Peer Hosts](#peer-hosts)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -356,6 +359,7 @@ type SessionState = {
   trace?: string;                              // where the Host writes this session's trace
   update?: { agentId: string; name: string; running: string; latest: string };  // see Updates
   startedBy?: string;                          // the session whose agent started it; see Delegated sessions
+  startedByHost?: string;                      // the peer Host that session is on; see Peer Hosts
 };
 ```
 
@@ -386,6 +390,7 @@ type SessionListing = {
   lastActivityAt?: number;
   git?: GitLocation;            // as the Host last read it while the session was open
   startedBy?: string;           // the session whose agent started it; see Delegated sessions
+  startedByHost?: string;       // the peer Host that session is on; see Peer Hosts
 };
 ```
 
@@ -584,7 +589,8 @@ device's name as `device`), `{"run": {}}` for a headless run, or
 `{"session": {"sessionId": "s-2"}}` for a prompt from another session, whose agent began the
 turn through a Host tool, or `{"session": {"sessionId": "s-2", "report": true}}` for the Host's
 report on session `s-2` to the session whose agent began a turn there (see
-[Delegated sessions](#delegated-sessions)). Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
+[Delegated sessions](#delegated-sessions)). A session on a peer Host adds that Host's id as
+`host`: `{"session": {"sessionId": "s-2", "host": "h-7Rk2"}}` (see [Peer Hosts](#peer-hosts)). Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
 updates. Terminal output an agent reports in `_meta` (`terminal_output_delta`) becomes
 `terminalOutput` and `terminalExit` events and is stripped from the update, so each chunk
 arrives once.
@@ -622,7 +628,7 @@ its `turnStarted` event. The session must be open, but the client needn't be att
 with the `queue` feature offers `queue/add` too, which starts a turn or queues the prompt
 behind the running one (see [Queue](#queue)).
 
-**`turn/steer`** `{sessionId, prompt: ContentBlock[]}` →
+**`turn/steer`** `{sessionId, prompt: ContentBlock[], caller?}` →
 `{outcome: "steered", seq, turnId?} | {outcome: "notRunning"}`
 
 Feature `turn/steer`. Sends a steer: a message for the session's running turn, which joins
@@ -646,21 +652,28 @@ agent whose turn just ended hands the steer back rather than starting a turn the
 see end. codex-acp ignores that: a steer that reaches it as its turn ends starts a turn of its
 own, whose output reaches clients but whose end never does. The Host journals that steer as
 `steered` and logs it. When the agent can't take a steer, the request fails with its error.
+`caller` is a peer Host's only (see [Peer Hosts](#peer-hosts)).
 
 **`turn/cancel`** `{sessionId}` → `{}`
 
 Cancels the session's running turn (ACP `session/cancel`) and cancels its pending
 requests.
 
-**`session/run`** `{agentId, cwd, sessionId?, additionalDirectories?, prompt, policy, attach?, trace?, key?}` →
-`{sessionId, turnId?, state?: SessionState}`
+**`session/run`** `{agentId, cwd, remote?, sessionId?, additionalDirectories?, prompt, policy, attach?, trace?, key?, caller?}` →
+`{sessionId, turnId?, state?: SessionState, policy?}`
 
 Opens a session (`sessionId`, as attaching would, or a new one) and starts a turn in it
 without the client having to stay. An open session keeps its own policy. With `attach`, the
 client is attached before the prompt is sent, so it sees the whole turn, and `state` is
 returned. Nobody can sign in at a terminal for a headless session, so the Host doesn't
 offer agents terminal sign-in for one. `turnId` names the turn it started; a repeat under its
-key names it too.
+key names it too. `policy` (feature `peers`) is the policy the session runs under: the one
+asked for, or an open session's own; a repeat under a key leaves it out. `caller` is a peer
+Host's only: the session there whose agent asks, which the turn's origin names and a new
+session records as `startedBy` (see [Peer Hosts](#peer-hosts)).
+`cwd` may be `~` or start with `~/` (feature `peers`), under the Host's home, and with `remote`
+it has to be a checkout of that repository, by its remote as `GitLocation.remote` gives it, or
+the request fails saying what's there, as a peer Host asks for the directory its agent works in.
 
 ### Turn ids
 
@@ -711,7 +724,7 @@ type QueuedPrompt = {
 - **At startup** the Host takes up the suspended headless sessions whose queue holds prompts
   and isn't paused, so their queue runs with nobody attached.
 
-**`queue/add`** `{sessionId, prompt: ContentBlock[], key?}` → `{queuedId, seq, started}`, where
+**`queue/add`** `{sessionId, prompt: ContentBlock[], key?, caller?}` → `{queuedId, seq, started}`, where
 `queuedId` is also the id of the turn it starts (see [Turn ids](#turn-ids))
 
 Adds a prompt to the end of the session's queue, with the client's origin. Any client may add
@@ -853,6 +866,13 @@ answer as JSON text, or a tool error saying why the method failed.
 - `prompt_session {sessionId, prompt, key?}`: `queue/add`.
 - `steer_session {sessionId, prompt}`: `turn/steer`.
 - `cancel_session_turn {sessionId}`: `turn/cancel`.
+- `list_hosts {}`: `peers/list` with `check`: this Host's id and its peer Hosts, each with
+  whether it can be reached now, or why not.
+
+Every tool but `rename_session` and `list_hosts` takes `host`, a peer Host's id or name as
+`list_hosts` gives it, to act on that Host instead (see [Peer Hosts](#peer-hosts)).
+`start_session` then needs `cwd`, a directory on that Host. The tool list stays the same as peers
+come and go; a call naming a peer that can't be reached fails at once with a tool error.
 
 ### Delegated sessions
 
@@ -889,7 +909,133 @@ It isn't a subagent session.
   (1 by default: a delegated session can't start one), and may have at most `running` of its
   delegated sessions running a turn or waiting on a request at once (3 by default), from the
   configuration's `[delegation]`. Neither limits prompting sessions it didn't start. A tool call
-  past either fails as a tool error saying so.
+  past either fails as a tool error saying so. Delegated sessions on peer Hosts count toward
+  `running`, and a session a peer Host's agent started counts as one level down there.
+
+## Peer Hosts
+
+Feature `peers` (WVE-109, [ADR 0017](../adr/0017-hosts-pair-as-peers-through-the-tailnet-and-are-managed-through-their-cli.md),
+[ADR 0024](../adr/0024-a-peer-host-may-only-do-what-the-host-tools-need.md)). A Host pairs with
+another of the person's Hosts as a peer Host, connects to it as a remote client, and offers it to
+its agents through the Host tools' `host`. Hosts never speak MCP to each other, and none
+coordinates the others: the Host a session runs on stays its only authority.
+
+```text
+Host A (mini)                                         Host B (studio)
+  thread a1 ─ start_session {host: "studio", …}         WebSocket, behind Tailscale Serve
+    │                                                      │
+    └─ A's connection to B, proving A's key at hello ───► session/run {caller: "a1", cwd: "~/…"}
+       follows the turn: session/attach {observe}  ◄────── thread b1: B runs it, journals it,
+       reports its end to a1                               holds its pending requests
+```
+
+- **The Host's key.** A Host proves itself to its peers with a P-256 key of its own, made the
+  first time it pairs with one. On a Mac with a Secure Enclave the key is made there and can't be
+  copied off the computer: the Host keeps only its wrapped form, which no other computer can use,
+  and the Security framework takes it back without a keychain, so an unsigned Host that launchd
+  runs and that is rebuilt often can use it. Elsewhere, as on Linux, the key itself is kept.
+  Either way it's in `host-key.json` beside `devices.json`, 0600. A Host that loses the file
+  makes a new key, and its peers refuse it until it pairs again.
+- **Pairing.** `weave hosts add studio`, on Host A, pairs over SSH, as ADR 0017 manages another
+  Host: it runs `weave pair --json` on studio, which offers a code as for a device
+  (`devices/offer`, turning B's remote access on) and prints the URL and code, and asks A for
+  `peers/add` with them. A connects to B's URL and pairs with `auth: {method: "pair", code,
+  device: {name, publicKey, host}}`, where `name` is A's computer's name and `host` A's Host id.
+  B keeps A as a paired device that names its Host (`Device.host`), lists it among its devices,
+  and revokes it as it revokes one. A keeps B's id, name (the name SSH reaches it by, unless
+  `--name` gives one), URL and the device id B gave it in `peers.json`, 0600. Then, unless
+  `--one-way`, the command offers a code on A and runs `weave hosts add <A's URL> <code>
+  --one-way` on studio, so B pairs with A the same way. Each pairing goes one way; given the URL
+  and code `weave pair` showed on B instead of a computer, `weave hosts add` makes this one only.
+- **Connecting.** A connects to B when a Host tool names B, proving its key at `host/hello` as a
+  device does, with `weave-host` as its client name, and fails the call at once when B can't be
+  reached within ten seconds or refuses A. A connection stays while A follows a turn on B, and
+  closes after a minute unused otherwise.
+- **Reachable.** A peer's `status` is how the last attempt to reach it went: `reachable` when its
+  hello succeeded, `refused` when it refused A's key (or closed A's connection as revoked),
+  `down` when its address answered but no weave Host did (an HTTP status instead of the
+  WebSocket, as Tailscale Serve answers for a Host that isn't running), `unreachable` when
+  nothing answered or the connection closed, `otherHost` when another weave Host answers at its
+  URL, and `unchecked` before A has tried since it started.
+- **What a peer may do** (ADR 0024). Only what the Host tools and following a turn need:
+  `host/hello`, `host/challenge`, `host/status`, `agents/list`, `sessions/list`,
+  `sessions/get`, `session/run` without `attach`, `session/attach` with `observe`,
+  `session/detach`, `queue/add`, `turn/steer` and `turn/cancel`. Everything else answers
+  `forbidden`, before any handler sees it: the computer's files, terminals and worktrees, opening
+  or attaching to a session as a client of it, answering its pending requests, and
+  administering B.
+- **Acting for a session.** A sends `session/run`, `queue/add` and `turn/steer` with `caller`,
+  the session on A whose agent asks. B accepts `caller` only from a peer Host, and makes the
+  turn's origin `{"session": {"sessionId": <caller>, "host": <A's id>, "hostName": <A's name>}}`,
+  taking the Host and its name from the paired device that connected, never from the request. A
+  new session records the caller as `startedBy` and A as `startedByHost`. Other methods, such as
+  `sessions/list`, `sessions/get`, `agents/list` and `turn/cancel`, A sends as any client would.
+- **Where it runs.** `session/run`'s `cwd` may be `~/…`, under B's home. With `start_session`'s
+  `host` and no `cwd`, A sends the calling session's directory as it lies under A's home, in the
+  repository's main worktree when the session is in another one (whose branch B may not have),
+  and the repository's remote as `remote`; B runs the session there only if that directory is a
+  checkout of the same remote, and otherwise refuses, saying what it found. A session outside
+  A's home has no such counterpart, and its agent names `cwd` itself.
+- **Sent once, recorded first.** B's request keys are B's own across its clients, and every
+  session on A is one client to B, so A sends an agent's `key`, or one it makes when the agent
+  gave none, as a hash of it and the calling session: two agents' keys never meet, and one
+  agent's retry is the same request. Before it sends `session/run` or `queue/add`, A records the
+  request in `peers.json` (`sending`), and forgets it once B answers. When B can't be reached,
+  or refuses, nothing has begun and the tool fails. When the connection goes before B answers,
+  A can't know whether B began the turn: the tool says so, and A sends the request again, under
+  the same key, until B answers, across A's restarts too, then reports what happened to the
+  calling session ("… took the start_session this thread asked of it after all").
+- **Authority.** B runs the session, journals it, applies its policy, and holds its pending
+  requests, which B's clients answer; A's agent never does. B applies the policy A asks for:
+  `start_session`'s, within the calling session's policy, as for a delegated session on A.
+  Sessions the calling session started on peers count toward its `[delegation] running`.
+- **Following and reports.** When A's agent starts or prompts a session on B, A follows that
+  turn: it observes the session (`session/attach` with `observe`) and reports to the calling
+  session, as for a delegated session of its own, when a request in the turn waits on a person
+  there and when the turn ends, reading how it ended with `sessions/get`. A report's origin names
+  the session on B, B's id and B's name: `{"session": {"sessionId": <b1>, "host": <B's id>,
+  "hostName": "studio", "report": true}}`. A keeps the turns it follows in `peers.json`, so a
+  Host that restarts follows them again; one that loses B reconnects, waiting longer each time up
+  to five minutes, and attaches after the position it saw. B never reports across Hosts: its
+  session's caller is on A, which follows the turn itself. A turn that can't be followed any
+  more, because B refused A, A forgot B, or B's session closed before the turn ran, is reported
+  as such.
+- **One hop.** A's agents reach A's peers only. Nothing passes a peer's request on: `peers/*` is
+  local only, and on B, a session whose running turn a peer Host's agent began, or that a peer
+  Host's agent started, or that one of those started, reaches none of B's own peers; its Host
+  tools fail if given `host`.
+- **Clients.** A session on B that A started shows its `startedBy` and `startedByHost`, and a
+  turn's origin its `hostName`: the TUI says "A thread on mini", and the app, which pairs with
+  several Hosts, names the thread that started it and that thread's Host when it lists both.
+
+**`peers/add`** `{url, code, name?}` → `{peer: Peer}`
+
+Pairs with the Host at `url`, with the code `weave pair` showed there. Pairing again with a peer
+replaces it. Fails with `peer_unavailable` when it can't be reached or refuses the code.
+
+**`peers/list`** `{check?}` → `{hostId, peers: Peer[]}`
+
+`hostId` is this Host's own id. With `check`, the Host first tries to reach each peer it isn't
+connected to.
+
+```ts
+type Peer = {
+  hostId: string;
+  name: string;
+  url: string;
+  pairedAt: number;
+  lastSeenAt?: number;   // when this Host last said hello to it
+  status: 'reachable' | 'unchecked' | 'refused' | 'down' | 'unreachable' | 'otherHost';
+  error?: string;        // why the last attempt to reach it failed
+};
+```
+
+**`peers/remove`** `{hostId}` → `{}`
+
+Forgets a peer and closes the connection to it; turns followed there are reported as no longer
+followed. The peer still lists this Host among its devices until it's revoked there.
+
+All three are for local clients only.
 
 ## Files
 
@@ -1323,6 +1469,7 @@ returns the agent's error unchanged.
 | -32076 | `key_reused` | the request key was used for another request (see [Request keys](#request-keys)) |
 | -32077 | `host_stopping` | the Host is draining before it stops and starts no new turns (see `host/drain`) |
 | -32080 | `unknown_turn` | the session's journal has no turn by that id (see [Turn ids](#turn-ids)) |
+| -32081 | `peer_unavailable` | a peer Host couldn't be reached or refused this Host, or this Host pairs with none; the message says why (see [Peer Hosts](#peer-hosts)) |
 
 ## Versioning
 
@@ -1369,7 +1516,10 @@ as it does now.
 Remote clients follow ADR 0010 and [`wve-90-remote-clients.md`](wve-90-remote-clients.md):
 the WebSocket binds loopback only and Tailscale Serve is the way in; every connection proves
 a paired device by signing a challenge; a paired device may do what a local client can,
-except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answer `forbidden`.
+except `host/shutdown`, `devices/*`, `peers/*`, and agent sign-in and sign-out, which answer
+`forbidden`. A peer Host is a paired device of this kind (ADR 0017). The Host's own key, which
+it proves itself to its peers with, is the one secret it keeps: in the Secure Enclave where
+there's one, and otherwise in `host-key.json`, 0600 (see [Peer Hosts](#peer-hosts)).
 
 ## Clients
 
@@ -1425,6 +1575,12 @@ except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answe
   Host (never starting one) for `worktrees/release`, failing while a session in the worktree is
   busy, for worktrunk's `pre-remove` hooks; `weave worktrees install-hook` adds it to
   worktrunk's user config when asked.
+- `weave hosts add <computer>` pairs with another of the person's Hosts over SSH, both ways
+  unless `--one-way` (`weave pair --json` there, `peers/add` here, and the same the other way);
+  `weave hosts add <url> <code>`, or the `weave://pair` link `weave pair`'s QR code holds, pairs
+  this way only. `weave hosts` lists them, trying to reach each (`peers/list` with `check`), and
+  `weave hosts remove` forgets one. `weave pair` says how, and `weave devices` marks the peer
+  Hosts among the devices.
 - With `--json`, what a command reports is the protocol's own types (WVE-108): `daemon status`
   prints `host/status`'s answer, `threads list` its sessions, `threads read` `sessions/get`'s,
   `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the paired devices, `run

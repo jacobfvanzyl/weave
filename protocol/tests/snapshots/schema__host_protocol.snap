@@ -64,6 +64,18 @@ expression: schema()
       "params": "RevokeDeviceRequest",
       "result": "Empty"
     },
+    "peers/add": {
+      "params": "AddPeerRequest",
+      "result": "AddPeerResponse"
+    },
+    "peers/list": {
+      "params": "ListPeersRequest",
+      "result": "ListPeersResponse"
+    },
+    "peers/remove": {
+      "params": "RemovePeerRequest",
+      "result": "Empty"
+    },
     "files/list": {
       "params": "ListFilesRequest",
       "result": "ListFilesResponse"
@@ -267,7 +279,8 @@ expression: schema()
       "hostStopping": -32077,
       "unknownTerminal": -32078,
       "terminalUnavailable": -32079,
-      "unknownTurn": -32080
+      "unknownTurn": -32080,
+      "peerUnavailable": -32081
     },
     "features": {
       "steer": "turn/steer",
@@ -283,7 +296,8 @@ expression: schema()
       "requestKeys": "requestKeys",
       "drain": "drain",
       "terminals": "terminals",
-      "turnIds": "turnIds"
+      "turnIds": "turnIds",
+      "peers": "peers"
     },
     "files": {
       "maxEntries": 2000
@@ -305,7 +319,8 @@ expression: schema()
       "promptSession": "prompt_session",
       "steerSession": "steer_session",
       "cancelSessionTurn": "cancel_session_turn",
-      "listAgents": "list_agents"
+      "listAgents": "list_agents",
+      "listHosts": "list_hosts"
     }
   },
   "$defs": {
@@ -458,6 +473,13 @@ expression: schema()
         },
         "publicKey": {
           "$ref": "#/$defs/Jwk"
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Host id of a peer Host pairing, which is one of the person's Hosts rather than a\ndevice; absent for a device."
         }
       },
       "required": [
@@ -614,6 +636,13 @@ expression: schema()
         },
         "name": {
           "type": "string"
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The peer Host's id, when the device is one of the person's Hosts."
         }
       },
       "required": [
@@ -809,6 +838,13 @@ expression: schema()
             }
           ],
           "description": "The session whose agent started it, for a delegated session."
+        },
+        "startedByHost": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The peer Host the session that started it is on, when it isn't this one."
         }
       },
       "required": [
@@ -1800,6 +1836,13 @@ expression: schema()
           "format": "uint32",
           "minimum": 0,
           "description": "Its connections now."
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The peer Host's id, when the device is one of the person's Hosts."
         }
       },
       "required": [
@@ -1821,6 +1864,167 @@ expression: schema()
         "deviceId"
       ],
       "description": "`devices/revoke`: forget a device and close its connections. It has to pair again."
+    },
+    "AddPeerRequest": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The peer's URL, as `weave pair` showed it there."
+        },
+        "code": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What to call the peer; its tailnet name when absent."
+        }
+      },
+      "required": [
+        "url",
+        "code"
+      ],
+      "description": "`peers/add`: pair with the Host at `url`, using the code `weave pair` showed there."
+    },
+    "AddPeerResponse": {
+      "type": "object",
+      "properties": {
+        "peer": {
+          "$ref": "#/$defs/Peer"
+        }
+      },
+      "required": [
+        "peer"
+      ]
+    },
+    "Peer": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string",
+          "description": "The peer's Host id, as its `host/hello` gives it."
+        },
+        "name": {
+          "type": "string",
+          "description": "What the person calls it: the name pairing gave it, or its tailnet name."
+        },
+        "url": {
+          "type": "string",
+          "description": "Its WebSocket, through Tailscale Serve."
+        },
+        "pairedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "lastSeenAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When this Host last said hello to it."
+        },
+        "status": {
+          "$ref": "#/$defs/PeerStatus",
+          "description": "How the last attempt to reach it went."
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the last attempt to reach it failed."
+        }
+      },
+      "required": [
+        "hostId",
+        "name",
+        "url",
+        "pairedAt",
+        "status"
+      ],
+      "description": "A peer Host, as `peers/list` shows it."
+    },
+    "PeerStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "reachable",
+          "description": "It took this Host's key at hello; this Host may be connected to it now."
+        },
+        {
+          "type": "string",
+          "const": "unchecked",
+          "description": "Not tried since this Host started."
+        },
+        {
+          "type": "string",
+          "const": "refused",
+          "description": "It refused this Host's key, as after it revoked this Host: pairing again is the way back."
+        },
+        {
+          "type": "string",
+          "const": "down",
+          "description": "Its computer answered at the URL, but no weave Host did, as when the Host isn't running\nthere."
+        },
+        {
+          "type": "string",
+          "const": "unreachable",
+          "description": "Nothing answered at the URL, as when the computer is asleep or off the tailnet."
+        },
+        {
+          "type": "string",
+          "const": "otherHost",
+          "description": "Another weave Host answers at the URL."
+        }
+      ],
+      "description": "How this Host's last attempt to reach a peer went."
+    },
+    "ListPeersRequest": {
+      "type": "object",
+      "properties": {
+        "check": {
+          "type": "boolean",
+          "description": "Try to reach each peer this Host isn't connected to, so `status` and `error` say\nwhether it can be reached now."
+        }
+      },
+      "description": "`peers/list`."
+    },
+    "ListPeersResponse": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string",
+          "description": "This Host's own id, which its peers know it by."
+        },
+        "peers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Peer"
+          }
+        }
+      },
+      "required": [
+        "hostId",
+        "peers"
+      ]
+    },
+    "RemovePeerRequest": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hostId"
+      ],
+      "description": "`peers/remove`: forget a peer and close the connection to it. The peer still lists this\nHost among its paired devices until it's revoked there."
     },
     "ListFilesRequest": {
       "type": "object",
@@ -2619,6 +2823,20 @@ expression: schema()
                 "sessionId": {
                   "$ref": "#/$defs/SessionId"
                 },
+                "host": {
+                  "description": "The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "hostName": {
+                  "description": "What this Host calls that Host: the name it paired with, for clients to show.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "report": {
                   "description": "The Host's report on that session, of how a turn this session's agent began there\nended or that it waits on a person. Nobody hears how a report's turn ends.",
                   "type": "boolean"
@@ -3085,6 +3303,13 @@ expression: schema()
             }
           ],
           "description": "The session whose agent started it, for a delegated session."
+        },
+        "startedByHost": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The peer Host the session that started it is on, when it isn't this one."
         }
       },
       "required": [
@@ -5189,6 +5414,13 @@ expression: schema()
           ],
           "description": "The session whose agent started it, for a delegated session."
         },
+        "startedByHost": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The peer Host the session that started it is on, when it isn't this one."
+        },
         "replay": {
           "$ref": "#/$defs/Replay"
         }
@@ -5431,7 +5663,15 @@ expression: schema()
           "type": "string"
         },
         "cwd": {
-          "type": "string"
+          "type": "string",
+          "description": "Absolute, or under the Host's home as `~/…` (feature `peers`), for a client that doesn't\nknow where the home is on the Host's computer."
+        },
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The repository `cwd` has to be a checkout of (feature `peers`), by its remote as\n[`crate::worktrees::GitLocation::remote`] gives it, such as `github.com/owner/name`."
         },
         "sessionId": {
           "anyOf": [
@@ -5474,6 +5714,17 @@ expression: schema()
             "null"
           ],
           "description": "Makes it safe to send again (feature `requestKeys`). A repeat answers with the session's\nid alone; a client that asked to attach attaches with `session/attach`."
+        },
+        "caller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A peer Host's only (feature `peers`): the session on it whose agent asks, which the\nturn's origin names, and a new session's `startedBy`."
         }
       },
       "required": [
@@ -5506,6 +5757,17 @@ expression: schema()
             }
           ],
           "description": "When attached."
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The policy the session runs under (feature `peers`): the one asked for, or an open\nsession's own. Absent from a repeat under a request key."
         }
       },
       "required": [
@@ -5570,6 +5832,17 @@ expression: schema()
           "items": {
             "$ref": "#/$defs/ContentBlock"
           }
+        },
+        "caller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A peer Host's only (feature `peers`): the session on it whose agent asks, which the\nsteer's origin names."
         }
       },
       "required": [
@@ -5650,6 +5923,17 @@ expression: schema()
             "null"
           ],
           "description": "Makes it safe to send again (feature `requestKeys`)."
+        },
+        "caller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A peer Host's only (feature `peers`): the session on it whose agent asks, which the\nturn's origin names."
         }
       },
       "required": [

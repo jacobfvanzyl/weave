@@ -3,6 +3,7 @@ mod config;
 mod daemon;
 mod devices;
 mod exit;
+mod hosts;
 mod recent;
 mod run;
 mod service;
@@ -84,6 +85,9 @@ enum Command {
     Pair(devices::PairArgs),
     /// Devices paired with the weave Host: list them, or revoke one.
     Devices(devices::DevicesArgs),
+    /// Your other Hosts this one pairs with, whose threads its agents reach: list them, pair
+    /// with one over SSH, or forget one.
+    Hosts(hosts::HostsArgs),
     /// Move the agents weave launches to their newest releases, after checking each starts.
     Update(update::UpdateArgs),
     /// Run one prompt headlessly and print every ACP event the agent sends.
@@ -164,6 +168,10 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Devices(args)) => {
             log_to_stderr("warn");
             devices::devices(args).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Hosts(args)) => {
+            log_to_stderr("warn");
+            hosts::hosts(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Update(args)) => {
             log_to_stderr("warn");

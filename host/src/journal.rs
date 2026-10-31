@@ -119,6 +119,9 @@ pub(crate) enum Entry {
         /// the journal a closed session gets when it opens again.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         started_by: Option<SessionId>,
+        /// The peer Host `started_by` is on, when it isn't this one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_by_host: Option<String>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -284,6 +287,7 @@ impl Entry {
             queue: Vec::new(),
             queue_paused: None,
             started_by: None,
+            started_by_host: None,
         }
     }
 
@@ -609,6 +613,8 @@ pub struct Recorded {
     pub git: Option<GitLocation>,
     /// The session whose agent started it, for a delegated session.
     pub started_by: Option<SessionId>,
+    /// The peer Host `started_by` is on, when it isn't this one.
+    pub started_by_host: Option<String>,
 }
 
 impl Recorded {
@@ -673,11 +679,16 @@ pub(crate) fn last_activity(records: &[Record]) -> Option<u64> {
         .filter(|at| *at > 0)
 }
 
-/// The session whose agent started the session `records` journal, as its header says.
-pub(crate) fn started_by(records: &[Record]) -> Option<SessionId> {
+/// The session whose agent started the session `records` journal, as its header says, and
+/// the peer Host that session is on when it isn't this one.
+pub(crate) fn started_by(records: &[Record]) -> (Option<SessionId>, Option<String>) {
     match records.first().map(|record| &record.entry) {
-        Some(Entry::Header { started_by, .. }) => started_by.clone(),
-        _ => None,
+        Some(Entry::Header {
+            started_by,
+            started_by_host,
+            ..
+        }) => (started_by.clone(), started_by_host.clone()),
+        _ => (None, None),
     }
 }
 
@@ -844,6 +855,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         policy,
         git,
         started_by,
+        started_by_host,
         title: mut renamed,
         ..
     } = serde_json::from_str::<Record>(&header).ok()?.entry
@@ -895,6 +907,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
             title: renamed.or(agent_title),
             git,
             started_by,
+            started_by_host,
         },
     ))
 }

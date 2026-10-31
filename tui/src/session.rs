@@ -103,6 +103,7 @@ mod tests {
             trace: None,
             update: None,
             started_by: None,
+            started_by_host: None,
         }
     }
 

@@ -812,6 +812,7 @@ mod tests {
             last_activity_at: Some(30_000),
             git: None,
             started_by: None,
+            started_by_host: None,
         });
         assert_eq!(
             describe(&status, &paths, 7_230_000),

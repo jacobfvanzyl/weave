@@ -281,6 +281,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 .send(SteerTurnRequest {
                     session_id: SessionId::new(session_id.clone()),
                     prompt: vec![ContentBlock::from(prompt)],
+                    caller: None,
                 })
                 .await
                 .context("steering the thread")?;
@@ -442,6 +443,7 @@ async fn add_prompt(
             session_id: SessionId::new(session_id),
             prompt: vec![ContentBlock::from(prompt)],
             key: args.key,
+            caller: None,
         })
         .await
         .context("prompting the thread")
@@ -570,12 +572,21 @@ fn describe_turn(latest: &LatestTurn, asked: bool) -> String {
         TurnOrigin::Run {} => "a headless run".to_owned(),
         TurnOrigin::Session {
             session_id,
-            report: false,
-        } => format!("thread {session_id}"),
-        TurnOrigin::Session {
-            session_id,
-            report: true,
-        } => format!("the Host's report on thread {session_id}"),
+            host,
+            host_name,
+            report,
+        } => {
+            let on = match (host_name, host) {
+                (Some(name), _) => format!(" on {name}"),
+                (None, Some(host)) => format!(" on Host {host}"),
+                (None, None) => String::new(),
+            };
+            if *report {
+                format!("the Host's report on thread {session_id}{on}")
+            } else {
+                format!("thread {session_id}{on}")
+            }
+        }
     };
     let stopped = |latest: &LatestTurn| {
         let reason = latest
@@ -638,6 +649,7 @@ mod tests {
             last_activity_at: Some(30_000),
             git: None,
             started_by: None,
+            started_by_host: None,
         };
         assert_eq!(
             describe(std::slice::from_ref(&session), 7_230_000),
@@ -673,6 +685,8 @@ mod tests {
             origin: TurnOrigin::Session {
                 session_id: "s0".into(),
                 report: false,
+                host: None,
+                host_name: None,
             },
             started_at: 0,
             running: true,
@@ -710,6 +724,8 @@ mod tests {
             origin: TurnOrigin::Session {
                 session_id: "s2".into(),
                 report: true,
+                host: None,
+                host_name: None,
             },
             response: Some(PromptResponse::new(StopReason::Cancelled)),
             ..finished

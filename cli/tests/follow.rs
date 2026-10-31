@@ -208,6 +208,7 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
                 session_id: state.session_id.clone(),
                 prompt: vec![ContentBlock::from("write notes.txt hi".to_owned())],
                 key: None,
+                caller: None,
             })
             .await
             .expect("queue/add");

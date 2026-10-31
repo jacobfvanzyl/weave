@@ -1,0 +1,18 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&Auth::Pair\n{\n    code: \"4F1N2K7Q9R3T5V8W0X6Y2Z4A1B\".to_owned(), device: NewDevice\n    {\n        name: \"mini\".to_owned(), public_key: jwk(), host:\n        Some(\"h-2Lm9\".to_owned()),\n    },\n})"
+---
+{
+  "method": "pair",
+  "code": "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B",
+  "device": {
+    "name": "mini",
+    "publicKey": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+    },
+    "host": "h-2Lm9"
+  }
+}

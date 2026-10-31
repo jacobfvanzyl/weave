@@ -93,6 +93,13 @@ use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::peers::AddPeerRequest;
+use weave_host_protocol::peers::AddPeerResponse;
+use weave_host_protocol::peers::ListPeersRequest;
+use weave_host_protocol::peers::ListPeersResponse;
+use weave_host_protocol::peers::Peer;
+use weave_host_protocol::peers::PeerStatus;
+use weave_host_protocol::peers::RemovePeerRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::pending::PendingAddedNotification;
 use weave_host_protocol::pending::PendingKind;
@@ -299,6 +306,7 @@ fn state() -> SessionState {
         trace: None,
         update: Some(update()),
         started_by: None,
+        started_by_host: None,
     }
 }
 
@@ -351,6 +359,7 @@ fn device() -> Device {
         paired_at: 1_760_180_000_000,
         last_seen_at: Some(1_760_180_005_000),
         connections: 1,
+        host: None,
     }
 }
 
@@ -365,6 +374,7 @@ fn listing() -> SessionListing {
         last_activity_at: Some(1_760_180_001_234),
         git: Some(git()),
         started_by: None,
+        started_by_host: None,
     }
 }
 
@@ -442,6 +452,7 @@ fn hello() {
             device: Some(DeviceInfo {
                 id: "d-3q8Hf0aZ".to_owned(),
                 name: "Jaco's iPad".to_owned(),
+                host: None,
             }),
         })
     );
@@ -473,6 +484,7 @@ fn hello() {
                 device: NewDevice {
                     name: "Jaco's iPad".to_owned(),
                     public_key: jwk(),
+                    host: None,
                 },
             },
             capabilities: ClientCapabilities::default(),
@@ -526,6 +538,93 @@ fn devices() {
         "revoke_device_request",
         message(&RevokeDeviceRequest {
             device_id: "d-3q8Hf0aZ".to_owned(),
+        })
+    );
+}
+
+/// The person's other Hosts: one pairs with a peer as a device that names its Host id, and its
+/// agents' turns there name the session on it that asks.
+#[test]
+fn peers() {
+    let peer = Peer {
+        host_id: "h-7Rk2".to_owned(),
+        name: "studio".to_owned(),
+        url: "wss://studio.example.ts.net:7341".to_owned(),
+        paired_at: 1_760_180_000_000,
+        last_seen_at: Some(1_760_180_005_000),
+        status: PeerStatus::Unreachable,
+        error: Some("it didn't answer within 10 seconds".to_owned()),
+    };
+    insta::assert_json_snapshot!(
+        "add_peer_request",
+        message(&AddPeerRequest {
+            url: "wss://studio.example.ts.net:7341".to_owned(),
+            code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
+            name: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "add_peer_response",
+        round_trip(&AddPeerResponse { peer: peer.clone() })
+    );
+    insta::assert_json_snapshot!(
+        "list_peers_request",
+        message(&ListPeersRequest { check: true })
+    );
+    insta::assert_json_snapshot!(
+        "list_peers_response",
+        round_trip(&ListPeersResponse {
+            host_id: "h-2Lm9".to_owned(),
+            peers: vec![peer],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_peer_request",
+        message(&RemovePeerRequest {
+            host_id: "h-7Rk2".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "peer_pairing",
+        round_trip(&Auth::Pair {
+            code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
+            device: NewDevice {
+                name: "mini".to_owned(),
+                public_key: jwk(),
+                host: Some("h-2Lm9".to_owned()),
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "peer_device",
+        round_trip(&Device {
+            host: Some("h-2Lm9".to_owned()),
+            ..device()
+        })
+    );
+    insta::assert_json_snapshot!(
+        "peer_run_request",
+        message(&RunRequest {
+            agent_id: "codex".to_owned(),
+            cwd: "~/src/app".into(),
+            remote: Some("github.com/jaco/app".to_owned()),
+            session_id: None,
+            additional_directories: Vec::new(),
+            prompt: vec![ContentBlock::from("Review the auth change")],
+            policy: PermissionPolicy::ask(),
+            attach: false,
+            trace: false,
+            key: None,
+            caller: Some("sess-a".into()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "peer_turn_origin",
+        round_trip(&TurnOrigin::Session {
+            session_id: "sess-a".into(),
+            host: Some("h-2Lm9".to_owned()),
+            host_name: Some("mini".to_owned()),
+            report: false,
         })
     );
 }
@@ -732,6 +831,7 @@ fn sessions() {
         message(&RunRequest {
             agent_id: "codex".to_owned(),
             cwd: "/repo".into(),
+            remote: None,
             session_id: None,
             additional_directories: Vec::new(),
             prompt: vec![text("fix the tests")],
@@ -739,6 +839,7 @@ fn sessions() {
             attach: false,
             trace: false,
             key: None,
+            caller: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -746,6 +847,7 @@ fn sessions() {
         message(&RunRequest {
             agent_id: "codex".to_owned(),
             cwd: "/repo".into(),
+            remote: None,
             session_id: None,
             additional_directories: Vec::new(),
             prompt: vec![text("fix the tests")],
@@ -753,6 +855,7 @@ fn sessions() {
             attach: false,
             trace: false,
             key: Some("nightly-2026-10-23".to_owned()),
+            caller: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -761,6 +864,7 @@ fn sessions() {
             session_id: "s-2".into(),
             turn_id: Some("t-1".to_owned()),
             state: None,
+            policy: None,
         })
     );
 }
@@ -938,6 +1042,7 @@ fn turns() {
         message(&SteerTurnRequest {
             session_id: "s-1".into(),
             prompt: vec![text("use the other branch")],
+            caller: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -991,6 +1096,8 @@ fn delegated_sessions() {
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
                     report: false,
+                    host: None,
+                    host_name: None,
                 },
                 started_at: 1_760_180_000_000,
                 running: false,
@@ -1011,6 +1118,8 @@ fn delegated_sessions() {
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
                     report: false,
+                    host: None,
+                    host_name: None,
                 },
                 started_at: 1_760_180_000_000,
                 running: true,
@@ -1030,6 +1139,7 @@ fn queue() {
             session_id: "s-1".into(),
             prompt: vec![text("then update the docs")],
             key: Some("0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c12".to_owned()),
+            caller: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -1154,6 +1264,8 @@ fn events() {
                 origin: TurnOrigin::Session {
                     session_id: "s-1".into(),
                     report: false,
+                    host: None,
+                    host_name: None,
                 },
                 queued_id: None,
                 turn_id: Some("t-1".to_owned()),
@@ -1173,6 +1285,8 @@ fn events() {
                 origin: TurnOrigin::Session {
                     session_id: "s-2".into(),
                     report: true,
+                    host: None,
+                    host_name: None,
                 },
                 queued_id: None,
                 turn_id: Some("t-1".to_owned()),

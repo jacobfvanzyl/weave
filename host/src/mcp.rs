@@ -81,7 +81,9 @@ const INSTRUCTIONS: &str = "Tools of the weave Host this thread runs in. Client 
                             as clipboard_write, run on the device of the person who sent the \
                             current turn, and fail when nobody is connected, as in a headless \
                             run. Host tools, such as rename_session, act on this thread in the \
-                            Host and need nobody connected.";
+                            Host and need nobody connected. Pairing the person's Hosts and \
+                            devices with each other (weave hosts, weave pair, weave devices) \
+                            is the person's to do: run those commands only when they ask.";
 
 /// What a client is told when its session's agent can't use the server.
 pub(crate) const REFUSED: &str = "This agent's MCP client predates MCP 2026-07-28, so it can't \

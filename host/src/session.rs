@@ -378,6 +378,11 @@ pub(crate) struct Summary {
     pub(crate) git: Option<GitLocation>,
     /// The session whose agent started it, for a delegated session.
     pub(crate) started_by: Option<SessionId>,
+    /// The peer Host `started_by` is on, when it isn't this one.
+    pub(crate) started_by_host: Option<String>,
+    /// The peer Host whose session's agent began its running turn, if one did: that turn's
+    /// agent reaches no peer Host of this one (ADR 0017's one hop).
+    pub(crate) turn_from_peer: Option<String>,
     /// The name of its agent process ([`crate::AGENT_PROCESS_VARIABLE`]).
     pub(crate) agent_process: String,
 }
@@ -396,6 +401,7 @@ impl Summary {
             last_activity_at: Some(self.last_activity_ms),
             git: self.git.clone(),
             started_by: self.started_by.clone(),
+            started_by_host: self.started_by_host.clone(),
         }
     }
 }
@@ -473,6 +479,8 @@ pub(crate) struct Opened {
     pub(crate) queue: Queue,
     /// The session whose agent started it, for a delegated session.
     pub(crate) started_by: Option<SessionId>,
+    /// The peer Host `started_by` is on, when it isn't this one.
+    pub(crate) started_by_host: Option<String>,
 }
 
 /// Start the task that owns a session, and register it with the Host.
@@ -495,6 +503,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         git,
         queue,
         started_by,
+        started_by_host,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
@@ -512,6 +521,8 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         last_activity_ms,
         git: git.clone(),
         started_by: started_by.clone(),
+        started_by_host: started_by_host.clone(),
+        turn_from_peer: None,
         agent_process: instance.process.clone(),
     }));
     let Instance {
@@ -548,6 +559,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
                 title: shown_title,
                 git,
                 started_by,
+                started_by_host,
             },
         );
     }
@@ -1160,6 +1172,7 @@ impl Actor {
             trace,
             update: self.update.clone(),
             started_by: summary.started_by,
+            started_by_host: summary.started_by_host,
         }
     }
 
@@ -1497,11 +1510,12 @@ impl Actor {
         };
         if let (Some(asks), Some(caller)) = (asks, self.caller()) {
             let listing = lock(&self.summary).listing();
-            let text = host_tools::waiting_text(&listing, &asks);
+            let text = host_tools::waiting_text(&host_tools::Named::of(&listing, None), &asks);
             tokio::spawn(host_tools::tell(
                 Arc::clone(&self.shared),
                 caller,
                 self.root.clone(),
+                None,
                 text,
             ));
         }
@@ -1585,11 +1599,14 @@ impl Actor {
 
     /// The session whose agent began the session's running turn through a Host tool, which
     /// hears how it goes (ADR 0023). A report's turn tells nobody back, so two sessions never
-    /// trade reports.
+    /// trade reports. A session on a peer Host isn't told from here: its Host follows the turn
+    /// itself (`peers.rs`).
     fn caller(&self) -> Option<SessionId> {
         match &self.turns.get(&self.root)?.origin {
             TurnOrigin::Session {
                 session_id,
+                host: None,
+                host_name: None,
                 report: false,
             } => Some(session_id.clone()),
             _ => None,
@@ -1625,11 +1642,13 @@ impl Actor {
         if let Some(caller) = caller {
             let latest = journal::turn(self.journal.records(), &self.root, None);
             let listing = lock(&self.summary).listing();
-            let text = host_tools::ended_text(&listing, latest.as_ref());
+            let text =
+                host_tools::ended_text(&host_tools::Named::of(&listing, None), latest.as_ref());
             tokio::spawn(host_tools::tell(
                 Arc::clone(&self.shared),
                 caller,
                 self.root.clone(),
+                None,
                 text,
             ));
         }
@@ -1706,10 +1725,17 @@ impl Actor {
     fn update_summary(&mut self) {
         let activity = self.activity();
         let clients = u32::try_from(self.clients.len()).unwrap_or(u32::MAX);
+        let turn_from_peer = match self.turns.get(&self.root).map(|turn| &turn.origin) {
+            Some(TurnOrigin::Session {
+                host: Some(host), ..
+            }) => Some(host.clone()),
+            _ => None,
+        };
         let (title, git) = {
             let mut summary = lock(&self.summary);
             summary.clients = clients;
             summary.activity = activity;
+            summary.turn_from_peer = turn_from_peer;
             (summary.title.clone(), summary.git.clone())
         };
         let now = Reported {

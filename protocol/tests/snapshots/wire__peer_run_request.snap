@@ -1,0 +1,22 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RunRequest\n{\n    agent_id: \"codex\".to_owned(), cwd: \"~/src/app\".into(), remote:\n    Some(\"github.com/jaco/app\".to_owned()), session_id: None,\n    additional_directories: Vec::new(), prompt:\n    vec![ContentBlock::from(\"Review the auth change\")], policy:\n    PermissionPolicy::ask(), attach: false, trace: false, key: None, caller:\n    Some(\"sess-a\".into()),\n})"
+---
+{
+  "method": "session/run",
+  "params": {
+    "agentId": "codex",
+    "cwd": "~/src/app",
+    "remote": "github.com/jaco/app",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "Review the auth change"
+      }
+    ],
+    "policy": {
+      "otherwise": "ask"
+    },
+    "caller": "sess-a"
+  }
+}

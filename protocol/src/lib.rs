@@ -9,6 +9,8 @@
 //!
 //! - [`hello`]: the first request on every connection: version, authentication, client.
 //! - [`devices`]: pairing the person's other devices, whose remote clients use the WebSocket.
+//! - [`peers`]: the person's other Hosts this Host has paired with, whose threads its agents
+//!   reach.
 //! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
 //! - [`files`]: files on the Host's computer, for clients that aren't on it.
 //! - [`worktrees`]: git repositories on the Host's computer, their worktrees, and where a
@@ -33,6 +35,7 @@ pub mod events;
 pub mod files;
 pub mod hello;
 pub mod host;
+pub mod peers;
 pub mod pending;
 pub mod policy;
 pub mod queue;

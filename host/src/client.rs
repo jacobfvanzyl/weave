@@ -16,7 +16,10 @@ use std::sync::atomic::Ordering;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
+use agent_client_protocol::Handled;
+use agent_client_protocol::Responder;
 use agent_client_protocol::Role as _;
+use agent_client_protocol::UntypedMessage;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::oneshot;
@@ -80,6 +83,12 @@ use weave_host_protocol::host::DrainRequest;
 use weave_host_protocol::host::DrainResponse;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::peers::AddPeerRequest;
+use weave_host_protocol::peers::AddPeerResponse;
+use weave_host_protocol::peers::ListPeersRequest;
+use weave_host_protocol::peers::ListPeersResponse;
+use weave_host_protocol::peers::PEERS_FEATURE;
+use weave_host_protocol::peers::RemovePeerRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::queue::AddQueuedRequest;
@@ -308,8 +317,26 @@ async fn handlers(
     let on_unwatch = Arc::clone(connection);
     let on_attach = Arc::clone(connection);
     let on_watch_terminals = Arc::clone(connection);
+    let on_any = Arc::clone(connection);
     Host.builder()
         .name("weave-host")
+        // A peer Host asks only what the Host tools need (ADR 0024), refused here before any
+        // handler sees the rest.
+        .on_receive_request(
+            async move |request: UntypedMessage, responder: Responder<serde_json::Value>, _cx| {
+                match on_any.peer_host().and(not_for_peers(&request)) {
+                    Some(asked) => {
+                        responder.respond_with_error(errors::not_for_peers(&asked))?;
+                        Ok(Handled::Yes)
+                    }
+                    None => Ok(Handled::No {
+                        message: (request, responder),
+                        retry: false,
+                    }),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         .on_receive_request(
             async move |request: HelloRequest, responder, _cx| {
                 responder.respond_with_result(on_hello.hello(request))
@@ -408,6 +435,18 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, list_files),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, add_peer),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, list_peers),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, remove_peer),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -630,6 +669,44 @@ async fn handlers(
         .await
 }
 
+/// The methods a peer Host may ask (ADR 0024): its hello, and what the Host tools and following
+/// a turn there need.
+const FOR_PEERS: [&str; 12] = [
+    "host/hello",
+    "host/challenge",
+    "host/status",
+    "agents/list",
+    "sessions/list",
+    "sessions/get",
+    "session/run",
+    "session/attach",
+    "session/detach",
+    "queue/add",
+    "turn/steer",
+    "turn/cancel",
+];
+
+/// What in `request` a peer Host may not ask, if anything: a method not in [`FOR_PEERS`], or
+/// attaching as anything but an observer, which would make it a client of the thread.
+fn not_for_peers(request: &UntypedMessage) -> Option<String> {
+    let method = request.method.as_str();
+    let flag = |name: &str| {
+        request
+            .params
+            .get(name)
+            .and_then(serde_json::Value::as_bool)
+    };
+    if !FOR_PEERS.contains(&method) {
+        Some(method.to_owned())
+    } else if method == "session/attach" && flag("observe") != Some(true) {
+        Some("session/attach without observe".to_owned())
+    } else if method == "session/run" && flag("attach") == Some(true) {
+        Some("session/run with attach".to_owned())
+    } else {
+        None
+    }
+}
+
 /// What a client from before this protocol reads as "another version".
 fn legacy_initialize() -> InitializeResponse {
     let mut meta = Meta::new();
@@ -753,6 +830,30 @@ impl Connection {
         }
     }
 
+    /// The peer Host this remote client proved, if it's one of the person's Hosts.
+    fn peer_host(&self) -> Option<String> {
+        lock(&self.device)
+            .as_ref()
+            .and_then(|device| device.host.clone())
+    }
+
+    /// The origin of a turn or steer this client sends for `caller`: the session on the peer
+    /// Host whose agent asks, which only a peer Host names; otherwise this client's.
+    fn origin_for(&self, hello: &Hello, caller: Option<SessionId>) -> Result<TurnOrigin, Error> {
+        let Some(session_id) = caller else {
+            return Ok(self.origin(hello));
+        };
+        let host = self.peer_host().ok_or_else(|| {
+            Error::invalid_params().data("only a peer Host names the session that asks")
+        })?;
+        Ok(TurnOrigin::Session {
+            session_id,
+            host: Some(host),
+            host_name: self.device_name(),
+            report: false,
+        })
+    }
+
     fn hello(&self, request: HelloRequest) -> Result<HelloResponse, Error> {
         let supported = VersionRange::supported();
         let protocol = request
@@ -802,6 +903,7 @@ impl Connection {
                 TURN_IDS_FEATURE.to_owned(),
                 DRAIN_FEATURE.to_owned(),
                 OBSERVE_FEATURE.to_owned(),
+                PEERS_FEATURE.to_owned(),
             ]
             .into_iter()
             .chain(
@@ -1016,6 +1118,31 @@ impl Connection {
     }
 
     /// `files/list`, off the dispatch loop's thread: a slow disk shouldn't hold it up.
+    /// The Host's peers, for a local client: remote clients, peer Hosts among them, may not
+    /// manage them, so no peer's request reaches another peer (ADR 0017's one hop).
+    fn peers(&self) -> Result<&crate::peers::Peers, Error> {
+        self.local_hello()?;
+        self.shared
+            .peers
+            .as_ref()
+            .ok_or_else(|| errors::peer_unavailable("this Host doesn't pair with other Hosts"))
+    }
+
+    /// `peers/add`: pair with another of the person's Hosts.
+    async fn add_peer(&self, request: AddPeerRequest) -> Result<AddPeerResponse, Error> {
+        let peer = self.peers()?.add(&self.shared, request).await?;
+        Ok(AddPeerResponse { peer })
+    }
+
+    async fn list_peers(&self, request: ListPeersRequest) -> Result<ListPeersResponse, Error> {
+        Ok(self.peers()?.list(&self.shared, request.check).await)
+    }
+
+    async fn remove_peer(&self, request: RemovePeerRequest) -> Result<Empty, Error> {
+        self.peers()?.remove(&request.host_id)?;
+        Ok(Empty {})
+    }
+
     async fn list_files(&self, request: ListFilesRequest) -> Result<ListFilesResponse, Error> {
         self.hello_info()?;
         let home = home();
@@ -1303,7 +1430,10 @@ impl Connection {
             setup.additional_directories,
             request.policy.unwrap_or_default(),
             snapshot,
-            Origin::New { started_by: None },
+            Origin::New {
+                started_by: None,
+                started_by_host: None,
+            },
             binding,
             git,
         )?;
@@ -1669,7 +1799,8 @@ impl Connection {
 
     async fn add_queued(&self, request: AddQueuedRequest) -> Result<AddQueuedResponse, Error> {
         let hello = self.hello_info()?;
-        add_queued(&self.shared, request, self.origin(&hello)).await
+        let origin = self.origin_for(&hello, request.caller.clone())?;
+        add_queued(&self.shared, request, origin).await
     }
 
     async fn remove_queued(
@@ -1699,7 +1830,8 @@ impl Connection {
 
     async fn steer_turn(&self, request: SteerTurnRequest) -> Result<SteerTurnResponse, Error> {
         let hello = self.hello_info()?;
-        steer_turn(&self.shared, request, self.origin(&hello)).await
+        let origin = self.origin_for(&hello, request.caller.clone())?;
+        steer_turn(&self.shared, request, origin).await
     }
 
     async fn cancel_turn(&self, request: CancelTurnRequest) -> Result<Empty, Error> {
@@ -1736,7 +1868,13 @@ impl Connection {
         request: RunRequest,
         cx: ConnectionTo<HostClient>,
     ) -> Result<RunResponse, Error> {
-        self.hello_info()?;
+        let hello = self.hello_info()?;
+        // A peer Host's agent starting a session here: the session is a delegated session of
+        // the one on the peer that asks.
+        let (origin, started_by) = match request.caller.clone() {
+            Some(caller) => (self.origin_for(&hello, Some(caller.clone()))?, Some(caller)),
+            None => (TurnOrigin::Run {}, None),
+        };
         let link = request.attach.then(|| {
             let client_tools = self.client_tools();
             let backlog = self.backlog();
@@ -1751,7 +1889,7 @@ impl Connection {
             )
         });
         let attaching = link.is_some();
-        let answer = run(&self.shared, request, link).await?;
+        let answer = run_as(&self.shared, request, link, origin, started_by).await?;
         if attaching {
             lock(&self.attached).insert(answer.session_id.clone());
         }
@@ -1835,6 +1973,7 @@ pub(crate) async fn add_queued(
         session_id,
         prompt,
         key,
+        caller: _,
     } = request;
     keyed(
         shared,
@@ -2046,6 +2185,9 @@ async fn agent_sessions(
                 started_by: known
                     .get(&info.session_id)
                     .and_then(|recorded| recorded.started_by.clone()),
+                started_by_host: known
+                    .get(&info.session_id)
+                    .and_then(|recorded| recorded.started_by_host.clone()),
                 info,
                 agent_id: agent.id.clone(),
                 state,
@@ -2143,6 +2285,7 @@ pub(crate) fn dormant(
         last_activity_at: Some(recorded.last_activity_ms),
         git: recorded.git.clone(),
         started_by: recorded.started_by.clone(),
+        started_by_host: recorded.started_by_host.clone(),
     }
 }
 
@@ -2310,7 +2453,7 @@ pub(crate) async fn run(
 }
 
 /// [`run`], its turn from `origin`; a new session is a delegated session of `started_by`'s when
-/// a session's agent starts it (ADR 0020).
+/// a session's agent starts it (ADR 0020), on the peer Host `origin` names when it's one's.
 pub(crate) async fn run_as(
     shared: &Arc<Shared>,
     request: RunRequest,
@@ -2335,6 +2478,7 @@ pub(crate) async fn run_as(
                 session_id: work.session_id,
                 turn_id: work.turn_id,
                 state: None,
+                policy: None,
             })
         },
         |answer: &RunResponse| RunResponse {
@@ -2344,6 +2488,48 @@ pub(crate) async fn run_as(
         async |key| run_now(shared, request, link, key, origin, started_by).await,
     )
     .await
+}
+
+/// Where `session/run` runs: `cwd`, under the Host's home when it starts with `~`, and a
+/// checkout of `remote` when one is named, as a peer Host's agent asks for the directory it
+/// works in on its own Host.
+async fn place(shared: &Shared, cwd: PathBuf, remote: Option<&str>) -> Result<PathBuf, Error> {
+    let cwd = match cwd.strip_prefix("~") {
+        Ok(rest) => shared
+            .peers
+            .as_ref()
+            .map_or_else(home, crate::peers::Peers::home)
+            .join(rest),
+        Err(_) => cwd,
+    };
+    let Some(remote) = remote else {
+        return Ok(cwd);
+    };
+    let shown = cwd.display();
+    let refused = |why: String| Err(Error::invalid_params().data(why));
+    if !cwd.is_dir() {
+        return refused(format!(
+            "{shown} isn't a directory on this Host, so it holds no checkout of {remote}"
+        ));
+    }
+    match shared.git.locate(&cwd).await {
+        Some(GitLocation {
+            remote: Some(found),
+            ..
+        }) if found.eq_ignore_ascii_case(remote) => Ok(cwd),
+        Some(GitLocation {
+            remote: Some(found),
+            ..
+        }) => refused(format!(
+            "{shown} on this Host is a checkout of {found}, not {remote}"
+        )),
+        Some(_) => refused(format!(
+            "{shown} on this Host is a repository without a remote, not a checkout of {remote}"
+        )),
+        None => refused(format!(
+            "{shown} on this Host isn't in a git repository, so it isn't a checkout of {remote}"
+        )),
+    }
 }
 
 /// [`run_as`], under `key` when there is one.
@@ -2361,6 +2547,7 @@ async fn run_now(
     let RunRequest {
         agent_id,
         cwd,
+        remote,
         session_id,
         additional_directories,
         prompt,
@@ -2368,7 +2555,13 @@ async fn run_now(
         attach: _,
         trace,
         key: _,
+        caller: _,
     } = request;
+    let cwd = place(shared, cwd, remote.as_deref()).await?;
+    let started_by_host = match &origin {
+        TurnOrigin::Session { host, .. } if started_by.is_some() => host.clone(),
+        _ => None,
+    };
     let agent = shared.resolve(&agent_id).await?;
     let options = headless(agent.options);
     let live = session_id
@@ -2420,7 +2613,10 @@ async fn run_now(
                 setup.additional_directories,
                 policy,
                 snapshot,
-                Origin::New { started_by },
+                Origin::New {
+                    started_by,
+                    started_by_host,
+                },
                 binding,
                 git,
             )?
@@ -2470,6 +2666,7 @@ async fn run_now(
         session_id: root,
         turn_id: Some(turn_id),
         state: state.map(Box::new),
+        policy: Some(session.summary().policy),
     })
 }
 
@@ -2548,7 +2745,7 @@ async fn reopen(
     let agent_title = earlier.and_then(journal::agent_title);
     let last_activity_ms = earlier.and_then(journal::last_activity);
     let mut queue = earlier.map(Queue::from_records).unwrap_or_default();
-    let started_by = earlier.and_then(journal::started_by);
+    let (started_by, started_by_host) = earlier.map(journal::started_by).unwrap_or_default();
     let (journal, policy) = match recovered {
         Some((path, records)) => {
             let policy = records
@@ -2601,6 +2798,7 @@ async fn reopen(
             last_activity_ms,
             queue,
             started_by,
+            started_by_host,
         },
         binding,
         git,
@@ -2652,8 +2850,11 @@ fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<
 /// Where a session [`open`] starts came from.
 enum Origin {
     /// `session/create` or a new run: the session is blank until it's prompted. A delegated
-    /// session names the session that started it.
-    New { started_by: Option<SessionId> },
+    /// session names the session that started it, and the peer Host that one is on.
+    New {
+        started_by: Option<SessionId>,
+        started_by_host: Option<String>,
+    },
     /// The agent's session reopened, with the journal a stopped Host left, if there is one,
     /// and the title and queue the Host kept for it, the last title its agent gave it, and when
     /// it was last active.
@@ -2664,6 +2865,7 @@ enum Origin {
         last_activity_ms: Option<u64>,
         queue: Queue,
         started_by: Option<SessionId>,
+        started_by_host: Option<String>,
     },
 }
 
@@ -2681,8 +2883,19 @@ fn open(
     binding: Option<Binding>,
     git: Option<GitLocation>,
 ) -> Result<SessionHandle, Error> {
-    let (journal, blank, title, agent_title, last_activity_ms, queue, started_by) = match origin {
-        Origin::New { started_by } => (None, true, None, None, None, Queue::default(), started_by),
+    let (journal, blank, title, agent_title, last_activity_ms, queue, starter) = match origin {
+        Origin::New {
+            started_by,
+            started_by_host,
+        } => (
+            None,
+            true,
+            None,
+            None,
+            None,
+            Queue::default(),
+            (started_by, started_by_host),
+        ),
         Origin::Reopened {
             journal,
             title,
@@ -2690,6 +2903,7 @@ fn open(
             last_activity_ms,
             queue,
             started_by,
+            started_by_host,
         } => (
             journal,
             false,
@@ -2697,9 +2911,10 @@ fn open(
             agent_title,
             last_activity_ms,
             queue,
-            started_by,
+            (started_by, started_by_host),
         ),
     };
+    let (started_by, started_by_host) = starter;
     let journal = match journal {
         Some(journal) => journal,
         None => {
@@ -2716,12 +2931,14 @@ fn open(
                 queue: carried,
                 queue_paused,
                 started_by: starter,
+                started_by_host: starter_host,
                 ..
             } = &mut header
             {
                 carried.extend(queue.prompts.iter().cloned());
                 *queue_paused = queue.paused;
                 starter.clone_from(&started_by);
+                starter_host.clone_from(&started_by_host);
             }
             match &shared.config.journals {
                 Some(dir) => Journal::create(dir, &session_id, header)
@@ -2754,6 +2971,7 @@ fn open(
             git,
             queue,
             started_by,
+            started_by_host,
         },
     ))
 }

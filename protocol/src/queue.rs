@@ -59,6 +59,10 @@ pub struct AddQueuedRequest {
     /// Makes it safe to send again (feature `requestKeys`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// A peer Host's only (feature `peers`): the session on it whose agent asks, which the
+    /// turn's origin names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]

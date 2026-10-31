@@ -24,12 +24,26 @@ expression: round_trip(&host_catalog())
     }
   },
   {
+    "name": "list_hosts",
+    "title": "List the person's other Hosts",
+    "description": "List the person's other weave Hosts that this thread's Host is paired with, its peer Hosts, usually other computers: each one's id and name, and whether it can be reached now (status reachable), or why not: refused (it revoked this Host), down (its computer answered but its weave Host didn't), unreachable (nothing answered), or otherHost. The other tools take one as host, to list, read, start and prompt threads there. Pairing Hosts is the person's to do. Answers with this Host's id and its peers/list result as JSON.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "list_sessions",
     "title": "List threads",
     "description": "List the threads of the weave Host this thread runs in, across agents and directories, most recently active first: each one's id, agent, directory, title, whether it is open and running, and which thread started it. Answers with the Host's sessions/list result as JSON.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "host": {
+          "type": "string",
+          "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        },
         "agentId": {
           "type": "string",
           "description": "Only this agent's threads, such as claude or codex, with the agent's own history of the directory."
@@ -61,7 +75,12 @@ expression: round_trip(&host_catalog())
     "description": "List the agents the weave Host can start threads with: each one's id, name, and what it's for when its configuration says, and which is the default. Use it to choose an agent for start_session. Answers with the Host's agents/list result as JSON.",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        }
+      },
       "additionalProperties": false
     }
   },
@@ -72,6 +91,10 @@ expression: round_trip(&host_catalog())
     "inputSchema": {
       "type": "object",
       "properties": {
+        "host": {
+          "type": "string",
+          "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        },
         "sessionId": {
           "type": "string",
           "description": "The thread's id, as list_sessions or start_session gave it."
@@ -94,6 +117,10 @@ expression: round_trip(&host_catalog())
     "inputSchema": {
       "type": "object",
       "properties": {
+        "host": {
+          "type": "string",
+          "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        },
         "agentId": {
           "type": "string",
           "description": "The agent to start; list_agents says which there are and what each is for."
@@ -104,7 +131,7 @@ expression: round_trip(&host_catalog())
         },
         "cwd": {
           "type": "string",
-          "description": "The absolute directory it works in; yours when absent."
+          "description": "The absolute directory it works in, or one under the home of its Host as ~/…; yours when absent. With host and no cwd, the same directory under the home there, which has to be a checkout of the same repository: its main checkout when yours is another worktree, since your branch may not be there."
         },
         "sessionId": {
           "type": "string",
@@ -158,6 +185,10 @@ expression: round_trip(&host_catalog())
     "inputSchema": {
       "type": "object",
       "properties": {
+        "host": {
+          "type": "string",
+          "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        },
         "sessionId": {
           "type": "string",
           "description": "The thread's id, as list_sessions or start_session gave it."
@@ -187,6 +218,10 @@ expression: round_trip(&host_catalog())
     "inputSchema": {
       "type": "object",
       "properties": {
+        "host": {
+          "type": "string",
+          "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        },
         "sessionId": {
           "type": "string",
           "description": "The thread's id, as list_sessions or start_session gave it."
@@ -210,6 +245,10 @@ expression: round_trip(&host_catalog())
     "inputSchema": {
       "type": "object",
       "properties": {
+        "host": {
+          "type": "string",
+          "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        },
         "sessionId": {
           "type": "string",
           "description": "The thread's id, as list_sessions or start_session gave it."

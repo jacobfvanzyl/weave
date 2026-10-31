@@ -156,6 +156,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     let request = RunRequest {
         agent_id: launch.agent_id().to_owned(),
         cwd: launch.cwd.clone(),
+        remote: None,
         session_id,
         additional_directories: launch.additional_directories.clone(),
         prompt: vec![ContentBlock::from(prompt)],
@@ -163,6 +164,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         attach: !args.detach,
         trace: launch.trace,
         key: args.key.clone(),
+        caller: None,
     };
     let response = match connection.send(request).await {
         Ok(response) => {

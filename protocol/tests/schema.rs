@@ -22,6 +22,7 @@ use weave_host_protocol::events;
 use weave_host_protocol::files;
 use weave_host_protocol::hello;
 use weave_host_protocol::host;
+use weave_host_protocol::peers;
 use weave_host_protocol::pending;
 use weave_host_protocol::queue;
 use weave_host_protocol::sessions;
@@ -101,6 +102,9 @@ fn schema() -> Value {
         "devices/offer" => devices::OfferDeviceRequest,
         "devices/list" => devices::ListDevicesRequest,
         "devices/revoke" => devices::RevokeDeviceRequest,
+        "peers/add" => peers::AddPeerRequest,
+        "peers/list" => peers::ListPeersRequest,
+        "peers/remove" => peers::RemovePeerRequest,
         "files/list" => files::ListFilesRequest,
         "sessions/list" => sessions::ListSessionsRequest,
         "sessions/get" => sessions::GetSessionRequest,
@@ -217,6 +221,7 @@ fn schema() -> Value {
                 "unknownTerminal": errors::UNKNOWN_TERMINAL,
                 "terminalUnavailable": errors::TERMINAL_UNAVAILABLE,
                 "unknownTurn": errors::UNKNOWN_TURN,
+                "peerUnavailable": errors::PEER_UNAVAILABLE,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
@@ -233,6 +238,7 @@ fn schema() -> Value {
                 "drain": host::DRAIN_FEATURE,
                 "terminals": terminals::FEATURE,
                 "turnIds": turns::TURN_IDS_FEATURE,
+                "peers": peers::PEERS_FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "sessions": {"maxTitle": sessions::MAX_TITLE},
@@ -247,6 +253,7 @@ fn schema() -> Value {
                 "steerSession": tools::STEER_SESSION,
                 "cancelSessionTurn": tools::CANCEL_SESSION_TURN,
                 "listAgents": tools::LIST_AGENTS,
+                "listHosts": tools::LIST_HOSTS,
             },
         },
         "$defs": definitions,

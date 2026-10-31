@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&Device { host: Some(\"h-2Lm9\".to_owned()), ..device() })"
+---
+{
+  "id": "d-3q8Hf0aZ",
+  "name": "Jaco's iPad",
+  "pairedAt": 1760180000000,
+  "lastSeenAt": 1760180005000,
+  "connections": 1,
+  "host": "h-2Lm9"
+}

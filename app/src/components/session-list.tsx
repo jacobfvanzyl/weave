@@ -87,6 +87,7 @@ function SessionRow({ session, host, selected, unread, onOpen, actions }: {
               <span className='flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted-foreground'>
                 <span className='shrink-0'>{session.agentName}</span>
                 {branch && <span className='truncate'>· {branch}{within && ` / ${within}`}</span>}
+                {session.startedBy && <span className='truncate'>· {session.startedBy.label}</span>}
                 {session.headless && <Badge variant='outline'>headless</Badge>}
                 {closed && <span>closed</span>}
               </span>

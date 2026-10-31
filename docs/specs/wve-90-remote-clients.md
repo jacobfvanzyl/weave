@@ -2,9 +2,11 @@
 
 Status: implemented, and checked live through Tailscale Serve from the Host's own Mac on
 2026-10-16. Since 2026-10-21 pairing turns remote access on, and the Host keeps its own Serve
-entry (WVE-100). The decisions are recorded in
-[ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md) and
-[ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md).
+entry (WVE-100). Since 2026-10-30 the person's other Hosts pair and connect as peer Hosts
+(WVE-109). The decisions are recorded in
+[ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md),
+[ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md) and
+[ADR 0017](../adr/0017-hosts-pair-as-peers-through-the-tailnet-and-are-managed-through-their-cli.md).
 
 ## Purpose
 
@@ -139,7 +141,9 @@ gives it as `host.id`, so a client tells Hosts apart, and challenges are bound t
    `publicKey` is a JWK (`{"kty": "EC", "crv": "P-256", "x": …, "y": …}`); an offer made with
    `--name` uses that name instead. The Host takes the offer, so a second use fails, records the
    device, and answers as any hello does, plus `device: {id, name}`. The connection is that
-   device's from then on.
+   device's from then on. Another of the person's Hosts pairing as a peer Host adds its own
+   Host id as `device.host`, which the Host records and gives back in `device` and `Device`
+   (see [Peer Hosts](#peer-hosts)).
 
 The code is 128 random bits in Crockford base32.
 
@@ -182,7 +186,7 @@ Every other connection from a paired device:
 Everything a local client may, except administer the Host. These answer `forbidden`:
 
 - `host/shutdown`;
-- `devices/*`;
+- `devices/*`, and `peers/*`, so a peer Host can't have this Host reach its own peers;
 - `agents/authenticate`, `agents/logout` and `agents/terminalSignIn`, since an agent's sign-in
   belongs to the Host's computer. As now, only local clients may claim
   `capabilities.terminalSignIn`.
@@ -206,8 +210,10 @@ All local only.
 **`devices/list`** `{}` → `{devices: Device[]}`
 
 ```ts
-type Device = { id: string; name: string; pairedAt: number; lastSeenAt?: number; connections: number };
+type Device = { id: string; name: string; pairedAt: number; lastSeenAt?: number; connections: number; host?: string };
 ```
+
+`host` is a peer Host's id, when the device is one of the person's Hosts.
 
 **`devices/revoke`** `{deviceId}` → `{}`
 
@@ -220,6 +226,20 @@ Forgets the device and closes its connections (4000). The device has to pair aga
 each device's id, name, public key and pairing and last-seen times. It holds no secrets; losing
 it unpairs every device. `daemon.log` records pairings, refused hellos and revocations, never
 codes, nonces or signatures.
+
+## Peer Hosts
+
+Another of the person's Hosts is a remote client like any other (ADR 0017,
+[Peer Hosts](wve-85-host-protocol.md#peer-hosts) in the Host protocol): it pairs with the code
+`weave pair` shows, through `weave hosts add` on its own computer (which runs `weave pair --json`
+here over SSH), then proves a key of its own at every hello, a Secure Enclave key where it has
+one. It is listed and revoked among the devices, and keeps remote access on as a paired device
+does; revoking it closes its connections, with `CLOSE_REVOKED`, and refuses the next. What makes
+it a peer is the Host id it gave at pairing: its turns' origins name the session on it whose
+agent asks (`caller`), with that Host id and the name it paired with, and the sessions it starts
+record it as `startedByHost`. Its client name is `weave-host`. It may do less than a paired
+device (ADR 0024): only what the Host tools and following a turn need, every other method
+answering `forbidden`.
 
 ## Security
 

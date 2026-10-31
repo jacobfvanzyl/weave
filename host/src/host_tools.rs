@@ -9,7 +9,15 @@
 //! how many of one session's run at once. When a turn the calling session's agent began ends,
 //! or waits on a person, the Host reports it to the calling session ([`tell`]): into its running
 //! turn, or else through its queue.
+//!
+//! Given `host`, a tool acts on a peer Host instead (ADR 0017, WVE-109): the same method, sent
+//! over this Host's connection to the peer, naming the calling session as its `caller`. The
+//! peer runs the session and holds its pending requests; this Host follows a turn its agent
+//! began there and reports on it as on its own (`peers.rs`). `list_hosts` lists the peers.
+//! Reach is one hop: a turn a peer's agent began here, and a session a peer's agent started
+//! here or anything that session started, reaches none of this Host's peers.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -39,6 +47,7 @@ use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::tools::CANCEL_SESSION_TURN;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::LIST_AGENTS;
+use weave_host_protocol::tools::LIST_HOSTS;
 use weave_host_protocol::tools::LIST_SESSIONS;
 use weave_host_protocol::tools::PROMPT_SESSION;
 use weave_host_protocol::tools::READ_SESSION;
@@ -50,10 +59,17 @@ use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::TurnId;
 
+use weave_host_protocol::peers::ListPeersResponse;
+
 use crate::Shared;
 use crate::client;
+use crate::peers::Begin;
+use crate::peers::Begun;
+use crate::peers::Peers;
+use crate::peers::Sending;
 use crate::session::Command;
 use crate::session::SessionHandle;
+use crate::session::Summary;
 
 /// How far up a chain of starting sessions the Host looks, should one ever loop.
 const MAX_CHAIN: usize = 64;
@@ -67,8 +83,32 @@ pub(crate) async fn call(
     tool: &str,
     arguments: &Map<String, Value>,
 ) -> ClientToolResult {
-    let answered = match tool {
+    let mut arguments = arguments.clone();
+    let answered = match arguments.remove("host") {
+        None => here(shared, caller, tool, &arguments).await,
+        // This Host, by the id list_hosts gives it.
+        Some(Value::String(host)) if host == shared.devices.host_id() => {
+            here(shared, caller, tool, &arguments).await
+        }
+        Some(Value::String(host)) => on_peer(shared, caller, tool, &host, &arguments).await,
+        Some(_) => Err("host is a peer Host's id or name, as a string.".to_owned()),
+    };
+    match answered {
+        Ok(text) => ClientToolResult::text(text),
+        Err(why) => ClientToolResult::error(why),
+    }
+}
+
+/// `tool`'s answer on this Host.
+async fn here(
+    shared: &Arc<Shared>,
+    caller: &SessionHandle,
+    tool: &str,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    match tool {
         RENAME_SESSION => rename(caller, arguments).await,
+        LIST_HOSTS => hosts(shared).await,
         LIST_SESSIONS => match parse::<ListSessionsRequest>(arguments) {
             Ok(request) => answer(client::list_sessions(shared, request).await),
             Err(why) => Err(why),
@@ -83,11 +123,239 @@ pub(crate) async fn call(
         STEER_SESSION => steer(shared, caller, arguments).await,
         CANCEL_SESSION_TURN => cancel(shared, arguments),
         _ => Err(format!("The Host doesn't answer {tool}.")),
-    };
-    match answered {
-        Ok(text) => ClientToolResult::text(text),
-        Err(why) => ClientToolResult::error(why),
     }
+}
+
+/// `list_hosts`: `peers/list`, checking which peers can be reached now.
+async fn hosts(shared: &Arc<Shared>) -> Result<String, String> {
+    let listed = match &shared.peers {
+        Some(peers) => peers.list(shared, true).await,
+        None => ListPeersResponse {
+            host_id: shared.devices.host_id(),
+            peers: Vec::new(),
+        },
+    };
+    to_text(&listed)
+}
+
+/// `tool`'s answer on the peer Host `host` names, through this Host's connection to it.
+async fn on_peer(
+    shared: &Arc<Shared>,
+    caller: &SessionHandle,
+    tool: &str,
+    host: &str,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    if matches!(tool, RENAME_SESSION | LIST_HOSTS) {
+        return Err(format!("{tool} acts on this Host, so it takes no host."));
+    }
+    let peers = shared
+        .peers
+        .as_ref()
+        .ok_or("This Host doesn't pair with other Hosts.")?;
+    let me = caller.summary();
+    if let Some(from) = from_peer(shared, &me) {
+        return Err(format!(
+            "This thread works for a thread on another Host ({from}), so it reaches none of \
+             this Host's peers: a Host's agents reach its own peers only, one hop away."
+        ));
+    }
+    let (host_id, name) = peers.resolve(host)?;
+    match tool {
+        START_SESSION => return start_on(shared, peers, &me, &host_id, &name, arguments).await,
+        PROMPT_SESSION => return prompt_on(shared, peers, &me, host_id, arguments).await,
+        _ => {}
+    }
+    let handle = peers
+        .reach(shared, &host_id)
+        .await
+        .map_err(|why| format!("{name} can't be reached: {why}."))?;
+    let there = |error: Error| format!("On {name}: {}", why(&error));
+    match tool {
+        LIST_SESSIONS => {
+            let request: ListSessionsRequest = parse(arguments)?;
+            to_text(&handle.send(request).await.map_err(there)?)
+        }
+        LIST_AGENTS => to_text(
+            &handle
+                .send(ListAgentsRequest::default())
+                .await
+                .map_err(there)?,
+        ),
+        READ_SESSION => {
+            let request: GetSessionRequest = parse(arguments)?;
+            to_text(&handle.send(request).await.map_err(there)?)
+        }
+        STEER_SESSION => {
+            let arguments: SteerArguments = parse(arguments)?;
+            let request = SteerTurnRequest {
+                session_id: arguments.session_id,
+                prompt: vec![ContentBlock::from(arguments.prompt)],
+                caller: Some(me.session_id),
+            };
+            to_text(&handle.send(request).await.map_err(there)?)
+        }
+        CANCEL_SESSION_TURN => {
+            let request: CancelTurnRequest = parse(arguments)?;
+            to_text(&handle.send(request).await.map_err(there)?)
+        }
+        _ => Err(format!("The Host doesn't answer {tool}.")),
+    }
+}
+
+/// The request key to send a peer for `key`, an agent's in `caller`, or a new one, so that this
+/// Host can send it again when the peer doesn't answer. Every session of this Host is one
+/// client to the peer, whose keys are its own across clients, so the key names the session too:
+/// two agents' keys never meet, and one agent's retry is the same request.
+fn peer_key(caller: &SessionId, key: Option<String>) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let key = key.unwrap_or_else(|| crate::devices::random_id(16));
+    let digest = sha2::Sha256::digest(format!("{caller}\n{key}").as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+/// `prompt_session` on a peer: `queue/add` there, recorded first and followed here.
+async fn prompt_on(
+    shared: &Arc<Shared>,
+    peers: &Peers,
+    me: &Summary,
+    host_id: String,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    let arguments: PromptArguments = parse(arguments)?;
+    let request = AddQueuedRequest {
+        session_id: arguments.session_id,
+        prompt: vec![ContentBlock::from(arguments.prompt)],
+        key: Some(peer_key(&me.session_id, arguments.key)),
+        caller: Some(me.session_id.clone()),
+    };
+    let sending = Sending {
+        host_id,
+        caller: me.session_id.clone(),
+        delegated: false,
+        request: Begin::Queue(request),
+    };
+    match peers.begin(shared, sending).await? {
+        Begun::Queue(added) => to_text(&added),
+        Begun::Run(ran) => to_text(&ran),
+    }
+}
+
+/// Where a session the session `me` starts on the peer `name` works when its agent names no
+/// directory: the same one under the home there, `~/…`, in a checkout of the same repository,
+/// its main one, since another worktree's branch may not be there.
+fn counterpart(
+    peers: &Peers,
+    me: &Summary,
+    name: &str,
+) -> Result<(PathBuf, Option<String>), String> {
+    let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let (dir, remote) = match &me.git {
+        Some(git) => {
+            let cwd = real(&me.cwd);
+            let within = cwd
+                .strip_prefix(real(&git.worktree))
+                .unwrap_or(Path::new(""));
+            let repo = real(&git.repo);
+            let dir = if within.as_os_str().is_empty() {
+                repo
+            } else {
+                repo.join(within)
+            };
+            (dir, git.remote.clone())
+        }
+        None => (real(&me.cwd), None),
+    };
+    let home = real(&peers.home());
+    let under = dir.strip_prefix(&home).map_err(|_| {
+        format!(
+            "This thread works in {}, outside its home, so it has no counterpart on {name}: \
+             give cwd, a directory there.",
+            dir.display()
+        )
+    })?;
+    let there = if under.as_os_str().is_empty() {
+        PathBuf::from("~")
+    } else {
+        Path::new("~").join(under)
+    };
+    Ok((there, remote))
+}
+
+/// The peer Host the session `me` works for, if one: one whose agent began its running turn,
+/// or, up the sessions that started it, one whose agent started one of them.
+fn from_peer(shared: &Shared, me: &Summary) -> Option<String> {
+    if let Some(host) = &me.turn_from_peer {
+        return Some(host.clone());
+    }
+    let mut current = me.session_id.clone();
+    for _ in 0..MAX_CHAIN {
+        let (starter, host) = started_by(shared, &current)?;
+        if host.is_some() {
+            return host;
+        }
+        current = starter;
+    }
+    None
+}
+
+/// `start_session` on a peer: `session/run` there, its session a delegated session of the
+/// caller's, recorded first and followed here.
+async fn start_on(
+    shared: &Arc<Shared>,
+    peers: &Peers,
+    me: &Summary,
+    host_id: &str,
+    name: &str,
+    arguments: &Map<String, Value>,
+) -> Result<String, String> {
+    let arguments: StartArguments = parse(arguments)?;
+    let (cwd, remote) = match arguments.cwd {
+        Some(cwd) => (cwd, None),
+        None => counterpart(peers, me, name)?,
+    };
+    let limits = shared
+        .load_config()
+        .map_err(|error| why(&error))?
+        .delegation;
+    if arguments.session_id.is_none() {
+        let depth = depth(shared, &me.session_id);
+        if depth >= limits.depth() {
+            return Err(too_deep(depth, limits.depth()));
+        }
+        room(shared, &me.session_id, limits.running())?;
+    }
+    let policy = asked(&arguments.approve, arguments.otherwise, &me.policy);
+    let request = RunRequest {
+        agent_id: arguments.agent_id,
+        cwd,
+        remote,
+        session_id: arguments.session_id.clone(),
+        additional_directories: Vec::new(),
+        prompt: vec![ContentBlock::from(arguments.prompt)],
+        policy: policy.clone(),
+        attach: false,
+        trace: false,
+        key: Some(peer_key(&me.session_id, arguments.key)),
+        caller: Some(me.session_id.clone()),
+    };
+    let sending = Sending {
+        host_id: host_id.to_owned(),
+        caller: me.session_id.clone(),
+        delegated: arguments.session_id.is_none(),
+        request: Begin::Run(request),
+    };
+    let ran = match peers.begin(shared, sending).await? {
+        Begun::Run(ran) => ran,
+        Begun::Queue(added) => return to_text(&added),
+    };
+    to_text(&Started {
+        session_id: ran.session_id,
+        turn_id: ran.turn_id,
+        policy: ran.policy.unwrap_or(policy),
+        host: Some(host_id.to_owned()),
+    })
 }
 
 /// `rename_session`: `session/rename` for the calling session.
@@ -129,6 +397,9 @@ struct Started {
     turn_id: Option<TurnId>,
     /// The policy the session runs under, within the calling session's.
     policy: PermissionPolicy,
+    /// The peer Host it's on, when it isn't this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
 }
 
 /// `start_session`: `session/run`, for a new delegated session of the caller's or for any
@@ -153,26 +424,16 @@ async fn start(
         None => {
             let depth = depth(shared, &me.session_id);
             if depth >= limits.depth() {
-                return Err(format!(
-                    "This thread can't start threads: it is {depth} level{} below a thread a \
-                     person started, and the Host allows {} (`[delegation] depth`).",
-                    if depth == 1 { "" } else { "s" },
-                    limits.depth()
-                ));
+                return Err(too_deep(depth, limits.depth()));
             }
             room(shared, &me.session_id, limits.running())?;
         }
     }
-    let asked = PermissionPolicy {
-        approve: arguments
-            .approve
-            .unwrap_or_else(|| me.policy.approve.clone()),
-        otherwise: arguments.otherwise.unwrap_or(me.policy.otherwise),
-    };
-    let policy = asked.within(&me.policy);
+    let policy = asked(&arguments.approve, arguments.otherwise, &me.policy);
     let request = RunRequest {
         agent_id: arguments.agent_id,
         cwd: arguments.cwd.unwrap_or_else(|| me.cwd.clone()),
+        remote: None,
         session_id: arguments.session_id,
         additional_directories: Vec::new(),
         prompt: vec![ContentBlock::from(arguments.prompt)],
@@ -180,9 +441,12 @@ async fn start(
         attach: false,
         trace: false,
         key: arguments.key,
+        caller: None,
     };
     let origin = TurnOrigin::Session {
         session_id: me.session_id.clone(),
+        host: None,
+        host_name: None,
         report: false,
     };
     let RunResponse {
@@ -201,7 +465,30 @@ async fn start(
         session_id,
         turn_id,
         policy,
+        host: None,
     })
+}
+
+/// The policy a delegated session asks for: `approve` and `otherwise`, the caller's where
+/// absent, within the caller's.
+fn asked(
+    approve: &Option<Vec<ToolKind>>,
+    otherwise: Option<Unapproved>,
+    caller: &PermissionPolicy,
+) -> PermissionPolicy {
+    PermissionPolicy {
+        approve: approve.clone().unwrap_or_else(|| caller.approve.clone()),
+        otherwise: otherwise.unwrap_or(caller.otherwise),
+    }
+    .within(caller)
+}
+
+fn too_deep(depth: u32, allowed: u32) -> String {
+    format!(
+        "This thread can't start threads: it is {depth} level{} below a thread a person \
+         started, and the Host allows {allowed} (`[delegation] depth`).",
+        if depth == 1 { "" } else { "s" },
+    )
 }
 
 #[derive(Deserialize)]
@@ -231,9 +518,12 @@ async fn prompt(
         session_id: arguments.session_id,
         prompt: vec![ContentBlock::from(arguments.prompt)],
         key: arguments.key,
+        caller: None,
     };
     let origin = TurnOrigin::Session {
         session_id: me,
+        host: None,
+        host_name: None,
         report: false,
     };
     answer(client::add_queued(shared, request, origin).await)
@@ -256,9 +546,12 @@ async fn steer(
     let request = SteerTurnRequest {
         session_id: arguments.session_id,
         prompt: vec![ContentBlock::from(arguments.prompt)],
+        caller: None,
     };
     let origin = TurnOrigin::Session {
         session_id: caller.summary().session_id,
+        host: None,
+        host_name: None,
         report: false,
     };
     answer(client::steer_turn(shared, request, origin).await)
@@ -272,11 +565,26 @@ fn cancel(shared: &Arc<Shared>, arguments: &Map<String, Value>) -> Result<String
 
 /// The session that started `session_id`, or the one it belongs to as a subagent.
 fn starter(shared: &Shared, session_id: &SessionId) -> Option<SessionId> {
+    started_by(shared, session_id).map(|(starter, _)| starter)
+}
+
+/// The session that started `session_id`, or the one it belongs to as a subagent, and the
+/// peer Host that one is on when it isn't this one.
+fn started_by(shared: &Shared, session_id: &SessionId) -> Option<(SessionId, Option<String>)> {
     let registry = shared.registry();
     let root = registry.root(session_id);
     match registry.sessions.get(&root) {
-        Some(session) => session.summary().started_by,
-        None => registry.known.get(&root)?.started_by.clone(),
+        Some(session) => {
+            let summary = session.summary();
+            Some((summary.started_by?, summary.started_by_host))
+        }
+        None => {
+            let recorded = registry.known.get(&root)?;
+            Some((
+                recorded.started_by.clone()?,
+                recorded.started_by_host.clone(),
+            ))
+        }
     }
 }
 
@@ -316,9 +624,15 @@ fn room(shared: &Shared, caller: &SessionId, running: u32) -> Result<(), String>
         .values()
         .map(SessionHandle::summary)
         .filter(|summary| {
-            summary.started_by.as_ref() == Some(caller) && summary.activity != Activity::Idle
+            summary.started_by.as_ref() == Some(caller)
+                && summary.started_by_host.is_none()
+                && summary.activity != Activity::Idle
         })
-        .count();
+        .count()
+        + shared
+            .peers
+            .as_ref()
+            .map_or(0, |peers| peers.delegated_running(caller));
     if busy < usize::try_from(running).unwrap_or(usize::MAX) {
         return Ok(());
     }
@@ -338,18 +652,44 @@ pub(crate) enum Asks {
     Elicitation(String),
 }
 
-/// A session as a report names it: its title, agent and id.
-fn name(listing: &SessionListing) -> String {
-    let id = &listing.info.session_id;
-    match &listing.info.title {
-        Some(title) => format!("“{title}” ({}, {id})", listing.agent_id),
-        None => format!("{id} ({})", listing.agent_id),
+/// A session as a report names it: its title, agent and id, and the peer Host it's on when it
+/// isn't this one.
+pub(crate) struct Named<'a> {
+    pub(crate) session_id: &'a SessionId,
+    pub(crate) title: Option<&'a str>,
+    pub(crate) agent_id: &'a str,
+    /// The peer Host's name.
+    pub(crate) host: Option<&'a str>,
+}
+
+impl<'a> Named<'a> {
+    pub(crate) fn of(listing: &'a SessionListing, host: Option<&'a str>) -> Self {
+        Self {
+            session_id: &listing.info.session_id,
+            title: listing.info.title.as_deref(),
+            agent_id: &listing.agent_id,
+            host,
+        }
+    }
+}
+
+impl std::fmt::Display for Named<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let id = self.session_id;
+        match self.title {
+            Some(title) => write!(f, "“{title}” ({}, {id})", self.agent_id)?,
+            None => write!(f, "{id} ({})", self.agent_id)?,
+        }
+        match self.host {
+            Some(host) => write!(f, " on {host}"),
+            None => Ok(()),
+        }
     }
 }
 
 /// The report on a session to the session whose agent began a turn there, when the turn ends:
 /// how, and the start of the agent's last message.
-pub(crate) fn ended_text(listing: &SessionListing, latest: Option<&LatestTurn>) -> String {
+pub(crate) fn ended_text(named: &Named<'_>, latest: Option<&LatestTurn>) -> String {
     let how = match latest {
         Some(LatestTurn {
             error: Some(error), ..
@@ -369,13 +709,17 @@ pub(crate) fn ended_text(listing: &SessionListing, latest: Option<&LatestTurn>) 
         },
         _ => "ended its turn".to_owned(),
     };
-    let mut text = format!("[weave] Thread {} {how}.", name(listing));
+    let mut text = format!("[weave] Thread {named} {how}.");
     if let Some(message) = latest.and_then(|turn| turn.message.as_deref()) {
         let shown: String = message.chars().take(MESSAGE_CHARS).collect();
         text.push_str(" Its agent's last message:\n\n");
         text.push_str(&shown);
         if shown.len() < message.len() {
-            text.push_str("\n\n[…] read_session gives the rest.");
+            text.push_str("\n\n[…] read_session gives the rest");
+            if let Some(host) = named.host {
+                text.push_str(&format!(", with host {host}"));
+            }
+            text.push('.');
         }
     }
     text
@@ -383,26 +727,39 @@ pub(crate) fn ended_text(listing: &SessionListing, latest: Option<&LatestTurn>) 
 
 /// The report on a session to the session whose agent began a turn there, when a person must
 /// answer something in it.
-pub(crate) fn waiting_text(listing: &SessionListing, asks: &Asks) -> String {
+pub(crate) fn waiting_text(named: &Named<'_>, asks: &Asks) -> String {
     let what = match asks {
         Asks::Permission(Some(title)) => format!("asks permission for “{title}”"),
         Asks::Permission(None) => "asks permission for a tool call".to_owned(),
         Asks::Elicitation(message) => format!("asks: “{message}”"),
     };
+    let host = named
+        .host
+        .map_or_else(String::new, |host| format!(" connected to {host}"));
     format!(
-        "[weave] Thread {} is waiting on a person: it {what}. Someone attached to it in a weave \
-         client has to answer; you can't. Tell the person if they need to.",
-        name(listing)
+        "[weave] Thread {named} is waiting on a person: it {what}. Someone attached to it in a \
+         weave client{host} has to answer; you can't. Tell the person if they need to."
     )
 }
 
 /// Report on `about` to the session `caller`, whose agent began a turn there: into its running
 /// turn if its agent takes steers, otherwise through its queue, which starts its next turn. A
 /// caller that isn't open is taken up again for it. One that can't be is left untold, and
-/// `about`'s journal says so.
-pub(crate) async fn tell(shared: Arc<Shared>, caller: SessionId, about: SessionId, text: String) {
+/// `about`'s journal says so. `about` is on the peer Host `host` when there is one.
+pub(crate) async fn tell(
+    shared: Arc<Shared>,
+    caller: SessionId,
+    about: SessionId,
+    host: Option<String>,
+    text: String,
+) {
+    let host_name = host
+        .as_ref()
+        .and_then(|host| shared.peers.as_ref()?.name_of(host));
     let origin = TurnOrigin::Session {
         session_id: about.clone(),
+        host,
+        host_name,
         report: true,
     };
     let prompt = vec![ContentBlock::from(text)];
@@ -413,6 +770,7 @@ pub(crate) async fn tell(shared: Arc<Shared>, caller: SessionId, about: SessionI
                 SteerTurnRequest {
                     session_id: caller.clone(),
                     prompt: prompt.clone(),
+                    caller: None,
                 },
                 origin.clone(),
             )
@@ -424,6 +782,7 @@ pub(crate) async fn tell(shared: Arc<Shared>, caller: SessionId, about: SessionI
                 session_id: caller.clone(),
                 prompt,
                 key: None,
+                caller: None,
             };
             client::add_queued(&shared, request, origin)
                 .await
@@ -447,6 +806,11 @@ pub(crate) async fn tell(shared: Arc<Shared>, caller: SessionId, about: SessionI
 
 /// Make sure `session_id` is open, taking it up again under its own policy if it isn't.
 async fn open(shared: &Arc<Shared>, session_id: &SessionId) -> Result<(), String> {
+    if shared.registry().live(session_id).is_some() {
+        return Ok(());
+    }
+    // Another report may be taking it up already; this one waits, and finds it open.
+    let _one = shared.taking_up_for_reports.lock().await;
     if shared.registry().live(session_id).is_some() {
         return Ok(());
     }
@@ -508,7 +872,7 @@ fn strip_media(value: &mut Value) {
 }
 
 /// Why `error` happened, as its message and the text of its data.
-fn why(error: &Error) -> String {
+pub(crate) fn why(error: &Error) -> String {
     match error.data.as_ref() {
         Some(Value::String(data)) => format!("{}: {data}", error.message),
         Some(data) if !data.is_null() => format!("{}: {data}", error.message),

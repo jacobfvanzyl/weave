@@ -24,6 +24,11 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
 tracing = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = { workspace = true }
+security-framework = { workspace = true }
+security-framework-sys = { workspace = true }
+
 [dev-dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

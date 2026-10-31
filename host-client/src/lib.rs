@@ -9,6 +9,8 @@
 //! Local clients use the Unix socket; remote ones, the Host's WebSocket and a paired device
 //! ([`remote`]).
 
+#[cfg(target_os = "macos")]
+mod enclave;
 pub mod remote;
 
 use agent_client_protocol::ConnectTo;
@@ -108,6 +110,9 @@ pub enum ConnectError {
     /// The Host isn't the one the device paired with.
     #[error("this isn't the weave Host this device paired with")]
     WrongHost,
+    /// The device's key couldn't sign the Host's challenge.
+    #[error("couldn't sign with this device's key: {0}")]
+    Key(String),
 }
 
 /// One connection to the Host. Dereferences to its [`HostHandle`].
@@ -310,11 +315,17 @@ async fn say_hello(
 ) -> Result<HelloResponse, ConnectError> {
     let auth = match credentials {
         Credentials::Local => Auth::Local,
-        Credentials::Pair { code, name, key } => Auth::Pair {
+        Credentials::Pair {
+            code,
+            name,
+            key,
+            host,
+        } => Auth::Pair {
             code,
             device: NewDevice {
                 name,
                 public_key: key.jwk(),
+                host,
             },
         },
         Credentials::Device {
@@ -333,7 +344,7 @@ async fn say_hello(
             let message = auth_message(&challenge.host_id, &device_id, &challenge.nonce);
             Auth::Device {
                 device_id,
-                signature: key.sign(&message),
+                signature: key.sign(&message).map_err(ConnectError::Key)?,
             }
         }
     };

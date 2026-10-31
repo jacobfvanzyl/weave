@@ -5,8 +5,10 @@
 
 #![allow(dead_code, clippy::expect_used)]
 
+use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::Command;
 use std::process::Output;
 use std::sync::Arc;
@@ -21,6 +23,9 @@ use weave_host::Daemon;
 use weave_host::DaemonConfig;
 use weave_host::DaemonPaths;
 use weave_host::Launcher;
+use weave_host::PeerSettings;
+use weave_host::RemoteSettings;
+use weave_host::Serve;
 use weave_host::socket;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
@@ -36,6 +41,16 @@ pub struct TestHost {
 
 impl TestHost {
     pub fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    /// A Host that pairs with other Hosts as `name`, with remote access through a stand-in
+    /// for Tailscale Serve, so others pair with it too.
+    pub fn start_peer(name: &str) -> Self {
+        Self::start_with(Some(name))
+    }
+
+    fn start_with(peer: Option<&str>) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let config_home = dir.path().join("config");
         std::fs::create_dir_all(config_home.join("weave")).expect("config dir");
@@ -69,6 +84,16 @@ impl TestHost {
         config.devices = Some(paths.devices());
         config.traces = dir.path().join("traces");
         config.launcher = launcher;
+        if let Some(name) = peer {
+            let mut remote = RemoteSettings::new(Arc::new(LoopbackServe));
+            remote.listen = "127.0.0.1:0".parse().expect("an address");
+            config.remote = Some(remote);
+            config.peers = Some(PeerSettings {
+                secure_enclave: false,
+                name: name.to_owned(),
+                ..PeerSettings::new(None, None)
+            });
+        }
         let daemon = Daemon::new(config);
         let serving = daemon.clone();
         runtime.spawn(async move {
@@ -132,6 +157,25 @@ impl TestHost {
     /// Run `weave args…` against this Host, without a terminal, as a script over SSH would.
     pub fn weave(&self, args: &[&str]) -> Output {
         self.command(args).output().expect("run weave")
+    }
+}
+
+/// Tailscale Serve for a test: the Host's own loopback listener is its URL.
+struct LoopbackServe;
+
+impl Serve for LoopbackServe {
+    fn ensure(
+        &self,
+        listen: SocketAddr,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + '_>> {
+        Box::pin(async move { Ok(format!("ws://{listen}")) })
+    }
+
+    fn remove(
+        &self,
+        _listen: SocketAddr,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(async move { Ok(()) })
     }
 }
 

@@ -1,0 +1,18 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ListPeersResponse\n{ host_id: \"h-2Lm9\".to_owned(), peers: vec![peer], })"
+---
+{
+  "hostId": "h-2Lm9",
+  "peers": [
+    {
+      "hostId": "h-7Rk2",
+      "name": "studio",
+      "url": "wss://studio.example.ts.net:7341",
+      "pairedAt": 1760180000000,
+      "lastSeenAt": 1760180005000,
+      "status": "unreachable",
+      "error": "it didn't answer within 10 seconds"
+    }
+  ]
+}

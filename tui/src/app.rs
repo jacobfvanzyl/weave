@@ -665,7 +665,14 @@ impl App {
                     }
                     Some(TurnOrigin::Client { name, device, .. }) => device.unwrap_or(name),
                     Some(TurnOrigin::Run {}) => "A headless run".to_owned(),
-                    Some(TurnOrigin::Session { .. }) => "Another thread".to_owned(),
+                    Some(TurnOrigin::Session {
+                        host_name: Some(name),
+                        ..
+                    }) => format!("A thread on {name}"),
+                    Some(TurnOrigin::Session { host: None, .. }) => "Another thread".to_owned(),
+                    Some(TurnOrigin::Session { host: Some(_), .. }) => {
+                        "A thread on another Host".to_owned()
+                    }
                 },
             },
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
@@ -983,6 +990,7 @@ impl App {
                                 session_id,
                                 prompt,
                                 key: None,
+                                caller: None,
                             })
                             .await
                             .err()
@@ -1038,6 +1046,7 @@ impl App {
                             .send(SteerTurnRequest {
                                 session_id: session_id.clone(),
                                 prompt,
+                                caller: None,
                             })
                             .await;
                         AppEvent::Steered {

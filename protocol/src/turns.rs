@@ -72,6 +72,10 @@ pub const STEER_FEATURE: &str = "turn/steer";
 pub struct SteerTurnRequest {
     pub session_id: SessionId,
     pub prompt: Vec<ContentBlock>,
+    /// A peer Host's only (feature `peers`): the session on it whose agent asks, which the
+    /// steer's origin names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]

@@ -3,7 +3,8 @@
 //! each device has open, so revoking it closes them.
 //!
 //! The Host keeps no secret for a device: a device proves itself by signing its connection's
-//! challenge with a key that never leaves it. Offers live in memory only.
+//! challenge with a key that never leaves it. Offers live in memory only. A peer Host pairs as
+//! a device does and is kept as one, with its Host id (ADR 0017).
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -79,6 +80,19 @@ struct Stored {
     paired_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_seen_at: Option<Timestamp>,
+    /// The Host id of a peer Host, which is one of the person's Hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
+}
+
+impl Stored {
+    fn info(&self) -> DeviceInfo {
+        DeviceInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            host: self.host.clone(),
+        }
+    }
 }
 
 struct Offer {
@@ -183,19 +197,22 @@ impl Devices {
             public_key: device.public_key,
             paired_at: now,
             last_seen_at: Some(now),
+            host: device.host,
         };
-        state.devices.insert(id.clone(), stored.clone());
+        state.devices.insert(id, stored.clone());
         self.save(&state);
         drop(state);
-        let info = DeviceInfo {
-            id,
-            name: stored.name.clone(),
-        };
+        let info = stored.info();
         if let Some(offered_by) = offer.offered_by {
             let device = listing(&stored, 1);
             let _ = offered_by.send_notification(DevicePairedNotification { device });
         }
-        tracing::info!(device = %info.id, name = %info.name, "a device paired");
+        match &info.host {
+            Some(host) => {
+                tracing::info!(device = %info.id, name = %info.name, %host, "a peer Host paired");
+            }
+            None => tracing::info!(device = %info.id, name = %info.name, "a device paired"),
+        }
         Some(info)
     }
 
@@ -218,10 +235,7 @@ impl Devices {
         )
         .ok()?;
         stored.last_seen_at = Some(now_ms());
-        let info = DeviceInfo {
-            id: stored.id.clone(),
-            name: stored.name.clone(),
-        };
+        let info = stored.info();
         self.save(&state);
         Some(info)
     }
@@ -316,11 +330,13 @@ fn listing(stored: &Stored, connections: u32) -> Device {
         paired_at: stored.paired_at,
         last_seen_at: stored.last_seen_at,
         connections,
+        host: stored.host.clone(),
     }
 }
 
-fn write_private(path: &Path, file: &File) -> std::io::Result<()> {
-    let json = serde_json::to_vec_pretty(file).map_err(std::io::Error::other)?;
+/// Write `value` to `path` as JSON only the Host's user can read, replacing the file whole.
+pub(crate) fn write_private(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
+    let json = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
     let temporary = path.with_extension("json.tmp");
     let written = (|| {
         let mut out = crate::journal::private_file(&temporary, true)?;
@@ -435,6 +451,7 @@ mod tests {
         NewDevice {
             name: "iPad".to_owned(),
             public_key: jwk,
+            host: None,
         }
     }
 

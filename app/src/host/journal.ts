@@ -60,11 +60,16 @@ const clientNames: Record<string, string> = { 'weave-tui': 'the TUI', 'weave-app
 
 /**
  * Where another client's prompt came from: its device, its client, a headless run, or another
- * session: one whose agent prompted this one, or one the Host reports on.
+ * session: one whose agent prompted this one, or one the Host reports on, on this Host or a
+ * peer Host.
  */
 export function originLabel(origin: TurnOrigin): string {
   if ('run' in origin) return 'a headless run';
-  if ('session' in origin) return 'another thread';
+  if ('session' in origin) {
+    const { host, hostName } = origin.session;
+    if (hostName) return `a thread on ${hostName}`;
+    return host ? 'a thread on another Host' : 'another thread';
+  }
   if (!('client' in origin)) return 'elsewhere';
   return origin.client.device || clientNames[origin.client.name] || origin.client.name;
 }

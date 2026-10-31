@@ -1488,6 +1488,7 @@ export class HostStore {
           clients: listing.clients ?? 0,
           headless: listing.headless ?? false,
           lastActivityAt: listing.lastActivityAt ?? (listing.info.updatedAt ? Date.parse(listing.info.updatedAt) : undefined),
+          ...(listing.startedBy ? { startedBy: { key: sessionKey(listing.startedByHost ?? record.hostId, listing.startedBy), label: '' } } : {}),
         });
       }
       // A session on screen the list doesn't have yet, such as a new one nobody has prompted.
@@ -1510,6 +1511,7 @@ export class HostStore {
         });
       }
     }
+    labelStarters(sessions, hosts);
     return {
       hosts,
       sessions,
@@ -1533,5 +1535,23 @@ export class HostStore {
       unread: this.#read.unread(),
       ...(this.#error ? { error: this.#error } : {}),
     };
+  }
+}
+
+/**
+ * Name the thread that started each delegated one: its title, and its Host when that's another,
+ * which a thread a peer Host's agent started is (ADR 0017). The starter may be on a Host this
+ * device doesn't pair with, or gone, and is named as well as it can be then.
+ */
+export function labelStarters(sessions: SessionSummary[], hosts: readonly PairedHost[]) {
+  const byKey = new Map(sessions.map((session) => [session.key, session]));
+  for (const session of sessions) {
+    if (!session.startedBy) continue;
+    const { key } = session.startedBy;
+    const hostId = key.slice(0, key.indexOf('/'));
+    const starter = byKey.get(key);
+    const thread = starter?.title ? `“${starter.title}”` : 'another thread';
+    const host = hostId === session.hostId ? '' : ` on ${hosts.find(({ id }) => id === hostId)?.name ?? 'another Host'}`;
+    session.startedBy = { key, label: `from ${thread}${host}` };
   }
 }

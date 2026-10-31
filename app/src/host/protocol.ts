@@ -103,6 +103,13 @@ export type ProtocolVersion = number;
  */
 export type AuthMethodId = string;
 /**
+ * How this Host's last attempt to reach a peer went.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "PeerStatus".
+ */
+export type PeerStatus = "reachable" | "unchecked" | "refused" | "down" | "unreachable" | "otherHost";
+/**
  * What an entry is, following symlinks.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -171,6 +178,14 @@ export type TurnOrigin =
   | {
       session: {
         sessionId: SessionId;
+        /**
+         * The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).
+         */
+        host?: string | null;
+        /**
+         * What this Host calls that Host: the name it paired with, for clients to show.
+         */
+        hostName?: string | null;
         /**
          * The Host's report on that session, of how a turn this session's agent began there
          * ended or that it waits on a person. Nobody hears how a report's turn ends.
@@ -1108,6 +1123,11 @@ export interface NewDevice {
    */
   name: string;
   publicKey: Jwk;
+  /**
+   * The Host id of a peer Host pairing, which is one of the person's Hosts rather than a
+   * device; absent for a device.
+   */
+  host?: string | null;
 }
 /**
  * A P-256 public key as a JWK: `x` and `y` are its coordinates, 32 bytes each, in unpadded
@@ -1223,6 +1243,10 @@ export interface AcpInfo {
 export interface DeviceInfo {
   id: string;
   name: string;
+  /**
+   * The peer Host's id, when the device is one of the person's Hosts.
+   */
+  host?: string | null;
 }
 /**
  * `host/challenge`: what a paired device signs in its `host/hello`. Only on the WebSocket,
@@ -1301,6 +1325,10 @@ export interface SessionListing {
    * The session whose agent started it, for a delegated session.
    */
   startedBy?: SessionId | null;
+  /**
+   * The peer Host the session that started it is on, when it isn't this one.
+   */
+  startedByHost?: string | null;
 }
 /**
  * As ACP lists it: id, directory, title, last update.
@@ -2165,6 +2193,10 @@ export interface Device {
    * Its connections now.
    */
   connections: number;
+  /**
+   * The peer Host's id, when the device is one of the person's Hosts.
+   */
+  host?: string | null;
 }
 /**
  * `devices/revoke`: forget a device and close its connections. It has to pair again.
@@ -2174,6 +2206,97 @@ export interface Device {
  */
 export interface RevokeDeviceRequest {
   deviceId: string;
+}
+/**
+ * `peers/add`: pair with the Host at `url`, using the code `weave pair` showed there.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddPeerRequest".
+ */
+export interface AddPeerRequest {
+  /**
+   * The peer's URL, as `weave pair` showed it there.
+   */
+  url: string;
+  code: string;
+  /**
+   * What to call the peer; its tailnet name when absent.
+   */
+  name?: string | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddPeerResponse".
+ */
+export interface AddPeerResponse {
+  peer: Peer;
+}
+/**
+ * A peer Host, as `peers/list` shows it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Peer".
+ */
+export interface Peer {
+  /**
+   * The peer's Host id, as its `host/hello` gives it.
+   */
+  hostId: string;
+  /**
+   * What the person calls it: the name pairing gave it, or its tailnet name.
+   */
+  name: string;
+  /**
+   * Its WebSocket, through Tailscale Serve.
+   */
+  url: string;
+  pairedAt: number;
+  /**
+   * When this Host last said hello to it.
+   */
+  lastSeenAt?: number | null;
+  /**
+   * How the last attempt to reach it went.
+   */
+  status: "reachable" | "unchecked" | "refused" | "down" | "unreachable" | "otherHost";
+  /**
+   * Why the last attempt to reach it failed.
+   */
+  error?: string | null;
+}
+/**
+ * `peers/list`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListPeersRequest".
+ */
+export interface ListPeersRequest {
+  /**
+   * Try to reach each peer this Host isn't connected to, so `status` and `error` say
+   * whether it can be reached now.
+   */
+  check?: boolean;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListPeersResponse".
+ */
+export interface ListPeersResponse {
+  /**
+   * This Host's own id, which its peers know it by.
+   */
+  hostId: string;
+  peers: Peer[];
+}
+/**
+ * `peers/remove`: forget a peer and close the connection to it. The peer still lists this
+ * Host among its paired devices until it's revoked there.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemovePeerRequest".
+ */
+export interface RemovePeerRequest {
+  hostId: string;
 }
 /**
  * `files/list`: what a directory on the Host's computer holds, by name and kind.
@@ -2809,6 +2932,10 @@ export interface SessionState {
    * The session whose agent started it, for a delegated session.
    */
   startedBy?: SessionId | null;
+  /**
+   * The peer Host the session that started it is on, when it isn't this one.
+   */
+  startedByHost?: string | null;
 }
 /**
  * The agent a session runs with.
@@ -3074,6 +3201,14 @@ export interface QueuedPrompt {
     | {
         session: {
           sessionId: SessionId;
+          /**
+           * The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).
+           */
+          host?: string | null;
+          /**
+           * What this Host calls that Host: the name it paired with, for clients to show.
+           */
+          hostName?: string | null;
           /**
            * The Host's report on that session, of how a turn this session's agent began there
            * ended or that it waits on a person. Nobody hears how a report's turn ends.
@@ -4161,6 +4296,10 @@ export interface AttachSessionResponse {
    * The session whose agent started it, for a delegated session.
    */
   startedBy?: SessionId | null;
+  /**
+   * The peer Host the session that started it is on, when it isn't this one.
+   */
+  startedByHost?: string | null;
   replay: Replay;
 }
 /**
@@ -4292,7 +4431,16 @@ export interface RenameSessionRequest {
  */
 export interface RunRequest {
   agentId: string;
+  /**
+   * Absolute, or under the Host's home as `~/…` (feature `peers`), for a client that doesn't
+   * know where the home is on the Host's computer.
+   */
   cwd: string;
+  /**
+   * The repository `cwd` has to be a checkout of (feature `peers`), by its remote as
+   * [`crate::worktrees::GitLocation::remote`] gives it, such as `github.com/owner/name`.
+   */
+  remote?: string | null;
   sessionId?: SessionId | null;
   additionalDirectories?: string[];
   prompt: ContentBlock[];
@@ -4307,6 +4455,11 @@ export interface RunRequest {
    * id alone; a client that asked to attach attaches with `session/attach`.
    */
   key?: string | null;
+  /**
+   * A peer Host's only (feature `peers`): the session on it whose agent asks, which the
+   * turn's origin names, and a new session's `startedBy`.
+   */
+  caller?: SessionId | null;
 }
 /**
  * How a session's permission requests are answered.
@@ -4335,6 +4488,11 @@ export interface RunResponse {
    * When attached.
    */
   state?: SessionState | null;
+  /**
+   * The policy the session runs under (feature `peers`): the one asked for, or an open
+   * session's own. Absent from a repeat under a request key.
+   */
+  policy?: PermissionPolicy | null;
 }
 /**
  * `turn/start`: send a prompt. Answered once the turn has started. The session must be
@@ -4377,6 +4535,11 @@ export interface StartTurnResponse {
 export interface SteerTurnRequest {
   sessionId: SessionId;
   prompt: ContentBlock[];
+  /**
+   * A peer Host's only (feature `peers`): the session on it whose agent asks, which the
+   * steer's origin names.
+   */
+  caller?: SessionId | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -4424,6 +4587,11 @@ export interface AddQueuedRequest {
    * Makes it safe to send again (feature `requestKeys`).
    */
   key?: string | null;
+  /**
+   * A peer Host's only (feature `peers`): the session on it whose agent asks, which the
+   * turn's origin names.
+   */
+  caller?: SessionId | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -6212,7 +6380,8 @@ export const HOST_PROTOCOL = {
     "hostStopping": -32077,
     "unknownTerminal": -32078,
     "terminalUnavailable": -32079,
-    "unknownTurn": -32080
+    "unknownTurn": -32080,
+    "peerUnavailable": -32081
   },
   "features": {
     "steer": "turn/steer",
@@ -6228,7 +6397,8 @@ export const HOST_PROTOCOL = {
     "requestKeys": "requestKeys",
     "drain": "drain",
     "terminals": "terminals",
-    "turnIds": "turnIds"
+    "turnIds": "turnIds",
+    "peers": "peers"
   },
   "files": {
     "maxEntries": 2000
@@ -6250,7 +6420,8 @@ export const HOST_PROTOCOL = {
     "promptSession": "prompt_session",
     "steerSession": "steer_session",
     "cancelSessionTurn": "cancel_session_turn",
-    "listAgents": "list_agents"
+    "listAgents": "list_agents",
+    "listHosts": "list_hosts"
   }
 } as const;
 
@@ -6270,6 +6441,9 @@ export interface HostRequests {
   "devices/offer": { params: OfferDeviceRequest; result: OfferDeviceResponse };
   "devices/list": { params: ListDevicesRequest; result: ListDevicesResponse };
   "devices/revoke": { params: RevokeDeviceRequest; result: Empty };
+  "peers/add": { params: AddPeerRequest; result: AddPeerResponse };
+  "peers/list": { params: ListPeersRequest; result: ListPeersResponse };
+  "peers/remove": { params: RemovePeerRequest; result: Empty };
   "files/list": { params: ListFilesRequest; result: ListFilesResponse };
   "sessions/list": { params: ListSessionsRequest; result: ListSessionsResponse };
   "sessions/get": { params: GetSessionRequest; result: GetSessionResponse };

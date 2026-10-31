@@ -138,6 +138,7 @@ impl World {
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
             remote: None,
             terminals: None,
+            peers: None,
         }
     }
 }
@@ -259,6 +260,7 @@ async fn pair(local: &HostConnection, url: &str, name: &str) -> (DeviceInfo, Dev
             code: offer.code,
             name: name.to_owned(),
             key: key.clone(),
+            host: None,
         },
     )
     .await;
@@ -312,6 +314,7 @@ async fn a_device_pairs_once_and_connects_with_its_key_after_that() {
         code: offer.code.clone(),
         name: "iPad".to_owned(),
         key: key.clone(),
+        host: None,
     };
     let (connected, _) = remote(&url, pairing.clone()).await;
     let (paired, _) = connected.expect("paired");
@@ -434,11 +437,13 @@ async fn a_challenge_is_good_for_one_hello() {
         client: info("raw"),
         auth: Auth::Device {
             device_id: device.id.clone(),
-            signature: key.sign(&auth_message(
-                &challenge.host_id,
-                &device.id,
-                &challenge.nonce,
-            )),
+            signature: key
+                .sign(&auth_message(
+                    &challenge.host_id,
+                    &device.id,
+                    &challenge.nonce,
+                ))
+                .expect("signed"),
         },
         capabilities: ClientCapabilities::default(),
     };
@@ -477,6 +482,7 @@ async fn the_socket_takes_no_device_auth_and_gives_no_challenges() {
                 code: "x".to_owned(),
                 name: "iPad".to_owned(),
                 key: DeviceKey::generate(),
+                host: None,
             },
         )
         .await,
@@ -866,6 +872,7 @@ async fn pairing_turns_remote_access_on_and_the_last_revoke_turns_it_off() {
             code: offer.code,
             name: "iPad".to_owned(),
             key: DeviceKey::generate(),
+            host: None,
         },
     )
     .await;

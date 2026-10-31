@@ -102,6 +102,8 @@ export type SessionSummary = {
   lastActivityAt?: number;
   /** What the session waits on, for the banner, while its activity is `waiting`. */
   waitingOn?: string;
+  /** The thread whose agent started it: its key, when this device lists it, and how to name it. */
+  startedBy?: { key: string; label: string };
 };
 
 export type AgentChoice = { id: string; name: string };

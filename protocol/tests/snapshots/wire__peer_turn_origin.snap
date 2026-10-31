@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&TurnOrigin::Session\n{\n    session_id: \"sess-a\".into(), host: Some(\"h-2Lm9\".to_owned()), host_name:\n    Some(\"mini\".to_owned()), report: false,\n})"
+---
+{
+  "session": {
+    "sessionId": "sess-a",
+    "host": "h-2Lm9",
+    "hostName": "mini"
+  }
+}

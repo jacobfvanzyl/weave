@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RemovePeerRequest { host_id: \"h-7Rk2\".to_owned(), })"
+---
+{
+  "method": "peers/remove",
+  "params": {
+    "hostId": "h-7Rk2"
+  }
+}

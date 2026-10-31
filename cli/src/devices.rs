@@ -9,6 +9,8 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
 use clap::Subcommand;
+use serde::Deserialize;
+use serde::Serialize;
 use weave_host::DaemonPaths;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
@@ -30,6 +32,20 @@ pub struct PairArgs {
     /// The name the device gets, instead of the one it gives.
     #[arg(long)]
     name: Option<String>,
+
+    /// Print the URL and code as JSON, and don't wait for a device: for `weave hosts add`
+    /// on another Host, which runs this over SSH.
+    #[arg(long)]
+    json: bool,
+}
+
+/// What `weave pair --json` prints: the URL and code a device or another Host pairs with.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Offered {
+    pub(crate) url: String,
+    pub(crate) code: String,
+    pub(crate) expires_at: u64,
 }
 
 #[derive(Args)]
@@ -69,7 +85,7 @@ pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
         daemon::capabilities("weave-cli"),
     )
     .await?;
-    let result = offer(&connection, &mut events, args.name, &paths).await;
+    let result = offer(&connection, &mut events, args, &paths).await;
     connection.shutdown().await;
     result
 }
@@ -77,11 +93,14 @@ pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
 async fn offer(
     connection: &HostConnection,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
-    name: Option<String>,
+    args: PairArgs,
     paths: &DaemonPaths,
 ) -> anyhow::Result<()> {
     let status = connection.send(StatusRequest {}).await?;
-    let offer = match connection.send(OfferDeviceRequest { name }).await {
+    let offer = match connection
+        .send(OfferDeviceRequest { name: args.name })
+        .await
+    {
         Ok(offer) => offer,
         Err(error) if errors::is(&error, errors::REMOTE_UNAVAILABLE) => bail!("{}", error.message),
         Err(error) => return Err(error.into()),
@@ -92,12 +111,23 @@ async fn offer(
              restart it with `weave daemon restart`"
         );
     };
+    if args.json {
+        let offered = Offered {
+            url,
+            code: offer.code,
+            expires_at: offer.expires_at,
+        };
+        println!("{}", serde_json::to_string_pretty(&offered)?);
+        return Ok(());
+    }
     let url = url.as_str();
     println!("{}\n", qr_code(&pairing_link(url, &offer.code))?);
     println!(
         "Scan this with the device, or enter:\n  Host  {url}\n  Code  {}\n\nThe code works \
-         once, for five minutes.",
-        grouped(&offer.code)
+         once, for five minutes. To pair another of your Hosts, run there:\n  weave hosts add \
+         {url} {}",
+        grouped(&offer.code),
+        offer.code
     );
     if !matches!(status.service, Service::Launchd | Service::Systemd) {
         eprintln!(
@@ -241,8 +271,13 @@ fn describe(devices: &[Device], now_ms: u64) -> String {
                 (1, _) => "connected".to_owned(),
                 (connections, _) => format!("connected {connections} times"),
             };
+            let peer = if device.host.is_some() {
+                ", a peer Host"
+            } else {
+                ""
+            };
             format!(
-                "{}  {:width$}  paired {} ago, {seen}\n",
+                "{}  {:width$}  paired {} ago{peer}, {seen}\n",
                 device.id,
                 device.name,
                 ago(now_ms, device.paired_at)
@@ -275,6 +310,7 @@ mod tests {
             paired_at: 0,
             last_seen_at,
             connections,
+            host: None,
         };
         let day = 86_400_000;
         assert_eq!(

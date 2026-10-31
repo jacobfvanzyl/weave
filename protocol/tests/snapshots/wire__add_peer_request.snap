@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AddPeerRequest\n{\n    url: \"wss://studio.example.ts.net:7341\".to_owned(), code:\n    \"4F1N2K7Q9R3T5V8W0X6Y2Z4A1B\".to_owned(), name: None,\n})"
+---
+{
+  "method": "peers/add",
+  "params": {
+    "url": "wss://studio.example.ts.net:7341",
+    "code": "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B"
+  }
+}

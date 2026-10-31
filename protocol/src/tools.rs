@@ -8,7 +8,8 @@
 //!   method seen from inside the session, answered by the same code (ADR 0020): no tool does
 //!   what no client request can. They need no client, so they work in headless sessions. They
 //!   read and act on any session on the Host (ADR 0023), and start delegated sessions: sessions
-//!   of their own that the calling session starts.
+//!   of their own that the calling session starts. Given `host`, they act on a peer Host's
+//!   sessions instead (ADR 0017), through this Host's connection to it.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -44,6 +45,10 @@ pub const CANCEL_SESSION_TURN: &str = "cancel_session_turn";
 
 /// The Host tool that lists the agents threads can run, as `agents/list` does.
 pub const LIST_AGENTS: &str = "list_agents";
+
+/// The Host tool that lists this Host's peer Hosts and whether each can be reached, as
+/// `peers/list` does.
+pub const LIST_HOSTS: &str = "list_hosts";
 
 /// The tool kinds a permission policy names, for the tools that take one.
 const TOOL_KINDS: [&str; 10] = [
@@ -103,8 +108,31 @@ pub fn host_catalog() -> Vec<Tool> {
         "minLength": 1,
         "maxLength": crate::turns::MAX_KEY
     });
+    let host = json!({
+        "type": "string",
+        "description": "Optional: another of the person's weave Hosts, by the id or name \
+                        list_hosts gives, to act there instead of on this thread's Host."
+    });
     vec![
         rename_session(),
+        Tool {
+            name: LIST_HOSTS.to_owned(),
+            title: "List the person's other Hosts".to_owned(),
+            description: "List the person's other weave Hosts that this thread's Host is \
+                          paired with, its peer Hosts, usually other computers: each one's id \
+                          and name, and whether it can be reached now (status reachable), or \
+                          why not: refused (it revoked this Host), down (its computer answered \
+                          but its weave Host didn't), unreachable (nothing answered), or \
+                          otherHost. The other tools take one as host, to list, read, start and \
+                          prompt threads there. Pairing Hosts is the person's to do. Answers \
+                          with this Host's id and its peers/list result as JSON."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
         Tool {
             name: LIST_SESSIONS.to_owned(),
             title: "List threads".to_owned(),
@@ -117,6 +145,7 @@ pub fn host_catalog() -> Vec<Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "host": host,
                     "agentId": {"type": "string", "description": "Only this agent's threads, \
                         such as claude or codex, with the agent's own history of the directory."},
                     "cwd": {"type": "string", "description": "Only threads in this absolute \
@@ -140,7 +169,7 @@ pub fn host_catalog() -> Vec<Tool> {
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {"host": host},
                 "additionalProperties": false
             }),
         },
@@ -157,6 +186,7 @@ pub fn host_catalog() -> Vec<Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "host": host,
                     "sessionId": session_id,
                     "turnId": {"type": "string", "description": "Optional: a turn of the \
                         thread, as prompt_session (its queuedId) or start_session gave it."}
@@ -179,12 +209,16 @@ pub fn host_catalog() -> Vec<Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "host": host,
                     "agentId": {"type": "string", "description": "The agent to start; \
                         list_agents says which there are and what each is for."},
                     "prompt": {"type": "string", "description": "What to ask of it: everything \
                         it needs to know, since it doesn't see this conversation."},
                     "cwd": {"type": "string", "description": "The absolute directory it works \
-                        in; yours when absent."},
+                        in, or one under the home of its Host as ~/…; yours when absent. With \
+                        host and no cwd, the same directory under the home there, which has to \
+                        be a checkout of the same repository: its main checkout when yours is \
+                        another worktree, since your branch may not be there."},
                     "sessionId": {"type": "string", "description": "An existing thread, to \
                         prompt instead of starting one."},
                     "approve": {
@@ -218,6 +252,7 @@ pub fn host_catalog() -> Vec<Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "host": host,
                     "sessionId": session_id,
                     "prompt": {"type": "string", "description": "What to ask of it."},
                     "key": key
@@ -236,6 +271,7 @@ pub fn host_catalog() -> Vec<Tool> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "host": host,
                     "sessionId": session_id,
                     "prompt": {"type": "string", "description": "The message for its turn."}
                 },
@@ -251,7 +287,7 @@ pub fn host_catalog() -> Vec<Tool> {
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
-                "properties": {"sessionId": session_id},
+                "properties": {"host": host, "sessionId": session_id},
                 "required": ["sessionId"],
                 "additionalProperties": false
             }),

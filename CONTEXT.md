@@ -23,8 +23,12 @@ A device of the person's that the Host has paired with and accepts remote client
 _Avoid_: credential, principal, token
 
 **Peer Host**:
-One of the person's Hosts paired with another, so that the agents of one can reach the threads of the other.
+One of the person's Hosts that another has paired with, so that the other's agents can reach its threads; it keeps the other as a paired device, which may do only what the Host tools need. Each pairing goes one way, though `weave hosts add` makes both, and reach is one hop: a Host's agents reach its peers, not their peers.
 _Avoid_: remote Host, linked Host, federated Host
+
+**Host key**:
+The key a Host proves itself to its peer Hosts with, the one secret it keeps: in the Secure Enclave where the computer has one.
+_Avoid_: host certificate, token
 
 **Agent**:
 An ACP agent program the Host can launch, known by an id: a preset, one defined in the Host's configuration, or one from the ACP registry.
@@ -80,11 +84,11 @@ A thread an agent starts under another one. It shares its parent's journal and a
 _Avoid_: subthread
 
 **Delegated thread**:
-A thread of its own, with its own journal and agent, that another thread's agent started through the Host. It records the thread that started it.
+A thread of its own, with its own journal and agent, that another thread's agent started through the Host, on this Host or a peer Host. It records the thread that started it, and the peer Host that thread is on.
 _Avoid_: child thread, spawned thread, subagent
 
 **Report**:
-The Host's message to a thread about a turn that thread's agent began in another thread: how the turn ended, or that it waits on a person.
+The Host's message to a thread about a turn that thread's agent began in another thread, on this Host or a peer Host: how the turn ended, or that it waits on a person.
 _Avoid_: notification, callback
 
 **Attach**:

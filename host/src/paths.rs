@@ -76,6 +76,17 @@ impl DaemonPaths {
         self.dir.join("devices.json")
     }
 
+    /// The person's other Hosts this one pairs with as peers, and the turns it follows there.
+    pub fn peers(&self) -> PathBuf {
+        self.dir.join("peers.json")
+    }
+
+    /// The key the Host proves itself to its peers with: its wrapped Secure Enclave key, or
+    /// the key itself where there's no Secure Enclave.
+    pub fn host_key(&self) -> PathBuf {
+        self.dir.join("host-key.json")
+    }
+
     /// The Host MCP server's socket, which `weave mcp-bridge` connects to: beside the Host's.
     pub fn mcp_socket(&self) -> PathBuf {
         self.socket.with_file_name("mcp.sock")

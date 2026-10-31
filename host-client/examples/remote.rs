@@ -152,6 +152,7 @@ async fn pair(url: &str, code: &str) {
             code: code.to_owned(),
             name: name.clone(),
             key: key.clone(),
+            host: None,
         },
     )
     .await
@@ -163,7 +164,7 @@ async fn pair(url: &str, code: &str) {
         host_id: connection.hello().host.id.clone(),
         device_id: device.id,
         name: device.name,
-        key: URL_SAFE_NO_PAD.encode(key.to_bytes()),
+        key: URL_SAFE_NO_PAD.encode(key.to_bytes().expect("a key in memory")),
     });
     connection.shutdown().await;
 }

@@ -313,6 +313,7 @@ impl World {
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
             remote: None,
             terminals: None,
+            peers: None,
         }
     }
 
@@ -554,6 +555,7 @@ impl TestClient {
                 session_id: session_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
                 key: key.map(str::to_owned),
+                caller: None,
             })
             .await
     }
@@ -563,6 +565,7 @@ impl TestClient {
             .send(SteerTurnRequest {
                 session_id: session_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
+                caller: None,
             })
             .await
             .expect("turn/steer")
@@ -836,6 +839,7 @@ fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest
     RunRequest {
         agent_id: "fake".to_owned(),
         cwd: world.cwd(),
+        remote: None,
         session_id: None,
         additional_directories: Vec::new(),
         prompt: vec![ContentBlock::from(format!("write {} ok", path.display()))],
@@ -846,6 +850,7 @@ fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest
         attach: false,
         trace: false,
         key: None,
+        caller: None,
     }
 }
 
@@ -2834,6 +2839,7 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
         .send(RunRequest {
             agent_id: "fake".to_owned(),
             cwd: world.cwd(),
+            remote: None,
             session_id: None,
             additional_directories: Vec::new(),
             prompt: vec![ContentBlock::from(
@@ -2846,6 +2852,7 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
             attach: true,
             trace: false,
             key: None,
+            caller: None,
         })
         .await
         .expect("session/run");
@@ -4013,6 +4020,8 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
         TurnOrigin::Session {
             session_id: caller.clone(),
             report: false,
+            host: None,
+            host_name: None,
         }
     );
     let listed = client
@@ -4051,6 +4060,8 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
         Some(TurnOrigin::Session {
             session_id: caller.clone(),
             report: false,
+            host: None,
+            host_name: None,
         })
     );
     assert!(seen.agent.contains("Chunk 3 of 3."));
@@ -4176,6 +4187,8 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
         TurnOrigin::Session {
             session_id: caller.clone(),
             report: false,
+            host: None,
+            host_name: None,
         }
     );
     let told = client.told(&mut seen).await;
@@ -4196,6 +4209,8 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
         TurnOrigin::Session {
             session_id: persons.clone(),
             report: true,
+            host: None,
+            host_name: None,
         }
     );
 }
@@ -4344,6 +4359,8 @@ async fn a_caller_closed_meanwhile_is_taken_up_again_to_hear_how_its_delegated_t
     let from_delegated = TurnOrigin::Session {
         session_id: delegated.clone(),
         report: true,
+        host: None,
+        host_name: None,
     };
     tokio::time::timeout(WAIT, async {
         loop {
