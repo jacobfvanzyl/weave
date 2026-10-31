@@ -7,8 +7,8 @@
 //! removes the image (<https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>).
 //!
 //! Some terminals answer the protocol's query without drawing placeholders (WezTerm does), so
-//! weave asks only terminals known to draw them, outside multiplexers, and shows images where
-//! the answer is yes.
+//! weave asks only terminals known to draw them (Ghostty, kitty, and Rex, which runs
+//! libghostty), outside tmux and Zellij, and shows images where the answer is yes.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -39,7 +39,8 @@ pub struct Graphics {
 
 impl Graphics {
     /// Whether to ask the terminal about images at all: only terminals known to draw
-    /// placeholders, and not inside tmux or Zellij, which don't pass images through.
+    /// placeholders (Rex by `TERM_PROGRAM` or its own `xterm-rex` entry), and not inside tmux
+    /// or Zellij, which don't pass images through.
     pub fn worth_asking(var: impl Fn(&str) -> Option<String>) -> bool {
         if var("TMUX").is_some() || var("ZELLIJ").is_some() {
             return false;
@@ -47,9 +48,10 @@ impl Graphics {
         let program = var("TERM_PROGRAM").unwrap_or_default().to_ascii_lowercase();
         let term = var("TERM").unwrap_or_default();
         var("KITTY_WINDOW_ID").is_some()
-            || matches!(program.as_str(), "ghostty" | "kitty")
+            || matches!(program.as_str(), "ghostty" | "kitty" | "rex")
             || term.contains("kitty")
             || term.contains("ghostty")
+            || term.starts_with("xterm-rex")
     }
 
     /// The terminal's answers to [`QUERY`]: graphics, if it said it takes images.
@@ -259,6 +261,10 @@ mod tests {
         assert!(Graphics::worth_asking(env(&[("TERM", "xterm-kitty")])));
         assert!(Graphics::worth_asking(env(&[("TERM", "xterm-ghostty")])));
         assert!(Graphics::worth_asking(env(&[("KITTY_WINDOW_ID", "1")])));
+        // Rex, before and after `rex terminfo setup`.
+        let rex = [("TERM_PROGRAM", "rex"), ("TERM", "xterm-256color")];
+        assert!(Graphics::worth_asking(env(&rex)));
+        assert!(Graphics::worth_asking(env(&[("TERM", "xterm-rex")])));
         // WezTerm answers the query but draws no placeholders.
         assert!(!Graphics::worth_asking(env(&[("TERM_PROGRAM", "WezTerm")])));
         assert!(!Graphics::worth_asking(env(&[("TERM", "xterm-256color")])));
@@ -267,6 +273,8 @@ mod tests {
             ("TMUX", "/tmp/tmux-501/default"),
         ];
         assert!(!Graphics::worth_asking(env(&tmux)));
+        let rex_in_tmux = [("TERM_PROGRAM", "rex"), ("TMUX", "/tmp/tmux-501/default")];
+        assert!(!Graphics::worth_asking(env(&rex_in_tmux)));
         assert!(!Graphics::worth_asking(env(&[
             ("TERM", "xterm-kitty"),
             ("ZELLIJ", "0")

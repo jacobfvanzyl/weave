@@ -46,7 +46,7 @@ its last row, typed into in place, and the answer the fields the agent asked for
 `thumbnails` the draft's pasted images above it and, in the fullscreen transcript, each
 message's under its text, drawn through `graphics` (the Kitty graphics protocol's Unicode
 placeholders: each image is sent once, and its cells are text, so they diff, move and reflow
-like any other; the startup probe asks only Ghostty and kitty, outside tmux and Zellij,
+like any other; the startup probe asks only Ghostty, kitty and Rex, outside tmux and Zellij,
 whether they draw them). An image's `Slot` (its id and thumbnail) is shared by the draft and
 the transcript, so a sent image is neither decoded nor sent again; images from the journal
 are decoded one at a time off the UI thread, and the transcript holds the newest 64;
