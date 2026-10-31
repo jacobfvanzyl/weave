@@ -29,32 +29,36 @@ describe('sessionListView', () => {
     session('mac', 'gone', '/code/weave', 60, { state: 'closed', activity: undefined }),
   ];
 
-  it('groups by directory, newest groups and sessions first, with waiting sessions also on top', () => {
+  /** The view's directories, across Hosts, in order. */
+  const directories = (view: ReturnType<typeof sessionListView>) => view.hosts.flatMap(({ directories: listed }) => listed);
+
+  it('groups by directory, newest groups and sessions first, waiting sessions in place', () => {
     const view = sessionListView(sessions, [mac]);
-    expect(view.needsYou.map(({ sessionId }) => sessionId)).toEqual(['pad']);
-    expect(view.groups.map(({ name }) => name)).toEqual(['weave', 'trackpad']);
-    expect(view.groups[0].sessions.map(({ sessionId }) => sessionId)).toEqual(['new', 'old']);
+    expect(directories(view).map(({ name }) => name)).toEqual(['weave', 'trackpad']);
+    expect(directories(view)[0].sessions.map(({ sessionId }) => sessionId)).toEqual(['new', 'old']);
   });
 
   it('hides closed sessions unless asked for them', () => {
-    expect(sessionListView(sessions, [mac]).groups[0].sessions).toHaveLength(2);
-    expect(sessionListView(sessions, [mac], { showClosed: true }).groups[0].sessions.map(({ sessionId }) => sessionId))
+    expect(directories(sessionListView(sessions, [mac]))[0].sessions).toHaveLength(2);
+    expect(directories(sessionListView(sessions, [mac], { showClosed: true }))[0].sessions.map(({ sessionId }) => sessionId))
       .toEqual(['gone', 'new', 'old']);
   });
 
-  it('keeps the same directory on two Hosts apart, and names Hosts only when there are several', () => {
+  it('groups by Host first, in pairing order, keeping the same directory on two Hosts apart', () => {
     const server = host('server', 'server.example.ts.net');
+    const idle = host('idle', 'idle.example.ts.net');
     const both = [...sessions, session('server', 'remote', '/code/weave', 70)];
-    expect(sessionListView(both, [mac]).groups.every(({ hostName }) => hostName === undefined)).toBe(true);
-    const groups = sessionListView(both, [mac, server]).groups;
-    expect(groups.map(({ hostName, name }) => `${hostName} ${name}`)).toEqual([
-      'server.example.ts.net weave',
-      'mac.example.ts.net weave',
-      'mac.example.ts.net trackpad',
+    const view = sessionListView(both, [mac, server, idle]);
+    expect(view.hosts.map(({ host: paired, directories: listed }) => [paired.name, listed.map(({ name }) => name)])).toEqual([
+      ['mac.example.ts.net', ['weave', 'trackpad']],
+      ['server.example.ts.net', ['weave']],
+      ['idle.example.ts.net', []],
     ]);
+    // Filtered, a Host with nothing matching goes.
+    expect(sessionListView(both, [mac, server, idle], { query: 'remote' }).hosts.map(({ host: paired }) => paired.id)).toEqual(['server']);
   });
 
-  it('groups sessions in a repository under it, by worktree, and places the repository by its latest activity', () => {
+  it('groups sessions in a repository under it, across worktrees, and places the repository by its latest activity', () => {
     const git = (worktree: string, branch?: string) => ({ repo: '/code/weave', worktree, ...(branch ? { branch } : {}) });
     const inRepo = [
       session('mac', 'tui', '/code/weave/tui', 30, { git: git('/code/weave', 'main') }),
@@ -66,41 +70,26 @@ describe('sessionListView', () => {
       session('mac', 'older', '/code/weave.feature-auth/src', 5),
     ];
     const view = sessionListView(inRepo, [mac]);
-    expect(view.groups.map(({ name, cwd, worktrees }) => ({
-      name,
-      cwd,
-      worktrees: worktrees?.map(({ cwd: path, branch, primary, sessions: grouped }) => ({
-        path,
-        branch,
-        primary,
-        sessions: grouped.map(({ sessionId }) => sessionId),
-      })),
-    }))).toEqual([
-      {
-        name: 'weave',
-        cwd: '/code/weave',
-        worktrees: [
-          { path: '/code/weave.feature-auth', branch: 'feature/auth', primary: false, sessions: ['auth', 'older'] },
-          { path: '/code/weave', branch: 'main', primary: true, sessions: ['tui', 'root'] },
-          { path: '/code/weave.review', branch: undefined, primary: false, sessions: ['review'] },
-        ],
-      },
-      { name: 'notes', cwd: '/code/notes', worktrees: undefined },
-    ]);
-    const older = view.groups[0].worktrees?.[0].sessions[1];
-    expect(older && subdirectory(older)).toBe('src');
+    expect(directories(view).map(({ name, cwd, sessions: grouped }) => ({ name, cwd, sessions: grouped.map(({ sessionId }) => sessionId) })))
+      .toEqual([
+        { name: 'weave', cwd: '/code/weave', sessions: ['auth', 'tui', 'root', 'review', 'older'] },
+        { name: 'notes', cwd: '/code/notes', sessions: ['notes'] },
+      ]);
+    const older = directories(view)[0].sessions[4];
+    expect(older.git).toEqual({ repo: '/code/weave', worktree: '/code/weave.feature-auth', branch: 'feature/auth' });
+    expect(subdirectory(older)).toBe('src');
     expect(inRepo.map(subdirectory)).toEqual(['tui', undefined, undefined, undefined, undefined, undefined]);
-    expect(sessionListView(inRepo, [mac], { query: 'feature/' }).groups[0].worktrees?.map(({ cwd }) => cwd))
-      .toEqual(['/code/weave.feature-auth']);
+    expect(directories(sessionListView(inRepo, [mac], { query: 'feature/' }))[0].sessions.map(({ sessionId }) => sessionId))
+      .toEqual(['auth', 'older']);
   });
 
   it('filters by title, directory and agent', () => {
     const codex = session('mac', 'docs', '/code/site', 5, { agentId: 'codex', agentName: 'Codex', title: 'Write docs' });
     const all = [...sessions, codex];
-    expect(sessionListView(all, [mac], { query: 'TRACK' }).groups.map(({ name }) => name)).toEqual(['trackpad']);
-    expect(sessionListView(all, [mac], { query: 'codex' }).groups.map(({ name }) => name)).toEqual(['site']);
-    expect(sessionListView(all, [mac], { query: 'write' }).groups[0].sessions[0].sessionId).toBe('docs');
-    expect(sessionListView(all, [mac], { query: 'nothing' }).groups).toEqual([]);
+    expect(directories(sessionListView(all, [mac], { query: 'TRACK' })).map(({ name }) => name)).toEqual(['trackpad']);
+    expect(directories(sessionListView(all, [mac], { query: 'codex' })).map(({ name }) => name)).toEqual(['site']);
+    expect(directories(sessionListView(all, [mac], { query: 'write' }))[0].sessions[0].sessionId).toBe('docs');
+    expect(sessionListView(all, [mac], { query: 'nothing' }).hosts).toEqual([]);
   });
 });
 

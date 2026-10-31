@@ -16,18 +16,19 @@ const setIdiom = (idiom?: 'phone' | 'pad') => {
 afterEach(() => setIdiom());
 
 describe('the session list', () => {
-  it('puts waiting sessions under Needs you and groups the rest by Host and directory, or by worktree', () => {
+  it('groups sessions by Host, then directory or repository, naming each one\u2019s agent and branch', () => {
     setIdiom('phone');
     render(<MockApp />);
-    const needsYou = screen.getByRole('group', { name: 'Needs you' });
-    expect(within(needsYou).getByText('Fix the flaky reconnect test')).toBeInTheDocument();
-    // Sessions in a repository group under it by worktree, saying where in it they run.
-    const weave = screen.getByRole('group', { name: 'weave on mac.tail1234.ts.net' });
-    const main = within(weave).getByRole('group', { name: 'weave main' });
-    expect(within(main).getByRole('button', { name: /^Steer handling in the TUI.*· tui/ })).toBeInTheDocument();
-    expect(within(weave).getByRole('group', { name: 'weave fix-reconnect' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'odin on build.tail1234.ts.net' })).toBeInTheDocument();
-    expect(screen.getAllByRole('img', { name: 'Waiting for you' }).length).toBeGreaterThan(0);
+    const mac = screen.getByRole('group', { name: 'mac.tail1234.ts.net' });
+    const weave = within(mac).getByRole('group', { name: 'weave' });
+    // A repository's threads list together, across its worktrees, with the branch after the agent.
+    expect(within(weave).getByRole('button', { name: /Fix the flaky reconnect test.*Claude\s*· fix-reconnect/ })).toBeInTheDocument();
+    expect(within(weave).getByRole('button', { name: /^Steer handling in the TUI.*Claude\s*· main \/ tui/ })).toBeInTheDocument();
+    const build = screen.getByRole('group', { name: 'build.tail1234.ts.net' });
+    expect(within(build).getByRole('group', { name: 'odin' })).toBeInTheDocument();
+    // Waiting threads stay in place, marked on their tile.
+    expect(within(weave).getByRole('img', { name: 'Waiting for you' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Needs you' })).not.toBeInTheDocument();
   });
 
   it('closes or deletes a session from its row, without opening it', async () => {
@@ -94,11 +95,11 @@ describe('the session list', () => {
 });
 
 describe('worktrees', () => {
-  it('starts a session in a new worktree from a repository\u2019s heading, and removes the worktree', async () => {
+  it('starts a session in a new worktree from a repository\u2019s heading, and removes the worktree from its thread', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    await user.click(screen.getByRole('button', { name: 'New thread in weave main' }));
+    await user.click(screen.getByRole('button', { name: 'New thread in weave' }));
     const form = screen.getByRole('form', { name: 'New thread' });
     await user.click(await within(form).findByRole('button', { name: 'Worktree' }));
     const listed = within(screen.getByRole('list', { name: 'Worktrees' })).getAllByRole('button');
@@ -111,32 +112,32 @@ describe('worktrees', () => {
     expect(await within(form).findByRole('button', { name: 'Worktree' })).toHaveTextContent('feature/authweave.feature-auth');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
     await screen.findByRole('region', { name: 'New thread' });
-    const group = within(screen.getByRole('group', { name: 'weave on mac.tail1234.ts.net' })).getByRole('group', { name: 'weave feature/auth' });
+    const weave = within(screen.getByRole('group', { name: 'mac.tail1234.ts.net' })).getByRole('group', { name: 'weave' });
+    const row = within(weave).getByRole('button', { name: /^New thread.*· feature\/auth/ });
 
-    await user.pointer({ keys: '[MouseRight]', target: within(group).getByText('feature/auth') });
+    await user.pointer({ keys: '[MouseRight]', target: row });
     const menu = await screen.findByRole('menu');
     await user.click(within(menu).getByRole('menuitem', { name: 'Remove worktree…' }));
     const confirm = await screen.findByRole('alertdialog', { name: 'Remove weave.feature-auth?' });
     expect(confirm).toHaveTextContent('feature/auth is deleted too if it\u2019s merged');
     await user.click(within(confirm).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(screen.queryByRole('group', { name: 'weave feature/auth' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('button', { name: /· feature\/auth/ })).not.toBeInTheDocument());
   });
 
   it('keeps a worktree while one of its sessions waits on the person, and the primary one always', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
-    const group = screen.getByRole('group', { name: 'weave fix-reconnect' });
-    await user.pointer({ keys: '[MouseRight]', target: within(group).getByText('fix-reconnect') });
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByRole('button', { name: /Fix the flaky reconnect test/ }) });
     await user.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Remove worktree…' }));
     const confirm = await screen.findByRole('alertdialog', { name: 'Remove weave.fix-reconnect?' });
     await user.click(within(confirm).getByRole('button', { name: 'Remove' }));
     expect(await within(confirm).findByRole('alert')).toHaveTextContent('waiting on you');
     await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
 
-    // The repository's own checkout offers no removal.
-    const main = screen.getByRole('group', { name: 'weave main' });
-    await user.pointer({ keys: '[MouseRight]', target: within(main).getByText('main') });
+    // A thread in the repository's own checkout offers no removal.
+    await user.pointer({ keys: '[MouseRight]', target: screen.getByRole('button', { name: /^Steer handling in the TUI/ }) });
+    expect(await screen.findByRole('menuitem', { name: 'Close thread' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Remove worktree…' })).not.toBeInTheDocument();
   });
 });
@@ -147,11 +148,11 @@ describe('on an iPhone', () => {
     const user = userEvent.setup();
     render(<MockApp />);
     await user.click(screen.getByText('Bring Alpha back'));
-    expect(screen.queryByRole('group', { name: 'Needs you' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'mac.tail1234.ts.net' })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message agent' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Threads, 1 waiting' }));
-    expect(screen.getByRole('group', { name: 'Needs you' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'mac.tail1234.ts.net' })).toBeInTheDocument();
   });
 
   it('says how many other clients are attached', async () => {
@@ -179,7 +180,7 @@ describe('Hosts', () => {
     expect(within(hosts).getByText('Studio Mac')).toBeInTheDocument();
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Hosts' })).not.toBeInTheDocument());
-    expect(screen.getByRole('group', { name: 'weave on Studio Mac' })).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Studio Mac' })).getByRole('group', { name: 'weave' })).toBeInTheDocument();
   });
 });
 
@@ -191,7 +192,7 @@ describe('on an iPad', () => {
     expect(screen.getByText('No thread open')).toBeInTheDocument();
     await user.click(screen.getByText('Diagnose upload failures'));
     expect(screen.getByRole('region', { name: 'Diagnose upload failures' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Needs you' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'mac.tail1234.ts.net' })).toBeInTheDocument();
   });
 
   it('drags the list\'s edge, or moves it with the arrow keys, and keeps the width', async () => {

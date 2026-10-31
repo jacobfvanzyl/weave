@@ -1,38 +1,28 @@
 import type { PairedHost, SessionGit, SessionSummary } from './app-controller';
 import { directoryName } from '@/lib/display-path';
 
-/** The sessions one Host runs in one worktree of a git repository. */
-export type WorktreeGroup = {
-  key: string;
-  /** The worktree's top directory: where its new sessions start. */
-  cwd: string;
-  /** As its latest session last saw it; none when its HEAD is detached. */
-  branch?: string;
-  /** The repository's own checkout, which can't be removed. */
-  primary: boolean;
-  sessions: SessionSummary[];
-};
-
 /** The sessions one Host runs in one directory, or in one git repository's worktrees. */
 export type DirectoryGroup = {
   key: string;
   hostId: string;
-  /** Set only when more than one Host is paired. */
-  hostName?: string;
   /** The directory, or the repository's primary worktree: where its new sessions start. */
   cwd: string;
   /** The directory's name, or the repository's. */
   name: string;
-  /** Its sessions; a repository's across its worktrees. */
+  /** Its sessions, the most recently active first; a repository's across its worktrees. */
   sessions: SessionSummary[];
-  /** A repository's worktrees that have sessions, the most recently active first; none for a directory outside one. */
-  worktrees?: WorktreeGroup[];
+};
+
+/** A paired Host and its directories and repositories that have sessions shown. */
+export type HostGroup = {
+  host: PairedHost;
+  /** The most recently active first. */
+  directories: DirectoryGroup[];
 };
 
 export type SessionListView = {
-  /** Sessions waiting on the person, across Hosts and directories. */
-  needsYou: SessionSummary[];
-  groups: DirectoryGroup[];
+  /** In pairing order; a Host with nothing shown only while the list isn't filtered. */
+  hosts: HostGroup[];
 };
 
 const recency = (session: SessionSummary) => session.lastActivityAt ?? 0;
@@ -79,10 +69,9 @@ function located(sessions: readonly SessionSummary[]): SessionSummary[] {
 }
 
 /**
- * The session list: closed sessions only when asked for, "Needs you" on top, then one group per
- * Host and directory, the most recently active first. Sessions in a git repository group by
- * repository, then by worktree under it, each named for its branch; a repository's place is its
- * latest activity in any worktree.
+ * The session list: closed sessions only when asked for, one group per Host in pairing order,
+ * then one per directory, the most recently active first. Sessions in a git repository group by
+ * repository, across its worktrees; a repository's place is its latest activity in any of them.
  */
 export function sessionListView(
   sessions: readonly SessionSummary[],
@@ -92,7 +81,6 @@ export function sessionListView(
   const query = options.query?.trim().toLocaleLowerCase() ?? '';
   const shown = located(sessions).filter((session) =>
     (options.showClosed || session.state !== 'closed') && (!query || matches(session, query)));
-  const named = hosts.length > 1;
   const groups = new Map<string, DirectoryGroup>();
   for (const session of [...shown].sort(newestFirst)) {
     const { git } = session;
@@ -101,37 +89,17 @@ export function sessionListView(
     const key = `${session.hostId}\u0000${git ? 'repo' : 'dir'}\u0000${cwd}`;
     let group = groups.get(key);
     if (!group) {
-      group = {
-        key,
-        hostId: session.hostId,
-        hostName: named ? hosts.find(({ id }) => id === session.hostId)?.name : undefined,
-        cwd,
-        name: directoryName(cwd),
-        sessions: [],
-        ...(git ? { worktrees: [] } : {}),
-      };
+      group = { key, hostId: session.hostId, cwd, name: directoryName(cwd), sessions: [] };
       groups.set(key, group);
     }
     group.sessions.push(session);
-    if (git && group.worktrees) {
-      let worktree = group.worktrees.find(({ cwd: path }) => path === git.worktree);
-      if (!worktree) {
-        worktree = {
-          key: `${key}\u0000${git.worktree}`,
-          cwd: git.worktree,
-          ...(git.branch ? { branch: git.branch } : {}),
-          primary: git.worktree === git.repo,
-          sessions: [],
-        };
-        group.worktrees.push(worktree);
-      }
-      worktree.sessions.push(session);
-    }
   }
+  // Sessions were added newest first, so groups already follow their latest activity.
+  const directories = [...groups.values()];
   return {
-    needsYou: shown.filter(({ activity }) => activity === 'waiting').sort(newestFirst),
-    // Sessions were added newest first, so groups and worktrees already follow their latest activity.
-    groups: [...groups.values()],
+    hosts: hosts
+      .map((host) => ({ host, directories: directories.filter(({ hostId }) => hostId === host.id) }))
+      .filter(({ directories: shownHere }) => !query || shownHere.length > 0),
   };
 }
 

@@ -1,17 +1,10 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { AppActions } from '@/app/app-controller';
-import type { WorktreeGroup } from '@/app/session-list';
+import type { AppActions, SessionGit } from '@/app/app-controller';
 import { RemoveWorktreeDialog } from './remove-worktree-dialog';
 
-const worktree: WorktreeGroup = {
-  key: 'h\u0000repo\u0000/code/weave\u0000/code/weave.feature-auth',
-  cwd: '/code/weave.feature-auth',
-  branch: 'feature/auth',
-  primary: false,
-  sessions: [],
-};
+const worktree: SessionGit = { repo: '/code/weave', worktree: '/code/weave.feature-auth', branch: 'feature/auth' };
 
 describe('removing a worktree', () => {
   it('asks again before losing its changes, then removes it anyway', async () => {
