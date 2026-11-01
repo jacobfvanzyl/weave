@@ -11,7 +11,9 @@
 //! - **Connections.** A peer is reached when a Host tool names it: this Host connects as a
 //!   remote client, proving its key at hello, or the tool fails at once. A connection stays
 //!   while a turn there is followed, and closes after a minute unused otherwise. How the last
-//!   attempt went, or how the peer closed the connection, is its status.
+//!   attempt went, or how the peer closed the connection, is its status, except that a refusal
+//!   stands, kept in `peers.json`, until a hello succeeds again: a peer that revoked this Host
+//!   as its last device stops listening, and finding nothing there says no more than that.
 //! - **Beginning a turn.** A request that begins a turn on a peer is recorded in `peers.json`
 //!   before it's sent, and kept until the peer answers; one whose answer was lost is sent again
 //!   under the same key until one comes, across restarts, and its caller told then.
@@ -154,6 +156,9 @@ struct Stored {
     paired_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_seen_at: Option<Timestamp>,
+    /// Why the peer refused this Host, as when it revoked it, until a hello succeeds again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refused: Option<String>,
 }
 
 /// A turn this Host's agent began on a peer, followed until it ends.
@@ -492,6 +497,7 @@ impl Peers {
             device_id: device.id,
             paired_at: now,
             last_seen_at: Some(now),
+            refused: None,
         };
         let replaced = {
             let mut state = lock(&self.state);
@@ -539,6 +545,8 @@ impl Peers {
     fn listing(&self, state: &State, peer: &Stored) -> Peer {
         let (status, error) = if state.links.contains_key(&peer.host_id) {
             (PeerStatus::Reachable, None)
+        } else if let Some(why) = &peer.refused {
+            (PeerStatus::Refused, Some(why.clone()))
         } else {
             state
                 .reached
@@ -586,7 +594,8 @@ impl Peers {
     }
 
     /// A connection to the peer `host_id`: the one open, or a new one. Fails at once when the
-    /// peer can't be reached within the reach timeout, or refuses this Host.
+    /// peer can't be reached within the reach timeout, or refuses this Host. A peer that refused
+    /// this Host before is refused still, unless this hello succeeds.
     pub(crate) async fn reach(
         &self,
         shared: &Arc<Shared>,
@@ -615,7 +624,10 @@ impl Peers {
             .ok_or_else(|| {
                 Unreached::new(PeerStatus::Refused, "this Host no longer pairs with it")
             })?;
-        let key = self.key().map_err(Unreached::unreachable)?;
+        let key = match self.key() {
+            Ok(key) => key,
+            Err(why) => return Err(self.failed(host_id, Unreached::unreachable(why))),
+        };
         let credentials = Credentials::Device {
             device_id: stored.device_id.clone(),
             key,
@@ -625,12 +637,10 @@ impl Peers {
             Ok((connection, events, closed)) => {
                 {
                     let mut state = lock(&self.state);
-                    state
-                        .reached
-                        .insert(host_id.to_owned(), (PeerStatus::Reachable, None));
                     if let Some(peer) = state.peers.get_mut(host_id) {
                         peer.last_seen_at = Some(now_ms());
                     }
+                    self.note(&mut state, host_id, PeerStatus::Reachable, None);
                     self.save(&state);
                 }
                 Ok(self.link(shared, host_id, connection, events, closed))
@@ -643,13 +653,65 @@ impl Peers {
                     );
                 }
                 tracing::info!(peer = %host_id, why = %unreached.why, "couldn't reach a peer Host");
-                lock(&self.state).reached.insert(
-                    host_id.to_owned(),
-                    (unreached.status, Some(unreached.why.clone())),
-                );
-                Err(unreached)
+                Err(self.failed(host_id, unreached))
             }
         }
+    }
+
+    /// Note that reaching `host_id` failed with `unreached`: what to answer, which is the
+    /// refusal that stands if the peer refused this Host before.
+    fn failed(&self, host_id: &str, unreached: Unreached) -> Unreached {
+        let (status, why) = self.note(
+            &mut lock(&self.state),
+            host_id,
+            unreached.status,
+            Some(unreached.why),
+        );
+        Unreached::new(status, why.unwrap_or_default())
+    }
+
+    /// Note how reaching `host_id` went, and answer what stands. A refusal, as when the peer
+    /// revoked this Host, is kept with the peer in `peers.json` until a hello succeeds again, so
+    /// an attempt that finds nothing there, or something else, doesn't replace it.
+    fn note(
+        &self,
+        state: &mut State,
+        host_id: &str,
+        status: PeerStatus,
+        why: Option<String>,
+    ) -> (PeerStatus, Option<String>) {
+        state
+            .reached
+            .insert(host_id.to_owned(), (status, why.clone()));
+        let Some(peer) = state.peers.get_mut(host_id) else {
+            return (status, why);
+        };
+        let changed = match status {
+            PeerStatus::Refused => {
+                let refusal = why.clone().unwrap_or_default();
+                let changed = peer.refused.as_ref() != Some(&refusal);
+                peer.refused = Some(refusal);
+                changed
+            }
+            PeerStatus::Reachable => peer.refused.take().is_some(),
+            _ => false,
+        };
+        let standing = match &peer.refused {
+            Some(refusal) => (PeerStatus::Refused, Some(refusal.clone())),
+            None => (status, why),
+        };
+        if changed {
+            self.save(state);
+        }
+        standing
+    }
+
+    /// Whether `host_id` refused this Host, with no hello succeeding since.
+    fn refuses(&self, host_id: &str) -> bool {
+        lock(&self.state)
+            .peers
+            .get(host_id)
+            .is_some_and(|peer| peer.refused.is_some())
     }
 
     fn linked(&self, host_id: &str) -> Option<HostHandle> {
@@ -704,16 +766,14 @@ impl Peers {
         let Some(closed) = closed else {
             return;
         };
-        let reached = match closed {
+        let (status, why) = match closed {
             Some((code, _)) if code == CLOSE_REVOKED => (
                 PeerStatus::Refused,
                 "it revoked this Host. Pair again with `weave hosts add` here".to_owned(),
             ),
             _ => (PeerStatus::Unreachable, "its connection closed".to_owned()),
         };
-        state
-            .reached
-            .insert(host_id.to_owned(), (reached.0, Some(reached.1)));
+        self.note(&mut state, host_id, status, Some(why));
     }
 
     /// Have what the peer sends about `session_id` go to `events`. False when the connection
@@ -1339,6 +1399,9 @@ async fn follow_turns(
                     .await;
                 retry = peers.settings.retry;
             }
+            // A peer that closed the connection as revoked refuses the next: don't wait to
+            // find out.
+            Observed::Lost if peers.refuses(host_id) => {}
             Observed::Lost => pause(wake, &mut retry).await,
         }
     }
@@ -1692,6 +1755,7 @@ mod tests {
                         device_id: format!("d-{id}"),
                         paired_at: 0,
                         last_seen_at: None,
+                        refused: None,
                     },
                 );
             }

@@ -190,7 +190,10 @@ as the wrapped form `SecKeyCreateWithData` takes back with that same form as its
 demand (`Peers::reach`, a `weave-host-client` WebSocket connection proving the key) and kept while
 followed, closing after `PeerSettings::idle` unused; `dispatch` hands what it sends to each
 session's follower by session id, and when the peer closes the connection `unlink` notes how
-(`CLOSE_REVOKED` is `refused`), so `peers/list`'s `status` is the last attempt's outcome. Host
+(`CLOSE_REVOKED` is `refused`), so `peers/list`'s `status` is the last attempt's outcome, except
+that a refusal stands until a hello succeeds (`Peers::note`, the peer's `refused` in
+`peers.json`): a peer that revoked this Host as its last device stops listening, and finding
+nothing there mustn't turn it back into one worth retrying (WVE-165). Host
 tools given `host` (`host_tools::on_peer`) send the method over that connection with `caller`
 naming the calling session. `start_session` and `prompt_session` go through `Peers::begin`: the
 request, under a key made per calling session (`peer_key`), is recorded in `sending` first, and
@@ -203,7 +206,7 @@ on the peer expands `~` and checks the checkout's remote. `watch` observes a fol
 (`session/attach` with `observe`), `check`s each followed turn with `sessions/get` after the
 attach and every turn end, and reports through `host_tools::tell` with the peer's id and name in
 the origin, reconnecting with backoff and giving up only when the peer refuses this Host or is
-removed. Reports that take up a closed caller do so one at a time
+removed, at once when it closed the connection as revoked. Reports that take up a closed caller do so one at a time
 (`Shared::taking_up_for_reports`), or two at once would take it up twice. On the serving side, a
 request handler before all others refuses a peer Host any method outside `FOR_PEERS` (ADR 0024,
 `client::not_for_peers`): it gets what the Host tools and following need, an observing attach,

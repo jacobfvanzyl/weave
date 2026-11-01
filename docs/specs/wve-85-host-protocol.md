@@ -999,7 +999,10 @@ Host A (mini)                                         Host B (studio)
   `down` when its address answered but no weave Host did (an HTTP status instead of the
   WebSocket, as Tailscale Serve answers for a Host that isn't running), `unreachable` when
   nothing answered or the connection closed, `otherHost` when another weave Host answers at its
-  URL, and `unchecked` before A has tried since it started.
+  URL, and `unchecked` before A has tried since it started. A refusal stands until a hello
+  succeeds again, across A's restarts: B turns remote access off when A was its last device
+  (ADR 0016), and what A finds there after that leaves B `refused`. A gives up the turns it
+  follows on B, and the requests it's still sending there, as soon as B refuses it.
 - **What a peer may do** (ADR 0024). Only what the Host tools and following a turn need:
   `host/hello`, `host/challenge`, `host/status`, `agents/list`, `sessions/list`,
   `sessions/get`, `session/run` without `attach`, `session/attach` with `observe`,
@@ -1069,7 +1072,7 @@ type Peer = {
   pairedAt: number;
   lastSeenAt?: number;   // when this Host last said hello to it
   status: 'reachable' | 'unchecked' | 'refused' | 'down' | 'unreachable' | 'otherHost';
-  error?: string;        // why the last attempt to reach it failed
+  error?: string;        // why the last attempt to reach it failed, or why it refused this Host
 };
 ```
 

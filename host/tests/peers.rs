@@ -1068,6 +1068,123 @@ async fn revoking_a_peer_host_refuses_its_next_connection() {
     drop((a, b));
 }
 
+#[tokio::test]
+async fn a_host_its_peer_revoked_as_the_last_device_gives_up_what_it_follows_and_sends_there() {
+    let studio = World::new();
+    let (b, b_local, url, code) = offering(&studio, "studio").await;
+    let b_id = b_local.hello().host.id.clone();
+    let mini = World::new();
+    let a = mini.daemon_keeping("mini");
+    let (a_local, mut a_events) = local(&a).await;
+    add_peer(&a_local, &url, code, "studio").await;
+    let caller = new_session(&a_local, mini.dir.path()).await;
+
+    // A's agent starts a thread on B whose turn waits on a person there.
+    let target = studio.dir.path().join("out.txt");
+    let started = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "start_session",
+        serde_json::json!({
+            "host": "studio",
+            "agentId": "fake",
+            "cwd": studio.dir.path(),
+            "prompt": format!("write {} hello", target.display()),
+        }),
+    )
+    .await;
+    let delegated = session_id(&started);
+    heard(&a, &caller, "waiting on a person").await;
+
+    // B revokes A, its only device, so nothing listens there any more (ADR 0016).
+    let devices = b_local
+        .send(ListDevicesRequest {})
+        .await
+        .expect("devices/list")
+        .devices;
+    assert_eq!(devices.len(), 1);
+    b_local
+        .send(RevokeDeviceRequest {
+            device_id: devices[0].id.clone(),
+        })
+        .await
+        .expect("devices/revoke");
+
+    // A gives the turn up, telling its caller why, and follows nothing.
+    let (_, text) = heard(&a, &caller, "can't follow thread").await;
+    assert!(
+        text.contains(&format!("thread {delegated} on studio"))
+            && text.contains("revoked this Host"),
+        "{text}"
+    );
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while mini.peers_json().get("following").is_some() {
+        assert!(tokio::time::Instant::now() < deadline, "still following");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // B stays refused, though what A finds there now is nothing at all.
+    let listed = peers(&a_local, true).await;
+    assert_eq!(listed[0].status, PeerStatus::Refused);
+    let error = listed[0].error.as_deref().unwrap_or_default();
+    assert!(error.contains("weave hosts add"), "{error}");
+    let refused = call_fails(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "list_sessions",
+        serde_json::json!({"host": "studio"}),
+    )
+    .await;
+    assert!(
+        refused.contains("studio can't be reached: it revoked this Host"),
+        "{refused}"
+    );
+    a_local.shutdown().await;
+    a.shutdown().await;
+
+    // A start A recorded on B without an answer, as a Host that crashed leaves it.
+    let request = RunRequest {
+        agent_id: "fake".to_owned(),
+        cwd: studio.dir.path().to_path_buf(),
+        remote: None,
+        session_id: None,
+        additional_directories: Vec::new(),
+        prompt: vec![ContentBlock::from("hello from the crash")],
+        policy: PermissionPolicy::ask(),
+        attach: false,
+        trace: false,
+        key: Some("k-revoked".to_owned()),
+        caller: Some(caller.clone()),
+    };
+    let mut json = mini.peers_json();
+    json["sending"] = serde_json::json!([{
+        "hostId": b_id,
+        "caller": caller,
+        "delegated": true,
+        "request": {"run": request},
+    }]);
+    mini.write_peers_json(&json);
+
+    // The next A still knows B refused it: it lists B so, and tells the caller it can't ask.
+    let a = mini.daemon_keeping("mini");
+    let (a_local, _) = local(&a).await;
+    let listed = peers(&a_local, false).await;
+    assert_eq!(listed[0].status, PeerStatus::Refused);
+    a.resume_remote().await;
+    let (_, text) = heard(&a, &caller, "can't ask studio any more").await;
+    assert!(text.contains("revoked this Host"), "{text}");
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while mini.peers_json().get("sending").is_some() {
+        assert!(tokio::time::Instant::now() < deadline, "still sending");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    a_local.shutdown().await;
+    a.shutdown().await;
+    b_local.shutdown().await;
+    drop(b);
+}
+
 /// An HTTP server at a loopback address that answers everything 502, as Tailscale Serve does
 /// for a Host that isn't running.
 async fn bad_gateway() -> String {
