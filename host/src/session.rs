@@ -43,7 +43,10 @@ use weave_acp_core::schema::CreateElicitationResponse;
 use weave_acp_core::schema::ElicitationMode;
 use weave_acp_core::schema::ElicitationScope;
 use weave_acp_core::schema::InitializeResponse;
+use weave_acp_core::schema::PermissionOptionKind;
 use weave_acp_core::schema::PromptResponse;
+use weave_acp_core::schema::RequestPermissionOutcome;
+use weave_acp_core::schema::RequestPermissionRequest;
 use weave_acp_core::schema::RequestPermissionResponse;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
@@ -52,6 +55,7 @@ use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
+use weave_acp_core::schema::ToolKind;
 use weave_acp_core::strip_terminal_events;
 use weave_agents::lock::compare;
 use weave_host_protocol::HostClient;
@@ -1447,6 +1451,10 @@ impl Actor {
                             outcome = ?response.outcome,
                             "permission answered by the thread's policy"
                         );
+                        if refuses(&request.request, &response) {
+                            let text = rejected_text(&request.request, kind);
+                            self.record(Entry::Notice { text });
+                        }
                         let _ = request.respond_with(response);
                     }
                     None => {
@@ -2140,6 +2148,39 @@ fn not_running() -> SteerTurnResponse {
         seq: None,
         turn_id: None,
     }
+}
+
+/// Whether a policy's `response` to `request` said no: a reject option, or no way to say yes or
+/// no at all, which is answered as cancelled.
+fn refuses(request: &RequestPermissionRequest, response: &RequestPermissionResponse) -> bool {
+    match &response.outcome {
+        RequestPermissionOutcome::Selected(selected) => request.options.iter().any(|option| {
+            option.option_id == selected.option_id
+                && matches!(
+                    option.kind,
+                    PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways
+                )
+        }),
+        _ => true,
+    }
+}
+
+/// What a thread's policy rejecting `request`, of a tool of `kind`, tells its clients: which
+/// tool, and how a headless run would approve its kind, which nobody would find in the agent's
+/// reply (WVE-166).
+fn rejected_text(request: &RequestPermissionRequest, kind: ToolKind) -> String {
+    let tool = match request.tool_call.fields.title.as_deref() {
+        Some(title) => format!("“{title}”"),
+        None => format!("tool call {}", request.tool_call.tool_call_id),
+    };
+    let kind = serde_json::to_value(kind)
+        .ok()
+        .and_then(|kind| kind.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "other".to_owned());
+    format!(
+        "This thread's policy rejected {tool}: it doesn't approve tools of kind {kind}. A \
+         headless run approves them with `weave run --approve {kind}`."
+    )
 }
 
 /// `new`, if it isn't what clients were last told.

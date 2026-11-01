@@ -2591,6 +2591,7 @@ async fn run_now(
         remote,
         session_id,
         additional_directories,
+        mode,
         prompt,
         policy,
         attach: _,
@@ -2641,10 +2642,19 @@ async fn run_now(
                     return Err(error);
                 }
             };
-            let snapshot = Snapshot {
+            let mut snapshot = Snapshot {
                 modes: response.modes,
                 config_options: response.config_options.unwrap_or_default(),
             };
+            // As `session/create` starts one, so a headless run is in the mode the person set.
+            if let Some(mode) = mode.or_else(|| agent.mode.clone()) {
+                let handle = instance.connection.handle();
+                if let Err(notice) =
+                    modes::start_in(&handle, &response.session_id, &mut snapshot, &mode).await
+                {
+                    notices.push(notice);
+                }
+            }
             open(
                 shared,
                 response.session_id,

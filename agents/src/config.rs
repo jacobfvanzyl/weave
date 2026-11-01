@@ -160,10 +160,11 @@ pub struct AgentConfig {
     /// Ask for subagent sessions, from ACP's draft Subagent Sessions RFD (default true).
     pub subagents: Option<bool>,
     /// The mode new sessions start in, by the agent's id or name for it, such as Codex's
-    /// `agent-full-access`, set through ACP once the session is open. It isn't applied to
-    /// sessions reopened by load or resume, which are in whatever mode the agent restores, or
-    /// to headless `weave run` sessions. Codex's adapter restores no mode, so for those set
-    /// its own `INITIAL_AGENT_MODE` in `env` too.
+    /// `agent-full-access`, set through ACP once the session is open, headless `weave run` ones
+    /// too (ADR 0026), where it may approve what `--approve` doesn't. It isn't applied to
+    /// sessions reopened by load or resume, which are in whatever mode the agent restores.
+    /// Codex's adapter restores no mode, so for those set its own `INITIAL_AGENT_MODE` in `env`
+    /// too.
     pub mode: Option<String>,
     /// The client tools this agent is offered, instead of the top-level `client_tools`.
     pub client_tools: Option<Vec<String>>,

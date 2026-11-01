@@ -115,7 +115,10 @@ Commands share their argument groups (`cli/src/args.rs`): `AgentArgs` (which age
 config and trace) everywhere an agent is involved, `WorkspaceArgs` where a session is,
 `SessionArgs` (`--resume`, `--continue`) where one is reopened, and `ApproveArgs`
 (`--approve <kinds>|all`, the rest rejected, through `acp-core`'s `PermissionPolicy`) where a
-turn runs headless. Prompts are positional, before the `--` agent command.
+turn runs headless. `weave run --mode` starts its new thread in a mode other than the agent's
+configured one, which otherwise applies and may approve for itself what `--approve` doesn't
+(ADR 0026); the Host's notices, such as a tool the policy rejected and the `--approve` for it,
+go to stderr as they come. Prompts are positional, before the `--` agent command.
 
 `weave daemon install` runs the Host as a service from the binary it's run from
 (`cli/src/service.rs`, which picks the manager): a launchd user agent on macOS

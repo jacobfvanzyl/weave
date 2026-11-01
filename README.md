@@ -213,8 +213,8 @@ mode = "acceptEdits"      # the mode new threads start in, by the agent's id or 
 
 [agents.codex]
 mode = "workspace-write"  # Codex's modes: read-only, workspace-write, agent, agent-full-access
-# Threads reloaded by load or resume, and `weave run` ones, aren't set to `mode`: they're in
-# whatever mode the agent restores, and codex-acp restores none. Its own default covers them.
+# Threads reloaded by load or resume aren't set to `mode`: they're in whatever mode the agent
+# restores, and codex-acp restores none. Its own default covers them.
 env = { INITIAL_AGENT_MODE = "workspace-write" }
 
 [agents.opencode]         # a registry agent, with settings of its own

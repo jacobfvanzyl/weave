@@ -672,12 +672,15 @@ own, whose output reaches clients but whose end never does. The Host journals th
 Cancels the session's running turn (ACP `session/cancel`) and cancels its pending
 requests.
 
-**`session/run`** `{agentId, cwd, remote?, sessionId?, additionalDirectories?, prompt, policy, attach?, trace?, key?, caller?}` →
+**`session/run`** `{agentId, cwd, remote?, sessionId?, additionalDirectories?, mode?, prompt, policy, attach?, trace?, key?, caller?}` →
 `{sessionId, turnId?, state?: SessionState, policy?}`
 
 Opens a session (`sessionId`, as attaching would, or a new one) and starts a turn in it
-without the client having to stay. An open session keeps its own policy. With `attach`, the
-client is attached before the prompt is sent, so it sees the whole turn, and `state` is
+without the client having to stay. An open session keeps its own policy. A new session starts
+in `mode` if given, otherwise in the agent's configured `mode`, as `session/create` starts one
+(WVE-166, ADR 0026): an agent's own mode may approve what `policy` would reject, as it would
+in an interactive session. A session it takes up is in whatever mode its agent restores. With
+`attach`, the client is attached before the prompt is sent, so it sees the whole turn, and `state` is
 returned. Nobody can sign in at a terminal for a headless session, so the Host doesn't
 offer agents terminal sign-in for one. `turnId` names the turn it started; a repeat under its
 key names it too. `policy` (feature `peers`) is the policy the session runs under: the one
@@ -801,8 +804,10 @@ type PendingRequest = {
 ```
 
 A session's permission policy answers the permission requests it can, and a policy that
-rejects what it doesn't approve dismisses elicitations. Every other permission request or
-elicitation becomes a pending request: in `SessionState.pending` for clients that attach
+rejects what it doesn't approve dismisses elicitations. When a policy rejects a permission
+request, the session journals a `notice` naming the tool, its kind and how `weave run` approves
+that kind, since the agent's reply may not say why it couldn't go on (WVE-166). Every other
+permission request or elicitation becomes a pending request: in `SessionState.pending` for clients that attach
 later, and announced with `pending/added` to clients attached now.
 
 **`pending/answer`** `{sessionId, pendingId, permission?: RequestPermissionResponse, elicitation?: CreateElicitationResponse, clientTool?: CallToolResult}` →

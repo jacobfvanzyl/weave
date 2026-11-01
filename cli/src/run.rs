@@ -72,6 +72,12 @@ pub struct RunArgs {
     #[command(flatten)]
     approve: ApproveArgs,
 
+    /// The mode a new thread starts in, by the agent's id or name for it, such as Claude's
+    /// `default`; the agent's configured `mode` when omitted, which approves for itself what
+    /// `--approve` doesn't.
+    #[arg(long, value_name = "MODE", conflicts_with_all = ["resume", "continue_last"])]
+    mode: Option<String>,
+
     /// Leave the turn running in the weave Host and print the thread's id.
     #[arg(long)]
     detach: bool,
@@ -159,6 +165,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         remote: None,
         session_id,
         additional_directories: launch.additional_directories.clone(),
+        mode: args.mode.clone(),
         prompt: vec![ContentBlock::from(prompt)],
         policy,
         attach: !args.detach,
@@ -396,6 +403,11 @@ impl Output {
             SessionEvent::Update { notification } if notification.session_id == *session_id => {
                 self.update(&notification.update)
             }
+            SessionEvent::Notice { text } => {
+                self.break_line()?;
+                eprintln!("weave: {text}");
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -415,6 +427,15 @@ impl Output {
             _ => {}
         }
         Ok(stdout.flush()?)
+    }
+
+    /// End the reply's line, so what goes to stderr starts on one of its own.
+    fn break_line(&mut self) -> anyhow::Result<()> {
+        if !self.at_line_start {
+            println!();
+            self.at_line_start = true;
+        }
+        Ok(std::io::stdout().flush()?)
     }
 
     pub(crate) fn is_json(&self) -> bool {

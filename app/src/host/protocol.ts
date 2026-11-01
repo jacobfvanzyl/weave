@@ -4509,6 +4509,10 @@ export interface RunRequest {
   remote?: string | null;
   sessionId?: SessionId | null;
   additionalDirectories?: string[];
+  /**
+   * The mode a new session starts in; the agent's configured one when absent.
+   */
+  mode?: string | null;
   prompt: ContentBlock[];
   policy?: PermissionPolicy1;
   /**

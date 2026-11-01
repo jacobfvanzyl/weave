@@ -847,6 +847,7 @@ fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest
         remote: None,
         session_id: None,
         additional_directories: Vec::new(),
+        mode: None,
         prompt: vec![ContentBlock::from(format!("write {} ok", path.display()))],
         policy: PermissionPolicy {
             approve,
@@ -1171,14 +1172,17 @@ async fn headless_runs_follow_their_policy() {
     assert!(response.state.is_some(), "attached");
     let mut seen = Seen::default();
     let mut origin = None;
+    let mut notices = Vec::new();
     loop {
         let event = client.next().await;
-        if let HostEvent::Event(event) = &event
-            && let SessionEvent::TurnStarted {
-                origin: started, ..
-            } = &event.event
-        {
-            origin = Some(started.clone());
+        if let HostEvent::Event(event) = &event {
+            match &event.event {
+                SessionEvent::TurnStarted {
+                    origin: started, ..
+                } => origin = Some(started.clone()),
+                SessionEvent::Notice { text } => notices.push(text.clone()),
+                _ => {}
+            }
         }
         if client.note(event, &mut seen, None).await {
             break;
@@ -1187,6 +1191,14 @@ async fn headless_runs_follow_their_policy() {
     assert_eq!(origin, Some(TurnOrigin::Run {}));
     assert!(seen.user.starts_with("write "));
     assert!(!rejected.exists(), "the policy rejected the write");
+    // And the thread says so, and how a run would approve it (WVE-166).
+    assert!(
+        notices.iter().any(
+            |notice| notice.contains("This thread's policy rejected “Write ")
+                && notice.contains("`weave run --approve edit`")
+        ),
+        "{notices:?}"
+    );
     let status = client
         .connection
         .send(StatusRequest {})
@@ -2035,6 +2047,35 @@ async fn new_sessions_start_in_the_configured_mode_unless_asked_for_another() {
         "{:?}",
         missing.notices
     );
+
+    // A headless run starts in it too, as `weave run` and a thread delegating do (WVE-166).
+    let path = world.cwd().join("ran.txt");
+    let ran = |mode: Option<&str>| {
+        let mut request = run_request(&world, &path, Vec::new());
+        request.attach = true;
+        request.mode = mode.map(str::to_owned);
+        request
+    };
+    let configured = client.connection.send(ran(None)).await.expect("run");
+    let configured = configured.state.expect("attached");
+    assert_eq!(current_mode(&configured).as_deref(), Some("code"));
+    let asked = client.connection.send(ran(Some("ask"))).await.expect("run");
+    assert_eq!(
+        current_mode(&asked.state.expect("attached")).as_deref(),
+        Some("ask")
+    );
+    let missing = client
+        .connection
+        .send(ran(Some("nonsense")))
+        .await
+        .expect("run");
+    let notices = missing.state.expect("attached").notices;
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("no mode nonsense")),
+        "{notices:?}"
+    );
 }
 
 #[tokio::test]
@@ -2337,7 +2378,11 @@ async fn a_client_beside_the_host_doesnt_keep_an_idle_one_running() {
     let serving = |name: &str| {
         let listener = tokio::net::UnixListener::bind(world.dir.path().join(name)).expect("bind");
         let daemon = daemon.clone();
-        tokio::spawn(async move { daemon.serve(listener, Some(Duration::from_millis(100))).await })
+        tokio::spawn(async move {
+            daemon
+                .serve(listener, Some(Duration::from_millis(100)))
+                .await
+        })
     };
 
     // A client connected the ordinary way keeps it running.
@@ -3028,6 +3073,7 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
             remote: None,
             session_id: None,
             additional_directories: Vec::new(),
+            mode: None,
             prompt: vec![ContentBlock::from(
                 r#"tool rename_session {"title": "Named by its agent"}"#.to_owned(),
             )],

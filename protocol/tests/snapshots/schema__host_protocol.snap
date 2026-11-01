@@ -5838,6 +5838,13 @@ expression: schema()
             "type": "string"
           }
         },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The mode a new session starts in; the agent's configured one when absent."
+        },
         "prompt": {
           "type": "array",
           "items": {

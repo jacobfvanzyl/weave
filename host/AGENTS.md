@@ -64,7 +64,9 @@ environment over the login shell's (`instance.rs`), which their Host-run termina
 (`Launch::agent_environment`, handed to `acp-core`); an agent started for no session (to
 answer `agents/get`, sign-in or listing) is a spare the next session for that agent and
 directory takes, stopped after a minute unused. New sessions start in the agent's configured
-`mode` (`modes.rs`). When a session of a preset or registry agent opens, `updates.rs` looks for
+`mode` (`modes.rs`), those `session/run` starts too (ADR 0026); when a session's policy rejects a
+permission request, it journals a `notice` saying which tool, its kind and `--approve` for it
+(`session::rejected_text`). When a session of a preset or registry agent opens, `updates.rs` looks for
 a newer version in the background, one lookup an hour per package (or for the registry's
 catalog) with the version source swappable (`DaemonConfig.upstream`), and tells the agent's
 sessions of an older one, which tell their clients (`agents/updateAvailable`,

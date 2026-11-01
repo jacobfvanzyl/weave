@@ -280,3 +280,21 @@ fn a_key_makes_prompting_or_running_again_safe() {
     let detached: RunResponse = serde_json::from_slice(&detached.stdout).expect("session/run");
     assert!(detached.turn_id.is_some());
 }
+
+#[test]
+fn a_run_says_what_its_policy_rejected_and_how_to_approve_it() {
+    let host = TestHost::start();
+    let target = host.work().join("out.txt");
+    let prompt = format!("write {} hello", target.display());
+    let output = host.weave(&["run", "--agent", "fake", &prompt]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!target.exists(), "rejected");
+    assert!(
+        stderr.contains("weave: This thread's policy rejected “Write ")
+            && stderr.contains("`weave run --approve edit`"),
+        "{stderr}"
+    );
+    let output = host.weave(&["run", "--agent", "fake", "--approve", "edit", &prompt]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(target.exists(), "approved");
+}

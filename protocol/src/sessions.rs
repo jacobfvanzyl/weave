@@ -602,6 +602,9 @@ pub struct RunRequest {
     pub session_id: Option<SessionId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_directories: Vec<PathBuf>,
+    /// The mode a new session starts in; the agent's configured one when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     pub prompt: Vec<ContentBlock>,
     #[serde(default)]
     pub policy: PermissionPolicy,
