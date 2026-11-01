@@ -1636,9 +1636,9 @@ there's one, and otherwise in `host-key.json`, 0600 (see [Peer Hosts](#peer-host
   input and size. While another device's size holds it draws nothing and says so; typing takes
   the size back, and it asks for a `resync`. It attaches again after a Host restart, and exits
   when the terminal does (ADR 0022, amended).
-- With `[rex] open_threads = true`, a Host running as a service opens the threads a paired
-  device opens in the Rex on its computer (ADR 0025): `weave daemon` watches every thread
-  (`sessions/watch`) through a client of its own, and for a listing whose `openedBy` names a
+- With `[rex] open_threads = true`, a Host opens the threads a paired device opens in the Rex
+  on its computer (ADR 0025): `weave daemon` watches every thread (`sessions/watch`) through a
+  client beside it, which doesn't keep an idle Host running, and for a listing whose `openedBy` names a
   `device`, once per `openedAt`, makes a tab running `weave --resume <id>` in the Rex session
   named for its repository, labelled and renamed with the thread's title, never taking focus.
   It keeps which tab shows which thread in `rex-threads.json` beside the journals, so a tab

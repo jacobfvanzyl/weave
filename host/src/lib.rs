@@ -904,6 +904,20 @@ impl Daemon {
         client
     }
 
+    /// A connection from the same process for a client that runs beside the Host, which
+    /// doesn't keep it running when it's otherwise idle: `weave daemon`'s follower of threads
+    /// for Rex (ADR 0025).
+    pub fn connect_beside(&self) -> Channel {
+        let (client, host) = Channel::duplex();
+        let shared = Arc::clone(&self.shared);
+        tokio::spawn(async move {
+            if let Err(error) = client::serve_beside(shared, host).await {
+                tracing::debug!(%error, "a client beside the Host ended");
+            }
+        });
+        client
+    }
+
     /// Accept clients on `listener` until asked to stop, or until nothing has been open or
     /// connected for `idle_exit`. Then stop every session, leaving them recoverable. Only
     /// peers with the socket owner's user id are served.

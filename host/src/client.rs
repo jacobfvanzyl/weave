@@ -241,7 +241,16 @@ pub(crate) async fn serve(
     shared: Arc<Shared>,
     transport: impl ConnectTo<Host> + 'static,
 ) -> Result<(), Error> {
-    serve_as(shared, transport, Peer::Local).await
+    serve_as(shared, transport, Peer::Local, true).await
+}
+
+/// Serve a local client that runs beside the Host in its own process, as `weave daemon`'s
+/// follower of threads for Rex does: it doesn't keep an idle Host running.
+pub(crate) async fn serve_beside(
+    shared: Arc<Shared>,
+    transport: impl ConnectTo<Host> + 'static,
+) -> Result<(), Error> {
+    serve_as(shared, transport, Peer::Local, false).await
 }
 
 /// Serve one WebSocket client, which has to prove a paired device at hello.
@@ -250,13 +259,15 @@ pub(crate) async fn serve_remote(
     transport: impl ConnectTo<Host> + 'static,
     link: Arc<Link>,
 ) -> Result<(), Error> {
-    serve_as(shared, transport, Peer::Remote(link)).await
+    serve_as(shared, transport, Peer::Remote(link), true).await
 }
 
+/// `counted`: the client keeps an idle Host running while it's connected.
 async fn serve_as(
     shared: Arc<Shared>,
     transport: impl ConnectTo<Host> + 'static,
     peer: Peer,
+    counted: bool,
 ) -> Result<(), Error> {
     let connection = Arc::new(Connection {
         id: shared.next_client.fetch_add(1, Ordering::Relaxed),
@@ -266,9 +277,13 @@ async fn serve_as(
         device: Mutex::new(None),
         attached: Mutex::new(HashSet::new()),
     });
-    shared.registry().clients += 1;
+    if counted {
+        shared.registry().clients += 1;
+    }
     let result = handlers(&connection, transport).await;
-    shared.registry().clients -= 1;
+    if counted {
+        shared.registry().clients -= 1;
+    }
     shared.unwatch(connection.id);
     if let Some(terminals) = &shared.terminals {
         terminals.forget(connection.id);

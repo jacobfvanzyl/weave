@@ -2327,6 +2327,49 @@ async fn the_configuration_decides_which_client_tools_agents_are_offered() {
 }
 
 #[tokio::test]
+async fn a_client_beside_the_host_doesnt_keep_an_idle_one_running() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let info = || ClientInfo {
+        name: "test".to_owned(),
+        version: "0".to_owned(),
+    };
+    let serving = |name: &str| {
+        let listener = tokio::net::UnixListener::bind(world.dir.path().join(name)).expect("bind");
+        let daemon = daemon.clone();
+        tokio::spawn(async move { daemon.serve(listener, Some(Duration::from_millis(100))).await })
+    };
+
+    // A client connected the ordinary way keeps it running.
+    let counted = HostConnection::connect(
+        daemon.connect_in_process(),
+        info(),
+        ClientCapabilities::default(),
+    )
+    .await
+    .expect("connect");
+    let served = serving("counted.sock");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(!served.is_finished(), "it stayed up for its client");
+    drop(counted);
+    served.abort();
+
+    // One beside it, as `weave daemon`'s follower of threads for Rex, doesn't.
+    let _beside = HostConnection::connect(
+        daemon.connect_beside(),
+        info(),
+        ClientCapabilities::default(),
+    )
+    .await
+    .expect("connect");
+    let served = serving("beside.sock");
+    tokio::time::timeout(WAIT, served)
+        .await
+        .expect("it went once idle")
+        .expect("served");
+}
+
+#[tokio::test]
 async fn listings_say_who_opened_a_session_and_its_clients_hear_who_closed_it() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));

@@ -21,7 +21,7 @@
 //! url = "https://mac.example.ts.net:7341" # what `weave pair` gives devices; found when absent
 //!
 //! [rex]                      # threads opened from the app get tabs in this computer's Rex (ADR 0025)
-//! open_threads = true        # off by default; for a Host that runs as a service
+//! open_threads = true        # off by default
 //!
 //! [delegation]               # threads agents start through the Host's tools (ADR 0020)
 //! depth = 1                  # how many levels below a person's thread; the default

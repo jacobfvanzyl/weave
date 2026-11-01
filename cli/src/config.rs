@@ -36,8 +36,7 @@ pub struct DaemonSettings {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RexSettings {
-    /// Open one when a paired device opens or resumes a thread (default false). Only a Host
-    /// running as a service does: it keeps a client of its own connected.
+    /// Open one when a paired device opens or resumes a thread (default false).
     pub open_threads: Option<bool>,
 }
 

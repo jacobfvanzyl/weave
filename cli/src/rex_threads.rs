@@ -42,7 +42,7 @@ const UNTITLED: &str = "New thread";
 /// device opens. `rex` is the CLI to drive; `record` where tabs are kept.
 pub async fn follow(daemon: weave_host::Daemon, rex: PathBuf, record: PathBuf) {
     let connected = HostConnection::connect(
-        daemon.connect_in_process(),
+        daemon.connect_beside(),
         daemon::client_info(CLIENT),
         daemon::capabilities(CLIENT),
     )

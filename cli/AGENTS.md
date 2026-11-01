@@ -25,8 +25,9 @@ its VT restore with history and the output to stdout through `terminal/filter.rs
 out queries the holder answers, OSC 52, 9 and 777, and kitty graphics, byte for byte otherwise
 and across chunks, and stdin back as input, read on a thread of its own so the process can exit.
 While another device's size holds it draws nothing and says so, and typing takes the size back
-with a `resync`. With `[rex] open_threads = true`, `weave daemon run` as a service runs
-`src/rex_threads.rs` beside the Host (ADR 0025): an in-process client that watches every thread
+with a `resync`. With `[rex] open_threads = true`, `weave daemon run` runs
+`src/rex_threads.rs` beside the Host (ADR 0025): an in-process client that watches every thread,
+connected through `Daemon::connect_beside` so it doesn't keep an idle Host running,
 and gives the ones a paired device opens a tab in this computer's Rex, running `weave --resume
 <id>` in the session named for the thread's repository, kept in `rex-threads.json` beside the
 journals.

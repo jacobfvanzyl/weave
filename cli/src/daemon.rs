@@ -448,7 +448,7 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     config.config_file = run.config;
     let daemon = weave_host::Daemon::new(config);
     if open_threads {
-        follow_threads_in_rex(&daemon, paths, service, login_path.as_deref());
+        follow_threads_in_rex(&daemon, paths, login_path.as_deref());
     }
     let stopper = daemon.clone();
     tokio::spawn(async move {
@@ -505,20 +505,13 @@ fn open_threads(config: Option<&Path>) -> bool {
     }
 }
 
-/// Open threads from the app in this computer's Rex (ADR 0025), for a Host that runs as a
-/// service: a client of its own keeps it from ever going idle, so one started on demand doesn't.
+/// Open threads from the app in this computer's Rex (ADR 0025), through a client beside the
+/// Host that doesn't keep an idle one running.
 fn follow_threads_in_rex(
     daemon: &weave_host::Daemon,
     paths: &DaemonPaths,
-    service: Service,
     login_path: Option<&str>,
 ) {
-    if matches!(service, Service::OnDemand) {
-        tracing::info!(
-            "[rex] open_threads applies to a Host running as a service (`weave daemon install`)"
-        );
-        return;
-    }
     let path = login_path
         .map(str::to_owned)
         .or_else(|| std::env::var("PATH").ok())

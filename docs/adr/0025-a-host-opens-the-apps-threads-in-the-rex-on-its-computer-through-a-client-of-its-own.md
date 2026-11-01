@@ -25,7 +25,7 @@ Closing a thread from the app now quits every TUI attached to it, wherever it ru
 
 ## Consequences
 
-- Only a Host running as a service opens threads in Rex: the in-process client counts as a connected client, so a Host started on demand would never go idle.
+- The client runs beside the Host without counting as a connected client, so a Host started on demand still goes once it's idle. A Host with paired devices, the only one whose threads a device opens, stays up for them anyway.
 - `[rex]` is the CLI's section of the config, which the Host's own parser keeps for it.
 - A TUI on a Rex pane is a client of its thread like any other: the app's "Other clients attached" counts it, and closing the thread from the app quits it.
 - WVE-110's OSC 7501 does the rest: the thread's status, waiting on the person included, shows in Rex's sidebar as the app's "Needs you" list shows it.
