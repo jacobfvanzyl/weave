@@ -783,8 +783,8 @@ connection never starts the same work twice.
   happened, and does it only if it didn't.
 - Keys are kept as long as journals are: they're forgotten 14 days after they were recorded.
 
-Triggers (WVE-98) are to admit each occurrence through the same record, under a key of its
-own.
+Triggers (WVE-145, WVE-146) are to admit each occurrence through the same record, under a key
+of its own.
 
 ## Pending requests
 

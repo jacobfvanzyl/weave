@@ -4,8 +4,8 @@
 //! to disk, then the answer once there is one, or a refusal that frees the key when the request
 //! failed. The work a key started is journaled with it, so when a Host stopped between
 //! admitting a key and answering, a repeat finds out from the session's journal whether the
-//! work happened. Keys are forgotten after the journals' retention. Triggers (WVE-98) are to
-//! admit their occurrences the same way.
+//! work happened. Keys are forgotten after the journals' retention. Triggers (WVE-145,
+//! WVE-146) are to admit their occurrences the same way.
 
 use std::collections::HashMap;
 use std::fs::File;
