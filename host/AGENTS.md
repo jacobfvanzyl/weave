@@ -93,7 +93,7 @@ whose catalog is `weave_host_protocol::tools`. `mcp.rs` is the Host MCP server, 
 first wait for it), with the tools the config's `client_tools` choose. The binding and the
 configured servers make up the session's `Servers`, whose statuses (WVE-160) are
 `SessionState.mcpServers` and `session/changed`'s: `weave` declared, connected from the
-agent's first 2026-07-28 request (`Command::McpServersChanged`), or unavailable, and each
+agent's first 2026-07-28 request (`Command::SummaryChanged`), or unavailable, and each
 configured server passed or skipped. It speaks MCP
 2026-07-28 only and answers `server/discover`, `tools/list`, `tools/call`, an empty
 `resources/list`, and `subscriptions/listen`, which it acknowledges and holds open (Claude
@@ -150,11 +150,14 @@ reader holds its owner back rather than the Host buffering.
   terminal's scope is the deepest worktree its directory is in, else the directory, symlinks
   resolved. `Shared::release` refuses a worktree while one of its terminals runs a command
   (OSC 133), and otherwise closes them with its sessions.
-- **The stream:** `terminals::stream` serves a `weave-terminal` upgrade on the remote listener.
-  It checks the ticket, connects to the owner afresh, attaches with a snapshot for the owner's
-  codec or VT for another, and relays frames, reading the owner only as fast as the client
-  takes them, so the holder's 4 MiB resync handles a slow device. The size follows the stream
-  that last typed (`Terminals::typed`, `resized`), and clipboard writes go to it alone.
+- **The stream:** `terminals::stream` serves a `weave-terminal` upgrade on the remote listener,
+  and the same WebSocket to local clients on `terminals.sock` beside the Host's socket
+  (`serve_local`, `Daemon::serve_terminal_streams`, WVE-167), generic over its transport. It
+  checks the ticket, connects to the owner afresh, attaches with a snapshot for the owner's codec
+  or VT for another, with the history when the client asks, and relays frames, reading the owner
+  only as fast as the client takes them, so the holder's 4 MiB resync handles a slow device; a
+  client's `{"resync": {}}` asks the owner for one (`resync`). The size follows the stream that
+  last typed (`Terminals::typed`, `resized`), and clipboard writes go to it alone.
 - **Tests:** `tests/terminals.rs` drives it all through a real client, against a fake owner that
   leaves out `command` and `opened_from`, and against real holders it builds with cargo.
 

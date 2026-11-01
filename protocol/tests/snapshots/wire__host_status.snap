@@ -27,7 +27,15 @@ expression: "round_trip(&HostStatus\n{\n    protocol: 2, version: \"0.1.0\".to_o
         "worktree": "/repo",
         "branch": "main",
         "remote": "github.com/jacobfvanzyl/weave"
-      }
+      },
+      "openedBy": {
+        "client": {
+          "name": "weave-app",
+          "id": "c9",
+          "device": "Jaco's iPad"
+        }
+      },
+      "openedAt": 1760180000500
     }
   ],
   "remote": "127.0.0.1:7341"

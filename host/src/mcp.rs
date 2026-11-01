@@ -388,7 +388,7 @@ impl Mcp {
             .upgrade()
             .and_then(|shared| shared.registry().live(&session_id));
         if let Some(session) = session {
-            let _ = session.send(Command::McpServersChanged);
+            let _ = session.send(Command::SummaryChanged);
         }
     }
 

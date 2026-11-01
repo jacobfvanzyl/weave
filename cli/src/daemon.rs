@@ -441,10 +441,15 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     } else {
         Service::OnDemand
     };
+    let login_path = environment.vars.get("PATH").cloned();
+    let open_threads = open_threads(run.config.as_deref());
     let mut config = DaemonConfig::persistent(paths, service, environment);
     config.remote = Some(remote_settings(run.config.as_deref()));
     config.config_file = run.config;
     let daemon = weave_host::Daemon::new(config);
+    if open_threads {
+        follow_threads_in_rex(&daemon, paths, service, login_path.as_deref());
+    }
     let stopper = daemon.clone();
     tokio::spawn(async move {
         stop_signal().await;
@@ -489,6 +494,44 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
 /// How the Host serves remote clients once pairing turns that on (ADR 0016): the defaults,
 /// with the config's `[remote]` over them. A `[remote]` that can't be used is logged, and the
 /// defaults stand.
+/// Whether the config has threads opened from the app open in Rex (`[rex] open_threads`).
+fn open_threads(config: Option<&Path>) -> bool {
+    match crate::config::Config::load(config) {
+        Ok(config) => config.rex.open_threads.unwrap_or(false),
+        Err(error) => {
+            tracing::error!(error = %format!("{error:#}"), "the config can't be read; threads won't open in Rex");
+            false
+        }
+    }
+}
+
+/// Open threads from the app in this computer's Rex (ADR 0025), for a Host that runs as a
+/// service: a client of its own keeps it from ever going idle, so one started on demand doesn't.
+fn follow_threads_in_rex(
+    daemon: &weave_host::Daemon,
+    paths: &DaemonPaths,
+    service: Service,
+    login_path: Option<&str>,
+) {
+    if matches!(service, Service::OnDemand) {
+        tracing::info!(
+            "[rex] open_threads applies to a Host running as a service (`weave daemon install`)"
+        );
+        return;
+    }
+    let path = login_path
+        .map(str::to_owned)
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let Some(rex) = crate::rex_threads::find_rex(&path) else {
+        tracing::info!("[rex] open_threads: there's no rex on the login shell's PATH");
+        return;
+    };
+    let daemon = daemon.clone();
+    let record = paths.dir.join("rex-threads.json");
+    tokio::spawn(async move { crate::rex_threads::follow(daemon, rex, record).await });
+}
+
 fn remote_settings(config: Option<&Path>) -> weave_host::RemoteSettings {
     let mut settings =
         weave_host::RemoteSettings::new(Arc::new(weave_host::tailscale::TailscaleServe));
@@ -820,6 +863,8 @@ mod tests {
             git: None,
             started_by: None,
             started_by_host: None,
+            opened_by: None,
+            opened_at: None,
         });
         assert_eq!(
             describe(&status, &paths, 7_230_000),

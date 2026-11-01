@@ -407,6 +407,12 @@ fn listing() -> SessionListing {
         git: Some(git()),
         started_by: None,
         started_by_host: None,
+        opened_by: Some(TurnOrigin::Client {
+            name: "weave-app".to_owned(),
+            id: "c9".to_owned(),
+            device: Some("Jaco's iPad".to_owned()),
+        }),
+        opened_at: Some(1_760_180_000_500),
     }
 }
 
@@ -1458,6 +1464,21 @@ fn events() {
             47,
             SessionEvent::Closed {
                 reason: "idle".to_owned(),
+                by: None,
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_closed_by_a_client",
+        message(&event(
+            48,
+            SessionEvent::Closed {
+                reason: "closed by a client".to_owned(),
+                by: Some(TurnOrigin::Client {
+                    name: "weave-app".to_owned(),
+                    id: "c9".to_owned(),
+                    device: Some("Jaco's iPad".to_owned()),
+                }),
             },
         ))
     );

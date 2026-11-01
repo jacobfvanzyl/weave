@@ -133,6 +133,33 @@ impl Rex {
         Ok(panes)
     }
 
+    /// Close the TUI's own pane when it's the only one in its tab, which closes the tab: for a
+    /// TUI quitting because its thread was closed. Rex ends the TUI with its pane, so this is
+    /// the last thing it does.
+    pub fn close_if_alone(&self) {
+        let Ok(output) = self.rex(&["block", "ls", "-s", &self.session, "--json"]) else {
+            return;
+        };
+        let Ok(listed) = serde_json::from_str::<Blocks>(&output) else {
+            return;
+        };
+        let window = listed
+            .blocks
+            .iter()
+            .find(|block| block.block_id == self.block)
+            .and_then(|block| block.window_id.clone());
+        let alone = window.is_some()
+            && listed
+                .blocks
+                .iter()
+                .filter(|block| block.window_id == window)
+                .count()
+                == 1;
+        if alone {
+            let _ = self.rex(&["block", "close", "-s", &self.session, &self.block]);
+        }
+    }
+
     /// The command a pane runs: `weave terminal attach <id>`, with what finds the same Host.
     fn attach_command(&self, terminal: &str) -> Vec<String> {
         let passed: Vec<String> = PASSED
@@ -229,6 +256,8 @@ struct Blocks {
 #[derive(Deserialize)]
 struct Block {
     block_id: String,
+    #[serde(default)]
+    window_id: Option<String>,
 }
 
 /// Each TUI pane's terminal panes, by `<session>/<block>`.

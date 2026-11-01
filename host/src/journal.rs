@@ -195,6 +195,9 @@ pub(crate) enum Entry {
     Closed {
         reason: String,
         at_ms: u64,
+        /// The client that closed it for everyone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
     },
     /// Something the Host told the session's clients.
     Notice {
@@ -373,8 +376,9 @@ impl Entry {
                 config_options: config_options.clone(),
                 failed: failed.clone(),
             },
-            Self::Closed { reason, .. } => SessionEvent::Closed {
+            Self::Closed { reason, by, .. } => SessionEvent::Closed {
                 reason: reason.clone(),
+                by: by.clone(),
             },
             Self::Notice { text } => SessionEvent::Notice { text: text.clone() },
             Self::Renamed { title, by } => SessionEvent::Renamed {
@@ -926,6 +930,7 @@ pub(crate) fn close(dir: &Path, session_id: &SessionId, reason: &str) -> io::Res
     journal.append(Entry::Closed {
         reason: reason.to_owned(),
         at_ms: now_ms(),
+        by: None,
     });
     journal.flush();
     if journal.failed_at.is_some() {
@@ -1238,6 +1243,7 @@ mod tests {
         let (seq, _) = journal.append(Entry::Closed {
             reason: "closed".into(),
             at_ms: 2,
+            by: None,
         });
         assert_eq!(seq, 4);
         let records = read(&path).expect("read");
@@ -1546,6 +1552,7 @@ mod tests {
         journal.append(Entry::Closed {
             reason: "closed".into(),
             at_ms: 1,
+            by: None,
         });
         assert!(!path_for(dir.path(), &"s1".into()).exists());
     }

@@ -1,6 +1,7 @@
 //! `~/.config/weave/config.toml`, owned by section: the Host reads `default_agent`,
 //! `[agents.*]`, `[[mcp_servers]]` and `[delegation]`, parsed here; clients read `[tui]` and `[daemon]`, and
-//! the CLI that runs the Host reads `[remote]`, which this keeps as tables for them to parse.
+//! the CLI that runs the Host reads `[remote]` and `[rex]`, which this keeps as tables for them
+//! to parse.
 //!
 //! ```toml
 //! default_agent = "claude"
@@ -18,6 +19,9 @@
 //! [remote]                   # let paired devices connect, through Tailscale Serve
 //! listen = "127.0.0.1:7341"  # the default; loopback only
 //! url = "https://mac.example.ts.net:7341" # what `weave pair` gives devices; found when absent
+//!
+//! [rex]                      # threads opened from the app get tabs in this computer's Rex (ADR 0025)
+//! open_threads = true        # off by default; for a Host that runs as a service
 //!
 //! [delegation]               # threads agents start through the Host's tools (ADR 0020)
 //! depth = 1                  # how many levels below a person's thread; the default
@@ -103,6 +107,9 @@ pub struct Config {
     /// Remote clients, for the CLI to parse; absent, the Host takes none.
     #[serde(default)]
     pub remote: Option<toml::Table>,
+    /// Threads in the Rex on this computer, for the CLI that runs the Host to parse.
+    #[serde(default)]
+    pub rex: toml::Table,
     /// The presets' versions `weave update` locked beside the file (`agents.lock`).
     #[serde(skip)]
     pub lock: Lock,

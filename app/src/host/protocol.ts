@@ -67,6 +67,41 @@ export type Activity = ("idle" | "running") | "waiting";
  */
 export type SessionId = string;
 /**
+ * Who started a turn.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "TurnOrigin".
+ */
+export type TurnOrigin =
+  | {
+      client: {
+        name: string;
+        id: string;
+        device?: string | null;
+      };
+    }
+  | {
+      run: {};
+    }
+  | {
+      session: {
+        sessionId: SessionId;
+        /**
+         * The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).
+         */
+        host?: string | null;
+        /**
+         * What this Host calls that Host: the name it paired with, for clients to show.
+         */
+        hostName?: string | null;
+        /**
+         * The Host's report on that session, of how a turn this session's agent began there
+         * ended or that it waits on a person. Nobody hears how a report's turn ends.
+         */
+        report?: boolean;
+      };
+    };
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "AgentSource".
  */
@@ -158,41 +193,6 @@ export type ContentBlock =
  * via the `definition` "Role".
  */
 export type Role = "assistant" | "user";
-/**
- * Who started a turn.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "TurnOrigin".
- */
-export type TurnOrigin =
-  | {
-      client: {
-        name: string;
-        id: string;
-        device?: string | null;
-      };
-    }
-  | {
-      run: {};
-    }
-  | {
-      session: {
-        sessionId: SessionId;
-        /**
-         * The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).
-         */
-        host?: string | null;
-        /**
-         * What this Host calls that Host: the name it paired with, for clients to show.
-         */
-        hostName?: string | null;
-        /**
-         * The Host's report on that session, of how a turn this session's agent began there
-         * ended or that it waits on a person. Nobody hears how a report's turn ends.
-         */
-        report?: boolean;
-      };
-    };
 /**
  * **Parse error**: Invalid JSON was received by the server.
  * An error occurred on the server while parsing the JSON text.
@@ -840,6 +840,7 @@ export type SessionEvent =
     }
   | {
       reason: string;
+      by?: TurnOrigin | null;
       kind: "closed";
     }
   | {
@@ -1095,9 +1096,13 @@ export type TerminalStreamMessage =
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "TerminalStreamClientMessage".
  */
-export type TerminalStreamClientMessage = {
-  resize: TerminalSize;
-};
+export type TerminalStreamClientMessage =
+  | {
+      resize: TerminalSize;
+    }
+  | {
+      resync: {};
+    };
 
 /**
  * The weave Host protocol (docs/specs/wve-85-host-protocol.md), generated from protocol/.
@@ -1350,6 +1355,16 @@ export interface SessionListing {
    * The peer Host the session that started it is on, when it isn't this one.
    */
   startedByHost?: string | null;
+  /**
+   * The client whose `session/create` or `session/attach` opened it last, while it's open:
+   * a paired device's names its `device`. Absent for one a headless run or a Host taking it
+   * up opened.
+   */
+  openedBy?: TurnOrigin | null;
+  /**
+   * When it opened last, while it's open.
+   */
+  openedAt?: number | null;
 }
 /**
  * As ACP lists it: id, directory, title, last update.
@@ -6368,6 +6383,12 @@ export interface TerminalStreamOpen {
    * `weave-holder --version` names its own.
    */
   codec: string;
+  /**
+   * With a VT restore, the history above the screen too, for a client whose terminal
+   * keeps scrollback of its own, as `weave terminal attach` does. A holder from before
+   * it sends the screen alone.
+   */
+  history?: boolean;
 }
 /**
  * The client's size, which is the terminal's once the client types.

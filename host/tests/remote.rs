@@ -582,10 +582,15 @@ async fn remote_clients_do_everything_but_administer_the_host() {
             break;
         }
     }
-    // Prompted, the watched session appears.
+    // Prompted, the watched session appears, opened by the device (WVE-167).
     loop {
         if let HostEvent::SessionUpdated(updated) = next(&mut events).await {
             assert_eq!(updated.session.info.session_id, state.session_id);
+            let Some(TurnOrigin::Client { device, .. }) = &updated.session.opened_by else {
+                panic!("opened by a client: {:?}", updated.session);
+            };
+            assert_eq!(device.as_deref(), Some("Jaco's iPad"));
+            assert!(updated.session.opened_at.is_some());
             break;
         }
     }

@@ -399,7 +399,8 @@ struct Seen {
     /// Their positions.
     steered_seqs: Vec<u64>,
     ended: Option<StopReason>,
-    closed: Option<String>,
+    /// Why it closed, and who closed it.
+    closed: Option<(String, Option<TurnOrigin>)>,
     notices: Vec<String>,
     /// Titles the session was renamed to through the Host, and by whom.
     renamed: Vec<(String, Option<TurnOrigin>)>,
@@ -773,7 +774,7 @@ impl Seen {
                 };
                 return true;
             }
-            SessionEvent::Closed { reason } => self.closed = Some(reason),
+            SessionEvent::Closed { reason, by } => self.closed = Some((reason, by)),
             SessionEvent::Notice { text } => self.notices.push(text),
             SessionEvent::Renamed { title, by } => self.renamed.push((title, by)),
             SessionEvent::Queued { queued_id, .. } => self.queued.push(queued_id),
@@ -1879,7 +1880,7 @@ async fn closing_a_session_closes_it_for_every_client() {
     let reason = loop {
         if let HostEvent::Event(event) = client.next().await {
             match event.event {
-                SessionEvent::Closed { reason } => break reason,
+                SessionEvent::Closed { reason, .. } => break reason,
                 SessionEvent::TurnEnded { error, .. } => failed = error.is_some(),
                 _ => {}
             }
@@ -2322,6 +2323,56 @@ async fn the_configuration_decides_which_client_tools_agents_are_offered() {
     assert!(
         seen.agent.contains("unknown tool: clipboard_write"),
         "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn listings_say_who_opened_a_session_and_its_clients_hear_who_closed_it() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut opener = world.client(&daemon).await;
+    let session_id = opener.create(&world).await;
+    opener.prompt(&session_id, "hello").await;
+    opener.until_turn_ends(&mut Seen::default(), None).await;
+    let listed = opener
+        .connection
+        .send(ListSessionsRequest::default())
+        .await
+        .expect("sessions/list")
+        .sessions;
+    let listing = listed
+        .iter()
+        .find(|listing| listing.info.session_id == session_id)
+        .expect("listed");
+    assert!(
+        matches!(
+            &listing.opened_by,
+            Some(TurnOrigin::Client { id, .. }) if id == opener.connection.client_id()
+        ),
+        "{listing:?}"
+    );
+    assert!(listing.opened_at.is_some());
+
+    // Another client closes it for everyone, and the first hears who did.
+    let mut closer = world.client(&daemon).await;
+    closer.attach(&session_id).await;
+    closer
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+    let mut seen = Seen::default();
+    while seen.closed.is_none() {
+        let event = opener.next().await;
+        opener.note(event, &mut seen, None).await;
+    }
+    let (reason, by) = seen.closed.expect("closed");
+    assert_eq!(reason, "closed by a client");
+    assert!(
+        matches!(&by, Some(TurnOrigin::Client { id, .. }) if id == closer.connection.client_id()),
+        "{by:?}"
     );
 }
 

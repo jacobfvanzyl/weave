@@ -5,6 +5,7 @@ mod devices;
 mod exit;
 mod hosts;
 mod recent;
+mod rex_threads;
 mod run;
 mod service;
 mod sessions;

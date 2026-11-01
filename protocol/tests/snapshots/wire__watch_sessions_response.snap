@@ -21,7 +21,15 @@ expression: "round_trip(&WatchSessionsResponse { sessions: vec![listing()], })"
         "worktree": "/repo",
         "branch": "main",
         "remote": "github.com/jacobfvanzyl/weave"
-      }
+      },
+      "openedBy": {
+        "client": {
+          "name": "weave-app",
+          "id": "c9",
+          "device": "Jaco's iPad"
+        }
+      },
+      "openedAt": 1760180000500
     }
   ]
 }

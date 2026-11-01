@@ -366,6 +366,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         watch_pending: false,
         rex,
         panes: Vec::new(),
+        closed_elsewhere: false,
     };
     let startup = match opened {
         Some(opened) => {
@@ -395,6 +396,20 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         }
     }
     app.connection.shutdown().await;
+    if app.closed_elsewhere
+        && let Some(rex) = app.rex.clone()
+    {
+        // Its terminal panes go with it, their terminals still running, and then its own pane
+        // if nothing else is in its tab.
+        let panes = std::mem::take(&mut app.panes);
+        let _ = tokio::task::spawn_blocking(move || {
+            for pane in &panes {
+                let _ = rex.hide(&panes, &pane.terminal);
+            }
+            rex.close_if_alone();
+        })
+        .await;
+    }
     result.map(|()| Exit {
         resumable_session: chat.resumable_session().cloned(),
         turn_running: chat.turn_running(),
@@ -448,6 +463,9 @@ struct App {
     rex: Option<Rex>,
     /// The terminals' panes, in the order placed.
     panes: Vec<Pane>,
+    /// Another client closed the thread for everyone, so this TUI quits, and leaves Rex as it
+    /// found it.
+    closed_elsewhere: bool,
 }
 
 impl App {
@@ -726,10 +744,17 @@ impl App {
                     replayed,
                 }
             }
-            SessionEvent::Closed { reason } if !replayed => ChatEvent::SessionEnded {
-                session_id: root,
-                reason,
-            },
+            SessionEvent::Closed { reason, by } if !replayed => {
+                // Another client closed it for everyone: this TUI is done with it (WVE-167).
+                if closed_by_another(by.as_ref(), self.handle.client_id()) {
+                    self.closed_elsewhere = true;
+                    return vec![AppCommand::Quit];
+                }
+                ChatEvent::SessionEnded {
+                    session_id: root,
+                    reason,
+                }
+            }
             SessionEvent::Notice { text } => ChatEvent::Notice(text),
             SessionEvent::Renamed { title, by } => ChatEvent::Renamed {
                 title,
@@ -1660,6 +1685,12 @@ impl App {
     }
 }
 
+/// Whether another client closed a thread for everyone: the TUI quits then. Its own close, and
+/// one nobody asked for (its agent exited, its worktree went), leave it showing why.
+fn closed_by_another(by: Option<&TurnOrigin>, me: &str) -> bool {
+    matches!(by, Some(TurnOrigin::Client { id, .. }) if id != me)
+}
+
 /// Whether an agent can open a closed session again: by loading it, or resuming it.
 fn reopenable(capabilities: &AgentCapabilities) -> bool {
     capabilities.load_session || capabilities.session_capabilities.resume.is_some()
@@ -1892,4 +1923,22 @@ fn draw(tui: &mut Tui, chat: &mut ChatWidget) -> std::io::Result<()> {
             frame.set_cursor_position(cursor);
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn another_clients_close_quits_the_tui_and_nothing_else_does() {
+        let client = |id: &str| TurnOrigin::Client {
+            name: "weave-app".to_owned(),
+            id: id.to_owned(),
+            device: Some("iPad".to_owned()),
+        };
+        assert!(closed_by_another(Some(&client("c9")), "c1"));
+        assert!(!closed_by_another(Some(&client("c1")), "c1"));
+        assert!(!closed_by_another(None, "c1"));
+        assert!(!closed_by_another(Some(&TurnOrigin::Run {}), "c1"));
+    }
 }

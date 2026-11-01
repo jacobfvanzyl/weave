@@ -739,6 +739,7 @@ impl Shared {
             let _ = session
                 .finish(|done| Command::End {
                     reason: "its worktree was removed".to_owned(),
+                    by: None,
                     done,
                 })
                 .await;

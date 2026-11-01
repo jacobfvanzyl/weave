@@ -197,6 +197,7 @@ say once that it should be renamed. The file is owned by section:
 | --- | --- |
 | `default_agent`, `[agents.*]`, `[[mcp_servers]]`, `client_tools`, `host_tools`, `[delegation]` | the Host |
 | `[tui]`, `[daemon]` | clients on the same computer |
+| `[remote]`, `[rex]` | `weave daemon run`, the CLI that runs the Host |
 
 The Host reads its sections whenever it resolves an agent, so edits apply to the next
 session without a restart. `weave daemon run --config <file>` points the Host at another
@@ -396,8 +397,15 @@ type SessionListing = {
   git?: GitLocation;            // as the Host last read it while the session was open
   startedBy?: string;           // the session whose agent started it; see Delegated sessions
   startedByHost?: string;       // the peer Host that session is on; see Peer Hosts
+  openedBy?: TurnOrigin;        // open sessions: the client whose create or attach opened it last
+  openedAt?: number;            // and when
 };
 ```
+
+`openedBy` names the client whose `session/create`, or whose `session/attach` that took the
+session up, opened it last, a paired device's with its `device` (WVE-167). It's absent for a
+session a headless run or the Host itself opened. `weave daemon` opens a tab in Rex for the
+threads a device opens, with `[rex] open_threads` (see [The CLI](#the-cli)).
 
 `activity` (feature `turnIds`) lists only the open sessions doing that, `idle`, `running` or
 `waiting`, so a caller finds the sessions waiting on a person without reading each. `repo` or
@@ -580,7 +588,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `terminalOutput` | `terminalId`, `data` | a command the Host runs for the agent writes output |
 | `terminalExit` | `terminalId`, `status`: ACP `TerminalExitStatus` | that command exits |
 | `agentReopened` | `agent`: `SessionState.agent`, `previous?`: `{name, version}`, `modes?`, `configOptions`, `failed?` | the session's agent was started again (`session/reopen`); `failed` says why it runs `previous` again |
-| `closed` | `reason` | the session closes |
+| `closed` | `reason`, `by?`: `origin` | the session closes; `by` is the client whose `session/close` or `session/delete` closed it for everyone, absent when nobody did (its agent exited, it went idle, its worktree was removed) |
 | `notice` | `text` | the Host tells the session's clients something, such as that its agent can't use client tools |
 | `renamed` | `title`, `by?`: `origin` | the session was renamed through the Host (`session/rename`); `by` is the renaming client's origin, absent when the session's own agent renamed it (the `rename_session` Host tool) |
 | `queued` | `queuedId`, `prompt`: ACP `ContentBlock[]`, `origin` | a prompt joined the queue (`queue/add`) |
@@ -1281,7 +1289,9 @@ could be started.
 
 A ticket for the terminal's stream, good once, within 30 seconds. The stream then counts as the
 device that asked, so revoking the device closes it too (4000). A local client's ticket opens a
-stream on the Host's loopback WebSocket.
+stream on the Host's loopback WebSocket while it serves one, or on its terminal socket,
+`terminals.sock` beside its own socket, which it always serves when it has terminals: the same
+WebSocket over the Unix socket, from peers of the Host's user only (WVE-167).
 
 ### The terminal stream
 
@@ -1292,9 +1302,12 @@ the Host's remote listener. It uses subprotocol `weave-terminal` and the same `O
 Opening the stream:
 
 1. The client's first text frame is
-   `{"ticket", "size": {"cols", "rows"}, "codec"}`. `codec` names the Ghostty commit the
-   client's libghostty-vt was built from, and its snapshot format. libghostty-vt reports the same
-   version at every commit, so only the commit tells two builds apart.
+   `{"ticket", "size": {"cols", "rows"}, "codec", "history"?}`. `codec` names the Ghostty commit
+   the client's libghostty-vt was built from, and its snapshot format. libghostty-vt reports the
+   same version at every commit, so only the commit tells two builds apart. `history` asks for
+   the history above the screen in a `vt` restore too, and its resyncs, for a client whose own
+   terminal keeps scrollback, as `weave terminal attach` does; a holder from before it sends
+   the screen alone.
 2. The Host answers with `{"terminal": Terminal, "restore": "snapshot" | "vt", "restoreBytes"}`,
    `restoreBytes` saying how much restore follows before the output does, and `terminal` being
    the terminal as the restore has it, so a `vt` restore is drawn at its `size`. The Host sizes
@@ -1332,7 +1345,9 @@ Text frames from the Host:
 
 A stream whose ticket is missing, used, late or another device's is closed with 4010.
 
-Text frames from the client: `{"resize": {"cols", "rows"}}`.
+Text frames from the client: `{"resize": {"cols", "rows"}}`, and `{"resync": {}}`, which asks
+for a fresh restore, in a `resync`, for a client that stopped drawing while another device's
+size held. A holder from before it sends none.
 
 Output, restores and input:
 
@@ -1384,13 +1399,16 @@ The holder protocol:
 * Its methods are Rex's terminal methods under Rex's names: `format` (`text`, `vt` or `html`,
   with `trim` and `unwrap`), `write`, `resize`, `process`, `pwd`, `title`, `size`,
   `program_status`, `set_label`, `attach` and `close`. The holder adds `hello` (its protocol
-  version and codec), `describe` and `subscribe`.
+  version and codec), `describe`, `subscribe` and `resync`, which sends an attached client a
+  fresh restore after a `resync` event, dropping what it hadn't sent.
 * Its events are Rex's terminal events, with Rex's payloads: `child_exited`, `pwd_changed`,
   `title_changed`, `bell`, `process_changed`, `desktop_notification`, `progress_report`,
   `clipboard_written`, `program_status_changed` and `program_status_removed`. The holder adds
   `command_changed` (OSC 133), `size_changed`, `label_changed` and `resync`.
 * `attach` takes `restore`: `snapshot`, the default, or `vt` for a client of another codec, which
-  gets the formatter's VT of the visible screen, and its resyncs too. It answers
+  gets the formatter's VT of the visible screen, and its resyncs too; with `history`, the VT
+  holds the history above the screen as well, which a fresh terminal of the same size scrolls
+  into its own. It answers
   `{codec, restore, snapshot_bytes, terminal}`, then sends the restore and all later output, in
   order, with each `size_changed` where the terminal took the size.
 * `format` takes `format` (`text`, `vt` or `html`), `trim`, `unwrap` and `history`; without
@@ -1597,8 +1615,35 @@ there's one, and otherwise in `host-key.json`, 0600 (see [Peer Hosts](#peer-host
   `--no-daemon`, `-- <command>` still works, as a config agent the in-process Host is given
   at startup.
 
+- `/thread`'s panel lists the thread's worktree's terminals too (`terminals/watch`), the
+  thread's own first (`openedFrom`), and manages them (WVE-167): in Rex, Enter shows one in a
+  pane running `weave terminal attach`, or focuses its pane, `h` hides it there, `n` starts one
+  (`terminals/new`) and shows it, `r` renames one and `x` ends one once confirmed; Alt+1 to
+  Alt+9 show one without the panel. The first pane goes to the right of the TUI and later ones
+  below it, and the TUI keeps which pane shows which terminal, so a `/reload` finds them again.
+  Outside Rex, Enter reads a terminal's screen as text (`terminals/format`) and `t` types a line
+  into it (`terminals/write`).
+- A `closed` event whose `by` is another client quits the TUI: another device closed the thread
+  for everyone. In Rex it hides the terminal panes it placed first, and closes its own pane when
+  nothing else is in its tab.
+
 ### The CLI
 
+- `weave terminal attach <id>` shows a terminal in the terminal it runs in, as the TUI's Rex
+  panes do: it opens the stream on `terminals.sock` with `history`, writes the VT restore and
+  the output to stdout, with the program's queries, OSC 52, 9 and 777, and kitty graphics left
+  out, and the Host's clipboard and notification frames written in their place, and sends its
+  input and size. While another device's size holds it draws nothing and says so; typing takes
+  the size back, and it asks for a `resync`. It attaches again after a Host restart, and exits
+  when the terminal does (ADR 0022, amended).
+- With `[rex] open_threads = true`, a Host running as a service opens the threads a paired
+  device opens in the Rex on its computer (ADR 0025): `weave daemon` watches every thread
+  (`sessions/watch`) through a client of its own, and for a listing whose `openedBy` names a
+  `device`, once per `openedAt`, makes a tab running `weave --resume <id>` in the Rex session
+  named for its repository, labelled and renamed with the thread's title, never taking focus.
+  It keeps which tab shows which thread in `rex-threads.json` beside the journals, so a tab
+  still in Rex isn't doubled, and acts only when `rex whoami` names a local socket, never
+  starting a Rex server.
 - `weave run`, `weave sessions` (`cancel`, `close`) and `weave daemon status|stop` use
   `session/run`, `sessions/list`, `turn/cancel`, `session/close`, `host/status` and
   `host/shutdown`.

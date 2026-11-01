@@ -305,6 +305,8 @@ pub(crate) enum Command {
     /// Close the session for good, as when it's deleted.
     End {
         reason: String,
+        /// The client that closed it for everyone, if one did.
+        by: Option<TurnOrigin>,
         done: oneshot::Sender<()>,
     },
     /// Stop the agent but leave the session recoverable: the Host is stopping.
@@ -330,8 +332,9 @@ pub(crate) enum Command {
     WithdrawClientTool {
         call: u64,
     },
-    /// Its agent's MCP servers changed: the agent spoke to the Host MCP server, say.
-    McpServersChanged,
+    /// Its summary changed outside the task: its agent spoke to the Host MCP server, say, or a
+    /// client opened it.
+    SummaryChanged,
     /// Tell the session's clients something, in the journal.
     Notice {
         text: String,
@@ -388,6 +391,8 @@ pub(crate) struct Summary {
     pub(crate) turn_from_peer: Option<String>,
     /// The name of its agent process ([`crate::AGENT_PROCESS_VARIABLE`]).
     pub(crate) agent_process: String,
+    /// The client that opened it last, and when.
+    pub(crate) opened: Option<(TurnOrigin, u64)>,
 }
 
 impl Summary {
@@ -405,6 +410,8 @@ impl Summary {
             git: self.git.clone(),
             started_by: self.started_by.clone(),
             started_by_host: self.started_by_host.clone(),
+            opened_by: self.opened.as_ref().map(|(by, _)| by.clone()),
+            opened_at: self.opened.as_ref().map(|(_, at)| *at),
         }
     }
 }
@@ -441,6 +448,12 @@ impl SessionHandle {
 
     pub(crate) fn summary(&self) -> Summary {
         lock(&self.summary).clone()
+    }
+
+    /// `by` opened it: listings say so from now on.
+    pub(crate) fn opened_by(&self, by: TurnOrigin) {
+        lock(&self.summary).opened = Some((by, now_ms()));
+        let _ = self.send(Command::SummaryChanged);
     }
 
     /// Whether the session is blank: `session/create` opened it, and nobody has prompted it.
@@ -527,6 +540,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         started_by_host: started_by_host.clone(),
         turn_from_peer: None,
         agent_process: instance.process.clone(),
+        opened: None,
     }));
     let Instance {
         agent_id: _,
@@ -599,6 +613,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         summary,
         renamed: title,
         reported: Reported::default(),
+        closed_by: None,
         blank,
         idle_since: None,
         close_when_unused: false,
@@ -720,6 +735,8 @@ struct Reported {
     blank: Option<bool>,
     git: Option<GitLocation>,
     mcp_servers: Option<Vec<McpServerStatus>>,
+    /// When it last opened: watchers hear of it, attached clients don't.
+    opened_at: Option<u64>,
 }
 
 struct Actor {
@@ -769,6 +786,8 @@ struct Actor {
     /// replace.
     renamed: Option<String>,
     reported: Reported,
+    /// The client closing it for everyone, for the journal's `closed`.
+    closed_by: Option<TurnOrigin>,
     /// Whether the session is blank; see [`SessionHandle::is_blank`].
     blank: Arc<AtomicBool>,
     /// When nothing last needed the session; it closes once that's the idle grace ago.
@@ -941,8 +960,9 @@ impl Actor {
                     let _ = done.send(());
                 }
             }
-            Command::End { reason, done } => {
+            Command::End { reason, by, done } => {
                 self.waiting.push(done);
+                self.closed_by = by;
                 self.stop(Ending::Closed(reason));
             }
             Command::Suspend { done } => {
@@ -966,7 +986,7 @@ impl Actor {
                     pending.withdrawn();
                 }
             }
-            Command::McpServersChanged => self.update_summary(),
+            Command::SummaryChanged => self.update_summary(),
             Command::Notice { text } => {
                 self.record(Entry::Notice { text });
             }
@@ -1736,12 +1756,16 @@ impl Actor {
             }) => Some(host.clone()),
             _ => None,
         };
-        let (title, git) = {
+        let (title, git, opened_at) = {
             let mut summary = lock(&self.summary);
             summary.clients = clients;
             summary.activity = activity;
             summary.turn_from_peer = turn_from_peer;
-            (summary.title.clone(), summary.git.clone())
+            (
+                summary.title.clone(),
+                summary.git.clone(),
+                summary.opened.as_ref().map(|(_, at)| *at),
+            )
         };
         let now = Reported {
             activity: Some(activity),
@@ -1750,6 +1774,7 @@ impl Actor {
             blank: Some(self.blank.load(Ordering::Relaxed)),
             git,
             mcp_servers: Some(self.servers.statuses()),
+            opened_at,
         };
         if now == self.reported {
             return;
@@ -1838,9 +1863,11 @@ impl Actor {
                 self.record(Entry::turn_ended(session_id, &Err(error.clone())));
             }
             self.resolve_where(pending_all, Resolution::Cancelled);
+            let by = self.closed_by.take();
             self.record(Entry::Closed {
                 reason,
                 at_ms: now_ms(),
+                by,
             });
         }
         if matches!(ending, Ending::Closed(_)) {

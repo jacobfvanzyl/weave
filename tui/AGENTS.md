@@ -60,7 +60,13 @@ opens are kept here and go to the Host once it's open (`send_kept_messages`);
 `/new`, `/reload`, `/exit` (`/quit` too), `/rename`, `/subagents`, `/thread` and `/update` are
 the TUI's own slash commands (`/thread` opens `thread_panel`, the thread's status in place of the
 composer: its MCP servers as the Host reports them, from `SessionState` and `session/changed`,
-with a pointer to the agent's own `/mcp` when it offers one, WVE-160), offered with the agent's and handled locally (`/exit` and Ctrl+C twice quit
+with a pointer to the agent's own `/mcp` when it offers one, WVE-160, and its worktree's
+terminals from `terminals/watch`, which the panel manages, WVE-167: in Rex, `rex` shows each in a
+pane of its own running `weave terminal attach`, to the right of the TUI and then stacked
+below, focuses, hides and records them in `$XDG_STATE_HOME/weave/rex-panes.json`, all off the
+UI thread, and Alt+1 to Alt+9 show one; outside Rex the panel reads a terminal's screen into the
+transcript and types into it; a `closed` event naming another client quits the TUI, hiding its
+panes and closing its own when it's alone in its tab, ADR 0025), offered with the agent's and handled locally (`/exit` and Ctrl+C twice quit
 closing the thread once nothing else needs it, if its agent can load or resume it again, while
 Ctrl+D quits leaving it open in the weave Host (WVE-159);
 `/reload` ends the TUI and the CLI execs its own

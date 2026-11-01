@@ -233,6 +233,14 @@ pub struct SessionListing {
     /// The peer Host the session that started it is on, when it isn't this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by_host: Option<String>,
+    /// The client whose `session/create` or `session/attach` opened it last, while it's open:
+    /// a paired device's names its `device`. Absent for one a headless run or a Host taking it
+    /// up opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_by: Option<TurnOrigin>,
+    /// When it opened last, while it's open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_at: Option<Timestamp>,
 }
 
 /// `sessions/list`. Without an agent: the sessions the Host has a journal for, across

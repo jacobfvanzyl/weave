@@ -199,7 +199,9 @@ impl Follower {
                     {
                         return Ok(Some(Outcome::Removed));
                     }
-                    SessionEvent::Closed { reason } => return Ok(Some(Outcome::Closed(reason))),
+                    SessionEvent::Closed { reason, .. } => {
+                        return Ok(Some(Outcome::Closed(reason)));
+                    }
                     _ => {}
                 }
                 Ok(self.waiting())

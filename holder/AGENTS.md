@@ -82,7 +82,9 @@ Host finds it again by. Both are removed when the program exits, which ends the 
 - The protocol is in `src/protocol.rs` (framing, Rex's request and answer shapes) and
   `src/event.rs` (Rex's terminal events and weave's additions).
 - Threads share one lock around the terminal.
-- Each client has an outbox. One that falls 4 MiB behind gets `resync` and a fresh snapshot.
+- Each client has an outbox. One that falls 4 MiB behind gets `resync` and a fresh snapshot, or
+  the VT it attached for, with the history when it asked (`attach`'s `history`, WVE-167); a
+  client asks for one itself with `resync`.
 - Only the socket's owner may connect.
 - Told to stop (SIGTERM, SIGINT, SIGHUP), the holder hangs its program up and ends with it.
 

@@ -17,6 +17,7 @@ pub struct Config {
     pub daemon: DaemonSettings,
     /// Remote clients: the Host takes them only when the file has a `[remote]`.
     pub remote: Option<RemoteSettings>,
+    pub rex: RexSettings,
     /// Worth telling the user: the file read is `tui.toml`, which should be renamed.
     pub notice: Option<String>,
 }
@@ -28,6 +29,16 @@ pub struct DaemonSettings {
     /// Run agents in the daemon, so sessions outlive the TUI (default true). Without it each
     /// `weave` runs its own, as `--no-daemon` does.
     pub enabled: Option<bool>,
+}
+
+/// Threads opened from the app, as tabs in the Rex on this computer, each running the TUI on its
+/// thread (WVE-167, ADR 0025).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RexSettings {
+    /// Open one when a paired device opens or resumes a thread (default false). Only a Host
+    /// running as a service does: it keeps a client of its own connected.
+    pub open_threads: Option<bool>,
 }
 
 /// Where the Host listens for remote clients, which reach it through Tailscale Serve
@@ -123,6 +134,7 @@ impl Config {
         Ok(Self {
             tui: section(&loaded.config.tui, "tui")?,
             daemon: section(&loaded.config.daemon, "daemon")?,
+            rex: section(&loaded.config.rex, "rex")?,
             remote: loaded
                 .config
                 .remote

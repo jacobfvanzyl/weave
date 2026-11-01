@@ -16,8 +16,20 @@ signs in through the Host (`agents/authenticate`, or `agents/terminalSignIn` and
 run in this terminal), then retries.
 Agents and MCP servers come from `~/.config/weave/config.toml` (read from `tui.toml` while only
 that exists; see `../agents/src/config.rs`), whose `[tui]` and `[daemon]` are the CLI's
-(`src/config.rs`), as is `[remote]`, optional overrides for remote access (port, URL,
-other origins) that `weave daemon run` reads (a restart picks up a change).
+(`src/config.rs`), as are `[remote]`, optional overrides for remote access (port, URL,
+other origins) that `weave daemon run` reads (a restart picks up a change), and `[rex]`.
+
+`weave terminal attach <id>` (`src/terminal.rs`, WVE-167) shows one of the Host's terminals in
+the terminal it runs in, as the TUI's Rex panes do: the stream on the Host's `terminals.sock`,
+its VT restore with history and the output to stdout through `terminal/filter.rs`, which leaves
+out queries the holder answers, OSC 52, 9 and 777, and kitty graphics, byte for byte otherwise
+and across chunks, and stdin back as input, read on a thread of its own so the process can exit.
+While another device's size holds it draws nothing and says so, and typing takes the size back
+with a `resync`. With `[rex] open_threads = true`, `weave daemon run` as a service runs
+`src/rex_threads.rs` beside the Host (ADR 0025): an in-process client that watches every thread
+and gives the ones a paired device opens a tab in this computer's Rex, running `weave --resume
+<id>` in the session named for the thread's repository, kept in `rex-threads.json` beside the
+journals.
 
 ```bash
 ./target/debug/weave run --approve read,edit "fix the tests" --agent <id>   # headless, in the Host

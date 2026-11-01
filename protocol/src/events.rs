@@ -106,8 +106,13 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failed: Option<String>,
     },
-    /// The session closed.
-    Closed { reason: String },
+    /// The session closed. `by` is the client whose `session/close` or `session/delete` closed
+    /// it for everyone; absent when nobody did, as when its agent exited.
+    Closed {
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
     /// The session was renamed through the Host (`session/rename`, or the `rename_session` Host
     /// tool). Its title is the Host's from then on: titles the agent sends later don't replace
     /// it.

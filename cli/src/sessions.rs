@@ -650,6 +650,8 @@ mod tests {
             git: None,
             started_by: None,
             started_by_host: None,
+            opened_by: None,
+            opened_at: None,
         };
         assert_eq!(
             describe(std::slice::from_ref(&session), 7_230_000),

@@ -1441,6 +1441,7 @@ impl Connection {
             servers,
             git,
         )?;
+        session.opened_by(self.origin(&self.hello_info()?));
         let trace = self.trace(&session, request.trace)?;
         updates::look_for_update(&self.shared, &session);
         Ok(Ready {
@@ -1522,6 +1523,7 @@ impl Connection {
         .await
         {
             Ok(session) => {
+                session.opened_by(self.origin(&self.hello_info()?));
                 let trace = self.trace(&session, request.trace)?;
                 updates::look_for_update(&self.shared, &session);
                 Ok(Ready {
@@ -1607,11 +1609,13 @@ impl Connection {
     }
 
     async fn close(&self, request: CloseSessionRequest) -> Result<Empty, Error> {
-        self.hello_info()?;
+        let hello = self.hello_info()?;
         let session = self.live(&request.session_id)?;
+        let by = Some(self.origin(&hello));
         session
             .finish(|done| Command::End {
                 reason: "closed by a client".to_owned(),
+                by,
                 done,
             })
             .await?;
@@ -1631,7 +1635,7 @@ impl Connection {
     }
 
     async fn delete(&self, request: DeleteSessionRequest) -> Result<Empty, Error> {
-        self.hello_info()?;
+        let hello = self.hello_info()?;
         let session_id = request.session_id;
         let live = self.shared.registry().live(&session_id);
         let known = self.shared.registry().known.get(&session_id).cloned();
@@ -1647,9 +1651,11 @@ impl Connection {
             .or(request.agent_id)
             .ok_or_else(|| errors::unknown_session(&session_id.to_string()))?;
         if let Some(session) = live {
+            let by = Some(self.origin(&hello));
             let _ = session
                 .finish(|done| Command::End {
                     reason: "deleted".to_owned(),
+                    by,
                     done,
                 })
                 .await;
@@ -2192,6 +2198,8 @@ async fn agent_sessions(
                 started_by_host: known
                     .get(&info.session_id)
                     .and_then(|recorded| recorded.started_by_host.clone()),
+                opened_by: None,
+                opened_at: None,
                 info,
                 agent_id: agent.id.clone(),
                 state,
@@ -2290,6 +2298,8 @@ pub(crate) fn dormant(
         git: recorded.git.clone(),
         started_by: recorded.started_by.clone(),
         started_by_host: recorded.started_by_host.clone(),
+        opened_by: None,
+        opened_at: None,
     }
 }
 

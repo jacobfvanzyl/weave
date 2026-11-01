@@ -846,6 +846,26 @@ expression: schema()
             "null"
           ],
           "description": "The peer Host the session that started it is on, when it isn't this one."
+        },
+        "openedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The client whose `session/create` or `session/attach` opened it last, while it's open:\na paired device's names its `device`. Absent for one a headless run or a Host taking it\nup opened."
+        },
+        "openedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it opened last, while it's open."
         }
       },
       "required": [
@@ -977,6 +997,94 @@ expression: schema()
         "worktree"
       ],
       "description": "Where in a git repository a session's directory is, as the Host last read it: when the\nsession opened, and again after each of its turns."
+    },
+    "TurnOrigin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "client": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "device": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "client"
+          ],
+          "additionalProperties": false,
+          "description": "A client's prompt: its name, and its connection, so it knows its own prompts. A\nremote client's names its device too."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "run"
+          ],
+          "additionalProperties": false,
+          "description": "A headless run."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "host": {
+                  "description": "The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "hostName": {
+                  "description": "What this Host calls that Host: the name it paired with, for clients to show.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "report": {
+                  "description": "The Host's report on that session, of how a turn this session's agent began there\nended or that it waits on a person. Nobody hears how a report's turn ends.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "sessionId"
+              ]
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false,
+          "description": "Another session: one whose agent began the turn through a Host tool, or, in a report,\nthe session the Host reports on (ADR 0023)."
+        }
+      ],
+      "description": "Who started a turn."
     },
     "DrainRequest": {
       "type": "object",
@@ -2768,94 +2876,6 @@ expression: schema()
         "resource"
       ],
       "description": "The contents of a resource, embedded into a prompt or tool call result."
-    },
-    "TurnOrigin": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "client": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "id": {
-                  "type": "string"
-                },
-                "device": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "name",
-                "id"
-              ]
-            }
-          },
-          "required": [
-            "client"
-          ],
-          "additionalProperties": false,
-          "description": "A client's prompt: its name, and its connection, so it knows its own prompts. A\nremote client's names its device too."
-        },
-        {
-          "type": "object",
-          "properties": {
-            "run": {
-              "type": "object"
-            }
-          },
-          "required": [
-            "run"
-          ],
-          "additionalProperties": false,
-          "description": "A headless run."
-        },
-        {
-          "type": "object",
-          "properties": {
-            "session": {
-              "type": "object",
-              "properties": {
-                "sessionId": {
-                  "$ref": "#/$defs/SessionId"
-                },
-                "host": {
-                  "description": "The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).",
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "hostName": {
-                  "description": "What this Host calls that Host: the name it paired with, for clients to show.",
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "report": {
-                  "description": "The Host's report on that session, of how a turn this session's agent began there\nended or that it waits on a person. Nobody hears how a report's turn ends.",
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "sessionId"
-              ]
-            }
-          },
-          "required": [
-            "session"
-          ],
-          "additionalProperties": false,
-          "description": "Another session: one whose agent began the turn through a Host tool, or, in a report,\nthe session the Host reports on (ADR 0023)."
-        }
-      ],
-      "description": "Who started a turn."
     },
     "PromptResponse": {
       "type": "object",
@@ -7449,6 +7469,16 @@ expression: schema()
             "reason": {
               "type": "string"
             },
+            "by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "kind": {
               "type": "string",
               "const": "closed"
@@ -7458,7 +7488,7 @@ expression: schema()
             "kind",
             "reason"
           ],
-          "description": "The session closed."
+          "description": "The session closed. `by` is the client whose `session/close` or `session/delete` closed\nit for everyone; absent when nobody did, as when its agent exited."
         },
         {
           "type": "object",

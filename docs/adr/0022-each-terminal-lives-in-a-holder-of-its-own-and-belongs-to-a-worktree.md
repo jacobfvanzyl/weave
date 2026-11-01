@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; terminals at the desk, as Rex panes beside the TUI, amended on 2026-11-01 (WVE-167)
 date: 2026-10-25
 ---
 
@@ -54,3 +54,19 @@ The Host protocol's terminal methods use the same concepts and names. When Rex l
 - Each attached terminal streams over a WebSocket of its own, so a flood of output has its own flow control and can't trip the thread connection's fell-behind limit.
 - Host-run terminals, the commands an agent runs through ACP's `terminal/create`, are unchanged: they belong to the agent's tool call.
 - Some things come later: `weave terminal attach`, so a cmux or Rex pane at the desk joins the same shell, and a Host tool for agents to read a worktree's terminals, decided against ADR 0020.
+
+## Amended 2026-11-01: terminals at the desk (WVE-167)
+
+The TUI shows a worktree's terminals too, as Rex panes in its own tab, with holders still their owners. Its thread panel manages them: it lists them, the thread's own first, and starts, names and ends them. A Rex pane is only a place to show one. It runs `weave terminal attach <id>`, which ADR 0022 left for later, and closing it hides the terminal at the desk while it keeps running for every device. The panel shows a terminal in a pane on request, never on its own: the first goes to the right of the TUI, later ones below it in a column. Outside Rex, the panel is the text floor: it reads a terminal's screen as text and types into it.
+
+`weave terminal attach` has no emulator of its own, so the terminal it runs in becomes a second emulator beside the holder's, which changes the passage above for this client:
+
+1. The holder's libghostty-vt still answers every query. The attach leaves the program's queries out of the output before its terminal sees them, so nothing answers twice.
+2. Clipboard writes (OSC 52) and notifications (OSC 9 and OSC 777) still reach a device through the Host, so the attach leaves them out too and writes the Host's own frames. Kitty graphics are left out, as the app leaves them undrawn, since a terminal that drew them would answer them as well.
+3. The size still follows the last device to type, but a pane can't clip as the app does. While another device's size holds, the attach draws nothing and says so. Typing there takes the size back, and a fresh restore follows.
+4. Its restores are the formatter's VT, as for any client of another codec, with the history above the screen, so its terminal's scrollback fills too.
+
+Local clients get the terminal stream on a socket of the Host's own, `terminals.sock` beside its socket, since its WebSocket listens only while remote access is on. The stream is the same.
+
+Rex blocks as owners stay later work. Rex's API (revision 7) now streams a block to another program (`data.connect`), but the data connection's frames aren't documented, its shell blocks take no environment beyond `PATH` (WVE-141) and report no OSC 133, its blocks don't move between sessions, and the terminals the app opens would still need `weave terminal attach`.
+
