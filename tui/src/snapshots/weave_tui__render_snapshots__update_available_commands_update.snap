@@ -12,6 +12,6 @@ expression: screen(&mut chat)
 › /new     Start a new thread in this directory
   /reload  Restart this TUI, picking up a rebuilt weave, and reattach
   /exit    Quit and close this thread (also /quit)
-  /thread  Show this thread's status: its MCP servers
+  /thread  Show this thread's status: its MCP servers and terminals
   /review  Review the current changes
   /test    Run the test suite

@@ -63,6 +63,16 @@ use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
 use weave_host_protocol::sessions::TurnOrigin;
+use weave_host_protocol::terminals::CloseTerminalRequest;
+use weave_host_protocol::terminals::FEATURE as TERMINALS_FEATURE;
+use weave_host_protocol::terminals::FormatTerminalRequest;
+use weave_host_protocol::terminals::NewTerminalRequest;
+use weave_host_protocol::terminals::SetTerminalLabelRequest;
+use weave_host_protocol::terminals::Terminal;
+use weave_host_protocol::terminals::TerminalFormat;
+use weave_host_protocol::terminals::UnwatchTerminalsRequest;
+use weave_host_protocol::terminals::WatchTerminalsRequest;
+use weave_host_protocol::terminals::WriteTerminalRequest;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::CancelTurnRequest;
@@ -85,6 +95,8 @@ use crate::input::Input;
 use crate::links;
 use crate::markdown;
 use crate::markdown::Rendering;
+use crate::rex::Pane;
+use crate::rex::Rex;
 use crate::runs;
 use crate::session::OpenedSession;
 use crate::session::SessionTarget;
@@ -217,6 +229,16 @@ enum AppEvent {
     Unqueued(Vec<String>),
     /// `/queue` failed.
     ResumeFailed(Error),
+    /// The worktree's terminals, as `terminals/watch` answered: its scope and its terminals.
+    TerminalsWatched(Result<(PathBuf, Vec<Terminal>), Error>),
+    /// The terminals' Rex panes now, or why Rex didn't do what was asked.
+    Panes(Result<Vec<Pane>, String>),
+    /// A terminal the thread panel started, to show.
+    TerminalStarted(Result<Terminal, Error>),
+    /// A terminal's screen as text, by its id, or why it couldn't be read.
+    TerminalRead(String, Result<String, String>),
+    /// Something asked of a terminal failed.
+    TerminalFailed(String),
 }
 
 /// Why a session is being opened, for when the Host answers.
@@ -289,6 +311,13 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .features
         .iter()
         .any(|feature| feature == MCP_SERVERS_FEATURE);
+    let has_terminals = connection
+        .hello()
+        .features
+        .iter()
+        .any(|feature| feature == TERMINALS_FEATURE);
+    // Terminals show in Rex panes only when another process can attach to the Host's.
+    let rex = (has_terminals && detachable).then(Rex::detect).flatten();
     let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
     // The session works where the Host says, and so does this client.
@@ -303,6 +332,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .with_rename(renamable)
         .with_host_queue(queueable)
         .with_mcp_servers(reports_mcp_servers)
+        .with_rex(rex.is_some())
         .with_thumbnails(tui.shows_images());
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
@@ -331,6 +361,11 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         replay_until: None,
         decoding: Arc::new(Semaphore::new(1)),
         dismissed,
+        has_terminals,
+        watched: None,
+        watch_pending: false,
+        rex,
+        panes: Vec::new(),
     };
     let startup = match opened {
         Some(opened) => {
@@ -403,6 +438,16 @@ struct App {
     decoding: Arc<Semaphore>,
     /// The versions whose update notice the user dismissed.
     dismissed: Dismissed,
+    /// The Host has terminals (feature `terminals`).
+    has_terminals: bool,
+    /// The worktree whose terminals this client watches.
+    watched: Option<PathBuf>,
+    /// Watch them once the app runs: a session opened before it did.
+    watch_pending: bool,
+    /// The Rex pane this TUI runs in, which shows terminals in panes beside it.
+    rex: Option<Rex>,
+    /// The terminals' panes, in the order placed.
+    panes: Vec<Pane>,
 }
 
 impl App {
@@ -416,6 +461,10 @@ impl App {
         let mut input = Input::start();
         let (app_tx, mut app_events) = mpsc::unbounded_channel();
         self.results = Some(app_tx);
+        self.find_panes();
+        if std::mem::take(&mut self.watch_pending) {
+            self.watch_terminals();
+        }
         let mut frames = tokio::time::interval(FRAME_INTERVAL);
         frames.set_missed_tick_behavior(MissedTickBehavior::Skip);
         if self.execute(tui, chat, startup) {
@@ -514,12 +563,24 @@ impl App {
                 }
                 Vec::new()
             }
+            HostEvent::TerminalUpdated(updated) => {
+                if self.watched.as_ref() == Some(&updated.terminal.scope) {
+                    chat.terminal_updated(updated.terminal);
+                }
+                Vec::new()
+            }
+            HostEvent::TerminalRemoved(removed) => {
+                if self.watched.as_ref() == Some(&removed.scope) {
+                    chat.terminal_removed(&removed.id);
+                }
+                // Its pane closes as its attach ends.
+                self.panes.retain(|pane| pane.terminal != removed.id);
+                Vec::new()
+            }
             // The TUI makes no pairing offers, and watches no sessions.
             HostEvent::DevicePaired(_)
             | HostEvent::SessionUpdated(_)
-            | HostEvent::SessionRemoved(_)
-            | HostEvent::TerminalUpdated(_)
-            | HostEvent::TerminalRemoved(_) => Vec::new(),
+            | HostEvent::SessionRemoved(_) => Vec::new(),
             HostEvent::UpdateAvailable(notification) => {
                 if chat.active_session() == Some(&notification.session_id) {
                     chat.update_available(notification.update);
@@ -728,6 +789,9 @@ impl App {
                     return self.session_opened(chat, &opened);
                 }
                 self.track(chat, &opened);
+                // A restarted Host has no watchers.
+                self.watched = None;
+                self.watch_terminals();
                 self.agent_changed(chat, &opened.state.agent);
                 chat.reattached(OpenedSession::from_state(
                     &opened.state,
@@ -764,9 +828,57 @@ impl App {
             chat.update_available(update);
         }
         self.track(chat, opened);
+        self.watch_terminals();
         let mut commands = self.show_state(chat, &opened.state);
         commands.extend(chat.send_kept_messages());
         commands
+    }
+
+    /// Watch the open thread's worktree's terminals, letting go of the last one's.
+    fn watch_terminals(&mut self) {
+        if !self.has_terminals {
+            return;
+        }
+        if self.results.is_none() {
+            self.watch_pending = true;
+            return;
+        }
+        let handle = self.handle.clone();
+        let previous = self.watched.take();
+        let directory = self.cwd.clone();
+        self.spawn(async move {
+            if let Some(scope) = previous {
+                let _ = handle.send(UnwatchTerminalsRequest { scope }).await;
+            }
+            let watched = handle.send(WatchTerminalsRequest { directory }).await;
+            AppEvent::TerminalsWatched(watched.map(|answer| (answer.scope, answer.terminals)))
+        });
+    }
+
+    /// The panes this TUI placed before a `/reload`, which Rex still has.
+    fn find_panes(&self) {
+        let Some(rex) = self.rex.clone() else {
+            return;
+        };
+        self.spawn(async move {
+            let placed = tokio::task::spawn_blocking(move || rex.placed()).await;
+            AppEvent::Panes(placed.map_err(|error| error.to_string()))
+        });
+    }
+
+    /// Run `act` on the Rex panes off the UI thread; what it leaves comes back as panes.
+    fn on_panes(
+        &self,
+        act: impl FnOnce(&Rex, &[Pane]) -> Result<Vec<Pane>, String> + Send + 'static,
+    ) {
+        let Some(rex) = self.rex.clone() else {
+            return;
+        };
+        let panes = self.panes.clone();
+        self.spawn(async move {
+            let done = tokio::task::spawn_blocking(move || act(&rex, &panes)).await;
+            AppEvent::Panes(done.unwrap_or_else(|error| Err(error.to_string())))
+        });
     }
 
     /// Follow what the session's agent says about itself: what prompts may carry, and
@@ -899,6 +1011,46 @@ impl App {
             }
             AppEvent::SessionDeleted(session_id, result) => {
                 chat.session_deleted(&session_id, result);
+                Vec::new()
+            }
+            AppEvent::TerminalsWatched(Ok((scope, terminals))) => {
+                self.watched = Some(scope);
+                chat.set_terminals(terminals);
+                Vec::new()
+            }
+            AppEvent::TerminalsWatched(Err(error)) => {
+                tracing::debug!(%error, "couldn't watch the worktree's terminals");
+                Vec::new()
+            }
+            AppEvent::Panes(Ok(panes)) => {
+                chat.set_shown_terminals(panes.iter().map(|pane| pane.terminal.clone()).collect());
+                self.panes = panes;
+                Vec::new()
+            }
+            AppEvent::Panes(Err(why)) => {
+                chat.report_info(&format!("Rex didn't show the terminal: {why}"));
+                Vec::new()
+            }
+            AppEvent::TerminalStarted(Ok(terminal)) => {
+                let (id, label) = (terminal.id.clone(), crate::thread_panel::name(&terminal));
+                chat.terminal_updated(terminal);
+                if self.rex.is_some() {
+                    vec![AppCommand::ShowTerminal { id, label }]
+                } else {
+                    chat.report_info(&format!("Started terminal {label}"));
+                    Vec::new()
+                }
+            }
+            AppEvent::TerminalStarted(Err(error)) => {
+                chat.report_info(&format!("Couldn't start a terminal: {error}"));
+                Vec::new()
+            }
+            AppEvent::TerminalRead(id, screen) => {
+                chat.terminal_read(&id, screen);
+                Vec::new()
+            }
+            AppEvent::TerminalFailed(why) => {
+                chat.report_info(&why);
                 Vec::new()
             }
             AppEvent::PromptFailed(error) => {
@@ -1101,6 +1253,80 @@ impl App {
                 }
                 AppCommand::OpenSession { target, title, cwd } => {
                     queue.extend(self.open_session(chat, target, title, cwd));
+                }
+                AppCommand::ShowTerminal { id, label } => {
+                    self.on_panes(move |rex, panes| rex.show(panes, &id, &label));
+                }
+                AppCommand::HideTerminal(id) => {
+                    self.on_panes(move |rex, panes| rex.hide(panes, &id));
+                }
+                AppCommand::NewTerminal => {
+                    let handle = self.handle.clone();
+                    let request = NewTerminalRequest {
+                        directory: self.cwd.clone(),
+                        label: None,
+                        opened_from: chat.active_session().cloned(),
+                        command: None,
+                        size: None,
+                    };
+                    self.spawn(async move {
+                        AppEvent::TerminalStarted(
+                            handle.send(request).await.map(|answer| answer.terminal),
+                        )
+                    });
+                }
+                AppCommand::RenameTerminal { id, label } => {
+                    let handle = self.handle.clone();
+                    let label = Some(label.trim().to_owned()).filter(|label| !label.is_empty());
+                    self.spawn_unless_ok(async move {
+                        handle
+                            .send(SetTerminalLabelRequest { id, label })
+                            .await
+                            .err()
+                            .map(|error| {
+                                AppEvent::TerminalFailed(format!("Couldn't rename it: {error}"))
+                            })
+                    });
+                }
+                AppCommand::EndTerminal(id) => {
+                    let handle = self.handle.clone();
+                    self.spawn_unless_ok(async move {
+                        handle
+                            .send(CloseTerminalRequest { id })
+                            .await
+                            .err()
+                            .map(|error| {
+                                AppEvent::TerminalFailed(format!("Couldn't end it: {error}"))
+                            })
+                    });
+                }
+                AppCommand::ReadTerminal(id) => {
+                    let handle = self.handle.clone();
+                    self.spawn(async move {
+                        let read = handle
+                            .send(FormatTerminalRequest {
+                                id: id.clone(),
+                                format: TerminalFormat::Text,
+                                history: false,
+                                trim: true,
+                            })
+                            .await
+                            .map(|answer| answer.content)
+                            .map_err(|error| error.to_string());
+                        AppEvent::TerminalRead(id, read)
+                    });
+                }
+                AppCommand::WriteTerminal { id, text } => {
+                    let handle = self.handle.clone();
+                    self.spawn_unless_ok(async move {
+                        handle
+                            .send(WriteTerminalRequest { id, text })
+                            .await
+                            .err()
+                            .map(|error| {
+                                AppEvent::TerminalFailed(format!("Couldn't type into it: {error}"))
+                            })
+                    });
                 }
                 AppCommand::DeleteSession(session_id) => {
                     let handle = self.handle.clone();

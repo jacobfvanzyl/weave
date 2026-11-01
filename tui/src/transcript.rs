@@ -274,6 +274,12 @@ impl TranscriptCell {
         Self::new(move |width| history_cell::info(&text, width))
     }
 
+    /// A terminal's screen as text.
+    pub fn screen(title: &str, text: &str) -> Self {
+        let (title, text) = (title.to_owned(), text.to_owned());
+        Self::new(move |width| history_cell::screen(&title, &text, width))
+    }
+
     pub fn error(text: &str) -> Self {
         let text = text.to_owned();
         Self::new(move |width| history_cell::error(&text, width))

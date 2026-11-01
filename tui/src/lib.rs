@@ -32,6 +32,7 @@ mod permission;
 mod program_status;
 #[cfg(test)]
 mod render_snapshots;
+mod rex;
 mod runs;
 mod session;
 mod session_picker;

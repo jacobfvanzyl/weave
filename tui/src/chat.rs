@@ -5,6 +5,7 @@
 //! [`ChatWidget::take_history`], and protocol actions come back as [`AppCommand`]s.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -62,6 +63,7 @@ use weave_host_protocol::agents::AgentUpdate;
 use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
+use weave_host_protocol::terminals::Terminal;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnResponse;
 
@@ -238,6 +240,29 @@ pub enum AppCommand {
     /// Something needs the user, such as a finished turn or an approval; the app raises a
     /// desktop notification when the terminal isn't focused.
     Notify(String),
+    /// Show a terminal in a Rex pane beside the TUI, labelled `label`, or focus its pane.
+    ShowTerminal {
+        id: String,
+        label: String,
+    },
+    /// Close a terminal's Rex pane; the terminal keeps running.
+    HideTerminal(String),
+    /// `terminals/new` in the thread's directory, then show it.
+    NewTerminal,
+    /// `terminals/setLabel`; an empty label clears it.
+    RenameTerminal {
+        id: String,
+        label: String,
+    },
+    /// `terminals/close`, for every device.
+    EndTerminal(String),
+    /// `terminals/format`; the screen comes back through [`ChatWidget::terminal_read`].
+    ReadTerminal(String),
+    /// `terminals/write`.
+    WriteTerminal {
+        id: String,
+        text: String,
+    },
     /// Quit, leaving the session open in the weave Host: Ctrl+D.
     Quit,
     /// Quit, closing the session if nothing else needs it: `/exit`, `/quit`, Ctrl+C twice.
@@ -452,6 +477,12 @@ pub struct ChatWidget {
     mcp_servers: Option<Vec<McpServerStatus>>,
     /// The Host reports its sessions' MCP servers (feature `mcpServers`).
     reports_mcp_servers: bool,
+    /// The worktree's terminals, oldest first, once the Host lists them (feature `terminals`).
+    worktree_terminals: Option<Vec<Terminal>>,
+    /// The terminals shown in Rex panes beside this TUI.
+    shown_terminals: BTreeSet<String>,
+    /// The TUI runs in Rex, which shows terminals in panes.
+    in_rex: bool,
     /// Messages between this session and another, while they stream.
     messages: Vec<SessionMessageEntry>,
     /// In a subagent's own chat: what its parent is called.
@@ -623,6 +654,9 @@ impl ChatWidget {
             thread_panel: None,
             mcp_servers: None,
             reports_mcp_servers: false,
+            worktree_terminals: None,
+            shown_terminals: BTreeSet::new(),
+            in_rex: false,
             messages: Vec::new(),
             parent_label: None,
             updatable: false,
@@ -648,6 +682,55 @@ impl ChatWidget {
     pub fn with_mcp_servers(mut self, reports: bool) -> Self {
         self.reports_mcp_servers = reports;
         self
+    }
+
+    /// The TUI runs in Rex, so the thread panel shows terminals in panes beside it.
+    pub fn with_rex(mut self, in_rex: bool) -> Self {
+        self.in_rex = in_rex;
+        self
+    }
+
+    /// The worktree's terminals, as `terminals/watch` answered.
+    pub fn set_terminals(&mut self, terminals: Vec<Terminal>) {
+        self.worktree_terminals = Some(terminals);
+    }
+
+    /// One of the worktree's terminals started or changed.
+    pub fn terminal_updated(&mut self, terminal: Terminal) {
+        let terminals = self.worktree_terminals.get_or_insert_with(Vec::new);
+        match terminals.iter_mut().find(|known| known.id == terminal.id) {
+            Some(known) => *known = terminal,
+            None => terminals.push(terminal),
+        }
+    }
+
+    /// One of the worktree's terminals ended.
+    pub fn terminal_removed(&mut self, id: &str) {
+        if let Some(terminals) = &mut self.worktree_terminals {
+            terminals.retain(|terminal| terminal.id != id);
+        }
+        self.shown_terminals.remove(id);
+    }
+
+    /// The terminals shown in Rex panes now.
+    pub fn set_shown_terminals(&mut self, shown: BTreeSet<String>) {
+        self.shown_terminals = shown;
+    }
+
+    /// A terminal's screen as text, for the transcript, or why it couldn't be read.
+    pub fn terminal_read(&mut self, id: &str, screen: Result<String, String>) {
+        let name = self
+            .worktree_terminals
+            .iter()
+            .flatten()
+            .find(|terminal| terminal.id == id)
+            .map_or_else(|| id.to_owned(), thread_panel::name);
+        match screen {
+            Ok(text) => self.push_cell(TranscriptCell::screen(&format!("Terminal {name}"), &text)),
+            Err(why) => self.push_cell(TranscriptCell::error(&format!(
+                "Couldn't read terminal {name}: {why}"
+            ))),
+        }
     }
 
     /// The thread's MCP servers changed, as the Host reports them.
@@ -824,6 +907,7 @@ impl ChatWidget {
         self.subagent_picker = None;
         self.thread_panel = None;
         self.mcp_servers = None;
+        self.worktree_terminals = None;
         self.messages.clear();
         self.turn = None;
         self.ended = None;
@@ -2646,6 +2730,7 @@ impl ChatWidget {
     pub fn handle_key(&mut self, key: KeyEvent) -> Vec<AppCommand> {
         self.ended = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         // Find's query takes every key while it's typed, Ctrl+C included, as in Codex.
         if self.find_key(key) {
             return Vec::new();
@@ -2761,11 +2846,29 @@ impl ChatWidget {
             };
         }
 
-        if let Some(panel) = &mut self.thread_panel {
-            if let Some(PanelAction::Close) = panel.handle_key(key) {
-                self.thread_panel = None;
+        if let Some(mut panel) = self.thread_panel.take() {
+            let action = panel.handle_key(key, &self.panel_view());
+            if action != Some(PanelAction::Close) {
+                self.thread_panel = Some(panel);
             }
-            return Vec::new();
+            return action
+                .map(|action| self.panel_command(action))
+                .unwrap_or_default();
+        }
+
+        // Alt+1 to Alt+9 show the panel's terminal of that number, in Rex.
+        if alt
+            && self.in_rex
+            && let KeyCode::Char(digit @ '1'..='9') = key.code
+            && let Some(terminal) = self
+                .panel_view()
+                .ordered()
+                .get(digit as usize - '1' as usize)
+        {
+            return vec![AppCommand::ShowTerminal {
+                id: terminal.id.clone(),
+                label: thread_panel::name(terminal),
+            }];
         }
 
         if let Some(mut picker) = self.subagent_picker.take() {
@@ -2942,7 +3045,36 @@ impl ChatWidget {
                 .commands
                 .iter()
                 .any(|command| command.name == thread_panel::AGENT_MCP_COMMAND),
+            terminals: self.worktree_terminals.as_deref(),
+            shown: &self.shown_terminals,
+            in_rex: self.in_rex,
+            session: self.active_session.as_ref(),
         }
+    }
+
+    /// What the app does for something asked of the thread panel.
+    fn panel_command(&self, action: PanelAction) -> Vec<AppCommand> {
+        let name = |id: &str| {
+            self.worktree_terminals
+                .iter()
+                .flatten()
+                .find(|terminal| terminal.id == id)
+                .map_or_else(|| "shell".to_owned(), thread_panel::name)
+        };
+        let command = match action {
+            PanelAction::Close => return Vec::new(),
+            PanelAction::Show(id) => AppCommand::ShowTerminal {
+                label: name(&id),
+                id,
+            },
+            PanelAction::Hide(id) => AppCommand::HideTerminal(id),
+            PanelAction::New => AppCommand::NewTerminal,
+            PanelAction::Rename { id, label } => AppCommand::RenameTerminal { id, label },
+            PanelAction::End(id) => AppCommand::EndTerminal(id),
+            PanelAction::Read(id) => AppCommand::ReadTerminal(id),
+            PanelAction::Write { id, text } => AppCommand::WriteTerminal { id, text },
+        };
+        vec![command]
     }
 
     fn open_subagent_picker(&mut self) {
@@ -3229,7 +3361,7 @@ impl ChatWidget {
                 return Vec::new();
             }
             if text.trim() == format!("/{}", thread_panel::COMMAND) {
-                self.thread_panel = Some(ThreadPanel);
+                self.thread_panel = Some(ThreadPanel::default());
                 return Vec::new();
             }
             // Restart the TUI alone; the daemon keeps the session, even mid-turn. After the

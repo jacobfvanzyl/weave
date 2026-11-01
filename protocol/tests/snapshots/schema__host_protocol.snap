@@ -9167,6 +9167,10 @@ expression: schema()
         "codec": {
           "type": "string",
           "description": "The Ghostty commit and snapshot format the client's libghostty-vt decodes, as\n`weave-holder --version` names its own."
+        },
+        "history": {
+          "type": "boolean",
+          "description": "With a VT restore, the history above the screen too, for a client whose terminal\nkeeps scrollback of its own, as `weave terminal attach` does. A holder from before\nit sends the screen alone."
         }
       },
       "required": [
@@ -9396,6 +9400,19 @@ expression: schema()
             "resize"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "resync": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "resync"
+          ],
+          "additionalProperties": false,
+          "description": "A fresh restore, in a [`Message::Resync`], for a client that stopped drawing for a\nwhile: one whose terminal another device sized. A holder from before it sends none."
         }
       ],
       "description": "The client's text frames after [`Open`]."

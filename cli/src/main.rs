@@ -10,6 +10,7 @@ mod service;
 mod sessions;
 mod smoke;
 mod start;
+mod terminal;
 mod turn;
 mod update;
 mod worktrees;
@@ -79,6 +80,8 @@ enum Command {
     Sessions(sessions::SessionsArgs),
     /// Git worktrees: what worktrunk asks the weave Host before it removes one.
     Worktrees(worktrees::WorktreesArgs),
+    /// The weave Host's terminals: show one here, as the TUI does in a Rex pane.
+    Terminal(terminal::TerminalArgs),
     /// Manage the weave Host, which runs agents so their threads outlive the TUI.
     Daemon(daemon::DaemonArgs),
     /// Pair another of your devices with the weave Host, to reach it over your tailnet.
@@ -155,6 +158,11 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Worktrees(args)) => {
             log_to_stderr("warn");
             worktrees::command(args).await
+        }
+        Some(Command::Terminal(args)) => {
+            // Its stdout is the terminal's screen.
+            log_to_stderr("error");
+            terminal::command(args).await
         }
         Some(Command::Daemon(args)) => {
             // A Host's stderr is its log, agents' stderr included, as `--log-file` has it.

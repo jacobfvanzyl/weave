@@ -18,6 +18,7 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_tungstenite::WebSocketStream;
 use weave_agents::environment::Environment;
 use weave_host::Daemon;
 use weave_host::DaemonConfig;
@@ -610,6 +611,11 @@ async fn a_holder_that_died_is_forgotten() {
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+/// What a stream's WebSocket runs over: TCP to the remote listener, or the terminal socket.
+trait Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {}
+
+impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> Stream for S {}
+
 /// `daemon`'s WebSocket on a loopback port of its own.
 async fn listen(daemon: &Daemon) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -653,7 +659,7 @@ async fn stream(url: &str, ticket: &str, size: (u16, u16), codec: &str) -> Socke
     socket
 }
 
-async fn send_text(socket: &mut Socket, value: Value) {
+async fn send_text<S: Stream>(socket: &mut WebSocketStream<S>, value: Value) {
     use futures::SinkExt as _;
     socket
         .send(tokio_tungstenite::tungstenite::Message::text(
@@ -663,7 +669,7 @@ async fn send_text(socket: &mut Socket, value: Value) {
         .expect("sent");
 }
 
-async fn type_(socket: &mut Socket, text: &str) {
+async fn type_<S: Stream>(socket: &mut WebSocketStream<S>, text: &str) {
     use futures::SinkExt as _;
     let mut bytes = vec![0x10];
     bytes.extend_from_slice(text.as_bytes());
@@ -683,8 +689,8 @@ struct Received {
 }
 
 /// Reads `socket` until `done` holds.
-async fn read_until(
-    socket: &mut Socket,
+async fn read_until<S: Stream>(
+    socket: &mut WebSocketStream<S>,
     received: &mut Received,
     done: impl Fn(&Received) -> bool,
 ) {
@@ -826,6 +832,103 @@ async fn a_stream_relays_a_holders_terminal_to_a_ticket() {
         received.messages
     );
     assert_eq!(received.close, Some(4011));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_client_streams_on_the_terminal_socket_with_history_and_asks_again() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cwd = dir.path().canonicalize().expect("canonical");
+    let daemon = daemon(dir.path(), Some(holders(dir.path())));
+    let socket_path = dir.path().join("terminals.sock");
+    let serving = daemon.clone();
+    let path = socket_path.clone();
+    tokio::spawn(async move { serving.serve_terminal_streams(&path).await });
+    let client = client(&daemon).await;
+    let terminal = client.new_terminal(&cwd).await;
+    client
+        .connection
+        .send(WriteTerminalRequest {
+            id: terminal.id.clone(),
+            text: "for i in $(seq 1 60); do echo row-$i; done\r".to_owned(),
+        })
+        .await
+        .expect("terminals/write");
+    client.wait_for_screen(&terminal.id, "row-60").await;
+    let ticket = client
+        .connection
+        .send(weave_host_protocol::terminals::AttachTerminalRequest {
+            id: terminal.id.clone(),
+        })
+        .await
+        .expect("terminals/attach")
+        .ticket;
+
+    // The same WebSocket, over the Unix socket.
+    let unix = loop {
+        if let Ok(unix) = tokio::net::UnixStream::connect(&socket_path).await {
+            break unix;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let mut request = "ws://localhost/".into_client_request().expect("a request");
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        "weave-terminal".parse().expect("a header"),
+    );
+    let (mut socket, _) = tokio_tungstenite::client_async(request, unix)
+        .await
+        .expect("the stream");
+    let open = json!({
+        "ticket": ticket,
+        "size": {"cols": 80, "rows": 24},
+        "codec": "none",
+        "history": true,
+    });
+    send_text(&mut socket, open).await;
+
+    // A VT restore with the history above the screen.
+    let mut received = Received::default();
+    read_until(&mut socket, &mut received, |received| {
+        received.messages.first().is_some_and(|opened| {
+            received.restore.len() as u64 >= opened["restoreBytes"].as_u64().unwrap_or(u64::MAX)
+        })
+    })
+    .await;
+    assert_eq!(received.messages[0]["restore"], "vt");
+    let restore = String::from_utf8_lossy(&received.restore).into_owned();
+    assert!(restore.contains("row-1\r\n"), "{restore}");
+
+    // Asked again, a fresh one follows its resync.
+    send_text(&mut socket, json!({"resync": {}})).await;
+    let before = received.restore.len();
+    read_until(&mut socket, &mut received, |received| {
+        received
+            .messages
+            .iter()
+            .find_map(|message| message["resync"]["restoreBytes"].as_u64())
+            .is_some_and(|bytes| (received.restore.len() - before) as u64 >= bytes)
+    })
+    .await;
+    let again = String::from_utf8_lossy(&received.restore[before..]).into_owned();
+    assert!(
+        again.contains("row-1\r\n") && again.contains("row-60"),
+        "{again}"
+    );
+
+    // Input and output as on the remote listener.
+    type_(&mut socket, "echo local-$((2+2))\r").await;
+    read_until(&mut socket, &mut received, |received| {
+        String::from_utf8_lossy(&received.output).contains("local-4")
+    })
+    .await;
+
+    // Only `weave-terminal` upgrades.
+    let unix = tokio::net::UnixStream::connect(&socket_path)
+        .await
+        .expect("the socket");
+    let refused = tokio_tungstenite::client_async("ws://localhost/", unix).await;
+    assert!(refused.is_err(), "{refused:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

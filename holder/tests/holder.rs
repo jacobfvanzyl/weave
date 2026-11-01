@@ -603,3 +603,66 @@ fn a_client_of_another_codec_restores_from_vt() {
             .contains("after-44")
     );
 }
+
+/// The VT restore an attach with `args` sends, after its answer.
+fn vt_restore(client: &mut Client, method: &str, args: Value) -> Vec<u8> {
+    let answer = client.request(method, args);
+    let deadline = Instant::now() + WAIT;
+    let len = match answer["result"]["snapshot_bytes"].as_u64() {
+        Some(len) => len as usize,
+        // A resync answers at once and says how much restore follows in its event.
+        None => loop {
+            match client.next(deadline) {
+                Some(Frame::Json(event)) if event["type"] == "resync" => {
+                    break event["payload"]["snapshot_bytes"].as_u64().unwrap() as usize;
+                }
+                Some(frame) => client.take(frame),
+                None => panic!("no resync"),
+            }
+        },
+    };
+    let mut vt = Vec::new();
+    while vt.len() < len {
+        match client.next(deadline) {
+            Some(Frame::Snapshot(bytes)) => vt.extend(bytes),
+            Some(frame) => client.take(frame),
+            None => panic!("the restore stopped at {} of {len} bytes", vt.len()),
+        }
+    }
+    vt
+}
+
+#[test]
+fn a_vt_restore_carries_the_history_when_asked_and_a_client_can_ask_again() {
+    let holder = serve();
+    let mut client = holder.connect();
+    client.attach();
+    client.type_("for i in $(seq 1 60); do echo row-$i; done\r");
+    client.until("the rows", |client| client.screen().contains("row-60"));
+
+    let mut other = holder.connect();
+    let vt = vt_restore(
+        &mut other,
+        "attach",
+        json!({"restore": "vt", "history": true}),
+    );
+    let mut replica = Terminal::new(80, 24).unwrap();
+    replica.write(&vt);
+    let text = replica.format(Format::Text, Formatting::TRIMMED).unwrap();
+    assert!(text.contains("row-1\n"), "{text}");
+    assert!(text.contains("row-60"), "{text}");
+
+    // Asked again, it sends a fresh one, the history too.
+    let vt = vt_restore(&mut other, "resync", json!({}));
+    let mut again = Terminal::new(80, 24).unwrap();
+    again.write(&vt);
+    assert_eq!(
+        again.format(Format::Text, Formatting::TRIMMED).unwrap(),
+        text
+    );
+
+    // A client that hasn't attached has nothing to resync.
+    let mut idle = holder.connect();
+    let refused = idle.request("resync", json!({}));
+    assert_eq!(refused["error"]["code"], "bad_request");
+}

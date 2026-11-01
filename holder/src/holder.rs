@@ -137,9 +137,26 @@ struct Client {
     subscribed: AtomicBool,
     /// It restores from the formatter's VT rather than a snapshot: another codec's client.
     vt: AtomicBool,
+    /// Its VT restores carry the history too.
+    history: AtomicBool,
 }
 
 impl Client {
+    /// What it restores from, as it attached.
+    fn restore(&self) -> RestoreKind {
+        RestoreKind {
+            vt: self.vt.load(Ordering::Relaxed),
+            history: self.history.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Forgets what it hasn't been sent yet, which a fresh restore replaces.
+    fn drop_unsent(&self) {
+        let mut outbox = lock(&self.outbox);
+        outbox.frames.clear();
+        outbox.bytes = 0;
+    }
+
     fn push(&self, frame: Vec<u8>) {
         let mut outbox = lock(&self.outbox);
         if outbox.closed {
@@ -418,54 +435,69 @@ fn send_output(inner: &mut Inner, bytes: &[u8]) {
             continue;
         }
         // What it wasn't sent is in a fresh restore, this output included.
-        {
-            let mut outbox = lock(&client.outbox);
-            outbox.frames.clear();
-            outbox.bytes = 0;
-        }
-        let vt = client.vt.load(Ordering::Relaxed);
-        if let Some(restore) = restores.get(&inner.terminal, vt) {
-            client.push(protocol::json(&Event::Resync {
-                codec: vt::codec().unwrap_or_default(),
-                restore: restore_name(vt).to_owned(),
-                snapshot_bytes: restore.len(),
-                size: inner.terminal.size(),
-            }));
-            send_restore(client, restore);
-        }
+        resync(inner, client, &mut restores);
     }
+}
+
+/// Replaces what `client` hasn't been sent with a fresh restore, as it attached for.
+fn resync(inner: &Inner, client: &Client, restores: &mut Restores) {
+    client.drop_unsent();
+    send_resync(inner, client, restores);
+}
+
+/// Sends `client` a fresh restore, as it attached for, after a `resync` event.
+fn send_resync(inner: &Inner, client: &Client, restores: &mut Restores) {
+    let kind = client.restore();
+    if let Some(restore) = restores.get(&inner.terminal, kind) {
+        client.push(protocol::json(&Event::Resync {
+            codec: vt::codec().unwrap_or_default(),
+            restore: restore_name(kind.vt).to_owned(),
+            snapshot_bytes: restore.len(),
+            size: inner.terminal.size(),
+        }));
+        send_restore(client, restore);
+    }
+}
+
+/// What a client restores the terminal from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RestoreKind {
+    /// The formatter's VT, for a client of another codec; otherwise a snapshot.
+    vt: bool,
+    /// With the VT, the history too, for a client that keeps scrollback of its own.
+    history: bool,
 }
 
 /// The restores clients get, each made once however many clients need it.
 #[derive(Default)]
 struct Restores {
-    snapshot: Option<Option<Vec<u8>>>,
-    vt: Option<Option<Vec<u8>>>,
+    made: Vec<(RestoreKind, Option<Vec<u8>>)>,
 }
 
 impl Restores {
-    fn get(&mut self, terminal: &Terminal, vt: bool) -> Option<&Vec<u8>> {
-        if vt {
-            self.vt
-                .get_or_insert_with(|| restore(terminal, true).ok())
-                .as_ref()
-        } else {
-            self.snapshot
-                .get_or_insert_with(|| restore(terminal, false).ok())
-                .as_ref()
-        }
+    fn get(&mut self, terminal: &Terminal, kind: RestoreKind) -> Option<&Vec<u8>> {
+        let index = match self.made.iter().position(|(made, _)| *made == kind) {
+            Some(index) => index,
+            None => {
+                self.made.push((kind, restore(terminal, kind).ok()));
+                self.made.len() - 1
+            }
+        };
+        self.made[index].1.as_ref()
     }
 }
 
 /// What a client restores the terminal from: a snapshot, or for a client of another codec the
-/// formatter's VT of the visible screen.
-fn restore(terminal: &Terminal, vt: bool) -> Result<Vec<u8>, vt::Error> {
-    if vt {
-        terminal
+/// formatter's VT of the visible screen, and of its history too when it asked.
+fn restore(terminal: &Terminal, kind: RestoreKind) -> Result<Vec<u8>, vt::Error> {
+    match kind {
+        RestoreKind { vt: false, .. } => terminal.snapshot(),
+        RestoreKind { history: false, .. } => terminal
             .format(Format::Vt, Formatting::RESTORE)
-            .map(String::into_bytes)
-    } else {
-        terminal.snapshot()
+            .map(String::into_bytes),
+        RestoreKind { history: true, .. } => terminal
+            .format(Format::Vt, Formatting::RESTORE_WITH_HISTORY)
+            .map(String::into_bytes),
     }
 }
 
@@ -590,6 +622,7 @@ fn accept(holder: &Arc<Holder>, listener: &UnixListener) {
             ready: Condvar::new(),
             attached: AtomicBool::new(false),
             vt: AtomicBool::new(false),
+            history: AtomicBool::new(false),
             subscribed: AtomicBool::new(false),
         });
         lock(&holder.inner).clients.push(client.clone());
@@ -674,6 +707,9 @@ struct AttachArgs {
     /// `snapshot`, the default, or `vt` for a client of another codec.
     #[serde(default)]
     restore: Option<String>,
+    /// With `vt`, the history too.
+    #[serde(default)]
+    history: bool,
 }
 
 #[derive(Deserialize)]
@@ -727,15 +763,22 @@ fn handle(holder: &Arc<Holder>, client: &Client, request: Request) {
                     "vt" => Ok(true),
                     other => Err(Failure::bad_request(format!("no restore {other}"))),
                 };
+                let history = args.history;
                 match vt.and_then(|vt| {
-                    restore(&inner.terminal, vt)
-                        .map(|restore| (vt, restore))
+                    let kind = RestoreKind {
+                        vt,
+                        history: vt && history,
+                    };
+                    restore(&inner.terminal, kind)
+                        .map(|restore| (kind, restore))
                         .map_err(|error| Failure::bad_request(error.to_string()))
                 }) {
-                    Ok((vt, restore)) => {
+                    Ok((kind, restore)) => {
+                        let vt = kind.vt;
                         client.subscribed.store(true, Ordering::Relaxed);
                         client.attached.store(true, Ordering::Relaxed);
                         client.vt.store(vt, Ordering::Relaxed);
+                        client.history.store(kind.history, Ordering::Relaxed);
                         let result = json!({
                             "codec": lock(&holder.record).codec,
                             "restore": restore_name(vt),
@@ -751,6 +794,14 @@ fn handle(holder: &Arc<Holder>, client: &Client, request: Request) {
             }
             Err(failure) => Err(failure),
         },
+        // A fresh restore, for a client that stopped drawing for a while.
+        "resync" if client.attached.load(Ordering::Relaxed) => {
+            client.drop_unsent();
+            answer(client, id, Ok(json!({})));
+            send_resync(&inner, client, &mut Restores::default());
+            return;
+        }
+        "resync" => Err(Failure::bad_request("attach first")),
         "format" => args::<FormatArgs>(raw).and_then(|args| {
             let format = match args.format.as_deref().unwrap_or("text") {
                 "text" | "plain" => Format::Text,

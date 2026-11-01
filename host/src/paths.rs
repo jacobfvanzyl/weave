@@ -92,6 +92,12 @@ impl DaemonPaths {
         self.socket.with_file_name("mcp.sock")
     }
 
+    /// Where local clients stream the Host's terminals (`weave terminal attach`): beside its
+    /// socket.
+    pub fn terminal_socket(&self) -> PathBuf {
+        self.socket.with_file_name("terminals.sock")
+    }
+
     /// The holders of the Host's terminals: their records, sockets and Ghostty's resources.
     pub fn terminals(&self) -> PathBuf {
         self.dir.join("terminals")

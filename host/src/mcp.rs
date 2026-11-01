@@ -353,7 +353,8 @@ impl Mcp {
                 dir.join("mcp.sock")
             }
         };
-        let listener = bind(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let listener = crate::socket::bind_private(&path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
         tokio::spawn(accept(
             Arc::downgrade(self),
             listener,
@@ -602,22 +603,6 @@ fn complete(mut result: Value) -> Value {
 
 fn tool_result(result: ClientToolResult) -> McpOutcome {
     McpOutcome::Result(complete(serde_json::to_value(result).unwrap_or_default()))
-}
-
-fn bind(path: &Path) -> std::io::Result<UnixListener> {
-    // A socket left by a Host that died; this one holds the lock.
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    let listener = UnixListener::bind(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(listener)
 }
 
 /// Accept bridges until the Host stops. Only the Host's own user may connect.

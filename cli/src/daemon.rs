@@ -473,6 +473,13 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     tokio::spawn(async move { resuming.resume_remote().await });
     let queues = daemon.clone();
     tokio::spawn(async move { queues.resume_queues().await });
+    let streams = daemon.clone();
+    let terminal_socket = paths.terminal_socket();
+    tokio::spawn(async move {
+        if let Err(error) = streams.serve_terminal_streams(&terminal_socket).await {
+            tracing::warn!(%error, socket = %terminal_socket.display(), "local terminal streams aren't served");
+        }
+    });
     daemon.serve(listening.listener, idle_exit).await;
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("weave Host stopped");

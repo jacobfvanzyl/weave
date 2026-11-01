@@ -69,6 +69,13 @@ impl Formatting {
         unwrap: false,
         history: false,
     };
+    /// The history and the screen as VT, untrimmed, which a fresh terminal of the same size
+    /// restores both from: the history scrolls into its own.
+    pub const RESTORE_WITH_HISTORY: Self = Self {
+        trim: false,
+        unwrap: false,
+        history: true,
+    };
 }
 
 /// What writing to the terminal produced besides the screen.
@@ -831,6 +838,30 @@ mod tests {
         assert_eq!(
             restored.format(Format::Text, Formatting::TRIMMED).unwrap(),
             "line 48\nline 49\nline 50\nlast"
+        );
+    }
+
+    #[test]
+    fn a_terminal_restored_from_vt_with_its_history_scrolls_it_into_its_own() {
+        let mut terminal = Terminal::new(20, 4).unwrap();
+        for line in 1..=50 {
+            terminal.write(format!("line {line}\r\n").as_bytes());
+        }
+        terminal.write(b"\x1b[1;32mlast\x1b[0m");
+        let mut restored = Terminal::new(20, 4).unwrap();
+        restored.write(
+            terminal
+                .format(Format::Vt, Formatting::RESTORE_WITH_HISTORY)
+                .unwrap()
+                .as_bytes(),
+        );
+        assert_eq!(
+            restored.format(Format::Text, Formatting::TRIMMED).unwrap(),
+            terminal.format(Format::Text, Formatting::TRIMMED).unwrap()
+        );
+        assert_eq!(
+            restored.format(Format::Vt, Formatting::RESTORE).unwrap(),
+            terminal.format(Format::Vt, Formatting::RESTORE).unwrap()
         );
     }
 

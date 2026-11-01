@@ -1,5 +1,6 @@
 //! A terminal's stream (spec, "The terminal stream"): a WebSocket of its own on the Host's
-//! remote listener, with subprotocol `weave-terminal`, which the listener hands here.
+//! remote listener, with subprotocol `weave-terminal`, which the listener hands here, or the
+//! same WebSocket on the Host's terminal socket for local clients ([`serve_local`]).
 //!
 //! The client's first text frame names a ticket `terminals/attach` gave its device; the Host
 //! takes a connection of its own to the terminal's owner and attaches, with a snapshot for a
@@ -18,7 +19,10 @@ use futures::SinkExt as _;
 use futures::StreamExt as _;
 use serde_json::Value;
 use serde_json::json;
-use tokio::net::TcpStream;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
+use tokio::net::UnixListener;
+use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
@@ -37,6 +41,7 @@ use weave_host_protocol::terminals::stream::Open;
 use weave_host_protocol::terminals::stream::Opened;
 use weave_host_protocol::terminals::stream::RESTORE;
 use weave_host_protocol::terminals::stream::Restore;
+use weave_host_protocol::terminals::stream::SUBPROTOCOL;
 
 use super::Control;
 use super::Incoming;
@@ -45,7 +50,11 @@ use crate::Shared;
 use crate::devices::Closer;
 use crate::websocket::RemoteConfig;
 
-type Socket = WebSocketStream<TcpStream>;
+/// What a stream's WebSocket runs over: a TCP connection on the remote listener, or a Unix one
+/// on the terminal socket.
+pub(crate) trait Transport: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for T {}
 
 /// Closes a stream from elsewhere, as revoking its device does.
 struct StreamCloser(mpsc::UnboundedSender<u16>);
@@ -56,8 +65,76 @@ impl Closer for StreamCloser {
     }
 }
 
+/// Accepts local clients' streams on `listener`, the Host's terminal socket, until the Host
+/// stops: the same WebSocket as on the remote listener, from peers of the Host's own user only.
+pub(crate) async fn serve_local(shared: Arc<Shared>, listener: UnixListener) {
+    let owner = crate::socket::owner(&listener);
+    let config = Arc::new(RemoteConfig::default());
+    let mut stop = shared.stop.subscribe();
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => {
+                    if !matches!(crate::socket::peer(&stream, owner), crate::socket::Peer::Owner) {
+                        tracing::warn!("refused a terminal stream from another user");
+                        continue;
+                    }
+                    let shared = Arc::clone(&shared);
+                    let config = Arc::clone(&config);
+                    tokio::spawn(async move { local(shared, stream, config).await });
+                }
+                Err(error) => tracing::warn!(%error, "accepting a terminal stream failed"),
+            },
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// One local client's stream: the upgrade, which must ask for `weave-terminal`, then [`serve`].
+async fn local(shared: Arc<Shared>, stream: UnixStream, config: Arc<RemoteConfig>) {
+    // tungstenite's upgrade callback returns its HTTP response as the error, unboxed.
+    #[allow(clippy::result_large_err)]
+    let callback =
+        |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+         mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+            let asked = request
+                .headers()
+                .get_all("Sec-WebSocket-Protocol")
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .flat_map(|value| value.split(','))
+                .any(|protocol| protocol.trim() == SUBPROTOCOL);
+            if !asked {
+                let mut refusal =
+                    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(Some(
+                        format!("ask for the {SUBPROTOCOL} subprotocol"),
+                    ));
+                *refusal.status_mut() =
+                    tokio_tungstenite::tungstenite::http::StatusCode::BAD_REQUEST;
+                return Err(refusal);
+            }
+            response.headers_mut().insert(
+                "Sec-WebSocket-Protocol",
+                tokio_tungstenite::tungstenite::http::HeaderValue::from_static(SUBPROTOCOL),
+            );
+            Ok(response)
+        };
+    match tokio_tungstenite::accept_hdr_async(stream, callback).await {
+        Ok(socket) => serve(shared, socket, config).await,
+        Err(error) => tracing::debug!(%error, "a local terminal stream's upgrade failed"),
+    }
+}
+
 /// Serves one terminal stream until either end closes it.
-pub(crate) async fn serve(shared: Arc<Shared>, mut socket: Socket, config: Arc<RemoteConfig>) {
+pub(crate) async fn serve<T: Transport>(
+    shared: Arc<Shared>,
+    mut socket: WebSocketStream<T>,
+    config: Arc<RemoteConfig>,
+) {
     let Some(terminals) = shared.terminals.clone() else {
         close(&mut socket, CLOSE_TICKET, "this Host has no terminals").await;
         return;
@@ -92,7 +169,10 @@ pub(crate) async fn serve(shared: Arc<Shared>, mut socket: Socket, config: Arc<R
     let updates = terminals.updates();
     let attached = match terminals.connect(&id).await {
         Ok((control, incoming)) => control
-            .call("attach", json!({"restore": restore_name(restore)}))
+            .call(
+                "attach",
+                json!({"restore": restore_name(restore), "history": open.history}),
+            )
             .await
             .map(|answer| (control, incoming, answer)),
         Err(error) => Err(error),
@@ -155,7 +235,7 @@ fn restore_name(restore: Restore) -> &'static str {
 }
 
 /// The client's first text frame, if it's an [`Open`].
-async fn first_open(socket: &mut Socket) -> Option<Open> {
+async fn first_open<T: Transport>(socket: &mut WebSocketStream<T>) -> Option<Open> {
     while let Some(frame) = socket.next().await {
         match frame.ok()? {
             Frame::Text(text) => return serde_json::from_str(&text).ok(),
@@ -166,7 +246,7 @@ async fn first_open(socket: &mut Socket) -> Option<Open> {
     None
 }
 
-async fn close(socket: &mut Socket, code: u16, reason: &str) {
+async fn close<T: Transport>(socket: &mut WebSocketStream<T>, code: u16, reason: &str) {
     let frame = CloseFrame {
         code: CloseCode::from(code),
         reason: reason.to_owned().into(),
@@ -189,9 +269,9 @@ struct Link<'a> {
 
 impl Link<'_> {
     /// Relays until either end closes; the close code sent, if any.
-    async fn relay(
+    async fn relay<T: Transport>(
         &self,
-        socket: Socket,
+        socket: WebSocketStream<T>,
         mut incoming: mpsc::Receiver<Incoming>,
         mut updates: broadcast::Receiver<Terminal>,
         mut closed: mpsc::UnboundedReceiver<u16>,
@@ -326,8 +406,15 @@ impl Link<'_> {
     }
 
     async fn message(&self, text: &str) {
-        let Ok(ClientMessage::Resize(size)) = serde_json::from_str::<ClientMessage>(text) else {
-            return;
+        let size = match serde_json::from_str::<ClientMessage>(text) {
+            Ok(ClientMessage::Resize(size)) => size,
+            Ok(ClientMessage::Resync {}) => {
+                if let Err(error) = self.control.call("resync", json!({})).await {
+                    tracing::debug!(%error, "the terminal's owner sent no fresh restore");
+                }
+                return;
+            }
+            Err(_) => return,
         };
         let size = TerminalSize {
             cols: size.cols.max(2),

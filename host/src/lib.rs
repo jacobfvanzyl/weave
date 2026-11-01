@@ -976,6 +976,18 @@ impl Daemon {
         self.shutdown().await;
     }
 
+    /// Serve local clients' terminal streams on `socket`, beside the Host's own, until the Host
+    /// stops; nothing for a Host without terminals.
+    pub async fn serve_terminal_streams(&self, socket: &Path) -> std::io::Result<()> {
+        if self.shared.terminals.is_none() {
+            return Ok(());
+        }
+        let listener = socket::bind_private(socket)?;
+        terminals::stream::serve_local(Arc::clone(&self.shared), listener).await;
+        let _ = std::fs::remove_file(socket);
+        Ok(())
+    }
+
     /// Accept remote clients on `listener`, a loopback address Tailscale Serve forwards to,
     /// until the Host stops. Each has to prove a paired device at hello.
     pub async fn serve_remote(&self, listener: tokio::net::TcpListener, config: RemoteConfig) {

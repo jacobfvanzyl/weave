@@ -58,6 +58,23 @@ pub fn listen(paths: &DaemonPaths) -> io::Result<Listening> {
     })
 }
 
+/// Listen on a socket of the Host's beside its own, readable only by its user, replacing one
+/// a Host that died left. The directory's lock is this Host's.
+pub(crate) fn bind_private(path: &Path) -> io::Result<UnixListener> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let listener = UnixListener::bind(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(listener)
+}
+
 /// Connect to a daemon's socket.
 pub async fn connect(socket: &Path) -> io::Result<Transport> {
     Ok(transport(UnixStream::connect(socket).await?))

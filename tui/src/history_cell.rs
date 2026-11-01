@@ -59,6 +59,21 @@ pub fn info(text: &str, width: usize) -> Vec<DisplayLine> {
     wrap_sourced(&content, width, &bullet(dim()), &indent())
 }
 
+/// A terminal's screen as text, under what it's called: the text floor for terminals.
+pub fn screen(title: &str, text: &str, width: usize) -> Vec<DisplayLine> {
+    let mut lines = info(title, width);
+    for row in text.lines() {
+        let content = Line::from(row.to_owned());
+        lines.extend(wrap_sourced(
+            &content,
+            width,
+            &Line::from("    "),
+            &Line::from("    "),
+        ));
+    }
+    lines
+}
+
 pub fn error(text: &str, width: usize) -> Vec<DisplayLine> {
     let red = Style::default().fg(Color::Red);
     let content = Line::from(Span::styled(text.to_owned(), red));

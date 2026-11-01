@@ -64,6 +64,9 @@ use weave_host_protocol::mcp::McpServerSource;
 use weave_host_protocol::mcp::McpServerState;
 use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::mcp::McpTransport;
+use weave_host_protocol::terminals::Terminal as HostTerminal;
+use weave_host_protocol::terminals::TerminalCommand;
+use weave_host_protocol::terminals::TerminalSize;
 
 use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
@@ -646,6 +649,64 @@ fn panel_thread_mcp_servers() {
         ],
         &["mcp", "review"],
     ));
+}
+
+#[test]
+fn panel_thread_terminals_in_rex() {
+    let abilities = SessionAbilities {
+        list: true,
+        delete: true,
+    };
+    let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, WIDTH)
+        .with_mcp_servers(true)
+        .with_rex(true);
+    chat.session_ready(OpenedSession {
+        session_id: "s1".into(),
+        modes: None,
+        config_options: Vec::new(),
+        reopened: None,
+        notices: Vec::new(),
+        mcp_servers: vec![mcp_server(
+            "weave",
+            McpServerSource::Host,
+            Some(McpTransport::Stdio),
+            McpServerState::Connected,
+            None,
+        )],
+        title: None,
+    });
+    let terminal = |id: &str, label: Option<&str>, opened_from: Option<&str>| HostTerminal {
+        id: id.to_owned(),
+        scope: "/repo".into(),
+        label: label.map(str::to_owned),
+        opened_from: opened_from.map(|id| id.to_owned().into()),
+        title: None,
+        pwd: Some("/repo/app".into()),
+        process: None,
+        size: TerminalSize { cols: 80, rows: 24 },
+        command: None,
+        program_status: Vec::new(),
+        started_at: 1,
+    };
+    let mut tests = terminal("t-2", Some("tests"), Some("s1"));
+    tests.command = Some(TerminalCommand {
+        running: true,
+        command: Some("cargo test".to_owned()),
+        exit_code: None,
+    });
+    let mut server = terminal("t-1", Some("server"), Some("s-other"));
+    server.command = Some(TerminalCommand {
+        running: false,
+        command: None,
+        exit_code: Some(1),
+    });
+    chat.set_terminals(vec![server, tests]);
+    chat.set_shown_terminals(std::collections::BTreeSet::from(["t-2".to_owned()]));
+    for c in "/thread".chars() {
+        chat.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    insta::assert_snapshot!(screen(&mut chat));
 }
 
 #[test]

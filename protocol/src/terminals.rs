@@ -357,6 +357,11 @@ pub mod stream {
         /// The Ghostty commit and snapshot format the client's libghostty-vt decodes, as
         /// `weave-holder --version` names its own.
         pub codec: String,
+        /// With a VT restore, the history above the screen too, for a client whose terminal
+        /// keeps scrollback of its own, as `weave terminal attach` does. A holder from before
+        /// it sends the screen alone.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub history: bool,
     }
 
     /// The Host's first text frame: the terminal as the restore has it, so a VT restore is drawn
@@ -428,5 +433,8 @@ pub mod stream {
     #[serde(rename_all = "camelCase")]
     pub enum ClientMessage {
         Resize(TerminalSize),
+        /// A fresh restore, in a [`Message::Resync`], for a client that stopped drawing for a
+        /// while: one whose terminal another device sized. A holder from before it sends none.
+        Resync {},
     }
 }

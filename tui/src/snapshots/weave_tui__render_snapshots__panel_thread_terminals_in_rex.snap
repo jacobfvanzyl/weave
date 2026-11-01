@@ -1,0 +1,20 @@
+---
+source: tui/src/render_snapshots.rs
+expression: screen(&mut chat)
+---
+── transcript ──
+
+── viewport ──
+
+  Thread
+
+  MCP servers
+  • weave  connected · weave's own · stdio
+
+  The agent may have more of its own, which only it knows of.
+
+  Terminals
+› 1. • tests   shown  running cargo test · /repo/app
+  2. • server         exited 1 · /repo/app
+
+  enter show · h hide · n new · r rename · x end · esc back

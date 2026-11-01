@@ -1864,6 +1864,13 @@ fn terminals() {
                 ticket: "k2Vx".to_owned(),
                 size: TerminalSize { cols: 60, rows: 40 },
                 codec: "ghostty fb13fa9602f47590ccfaaea4cd8e178fac2ec8cc snapshot 1".to_owned(),
+                history: false,
+            }),
+            "openWithHistory": round_trip(&stream::Open {
+                ticket: "k2Vx".to_owned(),
+                size: TerminalSize { cols: 60, rows: 40 },
+                codec: "none".to_owned(),
+                history: true,
             }),
             "opened": round_trip(&stream::Opened {
                 terminal: terminal(),
@@ -1890,6 +1897,7 @@ fn terminals() {
                 round_trip(&stream::Message::Exited { exit_code: 0 }),
             ],
             "client": round_trip(&stream::ClientMessage::Resize(TerminalSize { cols: 60, rows: 35 })),
+            "clientResync": round_trip(&stream::ClientMessage::Resync {}),
         })
     );
 }
