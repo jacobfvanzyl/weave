@@ -60,6 +60,11 @@ use weave_acp_core::schema::ToolKind;
 use weave_acp_core::schema::UnstructuredCommandInput;
 use weave_acp_core::schema::UsageUpdate;
 
+use weave_host_protocol::mcp::McpServerSource;
+use weave_host_protocol::mcp::McpServerState;
+use weave_host_protocol::mcp::McpServerStatus;
+use weave_host_protocol::mcp::McpTransport;
+
 use crate::chat::ChatWidget;
 use crate::chat::SessionAbilities;
 use crate::elicitation::ElicitationView;
@@ -85,6 +90,7 @@ fn chat_with(
         config_options,
         reopened: None,
         notices: Vec::new(),
+        mcp_servers: Vec::new(),
         title: None,
     });
     chat
@@ -563,6 +569,99 @@ fn picker_settings() {
     insta::assert_snapshot!(screen(&mut chat));
 }
 
+/// A chat whose Host reports its MCP servers, with the thread's panel open.
+fn thread_panel(servers: Vec<McpServerStatus>, agent_commands: &[&str]) -> String {
+    let abilities = SessionAbilities {
+        list: true,
+        delete: true,
+    };
+    let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, WIDTH)
+        .with_mcp_servers(true);
+    chat.session_ready(OpenedSession {
+        session_id: "s1".into(),
+        modes: None,
+        config_options: Vec::new(),
+        reopened: None,
+        notices: Vec::new(),
+        mcp_servers: servers,
+        title: None,
+    });
+    send(
+        &mut chat,
+        SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(
+            agent_commands
+                .iter()
+                .map(|name| AvailableCommand::new(*name, "The agent's own"))
+                .collect(),
+        )),
+    );
+    for c in "/thread".chars() {
+        chat.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    screen(&mut chat)
+}
+
+fn mcp_server(
+    name: &str,
+    source: McpServerSource,
+    transport: Option<McpTransport>,
+    state: McpServerState,
+    reason: Option<&str>,
+) -> McpServerStatus {
+    McpServerStatus {
+        name: name.to_owned(),
+        source,
+        transport,
+        state,
+        reason: reason.map(str::to_owned),
+    }
+}
+
+#[test]
+fn panel_thread_mcp_servers() {
+    insta::assert_snapshot!(thread_panel(
+        vec![
+            mcp_server(
+                "weave",
+                McpServerSource::Host,
+                Some(McpTransport::Acp),
+                McpServerState::Connected,
+                None,
+            ),
+            mcp_server(
+                "github",
+                McpServerSource::Config,
+                Some(McpTransport::Stdio),
+                McpServerState::Passed,
+                None,
+            ),
+            mcp_server(
+                "docs",
+                McpServerSource::Config,
+                None,
+                McpServerState::Skipped,
+                Some("the agent does not support the sse transport"),
+            ),
+        ],
+        &["mcp", "review"],
+    ));
+}
+
+#[test]
+fn panel_thread_mcp_servers_unavailable() {
+    insta::assert_snapshot!(thread_panel(
+        vec![mcp_server(
+            "weave",
+            McpServerSource::Host,
+            Some(McpTransport::Stdio),
+            McpServerState::Unavailable,
+            Some("This agent's MCP client predates MCP 2026-07-28, so it can't use weave's tools."),
+        )],
+        &[],
+    ));
+}
+
 #[test]
 fn turn_running_with_a_queued_message() {
     let mut chat = chat();
@@ -604,6 +703,7 @@ fn fullscreen_chat() -> ChatWidget {
         config_options: Vec::new(),
         reopened: None,
         notices: Vec::new(),
+        mcp_servers: Vec::new(),
         title: None,
     });
     chat
@@ -682,6 +782,7 @@ fn with_update(mut chat: ChatWidget) -> ChatWidget {
         config_options: Vec::new(),
         reopened: Some(Reopened::Loaded),
         notices: Vec::new(),
+        mcp_servers: Vec::new(),
         title: None,
     });
     chat.update_available(weave_host_protocol::agents::AgentUpdate {

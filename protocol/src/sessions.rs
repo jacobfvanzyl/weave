@@ -30,6 +30,7 @@ use crate::agents::AgentId;
 use crate::agents::AgentRelease;
 use crate::agents::AgentUpdate;
 use crate::hello::ClientId;
+use crate::mcp::McpServerStatus;
 use crate::pending::PendingRequest;
 use crate::policy::PermissionPolicy;
 use crate::queue::QueuePause;
@@ -187,6 +188,9 @@ pub struct SessionState {
     /// Things worth telling the user, such as skipped MCP servers.
     #[serde(default)]
     pub notices: Vec<String>,
+    /// The MCP servers its agent was given, or left without (feature [`crate::mcp::FEATURE`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerStatus>,
     /// Where the Host writes this session's protocol trace, when asked to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<PathBuf>,

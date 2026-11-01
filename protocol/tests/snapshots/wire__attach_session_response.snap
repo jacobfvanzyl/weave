@@ -135,6 +135,26 @@ expression: "round_trip(&AttachSessionResponse\n{ state: state(), replay: Replay
   "notices": [
     "The agent doesn't support MCP server docs over SSE; skipped"
   ],
+  "mcpServers": [
+    {
+      "name": "weave",
+      "source": "host",
+      "transport": "acp",
+      "state": "connected"
+    },
+    {
+      "name": "github",
+      "source": "config",
+      "transport": "stdio",
+      "state": "passed"
+    },
+    {
+      "name": "docs",
+      "source": "config",
+      "state": "skipped",
+      "reason": "the agent does not support the sse transport"
+    }
+  ],
   "update": {
     "agentId": "claude",
     "name": "@agentclientprotocol/claude-agent-acp",

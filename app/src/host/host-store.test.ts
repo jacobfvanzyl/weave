@@ -558,6 +558,42 @@ describe('HostStore reconnecting', () => {
   });
 });
 
+describe('HostStore MCP servers', () => {
+  const hello = (features: string[]) => () => ({
+    result: { protocol: 2, clientId: 'c1', host: { id: HOST, version: '0', pid: 1, startedAt: 0 }, features, acp: { protocolVersion: 1 }, device: { id: 'd-1', name: 'iPad' } },
+  });
+
+  it("keeps the open thread's MCP servers as the Host reports them", async () => {
+    const declared = { name: 'weave', source: 'host', transport: 'stdio', state: 'declared' } as const;
+    const host = scriptedHost(() => [], { 'host/hello': hello([HOST_PROTOCOL.features.mcpServers]) });
+    host.state.mcpServers = [declared];
+    const store = storeFor(host.connector);
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    expect(store.snapshot().session?.mcpServers).toEqual([declared]);
+
+    host.notify('session/changed', { sessionId: SESSION, mcpServers: [{ ...declared, state: 'connected' }] });
+    await settle();
+    expect(store.snapshot().session?.mcpServers?.map(({ state }) => state)).toEqual(['connected']);
+    // A change of something else leaves them.
+    host.notify('session/changed', { sessionId: SESSION, activity: 'running' });
+    await settle();
+    expect(store.snapshot().session?.mcpServers?.map(({ state }) => state)).toEqual(['connected']);
+    store.stop();
+  });
+
+  it("reports none from a Host that doesn't", async () => {
+    const host = scriptedHost(() => []);
+    const store = storeFor(host.connector);
+    await store.start();
+    store.actions.selectSession(sessionKey(HOST, SESSION));
+    await settle();
+    expect(store.snapshot().session).not.toHaveProperty('mcpServers');
+    store.stop();
+  });
+});
+
 describe('HostStore terminals', () => {
   const hello = (features: string[]) => () => ({
     result: { protocol: 2, clientId: 'c1', host: { id: HOST, version: '0', pid: 1, startedAt: 0 }, features, acp: { protocolVersion: 1 }, device: { id: 'd-1', name: 'iPad' } },

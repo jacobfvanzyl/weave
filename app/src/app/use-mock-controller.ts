@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import { createAcpShowcaseTranscript, createMarkdownShowcaseTranscript } from '@/chat/acp-showcase';
 import { type AcpTranscript, type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
-import type { ContentBlock } from '@/host/protocol';
+import type { ContentBlock, McpServerStatus } from '@/host/protocol';
 import {
   type AgentChoice,
   type AppController,
@@ -141,6 +141,13 @@ const sessions = (now: number): SessionSummary[] => [
     activity: undefined,
   }),
   summary(SERVER, 'upload-failures', '/srv/odin', 'Diagnose upload failures', 'codex', 45, now),
+];
+
+/** Every thread's MCP servers: weave's own, connected, one from the config, and one it skipped. */
+const MCP_SERVERS: McpServerStatus[] = [
+  { name: 'weave', source: 'host', transport: 'acp', state: 'connected' },
+  { name: 'github', source: 'config', transport: 'stdio', state: 'passed' },
+  { name: 'docs', source: 'config', state: 'skipped', reason: 'the agent does not support the sse transport' },
 ];
 
 /**
@@ -345,6 +352,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         canSteer: steers(selected.agentId),
         queued: state.current.queued[selected.key] ?? [],
         canAttachImages: true,
+        mcpServers: MCP_SERVERS,
         ...(model.hosts.find(({ id }) => id === selected.hostId)?.canTerminals
           ? { terminals: (state.current.terminals[selected.hostId] ?? []).filter(({ scope }) => scope === (selected.git?.worktree ?? selected.cwd)) }
           : {}),

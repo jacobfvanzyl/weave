@@ -90,7 +90,11 @@ Client tools (WVE-89, ADR 0009) run on a client's device for an agent: `clipboar
 whose catalog is `weave_host_protocol::tools`. `mcp.rs` is the Host MCP server, `weave`, which
 `client::setup` declares for every session setup under a new `serverId` or token (a
 `Binding` the session keeps, bound to its id once the agent gives it, so calls that come
-first wait for it), with the tools the config's `client_tools` choose. It speaks MCP
+first wait for it), with the tools the config's `client_tools` choose. The binding and the
+configured servers make up the session's `Servers`, whose statuses (WVE-160) are
+`SessionState.mcpServers` and `session/changed`'s: `weave` declared, connected from the
+agent's first 2026-07-28 request (`Command::McpServersChanged`), or unavailable, and each
+configured server passed or skipped. It speaks MCP
 2026-07-28 only and answers `server/discover`, `tools/list`, `tools/call`, an empty
 `resources/list`, and `subscriptions/listen`, which it acknowledges and holds open (Claude
 Code opens one regardless); `initialize` is refused with `-32022`, and the session journals a

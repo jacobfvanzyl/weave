@@ -22,6 +22,7 @@ use weave_host_protocol::events;
 use weave_host_protocol::files;
 use weave_host_protocol::hello;
 use weave_host_protocol::host;
+use weave_host_protocol::mcp;
 use weave_host_protocol::peers;
 use weave_host_protocol::pending;
 use weave_host_protocol::queue;
@@ -239,6 +240,7 @@ fn schema() -> Value {
                 "terminals": terminals::FEATURE,
                 "turnIds": turns::TURN_IDS_FEATURE,
                 "peers": peers::PEERS_FEATURE,
+                "mcpServers": mcp::FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},
             "sessions": {"maxTitle": sessions::MAX_TITLE},

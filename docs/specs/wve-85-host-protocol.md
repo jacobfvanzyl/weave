@@ -162,7 +162,9 @@ request with `unauthenticated`.
   [Turn ids](#turn-ids)), and `peers` (WVE-109): `peers/*`, the `caller` a peer Host gives
   `session/run`, `queue/add` and `turn/steer`, `session/run`'s `policy`, `startedByHost`, the
   `session` turn origin's `host`, the `peer_unavailable` error, and the Host tools' `host` and
-  `list_hosts` (see [Peer Hosts](#peer-hosts)).
+  `list_hosts` (see [Peer Hosts](#peer-hosts)), and `mcpServers` (WVE-160):
+  `SessionState.mcpServers` and `session/changed`'s `mcpServers` (see
+  [MCP servers' status](#mcp-servers-status)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -204,7 +206,9 @@ sections of that computer's file do nothing.
 
 MCP servers come from the config only. When a session opens, the Host passes the ones the
 agent's `mcpCapabilities` accept and reports the others in the session's `notices`. Every
-session also gets the Host MCP server, `weave` (see [Client tools](#client-tools)).
+session also gets the Host MCP server, `weave` (see [Client tools](#client-tools)). How each
+server is reaches the session's clients as its status (see
+[MCP servers' status](#mcp-servers-status)).
 
 ### Environment
 
@@ -356,6 +360,7 @@ type SessionState = {
   subagents: string[];                         // subagent session ids so far
   journal: { id: string; head: number };       // the position of the last event written
   notices: string[];                           // e.g. skipped MCP servers
+  mcpServers?: McpServerStatus[];              // weave first, then the config's; see MCP servers' status
   trace?: string;                              // where the Host writes this session's trace
   update?: { agentId: string; name: string; running: string; latest: string };  // see Updates
   startedBy?: string;                          // the session whose agent started it; see Delegated sessions
@@ -601,9 +606,9 @@ Clients must ignore event kinds they don't know, while still advancing their pos
 
 These aren't journaled. They go to the session's attached clients.
 
-- `session/changed` `{sessionId, activity?, clients?, title?, blank?, git?}`: fields of
-  `SessionState` that changed. `git` changes when a turn ends in a worktree whose branch
-  changed meanwhile.
+- `session/changed` `{sessionId, activity?, clients?, title?, blank?, git?, mcpServers?}`:
+  fields of `SessionState` that changed. `git` changes when a turn ends in a worktree whose
+  branch changed meanwhile, and `mcpServers`, all of them, when one does.
 - `pending/added` `{sessionId, pending: PendingRequest}`
 - `pending/resolved` `{sessionId, pendingId, outcome: "answered" | "cancelled" | "withdrawn", by?: clientId}`
 - `session/elicitationCompleted` `{sessionId, notification: CompleteElicitationNotification}`:
@@ -824,6 +829,36 @@ Host's MCP socket beside its own, after a token naming the session's declaration
 session setup declares the server under a new `serverId` or token. An agent that opens it
 with `initialize`, from an MCP revision before 2026-07-28, is refused, and the session's
 clients get a `notice` event saying it can't use weave's tools.
+
+### MCP servers' status
+
+Feature `mcpServers` (WVE-160). The Host keeps, with each open session, how each MCP server
+its agent was given is, so every attached client shows the same: in `SessionState.mcpServers`
+when it attaches, and in `session/changed` whenever one changes. A session reopened in a new
+agent process (`session/reopen`, or taken up after a restart) has its servers declared anew,
+and their status starts over.
+
+```ts
+type McpServerStatus = {
+  name: string;                         // as the agent knows it: "weave" for the Host's own
+  source: "host" | "config";            // the Host MCP server, or [[mcp_servers]]
+  transport?: "acp" | "stdio" | "http" | "sse";   // absent for a server left out
+  state: "declared" | "connected" | "passed" | "skipped" | "unavailable";
+  reason?: string;                      // why it's skipped or unavailable
+};
+```
+
+- `weave` is `declared` once the session's setup declares it, over ACP or as the bridge, and
+  `connected` from the agent's first request to it in MCP 2026-07-28. It is `unavailable`
+  when it couldn't be declared, or when the agent opened it with `initialize` and was refused,
+  with `reason` saying which.
+- A configured server is `passed` when the session's agent was given it, and `skipped`, with
+  the reason its notice gives, when it wasn't. Only the agent knows whether a passed server
+  connected, so the Host never calls one connected.
+- Servers from the agent's own configuration are the agent's alone, and aren't listed. Clients
+  say so, and point to the agent's own `/mcp` when its `available_commands_update` offers one.
+
+Clients ignore states, sources and transports they don't know.
 
 ## Client tools
 
@@ -1545,6 +1580,8 @@ there's one, and otherwise in `host-key.json`, 0600 (see [Peer Hosts](#peer-host
   with `ifUnused`, so a session nothing else needs closes at once, as before.
 - The default mode, MCP servers and their notices, and extra directories the agent can't
   accept move to the Host. `weave --trace` asks the Host for a trace and shows its path.
+- `/thread` opens the thread's status panel (WVE-160): its MCP servers as the Host reports
+  them, with a hint to the agent's own `/mcp` when it offers one.
 - The session picker says each session's branch, and across directories its repository and
   branch in place of its directory. A worktree in a terminal comes from worktrunk
   (`wt switch -c <branch> -x weave`).

@@ -544,6 +544,27 @@ export type ElicitationUrlMode = {
   url: string;
 } & (ElicitationSessionScope1 | ElicitationRequestScope1);
 /**
+ * Where a server comes from.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "McpServerSource".
+ */
+export type McpServerSource = "other" | "host" | "config";
+/**
+ * How the agent reaches a server.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "McpTransport".
+ */
+export type McpTransport = ("stdio" | "http" | "sse" | "other") | "acp";
+/**
+ * How a server is, as far as the Host knows.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "McpServerState".
+ */
+export type McpServerState = "declared" | "connected" | "passed" | "skipped" | "unavailable" | "other";
+/**
  * Unique identifier for a Session Mode.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -2921,6 +2942,10 @@ export interface SessionState {
    */
   notices?: string[];
   /**
+   * The MCP servers its agent was given, or left without (feature [`crate::mcp::FEATURE`]).
+   */
+  mcpServers?: McpServerStatus[];
+  /**
    * Where the Host writes this session's protocol trace, when asked to.
    */
   trace?: string | null;
@@ -3998,6 +4023,28 @@ export interface JournalHead {
   head: number;
 }
 /**
+ * One MCP server a session's agent was given, or left without.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "McpServerStatus".
+ */
+export interface McpServerStatus {
+  /**
+   * As the agent knows it: `weave` for the Host's own.
+   */
+  name: string;
+  source: McpServerSource;
+  /**
+   * How the agent reaches it; absent for a server left out before it had one.
+   */
+  transport?: McpTransport | null;
+  state: McpServerState;
+  /**
+   * Why it was skipped or is unavailable.
+   */
+  reason?: string | null;
+}
+/**
  * A newer version of a session's agent than the one it runs.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -4284,6 +4331,10 @@ export interface AttachSessionResponse {
    * Things worth telling the user, such as skipped MCP servers.
    */
   notices?: string[];
+  /**
+   * The MCP servers its agent was given, or left without (feature [`crate::mcp::FEATURE`]).
+   */
+  mcpServers?: McpServerStatus[];
   /**
    * Where the Host writes this session's protocol trace, when asked to.
    */
@@ -6165,6 +6216,11 @@ export interface SessionChangedNotification {
    * Where in a git repository the session's directory is, as a turn left it.
    */
   git?: GitLocation | null;
+  /**
+   * The MCP servers its agent was given, all of them, when one changed (feature
+   * [`crate::mcp::FEATURE`]).
+   */
+  mcpServers?: McpServerStatus[] | null;
 }
 /**
  * `sessions/updated`, to watching clients: a session appeared or changed (opened, suspended,
@@ -6398,7 +6454,8 @@ export const HOST_PROTOCOL = {
     "drain": "drain",
     "terminals": "terminals",
     "turnIds": "turnIds",
-    "peers": "peers"
+    "peers": "peers",
+    "mcpServers": "mcpServers"
   },
   "files": {
     "maxEntries": 2000

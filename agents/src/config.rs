@@ -329,13 +329,48 @@ impl Config {
     pub fn mcp_servers(&self, capabilities: &McpCapabilities) -> (Vec<McpServer>, Vec<String>) {
         let mut servers = Vec::new();
         let mut warnings = Vec::new();
-        for server in &self.mcp_servers {
-            match server.to_protocol(capabilities) {
+        for configured in self.configured_mcp_servers(capabilities) {
+            match configured.server {
                 Ok(server) => servers.push(server),
-                Err(error) => warnings.push(format!("MCP server {} skipped: {error}", server.name)),
+                Err(_) => warnings.extend(configured.warning()),
             }
         }
         (servers, warnings)
+    }
+
+    /// Each configured MCP server, in order, as an agent with `capabilities` gets it: the
+    /// server, or why it's left out.
+    pub fn configured_mcp_servers(
+        &self,
+        capabilities: &McpCapabilities,
+    ) -> Vec<ConfiguredMcpServer> {
+        self.mcp_servers
+            .iter()
+            .map(|server| ConfiguredMcpServer {
+                name: server.name.clone(),
+                server: server
+                    .to_protocol(capabilities)
+                    .map_err(|error| error.to_string()),
+            })
+            .collect()
+    }
+}
+
+/// A configured MCP server, as a session's agent gets it.
+#[derive(Clone, Debug)]
+pub struct ConfiguredMcpServer {
+    pub name: String,
+    /// The server to pass on, or why it's skipped.
+    pub server: Result<McpServer, String>,
+}
+
+impl ConfiguredMcpServer {
+    /// What to tell the person when it's skipped.
+    pub fn warning(&self) -> Option<String> {
+        self.server
+            .as_ref()
+            .err()
+            .map(|why| format!("MCP server {} skipped: {why}", self.name))
     }
 }
 

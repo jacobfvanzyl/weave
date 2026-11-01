@@ -3,6 +3,7 @@
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionModeState;
+use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::SessionState;
 
@@ -24,6 +25,8 @@ pub struct OpenedSession {
     pub reopened: Option<Reopened>,
     /// Worth telling the user, such as skipped MCP servers or a mode it couldn't start in.
     pub notices: Vec<String>,
+    /// Its MCP servers, as the Host reports them.
+    pub mcp_servers: Vec<McpServerStatus>,
     /// The title the Host shows for it as it opens. A closed session's new journal holds it in
     /// no event, so its replay can't give it.
     pub title: Option<String>,
@@ -53,6 +56,7 @@ impl OpenedSession {
             config_options: state.config_options.clone(),
             reopened,
             notices: state.notices.clone(),
+            mcp_servers: state.mcp_servers.clone(),
             title: state.title.clone(),
         }
     }
@@ -100,6 +104,7 @@ mod tests {
                 head,
             },
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             trace: None,
             update: None,
             started_by: None,

@@ -297,7 +297,8 @@ expression: schema()
       "drain": "drain",
       "terminals": "terminals",
       "turnIds": "turnIds",
-      "peers": "peers"
+      "peers": "peers",
+      "mcpServers": "mcpServers"
     },
     "files": {
       "maxEntries": 2000
@@ -3275,6 +3276,13 @@ expression: schema()
           "description": "Things worth telling the user, such as skipped MCP servers.",
           "default": []
         },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/McpServerStatus"
+          },
+          "description": "The MCP servers its agent was given, or left without (feature [`crate::mcp::FEATURE`])."
+        },
         "trace": {
           "type": [
             "string",
@@ -5174,6 +5182,120 @@ expression: schema()
       ],
       "description": "Where a session's journal is up to."
     },
+    "McpServerStatus": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "As the agent knows it: `weave` for the Host's own."
+        },
+        "source": {
+          "$ref": "#/$defs/McpServerSource"
+        },
+        "transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpTransport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the agent reaches it; absent for a server left out before it had one."
+        },
+        "state": {
+          "$ref": "#/$defs/McpServerState"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why it was skipped or is unavailable."
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "state"
+      ],
+      "description": "One MCP server a session's agent was given, or left without."
+    },
+    "McpServerSource": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "other"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "host",
+          "description": "The Host MCP server, `weave` (ADR 0009)."
+        },
+        {
+          "type": "string",
+          "const": "config",
+          "description": "The Host's config, `[[mcp_servers]]`."
+        }
+      ],
+      "description": "Where a server comes from."
+    },
+    "McpTransport": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "stdio",
+            "http",
+            "sse",
+            "other"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "acp",
+          "description": "Over ACP itself, for agents that advertise `mcpCapabilities.acp`."
+        }
+      ],
+      "description": "How the agent reaches a server."
+    },
+    "McpServerState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "declared",
+          "description": "The Host's own server was declared to the agent, which hasn't spoken to it yet."
+        },
+        {
+          "type": "string",
+          "const": "connected",
+          "description": "The agent has spoken to the Host's own server."
+        },
+        {
+          "type": "string",
+          "const": "passed",
+          "description": "A configured server passed on to the agent, which alone knows whether it connected."
+        },
+        {
+          "type": "string",
+          "const": "skipped",
+          "description": "A configured server left out of the session, `reason` saying why."
+        },
+        {
+          "type": "string",
+          "const": "unavailable",
+          "description": "The Host's own server can't serve this agent, `reason` saying why."
+        },
+        {
+          "type": "string",
+          "const": "other",
+          "description": "A state this client doesn't know."
+        }
+      ],
+      "description": "How a server is, as far as the Host knows."
+    },
     "AgentUpdate": {
       "type": "object",
       "properties": {
@@ -5384,6 +5506,13 @@ expression: schema()
           },
           "description": "Things worth telling the user, such as skipped MCP servers.",
           "default": []
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/McpServerStatus"
+          },
+          "description": "The MCP servers its agent was given, or left without (feature [`crate::mcp::FEATURE`])."
         },
         "trace": {
           "type": [
@@ -8802,6 +8931,16 @@ expression: schema()
             }
           ],
           "description": "Where in a git repository the session's directory is, as a turn left it."
+        },
+        "mcpServers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/McpServerStatus"
+          },
+          "description": "The MCP servers its agent was given, all of them, when one changed (feature\n[`crate::mcp::FEATURE`])."
         }
       },
       "required": [

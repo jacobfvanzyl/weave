@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
+import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, OpenSession, PairedHost, SessionSummary } from '@/app/app-controller';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
@@ -11,6 +11,7 @@ import { DeleteSessionDialog } from '@/components/delete-session-dialog';
 import { PathLabel } from '@/components/path-label';
 import { ResizeHandle } from '@/components/resize-handle';
 import { TerminalPanel } from '@/components/terminal-panel';
+import { ThreadStatusSheet } from '@/components/thread-status-sheet';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -79,7 +80,13 @@ function RenameDialog({ session, actions, open, onOpenChange }: {
   );
 }
 
-function SessionMenu({ session, actions, canRename }: { session: SessionSummary; actions: AppController['actions']; canRename?: boolean }) {
+function SessionMenu({ session, actions, canRename, onStatus }: {
+  session: SessionSummary;
+  actions: AppController['actions'];
+  canRename?: boolean;
+  /** Show the thread's status sheet. */
+  onStatus(): void;
+}) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
   return (
@@ -90,6 +97,10 @@ function SessionMenu({ session, actions, canRename }: { session: SessionSummary;
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end'>
           <DropdownMenuGroup>
+            <DropdownMenuItem onClick={onStatus}>
+              <HugeiconsIcon icon={InformationCircleIcon} strokeWidth={2} />
+              Thread status
+            </DropdownMenuItem>
             {canRename && (
               <DropdownMenuItem disabled={session.state !== 'open'} onClick={() => setRenaming(true)}>
                 <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
@@ -301,6 +312,8 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
     <TerminalsButton shown={terminalsShown} count={terminals.tabs.length} onToggle={toggleTerminals} />
   );
   const [update, dismissUpdate] = useUpdateNotice(session.key, session.update);
+  const [statusShown, setStatusShown] = useState(false);
+  useEffect(() => setStatusShown(false), [session.key]);
   // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
   const asking = [
     ...(subagent && waitsForAnswer(session.transcript) ? [undefined] : []),
@@ -332,9 +345,16 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
               </Badge>
             )}
             {terminalsButton}
-            {summary && <SessionMenu session={summary} actions={actions} canRename={host?.canRename} />}
+            {summary && <SessionMenu session={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)} />}
           </SessionHeader>
         )}
+        <ThreadStatusSheet
+          open={statusShown}
+          onOpenChange={setStatusShown}
+          servers={session.mcpServers}
+          agentListsServers={session.transcript.availableCommands.some(({ name }) => name === 'mcp')}
+          side={phone ? 'bottom' : 'right'}
+        />
         {host && host.status !== 'connected' && <ConnectionNotice host={host} />}
         {model.error && (
           <Alert variant='destructive' className='m-2 w-auto'>

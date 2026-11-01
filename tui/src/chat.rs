@@ -59,6 +59,7 @@ use weave_acp_core::schema::ToolCallStatus;
 
 use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentUpdate;
+use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
 use weave_host_protocol::turns::SteerOutcome;
@@ -119,6 +120,10 @@ use crate::streaming::render_compact;
 use crate::style;
 use crate::subagents;
 use crate::subagents::Subagent;
+use crate::thread_panel;
+use crate::thread_panel::PanelAction;
+use crate::thread_panel::PanelView;
+use crate::thread_panel::ThreadPanel;
 use crate::thumbnails;
 use crate::thumbnails::Slot;
 use crate::thumbnails::Strip;
@@ -441,6 +446,12 @@ pub struct ChatWidget {
     /// The subagent whose transcript is shown instead of this session's.
     watching: Option<SessionId>,
     subagent_picker: Option<subagents::Picker>,
+    /// The thread's status panel, while `/thread` shows it.
+    thread_panel: Option<ThreadPanel>,
+    /// The thread's MCP servers as the Host reports them; `None` from a Host that doesn't.
+    mcp_servers: Option<Vec<McpServerStatus>>,
+    /// The Host reports its sessions' MCP servers (feature `mcpServers`).
+    reports_mcp_servers: bool,
     /// Messages between this session and another, while they stream.
     messages: Vec<SessionMessageEntry>,
     /// In a subagent's own chat: what its parent is called.
@@ -609,6 +620,9 @@ impl ChatWidget {
             subagents: Vec::new(),
             watching: None,
             subagent_picker: None,
+            thread_panel: None,
+            mcp_servers: None,
+            reports_mcp_servers: false,
             messages: Vec::new(),
             parent_label: None,
             updatable: false,
@@ -627,6 +641,20 @@ impl ChatWidget {
         self.renamable = renamable;
         self.offer_own_commands();
         self
+    }
+
+    /// The Host reports each session's MCP servers (feature `mcpServers`), which `/thread`
+    /// shows.
+    pub fn with_mcp_servers(mut self, reports: bool) -> Self {
+        self.reports_mcp_servers = reports;
+        self
+    }
+
+    /// The thread's MCP servers changed, as the Host reports them.
+    pub fn set_mcp_servers(&mut self, servers: Vec<McpServerStatus>) {
+        if self.reports_mcp_servers {
+            self.mcp_servers = Some(servers);
+        }
     }
 
     /// Queue messages in the Host, which holds each session's queue (feature `queue`).
@@ -794,6 +822,8 @@ impl ChatWidget {
         self.subagents.clear();
         self.watching = None;
         self.subagent_picker = None;
+        self.thread_panel = None;
+        self.mcp_servers = None;
         self.messages.clear();
         self.turn = None;
         self.ended = None;
@@ -840,6 +870,7 @@ impl ChatWidget {
         self.resumable |= opened.reopened.is_some();
         self.modes = opened.modes;
         self.config_options = opened.config_options;
+        self.set_mcp_servers(opened.mcp_servers);
         // A new, blank thread starts in the Vim composer, for a first message to write out.
         if self.vim && opened.reopened.is_none() {
             self.composer.enter_vim();
@@ -1780,6 +1811,7 @@ impl ChatWidget {
                 "Restart this TUI, picking up a rebuilt weave, and reattach",
             ),
             (EXIT_COMMAND, "Quit and close this thread (also /quit)"),
+            (thread_panel::COMMAND, thread_panel::COMMAND_DESCRIPTION),
         ];
         if self.renamable {
             own.push((
@@ -1833,6 +1865,7 @@ impl ChatWidget {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         chat
@@ -2728,6 +2761,13 @@ impl ChatWidget {
             };
         }
 
+        if let Some(panel) = &mut self.thread_panel {
+            if let Some(PanelAction::Close) = panel.handle_key(key) {
+                self.thread_panel = None;
+            }
+            return Vec::new();
+        }
+
         if let Some(mut picker) = self.subagent_picker.take() {
             let entries = self.picker_entries();
             match picker.handle_key(key, &entries) {
@@ -2892,6 +2932,17 @@ impl ChatWidget {
             _ => return None,
         }
         Some(Vec::new())
+    }
+
+    /// What the thread's status panel shows.
+    fn panel_view(&self) -> PanelView<'_> {
+        PanelView {
+            mcp_servers: self.mcp_servers.as_deref(),
+            agent_lists_servers: self
+                .commands
+                .iter()
+                .any(|command| command.name == thread_panel::AGENT_MCP_COMMAND),
+        }
     }
 
     fn open_subagent_picker(&mut self) {
@@ -3175,6 +3226,10 @@ impl ChatWidget {
         if let ComposerAction::Submit(text) = &action {
             if text.trim() == format!("/{}", subagents::COMMAND) && !self.subagents.is_empty() {
                 self.open_subagent_picker();
+                return Vec::new();
+            }
+            if text.trim() == format!("/{}", thread_panel::COMMAND) {
+                self.thread_panel = Some(ThreadPanel);
                 return Vec::new();
             }
             // Restart the TUI alone; the daemon keeps the session, even mid-turn. After the
@@ -4000,6 +4055,7 @@ impl ChatWidget {
             || self.session_picker.is_some()
             || self.settings.is_some()
             || self.subagent_picker.is_some()
+            || self.thread_panel.is_some()
     }
 
     fn popup_matches(&self) -> Vec<&AvailableCommand> {
@@ -4016,6 +4072,10 @@ impl ChatWidget {
         }
         if let Some(pending) = self.elicitations.front() {
             return pending.view.desired_height(width);
+        }
+        if let Some(panel) = &self.thread_panel {
+            let rows = panel.lines(&self.panel_view(), width).len();
+            return u16::try_from(rows).unwrap_or(u16::MAX);
         }
         if let Some(picker) = &self.subagent_picker {
             let rows = picker.lines(&self.picker_entries()).len();
@@ -4279,6 +4339,9 @@ impl ChatWidget {
             None
         } else if let Some(pending) = self.elicitations.front() {
             pending.view.render(input_area, buf)
+        } else if let Some(panel) = &self.thread_panel {
+            panel.render(&self.panel_view(), input_area, buf);
+            None
         } else if let Some(picker) = &self.subagent_picker {
             picker.render(&self.picker_entries(), input_area, buf);
             None
@@ -4470,6 +4533,7 @@ mod tests {
             config_options: options,
             reopened: None,
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         chat
@@ -4527,6 +4591,7 @@ mod tests {
             config_options: Vec::new(),
             reopened,
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         chat
@@ -4723,6 +4788,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
@@ -4761,6 +4827,32 @@ mod tests {
     }
 
     #[test]
+    fn the_thread_panel_follows_the_hosts_mcp_servers() {
+        let connected = McpServerStatus {
+            name: "weave".to_owned(),
+            source: weave_host_protocol::mcp::McpServerSource::Host,
+            transport: None,
+            state: weave_host_protocol::mcp::McpServerState::Connected,
+            reason: None,
+        };
+        // A Host without the feature reports none, whatever comes.
+        let mut older = chat();
+        older.set_mcp_servers(vec![connected.clone()]);
+        assert_eq!(older.panel_view().mcp_servers, None);
+
+        let mut chat = chat().with_mcp_servers(true);
+        assert_eq!(submit(&mut chat, "/thread"), []);
+        assert!(chat.thread_panel.is_some());
+        chat.set_mcp_servers(vec![connected.clone()]);
+        assert_eq!(chat.panel_view().mcp_servers, Some(&[connected][..]));
+        chat.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(chat.thread_panel.is_none());
+        // Another session's servers are its own.
+        chat.begin_session("s2".into(), None);
+        assert_eq!(chat.panel_view().mcp_servers, None);
+    }
+
+    #[test]
     fn slash_new_starts_a_new_session_here_whatever_the_agent_offers() {
         let mut chat = chat();
         // The agent's commands, one of them also called `new`.
@@ -4775,7 +4867,7 @@ mod tests {
             .iter()
             .map(|command| command.name.as_str())
             .collect();
-        assert_eq!(names, ["new", "reload", "exit", "review"]);
+        assert_eq!(names, ["new", "reload", "exit", "thread", "review"]);
         assert_eq!(
             chat.commands[0].description,
             "Start a new thread in this directory"
@@ -4838,6 +4930,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Resumed),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         // The transcript stays as it was, with what happened and that it's back.
@@ -4865,6 +4958,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         assert_eq!(reopened.blank_session(), None);
@@ -5696,6 +5790,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         assert_eq!(
@@ -5728,6 +5823,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         assert_eq!(history(&mut chat), ["", "• Thread: new thread"]);
@@ -5760,6 +5856,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         assert_eq!(history(&mut chat), ["", "• Run it"]);
@@ -5877,6 +5974,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         chat
@@ -6572,6 +6670,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: Some("Parser fixes".into()),
         });
         let s2 = |update| ChatEvent::SessionUpdate(SessionNotification::new("s2", update));
@@ -6953,6 +7052,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         chat
@@ -6985,6 +7085,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         // The agent's own `/rename` gives way to this client's.
@@ -7028,6 +7129,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         assert_eq!(
@@ -7147,6 +7249,7 @@ mod tests {
             config_options: Vec::new(),
             reopened: None,
             notices: Vec::new(),
+            mcp_servers: Vec::new(),
             title: None,
         });
         let shown = said(&mut chat);

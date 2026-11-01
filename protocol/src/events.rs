@@ -18,6 +18,7 @@ use serde::Serialize;
 
 use crate::Timestamp;
 use crate::agents::AgentRelease;
+use crate::mcp::McpServerStatus;
 use crate::queue::QueuePause;
 use crate::queue::QueuedId;
 use crate::sessions::Activity;
@@ -162,6 +163,10 @@ pub struct SessionChangedNotification {
     /// Where in a git repository the session's directory is, as a turn left it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<GitLocation>,
+    /// The MCP servers its agent was given, all of them, when one changed (feature
+    /// [`crate::mcp::FEATURE`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<Vec<McpServerStatus>>,
 }
 
 /// `session/elicitationCompleted`: an accepted URL elicitation's external step finished.

@@ -93,6 +93,10 @@ use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::mcp::McpServerSource;
+use weave_host_protocol::mcp::McpServerState;
+use weave_host_protocol::mcp::McpServerStatus;
+use weave_host_protocol::mcp::McpTransport;
 use weave_host_protocol::peers::AddPeerRequest;
 use weave_host_protocol::peers::AddPeerResponse;
 use weave_host_protocol::peers::ListPeersRequest;
@@ -263,6 +267,33 @@ fn session_agent(version: &str) -> SessionAgent {
     }
 }
 
+/// The Host's own server, connected, a configured server passed on, and one skipped.
+fn mcp_servers() -> Vec<McpServerStatus> {
+    vec![
+        McpServerStatus {
+            name: "weave".to_owned(),
+            source: McpServerSource::Host,
+            transport: Some(McpTransport::Acp),
+            state: McpServerState::Connected,
+            reason: None,
+        },
+        McpServerStatus {
+            name: "github".to_owned(),
+            source: McpServerSource::Config,
+            transport: Some(McpTransport::Stdio),
+            state: McpServerState::Passed,
+            reason: None,
+        },
+        McpServerStatus {
+            name: "docs".to_owned(),
+            source: McpServerSource::Config,
+            transport: None,
+            state: McpServerState::Skipped,
+            reason: Some("the agent does not support the sse transport".to_owned()),
+        },
+    ]
+}
+
 fn state() -> SessionState {
     SessionState {
         session_id: "s-1".into(),
@@ -303,6 +334,7 @@ fn state() -> SessionState {
             head: 41,
         },
         notices: vec!["The agent doesn't support MCP server docs over SSE; skipped".to_owned()],
+        mcp_servers: mcp_servers(),
         trace: None,
         update: Some(update()),
         started_by: None,
@@ -1453,6 +1485,7 @@ fn events() {
             title: None,
             blank: None,
             git: None,
+            mcp_servers: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -1468,6 +1501,19 @@ fn events() {
                 branch: Some("feature/auth".to_owned()),
                 ..git()
             }),
+            mcp_servers: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "session_changed_notification_mcp_servers",
+        message(&SessionChangedNotification {
+            session_id: "s-1".into(),
+            activity: None,
+            clients: None,
+            title: None,
+            blank: None,
+            git: None,
+            mcp_servers: Some(mcp_servers()),
         })
     );
     insta::assert_json_snapshot!(

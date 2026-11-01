@@ -1,0 +1,20 @@
+---
+source: tui/src/render_snapshots.rs
+expression: "thread_panel(vec![mcp_server(\"weave\", McpServerSource::Host,\nSome(McpTransport::Acp), McpServerState::Connected, None,),\nmcp_server(\"github\", McpServerSource::Config, Some(McpTransport::Stdio),\nMcpServerState::Passed, None,),\nmcp_server(\"docs\", McpServerSource::Config, None, McpServerState::Skipped,\nSome(\"the agent does not support the sse transport\"),),], &[\"mcp\", \"review\"],)"
+---
+── transcript ──
+
+── viewport ──
+
+  Thread
+
+  MCP servers
+  • weave   connected · weave's own · over ACP
+  • github  passed to the agent · from the config · stdio
+  • docs    skipped · from the config
+            the agent does not support the sse transport
+
+  The agent may have more of its own, which only it knows of: its /mcp
+  lists them.
+
+  esc back

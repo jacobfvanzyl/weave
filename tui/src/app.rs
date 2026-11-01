@@ -38,6 +38,7 @@ use weave_host_protocol::agents::UPDATES_FEATURE;
 use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::mcp::FEATURE as MCP_SERVERS_FEATURE;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::pending::PendingKind;
 use weave_host_protocol::pending::PendingRequest;
@@ -283,6 +284,11 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .features
         .iter()
         .any(|feature| feature == QUEUE_FEATURE);
+    let reports_mcp_servers = connection
+        .hello()
+        .features
+        .iter()
+        .any(|feature| feature == MCP_SERVERS_FEATURE);
     let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
     // The session works where the Host says, and so does this client.
@@ -296,6 +302,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .with_updates(updatable, dismissed.versions().clone())
         .with_rename(renamable)
         .with_host_queue(queueable)
+        .with_mcp_servers(reports_mcp_servers)
         .with_thumbnails(tui.shows_images());
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
@@ -499,9 +506,16 @@ impl App {
                 commands.shrink_to_fit();
                 commands
             }
+            HostEvent::Changed(changed) => {
+                if chat.active_session() == Some(&changed.session_id)
+                    && let Some(servers) = changed.mcp_servers
+                {
+                    chat.set_mcp_servers(servers);
+                }
+                Vec::new()
+            }
             // The TUI makes no pairing offers, and watches no sessions.
-            HostEvent::Changed(_)
-            | HostEvent::DevicePaired(_)
+            HostEvent::DevicePaired(_)
             | HostEvent::SessionUpdated(_)
             | HostEvent::SessionRemoved(_)
             | HostEvent::TerminalUpdated(_)

@@ -1,4 +1,4 @@
-import type { CreateElicitationResponse, ProgramStatus } from '@/host/protocol';
+import type { CreateElicitationResponse, McpServerStatus, ProgramStatus } from '@/host/protocol';
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 /**
@@ -188,6 +188,11 @@ export type OpenSession = {
    * in every thread of the worktree. None until its Host lists them, or on a Host without them.
    */
   terminals?: TerminalSummary[];
+  /**
+   * The MCP servers its agent was given, as the Host reports them (`mcpServers`): weave's own
+   * first, then the Host's config's. None from a Host that doesn't report them.
+   */
+  mcpServers?: McpServerStatus[];
 };
 
 export type AppModel = {

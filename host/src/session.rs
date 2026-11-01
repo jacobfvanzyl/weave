@@ -62,6 +62,7 @@ use weave_host_protocol::errors;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::SessionChangedNotification;
 use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::pending::PendingAddedNotification;
 use weave_host_protocol::pending::PendingKind;
 use weave_host_protocol::pending::PendingResolvedNotification;
@@ -105,7 +106,7 @@ use crate::journal::Journal;
 use crate::journal::Recorded;
 use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
-use crate::mcp::Binding;
+use crate::mcp::Servers;
 use crate::queue::Queue;
 use crate::updates::Feed;
 use crate::updates::describe;
@@ -329,6 +330,8 @@ pub(crate) enum Command {
     WithdrawClientTool {
         call: u64,
     },
+    /// Its agent's MCP servers changed: the agent spoke to the Host MCP server, say.
+    McpServersChanged,
     /// Tell the session's clients something, in the journal.
     Notice {
         text: String,
@@ -465,8 +468,8 @@ pub(crate) struct Opened {
     pub(crate) additional_directories: Vec<PathBuf>,
     /// Opened by `session/create`, so blank until it's prompted.
     pub(crate) blank: bool,
-    /// The Host MCP server's declaration for the session, when it has one.
-    pub(crate) binding: Option<Binding>,
+    /// Its agent's MCP servers: the Host MCP server's declaration, and their statuses.
+    pub(crate) servers: Servers,
     /// The title the Host keeps for it, from its journal.
     pub(crate) title: Option<String>,
     /// The last title its agent gave it, from its journal, shown until it's renamed.
@@ -496,7 +499,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         cwd,
         additional_directories,
         blank,
-        binding,
+        servers,
         title,
         agent_title,
         last_activity_ms,
@@ -563,12 +566,10 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
             },
         );
     }
-    if let Some(binding) = &binding {
-        binding.bind(&session_id);
-    }
+    servers.bind(&session_id);
     let actor = Actor {
         root: session_id,
-        binding,
+        servers,
         shared: Arc::clone(shared),
         handle: connection.handle(),
         connection: Some(connection),
@@ -718,12 +719,14 @@ struct Reported {
     title: Option<String>,
     blank: Option<bool>,
     git: Option<GitLocation>,
+    mcp_servers: Option<Vec<McpServerStatus>>,
 }
 
 struct Actor {
     root: SessionId,
-    /// The Host MCP server's declaration for the agent's process, which goes with it.
-    binding: Option<Binding>,
+    /// The MCP servers of the agent's process, which go with it: the Host MCP server's
+    /// declaration, and their statuses.
+    servers: Servers,
     shared: Arc<Shared>,
     handle: AgentHandle,
     connection: Option<AgentConnection>,
@@ -963,6 +966,7 @@ impl Actor {
                     pending.withdrawn();
                 }
             }
+            Command::McpServersChanged => self.update_summary(),
             Command::Notice { text } => {
                 self.record(Entry::Notice { text });
             }
@@ -1169,6 +1173,7 @@ impl Actor {
                 head: self.journal.head(),
             },
             notices,
+            mcp_servers: self.servers.statuses(),
             trace,
             update: self.update.clone(),
             started_by: summary.started_by,
@@ -1744,6 +1749,7 @@ impl Actor {
             title,
             blank: Some(self.blank.load(Ordering::Relaxed)),
             git,
+            mcp_servers: Some(self.servers.statuses()),
         };
         if now == self.reported {
             return;
@@ -1755,6 +1761,7 @@ impl Actor {
             title: changed(&now.title, &self.reported.title),
             blank: changed(&now.blank, &self.reported.blank),
             git: changed(&now.git, &self.reported.git),
+            mcp_servers: changed(&now.mcp_servers, &self.reported.mcp_servers),
         };
         self.reported = now;
         self.broadcast(&notification);
@@ -1985,7 +1992,7 @@ impl Actor {
     /// Take the session up in `instance`: resumed, or loaded with its replay dropped, which
     /// the journal has already.
     async fn take_up(&mut self, instance: &mut Instance, agent: &Agent) -> Result<Snapshot, Error> {
-        let (setup, _, binding) = crate::client::setup(
+        let (setup, _, servers) = crate::client::setup(
             &self.shared,
             agent,
             instance,
@@ -2014,10 +2021,8 @@ impl Actor {
             loaded?
         };
         // The new process's declaration replaces the last one's.
-        if let Some(binding) = &binding {
-            binding.bind(&self.root);
-        }
-        self.binding = binding;
+        servers.bind(&self.root);
+        self.servers = servers;
         Ok(Snapshot {
             modes,
             config_options: config_options.unwrap_or_default(),
@@ -2086,6 +2091,8 @@ impl Actor {
             config_options: self.snapshot.config_options.clone(),
             failed,
         });
+        // The new process's servers were declared anew.
+        self.update_summary();
         ReopenSessionResponse { version: running }
     }
 }

@@ -57,8 +57,10 @@ the Host's, every client's prompts in it (`set_queue`, then `queued`/`unqueued` 
 state covering a replay), the Host starts them, and Esc takes this client's own back with
 `queue/remove`, leaving the rest paused, which `/queue` resumes; messages sent while a session
 opens are kept here and go to the Host once it's open (`send_kept_messages`);
-`/new`, `/reload`, `/exit` (`/quit` too), `/rename`, `/subagents` and `/update` are the TUI's
-own slash commands, offered with the agent's and handled locally (`/exit` and Ctrl+C twice quit
+`/new`, `/reload`, `/exit` (`/quit` too), `/rename`, `/subagents`, `/thread` and `/update` are
+the TUI's own slash commands (`/thread` opens `thread_panel`, the thread's status in place of the
+composer: its MCP servers as the Host reports them, from `SessionState` and `session/changed`,
+with a pointer to the agent's own `/mcp` when it offers one, WVE-160), offered with the agent's and handled locally (`/exit` and Ctrl+C twice quit
 closing the thread once nothing else needs it, if its agent can load or resume it again, while
 Ctrl+D quits leaving it open in the weave Host (WVE-159);
 `/reload` ends the TUI and the CLI execs its own

@@ -22,6 +22,7 @@
 //! - [`pending`]: permission requests and elicitations waiting on a person, and client tool
 //!   calls waiting on a client.
 //! - [`tools`]: client tools, which an attached client runs for the agent.
+//! - [`mcp`]: the MCP servers a session's agent was given, and how each one is.
 //! - [`terminals`]: terminals on the Host's computer, which clients show beside a thread, and
 //!   their streams.
 //! - [`host`]: the Host's status, and stopping it.
@@ -35,6 +36,7 @@ pub mod events;
 pub mod files;
 pub mod hello;
 pub mod host;
+pub mod mcp;
 pub mod peers;
 pub mod pending;
 pub mod policy;

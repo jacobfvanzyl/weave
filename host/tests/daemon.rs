@@ -59,6 +59,10 @@ use weave_host_protocol::host::DRAIN_FEATURE;
 use weave_host_protocol::host::DrainRequest;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::mcp::McpServerSource;
+use weave_host_protocol::mcp::McpServerState;
+use weave_host_protocol::mcp::McpServerStatus;
+use weave_host_protocol::mcp::McpTransport;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::pending::PendingKind;
 use weave_host_protocol::pending::PendingRequest;
@@ -2322,6 +2326,86 @@ async fn the_configuration_decides_which_client_tools_agents_are_offered() {
 }
 
 #[tokio::test]
+async fn a_sessions_mcp_servers_say_how_each_one_is() {
+    let world = World::new();
+    std::fs::write(
+        world.dir.path().join("config.toml"),
+        "[agents.fake]\ncommand = \"fake-agent\"\n\n\
+         [[mcp_servers]]\nname = \"shell\"\ncommand = \"/bin/sh\"\n\n\
+         [[mcp_servers]]\nname = \"missing\"\ncommand = \"weave-no-such-server\"\n",
+    )
+    .expect("config");
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let state = client.create_with(&world, "fake").await;
+    let status = |name: &str, source, transport, state, reason: Option<&str>| McpServerStatus {
+        name: name.to_owned(),
+        source,
+        transport,
+        state,
+        reason: reason.map(str::to_owned),
+    };
+    assert_eq!(
+        state.mcp_servers,
+        [
+            status(
+                "weave",
+                McpServerSource::Host,
+                Some(McpTransport::Stdio),
+                McpServerState::Declared,
+                None,
+            ),
+            status(
+                "shell",
+                McpServerSource::Config,
+                Some(McpTransport::Stdio),
+                McpServerState::Passed,
+                None,
+            ),
+            status(
+                "missing",
+                McpServerSource::Config,
+                None,
+                McpServerState::Skipped,
+                Some("weave-no-such-server not found on PATH"),
+            ),
+        ]
+    );
+
+    // Its own server is connected once the agent speaks to it, and attached clients hear so.
+    client.prompt(&state.session_id, COPY).await;
+    let servers = tokio::time::timeout(WAIT, async {
+        loop {
+            if let HostEvent::Changed(changed) = client.next().await
+                && let Some(servers) = changed.mcp_servers
+                && servers[0].state == McpServerState::Connected
+            {
+                return servers;
+            }
+        }
+    })
+    .await
+    .expect("the change in time");
+    assert_eq!(servers[1..], state.mcp_servers[1..]);
+
+    // A client attaching later sees it as it is now.
+    let mut later = world.client(&daemon).await;
+    let attached = later.attach(&state.session_id).await;
+    assert_eq!(attached.state.mcp_servers, servers);
+}
+
+#[tokio::test]
+async fn the_host_mcp_server_over_acp_says_so() {
+    let world = World::new();
+    let daemon = world.daemon_over_acp();
+    let mut client = world.client(&daemon).await;
+    let state = client.create_with(&world, "fake").await;
+    assert_eq!(state.mcp_servers.len(), 1);
+    assert_eq!(state.mcp_servers[0].transport, Some(McpTransport::Acp));
+    assert_eq!(state.mcp_servers[0].state, McpServerState::Declared);
+}
+
+#[tokio::test]
 async fn an_agent_on_an_older_mcp_is_refused_and_its_clients_told() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
@@ -2343,9 +2427,17 @@ async fn an_agent_on_an_older_mcp_is_refused_and_its_clients_told() {
         "{seen:?}"
     );
 
-    // Later clients see it in the journal.
+    // Later clients see it in the journal, and in the server's status.
     let mut later = world.client(&daemon).await;
-    later.attach_after(&session_id, None).await.expect("attach");
+    let attached = later.attach_after(&session_id, None).await.expect("attach");
+    let own = &attached.state.mcp_servers[0];
+    assert_eq!(own.state, McpServerState::Unavailable);
+    assert!(
+        own.reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("predates MCP 2026-07-28")),
+        "{own:?}"
+    );
     let mut replayed = Seen::default();
     while replayed.notices.is_empty() {
         let event = later.next().await;
@@ -4144,7 +4236,8 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
         "{listed}"
     );
 
-    // It steers and cancels a turn the person began in a thread it didn't start.
+    // It steers a turn the person began in a thread it didn't start; the steer takes the turn
+    // over, which ends once it's answered.
     person.prompt(&persons, "slow 30").await;
     let said = client
         .call_tool(
@@ -4155,6 +4248,12 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
         .await
         .agent;
     assert!(said.contains("steer_session answered:"), "{said}");
+    let mut seen = Seen::default();
+    person.until_turn_ends(&mut seen, None).await;
+    assert!(seen.agent.contains("You steered: and the docs"), "{seen:?}");
+
+    // And it cancels one.
+    person.prompt(&persons, "slow 30").await;
     let said = client
         .call_tool(
             &caller,

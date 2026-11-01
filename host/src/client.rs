@@ -33,6 +33,7 @@ use weave_acp_core::schema::ConfigOptionUpdate;
 use weave_acp_core::schema::CurrentModeUpdate;
 use weave_acp_core::schema::InitializeRequest;
 use weave_acp_core::schema::InitializeResponse;
+use weave_acp_core::schema::McpServer;
 use weave_acp_core::schema::Meta;
 use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionInfo;
@@ -40,6 +41,7 @@ use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::SetSessionConfigOptionResponse;
 use weave_acp_core::schema::StopReason;
+use weave_agents::config::ConfiguredMcpServer;
 use weave_host_protocol::Empty;
 use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
@@ -83,6 +85,7 @@ use weave_host_protocol::host::DrainRequest;
 use weave_host_protocol::host::DrainResponse;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::mcp::FEATURE as MCP_SERVERS_FEATURE;
 use weave_host_protocol::peers::AddPeerRequest;
 use weave_host_protocol::peers::AddPeerResponse;
 use weave_host_protocol::peers::ListPeersRequest;
@@ -179,7 +182,7 @@ use crate::journal::Entry;
 use crate::journal::Journal;
 use crate::journal::Recorded;
 use crate::journal::now_ms;
-use crate::mcp::Binding;
+use crate::mcp::Servers;
 use crate::modes;
 use crate::queue::Queue;
 use crate::session;
@@ -904,6 +907,7 @@ impl Connection {
                 DRAIN_FEATURE.to_owned(),
                 OBSERVE_FEATURE.to_owned(),
                 PEERS_FEATURE.to_owned(),
+                MCP_SERVERS_FEATURE.to_owned(),
             ]
             .into_iter()
             .chain(
@@ -1395,7 +1399,7 @@ impl Connection {
             self.shared.git.locate(&request.cwd),
         );
         let instance = instance?;
-        let (setup, mut notices, binding) = setup(
+        let (setup, mut notices, servers) = setup(
             &self.shared,
             &agent,
             &instance,
@@ -1434,7 +1438,7 @@ impl Connection {
                 started_by: None,
                 started_by_host: None,
             },
-            binding,
+            servers,
             git,
         )?;
         let trace = self.trace(&session, request.trace)?;
@@ -1503,13 +1507,13 @@ impl Connection {
             self.shared.git.locate(&cwd),
         );
         let instance = instance?;
-        let (setup, notices, binding) = setup(&self.shared, &agent, &instance, cwd, Vec::new());
+        let (setup, notices, servers) = setup(&self.shared, &agent, &instance, cwd, Vec::new());
         match reopen(
             &self.shared,
             instance,
             session_id.clone(),
             setup,
-            binding,
+            servers,
             &agent,
             PermissionPolicy::ask(),
             true,
@@ -2291,20 +2295,31 @@ pub(crate) fn dormant(
 
 /// How a session in `cwd` is set up for `instance`'s agent: the configured MCP servers it
 /// accepts, the Host MCP server, and `additional_directories` if it accepts those; with a
-/// notice for each left out, and the Host MCP server's declaration for the session to keep.
+/// notice for each left out, and the MCP servers for the session to keep: the Host MCP
+/// server's declaration, and every server's status.
 pub(crate) fn setup(
     shared: &Arc<Shared>,
     agent: &Agent,
     instance: &Instance,
     cwd: PathBuf,
     mut additional_directories: Vec<PathBuf>,
-) -> (SessionSetup, Vec<String>, Option<Binding>) {
+) -> (SessionSetup, Vec<String>, Servers) {
     let capabilities = instance
         .init()
         .map(|init| init.agent_capabilities.clone())
         .unwrap_or_default();
-    let (mut mcp_servers, mut notices) = agent.config.mcp_servers(&capabilities.mcp_capabilities);
-    let binding = match shared.mcp.declare(
+    let configured = agent
+        .config
+        .configured_mcp_servers(&capabilities.mcp_capabilities);
+    let mut notices: Vec<String> = configured
+        .iter()
+        .filter_map(ConfiguredMcpServer::warning)
+        .collect();
+    let mut mcp_servers: Vec<McpServer> = configured
+        .iter()
+        .filter_map(|server| server.server.as_ref().ok().cloned())
+        .collect();
+    let declared = match shared.mcp.declare(
         client_tools(agent),
         host_tools(agent),
         &capabilities.mcp_capabilities,
@@ -2312,13 +2327,14 @@ pub(crate) fn setup(
     ) {
         Ok((server, binding)) => {
             mcp_servers.push(server);
-            Some(binding)
+            Ok(binding)
         }
         Err(why) => {
             notices.push(format!("weave's tools are unavailable: {why}"));
-            None
+            Err(why)
         }
     };
+    let servers = Servers::new(declared, &configured);
     if !additional_directories.is_empty()
         && capabilities
             .session_capabilities
@@ -2336,7 +2352,7 @@ pub(crate) fn setup(
             mcp_servers,
         },
         notices,
-        binding,
+        servers,
     )
 }
 
@@ -2425,9 +2441,9 @@ async fn take_up_with(
         shared.git.locate(&cwd),
     );
     let instance = instance?;
-    let (setup, notices, binding) = setup(shared, agent, &instance, cwd, additional_directories);
+    let (setup, notices, servers) = setup(shared, agent, &instance, cwd, additional_directories);
     match reopen(
-        shared, instance, session_id, setup, binding, agent, policy, false, git,
+        shared, instance, session_id, setup, servers, agent, policy, false, git,
     )
     .await
     {
@@ -2590,7 +2606,7 @@ async fn run_now(
                 shared.git.locate(&cwd),
             );
             let instance = instance?;
-            let (setup, more, binding) =
+            let (setup, more, servers) =
                 setup(shared, &agent, &instance, cwd, additional_directories);
             notices = more;
             let response = match instance.connection.new_session(&setup).await {
@@ -2617,7 +2633,7 @@ async fn run_now(
                     started_by,
                     started_by_host,
                 },
-                binding,
+                servers,
                 git,
             )?
         }
@@ -2680,7 +2696,7 @@ async fn reopen(
     mut instance: Instance,
     session_id: SessionId,
     setup: SessionSetup,
-    binding: Option<Binding>,
+    servers: Servers,
     agent: &Agent,
     policy: PermissionPolicy,
     replay: bool,
@@ -2800,7 +2816,7 @@ async fn reopen(
             started_by,
             started_by_host,
         },
-        binding,
+        servers,
         git,
     ) {
         Ok(session) => Ok(session),
@@ -2880,7 +2896,7 @@ fn open(
     policy: PermissionPolicy,
     snapshot: Snapshot,
     origin: Origin,
-    binding: Option<Binding>,
+    servers: Servers,
     git: Option<GitLocation>,
 ) -> Result<SessionHandle, Error> {
     let (journal, blank, title, agent_title, last_activity_ms, queue, starter) = match origin {
@@ -2964,7 +2980,7 @@ fn open(
             cwd,
             additional_directories,
             blank,
-            binding,
+            servers,
             title,
             agent_title,
             last_activity_ms,

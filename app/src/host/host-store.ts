@@ -647,7 +647,7 @@ export class HostStore {
             this.#journalEvent(entry, event.params);
             return;
           case 'session/changed': {
-            const { sessionId, activity, clients, title, blank } = event.params;
+            const { sessionId, activity, clients, title, blank, mcpServers } = event.params;
             const followed = this.#followed.get(sessionKey(entry.record.hostId, sessionId));
             if (followed?.state) {
               followed.state = {
@@ -656,6 +656,7 @@ export class HostStore {
                 ...(clients !== undefined && clients !== null ? { clients } : {}),
                 ...(title ? { title } : {}),
                 ...(blank !== undefined && blank !== null ? { blank } : {}),
+                ...(mcpServers ? { mcpServers } : {}),
               };
             }
             const listing = entry.sessions.find(({ info }) => info.sessionId === sessionId);
@@ -1530,6 +1531,9 @@ export class HostStore {
             ...(selected.reopening ? { reopening: true } : {}),
             ...(selected.loading ? { loading: true } : {}),
             ...(selected.terminals ? { terminals: selected.terminals.list.map(terminalSummary) } : {}),
+            ...(this.#hosts.get(selected.hostId)?.connection?.supports(HOST_PROTOCOL.features.mcpServers)
+              ? { mcpServers: selected.state?.mcpServers ?? [] }
+              : {}),
           }
         : undefined,
       unread: this.#read.unread(),

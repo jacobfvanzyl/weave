@@ -10,7 +10,9 @@
 //!
 //! Every session setup declares the server afresh, under a new `serverId` or token: a
 //! [`Binding`]. It learns its session's id once the agent has given it, since calls may come
-//! before then, and its declaration goes when it's dropped.
+//! before then, and its declaration goes when it's dropped. With the configured servers, it
+//! makes up the session's [`Servers`], whose statuses its clients are shown (WVE-160): the
+//! Host's own server is connected once the agent has spoken to it.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,6 +52,11 @@ use weave_acp_core::schema::McpServer;
 use weave_acp_core::schema::McpServerAcp;
 use weave_acp_core::schema::McpServerStdio;
 use weave_acp_core::schema::SessionId;
+use weave_agents::config::ConfiguredMcpServer;
+use weave_host_protocol::mcp::McpServerSource;
+use weave_host_protocol::mcp::McpServerState;
+use weave_host_protocol::mcp::McpServerStatus;
+use weave_host_protocol::mcp::McpTransport;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::Tool;
 
@@ -97,6 +104,10 @@ struct Declared {
     host_tools: Vec<String>,
     /// The session's id, once the agent has given it.
     session: watch::Sender<Option<SessionId>>,
+    /// How the agent reaches it.
+    transport: McpTransport,
+    /// The agent has spoken to it in 2026-07-28.
+    connected: AtomicBool,
     /// The agent spoke an MCP revision before 2026-07-28.
     refused: AtomicBool,
     /// Its session was told so.
@@ -127,7 +138,110 @@ impl Binding {
         self.declared.session.send_replace(Some(session_id.clone()));
         if let Some(mcp) = self.mcp.upgrade() {
             mcp.tell_if_refused(&self.declared);
+            if self.declared.connected.load(Ordering::Relaxed) {
+                mcp.tell_changed(&self.declared);
+            }
         }
+    }
+
+    /// How the server is.
+    fn status(&self) -> McpServerStatus {
+        let (state, reason) = if self.declared.refused.load(Ordering::Relaxed) {
+            (McpServerState::Unavailable, Some(REFUSED.to_owned()))
+        } else if self.declared.connected.load(Ordering::Relaxed) {
+            (McpServerState::Connected, None)
+        } else {
+            (McpServerState::Declared, None)
+        };
+        McpServerStatus {
+            name: SERVER_NAME.to_owned(),
+            source: McpServerSource::Host,
+            transport: Some(self.declared.transport),
+            state,
+            reason,
+        }
+    }
+}
+
+/// The MCP servers one session setup gives its agent: the Host's own, declared or not, and the
+/// configured ones, passed on or skipped.
+pub(crate) struct Servers {
+    /// The Host's own server's declaration, which goes with the agent's process.
+    binding: Option<Binding>,
+    /// Why the Host's own server couldn't be declared, when it couldn't.
+    undeclared: Option<String>,
+    configured: Vec<McpServerStatus>,
+}
+
+impl Servers {
+    pub(crate) fn new(
+        declared: Result<Binding, String>,
+        configured: &[ConfiguredMcpServer],
+    ) -> Self {
+        let (binding, undeclared) = match declared {
+            Ok(binding) => (Some(binding), None),
+            Err(why) => (None, Some(why)),
+        };
+        let configured = configured
+            .iter()
+            .map(|server| match &server.server {
+                Ok(declared) => McpServerStatus {
+                    name: server.name.clone(),
+                    source: McpServerSource::Config,
+                    transport: Some(transport(declared)),
+                    state: McpServerState::Passed,
+                    reason: None,
+                },
+                Err(why) => McpServerStatus {
+                    name: server.name.clone(),
+                    source: McpServerSource::Config,
+                    transport: None,
+                    state: McpServerState::Skipped,
+                    reason: Some(why.clone()),
+                },
+            })
+            .collect();
+        Self {
+            binding,
+            undeclared,
+            configured,
+        }
+    }
+
+    /// The agent named the session these servers serve.
+    pub(crate) fn bind(&self, session_id: &SessionId) {
+        if let Some(binding) = &self.binding {
+            binding.bind(session_id);
+        }
+    }
+
+    /// Each server's status: the Host's own first, then the configured ones in order.
+    pub(crate) fn statuses(&self) -> Vec<McpServerStatus> {
+        let own = match (&self.binding, &self.undeclared) {
+            (Some(binding), _) => Some(binding.status()),
+            (None, Some(why)) => Some(McpServerStatus {
+                name: SERVER_NAME.to_owned(),
+                source: McpServerSource::Host,
+                transport: None,
+                state: McpServerState::Unavailable,
+                reason: Some(why.clone()),
+            }),
+            (None, None) => None,
+        };
+        own.into_iter()
+            .chain(self.configured.iter().cloned())
+            .collect()
+    }
+}
+
+/// How the agent reaches `server`.
+fn transport(server: &McpServer) -> McpTransport {
+    match server {
+        McpServer::Stdio(_) => McpTransport::Stdio,
+        McpServer::Http(_) => McpTransport::Http,
+        McpServer::Sse(_) => McpTransport::Sse,
+        McpServer::Acp(_) => McpTransport::Acp,
+        _ => McpTransport::Other,
     }
 }
 
@@ -195,6 +309,8 @@ impl Mcp {
             host_tools: host_tools.iter().map(|tool| tool.name.clone()).collect(),
             tools: client_tools.into_iter().chain(host_tools).collect(),
             session: watch::Sender::new(None),
+            transport: transport(&server),
+            connected: AtomicBool::new(false),
             refused: AtomicBool::new(false),
             told: AtomicBool::new(false),
         });
@@ -248,8 +364,31 @@ impl Mcp {
 
     /// The agent behind `declared` can't speak 2026-07-28: tell its session, once.
     fn refused(&self, declared: &Declared) {
-        declared.refused.store(true, Ordering::Relaxed);
+        if !declared.refused.swap(true, Ordering::Relaxed) {
+            self.tell_changed(declared);
+        }
         self.tell_if_refused(declared);
+    }
+
+    /// The agent behind `declared` spoke to it in 2026-07-28.
+    fn connected(&self, declared: &Declared) {
+        if !declared.connected.swap(true, Ordering::Relaxed) {
+            self.tell_changed(declared);
+        }
+    }
+
+    /// Tell `declared`'s session, once it's known, that its servers' statuses changed.
+    fn tell_changed(&self, declared: &Declared) {
+        let Some(session_id) = declared.session.borrow().clone() else {
+            return;
+        };
+        let session = self
+            .shared
+            .upgrade()
+            .and_then(|shared| shared.registry().live(&session_id));
+        if let Some(session) = session {
+            let _ = session.send(Command::McpServersChanged);
+        }
     }
 
     fn tell_if_refused(&self, declared: &Declared) {
@@ -303,6 +442,7 @@ impl Mcp {
         if requested.as_ref().and_then(Value::as_str) != Some(MCP_PROTOCOL_VERSION) {
             return McpOutcome::Error(unsupported(requested));
         }
+        self.connected(&declared);
         match method.as_str() {
             "server/discover" => McpOutcome::Result(complete(json!({
                 "supportedVersions": [MCP_PROTOCOL_VERSION],

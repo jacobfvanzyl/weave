@@ -1,0 +1,18 @@
+---
+source: tui/src/render_snapshots.rs
+expression: "thread_panel(vec![mcp_server(\"weave\", McpServerSource::Host,\nSome(McpTransport::Stdio), McpServerState::Unavailable,\nSome(\"This agent's MCP client predates MCP 2026-07-28, so it can't use weave's tools.\"),)],\n&[],)"
+---
+── transcript ──
+
+── viewport ──
+
+  Thread
+
+  MCP servers
+  • weave  unavailable · weave's own · stdio
+           This agent's MCP client predates MCP 2026-07-28, so it can't
+           use weave's tools.
+
+  The agent may have more of its own, which only it knows of.
+
+  esc back

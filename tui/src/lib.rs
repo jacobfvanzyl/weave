@@ -42,6 +42,7 @@ mod style;
 mod subagents;
 #[cfg(test)]
 mod test_backend;
+mod thread_panel;
 mod thumbnails;
 mod tool_call;
 mod tool_output;
