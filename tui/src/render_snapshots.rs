@@ -980,6 +980,7 @@ fn started_elsewhere(chat: &mut ChatWidget, replayed: bool) {
             prompt: vec!["Fix the flaky parser test".into()],
             elapsed: std::time::Duration::from_secs(140),
             replayed,
+            started_by: None,
         },
     );
 }
@@ -1187,6 +1188,29 @@ fn fullscreen_lone_tool_call() {
         },
     );
     insta::assert_snapshot!(both_views(&mut chat, 22, 22));
+}
+
+/// A turn a service started says what started it, above its prompt.
+#[test]
+fn fullscreen_turn_a_service_started() {
+    let mut chat = fullscreen_chat();
+    journal(
+        &mut chat,
+        0,
+        ChatEvent::TurnStarted {
+            session_id: "s1".into(),
+            prompt: vec!["Review yesterday's merged pull requests".into()],
+            elapsed: std::time::Duration::ZERO,
+            replayed: true,
+            started_by: Some("schedule daily-review, via Dispatcher".to_owned()),
+        },
+    );
+    journal_update(
+        &mut chat,
+        5,
+        SessionUpdate::AgentMessageChunk(text("Three merged; none need follow-up.")),
+    );
+    insta::assert_snapshot!(full_screen(&chat, 14));
 }
 
 /// A replayed thread's runs fold as a live one's did, timed by the journal.

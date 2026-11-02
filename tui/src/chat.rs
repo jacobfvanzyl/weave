@@ -1584,12 +1584,16 @@ impl ChatWidget {
                 prompt,
                 elapsed,
                 replayed,
+                started_by,
             } => {
                 if !self.is_active(&session_id) {
                     return Vec::new();
                 }
                 // Anything still live belongs to what came before.
                 self.finish_live_cells();
+                if let Some(started_by) = started_by {
+                    self.push_cell(TranscriptCell::info(&format!("Started by {started_by}")));
+                }
                 for block in prompt {
                     self.handle_update(SessionUpdate::UserMessageChunk(ContentChunk::new(block)));
                 }
@@ -5669,6 +5673,7 @@ mod tests {
             prompt: vec![ContentBlock::from("from the journal".to_owned())],
             elapsed: Duration::from_secs(1),
             replayed,
+            started_by: None,
         };
         let ended = |replayed| ChatEvent::TurnEnded {
             session_id: "s1".into(),
@@ -7006,6 +7011,7 @@ mod tests {
             prompt,
             elapsed: Duration::ZERO,
             replayed: true,
+            started_by: None,
         }
     }
 

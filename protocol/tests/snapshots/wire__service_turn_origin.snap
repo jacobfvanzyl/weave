@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&TurnOrigin::Service\n{\n    name: \"Dispatcher\".to_owned(), label: \"schedule daily-review\".to_owned(),\n    id: \"o-01J9Z\".to_owned(),\n})"
+---
+{
+  "service": {
+    "name": "Dispatcher",
+    "label": "schedule daily-review",
+    "id": "o-01J9Z"
+  }
+}

@@ -309,6 +309,7 @@ async fn said(
             prompt: vec![ContentBlock::from(text)],
             key: None,
             caller: None,
+            origin: None,
         })
         .await
         .expect("queue/add")
@@ -954,6 +955,7 @@ async fn a_peer_host_may_only_do_what_the_host_tools_need() {
             trace: false,
             key: None,
             caller: None,
+            origin: None,
         })
         .await
         .map(drop),
@@ -1161,6 +1163,7 @@ async fn a_host_its_peer_revoked_as_the_last_device_gives_up_what_it_follows_and
         trace: false,
         key: Some("k-revoked".to_owned()),
         caller: Some(caller.clone()),
+        origin: None,
     };
     let mut json = mini.peers_json();
     json["sending"] = serde_json::json!([{
@@ -1384,6 +1387,7 @@ async fn a_start_a_peer_never_answered_is_sent_again_under_its_key_and_reported(
         trace: false,
         key: Some("k-crash".to_owned()),
         caller: Some(caller.clone()),
+        origin: None,
     };
     let sending = serde_json::json!([{
         "hostId": b_id,

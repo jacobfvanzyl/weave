@@ -60,12 +60,13 @@ export type JournalReading = {
 const clientNames: Record<string, string> = { 'weave-tui': 'the TUI', 'weave-app': 'the weave app' };
 
 /**
- * Where another client's prompt came from: its device, its client, a headless run, or another
- * session: one whose agent prompted this one, or one the Host reports on, on this Host or a
- * peer Host.
+ * Where another client's prompt came from: its device, its client, a headless run, what started
+ * a service's turn, or another session: one whose agent prompted this one, or one the Host
+ * reports on, on this Host or a peer Host.
  */
 export function originLabel(origin: TurnOrigin): string {
   if ('run' in origin) return 'a headless run';
+  if ('service' in origin) return `${origin.service.label}, via ${origin.service.name}`;
   if ('session' in origin) {
     const { host, hostName } = origin.session;
     if (hostName) return `a thread on ${hostName}`;

@@ -209,6 +209,7 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
                 prompt: vec![ContentBlock::from("write notes.txt hi".to_owned())],
                 key: None,
                 caller: None,
+                origin: None,
             })
             .await
             .expect("queue/add");

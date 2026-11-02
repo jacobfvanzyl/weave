@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Empty;
+use crate::sessions::ServiceOrigin;
 
 /// A turn, by the id of the prompt that started it: the prompt's `queuedId` when it came
 /// through the queue (so it's known before the turn starts), else one the Host gives it. Unique
@@ -76,6 +77,9 @@ pub struct SteerTurnRequest {
     /// steer's origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<SessionId>,
+    /// A service's only: what started the steer, which its origin names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ServiceOrigin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]

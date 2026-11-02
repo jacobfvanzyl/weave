@@ -561,6 +561,7 @@ impl TestClient {
                 prompt: vec![ContentBlock::from(text.to_owned())],
                 key: key.map(str::to_owned),
                 caller: None,
+                origin: None,
             })
             .await
     }
@@ -571,6 +572,7 @@ impl TestClient {
                 session_id: session_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
                 caller: None,
+                origin: None,
             })
             .await
             .expect("turn/steer")
@@ -859,6 +861,7 @@ fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest
         trace: false,
         key: None,
         caller: None,
+        origin: None,
     }
 }
 
@@ -3087,6 +3090,7 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
             trace: false,
             key: None,
             caller: None,
+            origin: None,
         })
         .await
         .expect("session/run");

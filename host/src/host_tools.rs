@@ -192,6 +192,7 @@ async fn on_peer(
                 session_id: arguments.session_id,
                 prompt: vec![ContentBlock::from(arguments.prompt)],
                 caller: Some(me.session_id),
+                origin: None,
             };
             to_text(&handle.send(request).await.map_err(there)?)
         }
@@ -229,6 +230,7 @@ async fn prompt_on(
         prompt: vec![ContentBlock::from(arguments.prompt)],
         key: Some(peer_key(&me.session_id, arguments.key)),
         caller: Some(me.session_id.clone()),
+        origin: None,
     };
     let sending = Sending {
         host_id,
@@ -340,6 +342,7 @@ async fn start_on(
         trace: false,
         key: Some(peer_key(&me.session_id, arguments.key)),
         caller: Some(me.session_id.clone()),
+        origin: None,
     };
     let sending = Sending {
         host_id: host_id.to_owned(),
@@ -444,6 +447,7 @@ async fn start(
         trace: false,
         key: arguments.key,
         caller: None,
+        origin: None,
     };
     let origin = TurnOrigin::Session {
         session_id: me.session_id.clone(),
@@ -521,6 +525,7 @@ async fn prompt(
         prompt: vec![ContentBlock::from(arguments.prompt)],
         key: arguments.key,
         caller: None,
+        origin: None,
     };
     let origin = TurnOrigin::Session {
         session_id: me,
@@ -549,6 +554,7 @@ async fn steer(
         session_id: arguments.session_id,
         prompt: vec![ContentBlock::from(arguments.prompt)],
         caller: None,
+        origin: None,
     };
     let origin = TurnOrigin::Session {
         session_id: caller.summary().session_id,
@@ -773,6 +779,7 @@ pub(crate) async fn tell(
                     session_id: caller.clone(),
                     prompt: prompt.clone(),
                     caller: None,
+                    origin: None,
                 },
                 origin.clone(),
             )
@@ -785,6 +792,7 @@ pub(crate) async fn tell(
                 prompt,
                 key: None,
                 caller: None,
+                origin: None,
             };
             client::add_queued(&shared, request, origin)
                 .await

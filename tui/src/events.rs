@@ -57,6 +57,8 @@ pub enum ChatEvent {
         elapsed: Duration,
         /// From the journal, before this client was there: history, not news.
         replayed: bool,
+        /// What started it, when a service did: "schedule daily-review, via Dispatcher".
+        started_by: Option<String>,
     },
     /// A message joined the running turn: this client's, another's, or one in the replay.
     TurnSteered {

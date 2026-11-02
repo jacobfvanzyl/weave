@@ -76,6 +76,16 @@ describe('transcriptEvents', () => {
     ]);
   });
 
+  it('names what started a service\'s turn, and the service', () => {
+    const events = [
+      event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'Review the merged pull requests' }], origin: { service: { name: 'Dispatcher', label: 'schedule daily-review', id: 'o-1' } } }),
+    ];
+    const transcript = events.flatMap((notification) => transcriptEvents(notification, live)).reduce(reduceAcpEvent, createTranscript('s-1'));
+    expect(transcript.entries.map((entry) => entry.kind === 'message' ? [entry.role, entry.origin] : entry.kind)).toEqual([
+      ['user', 'schedule daily-review, via Dispatcher'],
+    ]);
+  });
+
   it('changes no turn state for history', () => {
     const started = event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'First' }], origin: { run: {} } });
     expect(transcriptEvents(started, replayed).map(({ type }) => type)).toEqual(['prompt']);

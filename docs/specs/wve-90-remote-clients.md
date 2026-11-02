@@ -263,7 +263,9 @@ naming the ones it starts need:
 Everything else answers `forbidden`, before any handler sees it: the computer's files,
 terminals and worktrees, opening or attaching to a session as a client of it, answering a
 thread's pending requests, devices, peers, and agents' sign-in and updates. Its turns' origin
-names its device, as any remote client's does.
+names its device, as any remote client's does, unless it says what started a turn (`origin` on
+`session/run`, `queue/add` and `turn/steer`; see
+[Service origins](wve-85-host-protocol.md#service-origins)).
 
 ## Security
 

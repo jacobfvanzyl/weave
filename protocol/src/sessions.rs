@@ -129,6 +129,25 @@ pub enum TurnOrigin {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         report: bool,
     },
+    /// A service's turn (ADR 0027), naming what started it in the service's own words.
+    Service {
+        /// The name the service paired with, which the Host gives, never the request.
+        name: String,
+        /// What started the turn, such as "schedule daily-review".
+        label: String,
+        /// The service's own id for it, such as a trigger's occurrence.
+        id: String,
+    },
+}
+
+/// What started a turn a service sends (ADR 0027), which its origin names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ServiceOrigin {
+    /// What started it, such as "schedule daily-review" or "your message from iPhone".
+    pub label: String,
+    /// The service's own id for it, such as a trigger's occurrence.
+    pub id: String,
 }
 
 /// A turn running now.
@@ -234,8 +253,8 @@ pub struct SessionListing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by_host: Option<String>,
     /// The client whose `session/create` or `session/attach` opened it last, while it's open:
-    /// a paired device's names its `device`. Absent for one a headless run or a Host taking it
-    /// up opened.
+    /// a paired device's names its `device`. A service's `session/run` that opened it gives
+    /// the turn's origin. Absent for one another headless run or a Host taking it up opened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<TurnOrigin>,
     /// When it opened last, while it's open.
@@ -627,6 +646,9 @@ pub struct RunRequest {
     /// turn's origin names, and a new session's `startedBy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<SessionId>,
+    /// A service's only: what started the turn, which its origin names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ServiceOrigin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]

@@ -183,7 +183,8 @@ except `host/shutdown`, `devices/*`, `peers/*`, agent sign-in and sign-out, and 
 (`Connection::refusal`) answers either `forbidden` for any method outside its list (`FOR_PEERS`,
 ADR 0024; `FOR_SERVICES`, ADR 0027), attaching without `observe` or running with `attach`. A
 service, such as the Dispatcher, is a device whose `NewDevice.service` said so at pairing, never
-a peer Host too. The Host
+a peer Host too; `Connection::origin_for` lets only a service name what started a turn
+(`TurnOrigin::Service`, its name taken from the paired device). The Host
 pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent beyond the
 replays it asked for (a `Backlog`, which an attach tells its replay's size), which attaches again
 after its position. Remote tests (`tests/remote.rs`) use a real

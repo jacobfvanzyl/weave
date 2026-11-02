@@ -100,6 +100,22 @@ export type TurnOrigin =
          */
         report?: boolean;
       };
+    }
+  | {
+      service: {
+        /**
+         * The name the service paired with, which the Host gives, never the request.
+         */
+        name: string;
+        /**
+         * What started the turn, such as "schedule daily-review".
+         */
+        label: string;
+        /**
+         * The service's own id for it, such as a trigger's occurrence.
+         */
+        id: string;
+      };
     };
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -1372,8 +1388,8 @@ export interface SessionListing {
   startedByHost?: string | null;
   /**
    * The client whose `session/create` or `session/attach` opened it last, while it's open:
-   * a paired device's names its `device`. Absent for one a headless run or a Host taking it
-   * up opened.
+   * a paired device's names its `device`. A service's `session/run` that opened it gives
+   * the turn's origin. Absent for one another headless run or a Host taking it up opened.
    */
   openedBy?: TurnOrigin | null;
   /**
@@ -3278,6 +3294,22 @@ export interface QueuedPrompt {
            */
           report?: boolean;
         };
+      }
+    | {
+        service: {
+          /**
+           * The name the service paired with, which the Host gives, never the request.
+           */
+          name: string;
+          /**
+           * What started the turn, such as "schedule daily-review".
+           */
+          label: string;
+          /**
+           * The service's own id for it, such as a trigger's occurrence.
+           */
+          id: string;
+        };
       };
   queuedAt: number;
 }
@@ -4553,6 +4585,10 @@ export interface RunRequest {
    * turn's origin names, and a new session's `startedBy`.
    */
   caller?: SessionId | null;
+  /**
+   * A service's only: what started the turn, which its origin names.
+   */
+  origin?: ServiceOrigin | null;
 }
 /**
  * How a session's permission requests are answered.
@@ -4566,6 +4602,22 @@ export interface PermissionPolicy1 {
    * What happens to the rest.
    */
   otherwise?: "ask" | "reject";
+}
+/**
+ * What started a turn a service sends (ADR 0027), which its origin names.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ServiceOrigin".
+ */
+export interface ServiceOrigin {
+  /**
+   * What started it, such as "schedule daily-review" or "your message from iPhone".
+   */
+  label: string;
+  /**
+   * The service's own id for it, such as a trigger's occurrence.
+   */
+  id: string;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -4633,6 +4685,10 @@ export interface SteerTurnRequest {
    * steer's origin names.
    */
   caller?: SessionId | null;
+  /**
+   * A service's only: what started the steer, which its origin names.
+   */
+  origin?: ServiceOrigin | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -4685,6 +4741,10 @@ export interface AddQueuedRequest {
    * turn's origin names.
    */
   caller?: SessionId | null;
+  /**
+   * A service's only: what started the turn, which its origin names.
+   */
+  origin?: ServiceOrigin | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema

@@ -119,6 +119,7 @@ use weave_host_protocol::sessions::ReopenSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
+use weave_host_protocol::sessions::ServiceOrigin;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionStatus;
@@ -890,21 +891,43 @@ impl Connection {
         }
     }
 
-    /// The origin of a turn or steer this client sends for `caller`: the session on the peer
-    /// Host whose agent asks, which only a peer Host names; otherwise this client's.
-    fn origin_for(&self, hello: &Hello, caller: Option<SessionId>) -> Result<TurnOrigin, Error> {
-        let Some(session_id) = caller else {
-            return Ok(self.origin(hello));
-        };
-        let host = self.peer_host().ok_or_else(|| {
-            Error::invalid_params().data("only a peer Host names the session that asks")
-        })?;
-        Ok(TurnOrigin::Session {
-            session_id,
-            host: Some(host),
-            host_name: self.device_name(),
-            report: false,
-        })
+    /// The origin of a turn or steer this client sends for `caller`, the session on the peer
+    /// Host whose agent asks, which only a peer Host names, or with `origin`, what started it,
+    /// which only a service names; otherwise this client's, or `otherwise` when given.
+    fn origin_for(
+        &self,
+        hello: &Hello,
+        caller: Option<SessionId>,
+        origin: Option<ServiceOrigin>,
+        otherwise: Option<TurnOrigin>,
+    ) -> Result<TurnOrigin, Error> {
+        match (caller, origin) {
+            (Some(_), Some(_)) => {
+                Err(Error::invalid_params().data("a turn names a caller or an origin, not both"))
+            }
+            (Some(session_id), None) => {
+                let host = self.peer_host().ok_or_else(|| {
+                    Error::invalid_params().data("only a peer Host names the session that asks")
+                })?;
+                Ok(TurnOrigin::Session {
+                    session_id,
+                    host: Some(host),
+                    host_name: self.device_name(),
+                    report: false,
+                })
+            }
+            (None, Some(ServiceOrigin { label, id })) => {
+                let name = lock(&self.device)
+                    .as_ref()
+                    .filter(|device| device.service)
+                    .map(|device| device.name.clone())
+                    .ok_or_else(|| {
+                        Error::invalid_params().data("only a service names what started a turn")
+                    })?;
+                Ok(TurnOrigin::Service { name, label, id })
+            }
+            (None, None) => Ok(otherwise.unwrap_or_else(|| self.origin(hello))),
+        }
     }
 
     fn hello(&self, request: HelloRequest) -> Result<HelloResponse, Error> {
@@ -1859,7 +1882,8 @@ impl Connection {
 
     async fn add_queued(&self, request: AddQueuedRequest) -> Result<AddQueuedResponse, Error> {
         let hello = self.hello_info()?;
-        let origin = self.origin_for(&hello, request.caller.clone())?;
+        let origin =
+            self.origin_for(&hello, request.caller.clone(), request.origin.clone(), None)?;
         add_queued(&self.shared, request, origin).await
     }
 
@@ -1890,7 +1914,8 @@ impl Connection {
 
     async fn steer_turn(&self, request: SteerTurnRequest) -> Result<SteerTurnResponse, Error> {
         let hello = self.hello_info()?;
-        let origin = self.origin_for(&hello, request.caller.clone())?;
+        let origin =
+            self.origin_for(&hello, request.caller.clone(), request.origin.clone(), None)?;
         steer_turn(&self.shared, request, origin).await
     }
 
@@ -1931,10 +1956,13 @@ impl Connection {
         let hello = self.hello_info()?;
         // A peer Host's agent starting a session here: the session is a delegated session of
         // the one on the peer that asks.
-        let (origin, started_by) = match request.caller.clone() {
-            Some(caller) => (self.origin_for(&hello, Some(caller.clone()))?, Some(caller)),
-            None => (TurnOrigin::Run {}, None),
-        };
+        let origin = self.origin_for(
+            &hello,
+            request.caller.clone(),
+            request.origin.clone(),
+            Some(TurnOrigin::Run {}),
+        )?;
+        let started_by = request.caller.clone();
         let link = request.attach.then(|| {
             let client_tools = self.client_tools();
             let backlog = self.backlog();
@@ -2034,6 +2062,7 @@ pub(crate) async fn add_queued(
         prompt,
         key,
         caller: _,
+        origin: _,
     } = request;
     keyed(
         shared,
@@ -2633,6 +2662,7 @@ async fn run_now(
         trace,
         key: _,
         caller: _,
+        origin: _,
     } = request;
     let cwd = place(shared, cwd, remote.as_deref()).await?;
     let started_by_host = match &origin {
@@ -2645,6 +2675,7 @@ async fn run_now(
         .as_ref()
         .and_then(|session_id| shared.registry().live(session_id));
     let mut notices = Vec::new();
+    let opening = live.is_none();
     let session = match (live, session_id) {
         // An open session keeps its own policy.
         (Some(session), _) => session,
@@ -2708,6 +2739,10 @@ async fn run_now(
             )?
         }
     };
+    // A service's run opened it for what started it, as listings say.
+    if opening && let TurnOrigin::Service { .. } = &origin {
+        session.opened_by(origin.clone());
+    }
     let root = session.summary().session_id;
     let owner = link.as_ref().map_or(0, |(client, _)| *client);
     let trace = if trace {

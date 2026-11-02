@@ -282,6 +282,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                     session_id: SessionId::new(session_id.clone()),
                     prompt: vec![ContentBlock::from(prompt)],
                     caller: None,
+                    origin: None,
                 })
                 .await
                 .context("steering the thread")?;
@@ -444,6 +445,7 @@ async fn add_prompt(
             prompt: vec![ContentBlock::from(prompt)],
             key: args.key,
             caller: None,
+            origin: None,
         })
         .await
         .context("prompting the thread")
@@ -570,6 +572,7 @@ fn describe_turn(latest: &LatestTurn, asked: bool) -> String {
     let from = match &latest.origin {
         TurnOrigin::Client { name, device, .. } => device.clone().unwrap_or_else(|| name.clone()),
         TurnOrigin::Run {} => "a headless run".to_owned(),
+        TurnOrigin::Service { name, label, .. } => format!("{label}, via {name}"),
         TurnOrigin::Session {
             session_id,
             host,

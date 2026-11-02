@@ -1042,6 +1042,10 @@ impl Actor {
                  attached."
                     .to_owned(),
             ),
+            Some(TurnOrigin::Service { label, .. }) => Err(format!(
+                "This turn came from {label}, through a service, so no person's device is \
+                 attached."
+            )),
             Some(TurnOrigin::Client { id, .. }) => self
                 .clients
                 .iter()

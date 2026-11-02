@@ -669,6 +669,12 @@ impl App {
                         prompt,
                         elapsed: since(at),
                         replayed,
+                        started_by: match origin {
+                            TurnOrigin::Service { name, label, .. } => {
+                                Some(format!("{label}, via {name}"))
+                            }
+                            _ => None,
+                        },
                     },
                     at,
                 ));
@@ -773,6 +779,7 @@ impl App {
                     Some(TurnOrigin::Session { host: Some(_), .. }) => {
                         "A thread on another Host".to_owned()
                     }
+                    Some(TurnOrigin::Service { name, .. }) => name,
                 },
             },
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
@@ -1182,6 +1189,7 @@ impl App {
                                 prompt,
                                 key: None,
                                 caller: None,
+                                origin: None,
                             })
                             .await
                             .err()
@@ -1238,6 +1246,7 @@ impl App {
                                 session_id: session_id.clone(),
                                 prompt,
                                 caller: None,
+                                origin: None,
                             })
                             .await;
                         AppEvent::Steered {

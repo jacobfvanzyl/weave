@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::Empty;
 use crate::Timestamp;
+use crate::sessions::ServiceOrigin;
 use crate::sessions::TurnOrigin;
 
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that holds sessions' queues.
@@ -63,6 +64,9 @@ pub struct AddQueuedRequest {
     /// turn's origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<SessionId>,
+    /// A service's only: what started the turn, which its origin names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ServiceOrigin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]

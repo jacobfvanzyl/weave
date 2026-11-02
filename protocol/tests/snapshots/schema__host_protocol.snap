@@ -865,7 +865,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The client whose `session/create` or `session/attach` opened it last, while it's open:\na paired device's names its `device`. Absent for one a headless run or a Host taking it\nup opened."
+          "description": "The client whose `session/create` or `session/attach` opened it last, while it's open:\na paired device's names its `device`. A service's `session/run` that opened it gives\nthe turn's origin. Absent for one another headless run or a Host taking it up opened."
         },
         "openedAt": {
           "type": [
@@ -1091,6 +1091,38 @@ expression: schema()
           ],
           "additionalProperties": false,
           "description": "Another session: one whose agent began the turn through a Host tool, or, in a report,\nthe session the Host reports on (ADR 0023)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "The name the service paired with, which the Host gives, never the request.",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "What started the turn, such as \"schedule daily-review\".",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "The service's own id for it, such as a trigger's occurrence.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "label",
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "service"
+          ],
+          "additionalProperties": false,
+          "description": "A service's turn (ADR 0027), naming what started it in the service's own words."
         }
       ],
       "description": "Who started a turn."
@@ -5906,6 +5938,17 @@ expression: schema()
             }
           ],
           "description": "A peer Host's only (feature `peers`): the session on it whose agent asks, which the\nturn's origin names, and a new session's `startedBy`."
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServiceOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A service's only: what started the turn, which its origin names."
         }
       },
       "required": [
@@ -5914,6 +5957,24 @@ expression: schema()
         "prompt"
       ],
       "description": "`session/run`: open a session (this one, or a new one) and start a turn in it, without\nthe client having to stay."
+    },
+    "ServiceOrigin": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "What started it, such as \"schedule daily-review\" or \"your message from iPhone\"."
+        },
+        "id": {
+          "type": "string",
+          "description": "The service's own id for it, such as a trigger's occurrence."
+        }
+      },
+      "required": [
+        "label",
+        "id"
+      ],
+      "description": "What started a turn a service sends (ADR 0027), which its origin names."
     },
     "RunResponse": {
       "type": "object",
@@ -6024,6 +6085,17 @@ expression: schema()
             }
           ],
           "description": "A peer Host's only (feature `peers`): the session on it whose agent asks, which the\nsteer's origin names."
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServiceOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A service's only: what started the steer, which its origin names."
         }
       },
       "required": [
@@ -6115,6 +6187,17 @@ expression: schema()
             }
           ],
           "description": "A peer Host's only (feature `peers`): the session on it whose agent asks, which the\nturn's origin names."
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServiceOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A service's only: what started the turn, which its origin names."
         }
       },
       "required": [

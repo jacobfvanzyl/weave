@@ -140,6 +140,7 @@ use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::RunningTurn;
+use weave_host_protocol::sessions::ServiceOrigin;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionRemovedNotification;
@@ -688,6 +689,38 @@ fn peers() {
             trace: false,
             key: None,
             caller: Some("sess-a".into()),
+            origin: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "service_run_request",
+        message(&RunRequest {
+            agent_id: "claude".to_owned(),
+            cwd: "/Users/jaco/src/app".into(),
+            remote: None,
+            session_id: None,
+            additional_directories: Vec::new(),
+            mode: None,
+            prompt: vec![ContentBlock::from(
+                "Review yesterday's merged pull requests"
+            )],
+            policy: PermissionPolicy::ask(),
+            attach: false,
+            trace: false,
+            key: Some("daily-review@1760180000000".to_owned()),
+            caller: None,
+            origin: Some(ServiceOrigin {
+                label: "schedule daily-review".to_owned(),
+                id: "o-01J9Z".to_owned(),
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "service_turn_origin",
+        round_trip(&TurnOrigin::Service {
+            name: "Dispatcher".to_owned(),
+            label: "schedule daily-review".to_owned(),
+            id: "o-01J9Z".to_owned(),
         })
     );
     insta::assert_json_snapshot!(
@@ -913,6 +946,7 @@ fn sessions() {
             trace: false,
             key: None,
             caller: None,
+            origin: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -930,6 +964,7 @@ fn sessions() {
             trace: false,
             key: Some("nightly-2026-10-23".to_owned()),
             caller: None,
+            origin: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -1117,6 +1152,7 @@ fn turns() {
             session_id: "s-1".into(),
             prompt: vec![text("use the other branch")],
             caller: None,
+            origin: None,
         })
     );
     insta::assert_json_snapshot!(
@@ -1216,6 +1252,7 @@ fn queue() {
             prompt: vec![text("then update the docs")],
             key: Some("0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c12".to_owned()),
             caller: None,
+            origin: None,
         })
     );
     insta::assert_json_snapshot!(

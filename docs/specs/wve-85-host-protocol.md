@@ -397,7 +397,8 @@ type SessionListing = {
   git?: GitLocation;            // as the Host last read it while the session was open
   startedBy?: string;           // the session whose agent started it; see Delegated sessions
   startedByHost?: string;       // the peer Host that session is on; see Peer Hosts
-  openedBy?: TurnOrigin;        // open sessions: the client whose create or attach opened it last
+  openedBy?: TurnOrigin;        // open sessions: the client whose create or attach opened it last,
+                                // or the origin of a service's run that opened it
   openedAt?: number;            // and when
 };
 ```
@@ -605,7 +606,9 @@ device's name as `device`), `{"run": {}}` for a headless run, or
 turn through a Host tool, or `{"session": {"sessionId": "s-2", "report": true}}` for the Host's
 report on session `s-2` to the session whose agent began a turn there (see
 [Delegated sessions](#delegated-sessions)). A session on a peer Host adds that Host's id as
-`host`: `{"session": {"sessionId": "s-2", "host": "h-7Rk2"}}` (see [Peer Hosts](#peer-hosts)). Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
+`host`: `{"session": {"sessionId": "s-2", "host": "h-7Rk2"}}` (see [Peer Hosts](#peer-hosts)).
+A service's prompt may name what started it: `{"service": {"name": "Dispatcher", "label":
+"schedule daily-review", "id": "o-01J9Z"}}` (see [Service origins](#service-origins)). Prompts are journaled in `turnStarted`, not as made-up `user_message_chunk`
 updates. Terminal output an agent reports in `_meta` (`terminal_output_delta`) becomes
 `terminalOutput` and `terminalExit` events and is stripped from the update, so each chunk
 arrives once.
@@ -643,7 +646,7 @@ its `turnStarted` event. The session must be open, but the client needn't be att
 with the `queue` feature offers `queue/add` too, which starts a turn or queues the prompt
 behind the running one (see [Queue](#queue)).
 
-**`turn/steer`** `{sessionId, prompt: ContentBlock[], caller?}` →
+**`turn/steer`** `{sessionId, prompt: ContentBlock[], caller?, origin?}` →
 `{outcome: "steered", seq, turnId?} | {outcome: "notRunning"}`
 
 Feature `turn/steer`. Sends a steer: a message for the session's running turn, which joins
@@ -674,7 +677,7 @@ own, whose output reaches clients but whose end never does. The Host journals th
 Cancels the session's running turn (ACP `session/cancel`) and cancels its pending
 requests.
 
-**`session/run`** `{agentId, cwd, remote?, sessionId?, additionalDirectories?, mode?, prompt, policy, attach?, trace?, key?, caller?}` →
+**`session/run`** `{agentId, cwd, remote?, sessionId?, additionalDirectories?, mode?, prompt, policy, attach?, trace?, key?, caller?, origin?}` →
 `{sessionId, turnId?, state?: SessionState, policy?}`
 
 Opens a session (`sessionId`, as attaching would, or a new one) and starts a turn in it
@@ -688,7 +691,9 @@ offer agents terminal sign-in for one. `turnId` names the turn it started; a rep
 key names it too. `policy` (feature `peers`) is the policy the session runs under: the one
 asked for, or an open session's own; a repeat under a key leaves it out. `caller` is a peer
 Host's only: the session there whose agent asks, which the turn's origin names and a new
-session records as `startedBy` (see [Peer Hosts](#peer-hosts)).
+session records as `startedBy` (see [Peer Hosts](#peer-hosts)). `origin` is a service's only
+(see [Service origins](#service-origins)), and a session its run opens records the turn's
+origin as `openedBy`.
 `cwd` may be `~` or start with `~/` (feature `peers`), under the Host's home, and with `remote`
 it has to be a checkout of that repository, by its remote as `GitLocation.remote` gives it, or
 the request fails saying what's there, as a peer Host asks for the directory its agent works in.
@@ -762,7 +767,7 @@ type QueuedPrompt = {
   and isn't paused, so their queue runs with nobody attached, and those it stopped under
   mid-turn, which continue that turn first (see [Interrupted turns](#interrupted-turns)).
 
-**`queue/add`** `{sessionId, prompt: ContentBlock[], key?, caller?}` → `{queuedId, seq, started}`, where
+**`queue/add`** `{sessionId, prompt: ContentBlock[], key?, caller?, origin?}` → `{queuedId, seq, started}`, where
 `queuedId` is also the id of the turn it starts (see [Turn ids](#turn-ids))
 
 Adds a prompt to the end of the session's queue, with the client's origin. Any client may add
@@ -981,6 +986,20 @@ It isn't a subagent session.
   configuration's `[delegation]`. Neither limits prompting sessions it didn't start. A tool call
   past either fails as a tool error saying so. Delegated sessions on peer Hosts count toward
   `running`, and a session a peer Host's agent started counts as one level down there.
+
+## Service origins
+
+A service (ADR 0027; [Services](wve-90-remote-clients.md#services) in the remote clients spec)
+may say what started a turn it sends with `session/run`, `queue/add` or `turn/steer`:
+`origin: {label, id}`, where `label` is what started it in the service's own words ("schedule
+daily-review", "your message from iPhone") and `id` its own id for that, such as a trigger's
+occurrence. The turn's origin is `{"service": {"name", "label", "id"}}`, with `name` the name
+the service paired with, which the Host takes from the paired device, never from the request,
+as `turnStarted`, `turnSteered`, `queued`, `sessions/get` and a new session's `openedBy` carry
+it. Only a service may send `origin`, and not with `caller` (invalid params). The Host gives it
+no other meaning. Clients show it as "schedule daily-review, via Dispatcher"; the TUI says
+"Started by" that above the prompt. A client tool call in such a turn fails, since no person's
+device sent it.
 
 ## Peer Hosts
 

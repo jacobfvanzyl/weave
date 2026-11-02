@@ -64,15 +64,18 @@ use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
+use weave_host_protocol::sessions::ServiceOrigin;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::turns::StartTurnRequest;
+use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::websocket::APP_ORIGIN;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
@@ -607,19 +610,15 @@ async fn remote_clients_do_everything_but_administer_the_host() {
     remote.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_service_may_only_start_and_follow_threads() {
-    let world = World::new();
-    let daemon = world.daemon();
-    let url = listen(&daemon, RemoteConfig::default()).await;
-    let (local, _local_events) = local(&daemon).await;
+/// Pair a service named "Dispatcher" through `local`, which makes the offer.
+async fn pair_service(local: &HostConnection, url: &str) -> (DeviceInfo, DeviceKey) {
     let offer = local
         .send(OfferDeviceRequest { name: None })
         .await
         .expect("devices/offer");
     let key = DeviceKey::generate();
     let (connected, _) = remote(
-        &url,
+        url,
         Credentials::Pair {
             code: offer.code,
             name: "Dispatcher".to_owned(),
@@ -631,8 +630,18 @@ async fn a_service_may_only_start_and_follow_threads() {
     .await;
     let (paired, _) = connected.expect("paired");
     let device = paired.hello().device.clone().expect("a device");
-    assert!(device.service);
     paired.shutdown().await;
+    (device, key)
+}
+
+#[tokio::test]
+async fn a_service_may_only_start_and_follow_threads() {
+    let world = World::new();
+    let daemon = world.daemon();
+    let url = listen(&daemon, RemoteConfig::default()).await;
+    let (local, _local_events) = local(&daemon).await;
+    let (device, key) = pair_service(&local, &url).await;
+    assert!(device.service);
     let listed = local
         .send(ListDevicesRequest {})
         .await
@@ -722,6 +731,7 @@ async fn a_service_may_only_start_and_follow_threads() {
         trace: false,
         key: Some("daily-review@1760180000000".to_owned()),
         caller: None,
+        origin: None,
     };
     let started = service.send(run()).await.expect("session/run");
     let again = service.send(run()).await.expect("the same key again");
@@ -763,6 +773,144 @@ async fn a_service_may_only_start_and_follow_threads() {
             .iter()
             .any(|listed| listed.info.session_id == started.session_id)
     );
+    service.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_services_turns_name_what_started_them() {
+    let world = World::new();
+    let daemon = world.daemon();
+    let url = listen(&daemon, RemoteConfig::default()).await;
+    let (local, mut local_events) = local(&daemon).await;
+    let (device, key) = pair_service(&local, &url).await;
+    let (connected, _) = remote(&url, self::device(&device, &key, None)).await;
+    let (service, _events) = connected.expect("connects");
+    let origin = |label: &str, id: &str| ServiceOrigin {
+        label: label.to_owned(),
+        id: id.to_owned(),
+    };
+    let named = |label: &str, id: &str| TurnOrigin::Service {
+        name: "Dispatcher".to_owned(),
+        label: label.to_owned(),
+        id: id.to_owned(),
+    };
+
+    // A schedule's turn, long enough to queue a message behind.
+    let started = service
+        .send(RunRequest {
+            agent_id: "fake".to_owned(),
+            cwd: world.dir.path().to_path_buf(),
+            remote: None,
+            session_id: None,
+            additional_directories: Vec::new(),
+            mode: None,
+            prompt: vec![ContentBlock::from("/slow 5".to_owned())],
+            policy: PermissionPolicy::ask(),
+            attach: false,
+            trace: false,
+            key: Some("daily-review@1".to_owned()),
+            caller: None,
+            origin: Some(origin("schedule daily-review", "o-1")),
+        })
+        .await
+        .expect("session/run");
+    let session_id = started.session_id.clone();
+    local
+        .send(AttachSessionRequest {
+            session_id: session_id.clone(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+            observe: true,
+        })
+        .await
+        .expect("observing");
+    loop {
+        if let HostEvent::Event(notification) = next(&mut local_events).await
+            && let SessionEvent::TurnStarted { origin, .. } = notification.event
+        {
+            assert_eq!(origin, named("schedule daily-review", "o-1"));
+            break;
+        }
+    }
+    let got = service
+        .send(GetSessionRequest {
+            session_id: session_id.clone(),
+            turn_id: None,
+        })
+        .await
+        .expect("sessions/get");
+    assert_eq!(
+        got.session.opened_by,
+        Some(named("schedule daily-review", "o-1"))
+    );
+
+    // A message for the thread waits behind it, and starts when it ends.
+    service
+        .send(AddQueuedRequest {
+            session_id: session_id.clone(),
+            prompt: vec![ContentBlock::from("And the open ones?".to_owned())],
+            key: Some("m-7".to_owned()),
+            caller: None,
+            origin: Some(origin("your message from iPhone", "m-7")),
+        })
+        .await
+        .expect("queue/add");
+    loop {
+        if let HostEvent::Event(notification) = next(&mut local_events).await
+            && let SessionEvent::Queued { origin, .. } = notification.event
+        {
+            assert_eq!(origin, named("your message from iPhone", "m-7"));
+            break;
+        }
+    }
+    loop {
+        if let HostEvent::Event(notification) = next(&mut local_events).await
+            && let SessionEvent::TurnStarted { origin, .. } = notification.event
+        {
+            assert_eq!(origin, named("your message from iPhone", "m-7"));
+            break;
+        }
+    }
+    let got = service
+        .send(GetSessionRequest {
+            session_id: session_id.clone(),
+            turn_id: None,
+        })
+        .await
+        .expect("sessions/get");
+    assert_eq!(
+        got.latest_turn.map(|turn| turn.origin),
+        Some(named("your message from iPhone", "m-7"))
+    );
+
+    // Nor may it name a caller as well, and a device that isn't a service names nothing.
+    let both = service
+        .send(SteerTurnRequest {
+            session_id: session_id.clone(),
+            prompt: vec![ContentBlock::from("also".to_owned())],
+            caller: Some("s-0".into()),
+            origin: Some(origin("schedule daily-review", "o-2")),
+        })
+        .await
+        .expect_err("a caller and an origin");
+    assert_eq!(both.code, Error::invalid_params().code, "{both}");
+    let (ipad, ipad_key) = pair(&local, &url, "Jaco's iPad").await;
+    let (connected, _) = remote(&url, self::device(&ipad, &ipad_key, None)).await;
+    let (ipad, _ipad_events) = connected.expect("connects");
+    let refused = ipad
+        .send(AddQueuedRequest {
+            session_id,
+            prompt: vec![ContentBlock::from("hello".to_owned())],
+            key: None,
+            caller: None,
+            origin: Some(origin("schedule daily-review", "o-3")),
+        })
+        .await
+        .expect_err("only a service names what started a turn");
+    assert_eq!(refused.code, Error::invalid_params().code, "{refused}");
+    ipad.shutdown().await;
     service.shutdown().await;
 }
 
