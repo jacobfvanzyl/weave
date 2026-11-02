@@ -50,6 +50,14 @@ _Avoid_: weave MCP, bridge, proxy, gateway
 An MCP server in the Host's configuration that the Host connects to itself and offers through the Host MCP server.
 _Avoid_: proxied server, backend server
 
+**Service**:
+A client that does work for the person rather than showing them anything, such as the Dispatcher. A Host lets it do less than a paired device.
+_Avoid_: integration, daemon, bot
+
+**Service tool**:
+A tool the Host offers threads' agents that a service declares and runs, answering each call over its own connection.
+_Avoid_: remote tool, plugin
+
 ### Threads
 
 **Thread**:
@@ -75,9 +83,6 @@ _Avoid_: empty thread, draft
 A thread whose permission requests a permission policy answers, so it can run with nobody attached.
 _Avoid_: background thread, run
 
-**Trigger**:
-A schedule or webhook that starts a headless thread's turn in the Host with no client involved.
-_Avoid_: automation, job, cron
 
 **Subagent thread**:
 A thread an agent starts under another one. It shares its parent's journal and attached clients.
@@ -91,6 +96,14 @@ _Avoid_: child thread, spawned thread, subagent
 The Host's message to a thread about a turn that thread's agent began in another thread, on this Host or a peer Host: how the turn ended, or that it waits on a person.
 _Avoid_: notification, callback
 
+**Label**:
+A short tag a client puts on a thread, which listings carry and can be filtered by. It means nothing to the Host.
+_Avoid_: tag, category, folder
+
+**Successor**:
+The thread or turn that carries another's work on: the turn continuing an interrupted turn, or a Bot's new thread. Clients following the one, and reports to it, follow it to its successor.
+_Avoid_: continuation thread, next thread
+
 **Attach**:
 A client's relationship with an open thread: it receives the thread's events and pending requests, and keeps the thread open while it lasts.
 _Avoid_: subscribe, join, connect
@@ -98,6 +111,28 @@ _Avoid_: subscribe, join, connect
 **Reopen**:
 Moving an open thread to a new process of its agent, on the version the agent's new threads get, keeping the thread's id and journal.
 _Avoid_: restart, reload (the TUI's own restart)
+
+### Work while the person is away
+
+**Dispatcher**:
+The person's program, apart from their Hosts, that keeps triggers and Bots and starts their work on the Hosts as a service. Hosts never connect to it, and work on without it.
+_Avoid_: scheduler, coordinator, orchestrator, automation engine
+
+**Trigger**:
+A schedule or webhook the Dispatcher keeps, each occurrence of which starts a turn on one of the person's Hosts with nobody there.
+_Avoid_: automation, routine, job, cron
+
+**Occurrence**:
+One time a trigger fires, which the Dispatcher records whether it started a turn or was skipped, and why.
+_Avoid_: run, execution, invocation, job
+
+**Bot**:
+A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home directory of its own memory, whose work goes on in one thread at a time.
+_Avoid_: resident, persona, dot, always-on agent, profile
+
+**Edge**:
+The thin service on the internet that holds webhook deliveries for the Dispatcher and sends its pushes, which the Dispatcher dials out to.
+_Avoid_: relay, gateway, proxy, cloud
 
 ### Repositories
 

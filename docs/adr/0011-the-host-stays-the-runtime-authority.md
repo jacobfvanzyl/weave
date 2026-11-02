@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; triggers move out of the Host into the Dispatcher by ADR 0027
 date: 2026-10-19
 ---
 

@@ -1,5 +1,5 @@
 ---
-status: accepted; what a peer may do, and pairing both ways, are amended by ADR 0024
+status: accepted; what a peer may do, and pairing both ways, are amended by ADR 0024; what a service may do, by ADR 0027
 date: 2026-10-21
 ---
 
