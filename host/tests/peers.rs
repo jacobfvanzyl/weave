@@ -840,6 +840,7 @@ async fn a_peer_host_may_only_do_what_the_host_tools_need() {
             name: "mini".to_owned(),
             key: key.clone(),
             host: Some("h-mini".to_owned()),
+            service: false,
         },
     )
     .await
@@ -978,6 +979,7 @@ async fn a_peer_host_may_only_do_what_the_host_tools_need() {
             name: "iPad".to_owned(),
             key: device_key,
             host: None,
+            service: false,
         },
     )
     .await
@@ -1010,6 +1012,7 @@ async fn revoking_a_peer_host_refuses_its_next_connection() {
             name: "iPad".to_owned(),
             key: DeviceKey::generate(),
             host: None,
+            service: false,
         },
     )
     .await

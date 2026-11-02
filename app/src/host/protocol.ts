@@ -1160,6 +1160,11 @@ export interface NewDevice {
    * device; absent for a device.
    */
   host?: string | null;
+  /**
+   * A service pairing, such as the Dispatcher, which may do only what it needs (ADR 0027).
+   * A peer Host is never one.
+   */
+  service?: boolean;
 }
 /**
  * A P-256 public key as a JWK: `x` and `y` are its coordinates, 32 bytes each, in unpadded
@@ -1279,6 +1284,10 @@ export interface DeviceInfo {
    * The peer Host's id, when the device is one of the person's Hosts.
    */
   host?: string | null;
+  /**
+   * Whether the device is a service.
+   */
+  service?: boolean;
 }
 /**
  * `host/challenge`: what a paired device signs in its `host/hello`. Only on the WebSocket,
@@ -2239,6 +2248,10 @@ export interface Device {
    * The peer Host's id, when the device is one of the person's Hosts.
    */
   host?: string | null;
+  /**
+   * Whether the device is a service.
+   */
+  service?: boolean;
 }
 /**
  * `devices/revoke`: forget a device and close its connections. It has to pair again.

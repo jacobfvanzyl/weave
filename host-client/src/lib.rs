@@ -320,12 +320,14 @@ async fn say_hello(
             name,
             key,
             host,
+            service,
         } => Auth::Pair {
             code,
             device: NewDevice {
                 name,
                 public_key: key.jwk(),
                 host,
+                service,
             },
         },
         Credentials::Device {

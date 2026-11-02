@@ -42,12 +42,13 @@ pub enum Credentials {
         host_id: Option<String>,
     },
     /// A device pairing with the code `weave pair` showed. A Host pairing as a peer Host gives
-    /// its own Host id as `host`.
+    /// its own Host id as `host`; a service, such as the Dispatcher, says so with `service`.
     Pair {
         code: String,
         name: String,
         key: DeviceKey,
         host: Option<String>,
+        service: bool,
     },
 }
 

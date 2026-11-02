@@ -13,6 +13,7 @@ use agent_client_protocol::Channel;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::Role as _;
+use agent_client_protocol::UntypedMessage;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
@@ -43,6 +44,7 @@ use weave_host_client::remote::connect_websocket;
 use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::VersionRange;
+use weave_host_protocol::agents::ListAgentsRequest;
 use weave_host_protocol::agents::LogoutAgentRequest;
 use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::devices::DeviceInfo;
@@ -61,8 +63,13 @@ use weave_host_protocol::hello::HelloRequest;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
+use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CreateSessionRequest;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::RenameSessionRequest;
+use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::turns::StartTurnRequest;
@@ -261,6 +268,7 @@ async fn pair(local: &HostConnection, url: &str, name: &str) -> (DeviceInfo, Dev
             name: name.to_owned(),
             key: key.clone(),
             host: None,
+            service: false,
         },
     )
     .await;
@@ -315,6 +323,7 @@ async fn a_device_pairs_once_and_connects_with_its_key_after_that() {
         name: "iPad".to_owned(),
         key: key.clone(),
         host: None,
+        service: false,
     };
     let (connected, _) = remote(&url, pairing.clone()).await;
     let (paired, _) = connected.expect("paired");
@@ -483,6 +492,7 @@ async fn the_socket_takes_no_device_auth_and_gives_no_challenges() {
                 name: "iPad".to_owned(),
                 key: DeviceKey::generate(),
                 host: None,
+                service: false,
             },
         )
         .await,
@@ -595,6 +605,165 @@ async fn remote_clients_do_everything_but_administer_the_host() {
         }
     }
     remote.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_service_may_only_start_and_follow_threads() {
+    let world = World::new();
+    let daemon = world.daemon();
+    let url = listen(&daemon, RemoteConfig::default()).await;
+    let (local, _local_events) = local(&daemon).await;
+    let offer = local
+        .send(OfferDeviceRequest { name: None })
+        .await
+        .expect("devices/offer");
+    let key = DeviceKey::generate();
+    let (connected, _) = remote(
+        &url,
+        Credentials::Pair {
+            code: offer.code,
+            name: "Dispatcher".to_owned(),
+            key: key.clone(),
+            host: None,
+            service: true,
+        },
+    )
+    .await;
+    let (paired, _) = connected.expect("paired");
+    let device = paired.hello().device.clone().expect("a device");
+    assert!(device.service);
+    paired.shutdown().await;
+    let listed = local
+        .send(ListDevicesRequest {})
+        .await
+        .expect("devices/list");
+    assert!(listed.devices.iter().all(|listed| listed.service));
+
+    let (connected, _) = remote(&url, self::device(&device, &key, None)).await;
+    let (service, _events) = connected.expect("connects");
+
+    // Every method but its own, and attaching or running as a client of a thread, is refused
+    // before any handler sees it.
+    let refused = [
+        "agents/authenticate",
+        "agents/get",
+        "agents/logout",
+        "agents/terminalSignIn",
+        "agents/update",
+        "devices/list",
+        "devices/offer",
+        "devices/revoke",
+        "files/list",
+        "host/drain",
+        "host/shutdown",
+        "peers/add",
+        "peers/list",
+        "peers/remove",
+        "pending/answer",
+        "queue/remove",
+        "queue/resume",
+        "session/close",
+        "session/create",
+        "session/delete",
+        "session/reopen",
+        "session/setConfigOption",
+        "session/setMode",
+        "terminals/attach",
+        "terminals/close",
+        "terminals/format",
+        "terminals/list",
+        "terminals/new",
+        "terminals/setLabel",
+        "terminals/unwatch",
+        "terminals/watch",
+        "terminals/write",
+        "turn/start",
+        "worktrees/create",
+        "worktrees/list",
+        "worktrees/release",
+        "worktrees/remove",
+    ]
+    .map(|method| (method, serde_json::json!({})))
+    .into_iter()
+    .chain([
+        ("session/attach", serde_json::json!({"sessionId": "s-1"})),
+        (
+            "session/run",
+            serde_json::json!({"agentId": "fake", "cwd": "/", "prompt": [], "attach": true}),
+        ),
+    ]);
+    for (method, params) in refused {
+        let request = UntypedMessage::new(method, params).expect("a request");
+        let error = service.send(request).await.expect_err(method);
+        assert!(errors::is(&error, errors::FORBIDDEN), "{method}: {error}");
+        assert!(error.to_string().contains("a service"), "{method}: {error}");
+    }
+
+    // What starting and following threads needs, it may.
+    service.send(StatusRequest {}).await.expect("host/status");
+    service
+        .send(ListAgentsRequest::default())
+        .await
+        .expect("agents/list");
+    service
+        .send(WatchSessionsRequest {})
+        .await
+        .expect("sessions/watch");
+    let run = || RunRequest {
+        agent_id: "fake".to_owned(),
+        cwd: world.dir.path().to_path_buf(),
+        remote: None,
+        session_id: None,
+        additional_directories: Vec::new(),
+        mode: None,
+        prompt: vec![ContentBlock::from("hello".to_owned())],
+        policy: PermissionPolicy::ask(),
+        attach: false,
+        trace: false,
+        key: Some("daily-review@1760180000000".to_owned()),
+        caller: None,
+    };
+    let started = service.send(run()).await.expect("session/run");
+    let again = service.send(run()).await.expect("the same key again");
+    assert_eq!(again.session_id, started.session_id);
+    assert_eq!(again.turn_id, started.turn_id);
+    service
+        .send(RenameSessionRequest {
+            session_id: started.session_id.clone(),
+            title: "Daily review".to_owned(),
+        })
+        .await
+        .expect("session/rename");
+    let got = service
+        .send(GetSessionRequest {
+            session_id: started.session_id.clone(),
+            turn_id: None,
+        })
+        .await
+        .expect("sessions/get");
+    assert_eq!(got.session.info.title.as_deref(), Some("Daily review"));
+    service
+        .send(AttachSessionRequest {
+            session_id: started.session_id.clone(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+            observe: true,
+        })
+        .await
+        .expect("observing");
+    let listed = service
+        .send(ListSessionsRequest::default())
+        .await
+        .expect("sessions/list");
+    assert!(
+        listed
+            .sessions
+            .iter()
+            .any(|listed| listed.info.session_id == started.session_id)
+    );
+    service.shutdown().await;
 }
 
 #[tokio::test]
@@ -878,6 +1047,7 @@ async fn pairing_turns_remote_access_on_and_the_last_revoke_turns_it_off() {
             name: "iPad".to_owned(),
             key: DeviceKey::generate(),
             host: None,
+            service: false,
         },
     )
     .await;

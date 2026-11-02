@@ -1542,7 +1542,7 @@ returns the agent's error unchanged.
 | -32066 | `already_resolved` | the pending request was answered, cancelled or withdrawn |
 | -32067 | `wrong_agent` | the session belongs to another agent |
 | -32068 | `requires_terminal` | the sign-in method needs a terminal on the Host's computer |
-| -32069 | `forbidden` | a remote client asked to administer the Host |
+| -32069 | `forbidden` | a remote client asked to administer the Host, or a peer Host or service asked what it may not |
 | -32070 | `not_target` | the client tool call is for another client |
 | -32071 | `remote_unavailable` | remote access couldn't be turned on |
 | -32072 | `worktree_busy` | a session in the worktree runs a turn or waits on a request; `data: {sessions}` |
@@ -1601,7 +1601,9 @@ Remote clients follow ADR 0010 and [`wve-90-remote-clients.md`](wve-90-remote-cl
 the WebSocket binds loopback only and Tailscale Serve is the way in; every connection proves
 a paired device by signing a challenge; a paired device may do what a local client can,
 except `host/shutdown`, `devices/*`, `peers/*`, and agent sign-in and sign-out, which answer
-`forbidden`. A peer Host is a paired device of this kind (ADR 0017). The Host's own key, which
+`forbidden`. A peer Host is a paired device of this kind (ADR 0017), and so is a service such
+as the Dispatcher (ADR 0027); each may do less (see
+[Services](wve-90-remote-clients.md#services)). The Host's own key, which
 it proves itself to its peers with, is the one secret it keeps: in the Secure Enclave where
 there's one, and otherwise in `host-key.json`, 0600 (see [Peer Hosts](#peer-hosts)).
 

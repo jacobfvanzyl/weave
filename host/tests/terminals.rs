@@ -1062,6 +1062,7 @@ async fn revoking_a_device_closes_its_terminal_streams() {
             name: "iPad".to_owned(),
             key: DeviceKey::generate(),
             host: None,
+            service: false,
         },
     )
     .await

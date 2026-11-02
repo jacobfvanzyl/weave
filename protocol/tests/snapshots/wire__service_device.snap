@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&Device\n{ name: \"Dispatcher\".to_owned(), service: true, ..device() })"
+---
+{
+  "id": "d-3q8Hf0aZ",
+  "name": "Dispatcher",
+  "pairedAt": 1760180000000,
+  "lastSeenAt": 1760180005000,
+  "connections": 1,
+  "service": true
+}

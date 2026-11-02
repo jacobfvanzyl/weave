@@ -273,6 +273,8 @@ fn describe(devices: &[Device], now_ms: u64) -> String {
             };
             let peer = if device.host.is_some() {
                 ", a peer Host"
+            } else if device.service {
+                ", a service"
             } else {
                 ""
             };
@@ -311,6 +313,7 @@ mod tests {
             last_seen_at,
             connections,
             host: None,
+            service: false,
         };
         let day = 86_400_000;
         assert_eq!(

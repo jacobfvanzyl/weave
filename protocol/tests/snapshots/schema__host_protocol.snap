@@ -482,6 +482,10 @@ expression: schema()
             "null"
           ],
           "description": "The Host id of a peer Host pairing, which is one of the person's Hosts rather than a\ndevice; absent for a device."
+        },
+        "service": {
+          "type": "boolean",
+          "description": "A service pairing, such as the Dispatcher, which may do only what it needs (ADR 0027).\nA peer Host is never one."
         }
       },
       "required": [
@@ -645,6 +649,10 @@ expression: schema()
             "null"
           ],
           "description": "The peer Host's id, when the device is one of the person's Hosts."
+        },
+        "service": {
+          "type": "boolean",
+          "description": "Whether the device is a service."
         }
       },
       "required": [
@@ -1953,6 +1961,10 @@ expression: schema()
             "null"
           ],
           "description": "The peer Host's id, when the device is one of the person's Hosts."
+        },
+        "service": {
+          "type": "boolean",
+          "description": "Whether the device is a service."
         }
       },
       "required": [

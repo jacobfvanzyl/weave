@@ -392,6 +392,7 @@ fn device() -> Device {
         last_seen_at: Some(1_760_180_005_000),
         connections: 1,
         host: None,
+        service: false,
     }
 }
 
@@ -491,6 +492,7 @@ fn hello() {
                 id: "d-3q8Hf0aZ".to_owned(),
                 name: "Jaco's iPad".to_owned(),
                 host: None,
+                service: false,
             }),
         })
     );
@@ -523,6 +525,7 @@ fn hello() {
                     name: "Jaco's iPad".to_owned(),
                     public_key: jwk(),
                     host: None,
+                    service: false,
                 },
             },
             capabilities: ClientCapabilities::default(),
@@ -630,6 +633,7 @@ fn peers() {
                 name: "mini".to_owned(),
                 public_key: jwk(),
                 host: Some("h-2Lm9".to_owned()),
+                service: false,
             },
         })
     );
@@ -638,6 +642,35 @@ fn peers() {
         round_trip(&Device {
             host: Some("h-2Lm9".to_owned()),
             ..device()
+        })
+    );
+    insta::assert_json_snapshot!(
+        "service_pairing",
+        round_trip(&Auth::Pair {
+            code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
+            device: NewDevice {
+                name: "Dispatcher".to_owned(),
+                public_key: jwk(),
+                host: None,
+                service: true,
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "service_device",
+        round_trip(&Device {
+            name: "Dispatcher".to_owned(),
+            service: true,
+            ..device()
+        })
+    );
+    insta::assert_json_snapshot!(
+        "service_device_info",
+        round_trip(&DeviceInfo {
+            id: "d-3q8Hf0aZ".to_owned(),
+            name: "Dispatcher".to_owned(),
+            host: None,
+            service: true,
         })
     );
     insta::assert_json_snapshot!(

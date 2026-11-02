@@ -153,6 +153,7 @@ async fn pair(url: &str, code: &str) {
             name: name.clone(),
             key: key.clone(),
             host: None,
+            service: false,
         },
     )
     .await

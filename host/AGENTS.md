@@ -179,7 +179,11 @@ counts for nothing: every WebSocket connection proves a paired device at hello, 
 which keeps the Host's id and the devices' public keys in `devices.json`, 0600, and offers in
 memory). A remote client can do what a local one can,
 except `host/shutdown`, `devices/*`, `peers/*`, agent sign-in and sign-out, and `agents/update`
-(`forbidden`), and a peer Host less (ADR 0024). The Host
+(`forbidden`), and a peer Host or a service less: the first request handler
+(`Connection::refusal`) answers either `forbidden` for any method outside its list (`FOR_PEERS`,
+ADR 0024; `FOR_SERVICES`, ADR 0027), attaching without `observe` or running with `attach`. A
+service, such as the Dispatcher, is a device whose `NewDevice.service` said so at pairing, never
+a peer Host too. The Host
 pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent beyond the
 replays it asked for (a `Backlog`, which an attach tells its replay's size), which attaches again
 after its position. Remote tests (`tests/remote.rs`) use a real

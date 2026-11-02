@@ -338,13 +338,14 @@ async fn handlers(
     let on_any = Arc::clone(connection);
     Host.builder()
         .name("weave-host")
-        // A peer Host asks only what the Host tools need (ADR 0024), refused here before any
-        // handler sees the rest.
+        // A peer Host asks only what the Host tools need (ADR 0024), and a service only what
+        // starting and following threads needs (ADR 0027), refused here before any handler
+        // sees the rest.
         .on_receive_request(
             async move |request: UntypedMessage, responder: Responder<serde_json::Value>, _cx| {
-                match on_any.peer_host().and(not_for_peers(&request)) {
-                    Some(asked) => {
-                        responder.respond_with_error(errors::not_for_peers(&asked))?;
+                match on_any.refusal(&request) {
+                    Some(error) => {
+                        responder.respond_with_error(error)?;
                         Ok(Handled::Yes)
                     }
                     None => Ok(Handled::No {
@@ -704,9 +705,29 @@ const FOR_PEERS: [&str; 12] = [
     "turn/cancel",
 ];
 
-/// What in `request` a peer Host may not ask, if anything: a method not in [`FOR_PEERS`], or
-/// attaching as anything but an observer, which would make it a client of the thread.
-fn not_for_peers(request: &UntypedMessage) -> Option<String> {
+/// The methods a service may ask (ADR 0027): its hello, and what starting headless turns,
+/// following threads and naming the ones it starts need.
+const FOR_SERVICES: [&str; 15] = [
+    "host/hello",
+    "host/challenge",
+    "host/status",
+    "agents/list",
+    "sessions/list",
+    "sessions/get",
+    "sessions/watch",
+    "sessions/unwatch",
+    "session/run",
+    "session/attach",
+    "session/detach",
+    "session/rename",
+    "queue/add",
+    "turn/steer",
+    "turn/cancel",
+];
+
+/// What in `request` a client allowed only `methods` may not ask, if anything: another method,
+/// or attaching as anything but an observer, which would make it a client of the thread.
+fn not_allowed(request: &UntypedMessage, methods: &[&str]) -> Option<String> {
     let method = request.method.as_str();
     let flag = |name: &str| {
         request
@@ -714,7 +735,7 @@ fn not_for_peers(request: &UntypedMessage) -> Option<String> {
             .get(name)
             .and_then(serde_json::Value::as_bool)
     };
-    if !FOR_PEERS.contains(&method) {
+    if !methods.contains(&method) {
         Some(method.to_owned())
     } else if method == "session/attach" && flag("observe") != Some(true) {
         Some("session/attach without observe".to_owned())
@@ -853,6 +874,20 @@ impl Connection {
         lock(&self.device)
             .as_ref()
             .and_then(|device| device.host.clone())
+    }
+
+    /// The error `request` gets when this client may not ask it: a peer Host and a service may
+    /// ask only their own methods.
+    fn refusal(&self, request: &UntypedMessage) -> Option<Error> {
+        let device = lock(&self.device);
+        let device = device.as_ref()?;
+        if device.host.is_some() {
+            not_allowed(request, &FOR_PEERS).map(|asked| errors::not_for_peers(&asked))
+        } else if device.service {
+            not_allowed(request, &FOR_SERVICES).map(|asked| errors::not_for_services(&asked))
+        } else {
+            None
+        }
     }
 
     /// The origin of a turn or steer this client sends for `caller`: the session on the peer

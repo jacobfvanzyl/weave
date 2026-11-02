@@ -1,0 +1,9 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&DeviceInfo\n{\n    id: \"d-3q8Hf0aZ\".to_owned(), name: \"Dispatcher\".to_owned(), host: None,\n    service: true,\n})"
+---
+{
+  "id": "d-3q8Hf0aZ",
+  "name": "Dispatcher",
+  "service": true
+}

@@ -83,6 +83,9 @@ struct Stored {
     /// The Host id of a peer Host, which is one of the person's Hosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     host: Option<String>,
+    /// A service, such as the Dispatcher (ADR 0027).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    service: bool,
 }
 
 impl Stored {
@@ -91,6 +94,7 @@ impl Stored {
             id: self.id.clone(),
             name: self.name.clone(),
             host: self.host.clone(),
+            service: self.service,
         }
     }
 }
@@ -175,9 +179,13 @@ impl Devices {
     }
 
     /// Pair `device` with the offer whose code is `code`, which no one can take again.
-    /// `None` when there's no such live offer or the key isn't a P-256 point.
+    /// `None` when there's no such live offer, the key isn't a P-256 point, or the device says
+    /// it's both a peer Host and a service.
     pub(crate) fn pair(&self, code: &str, device: NewDevice) -> Option<DeviceInfo> {
         verifying_key(&device.public_key)?;
+        if device.host.is_some() && device.service {
+            return None;
+        }
         let code = normalize_code(code);
         let mut state = lock(&self.state);
         let now = now_ms();
@@ -198,6 +206,7 @@ impl Devices {
             paired_at: now,
             last_seen_at: Some(now),
             host: device.host,
+            service: device.service,
         };
         state.devices.insert(id, stored.clone());
         self.save(&state);
@@ -210,6 +219,9 @@ impl Devices {
         match &info.host {
             Some(host) => {
                 tracing::info!(device = %info.id, name = %info.name, %host, "a peer Host paired");
+            }
+            None if info.service => {
+                tracing::info!(device = %info.id, name = %info.name, "a service paired");
             }
             None => tracing::info!(device = %info.id, name = %info.name, "a device paired"),
         }
@@ -331,6 +343,7 @@ fn listing(stored: &Stored, connections: u32) -> Device {
         last_seen_at: stored.last_seen_at,
         connections,
         host: stored.host.clone(),
+        service: stored.service,
     }
 }
 
@@ -452,7 +465,34 @@ mod tests {
             name: "iPad".to_owned(),
             public_key: jwk,
             host: None,
+            service: false,
         }
+    }
+
+    #[test]
+    fn a_service_is_recorded_as_one_and_is_never_a_peer_host_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("devices.json");
+        let devices = Devices::load(Some(path.clone()));
+        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
+        let (_, jwk) = key();
+        let both = NewDevice {
+            host: Some("h-2Lm9".to_owned()),
+            service: true,
+            ..new_device(jwk.clone())
+        };
+        assert!(devices.pair(&code, both).is_none());
+
+        let service = NewDevice {
+            service: true,
+            ..new_device(jwk)
+        };
+        let paired = devices
+            .pair(&code, service)
+            .expect("the offer is still good");
+        assert!(paired.service);
+        let reloaded = Devices::load(Some(path));
+        assert!(reloaded.list().iter().all(|device| device.service));
     }
 
     #[test]

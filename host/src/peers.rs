@@ -463,6 +463,7 @@ impl Peers {
             name: self.settings.name.clone(),
             key,
             host: Some(me.clone()),
+            service: false,
         };
         let (connection, events, closed) = connect(&url, credentials, self.settings.reach_timeout)
             .await

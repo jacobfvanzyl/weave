@@ -128,6 +128,14 @@ pub fn not_for_peers(method: &str) -> Error {
     )
 }
 
+/// A service asked `method`, which starting and following threads doesn't need (ADR 0027).
+pub fn not_for_services(method: &str) -> Error {
+    Error::new(
+        FORBIDDEN,
+        format!("a service may only start and follow threads, not ask {method}"),
+    )
+}
+
 pub fn remote_unavailable(why: impl Into<String>) -> Error {
     Error::new(REMOTE_UNAVAILABLE, why)
 }

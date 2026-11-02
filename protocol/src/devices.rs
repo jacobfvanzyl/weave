@@ -53,6 +53,10 @@ pub struct NewDevice {
     /// device; absent for a device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// A service pairing, such as the Dispatcher, which may do only what it needs (ADR 0027).
+    /// A peer Host is never one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub service: bool,
 }
 
 /// Which device a connection is.
@@ -64,6 +68,9 @@ pub struct DeviceInfo {
     /// The peer Host's id, when the device is one of the person's Hosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Whether the device is a service.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub service: bool,
 }
 
 /// A paired device, as `devices/list` shows it.
@@ -82,6 +89,9 @@ pub struct Device {
     /// The peer Host's id, when the device is one of the person's Hosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Whether the device is a service.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub service: bool,
 }
 
 /// `devices/offer`: a one-time code a device pairs with, good for five minutes.
