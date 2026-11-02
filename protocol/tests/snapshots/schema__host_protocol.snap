@@ -280,7 +280,8 @@ expression: schema()
       "unknownTerminal": -32078,
       "terminalUnavailable": -32079,
       "unknownTurn": -32080,
-      "peerUnavailable": -32081
+      "peerUnavailable": -32081,
+      "interrupted": -32082
     },
     "features": {
       "steer": "turn/steer",
@@ -2337,6 +2338,13 @@ expression: schema()
           "$ref": "#/$defs/TurnState",
           "description": "Where it is (feature `turnIds`)."
         },
+        "continues": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The interrupted turn it continues (WVE-144)."
+        },
         "prompt": {
           "type": "array",
           "items": {
@@ -2427,6 +2435,11 @@ expression: schema()
           "type": "string",
           "const": "failed",
           "description": "It failed, or ended unexplained."
+        },
+        {
+          "type": "string",
+          "const": "interrupted",
+          "description": "The Host stopped or crashed while it ran (WVE-144). A headless session continues it in a\nturn of its own."
         }
       ],
       "description": "Where a turn is: waiting to start, running, waiting on a person, or how it ended. The\nendings match the exit statuses of `weave run` and `weave threads follow`."
@@ -7297,6 +7310,13 @@ expression: schema()
                 "null"
               ],
               "description": "The turn's id (feature `turnIds`): its `queuedId` when it has one."
+            },
+            "continues": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The interrupted turn it continues, which a Host that stopped under it left\n(WVE-144)."
             },
             "kind": {
               "type": "string",

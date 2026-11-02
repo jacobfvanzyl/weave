@@ -65,6 +65,10 @@ pub enum SessionEvent {
         /// The turn's id (feature `turnIds`): its `queuedId` when it has one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<TurnId>,
+        /// The interrupted turn it continues, which a Host that stopped under it left
+        /// (WVE-144).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continues: Option<TurnId>,
     },
     /// A message joined the running turn (`turn/steer`).
     TurnSteered {

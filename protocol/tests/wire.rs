@@ -1132,6 +1132,7 @@ fn delegated_sessions() {
             session: delegated.clone(),
             latest_turn: Some(LatestTurn {
                 turn_id: Some("t-1".to_owned()),
+                continues: None,
                 state: TurnState::Ended,
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
@@ -1154,6 +1155,7 @@ fn delegated_sessions() {
             session: delegated,
             latest_turn: Some(LatestTurn {
                 turn_id: Some("t-1".to_owned()),
+                continues: None,
                 state: TurnState::Waiting,
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
@@ -1262,6 +1264,7 @@ fn events() {
                 },
                 queued_id: None,
                 turn_id: Some("t-1".to_owned()),
+                continues: None,
             },
         ))
     );
@@ -1279,6 +1282,7 @@ fn events() {
                 },
                 queued_id: None,
                 turn_id: Some("t-1".to_owned()),
+                continues: None,
             },
         ))
     );
@@ -1292,6 +1296,7 @@ fn events() {
                 origin: tui(),
                 queued_id: Some("q-3".to_owned()),
                 turn_id: Some("q-3".to_owned()),
+                continues: None,
             },
         ))
     );
@@ -1310,6 +1315,7 @@ fn events() {
                 },
                 queued_id: None,
                 turn_id: Some("t-1".to_owned()),
+                continues: None,
             },
         ))
     );
@@ -1331,6 +1337,7 @@ fn events() {
                 },
                 queued_id: None,
                 turn_id: Some("t-1".to_owned()),
+                continues: None,
             },
         ))
     );
@@ -1449,6 +1456,33 @@ fn events() {
         ))
     );
     insta::assert_json_snapshot!(
+        "event_turn_interrupted",
+        message(&event(
+            45,
+            SessionEvent::TurnEnded {
+                session_id: "s-1".into(),
+                response: None,
+                error: Some(weave_host_protocol::errors::interrupted()),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_turn_continued",
+        message(&event(
+            46,
+            SessionEvent::TurnStarted {
+                session_id: "s-1".into(),
+                prompt: vec![text(
+                    "[weave] The weave Host stopped while your last turn ran…"
+                )],
+                origin: TurnOrigin::Run {},
+                queued_id: None,
+                turn_id: Some("t-2".to_owned()),
+                continues: Some("t-1".to_owned()),
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
         "event_run_started",
         message(&event(
             46,
@@ -1458,6 +1492,7 @@ fn events() {
                 origin: TurnOrigin::Run {},
                 queued_id: None,
                 turn_id: Some("t-1".to_owned()),
+                continues: None,
             },
         ))
     );

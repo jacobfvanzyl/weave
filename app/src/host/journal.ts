@@ -1,6 +1,7 @@
 import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
 import type { OpenedSession } from './connection';
 import type { AgentRelease, JournalPosition, SessionEventNotification, TurnOrigin } from './protocol';
+import { HOST_PROTOCOL } from './protocol';
 
 /**
  * Where this client is in one attached session's journal. A client attaches after the last
@@ -127,11 +128,14 @@ export function transcriptEvents(notification: SessionEventNotification, reading
     case 'turnEnded': {
       const error = event.error ? event.error.message : event.response ? undefined : 'The turn ended unexplained';
       const stopReason = event.response?.stopReason;
+      // The Host stopped while it ran (WVE-144).
+      const interrupted = event.error?.code === HOST_PROTOCOL.errors.interrupted;
       const ended: AcpTranscriptEvent = {
         type: 'turn/ended',
         sessionId: event.sessionId,
         ...(error === undefined ? {} : { error }),
         ...(stopReason ? { stopReason } : {}),
+        ...(interrupted ? { interrupted } : {}),
       };
       if (event.sessionId !== root || !live) return [ended];
       return [ended, error === undefined ? { type: 'turn/stopped', stopReason: stopReason ?? 'end_turn' } : { type: 'turn/failed', error }];

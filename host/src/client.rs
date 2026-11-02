@@ -40,7 +40,6 @@ use weave_acp_core::schema::SessionInfo;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::SetSessionConfigOptionResponse;
-use weave_acp_core::schema::StopReason;
 use weave_agents::config::ConfiguredMcpServer;
 use weave_host_protocol::Empty;
 use weave_host_protocol::Host;
@@ -192,6 +191,7 @@ use crate::session::Backlog;
 use crate::session::ClientId;
 use crate::session::ClientLink;
 use crate::session::Command;
+use crate::session::Continuation;
 use crate::session::Opened;
 use crate::session::ReplayFrom;
 use crate::session::SessionHandle;
@@ -2797,6 +2797,7 @@ async fn reopen(
     let last_activity_ms = earlier.and_then(journal::last_activity);
     let mut queue = earlier.map(Queue::from_records).unwrap_or_default();
     let (started_by, started_by_host) = earlier.map(journal::started_by).unwrap_or_default();
+    let mut continuation = None;
     let (journal, policy) = match recovered {
         Some((path, records)) => {
             let policy = records
@@ -2811,14 +2812,24 @@ async fn reopen(
                 Ok(journal) => journal,
                 Err(error) => return Err((journal_error(&error), Some(instance))),
             };
-            // A turn the stopped Host was running ended with it.
-            for session_id in open_turns {
+            // A turn the stopped Host was running was cut off with it (WVE-144). A headless
+            // session continues its own once, unless that turn was a continuation already, so a
+            // turn that brings the Host down can't do it again and again.
+            for open in open_turns {
                 journal.append(Entry::turn_ended(
-                    session_id,
-                    &Ok(weave_acp_core::schema::PromptResponse::new(
-                        StopReason::Cancelled,
-                    )),
+                    open.session_id.clone(),
+                    &Err(errors::interrupted()),
                 ));
+                if open.session_id == session_id
+                    && policy.is_headless()
+                    && open.continues.is_none()
+                    && let Some(turn_id) = open.turn_id
+                {
+                    continuation = Some(Box::new(Continuation {
+                        origin: open.origin,
+                        continues: turn_id,
+                    }));
+                }
             }
             if interrupt(&mut queue, &policy) {
                 journal.append(Entry::QueuePaused {
@@ -2850,6 +2861,7 @@ async fn reopen(
             queue,
             started_by,
             started_by_host,
+            continuation,
         },
         servers,
         git,
@@ -2917,6 +2929,8 @@ enum Origin {
         queue: Queue,
         started_by: Option<SessionId>,
         started_by_host: Option<String>,
+        /// The turn the stopped Host cut off, for a headless session to continue.
+        continuation: Option<Box<Continuation>>,
     },
 }
 
@@ -2945,7 +2959,7 @@ fn open(
             None,
             None,
             Queue::default(),
-            (started_by, started_by_host),
+            (started_by, started_by_host, None),
         ),
         Origin::Reopened {
             journal,
@@ -2955,6 +2969,7 @@ fn open(
             queue,
             started_by,
             started_by_host,
+            continuation,
         } => (
             journal,
             false,
@@ -2962,10 +2977,14 @@ fn open(
             agent_title,
             last_activity_ms,
             queue,
-            (started_by, started_by_host),
+            (
+                started_by,
+                started_by_host,
+                continuation.map(|continuation| *continuation),
+            ),
         ),
     };
-    let (started_by, started_by_host) = starter;
+    let (started_by, started_by_host, continuation) = starter;
     let journal = match journal {
         Some(journal) => journal,
         None => {
@@ -3023,6 +3042,7 @@ fn open(
             queue,
             started_by,
             started_by_host,
+            continuation,
         },
     ))
 }

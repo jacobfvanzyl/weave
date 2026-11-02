@@ -223,6 +223,7 @@ fn schema() -> Value {
                 "terminalUnavailable": errors::TERMINAL_UNAVAILABLE,
                 "unknownTurn": errors::UNKNOWN_TURN,
                 "peerUnavailable": errors::PEER_UNAVAILABLE,
+                "interrupted": errors::INTERRUPTED,
             },
             "features": {
                 "steer": turns::STEER_FEATURE,

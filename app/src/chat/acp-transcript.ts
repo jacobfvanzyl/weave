@@ -248,7 +248,7 @@ export type AcpTranscriptEvent =
    */
   | { type: 'prompt'; prompt: ContentBlock[]; sessionId?: string; steer?: boolean; own?: boolean; origin?: string; queued?: boolean; replayed?: boolean }
   /** How a turn ended, as the transcript records it; the turn's state changes with `turn/stopped`. */
-  | { type: 'turn/ended'; sessionId?: string; stopReason?: StopReason; error?: string }
+  | { type: 'turn/ended'; sessionId?: string; stopReason?: StopReason; error?: string; interrupted?: boolean }
   | { type: 'terminal/output'; terminalId: string; data: string }
   | { type: 'terminal/exit'; terminalId: string; status: TerminalExitStatus }
   /** The session's agent was started again (`session/reopen`); `text` says how it went. */
@@ -832,6 +832,9 @@ const stopReasonText: Partial<Record<StopReason, string>> = {
 
 /** A turn's end, in the transcript: nothing for one that finished, otherwise why it didn't. */
 const recordTurnEnd = (model: AcpTranscript, event: Extract<AcpTranscriptEvent, { type: 'turn/ended' }>): AcpTranscript => {
+  if (event.interrupted) {
+    return appendEntry(model, { kind: 'diagnostic', severity: 'info', title: 'Interrupted: the weave Host stopped while this turn ran' });
+  }
   if (event.error !== undefined) {
     return appendEntry(model, { kind: 'diagnostic', severity: 'error', title: 'Turn failed', detail: event.error });
   }

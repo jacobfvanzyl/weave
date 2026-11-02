@@ -42,6 +42,7 @@ use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::schema::TerminalId;
 use weave_host_protocol::agents::AgentRelease;
+use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::queue::QueuePause;
@@ -158,6 +159,9 @@ pub(crate) enum Entry {
         /// The request key it was started under, which a repeat finds it by.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
+        /// The interrupted turn it continues (WVE-144).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continues: Option<TurnId>,
     },
     /// A message joined the running turn (`turn/steer`).
     #[serde(rename_all = "camelCase")]
@@ -334,6 +338,7 @@ impl Entry {
                 origin,
                 queued_id,
                 turn_id,
+                continues,
                 ..
             } => SessionEvent::TurnStarted {
                 session_id: session_id.clone(),
@@ -341,6 +346,7 @@ impl Entry {
                 origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
                 queued_id: queued_id.clone(),
                 turn_id: turn_id.clone().or_else(|| queued_id.clone()),
+                continues: continues.clone(),
             },
             Self::TurnSteered {
                 session_id,
@@ -727,6 +733,7 @@ pub(crate) fn turn(
         return Some(LatestTurn {
             turn_id: Some(queued.id),
             state: TurnState::Queued,
+            continues: None,
             prompt: queued.prompt,
             origin: queued.origin,
             started_at: queued.queued_at,
@@ -741,6 +748,7 @@ pub(crate) fn turn(
         origin,
         turn_id: id,
         queued_id,
+        continues,
         ..
     } = &records[start].entry
     else {
@@ -749,6 +757,7 @@ pub(crate) fn turn(
     let mut turn = LatestTurn {
         turn_id: id.clone().or_else(|| queued_id.clone()),
         state: TurnState::Running,
+        continues: continues.clone(),
         prompt: prompt.clone(),
         origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
         started_at: records[start].at,
@@ -804,6 +813,7 @@ pub(crate) fn turn(
 /// How a turn that ended with `response`, or failed with `error`, stands.
 fn ended(response: Option<&PromptResponse>, error: Option<&Error>) -> TurnState {
     match (response, error) {
+        (_, Some(error)) if errors::is(error, errors::INTERRUPTED) => TurnState::Interrupted,
         (_, Some(_)) | (None, None) => TurnState::Failed,
         (Some(response), None) => match response.stop_reason {
             StopReason::EndTurn => TurnState::Ended,
@@ -1003,17 +1013,40 @@ pub(crate) struct KeyedWork {
     pub(crate) started: bool,
 }
 
-/// Sessions whose turn started and never ended.
-pub(crate) fn open_turns(records: &[Record]) -> Vec<SessionId> {
-    let mut open: Vec<SessionId> = Vec::new();
+/// The turns that started and never ended, as a Host that stopped under them leaves them.
+pub(crate) fn open_turns(records: &[Record]) -> Vec<OpenTurn> {
+    let mut open: Vec<OpenTurn> = Vec::new();
     for record in records {
         match &record.entry {
-            Entry::TurnStarted { session_id, .. } => open.push(session_id.clone()),
-            Entry::TurnEnded { session_id, .. } => open.retain(|open| open != session_id),
+            Entry::TurnStarted {
+                session_id,
+                origin,
+                queued_id,
+                turn_id,
+                continues,
+                ..
+            } => open.push(OpenTurn {
+                session_id: session_id.clone(),
+                turn_id: turn_id.clone().or_else(|| queued_id.clone()),
+                origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
+                continues: continues.clone(),
+            }),
+            Entry::TurnEnded { session_id, .. } => {
+                open.retain(|open| open.session_id != *session_id);
+            }
             _ => {}
         }
     }
     open
+}
+
+/// A turn a stopped Host left running: journaled as started, and never as ended.
+pub(crate) struct OpenTurn {
+    pub(crate) session_id: SessionId,
+    pub(crate) turn_id: Option<TurnId>,
+    pub(crate) origin: TurnOrigin,
+    /// The interrupted turn it continued, itself.
+    pub(crate) continues: Option<TurnId>,
 }
 
 /// Remove journals untouched for `age`: closed sessions, and ones left by a Host that
@@ -1203,6 +1236,7 @@ mod tests {
             queued_id: None,
             turn_id: Some("t1".to_owned()),
             key: Some("k1".to_owned()),
+            continues: None,
         });
         assert_eq!(seq, 1);
         journal.append(Entry::Update {
@@ -1219,7 +1253,10 @@ mod tests {
         let records = read(&path).expect("read");
         assert_eq!(records.len(), 3);
         assert!(!is_closed(&records));
-        assert_eq!(open_turns(&records), std::slice::from_ref(&id));
+        let open = open_turns(&records);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].session_id, id);
+        assert_eq!(open[0].turn_id.as_deref(), Some("t1"));
         assert_eq!(
             find_key(&records, "k1"),
             Some(KeyedWork {
@@ -1274,6 +1311,7 @@ mod tests {
                 queued_id: queued_id.map(str::to_owned),
                 turn_id: turn_id.map(str::to_owned),
                 key: None,
+                continues: None,
             };
         let tool = Entry::Update {
             notification: Box::new(SessionNotification::new(

@@ -605,6 +605,7 @@ fn describe_turn(latest: &LatestTurn, asked: bool) -> String {
             Some(error) => format!("failed: {}", error.message),
             None => "ended unexplained".to_owned(),
         },
+        TurnState::Interrupted => "interrupted: the weave Host stopped while it ran".to_owned(),
     };
     let prompt: Vec<String> = latest
         .prompt
@@ -681,6 +682,7 @@ mod tests {
         let turn = LatestTurn {
             turn_id: None,
             state: TurnState::Running,
+            continues: None,
             prompt: vec![ContentBlock::from(
                 "address the review\non the PR".to_owned(),
             )],

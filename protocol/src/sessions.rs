@@ -320,6 +320,9 @@ pub enum TurnState {
     Cancelled,
     /// It failed, or ended unexplained.
     Failed,
+    /// The Host stopped or crashed while it ran (WVE-144). A headless session continues it in a
+    /// turn of its own.
+    Interrupted,
 }
 
 impl TurnState {
@@ -327,7 +330,7 @@ impl TurnState {
     pub fn is_over(self) -> bool {
         matches!(
             self,
-            Self::Ended | Self::Stopped | Self::Cancelled | Self::Failed
+            Self::Ended | Self::Stopped | Self::Cancelled | Self::Failed | Self::Interrupted
         )
     }
 }
@@ -342,6 +345,9 @@ pub struct LatestTurn {
     pub turn_id: Option<TurnId>,
     /// Where it is (feature `turnIds`).
     pub state: TurnState,
+    /// The interrupted turn it continues (WVE-144).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues: Option<TurnId>,
     pub prompt: Vec<ContentBlock>,
     pub origin: TurnOrigin,
     /// When it started; for a queued turn, when it was queued.

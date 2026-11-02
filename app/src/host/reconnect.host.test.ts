@@ -176,7 +176,7 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
     await host.restart();
     await connected();
     const resumed = await until('the interrupted turn to end', (open) =>
-      open.transcript.turn.status !== 'running' && open.transcript.entries.some((entry) => line(entry) === 'info: Turn cancelled'));
+      open.transcript.turn.status !== 'running' && open.transcript.entries.some((entry) => line(entry) === 'info: Interrupted: the weave Host stopped while this turn ran'));
     // The Host continued the session's journal, and the app went on after its position.
     expect(resumed.transcript.entries[0]).toBe(before.transcript.entries[0]);
     const lines = resumed.transcript.entries.map(line);

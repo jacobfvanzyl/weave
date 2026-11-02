@@ -769,6 +769,8 @@ impl Seen {
             } => {
                 self.ended = match (response, error) {
                     (Some(response), _) => Some(response.stop_reason),
+                    // A turn a stopped Host cut off, replayed.
+                    (None, Some(error)) if errors::is(&error, errors::INTERRUPTED) => None,
                     (None, Some(error)) => panic!("the turn failed: {error}"),
                     (None, None) => None,
                 };
@@ -3766,6 +3768,119 @@ async fn a_queue_outlasts_a_host_restart_paused_for_a_person_or_running_headless
     while !seen.agent.contains("You said: still here") {
         client.until_turn_ends(&mut seen, None).await;
     }
+}
+
+#[tokio::test]
+async fn a_turn_the_host_stopped_under_is_interrupted_and_a_headless_one_continued_once() {
+    let world = World::new();
+    let (interactive, headless, cut) = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let interactive = client.create(&world).await;
+        client.queue(&interactive, "slow 50").await;
+        let run = client
+            .connection
+            .send(RunRequest {
+                prompt: vec![ContentBlock::from("slow 50".to_owned())],
+                ..run_request(&world, &world.cwd().join("unused"), Vec::new())
+            })
+            .await
+            .expect("session/run");
+        daemon.shutdown().await;
+        (
+            interactive,
+            run.session_id,
+            run.turn_id.expect("the run's turn"),
+        )
+    };
+    let latest = async |daemon: &Daemon, session_id: &SessionId, turn_id: Option<&str>| {
+        let client = world.client(daemon).await;
+        client
+            .connection
+            .send(GetSessionRequest {
+                session_id: session_id.clone(),
+                turn_id: turn_id.map(str::to_owned),
+            })
+            .await
+            .expect("sessions/get")
+            .latest_turn
+            .expect("a turn")
+    };
+
+    // The headless session's turn was interrupted, and a turn from its origin continues it.
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    daemon.resume_queues().await;
+    let interrupted = latest(&daemon, &headless, Some(&cut)).await;
+    assert_eq!(interrupted.state, TurnState::Interrupted);
+    assert!(
+        interrupted
+            .error
+            .as_ref()
+            .is_some_and(|error| errors::is(error, errors::INTERRUPTED)),
+        "{interrupted:?}"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let continued = loop {
+        let turn = latest(&daemon, &headless, None).await;
+        if turn.continues.is_some() && turn.state.is_over() {
+            break turn;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{turn:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(continued.continues.as_deref(), Some(cut.as_str()));
+    assert_eq!(continued.state, TurnState::Ended);
+    assert_eq!(continued.origin, TurnOrigin::Run {});
+    let prompt: String = continued
+        .prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(prompt.contains("cut off"), "{prompt}");
+
+    // The interactive one's waits for a person.
+    let mut client = world.client(&daemon).await;
+    let attached = client.attach(&interactive).await;
+    assert!(attached.state.turns.is_empty());
+    let turn = latest(&daemon, &interactive, None).await;
+    assert_eq!(turn.state, TurnState::Interrupted);
+    assert_eq!(turn.continues, None);
+    client.connection.shutdown().await;
+    daemon.shutdown().await;
+
+    // A continuation the Host stops under, as a turn that brought it down would, isn't
+    // continued again.
+    let id = headless.to_string();
+    let journal = std::fs::read_dir(world.journals())
+        .expect("the journals")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            std::fs::read_to_string(path).is_ok_and(|text| {
+                text.lines()
+                    .next()
+                    .is_some_and(|header| header.contains(&id))
+            })
+        })
+        .expect("the headless session's journal");
+    let text = std::fs::read_to_string(&journal).expect("the journal");
+    let lines: Vec<&str> = text.lines().collect();
+    let end = lines
+        .iter()
+        .rposition(|line| line.contains(r#""type":"turnEnded""#))
+        .expect("the continuation's end");
+    std::fs::write(&journal, format!("{}\n", lines[..end].join("\n"))).expect("the journal");
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    daemon.resume_queues().await;
+    let turn = latest(&daemon, &headless, None).await;
+    assert_eq!(turn.state, TurnState::Interrupted);
+    assert_eq!(turn.continues.as_deref(), Some(cut.as_str()));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let still = latest(&daemon, &headless, None).await;
+    assert_eq!(still.turn_id, turn.turn_id, "nothing continued it");
 }
 
 #[tokio::test]

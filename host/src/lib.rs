@@ -1091,8 +1091,8 @@ impl Daemon {
     }
 
     /// At startup, take up the suspended headless sessions whose queue holds prompts and isn't
-    /// paused, so their queue runs with nobody attached (WVE-107). Interactive sessions' queues
-    /// wait for a client.
+    /// paused, so their queue runs with nobody attached (WVE-107), and those a stopped Host was
+    /// running a turn in, which they continue (WVE-144). Interactive sessions wait for a client.
     pub async fn resume_queues(&self) {
         let Some(journals) = &self.shared.config.journals else {
             return;
@@ -1109,12 +1109,18 @@ impl Daemon {
             let Some(agent_id) = recorded.agent_id() else {
                 continue;
             };
-            let ready = journal::read(&journal::path_for(journals, &session_id))
-                .is_ok_and(|records| queue::Queue::from_records(&records).is_ready());
+            // Its queue waits, or a turn the stopped Host ran in it is to be continued.
+            let ready =
+                journal::read(&journal::path_for(journals, &session_id)).is_ok_and(|records| {
+                    queue::Queue::from_records(&records).is_ready()
+                        || journal::open_turns(&records)
+                            .iter()
+                            .any(|open| open.session_id == session_id)
+                });
             if !ready {
                 continue;
             }
-            tracing::info!(%session_id, "taking up a headless session whose queue waits");
+            tracing::info!(%session_id, "taking up a headless session whose queue waits or whose turn was cut off");
             if let Err(error) = client::take_up(
                 &self.shared,
                 agent_id,

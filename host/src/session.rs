@@ -501,7 +501,23 @@ pub(crate) struct Opened {
     pub(crate) started_by: Option<SessionId>,
     /// The peer Host `started_by` is on, when it isn't this one.
     pub(crate) started_by_host: Option<String>,
+    /// The turn a stopped Host cut off, for a headless session to continue first.
+    pub(crate) continuation: Option<Continuation>,
 }
+
+/// A headless session's turn that a Host stopping or crashing cut off, which it continues in a
+/// turn of its own as it opens, from the same origin, so whoever began it hears how it ends
+/// (WVE-144, ADR 0011).
+pub(crate) struct Continuation {
+    pub(crate) origin: TurnOrigin,
+    /// The interrupted turn.
+    pub(crate) continues: TurnId,
+}
+
+/// What a continuation prompts the agent with.
+const CONTINUE: &str = "[weave] The weave Host stopped while your last turn ran, so it was cut off. \
+                        Carry on from where you left off; check what you'd already done first, \
+                        since your last steps may not have finished.";
 
 /// Start the task that owns a session, and register it with the Host.
 pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
@@ -524,6 +540,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         queue,
         started_by,
         started_by_host,
+        continuation,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
     let (commands_tx, commands) = mpsc::unbounded_channel();
@@ -585,7 +602,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         );
     }
     servers.bind(&session_id);
-    let actor = Actor {
+    let mut actor = Actor {
         root: session_id,
         servers,
         shared: Arc::clone(shared),
@@ -624,6 +641,10 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         stopping: None,
         waiting: Vec::new(),
     };
+    // Before the task runs, so no queued prompt starts ahead of it.
+    if let Some(continuation) = continuation {
+        actor.continue_interrupted(continuation);
+    }
     tokio::spawn(actor.run());
     handle
 }
@@ -894,6 +915,7 @@ impl Actor {
                         None,
                         turn_id.clone(),
                         key,
+                        None,
                     )
                     .map(|seq| (seq, turn_id));
                 // Prompting the session resumes its queue, after this turn.
@@ -1206,7 +1228,9 @@ impl Actor {
     }
 
     /// Start the turn `turn_id` in `session_id` with `prompt`: from the queue when `queued_id`
-    /// names the queued prompt, under the request key `key` when there is one.
+    /// names the queued prompt, under the request key `key` when there is one, continuing the
+    /// interrupted turn `continues` when it names one.
+    #[allow(clippy::too_many_arguments)]
     fn prompt(
         &mut self,
         origin: TurnOrigin,
@@ -1215,6 +1239,7 @@ impl Actor {
         queued_id: Option<String>,
         turn_id: TurnId,
         key: Option<String>,
+        continues: Option<TurnId>,
     ) -> Result<u64, Error> {
         if self.turns.contains_key(&session_id) {
             return Err(errors::turn_running());
@@ -1232,6 +1257,7 @@ impl Actor {
             queued_id,
             turn_id: Some(turn_id.clone()),
             key,
+            continues,
         });
         self.turns.insert(
             session_id,
@@ -1269,6 +1295,7 @@ impl Actor {
                 Some(queued_id.clone()),
                 queued_id.clone(),
                 key,
+                None,
             )?;
             return Ok(AddQueuedResponse {
                 queued_id,
@@ -1314,6 +1341,23 @@ impl Actor {
 
     /// Start the first queued prompt, when no turn of the session's own runs and the queue
     /// isn't paused. One the agent won't take goes back to the front, and the queue pauses.
+    /// Continue the turn a stopped Host cut off, from its origin.
+    fn continue_interrupted(&mut self, continuation: Continuation) {
+        let root = self.root.clone();
+        let started = self.prompt(
+            continuation.origin,
+            root,
+            vec![ContentBlock::from(CONTINUE.to_owned())],
+            None,
+            crate::queue::new_id(),
+            None,
+            Some(continuation.continues),
+        );
+        if let Err(error) = started {
+            tracing::warn!(session = %self.root, %error, "couldn't continue an interrupted turn");
+        }
+    }
+
     fn advance(&mut self) {
         let free = !self.turns.contains_key(&self.root) && !self.shared.draining();
         if !free || !self.queue.is_ready() {
@@ -1329,6 +1373,7 @@ impl Actor {
             next.prompt.clone(),
             Some(next.id.clone()),
             next.id.clone(),
+            None,
             None,
         );
         if let Err(error) = started {

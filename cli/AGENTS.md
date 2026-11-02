@@ -84,7 +84,7 @@ journal events (`session/event`) stream as JSON lines. CLI tests check each pars
 The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
 the turn ended (`end_turn`); 1, any other error; 2, arguments clap refused; 3, the weave Host
 couldn't be reached: not running, for a command that never starts one (`threads read`, `daemon
-status`), didn't start, or went away; 4, the turn failed, or its thread closed under it; 5, the
+status`), didn't start, or went away; 4, the turn failed, was interrupted by the Host stopping, or its thread closed under it; 5, the
 turn was cancelled; 6, it stopped short otherwise (a token limit, a refusal, too many model
 requests); 7, the turn waits on a person; 8, waiting timed out. `threads list` with no Host lists
 none and exits 0. How the turn went is in the status on purpose, though the A2A CLI keeps a

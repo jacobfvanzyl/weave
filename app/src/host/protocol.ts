@@ -235,7 +235,8 @@ export type ResourceNotFound = -32002;
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "TurnState".
  */
-export type TurnState = ("running" | "cancelled") | "queued" | "waiting" | "ended" | "stopped" | "failed";
+export type TurnState =
+  ("running" | "cancelled") | "queued" | "waiting" | "ended" | "stopped" | "failed" | "interrupted";
 /**
  * Resource content that can be embedded in a message.
  *
@@ -799,6 +800,11 @@ export type SessionEvent =
        * The turn's id (feature `turnIds`): its `queuedId` when it has one.
        */
       turnId?: string | null;
+      /**
+       * The interrupted turn it continues, which a Host that stopped under it left
+       * (WVE-144).
+       */
+      continues?: string | null;
       kind: "turnStarted";
     }
   | {
@@ -2455,7 +2461,11 @@ export interface LatestTurn {
   /**
    * Where it is (feature `turnIds`).
    */
-  state: ("running" | "cancelled") | "queued" | "waiting" | "ended" | "stopped" | "failed";
+  state: ("running" | "cancelled") | "queued" | "waiting" | "ended" | "stopped" | "failed" | "interrupted";
+  /**
+   * The interrupted turn it continues (WVE-144).
+   */
+  continues?: string | null;
   prompt: ContentBlock[];
   origin: TurnOrigin;
   /**
@@ -6462,7 +6472,8 @@ export const HOST_PROTOCOL = {
     "unknownTerminal": -32078,
     "terminalUnavailable": -32079,
     "unknownTurn": -32080,
-    "peerUnavailable": -32081
+    "peerUnavailable": -32081,
+    "interrupted": -32082
   },
   "features": {
     "steer": "turn/steer",

@@ -60,6 +60,7 @@ use weave_acp_core::schema::ToolCallStatus;
 
 use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentUpdate;
+use weave_host_protocol::errors;
 use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
@@ -164,6 +165,9 @@ const QUEUE_COMMAND: &str = "queue";
 const COPIED_NOTE: Duration = Duration::from_secs(2);
 /// Images the fullscreen transcript shows at most; older ones show as their text.
 const MAX_TRANSCRIPT_IMAGES: usize = 64;
+
+/// What the transcript says of a turn the weave Host stopped or crashed under (WVE-144).
+const INTERRUPTED: &str = "Interrupted: the weave Host stopped while this turn ran";
 
 #[derive(Debug, PartialEq)]
 pub enum AppCommand {
@@ -1614,8 +1618,12 @@ impl ChatWidget {
                 if !self.is_active(&session_id) {
                     Vec::new()
                 } else if replayed {
-                    // History: what it finished settles, and nobody needs telling.
+                    // History: what it finished settles, and nobody needs telling; but a turn
+                    // the Host stopped under ended while nobody watched, so it says so.
                     self.finish_live_cells();
+                    if result.as_ref().is_err_and(is_interrupted) {
+                        self.push_cell(TranscriptCell::info(INTERRUPTED));
+                    }
                     Vec::new()
                 } else {
                     self.end_turn(result)
@@ -2484,6 +2492,7 @@ impl ChatWidget {
                     .map_or_else(|| "Turn complete".to_owned(), str::to_owned),
             ),
             Ok(_) => Some("The turn stopped early".to_owned()),
+            Err(error) if is_interrupted(error) => Some(INTERRUPTED.to_owned()),
             Err(error) => Some(format!("Turn failed: {error}")),
         };
         // A cancelled turn has nothing to show for it.
@@ -2517,6 +2526,9 @@ impl ChatWidget {
                 if let Some(note) = note {
                     self.push_cell(TranscriptCell::info(note));
                 }
+            }
+            Err(error) if is_interrupted(&error) => {
+                self.push_cell(TranscriptCell::info(INTERRUPTED));
             }
             Err(error) => self.push_error(&format!("Turn failed: {error}")),
         }
@@ -4595,6 +4607,11 @@ fn has_content(fields: &weave_acp_core::schema::ToolCallUpdateFields) -> bool {
 }
 
 /// The time of day for turn summaries; fixed in tests so snapshots stay stable.
+/// Whether a turn ended because the weave Host stopped while it ran.
+fn is_interrupted(error: &Error) -> bool {
+    errors::is(error, errors::INTERRUPTED)
+}
+
 fn clock_label() -> String {
     if cfg!(test) {
         "12:00".to_owned()
@@ -5568,6 +5585,28 @@ mod tests {
         assert_eq!(status_of(&chat).0, State::Done);
         chat.focus_gained();
         assert_eq!(status_of(&chat), (State::Idle, None));
+    }
+
+    #[test]
+    fn a_turn_the_host_stopped_under_says_it_was_interrupted_even_as_history() {
+        for replayed in [true, false] {
+            let mut chat = chat();
+            if !replayed {
+                submit(&mut chat, "write it");
+            }
+            chat.handle_agent_event(ChatEvent::TurnEnded {
+                session_id: "s1".into(),
+                result: Err(errors::interrupted()),
+                replayed,
+            });
+            let history = history(&mut chat);
+            assert!(
+                history
+                    .iter()
+                    .any(|line| line.contains(INTERRUPTED) && !line.contains("Turn failed")),
+                "{replayed}: {history:?}"
+            );
+        }
     }
 
     #[test]

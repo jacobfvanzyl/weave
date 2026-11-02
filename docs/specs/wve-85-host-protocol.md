@@ -422,7 +422,8 @@ queued one included; one the session's journal has no turn by fails with `unknow
 ```ts
 type LatestTurn = {
   turnId?: string;             // absent for turns journaled before the Host gave ids
-  state: "queued" | "running" | "waiting" | "ended" | "stopped" | "cancelled" | "failed";
+  state: "queued" | "running" | "waiting" | "ended" | "stopped" | "cancelled" | "failed" | "interrupted";
+  continues?: string;          // the interrupted turn it continues
   prompt: ContentBlock[];
   origin: TurnOrigin;
   startedAt: number;           // for a queued turn, when it was queued
@@ -437,8 +438,9 @@ type LatestTurn = {
 last tool call, thought or other message. `state` says where the turn is in one field, as A2A's
 task states do: `queued` while its prompt waits in the queue, `running`, `waiting` while it runs
 and a permission request or elicitation in it waits for a person (a client tool call doesn't
-count), and once over, `ended` (`end_turn`), `stopped` (another stop reason), `cancelled` or
-`failed`, which match the CLI's exit statuses.
+count), and once over, `ended` (`end_turn`), `stopped` (another stop reason), `cancelled`,
+`failed` or `interrupted` (see [Interrupted turns](#interrupted-turns)), which match the CLI's
+exit statuses; an interrupted turn exits as a failed one does.
 
 **`sessions/watch`** `{}` → `{sessions: SessionListing[]}`
 
@@ -582,7 +584,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `event.kind` | Fields | Written when |
 | --- | --- | --- |
 | `update` | `notification`: ACP `SessionNotification` | the agent sends `session/update` (for this session or a subagent session; `notification.sessionId` says which), or a client changes a mode or config option |
-| `turnStarted` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin`, `queuedId?`, `turnId?` | a turn starts; `queuedId` names the queued prompt it started from, `turnId` the turn |
+| `turnStarted` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin`, `queuedId?`, `turnId?`, `continues?` | a turn starts; `queuedId` names the queued prompt it started from, `turnId` the turn, `continues` the interrupted turn it continues |
 | `turnSteered` | `sessionId`, `prompt`: ACP `ContentBlock[]`, `origin` | a steer joins the running turn (`turn/steer`) |
 | `turnEnded` | `sessionId`, `response?`: ACP `PromptResponse`, `error?`: JSON-RPC error | a turn ends |
 | `terminalOutput` | `terminalId`, `data` | a command the Host runs for the agent writes output |
@@ -703,6 +705,25 @@ from journal positions. Turns journaled by a Host that gave no ids have none, ap
 ones, which go by their `queuedId`. This is A2A's `taskId`, which weave borrows without
 speaking A2A (`docs/research/a2a-and-agents-controlling-threads.md`).
 
+### Interrupted turns
+
+WVE-144, ADR 0011. A turn the Host stops or crashes under, as `weave daemon restart --now` or a
+drain that runs out of time stops it, is cut off with its agent's process. When the Host takes
+the session up again, it ends that turn with `turnEnded` whose `error` has the code
+`interrupted` ("the weave Host stopped while this turn ran"), and the turn's `state` is
+`interrupted`. A client that doesn't know the code shows it as a failed turn's error.
+
+- **A headless session continues it,** once: as the session opens, before its queue starts
+  anything, the Host starts a turn with a fixed prompt saying the turn was cut off and to carry
+  on after checking what it had done, from the interrupted turn's `origin`, so the thread whose
+  agent began it hears how it ends, as it would have. Its `turnStarted` names the interrupted
+  turn in `continues`, as `LatestTurn` does. A continuation that is itself interrupted isn't
+  continued again, so a turn that brings the Host down can't do it over and over. The Host
+  takes up such sessions at startup, as it does headless sessions whose queue waits.
+- **An interactive session doesn't.** It shows the outcome and leaves the turn to the person,
+  and its queue pauses as `interrupted` if prompts wait (see [Queue](#queue)).
+- A turn a stopped Host left was journaled as `cancelled` before; such journals stay as they are.
+
 ### Queue
 
 Feature `queue`. Each open session has a queue: prompts waiting, in order, to start its next
@@ -738,7 +759,8 @@ type QueuedPrompt = {
   title does. A paused queue doesn't keep its session open: the session closes after the idle
   grace like any other.
 - **At startup** the Host takes up the suspended headless sessions whose queue holds prompts
-  and isn't paused, so their queue runs with nobody attached.
+  and isn't paused, so their queue runs with nobody attached, and those it stopped under
+  mid-turn, which continue that turn first (see [Interrupted turns](#interrupted-turns)).
 
 **`queue/add`** `{sessionId, prompt: ContentBlock[], key?, caller?}` → `{queuedId, seq, started}`, where
 `queuedId` is also the id of the turn it starts (see [Turn ids](#turn-ids))
@@ -1531,6 +1553,7 @@ returns the agent's error unchanged.
 | -32077 | `host_stopping` | the Host is draining before it stops and starts no new turns (see `host/drain`) |
 | -32080 | `unknown_turn` | the session's journal has no turn by that id (see [Turn ids](#turn-ids)) |
 | -32081 | `peer_unavailable` | a peer Host couldn't be reached or refused this Host, or this Host pairs with none; the message says why (see [Peer Hosts](#peer-hosts)) |
+| -32082 | `interrupted` | in a turn's `turnEnded`, not a request's answer: the Host stopped while the turn ran (see [Interrupted turns](#interrupted-turns)) |
 
 ## Versioning
 
@@ -1751,7 +1774,7 @@ New, in-process with fake agents:
   with another user id needs a second account, so it's checked by hand;
 - agents run from the config, in the session's directory, with the layered environment;
   environment capture falls back when the shell times out;
-- a suspended session resumes when attached, with its interrupted turn ended as cancelled;
+- a suspended session resumes when attached, with its interrupted turn ended as `interrupted`;
   one nobody takes up within the idle grace closes, keeping its journal's age, and opens again
   in a new journal (WVE-120);
 - golden fixtures match for every message type.

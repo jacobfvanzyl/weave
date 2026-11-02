@@ -137,6 +137,10 @@ _Avoid_: run, request, exchange
 What a person sends an agent while its turn runs, which joins that turn instead of starting another.
 _Avoid_: interjection, injection, interrupt
 
+**Interrupted turn**:
+A turn the Host stopped or crashed under, cut off with its agent's process. A headless thread continues it once, in a turn of its own; an interactive one leaves it to the person.
+_Avoid_: uncertain, cancelled, aborted
+
 **Queued prompt**:
 A prompt the Host holds in a thread's queue while a turn runs, to start a later turn once the turns before it end. Every client attached to the thread sees it, and it outlives the client that sent it.
 _Avoid_: follow-up, pending message

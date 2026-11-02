@@ -151,6 +151,7 @@ mod tests {
                 queued_id: Some("carried".to_owned()),
                 turn_id: Some("carried".to_owned()),
                 key: None,
+                continues: None,
             }),
             record(Entry::Unqueued {
                 queued_id: "b".to_owned(),

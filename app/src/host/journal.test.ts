@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import type { OpenedSession } from './connection';
 import { JournalFollower, type JournalReading, reopenedText, transcriptEvents } from './journal';
-import type { SessionEvent, SessionEventNotification, TurnOrigin } from './protocol';
+import { HOST_PROTOCOL, type SessionEvent, type SessionEventNotification, type TurnOrigin } from './protocol';
 
 const opened = (journal: string, head: number, replay?: OpenedSession['replay']) =>
   ({ state: { journal: { id: journal, head } }, replay }) as unknown as OpenedSession;
@@ -90,6 +90,14 @@ describe('transcriptEvents', () => {
     const transcript = transcriptEvents(failed, live).reduce(reduceAcpEvent, createTranscript('s-1'));
     expect(transcript.entries).toMatchObject([{ kind: 'diagnostic', severity: 'error', title: 'Turn failed', detail: 'The agent crashed' }]);
     expect(transcript.turn).toEqual({ status: 'failed', error: 'The agent crashed' });
+  });
+
+  it('says a turn the Host stopped under was interrupted, in history too', () => {
+    const cut = event(1, { kind: 'turnEnded', sessionId: 's-1', error: { code: HOST_PROTOCOL.errors.interrupted, message: 'the weave Host stopped while this turn ran' } });
+    for (const position of [replayed, live]) {
+      const transcript = transcriptEvents(cut, position).reduce(reduceAcpEvent, createTranscript('s-1'));
+      expect(transcript.entries).toMatchObject([{ kind: 'diagnostic', severity: 'info', title: 'Interrupted: the weave Host stopped while this turn ran' }]);
+    }
   });
 
   it('routes subagent updates to their session and skips unknown kinds', () => {

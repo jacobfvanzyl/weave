@@ -51,6 +51,9 @@ pub const TERMINAL_UNAVAILABLE: i32 = -32079;
 pub const UNKNOWN_TURN: i32 = -32080;
 /// A peer Host couldn't be reached, or refused this Host; the message says why.
 pub const PEER_UNAVAILABLE: i32 = -32081;
+/// A turn's end, not a request's: the Host stopped or crashed while the turn ran, so it was cut
+/// off. A headless session's turn is continued once the Host takes it up again (WVE-144).
+pub const INTERRUPTED: i32 = -32082;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
     Error::new(UNAUTHENTICATED, why)
@@ -210,6 +213,11 @@ pub fn host_stopping() -> Error {
         "the Host is stopping once its running turns end, and starts no new ones; prompt again \
          once it's back",
     )
+}
+
+/// How a turn the Host stopped or crashed under ends.
+pub fn interrupted() -> Error {
+    Error::new(INTERRUPTED, "the weave Host stopped while this turn ran")
 }
 
 /// Whether `error` carries `code`.

@@ -29,7 +29,11 @@ that holds prompts (`queuePaused`), and prompting, adding or `queue/resume` resu
 is rebuilt from the journal (`Queue::from_records`); a closed session's new journal header
 carries it on, as it does a title; taking up an interactive session with prompts waiting pauses
 it as `interrupted`, and a Host starting takes up suspended headless sessions whose queue waits
-(`Daemon::resume_queues`). Request keys (`admissions.rs`, feature `requestKeys`) are admitted
+(`Daemon::resume_queues`). A turn a stopped Host left open ends `interrupted` when the session is
+taken up (`client::reopen`, `errors::interrupted`, WVE-144); a headless session continues its
+own once, from its origin, before its queue starts anything (`session::Continuation`, started
+before the task runs), and its `turnStarted` names the turn in `continues`, which also keeps a
+continuation from being continued again. Those sessions are taken up at startup too. Request keys (`admissions.rs`, feature `requestKeys`) are admitted
 before `session/run`, `turn/start` and `queue/add` act: a line in `admissions.jsonl` beside the
 journals, synced, then the answer, or a refusal that frees the key. The key is journaled with the
 `turnStarted` or `queued` entry it caused, so a repeat of a key a stopped Host never answered

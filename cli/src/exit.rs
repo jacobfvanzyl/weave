@@ -56,7 +56,7 @@ impl Status {
             TurnState::Waiting => Self::Waiting,
             TurnState::Stopped => Self::Stopped,
             TurnState::Cancelled => Self::Cancelled,
-            TurnState::Failed => Self::TurnFailed,
+            TurnState::Failed | TurnState::Interrupted => Self::TurnFailed,
         }
     }
 
