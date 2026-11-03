@@ -195,10 +195,12 @@ Peer Hosts (WVE-109, ADRs 0017 and 0024, `peers.rs`; the Host protocol's Peer Ho
 the person's other Hosts this one pairs with. Its key (`peers::Peers::key`, `host-key.json`,
 0600) is `weave_host_client::remote::DeviceKey`: in the Secure Enclave on a Mac that has one, kept
 as the wrapped form `SecKeyCreateWithData` takes back with that same form as its `toid` attribute
-(`host-client/src/enclave.rs`), otherwise the key itself. `peers/add` pairs as a device whose
+(`host-client/src/enclave.rs`), otherwise the key itself, read and written by
+`DeviceKey::kept` (`host-client/src/key_file.rs`), as the Dispatcher keeps its own. `peers/add` pairs as a device whose
 `NewDevice.host` is this Host's id; `peers.json` keeps each peer, the turns followed there
 (`following`) and the requests sent there without an answer yet (`sending`). A peer is reached on
-demand (`Peers::reach`, a `weave-host-client` WebSocket connection proving the key) and kept while
+demand (`Peers::reach`, a `weave-host-client` WebSocket connection proving the key, whose
+failures `weave_host_client::reach` names as the Dispatcher's are named) and kept while
 followed, closing after `PeerSettings::idle` unused; `dispatch` hands what it sends to each
 session's follower by session id, and when the peer closes the connection `unlink` notes how
 (`CLOSE_REVOKED` is `refused`), so `peers/list`'s `status` is the last attempt's outcome, except

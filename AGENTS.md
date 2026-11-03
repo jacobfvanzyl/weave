@@ -8,6 +8,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and its peer Hosts. No UI. Read `host/AGENTS.md`. |
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
+| `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, paired with each as a service, that keeps triggers and Bots and starts their work there. Its state is SQLite. Runs no agents; Hosts never connect to it. Read `dispatcher/AGENTS.md`. |
 | `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them. |
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
@@ -17,7 +18,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
 | `scripts/` | `update-hosts`: rebuild weave in release and restart the installed Host, here and on the person's other computers over SSH. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |
-| `docs/specs/` | The Host protocol (WVE-85) and remote clients (WVE-90). |
+| `docs/specs/` | The Host protocol (WVE-85), remote clients (WVE-90) and the Dispatcher (WVE-175). |
 | `docs/research/` | Dated research: evidence, not implementation requirements. |
 | `docs/agents/` | Tracker and domain guidance. |
 | `.agents/tools/linear/` | Deliberately isolated, pinned tracker CLI. |
@@ -51,8 +52,9 @@ implementation. Each crate's own guide is the `AGENTS.md` in its directory.
   spec `docs/specs/wve-85-host-protocol.md`, types in `protocol/`), which carries ACP's
   content as its payload. `--no-daemon` (`[daemon] enabled = false`) runs the same Host
   in-process, so there is one code path. `smoke`, `login` and `logout` talk to agents
-  directly. Triggers (schedules, webhooks) are planned separately; `Daemon::run` and the
-  `PermissionPolicy` are what they will call. Domain terms are in `CONTEXT.md`.
+  directly. Triggers (schedules, webhooks) live in the Dispatcher (`dispatcher/`, ADR 0027),
+  a separate program that starts work on the Hosts as a client of them, paired as a service.
+  Domain terms are in `CONTEXT.md`.
 
 ### Stack
 

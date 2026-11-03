@@ -1,5 +1,5 @@
-//! The weave Host as a launchd user agent, on macOS: started at login and started again if it
-//! exits, through `launchctl`.
+//! The weave Host, and the Dispatcher, as launchd user agents, on macOS: started at login and
+//! started again if they exit, through `launchctl`.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -7,16 +7,22 @@ use std::process::Command;
 
 use anyhow::Context;
 use anyhow::bail;
+use weave_dispatcher::DispatcherPaths;
 use weave_host::DaemonPaths;
 
+use super::dispatcher_instance;
 use super::executable;
 use super::instance;
+use super::owner_of;
 use super::passed_on;
 use super::user_id;
 use crate::daemon;
 
 /// The label of the default Host's service.
 const LABEL: &str = "local.weave.host";
+
+/// The label of the default Dispatcher's service.
+const DISPATCHER_LABEL: &str = "local.weave.dispatcher";
 
 /// Folders macOS keeps processes launchd starts out of until they're let in.
 const PROTECTED: [&str; 4] = [
@@ -33,16 +39,7 @@ pub(super) fn installed(paths: &DaemonPaths) -> bool {
 
 pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     let plist = plist_path(paths).context("no home directory for ~/Library/LaunchAgents")?;
-    let executable = executable()?;
-    if let Some(folder) = protected(&executable) {
-        bail!(
-            "launchd can't start {} from {}: macOS keeps the processes it starts out of that \
-             folder. Install from a copy elsewhere, such as ~/.local/bin/weave, by running that \
-             copy's `weave daemon install`",
-            executable.display(),
-            folder.display()
-        );
-    }
+    let executable = startable(executable()?, "weave daemon install")?;
     // A Host started on demand holds the socket; launchd's takes over from it.
     let was_running = daemon::stop(paths, false).await?;
     if installed(paths) {
@@ -51,7 +48,13 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     paths
         .prepare()
         .with_context(|| format!("creating {}", paths.dir.display()))?;
-    let contents = render(&label(paths), &executable, &paths.log(), &passed_on());
+    let contents = render(
+        &label(paths),
+        &executable,
+        &["daemon", "run", "--launchd"],
+        &paths.log(),
+        &passed_on(),
+    );
     if let Some(parent) = plist.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
@@ -71,6 +74,73 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
         executable.display()
     );
     Ok(())
+}
+
+/// `executable`, unless it's in a folder launchd can't start it from; `install` is the command
+/// to run from a copy elsewhere.
+fn startable(executable: PathBuf, install: &str) -> anyhow::Result<PathBuf> {
+    if let Some(folder) = protected(&executable) {
+        bail!(
+            "launchd can't start {} from {}: macOS keeps the processes it starts out of that \
+             folder. Install from a copy elsewhere, such as ~/.local/bin/weave, by running that \
+             copy's `{install}`",
+            executable.display(),
+            folder.display()
+        );
+    }
+    Ok(executable)
+}
+
+/// Whether launchd runs the Dispatcher for `paths`.
+pub(super) fn dispatcher_installed(paths: &DispatcherPaths) -> bool {
+    agent_plist(&dispatcher_label(paths)).is_some_and(|path| path.is_file())
+}
+
+/// Write the Dispatcher's service and start it.
+pub(super) fn install_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<PathBuf> {
+    let label = dispatcher_label(paths);
+    let plist = agent_plist(&label).context("no home directory for ~/Library/LaunchAgents")?;
+    let executable = startable(executable()?, "weave dispatcher install")?;
+    let uid = owner_of(&paths.dir)?;
+    let target = format!("gui/{uid}/{label}");
+    if plist.is_file() {
+        launchctl(&["bootout", &target]).ok();
+    }
+    let contents = render(
+        &label,
+        &executable,
+        &["dispatcher", "run"],
+        &paths.log(),
+        &passed_on(),
+    );
+    if let Some(parent) = plist.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(&plist, contents).with_context(|| format!("writing {}", plist.display()))?;
+    launchctl(&[
+        "bootstrap",
+        &format!("gui/{uid}"),
+        &plist.display().to_string(),
+    ])?;
+    Ok(executable)
+}
+
+pub(super) fn uninstall_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    let label = dispatcher_label(paths);
+    let plist = agent_plist(&label).context("no home directory for ~/Library/LaunchAgents")?;
+    let uid = owner_of(&paths.dir)?;
+    launchctl(&["bootout", &format!("gui/{uid}/{label}")]).ok();
+    std::fs::remove_file(&plist).with_context(|| format!("removing {}", plist.display()))
+}
+
+/// The Dispatcher service's label: the default Dispatcher's, or one named after another
+/// directory.
+fn dispatcher_label(paths: &DispatcherPaths) -> String {
+    match dispatcher_instance(paths) {
+        Some(name) => format!("{DISPATCHER_LABEL}.{name}"),
+        None => DISPATCHER_LABEL.to_owned(),
+    }
 }
 
 /// The protected folder `path` is in, if it's in one.
@@ -122,11 +192,16 @@ fn label(paths: &DaemonPaths) -> String {
 }
 
 fn plist_path(paths: &DaemonPaths) -> Option<PathBuf> {
+    agent_plist(&label(paths))
+}
+
+/// Where the user agent `label`'s property list goes.
+fn agent_plist(label: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
     Some(
         PathBuf::from(home)
             .join("Library/LaunchAgents")
-            .join(format!("{}.plist", label(paths))),
+            .join(format!("{label}.plist")),
     )
 }
 
@@ -154,12 +229,22 @@ fn launchctl(args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The property list for a service running `executable`'s Host with `environment`.
-fn render(label: &str, executable: &Path, log: &Path, environment: &[(String, String)]) -> String {
+/// The property list for a service running `executable` with `arguments` and `environment`.
+fn render(
+    label: &str,
+    executable: &Path,
+    arguments: &[&str],
+    log: &Path,
+    environment: &[(String, String)],
+) -> String {
     let string = |value: &str| format!("<string>{}</string>", escape(value));
     let variables: String = environment
         .iter()
         .map(|(name, value)| format!("\t\t<key>{}</key>\n\t\t{}\n", escape(name), string(value)))
+        .collect();
+    let arguments: String = std::iter::once(executable.display().to_string())
+        .chain(arguments.iter().map(|argument| (*argument).to_owned()))
+        .map(|argument| format!("\t\t{}\n", string(&argument)))
         .collect();
     let environment = if variables.is_empty() {
         String::new()
@@ -172,7 +257,7 @@ fn render(label: &str, executable: &Path, log: &Path, environment: &[(String, St
          \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\">\n<dict>\n\
          \t<key>Label</key>\n\t{label}\n\
-         \t<key>ProgramArguments</key>\n\t<array>\n\t\t{program}\n\t\t{daemon}\n\t\t{run}\n\t\t{launchd}\n\t</array>\n\
+         \t<key>ProgramArguments</key>\n\t<array>\n{arguments}\t</array>\n\
          {environment}\
          \t<key>RunAtLoad</key>\n\t<true/>\n\
          \t<key>KeepAlive</key>\n\t<true/>\n\
@@ -180,10 +265,6 @@ fn render(label: &str, executable: &Path, log: &Path, environment: &[(String, St
          \t<key>StandardErrorPath</key>\n\t{log}\n\
          </dict>\n</plist>\n",
         label = string(label),
-        program = string(&executable.display().to_string()),
-        daemon = string("daemon"),
-        run = string("run"),
-        launchd = string("--launchd"),
         log = string(&log.display().to_string()),
     )
 }
@@ -208,10 +289,20 @@ mod tests {
     }
 
     #[test]
+    fn a_dispatcher_directory_of_its_own_gets_a_service_of_its_own() {
+        let paths = DispatcherPaths::in_dir("/tmp/weave dev/dispatcher".into());
+        assert_eq!(
+            dispatcher_label(&paths),
+            "local.weave.dispatcher.tmp-weave-dev-dispatcher"
+        );
+    }
+
+    #[test]
     fn the_service_runs_this_weave_with_the_places_it_was_installed_with() {
         let plist = render(
             "local.weave.host",
             Path::new("/opt/weave & co/weave"),
+            &["daemon", "run", "--launchd"],
             Path::new("/state/daemon.log"),
             &[("WEAVE_DAEMON_DIR".to_owned(), "/state".to_owned())],
         );
@@ -225,7 +316,7 @@ mod tests {
             plist.contains("<key>StandardErrorPath</key>\n\t<string>/state/daemon.log</string>")
         );
         // Without anything to pass on, there's no environment dictionary.
-        let bare = render("x", Path::new("/w"), Path::new("/l"), &[]);
+        let bare = render("x", Path::new("/w"), &[], Path::new("/l"), &[]);
         assert!(!bare.contains("EnvironmentVariables"));
     }
 }

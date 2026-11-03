@@ -548,7 +548,7 @@ fn remote_settings(config: Option<&Path>) -> weave_host::RemoteSettings {
 }
 
 /// SIGTERM or SIGINT. A closing terminal's SIGHUP is ignored.
-async fn stop_signal() {
+pub(crate) async fn stop_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::SignalKind;

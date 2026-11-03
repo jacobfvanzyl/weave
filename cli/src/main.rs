@@ -2,6 +2,7 @@ mod args;
 mod config;
 mod daemon;
 mod devices;
+mod dispatcher;
 mod exit;
 mod hosts;
 mod recent;
@@ -92,6 +93,9 @@ enum Command {
     /// Your other Hosts this one pairs with, whose threads its agents reach: list them, pair
     /// with one over SSH, or forget one.
     Hosts(hosts::HostsArgs),
+    /// The Dispatcher, which starts work on your Hosts while you're away: run or install it,
+    /// and pair it with your Hosts.
+    Dispatcher(dispatcher::DispatcherArgs),
     /// Move the agents weave launches to their newest releases, after checking each starts.
     Update(update::UpdateArgs),
     /// Run one prompt headlessly and print every ACP event the agent sends.
@@ -181,6 +185,11 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Hosts(args)) => {
             log_to_stderr("warn");
             hosts::hosts(args).await.map(|()| ExitCode::SUCCESS)
+        }
+        Some(Command::Dispatcher(args)) => {
+            // `run`'s stderr is its log, as the Host's is.
+            log_to_stderr("info");
+            dispatcher::command(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Update(args)) => {
             log_to_stderr("warn");

@@ -2,6 +2,7 @@
 //! and started again if it exits, through `systemctl --user`. The user manager runs while they
 //! are logged in, or from boot to shutdown with lingering on, which `install` turns on, so a
 //! Host set up over SSH keeps running after they disconnect and after the computer restarts.
+//! The Dispatcher runs the same way, as a unit of its own.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,16 +11,25 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::bail;
+use weave_dispatcher::DispatcherPaths;
 use weave_host::DaemonPaths;
 
+use super::dispatcher_instance;
 use super::executable;
 use super::instance;
+use super::owner_of;
 use super::passed_on;
 use super::user_id;
 use crate::daemon;
 
 /// The default Host's unit, without its `.service`.
 const UNIT: &str = "weave-host";
+
+/// The default Dispatcher's unit, without its `.service`.
+const DISPATCHER_UNIT: &str = "weave-dispatcher";
+
+/// How long systemd lets the Dispatcher take to stop: it only closes its connections.
+const DISPATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long the Host may take to suspend its sessions as it stops, each given up to 10
 /// seconds.
@@ -48,7 +58,14 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let contents = render(&executable, &paths.log(), &passed_on());
+    let contents = render(
+        "weave Host",
+        &executable,
+        "daemon run --systemd",
+        &paths.log(),
+        &passed_on(),
+        STOP_TIMEOUT,
+    );
     std::fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
     let unit = unit(paths);
     systemctl(&["daemon-reload"])?;
@@ -60,11 +77,22 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     } else {
         ""
     };
-    let lingering = match user_id(paths) {
+    let lingering = lingering_said(user_id(paths), "the Host");
+    eprintln!(
+        "Installed the weave Host as the systemd user service {unit}{restarted}. It runs {} \
+         and restarts it if it stops; `weave daemon uninstall` removes it. {lingering}",
+        executable.display()
+    );
+    Ok(())
+}
+
+/// What lingering, turned on if it can be, means for `what`.
+fn lingering_said(uid: anyhow::Result<u32>, what: &str) -> String {
+    let lingering = match uid {
         Ok(uid) => linger(uid),
         Err(error) => Lingering::Off(format!("{error:#}")),
     };
-    let lingering = match lingering {
+    match lingering {
         Lingering::On => {
             "Lingering is on for you, so systemd runs it from boot, logged in or not.".to_owned()
         }
@@ -72,17 +100,62 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
                                 systemd runs it from boot, logged in or not."
             .to_owned(),
         Lingering::Off(why) => format!(
-            "Lingering is off for you and couldn't be turned on ({why}), so the Host stops when \
+            "Lingering is off for you and couldn't be turned on ({why}), so {what} stops when \
              you log out and waits for your next login after a restart; `sudo loginctl \
              enable-linger $USER` turns it on."
         ),
-    };
-    eprintln!(
-        "Installed the weave Host as the systemd user service {unit}{restarted}. It runs {} \
-         and restarts it if it stops; `weave daemon uninstall` removes it. {lingering}",
-        executable.display()
+    }
+}
+
+/// Whether systemd runs the Dispatcher for `paths`.
+pub(super) fn dispatcher_installed(paths: &DispatcherPaths) -> bool {
+    user_unit_path(&dispatcher_unit(paths)).is_some_and(|path| path.is_file())
+}
+
+/// Write the Dispatcher's unit and start it: the weave it runs, and what lingering means for
+/// it.
+pub(super) fn install_dispatcher(
+    paths: &DispatcherPaths,
+) -> anyhow::Result<(PathBuf, Option<String>)> {
+    let unit = dispatcher_unit(paths);
+    let path = user_unit_path(&unit).context("no home directory for ~/.config/systemd/user")?;
+    let executable = executable()?;
+    systemctl(&["daemon-reload"])?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let contents = render(
+        "weave Dispatcher",
+        &executable,
+        "dispatcher run",
+        &paths.log(),
+        &passed_on(),
+        DISPATCHER_STOP_TIMEOUT,
     );
+    std::fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
+    systemctl(&["daemon-reload"])?;
+    systemctl(&["enable", &unit])?;
+    systemctl(&["restart", &unit])?;
+    let lingering = lingering_said(owner_of(&paths.dir), "the Dispatcher");
+    Ok((executable, Some(lingering)))
+}
+
+pub(super) fn uninstall_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    let unit = dispatcher_unit(paths);
+    let path = user_unit_path(&unit).context("no home directory for ~/.config/systemd/user")?;
+    systemctl(&["disable", "--now", &unit])?;
+    std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    systemctl(&["daemon-reload"]).ok();
     Ok(())
+}
+
+/// The Dispatcher's unit: the default one, or one named after another directory.
+fn dispatcher_unit(paths: &DispatcherPaths) -> String {
+    match dispatcher_instance(paths) {
+        Some(name) => format!("{DISPATCHER_UNIT}-{name}.service"),
+        None => format!("{DISPATCHER_UNIT}.service"),
+    }
 }
 
 pub(super) async fn uninstall(paths: &DaemonPaths) -> anyhow::Result<()> {
@@ -208,12 +281,12 @@ fn unit(paths: &DaemonPaths) -> String {
 /// Where the user manager looks for the person's own units. Not under `$XDG_CONFIG_HOME`,
 /// which a development Host sets for a config of its own and the user manager doesn't see.
 fn unit_path(paths: &DaemonPaths) -> Option<PathBuf> {
+    user_unit_path(&unit(paths))
+}
+
+fn user_unit_path(unit: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
-    Some(
-        PathBuf::from(home)
-            .join(".config/systemd/user")
-            .join(unit(paths)),
-    )
+    Some(PathBuf::from(home).join(".config/systemd/user").join(unit))
 }
 
 /// `systemctl --user <args>`, with a hint when it can't reach the user manager.
@@ -276,10 +349,17 @@ fn timespan(text: &str) -> Option<Duration> {
     (!text.trim().is_empty()).then_some(total)
 }
 
-/// The unit for a service running `executable`'s Host with `environment`, logging to `log`.
-/// `KillMode=mixed` signals the Host alone, which stops its agents itself; systemd kills what
-/// is left once it has gone.
-fn render(executable: &Path, log: &Path, environment: &[(String, String)]) -> String {
+/// The unit `description` names, running `executable` with `arguments` and `environment`,
+/// logging to `log`. `KillMode=mixed` signals the main process alone, which stops what it
+/// started itself, as the Host stops its agents; systemd kills what is left once it has gone.
+fn render(
+    description: &str,
+    executable: &Path,
+    arguments: &str,
+    log: &Path,
+    environment: &[(String, String)],
+    stop: Duration,
+) -> String {
     let variables: String = environment
         .iter()
         .map(|(name, value)| format!("Environment={}\n", quoted(&format!("{name}={value}"))))
@@ -287,10 +367,10 @@ fn render(executable: &Path, log: &Path, environment: &[(String, String)]) -> St
     let log = specifiers(&log.display().to_string());
     format!(
         "[Unit]\n\
-         Description=weave Host\n\
+         Description={description}\n\
          \n\
          [Service]\n\
-         ExecStart={program} daemon run --systemd\n\
+         ExecStart={program} {arguments}\n\
          {variables}\
          Restart=always\n\
          RestartSec=2\n\
@@ -302,7 +382,7 @@ fn render(executable: &Path, log: &Path, environment: &[(String, String)]) -> St
          [Install]\n\
          WantedBy=default.target\n",
         program = quoted(&executable.display().to_string()).replace('$', "$$"),
-        stop = STOP_TIMEOUT.as_secs(),
+        stop = stop.as_secs(),
     )
 }
 
@@ -332,9 +412,12 @@ mod tests {
     #[test]
     fn the_unit_runs_this_weave_with_the_places_it_was_installed_with() {
         let unit = render(
+            "weave Host",
             Path::new("/opt/weave \"100%\" $HOME/weave"),
+            "daemon run --systemd",
             Path::new("/state/daemon.log"),
             &[("WEAVE_DAEMON_DIR".to_owned(), "/state dir".to_owned())],
+            STOP_TIMEOUT,
         );
         assert_eq!(
             unit,
@@ -354,6 +437,29 @@ mod tests {
              [Install]\n\
              WantedBy=default.target\n"
         );
+    }
+
+    #[test]
+    fn the_dispatcher_gets_a_unit_of_its_own() {
+        let paths = DispatcherPaths::in_dir("/tmp/weave dev/dispatcher".into());
+        assert_eq!(
+            dispatcher_unit(&paths),
+            "weave-dispatcher-tmp-weave-dev-dispatcher.service"
+        );
+        let unit = render(
+            "weave Dispatcher",
+            Path::new("/opt/weave"),
+            "dispatcher run",
+            Path::new("/state/dispatcher.log"),
+            &[],
+            DISPATCHER_STOP_TIMEOUT,
+        );
+        assert!(unit.contains("Description=weave Dispatcher\n"), "{unit}");
+        assert!(
+            unit.contains("ExecStart=\"/opt/weave\" dispatcher run\n"),
+            "{unit}"
+        );
+        assert!(unit.contains("TimeoutStopSec=30\n"), "{unit}");
     }
 
     #[test]

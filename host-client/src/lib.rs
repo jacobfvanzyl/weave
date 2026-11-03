@@ -11,6 +11,8 @@
 
 #[cfg(target_os = "macos")]
 mod enclave;
+mod key_file;
+pub mod reach;
 pub mod remote;
 
 use agent_client_protocol::ConnectTo;

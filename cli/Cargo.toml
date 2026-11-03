@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 weave-acp-core = { workspace = true }
 weave-agents = { workspace = true }
+weave-dispatcher = { workspace = true }
 weave-host = { workspace = true }
 weave-host-client = { workspace = true }
 weave-host-protocol = { workspace = true }

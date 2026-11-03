@@ -28,7 +28,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -36,27 +35,25 @@ use std::time::Duration;
 use std::time::Instant;
 
 use agent_client_protocol::Error;
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use weave_acp_core::schema::SessionId;
-use weave_host_client::ConnectError;
 use weave_host_client::Credentials;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::HostHandle;
+use weave_host_client::reach::Reached;
+use weave_host_client::reach::Unreached;
+use weave_host_client::reach::reach;
+use weave_host_client::reach::tailnet_name;
 use weave_host_client::remote::CloseReason;
 use weave_host_client::remote::DeviceKey;
-use weave_host_client::remote::answered_without_host;
-use weave_host_client::remote::connect_websocket;
 use weave_host_protocol::Timestamp;
 use weave_host_protocol::devices::DeviceId;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::peers::AddPeerRequest;
 use weave_host_protocol::peers::ListPeersResponse;
@@ -234,47 +231,6 @@ pub(crate) enum Begun {
     Queue(AddQueuedResponse),
 }
 
-/// `host-key.json`: the key, or the Secure Enclave's wrapped form of it, in unpadded base64url.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum SavedKey {
-    SecureEnclave(String),
-    Software(String),
-}
-
-/// Why a peer couldn't be reached: refused, down, unreachable or another Host, and how.
-#[derive(Debug)]
-pub(crate) struct Unreached {
-    pub(crate) status: PeerStatus,
-    pub(crate) why: String,
-}
-
-impl Unreached {
-    fn new(status: PeerStatus, why: impl Into<String>) -> Self {
-        Self {
-            status,
-            why: why.into(),
-        }
-    }
-
-    /// Nothing answered, or the connection failed.
-    fn unreachable(why: impl Into<String>) -> Self {
-        Self::new(PeerStatus::Unreachable, why)
-    }
-
-    /// It refused this Host, as after revoking it: pairing again is the way back, so trying
-    /// again won't help.
-    fn refused(&self) -> bool {
-        self.status == PeerStatus::Refused
-    }
-}
-
-impl std::fmt::Display for Unreached {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.why)
-    }
-}
-
 pub(crate) struct Peers {
     settings: PeerSettings,
     /// Cancelled when the Host stops: following ends, and connections close.
@@ -372,26 +328,9 @@ impl Peers {
         if let Some(key) = &state.key {
             return Ok(key.clone());
         }
-        let kept = match &self.settings.key {
-            Some(path) => read_key(path)?,
-            None => None,
-        };
-        let key = match kept {
-            Some(key) => key,
-            None => {
-                let key = if self.settings.secure_enclave {
-                    DeviceKey::in_secure_enclave().unwrap_or_else(|why| {
-                        tracing::info!(%why, "no Secure Enclave for this Host's key; keeping it in a file");
-                        DeviceKey::generate()
-                    })
-                } else {
-                    DeviceKey::generate()
-                };
-                if let Some(path) = &self.settings.key {
-                    write_key(path, &key)?;
-                }
-                key
-            }
+        let key = match &self.settings.key {
+            Some(path) => DeviceKey::kept(path, self.settings.secure_enclave)?,
+            None => DeviceKey::generate(),
         };
         state.key = Some(key.clone());
         Ok(key)
@@ -1195,65 +1134,12 @@ async fn connect(
     url: &str,
     credentials: Credentials,
     timeout: Duration,
-) -> Result<
-    (
-        HostConnection,
-        mpsc::UnboundedReceiver<HostEvent>,
-        CloseReason,
-    ),
-    Unreached,
-> {
-    let attempt = async {
-        let (transport, closed) =
-            connect_websocket(url)
-                .await
-                .map_err(|error| match answered_without_host(&error) {
-                    Some(status) => Unreached::new(
-                        PeerStatus::Down,
-                        format!(
-                            "its computer answered at {url} (HTTP {status}), but no weave Host \
-                             did: the Host may not be running there"
-                        ),
-                    ),
-                    None => Unreached::unreachable(format!("nothing answered at {url}: {error}")),
-                })?;
-        let client = ClientInfo {
-            name: CLIENT_NAME.to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-        };
-        HostConnection::connect_with(
-            transport,
-            client,
-            ClientCapabilities::default(),
-            credentials,
-        )
-        .await
-        .map_err(|error| match error {
-            ConnectError::Refused(error) if errors::is(&error, errors::UNAUTHENTICATED) => {
-                Unreached::new(
-                    PeerStatus::Refused,
-                    format!("it refused this Host: {}", error.message),
-                )
-            }
-            ConnectError::WrongHost => Unreached::new(
-                PeerStatus::OtherHost,
-                format!(
-                    "another weave Host answers at {url} now: pair again with the one that \
-                     should be there"
-                ),
-            ),
-            other => Unreached::unreachable(other.to_string()),
-        })
-        .map(|(connection, events)| (connection, events, closed))
+) -> Result<Reached, Unreached> {
+    let client = ClientInfo {
+        name: CLIENT_NAME.to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
     };
-    tokio::time::timeout(timeout, attempt)
-        .await
-        .unwrap_or_else(|_| {
-            Err(Unreached::unreachable(format!(
-                "it didn't answer within {} seconds",
-                timeout.as_secs_f32()
-            )))
-        })
+    reach(url, client, credentials, timeout, "this Host").await
 }
 
 /// Hand what a peer sends to the followers of its sessions, until the connection ends, is
@@ -1638,54 +1524,6 @@ fn asks(pending: &PendingRequest) -> Option<Asks> {
     }
 }
 
-fn read_key(path: &Path) -> Result<Option<DeviceKey>, String> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("reading {}: {error}", path.display())),
-    };
-    let saved: SavedKey = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("reading {}: {error}", path.display()))?;
-    let decode = |text: &str| {
-        URL_SAFE_NO_PAD
-            .decode(text)
-            .map_err(|error| format!("reading {}: {error}", path.display()))
-    };
-    let key = match saved {
-        SavedKey::SecureEnclave(wrapped) => DeviceKey::from_wrapped(&decode(&wrapped)?)
-            .map_err(|why| format!("the Secure Enclave key in {}: {why}", path.display()))?,
-        SavedKey::Software(scalar) => DeviceKey::from_bytes(&decode(&scalar)?)
-            .ok_or_else(|| format!("{} holds no P-256 key", path.display()))?,
-    };
-    Ok(Some(key))
-}
-
-fn write_key(path: &Path, key: &DeviceKey) -> Result<(), String> {
-    let saved = match (key.wrapped(), key.to_bytes()) {
-        (Some(wrapped), _) => SavedKey::SecureEnclave(URL_SAFE_NO_PAD.encode(wrapped)),
-        (None, Some(scalar)) => SavedKey::Software(URL_SAFE_NO_PAD.encode(scalar)),
-        (None, None) => return Err("the key can't be saved".to_owned()),
-    };
-    write_private(path, &saved).map_err(|error| format!("writing {}: {error}", path.display()))
-}
-
-/// What the person likely calls the Host at `url`: its tailnet name's first label, as in
-/// `wss://mac-mini.example.ts.net:7341`.
-fn tailnet_name(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = rest.split(['/', '?']).next().unwrap_or(rest);
-    let host = match authority.rsplit_once(':') {
-        Some((host, port)) if !host.contains(':') && port.bytes().all(|b| b.is_ascii_digit()) => {
-            host
-        }
-        _ => authority,
-    };
-    if host.parse::<std::net::IpAddr>().is_ok() || host.starts_with('[') {
-        return host.to_owned();
-    }
-    host.split('.').next().unwrap_or(host).to_owned()
-}
-
 /// This computer's name, without macOS's `.local`.
 fn computer_name() -> String {
     #[cfg(unix)]
@@ -1710,17 +1548,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-
-    #[test]
-    fn a_peer_is_named_by_its_tailnet_name() {
-        assert_eq!(
-            tailnet_name("wss://mac-mini.example.ts.net:7341"),
-            "mac-mini"
-        );
-        assert_eq!(tailnet_name("wss://studio.example.ts.net"), "studio");
-        assert_eq!(tailnet_name("ws://127.0.0.1:7341"), "127.0.0.1");
-        assert_eq!(tailnet_name("wss://box:7341/path"), "box");
-    }
 
     #[test]
     fn the_key_is_kept_and_comes_back() {

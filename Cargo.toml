@@ -1,5 +1,5 @@
 [workspace]
-members = ["acp-core", "agents", "cli", "fake-agent", "holder", "host", "host-client", "protocol", "tui"]
+members = ["acp-core", "agents", "cli", "dispatcher", "fake-agent", "holder", "host", "host-client", "protocol", "tui"]
 resolver = "3"
 
 [workspace.package]
@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 weave-acp-core = { path = "acp-core" }
 weave-agents = { path = "agents" }
+weave-dispatcher = { path = "dispatcher" }
 weave-fake-agent = { path = "fake-agent" }
 weave-host = { path = "host" }
 weave-host-client = { path = "host-client" }
@@ -52,6 +53,9 @@ qrcode = { version = "0.14", default-features = false }
 regex-lite = "0.1"
 # Fetching the ACP agent registry and its agents' archives.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "system-proxy"] }
+# The Dispatcher's state: triggers, their occurrences and the work waiting for a Host. Bundled,
+# so no system SQLite is needed.
+rusqlite = { version = "0.41", features = ["bundled"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
 # TLS for a remote client's WebSocket, with the crypto reqwest already uses.
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }

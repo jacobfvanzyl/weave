@@ -153,7 +153,7 @@ async fn run(connection: &HostConnection, command: HostsCommand) -> anyhow::Resu
 
 /// How `weave hosts add` reaches the other Host.
 #[derive(Debug, PartialEq, Eq)]
-enum Reach {
+pub(crate) enum Reach {
     /// The URL and code `weave pair` showed there.
     Code { url: String, code: String },
     /// The computer, as `ssh` reaches it.
@@ -238,7 +238,7 @@ async fn pair_back(connection: &HostConnection, destination: &str) -> anyhow::Re
 
 /// How `host` and `code` reach the other Host: a URL or `weave://pair` link with its code, or
 /// otherwise a computer SSH reaches.
-fn reach(host: &str, code: Option<String>) -> anyhow::Result<Reach> {
+pub(crate) fn reach(host: &str, code: Option<String>) -> anyhow::Result<Reach> {
     if let Some(query) = host.strip_prefix("weave://pair?") {
         let field = |name: &str| {
             query
@@ -272,7 +272,7 @@ fn reach(host: &str, code: Option<String>) -> anyhow::Result<Reach> {
 }
 
 /// What to call a Host SSH reaches at `destination`: its computer, without the user or port.
-fn ssh_name(destination: &str) -> String {
+pub(crate) fn ssh_name(destination: &str) -> String {
     let host = destination
         .rsplit_once('@')
         .map_or(destination, |(_, host)| host);
@@ -280,7 +280,7 @@ fn ssh_name(destination: &str) -> String {
 }
 
 /// Run `weave args…` on `destination` over SSH, without prompting: what it printed.
-fn ssh(destination: &str, args: &[&str]) -> anyhow::Result<String> {
+pub(crate) fn ssh(destination: &str, args: &[&str]) -> anyhow::Result<String> {
     let program = std::env::var(SSH_VARIABLE).unwrap_or_else(|_| "ssh".to_owned());
     let remote: Vec<String> = std::iter::once("weave")
         .chain(args.iter().copied())

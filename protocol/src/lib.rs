@@ -26,11 +26,13 @@
 //! - [`terminals`]: terminals on the Host's computer, which clients show beside a thread, and
 //!   their streams.
 //! - [`host`]: the Host's status, and stopping it.
+//! - [`dispatcher`]: the Dispatcher's own API, which its CLI asks over its socket.
 //!
 //! Remote clients follow `docs/specs/wve-90-remote-clients.md`.
 
 pub mod agents;
 pub mod devices;
+pub mod dispatcher;
 pub mod errors;
 pub mod events;
 pub mod files;
@@ -52,6 +54,8 @@ use agent_client_protocol::JsonRpcResponse;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub use crate::role::Dispatcher;
+pub use crate::role::DispatcherClient;
 pub use crate::role::Host;
 pub use crate::role::HostClient;
 

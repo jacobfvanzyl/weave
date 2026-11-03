@@ -5,6 +5,9 @@
 //! their own.
 //!
 //! A Host directory of its own (`WEAVE_DAEMON_DIR`) gets a service of its own, named after it.
+//!
+//! The Dispatcher (ADR 0027) is installed the same way, as a service of its own: `weave
+//! dispatcher install`.
 
 mod launchd;
 mod systemd;
@@ -15,13 +18,15 @@ use std::process::Stdio;
 
 use anyhow::Context;
 use anyhow::bail;
+use weave_dispatcher::DispatcherPaths;
 use weave_host::DaemonPaths;
 
 use crate::daemon;
 
 /// Environment the service passes on, as it was when installed, so it uses the same places.
-const PASSED_ON: [&str; 5] = [
+const PASSED_ON: [&str; 6] = [
     "WEAVE_DAEMON_DIR",
+    "WEAVE_DISPATCHER_DIR",
     "XDG_CONFIG_HOME",
     "XDG_STATE_HOME",
     "XDG_RUNTIME_DIR",
@@ -201,18 +206,57 @@ pub fn lingering_note(paths: &DaemonPaths) -> Option<String> {
 
 /// The name a Host directory of its own gives its service; none for the default Host's.
 fn instance(paths: &DaemonPaths) -> Option<String> {
-    let default = DaemonPaths::default_dir();
-    if default.as_deref() == Some(paths.dir.as_path()) {
+    named_after(&paths.dir, DaemonPaths::default_dir().as_deref())
+}
+
+/// The name a Dispatcher directory of its own gives its service; none for the default's.
+fn dispatcher_instance(paths: &DispatcherPaths) -> Option<String> {
+    named_after(&paths.dir, DispatcherPaths::default_dir().as_deref())
+}
+
+/// `dir` as a name for a service, unless it's `default`.
+fn named_after(dir: &Path, default: Option<&Path>) -> Option<String> {
+    if default == Some(dir) {
         return None;
     }
-    let name: String = paths
-        .dir
+    let name: String = dir
         .display()
         .to_string()
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect();
     Some(name.trim_matches('-').to_owned())
+}
+
+/// Whether the service manager runs the Dispatcher for `paths`.
+pub fn dispatcher_installed(paths: &DispatcherPaths) -> bool {
+    match Manager::here() {
+        Some(Manager::Launchd) => launchd::dispatcher_installed(paths),
+        Some(Manager::Systemd) => systemd::dispatcher_installed(paths),
+        None => false,
+    }
+}
+
+/// Write the Dispatcher's service and start it: the weave it runs, and on Linux, what
+/// lingering means for it.
+pub fn install_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<(PathBuf, Option<String>)> {
+    paths
+        .prepare()
+        .with_context(|| format!("creating {}", paths.dir.display()))?;
+    match manager()? {
+        Manager::Launchd => Ok((launchd::install_dispatcher(paths)?, None)),
+        Manager::Systemd => systemd::install_dispatcher(paths),
+    }
+}
+
+pub fn uninstall_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    if !dispatcher_installed(paths) {
+        bail!("the Dispatcher isn't installed as a service");
+    }
+    match manager()? {
+        Manager::Launchd => launchd::uninstall_dispatcher(paths),
+        Manager::Systemd => systemd::uninstall_dispatcher(paths),
+    }
 }
 
 /// The weave binary the service runs: this one.
@@ -233,19 +277,24 @@ fn passed_on() -> Vec<(String, String)> {
 
 /// This user's id: the owner of the Host's directory, which this user created.
 fn user_id(paths: &DaemonPaths) -> anyhow::Result<u32> {
+    paths
+        .prepare()
+        .with_context(|| format!("creating {}", paths.dir.display()))?;
+    owner_of(&paths.dir)
+}
+
+/// The owner of `dir`, which this user created: this user's id.
+fn owner_of(dir: &Path) -> anyhow::Result<u32> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        paths
-            .prepare()
-            .with_context(|| format!("creating {}", paths.dir.display()))?;
-        Ok(std::fs::metadata(&paths.dir)
-            .with_context(|| format!("reading {}", paths.dir.display()))?
+        Ok(std::fs::metadata(dir)
+            .with_context(|| format!("reading {}", dir.display()))?
             .uid())
     }
     #[cfg(not(unix))]
     {
-        let _ = paths;
+        let _ = dir;
         bail!("no user id on this platform")
     }
 }
