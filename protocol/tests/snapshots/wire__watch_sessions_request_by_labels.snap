@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&WatchSessionsRequest { labels: vec![\"dispatcher\".to_owned()], })"
+---
+{
+  "method": "sessions/watch",
+  "params": {
+    "labels": [
+      "dispatcher"
+    ]
+  }
+}

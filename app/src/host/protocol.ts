@@ -882,6 +882,14 @@ export type SessionEvent =
       kind: "continuedIn";
     }
   | {
+      labels: string[];
+      /**
+       * The client that labelled it.
+       */
+      by?: TurnOrigin | null;
+      kind: "labelled";
+    }
+  | {
       text: string;
       kind: "notice";
     }
@@ -1400,6 +1408,10 @@ export interface SessionListing {
    * and reports to this one go there.
    */
   continuedIn?: SessionId | null;
+  /**
+   * Its labels (feature `labels`, WVE-173), in order, which clients gave it and filter by.
+   */
+  labels?: string[];
   /**
    * The client whose `session/create` or `session/attach` opened it last, while it's open:
    * a paired device's names its `device`. A service's `session/run` that opened it gives
@@ -2454,6 +2466,10 @@ export interface ListSessionsRequest {
    * Only the open sessions doing this. Without an agent only (feature `turnIds`).
    */
   activity?: Activity | null;
+  /**
+   * Only the sessions that carry every one of these labels (feature `labels`).
+   */
+  labels?: string[];
   cursor?: string | null;
 }
 /**
@@ -2907,12 +2923,16 @@ export interface BlobResourceContents1 {
 /**
  * `sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a
  * [`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the
- * connection ends or the client sends `sessions/unwatch`. Blank sessions never appear.
+ * connection ends or the client sends `sessions/unwatch`. Blank sessions never appear. With
+ * `labels` (feature `labels`), only the sessions that carry every one of them: a change that
+ * makes one stop matching is the last the watcher hears of it, as an update showing its labels.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "WatchSessionsRequest".
  */
-export interface WatchSessionsRequest {}
+export interface WatchSessionsRequest {
+  labels?: string[];
+}
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "WatchSessionsResponse".
@@ -2949,6 +2969,10 @@ export interface CreateSessionRequest {
    * Have the Host trace the agent's protocol.
    */
   trace?: boolean;
+  /**
+   * Its labels from the start (feature `labels`).
+   */
+  labels?: string[];
 }
 /**
  * How a session's permission requests are answered.
@@ -3038,6 +3062,10 @@ export interface SessionState {
    * Its successor, as its listing's `continuedIn` (WVE-168).
    */
   continuedIn?: SessionId | null;
+  /**
+   * Its labels, as its listing's (WVE-173).
+   */
+  labels?: string[];
 }
 /**
  * The agent a session runs with.
@@ -4448,6 +4476,10 @@ export interface AttachSessionResponse {
    * Its successor, as its listing's `continuedIn` (WVE-168).
    */
   continuedIn?: SessionId | null;
+  /**
+   * Its labels, as its listing's (WVE-173).
+   */
+  labels?: string[];
   replay: Replay;
 }
 /**
@@ -4586,6 +4618,28 @@ export interface SetSuccessorRequest {
   successor: SessionId;
 }
 /**
+ * `session/label`: add labels to an open session and take others off, journaled as a
+ * `labelled` event, answered with its labels after. Labels mean nothing to the Host: clients
+ * give them, and filter `sessions/list` and `sessions/watch` by them. A labelled session's
+ * journal is kept past pruning. Each label is checked with [`check_label`], and a session
+ * carries at most [`MAX_LABELS`].
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LabelSessionRequest".
+ */
+export interface LabelSessionRequest {
+  sessionId: SessionId;
+  add?: string[];
+  remove?: string[];
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LabelSessionResponse".
+ */
+export interface LabelSessionResponse {
+  labels: string[];
+}
+/**
  * `session/run`: open a session (this one, or a new one) and start a turn in it, without
  * the client having to stay.
  *
@@ -4631,6 +4685,11 @@ export interface RunRequest {
    * A service's only: what started the turn, which its origin names.
    */
   origin?: ServiceOrigin | null;
+  /**
+   * Labels for a session it starts, from the start (feature `labels`); an existing session
+   * keeps its own.
+   */
+  labels?: string[];
 }
 /**
  * How a session's permission requests are answered.
@@ -6667,6 +6726,7 @@ export interface HostRequests {
   "session/reopen": { params: ReopenSessionRequest; result: ReopenSessionResponse };
   "session/rename": { params: RenameSessionRequest; result: Empty };
   "session/setSuccessor": { params: SetSuccessorRequest; result: Empty };
+  "session/label": { params: LabelSessionRequest; result: LabelSessionResponse };
   "session/run": { params: RunRequest; result: RunResponse };
   "turn/start": { params: StartTurnRequest; result: StartTurnResponse };
   "turn/steer": { params: SteerTurnRequest; result: SteerTurnResponse };

@@ -166,7 +166,10 @@ request with `unauthenticated`.
   `SessionState.mcpServers` and `session/changed`'s `mcpServers` (see
   [MCP servers' status](#mcp-servers-status)), and `successors` (WVE-168):
   `session/setSuccessor`, the `continuedIn` event, `continuedIn` in listings and
-  `SessionState`, and `LatestTurn`'s `continuedIn` (see [Successors](#successors)).
+  `SessionState`, and `LatestTurn`'s `continuedIn` (see [Successors](#successors)), and
+  `labels` (WVE-173): `session/label`, the `labelled` event, `labels` in listings,
+  `SessionState`, `session/create`, `session/run`, `sessions/list` and `sessions/watch` (see
+  [Labels](#labels)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -369,12 +372,13 @@ type SessionState = {
   startedBy?: string;                          // the session whose agent started it; see Delegated sessions
   startedByHost?: string;                      // the peer Host that session is on; see Peer Hosts
   continuedIn?: string;                        // its successor; see Successors
+  labels?: string[];                           // see Labels
 };
 ```
 
 ### Methods
 
-**`sessions/list`** `{agentId?, cwd?, repo?, activity?, cursor?}` → `{sessions: SessionListing[], nextCursor?}`
+**`sessions/list`** `{agentId?, cwd?, repo?, activity?, labels?, cursor?}` → `{sessions: SessionListing[], nextCursor?}`
 
 - Without `agentId`: the sessions the Host has a journal for, across agents (open,
   suspended and closed), most recently active first. No agent is started. Paging isn't
@@ -401,6 +405,7 @@ type SessionListing = {
   startedBy?: string;           // the session whose agent started it; see Delegated sessions
   startedByHost?: string;       // the peer Host that session is on; see Peer Hosts
   continuedIn?: string;         // its successor; see Successors
+  labels?: string[];            // see Labels
   openedBy?: TurnOrigin;        // open sessions: the client whose create or attach opened it last,
                                 // or the origin of a service's run that opened it
   openedAt?: number;            // and when
@@ -413,8 +418,10 @@ session a headless run or the Host itself opened. `weave daemon` opens a tab in 
 threads a device opens, with `[rex] open_threads` (see [The CLI](#the-cli)).
 
 `activity` (feature `turnIds`) lists only the open sessions doing that, `idle`, `running` or
-`waiting`, so a caller finds the sessions waiting on a person without reading each. `repo` or
-`activity` with `agentId` fails with invalid params: an agent's own listing goes by directory.
+`waiting`, so a caller finds the sessions waiting on a person without reading each. `labels`
+(feature `labels`) lists only the sessions that carry every one of them (see [Labels](#labels)).
+`repo`, `activity` or `labels` with `agentId` fails with invalid params: an agent's own listing
+goes by directory.
 
 **`sessions/get`** `{sessionId, turnId?}` → `{session: SessionListing, latestTurn?: LatestTurn}`
 
@@ -448,7 +455,7 @@ count), and once over, `ended` (`end_turn`), `stopped` (another stop reason), `c
 `failed` or `interrupted` (see [Interrupted turns](#interrupted-turns)), which match the CLI's
 exit statuses; an interrupted turn exits as a failed one does.
 
-**`sessions/watch`** `{}` → `{sessions: SessionListing[]}`
+**`sessions/watch`** `{labels?}` → `{sessions: SessionListing[]}`
 
 Feature `sessions/watch`. Answers with the listing `sessions/list` gives without an agent,
 then sends the client a notification for every change to the Host's sessions, whether it's
@@ -464,9 +471,13 @@ attached to them or not, until the connection ends or it sends `sessions/unwatch
   while blank.
 
 Blank sessions never appear. Nothing reaches a watching client between the answer and the
-notifications after it, so it misses no change and hears none older than its listing.
+notifications after it, so it misses no change and hears none older than its listing. With
+`labels` (feature `labels`), the listing and the notifications cover only the sessions that
+carry every one of them; a change that makes a session stop carrying them reaches the watcher
+as one last `sessions/updated`, showing its labels, and nothing of it after (see
+[Labels](#labels)).
 
-**`session/create`** `{agentId, cwd, additionalDirectories?, mode?, policy?, trace?}` →
+**`session/create`** `{agentId, cwd, additionalDirectories?, mode?, policy?, trace?, labels?}` →
 `SessionState`
 
 Starts a session and attaches the client to it. The session starts in `mode` if given,
@@ -569,6 +580,14 @@ must be 1 to 200 characters; the session must be open (`session_not_open`).
 The `rename_session` Host tool does the same for the calling session (see
 [Host tools](#host-tools)).
 
+**`session/label`** `{sessionId, add?, remove?}` → `{labels}`
+
+Feature `labels`. Adds labels to an open session and takes others off, answering with its
+labels after, in the order they were added (see [Labels](#labels)). The session must be open
+(`session_not_open`). A label that isn't one, or a change that would leave more than 16, fails
+with invalid params. Adding a label it carries, or taking off one it doesn't, changes nothing;
+a change is journaled as a `labelled` event. Services may ask it.
+
 **`session/setSuccessor`** `{sessionId, successor}` → `{}`
 
 Feature `successors`. Names the session an open session's work goes on in, its successor (see
@@ -608,6 +627,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `closed` | `reason`, `by?`: `origin` | the session closes; `by` is the client whose `session/close` or `session/delete` closed it for everyone, absent when nobody did (its agent exited, it went idle, its worktree was removed) |
 | `notice` | `text` | the Host tells the session's clients something, such as that its agent can't use client tools |
 | `renamed` | `title`, `by?`: `origin` | the session was renamed through the Host (`session/rename`); `by` is the renaming client's origin, absent when the session's own agent renamed it (the `rename_session` Host tool) |
+| `labelled` | `labels`: string[], `by?`: `origin` | a client changed the session's labels (`session/label`); `labels` are all of them, after |
 | `continuedIn` | `successor`: session id, `by?`: `origin` | a client named the session's successor (`session/setSuccessor`); `by` is that client's origin |
 | `queued` | `queuedId`, `prompt`: ACP `ContentBlock[]`, `origin` | a prompt joined the queue (`queue/add`) |
 | `unqueued` | `queuedId`, `by?`: `origin` | a client took a prompt out of the queue (`queue/remove`) |
@@ -692,7 +712,7 @@ own, whose output reaches clients but whose end never does. The Host journals th
 Cancels the session's running turn (ACP `session/cancel`) and cancels its pending
 requests.
 
-**`session/run`** `{agentId, cwd, remote?, sessionId?, additionalDirectories?, mode?, prompt, policy, attach?, trace?, key?, caller?, origin?}` →
+**`session/run`** `{agentId, cwd, remote?, sessionId?, additionalDirectories?, mode?, prompt, policy, attach?, trace?, key?, caller?, origin?, labels?}` →
 `{sessionId, turnId?, state?: SessionState, policy?}`
 
 Opens a session (`sessionId`, as attaching would, or a new one) and starts a turn in it
@@ -747,6 +767,26 @@ the session up again, it ends that turn with `turnEnded` whose `error` has the c
 - **An interactive session doesn't.** It shows the outcome and leaves the turn to the person,
   and its queue pauses as `interrupted` if prompts wait (see [Queue](#queue)).
 - A turn a stopped Host left was journaled as `cancelled` before; such journals stay as they are.
+
+### Labels
+
+WVE-173, ADR 0027. A label is a short string a client puts on a session, to find it by: the
+Dispatcher labels the threads it starts `dispatcher` and `schedule:<id>`, and a Bot's threads
+carry its label (ADR 0028). Labels mean nothing to the Host.
+
+- **What one is:** 1 to 64 letters, digits and `-_.:/`, compared as written. A session carries
+  at most 16, in the order they were given.
+- **Given** at the start, with `session/create`'s and `session/run`'s `labels` (a run that
+  continues a session leaves its labels as they are), and after with `session/label`, so a
+  client never lists a session before it carries its labels.
+- **Journaled:** a `labelled` event holds them all after each change. A suspended session's
+  journal carries them on, and a closed session's new journal begins with them.
+- **Listed and filtered:** listings, `SessionState` and `sessions/updated` carry `labels`;
+  `sessions/list` and `sessions/watch` take `labels` and cover only the sessions that carry
+  every one. A client that wants to leave labelled sessions out, as the apps do with Bots'
+  threads, reads `labels` from the listing.
+- **Kept:** pruning passes over a labelled session's journal however long it's been quiet, so a
+  Bot's earlier threads stay readable.
 
 ### Successors
 
@@ -1782,6 +1822,9 @@ there's one, and otherwise in `host-key.json`, 0600 (see [Peer Hosts](#peer-host
   goes away while it waits is waited for, up to a minute, and a turn it cut off that the
   session continues is followed into its continuation (see [Successors](#successors)).
   `weave threads set-successor <id> <successor>` names a session's successor.
+- `weave threads label <id> [--add <label>]… [--remove <label>]…` labels an open session and
+  prints its labels; `weave threads list --label <label>` lists the open sessions that carry it,
+  each given label; `weave run --label <label>` starts a labelled session.
 - The exit status says how a command went, for scripts (WVE-108): 0, it worked, or the turn ended
   (`end_turn`); 1, any other error; 2, bad arguments; 3, the Host couldn't be reached (not
   running, for a command that never starts one; didn't start; or went away); 4, the turn failed

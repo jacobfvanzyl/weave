@@ -345,6 +345,7 @@ pub fn run(world: &World, prompt: &str) -> Work {
         key: None,
         caller: None,
         origin: None,
+        labels: Vec::new(),
     })
 }
 

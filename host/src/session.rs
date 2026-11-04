@@ -82,16 +82,15 @@ use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::LatestTurn;
+use weave_host_protocol::sessions::MAX_LABELS;
 use weave_host_protocol::sessions::MAX_TITLE;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::Replay;
 use weave_host_protocol::sessions::RunningTurn;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
-use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::tools::ClientToolResult;
@@ -351,6 +350,13 @@ pub(crate) enum Command {
         by: Option<TurnOrigin>,
         done: oneshot::Sender<()>,
     },
+    /// Add and take off labels (`session/label`), checked already: the labels after.
+    Label {
+        add: Vec<String>,
+        remove: Vec<String>,
+        by: Option<TurnOrigin>,
+        done: oneshot::Sender<Result<Vec<String>, Error>>,
+    },
     /// Name the session its work goes on in (`session/setSuccessor`), checked already to be
     /// one the Host knows whose successors don't lead back here.
     SetSuccessor {
@@ -399,6 +405,8 @@ pub(crate) struct Summary {
     pub(crate) started_by_host: Option<String>,
     /// The session its work goes on in, which a client named (WVE-168).
     pub(crate) successor: Option<SessionId>,
+    /// Its labels (WVE-173).
+    pub(crate) labels: Vec<String>,
     /// The peer Host whose session's agent began its running turn, if one did: that turn's
     /// agent reaches no peer Host of this one (ADR 0017's one hop).
     pub(crate) turn_from_peer: Option<String>,
@@ -426,6 +434,7 @@ impl Summary {
             continued_in: self.successor.clone(),
             opened_by: self.opened.as_ref().map(|(by, _)| by.clone()),
             opened_at: self.opened.as_ref().map(|(_, at)| *at),
+            labels: self.labels.clone(),
         }
     }
 }
@@ -513,6 +522,8 @@ pub(crate) struct Opened {
     pub(crate) started_by_host: Option<String>,
     /// The session its work goes on in, as its journal says.
     pub(crate) successor: Option<SessionId>,
+    /// Its labels, as its journal says or as it was started with.
+    pub(crate) labels: Vec<String>,
     /// The turn a stopped Host cut off, for a headless session to continue first.
     pub(crate) continuation: Option<Continuation>,
 }
@@ -557,6 +568,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         started_by,
         started_by_host,
         successor,
+        labels,
         continuation,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
@@ -577,6 +589,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         started_by: started_by.clone(),
         started_by_host: started_by_host.clone(),
         successor: successor.clone(),
+        labels: labels.clone(),
         turn_from_peer: None,
         agent_process: instance.process.clone(),
         opened: None,
@@ -617,6 +630,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
                 started_by,
                 started_by_host,
                 successor,
+                labels,
             },
         );
     }
@@ -783,6 +797,8 @@ struct Reported {
     opened_at: Option<u64>,
     /// Its successor: watchers hear of it, attached clients have its `continuedIn` event.
     successor: Option<SessionId>,
+    /// Its labels: watchers hear of them, attached clients have its `labelled` events.
+    labels: Vec<String>,
 }
 
 struct Actor {
@@ -1043,6 +1059,14 @@ impl Actor {
                 self.record(Entry::Renamed { title, by });
                 let _ = done.send(());
             }
+            Command::Label {
+                add,
+                remove,
+                by,
+                done,
+            } => {
+                let _ = done.send(self.label(add, remove, by));
+            }
             Command::SetSuccessor {
                 successor,
                 by,
@@ -1257,6 +1281,7 @@ impl Actor {
             started_by: summary.started_by,
             started_by_host: summary.started_by_host,
             continued_in: summary.successor,
+            labels: summary.labels,
         }
     }
 
@@ -1374,6 +1399,44 @@ impl Actor {
 
     /// Start the first queued prompt, when no turn of the session's own runs and the queue
     /// isn't paused. One the agent won't take goes back to the front, and the queue pauses.
+    /// Add `add` to the session's labels and take `remove` off: its labels after. A change is
+    /// journaled; none, as for labels it has already, isn't.
+    fn label(
+        &mut self,
+        add: Vec<String>,
+        remove: Vec<String>,
+        by: Option<TurnOrigin>,
+    ) -> Result<Vec<String>, Error> {
+        let before = lock(&self.summary).labels.clone();
+        let mut labels: Vec<String> = before
+            .iter()
+            .filter(|label| !remove.contains(label))
+            .cloned()
+            .collect();
+        for label in add {
+            if !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+        if labels.len() > MAX_LABELS {
+            return Err(Error::invalid_params().data(format!(
+                "a thread carries at most {MAX_LABELS} labels; this would carry {}",
+                labels.len()
+            )));
+        }
+        if labels != before {
+            lock(&self.summary).labels.clone_from(&labels);
+            if let Some(recorded) = self.shared.registry().known.get_mut(&self.root) {
+                recorded.labels.clone_from(&labels);
+            }
+            self.record(Entry::Labelled {
+                labels: labels.clone(),
+                by,
+            });
+        }
+        Ok(labels)
+    }
+
     /// Name the session this one's work goes on in, once: the same again does nothing.
     fn set_successor(&mut self, successor: SessionId, by: Option<TurnOrigin>) -> Result<(), Error> {
         let named = lock(&self.summary).successor.clone();
@@ -1869,7 +1932,7 @@ impl Actor {
             }) => Some(host.clone()),
             _ => None,
         };
-        let (title, git, opened_at, successor) = {
+        let (title, git, opened_at, successor, labels) = {
             let mut summary = lock(&self.summary);
             summary.clients = clients;
             summary.activity = activity;
@@ -1879,6 +1942,7 @@ impl Actor {
                 summary.git.clone(),
                 summary.opened.as_ref().map(|(_, at)| *at),
                 summary.successor.clone(),
+                summary.labels.clone(),
             )
         };
         let now = Reported {
@@ -1890,6 +1954,7 @@ impl Actor {
             mcp_servers: Some(self.servers.statuses()),
             opened_at,
             successor,
+            labels,
         };
         if now == self.reported {
             return;
@@ -1908,8 +1973,7 @@ impl Actor {
         // A blank session isn't listed, so nobody watching hears of it until its first prompt.
         if !self.blank.load(Ordering::Relaxed) {
             let session = lock(&self.summary).listing();
-            self.shared
-                .tell_watchers(&SessionUpdatedNotification { session });
+            self.shared.tell_updated(session);
         }
     }
 
@@ -1946,9 +2010,7 @@ impl Actor {
             }
         }
         if blank {
-            self.shared.tell_watchers(&SessionRemovedNotification {
-                session_id: self.root.clone(),
-            });
+            self.shared.tell_removed(self.root.clone());
         } else {
             let mut session = lock(&self.summary).listing();
             session.state = if suspended {
@@ -1958,8 +2020,7 @@ impl Actor {
             };
             session.activity = None;
             session.clients = 0;
-            self.shared
-                .tell_watchers(&SessionUpdatedNotification { session });
+            self.shared.tell_updated(session);
         }
         let pending_all = |_: &Pending| true;
         if suspended {

@@ -226,6 +226,7 @@ impl Client {
                 mode: None,
                 policy: None,
                 trace: false,
+                labels: Vec::new(),
             })
             .await
             .expect("session/create")

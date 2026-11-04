@@ -130,6 +130,8 @@ use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::GetSessionResponse;
 use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::LabelSessionRequest;
+use weave_host_protocol::sessions::LabelSessionResponse;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
@@ -342,6 +344,7 @@ fn state() -> SessionState {
         started_by: None,
         started_by_host: None,
         continued_in: None,
+        labels: Vec::new(),
     }
 }
 
@@ -418,6 +421,7 @@ fn listing() -> SessionListing {
         }),
         opened_at: Some(1_760_180_000_500),
         continued_in: None,
+        labels: Vec::new(),
     }
 }
 
@@ -693,6 +697,7 @@ fn peers() {
             key: None,
             caller: Some("sess-a".into()),
             origin: None,
+            labels: Vec::new(),
         })
     );
     insta::assert_json_snapshot!(
@@ -716,6 +721,7 @@ fn peers() {
                 label: "schedule daily-review".to_owned(),
                 id: "o-01J9Z".to_owned(),
             }),
+            labels: Vec::new(),
         })
     );
     insta::assert_json_snapshot!(
@@ -807,6 +813,7 @@ fn sessions() {
             repo: None,
             activity: None,
             cursor: None,
+            labels: Vec::new(),
         })
     );
     insta::assert_json_snapshot!(
@@ -823,7 +830,23 @@ fn sessions() {
             next_cursor: Some("page-2".to_owned()),
         })
     );
-    insta::assert_json_snapshot!("watch_sessions_request", message(&WatchSessionsRequest {}));
+    insta::assert_json_snapshot!(
+        "list_sessions_request_by_labels",
+        message(&ListSessionsRequest {
+            labels: vec!["bot:daily".to_owned()],
+            ..ListSessionsRequest::default()
+        })
+    );
+    insta::assert_json_snapshot!(
+        "watch_sessions_request",
+        message(&WatchSessionsRequest::default())
+    );
+    insta::assert_json_snapshot!(
+        "watch_sessions_request_by_labels",
+        message(&WatchSessionsRequest {
+            labels: vec!["dispatcher".to_owned()],
+        })
+    );
     insta::assert_json_snapshot!(
         "watch_sessions_response",
         round_trip(&WatchSessionsResponse {
@@ -853,6 +876,7 @@ fn sessions() {
             mode: Some("plan".to_owned()),
             policy: None,
             trace: false,
+            labels: Vec::new(),
         })
     );
     insta::assert_json_snapshot!("session_state", round_trip(&state()));
@@ -920,6 +944,20 @@ fn sessions() {
         })
     );
     insta::assert_json_snapshot!(
+        "label_session_request",
+        message(&LabelSessionRequest {
+            session_id: "s-1".into(),
+            add: vec!["bot:daily".to_owned()],
+            remove: vec!["draft".to_owned()],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "label_session_response",
+        round_trip(&LabelSessionResponse {
+            labels: vec!["dispatcher".to_owned(), "bot:daily".to_owned()],
+        })
+    );
+    insta::assert_json_snapshot!(
         "set_successor_request",
         message(&SetSuccessorRequest {
             session_id: "s-1".into(),
@@ -957,6 +995,7 @@ fn sessions() {
             key: None,
             caller: None,
             origin: None,
+            labels: Vec::new(),
         })
     );
     insta::assert_json_snapshot!(
@@ -975,6 +1014,7 @@ fn sessions() {
             key: Some("nightly-2026-10-23".to_owned()),
             caller: None,
             origin: None,
+            labels: Vec::new(),
         })
     );
     insta::assert_json_snapshot!(
@@ -1234,6 +1274,7 @@ fn delegated_sessions() {
         round_trip(&GetSessionResponse {
             session: SessionListing {
                 continued_in: Some("s-3".into()),
+                labels: vec!["dispatcher".to_owned(), "bot:daily".to_owned()],
                 ..delegated.clone()
             },
             latest_turn: Some(LatestTurn {
@@ -1503,6 +1544,16 @@ fn events() {
             39,
             SessionEvent::Renamed {
                 title: "Parser fixes".to_owned(),
+                by: None,
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_labelled",
+        message(&event(
+            39,
+            SessionEvent::Labelled {
+                labels: vec!["dispatcher".to_owned(), "bot:daily".to_owned()],
                 by: None,
             },
         ))

@@ -74,7 +74,8 @@ same turn; a `run` repeated after its thread closed exits as its turn went. A sh
 goes away is waited for, up to a minute (`turn::Link`), and the thread followed again from the
 last event seen; an interrupted turn the thread continues is followed into its continuation, as
 one turn (WVE-168). `follow` without a turn moves on to a thread's successor, from its start, and
-`threads set-successor` names one.
+`threads set-successor` names one. `threads label` adds and takes off labels, `threads list --label` and
+`run --label` find and give them (WVE-173).
 
 What a command reports, it prints with `--json` as the Host protocol's own types, so scripts
 follow the protocol's versioning rather than a shape kept for the CLI: `daemon status`

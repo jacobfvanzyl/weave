@@ -136,6 +136,10 @@ expression: schema()
       "params": "SetSuccessorRequest",
       "result": "Empty"
     },
+    "session/label": {
+      "params": "LabelSessionRequest",
+      "result": "LabelSessionResponse"
+    },
     "session/run": {
       "params": "RunRequest",
       "result": "RunResponse"
@@ -870,6 +874,13 @@ expression: schema()
             }
           ],
           "description": "Its successor (feature `successors`, WVE-168): the session its work goes on in, which a\nclient named with `session/setSuccessor`. Clients following this one may follow that,\nand reports to this one go there."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Its labels (feature `labels`, WVE-173), in order, which clients gave it and filter by."
         },
         "openedBy": {
           "anyOf": [
@@ -2313,6 +2324,13 @@ expression: schema()
           ],
           "description": "Only the open sessions doing this. Without an agent only (feature `turnIds`)."
         },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Only the sessions that carry every one of these labels (feature `labels`)."
+        },
         "cursor": {
           "type": [
             "string",
@@ -3100,7 +3118,15 @@ expression: schema()
     },
     "WatchSessionsRequest": {
       "type": "object",
-      "description": "`sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a\n[`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the\nconnection ends or the client sends `sessions/unwatch`. Blank sessions never appear."
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "`sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a\n[`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the\nconnection ends or the client sends `sessions/unwatch`. Blank sessions never appear. With\n`labels` (feature `labels`), only the sessions that carry every one of them: a change that\nmakes one stop matching is the last the watcher hears of it, as an update showing its labels."
     },
     "WatchSessionsResponse": {
       "type": "object",
@@ -3156,6 +3182,13 @@ expression: schema()
         "trace": {
           "type": "boolean",
           "description": "Have the Host trace the agent's protocol."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Its labels from the start (feature `labels`)."
         }
       },
       "required": [
@@ -3428,6 +3461,13 @@ expression: schema()
             }
           ],
           "description": "Its successor, as its listing's `continuedIn` (WVE-168)."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Its labels, as its listing's (WVE-173)."
         }
       },
       "required": [
@@ -5671,6 +5711,13 @@ expression: schema()
           ],
           "description": "Its successor, as its listing's `continuedIn` (WVE-168)."
         },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Its labels, as its listing's (WVE-173)."
+        },
         "replay": {
           "$ref": "#/$defs/Replay"
         }
@@ -5922,6 +5969,44 @@ expression: schema()
       ],
       "description": "`session/setSuccessor`: name the session an open session's work goes on in, as the\nDispatcher does when it starts a Bot's new thread. Journaled as a `continuedIn` event and\nlisted as the session's `continuedIn`; reports to the session go to its successor from then\non. The successor is a session the Host has a record of, other than this one and not one\nwhose successors lead back to it. A session's successor is named once: naming the same one\nagain does nothing, and another is refused."
     },
+    "LabelSessionRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "add": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remove": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "description": "`session/label`: add labels to an open session and take others off, journaled as a\n`labelled` event, answered with its labels after. Labels mean nothing to the Host: clients\ngive them, and filter `sessions/list` and `sessions/watch` by them. A labelled session's\njournal is kept past pruning. Each label is checked with [`check_label`], and a session\ncarries at most [`MAX_LABELS`]."
+    },
+    "LabelSessionResponse": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "labels"
+      ]
+    },
     "RunRequest": {
       "type": "object",
       "properties": {
@@ -6009,6 +6094,13 @@ expression: schema()
             }
           ],
           "description": "A service's only: what started the turn, which its origin names."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Labels for a session it starts, from the start (feature `labels`); an existing session\nkeeps its own."
         }
       },
       "required": [
@@ -7727,6 +7819,37 @@ expression: schema()
             "successor"
           ],
           "description": "The session's work goes on in another, its successor, which a client named\n(`session/setSuccessor`, WVE-168): clients following this one may follow that."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The client that labelled it."
+            },
+            "kind": {
+              "type": "string",
+              "const": "labelled"
+            }
+          },
+          "required": [
+            "kind",
+            "labels"
+          ],
+          "description": "The session's labels changed (`session/label`, WVE-173): all of them, after."
         },
         {
           "type": "object",

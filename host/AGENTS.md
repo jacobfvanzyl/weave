@@ -17,7 +17,11 @@ minute) rather than `idle_grace` after nothing needs it, and closes rather than 
 the Host stops, its journal removed; the TUI detaches from a blank session with `ifUnused`
 when it quits or switches away, and opens a new one when it reconnects to a Host that
 dropped it. Journals untouched for 14 days are pruned at startup and hourly, never an open
-session's. A prompt is journaled with its turn (`turnStarted`, with the client's origin);
+or a labelled session's (`lib::labelled`; the journals are indexed before the startup prune, so
+their labels are known). Labels (WVE-173) are a `labelled` entry with all of them after each
+change, and the header's `labels` for those a session started with or a closed one carried;
+`Summary` and `Recorded` keep them, `session/label` is `Command::Label`, and `client::check_labels`
+checks those `session/create` and `session/run` give. A prompt is journaled with its turn (`turnStarted`, with the client's origin);
 turns end in `turnEnded` for every client. `turn/steer` (a `features` entry) passes a steer to
 the agent only while a turn the Host started runs, journals it as `turnSteered` where the
 agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Each session's queue (`queue.rs`,
@@ -49,10 +53,12 @@ requests (`pending/added`) every attached client sees, and later attachers in th
 the first `pending/answer` counts, and `turn/cancel` cancels them. `sessions/watch` (a
 `features` entry) keeps a client's list of the Host's sessions live without attaching:
 `Shared::watch` answers with `Shared::listings` and registers the connection under the
-watchers' lock, so nothing comes between, and `tell_watchers` sends `sessions/updated` from
+watchers' lock, so nothing comes between, and `tell_updated` sends `sessions/updated` from
 each session task's `update_summary` (the change that sends `session/changed`, unless the
 session is blank) and from `finish` (suspended or closed), and `sessions/removed` when a
-session is deleted, its journal pruned, or closed while blank. Take the watchers' lock before
+session is deleted, its journal pruned, or closed while blank (`tell_removed`). A watcher for
+labels (`Watcher`) hears of the sessions that carry them, and of one that stops carrying them
+once more, through the sessions it last heard of while they did (`matched`). Take the watchers' lock before
 the registry, never while holding it. `files/list` (`files.rs`) lists a directory on the Host's computer for clients
 that aren't on it: names and kinds, off the dispatch loop, with paths worked out from their text
 so symlinks stay as named. It's the first of the `files/*` family, which `files/search` and

@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListSessionsRequest\n{ labels: vec![\"bot:daily\".to_owned()], ..ListSessionsRequest::default() })"
+---
+{
+  "method": "sessions/list",
+  "params": {
+    "labels": [
+      "bot:daily"
+    ]
+  }
+}

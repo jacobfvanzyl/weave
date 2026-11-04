@@ -331,6 +331,7 @@ pub(crate) fn listing(info: weave_acp_core::schema::SessionInfo) -> SessionListi
         opened_by: None,
         opened_at: None,
         continued_in: None,
+        labels: Vec::new(),
     }
 }
 

@@ -66,7 +66,6 @@ use agent_client_protocol::Channel;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
-use agent_client_protocol::JsonRpcNotification;
 use tokio::net::UnixListener;
 use tokio::sync::watch;
 use weave_acp_core::AgentHandle;
@@ -308,7 +307,7 @@ pub(crate) struct Shared {
     pub(crate) stop: watch::Sender<bool>,
     /// Clients watching the Host's sessions (`sessions/watch`), by connection. Taken before
     /// the registry, never while holding it.
-    watchers: Mutex<BTreeMap<u64, ConnectionTo<HostClient>>>,
+    watchers: Mutex<BTreeMap<u64, Watcher>>,
     /// The drain before the Host stops, while one is on: no new turns start.
     drain: Mutex<Option<Drain>>,
     /// Terminals, when the Host has an owner for them.
@@ -751,15 +750,31 @@ impl Shared {
     /// `sessions/watch`: `respond` with the Host's sessions as they are, then tell `client` of
     /// every change from there on. Nothing reaches watchers between the two, so the client
     /// misses nothing and hears nothing older than its listing.
+    ///
+    /// With `labels`, only the sessions that carry every one of them (WVE-173).
     pub(crate) fn watch(
         &self,
         client: u64,
         cx: ConnectionTo<HostClient>,
+        labels: Vec<String>,
         respond: impl FnOnce(Vec<SessionListing>) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let mut watchers = lock(&self.watchers);
-        respond(self.listings(None, None))?;
-        watchers.insert(client, cx);
+        let mut sessions = self.listings(None, None);
+        sessions.retain(|listing| client::labelled(listing, &labels));
+        let matched = sessions
+            .iter()
+            .map(|listing| listing.info.session_id.clone())
+            .collect();
+        respond(sessions)?;
+        watchers.insert(
+            client,
+            Watcher {
+                cx,
+                labels,
+                matched,
+            },
+        );
         Ok(())
     }
 
@@ -767,9 +782,34 @@ impl Shared {
         lock(&self.watchers).remove(&client);
     }
 
-    /// Tell every client watching the Host's sessions, dropping those that have gone.
-    pub(crate) fn tell_watchers<N: JsonRpcNotification + Clone>(&self, notification: &N) {
-        lock(&self.watchers).retain(|_, cx| cx.send_notification(notification.clone()).is_ok());
+    /// Tell the clients watching the Host's sessions how `session` lists now, dropping those
+    /// that have gone. A watcher for labels hears of it while it carries them, and once more
+    /// when a change takes it out of what it watches.
+    pub(crate) fn tell_updated(&self, session: SessionListing) {
+        let session_id = session.info.session_id.clone();
+        let notification = SessionUpdatedNotification { session };
+        lock(&self.watchers).retain(|_, watcher| {
+            let told = if watcher.labels.is_empty() {
+                true
+            } else if client::labelled(&notification.session, &watcher.labels) {
+                watcher.matched.insert(session_id.clone());
+                true
+            } else {
+                watcher.matched.remove(&session_id)
+            };
+            !told || watcher.cx.send_notification(notification.clone()).is_ok()
+        });
+    }
+
+    /// Tell the clients watching the Host's sessions that `session_id` is gone: those that
+    /// watch it.
+    pub(crate) fn tell_removed(&self, session_id: SessionId) {
+        let notification = SessionRemovedNotification { session_id };
+        lock(&self.watchers).retain(|_, watcher| {
+            let told =
+                watcher.labels.is_empty() || watcher.matched.remove(&notification.session_id);
+            !told || watcher.cx.send_notification(notification.clone()).is_ok()
+        });
     }
 
     pub(crate) fn status(&self) -> HostStatus {
@@ -801,6 +841,14 @@ pub(crate) struct Spare {
     instance: Instance,
     /// Which keeping of it this is, so an old expiry leaves a newer one alone.
     generation: u64,
+}
+
+/// A client watching the Host's sessions, for the labels it asked for, if any.
+struct Watcher {
+    cx: ConnectionTo<HostClient>,
+    labels: Vec<String>,
+    /// The sessions that carried them when it last heard of each, with `labels`.
+    matched: HashSet<SessionId>,
 }
 
 #[derive(Default)]
@@ -854,6 +902,15 @@ impl Registry {
     }
 }
 
+/// The sessions `known` that carry labels, whose journals pruning keeps (WVE-173).
+fn labelled(known: &HashMap<SessionId, Recorded>) -> Vec<SessionId> {
+    known
+        .iter()
+        .filter(|(_, recorded)| !recorded.labels.is_empty())
+        .map(|(session_id, _)| session_id.clone())
+        .collect()
+}
+
 /// How many successors of a session are followed, at most.
 pub(crate) const MAX_SUCCESSORS: usize = 64;
 
@@ -866,8 +923,11 @@ impl Daemon {
     pub fn new(config: DaemonConfig) -> Self {
         let known = match &config.journals {
             Some(journals) => {
-                journal::prune(journals, JOURNAL_RETENTION, &[]);
-                journal::index(journals)
+                // Read first, so labelled sessions' journals are kept.
+                let mut known = journal::index(journals);
+                journal::prune(journals, JOURNAL_RETENTION, &labelled(&known));
+                known.retain(|session_id, _| journal::path_for(journals, session_id).exists());
+                known
             }
             None => HashMap::new(),
         };
@@ -1046,14 +1106,19 @@ impl Daemon {
         self.shared.remote.resume(&self.shared).await;
     }
 
-    /// Remove journals untouched for the retention period, except open sessions', and forget
-    /// the sessions they recorded.
+    /// Remove journals untouched for the retention period, except open and labelled sessions',
+    /// and forget the sessions they recorded.
     fn prune(&self) {
         let Some(journals) = &self.shared.config.journals else {
             return;
         };
-        let live: Vec<SessionId> = self.shared.registry().sessions.keys().cloned().collect();
-        journal::prune(journals, JOURNAL_RETENTION, &live);
+        let kept: Vec<SessionId> = {
+            let registry = self.shared.registry();
+            let mut kept = labelled(&registry.known);
+            kept.extend(registry.sessions.keys().cloned());
+            kept
+        };
+        journal::prune(journals, JOURNAL_RETENTION, &kept);
         self.shared.admissions.prune(JOURNAL_RETENTION);
         let mut pruned = Vec::new();
         self.shared.registry().known.retain(|session_id, _| {
@@ -1064,8 +1129,7 @@ impl Daemon {
             kept
         });
         for session_id in pruned {
-            self.shared
-                .tell_watchers(&SessionRemovedNotification { session_id });
+            self.shared.tell_removed(session_id);
         }
     }
 
@@ -1105,8 +1169,7 @@ impl Daemon {
         }
         for session in closed {
             tracing::info!(session_id = %session.info.session_id, "closed a suspended session nobody took up");
-            self.shared
-                .tell_watchers(&SessionUpdatedNotification { session });
+            self.shared.tell_updated(session);
         }
     }
 

@@ -79,6 +79,7 @@ fn asking_thread(host: &TestHost) -> (HostConnection, UnboundedReceiver<HostEven
                 mode: None,
                 policy: None,
                 trace: false,
+                labels: Vec::new(),
             })
             .await
             .expect("session/create")

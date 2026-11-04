@@ -343,6 +343,7 @@ async fn start_on(
         key: Some(peer_key(&me.session_id, arguments.key)),
         caller: Some(me.session_id.clone()),
         origin: None,
+        labels: Vec::new(),
     };
     let sending = Sending {
         host_id: host_id.to_owned(),
@@ -448,6 +449,7 @@ async fn start(
         key: arguments.key,
         caller: None,
         origin: None,
+        labels: Vec::new(),
     };
     let origin = TurnOrigin::Session {
         session_id: me.session_id.clone(),

@@ -88,6 +88,10 @@ pub struct RunArgs {
     #[arg(long)]
     key: Option<String>,
 
+    /// A label for a new thread, to find it by (`weave threads list --label`); repeatable.
+    #[arg(long = "label", value_name = "LABEL", conflicts_with_all = ["resume", "continue_last"])]
+    labels: Vec<String>,
+
     #[command(flatten)]
     waiting: WaitArgs,
 
@@ -143,6 +147,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                     repo: None,
                     activity: None,
                     cursor: None,
+                    labels: Vec::new(),
                 })
                 .await;
             match listed.map(|listed| listed.sessions.into_iter().next()) {
@@ -174,6 +179,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         key: args.key.clone(),
         caller: None,
         origin: None,
+        labels: args.labels.clone(),
     };
     let response = match connection.send(request).await {
         Ok(response) => {

@@ -116,6 +116,9 @@ and its turn's origin is the schedule's: `{"service": {"name": <the Dispatcher's
 So however often the Dispatcher considers a time, and across its restarts and the Host's,
 an occurrence starts once.
 
+A thread a schedule starts is labelled `dispatcher` and `schedule:<id>` (WVE-173), so clients
+can find or set aside the Dispatcher's threads; a thread a schedule prompts keeps its own labels.
+
 An occurrence is `skipped` (with why), `waiting` (written down, its Host hasn't taken it,
 as while it's unreachable), `started`, `finished` (with its turn's `outcome`, and its error),
 or `failed` (its Host refused it, saying why). The Dispatcher reads how a started turn ended

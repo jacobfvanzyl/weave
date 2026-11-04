@@ -194,6 +194,16 @@ async fn a_schedule_starts_a_turn_at_its_time_naming_itself() {
     assert_eq!(due.scheduled_at, ms("2026-11-04T09:00:00Z"));
     assert!(!due.late);
     assert_eq!(due.outcome, Some(TurnState::Ended));
+    // Its thread says whose it is.
+    let thread = threads(&studio)
+        .await
+        .into_iter()
+        .find(|thread| Some(&thread.info.session_id) == due.session_id.as_ref())
+        .expect("its thread");
+    assert_eq!(
+        thread.labels,
+        ["dispatcher".to_owned(), format!("schedule:{}", added.id)]
+    );
     let started = turn(&studio, due).await;
     assert_eq!(
         started.origin,

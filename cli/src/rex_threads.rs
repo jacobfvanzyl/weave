@@ -54,7 +54,7 @@ pub async fn follow(daemon: weave_host::Daemon, rex: PathBuf, record: PathBuf) {
             return;
         }
     };
-    let watched = match connection.send(WatchSessionsRequest {}).await {
+    let watched = match connection.send(WatchSessionsRequest::default()).await {
         Ok(watched) => watched,
         Err(error) => {
             tracing::warn!(%error, "threads won't open in Rex: the Host lists none");
@@ -506,6 +506,7 @@ mod tests {
             }),
             opened_at: opened.map(|(_, at)| at),
             continued_in: None,
+            labels: Vec::new(),
         }
     }
 

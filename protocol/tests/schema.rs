@@ -121,6 +121,7 @@ fn schema() -> Value {
         "session/reopen" => sessions::ReopenSessionRequest,
         "session/rename" => sessions::RenameSessionRequest,
         "session/setSuccessor" => sessions::SetSuccessorRequest,
+        "session/label" => sessions::LabelSessionRequest,
         "session/run" => sessions::RunRequest,
         "turn/start" => turns::StartTurnRequest,
         "turn/steer" => turns::SteerTurnRequest,

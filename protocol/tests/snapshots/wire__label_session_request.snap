@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&LabelSessionRequest\n{\n    session_id: \"s-1\".into(), add: vec![\"bot:daily\".to_owned()], remove:\n    vec![\"draft\".to_owned()],\n})"
+---
+{
+  "method": "session/label",
+  "params": {
+    "sessionId": "s-1",
+    "add": [
+      "bot:daily"
+    ],
+    "remove": [
+      "draft"
+    ]
+  }
+}

@@ -783,7 +783,10 @@ impl App {
                 },
             },
             SessionEvent::ContinuedIn { successor, .. } => ChatEvent::ContinuedIn { successor },
-            SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
+            // Labels are for clients that group threads by them, which this one doesn't yet.
+            SessionEvent::Closed { .. } | SessionEvent::Labelled { .. } | SessionEvent::Unknown => {
+                return Vec::new();
+            }
         };
         chat.handle_journal_event(event, at)
     }
@@ -1279,6 +1282,7 @@ impl App {
                         repo: None,
                         activity: None,
                         cursor: cursor.clone(),
+                        labels: Vec::new(),
                     };
                     let append = cursor.is_some();
                     let handle = self.handle.clone();
@@ -1523,6 +1527,7 @@ impl App {
                 mode: None,
                 policy: None,
                 trace: self.trace,
+                labels: Vec::new(),
             }),
             SessionTarget::Existing(session_id) => {
                 let title = title.unwrap_or_else(|| session_id.to_string());

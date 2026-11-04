@@ -86,7 +86,9 @@ use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::GetSessionResponse;
 use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::LabelSessionRequest;
 use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::MAX_LABELS;
 use weave_host_protocol::sessions::OBSERVE_FEATURE;
 use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
@@ -407,6 +409,8 @@ struct Seen {
     renamed: Vec<(String, Option<TurnOrigin>)>,
     /// The successors clients named for it.
     continued_in: Vec<SessionId>,
+    /// Its labels each time they changed.
+    labelled: Vec<Vec<String>>,
     /// Each turn's origin, and the queued prompt it started from.
     origins: Vec<(TurnOrigin, Option<String>)>,
     /// Each turn's id.
@@ -435,6 +439,7 @@ impl TestClient {
             mode: None,
             policy: None,
             trace: false,
+            labels: Vec::new(),
         }
     }
 
@@ -528,6 +533,7 @@ impl TestClient {
                 repo: None,
                 activity: None,
                 cursor: None,
+                labels: Vec::new(),
             })
             .await
             .expect("sessions/list")
@@ -687,7 +693,7 @@ impl TestClient {
     /// Watch the Host's sessions: how they list now.
     async fn watch(&self) -> Vec<SessionListing> {
         self.connection
-            .send(WatchSessionsRequest {})
+            .send(WatchSessionsRequest::default())
             .await
             .expect("sessions/watch")
             .sessions
@@ -785,6 +791,7 @@ impl Seen {
             SessionEvent::Notice { text } => self.notices.push(text),
             SessionEvent::Renamed { title, by } => self.renamed.push((title, by)),
             SessionEvent::ContinuedIn { successor, .. } => self.continued_in.push(successor),
+            SessionEvent::Labelled { labels, .. } => self.labelled.push(labels),
             SessionEvent::Queued { queued_id, .. } => self.queued.push(queued_id),
             SessionEvent::Unqueued { queued_id, .. } => self.unqueued.push(queued_id),
             SessionEvent::QueuePaused { reason } => self.paused.push(reason),
@@ -866,6 +873,7 @@ fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest
         key: None,
         caller: None,
         origin: None,
+        labels: Vec::new(),
     }
 }
 
@@ -1470,6 +1478,7 @@ async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_
                 repo: None,
                 activity: None,
                 cursor: None,
+                labels: Vec::new(),
             })
             .await
             .expect("sessions/list")
@@ -1584,6 +1593,7 @@ async fn deleting_a_session_whose_directory_is_gone_forgets_it_in_the_host() {
             repo: None,
             activity: None,
             cursor: None,
+            labels: Vec::new(),
         })
         .await
         .expect("sessions/list")
@@ -3095,6 +3105,7 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
             key: None,
             caller: None,
             origin: None,
+            labels: Vec::new(),
         })
         .await
         .expect("session/run");
@@ -4755,6 +4766,261 @@ async fn a_thread_names_its_successor_once_and_listings_and_its_clients_carry_it
         .expect("session/close");
     let attached = client.attach(&old).await;
     assert_eq!(attached.state.continued_in, Some(new));
+}
+
+#[tokio::test]
+async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let labels = |labels: &[&str]| labels.iter().map(|label| (*label).to_owned()).collect();
+
+    // Labels a session starts with are checked.
+    let bad = client
+        .connection
+        .send(CreateSessionRequest {
+            labels: labels(&["has space"]),
+            ..TestClient::create_request(&world, "fake")
+        })
+        .await
+        .expect_err("not a label");
+    assert_eq!(bad.code, Error::invalid_params().code, "{bad:?}");
+    let bot = client
+        .connection
+        .send(CreateSessionRequest {
+            labels: labels(&["bot:daily"]),
+            ..TestClient::create_request(&world, "fake")
+        })
+        .await
+        .expect("session/create");
+    assert_eq!(bot.labels, labels(&["bot:daily"]));
+    let bot = bot.session_id;
+    client.queue(&bot, "hello").await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+    let run = client
+        .connection
+        .send(RunRequest {
+            labels: labels(&["dispatcher"]),
+            ..run_request(&world, &world.cwd().join("unused"), Vec::new())
+        })
+        .await
+        .expect("session/run")
+        .session_id;
+    let plain = client.create(&world).await;
+    client.queue(&plain, "hello").await;
+    client.until_turn_ends(&mut Seen::default(), None).await;
+
+    // Listings carry them, and filter by every label asked for.
+    let listed = async |client: &TestClient, wanted: &[&str]| {
+        let mut ids: Vec<SessionId> = client
+            .connection
+            .send(ListSessionsRequest {
+                labels: labels(wanted),
+                ..ListSessionsRequest::default()
+            })
+            .await
+            .expect("sessions/list")
+            .sessions
+            .into_iter()
+            .map(|listing| listing.info.session_id)
+            .collect();
+        ids.sort_by_key(ToString::to_string);
+        ids
+    };
+    assert_eq!(
+        listed(&client, &["bot:daily"]).await,
+        std::slice::from_ref(&bot)
+    );
+    assert_eq!(
+        listed(&client, &["dispatcher"]).await,
+        std::slice::from_ref(&run)
+    );
+    assert!(
+        listed(&client, &["bot:daily", "dispatcher"])
+            .await
+            .is_empty()
+    );
+    assert_eq!(listed(&client, &[]).await.len(), 3);
+    let with_agent = client
+        .connection
+        .send(ListSessionsRequest {
+            agent_id: Some("fake".to_owned()),
+            labels: labels(&["bot:daily"]),
+            ..ListSessionsRequest::default()
+        })
+        .await
+        .expect_err("labels only without an agent");
+    assert_eq!(with_agent.code, Error::invalid_params().code);
+
+    // A watcher for a label hears of the threads that carry it, and of one that stops
+    // carrying it once more.
+    let mut watching = world.client(&daemon).await;
+    let watched = watching
+        .connection
+        .send(WatchSessionsRequest {
+            labels: labels(&["bot:daily"]),
+        })
+        .await
+        .expect("sessions/watch")
+        .sessions;
+    assert_eq!(watched.len(), 1);
+    let mut attached = world.client(&daemon).await;
+    attached.attach(&plain).await;
+    let label = async |session_id: &SessionId, add: &[&str], remove: &[&str]| {
+        client
+            .connection
+            .send(LabelSessionRequest {
+                session_id: session_id.clone(),
+                add: labels(add),
+                remove: labels(remove),
+            })
+            .await
+    };
+    let after = label(&plain, &["bot:daily", "keep"], &[])
+        .await
+        .expect("session/label");
+    assert_eq!(after.labels, labels(&["bot:daily", "keep"]));
+    let updated = loop {
+        if let Change::Updated(listing) = watching.change().await {
+            break listing;
+        }
+    };
+    assert_eq!(updated.info.session_id, plain);
+    let after = label(&plain, &[], &["bot:daily"])
+        .await
+        .expect("session/label");
+    assert_eq!(after.labels, labels(&["keep"]));
+    let last = loop {
+        if let Change::Updated(listing) = watching.change().await {
+            break listing;
+        }
+    };
+    assert_eq!(
+        (last.info.session_id.clone(), last.labels.clone()),
+        (plain.clone(), labels(&["keep"]))
+    );
+    // Past that, it hears nothing of the thread: the next it hears is of one it watches.
+    client
+        .connection
+        .send(RenameSessionRequest {
+            session_id: plain.clone(),
+            title: "Not watched".to_owned(),
+        })
+        .await
+        .expect("session/rename");
+    label(&bot, &["more"], &[]).await.expect("session/label");
+    let next = loop {
+        if let Change::Updated(listing) = watching.change().await {
+            break listing;
+        }
+    };
+    assert_eq!(next.info.session_id, bot);
+
+    // Attached clients see each change; labels are checked, and a thread carries few.
+    let mut seen = Seen::default();
+    while seen.labelled.len() < 2 {
+        let event = attached.next().await;
+        attached.note(event, &mut seen, None).await;
+    }
+    assert_eq!(
+        seen.labelled,
+        [labels(&["bot:daily", "keep"]), labels(&["keep"])]
+    );
+    let bad = label(&plain, &["no spaces please"], &[])
+        .await
+        .expect_err("not a label");
+    assert_eq!(bad.code, Error::invalid_params().code);
+    let many: Vec<String> = (0..MAX_LABELS).map(|n| format!("l{n}")).collect();
+    let too_many = client
+        .connection
+        .send(LabelSessionRequest {
+            session_id: plain.clone(),
+            add: many,
+            remove: Vec::new(),
+        })
+        .await
+        .expect_err("too many");
+    assert!(too_many.to_string().contains("at most"), "{too_many:?}");
+    for connected in [watching, attached, client] {
+        connected.connection.shutdown().await;
+    }
+    daemon.shutdown().await;
+
+    // They outlast the Host, and a closed thread's new journal.
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    assert_eq!(client.get(&plain).await.session.labels, labels(&["keep"]));
+    client.attach(&bot).await;
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: bot.clone(),
+        })
+        .await
+        .expect("session/close");
+    let attached = client.attach(&bot).await;
+    assert_eq!(attached.state.labels, labels(&["bot:daily", "more"]));
+}
+
+#[tokio::test]
+async fn a_labelled_threads_journal_outlasts_pruning() {
+    let world = World::new();
+    let (labelled, plain) = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let mut ids = Vec::new();
+        for labels in [vec!["bot:daily".to_owned()], Vec::new()] {
+            let state = client
+                .connection
+                .send(CreateSessionRequest {
+                    labels,
+                    ..TestClient::create_request(&world, "fake")
+                })
+                .await
+                .expect("session/create");
+            client.queue(&state.session_id, "hello").await;
+            client.until_turn_ends(&mut Seen::default(), None).await;
+            client
+                .connection
+                .send(CloseSessionRequest {
+                    session_id: state.session_id.clone(),
+                })
+                .await
+                .expect("session/close");
+            ids.push(state.session_id);
+        }
+        client.connection.shutdown().await;
+        daemon.shutdown().await;
+        (ids[0].clone(), ids[1].clone())
+    };
+    // Both untouched for longer than journals are kept.
+    let long_ago = std::time::SystemTime::now() - Duration::from_secs(30 * 24 * 60 * 60);
+    for entry in std::fs::read_dir(world.journals())
+        .expect("the journals")
+        .flatten()
+    {
+        std::fs::File::options()
+            .write(true)
+            .open(entry.path())
+            .and_then(|file| file.set_modified(long_ago))
+            .expect("backdate");
+    }
+
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let client = world.client(&daemon).await;
+    assert_eq!(
+        client.get(&labelled).await.session.labels,
+        ["bot:daily".to_owned()]
+    );
+    let gone = client
+        .connection
+        .send(GetSessionRequest {
+            session_id: plain,
+            turn_id: None,
+        })
+        .await
+        .expect_err("pruned");
+    assert!(errors::is(&gone, errors::UNKNOWN_SESSION), "{gone:?}");
 }
 
 #[tokio::test]

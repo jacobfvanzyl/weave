@@ -213,7 +213,7 @@ async fn follow(
         seen.why = None;
         seen.connected_at = Some(now_ms());
     }
-    match connection.send(WatchSessionsRequest {}).await {
+    match connection.send(WatchSessionsRequest::default()).await {
         Ok(watched) => {
             lock(seen).threads = watched
                 .sessions

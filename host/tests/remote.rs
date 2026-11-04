@@ -550,7 +550,7 @@ async fn remote_clients_do_everything_but_administer_the_host() {
     remote.send(StatusRequest {}).await.expect("host/status");
     // Watching the Host's sessions isn't administering it.
     let watched = remote
-        .send(WatchSessionsRequest {})
+        .send(WatchSessionsRequest::default())
         .await
         .expect("sessions/watch");
     assert_eq!(watched.sessions, Vec::new());
@@ -573,6 +573,7 @@ async fn remote_clients_do_everything_but_administer_the_host() {
             mode: None,
             policy: None,
             trace: false,
+            labels: Vec::new(),
         })
         .await
         .expect("session/create");
@@ -715,7 +716,7 @@ async fn a_service_may_only_start_and_follow_threads() {
         .await
         .expect("agents/list");
     service
-        .send(WatchSessionsRequest {})
+        .send(WatchSessionsRequest::default())
         .await
         .expect("sessions/watch");
     let run = || RunRequest {
@@ -732,6 +733,7 @@ async fn a_service_may_only_start_and_follow_threads() {
         key: Some("daily-review@1760180000000".to_owned()),
         caller: None,
         origin: None,
+        labels: Vec::new(),
     };
     let started = service.send(run()).await.expect("session/run");
     let again = service.send(run()).await.expect("the same key again");
@@ -811,6 +813,7 @@ async fn a_services_turns_name_what_started_them() {
             key: Some("daily-review@1".to_owned()),
             caller: None,
             origin: Some(origin("schedule daily-review", "o-1")),
+            labels: Vec::new(),
         })
         .await
         .expect("session/run");
@@ -936,6 +939,7 @@ async fn a_replay_many_times_the_limit_arrives_whole() {
             mode: None,
             policy: None,
             trace: false,
+            labels: Vec::new(),
         })
         .await
         .expect("session/create");

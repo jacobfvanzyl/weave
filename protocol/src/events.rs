@@ -134,6 +134,13 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<TurnOrigin>,
     },
+    /// The session's labels changed (`session/label`, WVE-173): all of them, after.
+    Labelled {
+        labels: Vec<String>,
+        /// The client that labelled it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
     /// Something the Host tells the session's clients, such as why its agent can't use client
     /// tools.
     Notice { text: String },

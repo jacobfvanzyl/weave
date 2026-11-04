@@ -282,6 +282,7 @@ async fn new_session(local: &HostConnection, cwd: &Path) -> SessionId {
             mode: None,
             policy: None,
             trace: false,
+            labels: Vec::new(),
         })
         .await
         .expect("session/create")
@@ -913,6 +914,7 @@ async fn a_peer_host_may_only_do_what_the_host_tools_need() {
             mode: None,
             policy: None,
             trace: false,
+            labels: Vec::new(),
         })
         .await
         .map(drop),
@@ -956,6 +958,7 @@ async fn a_peer_host_may_only_do_what_the_host_tools_need() {
             key: None,
             caller: None,
             origin: None,
+            labels: Vec::new(),
         })
         .await
         .map(drop),
@@ -1164,6 +1167,7 @@ async fn a_host_its_peer_revoked_as_the_last_device_gives_up_what_it_follows_and
         key: Some("k-revoked".to_owned()),
         caller: Some(caller.clone()),
         origin: None,
+        labels: Vec::new(),
     };
     let mut json = mini.peers_json();
     json["sending"] = serde_json::json!([{
@@ -1388,6 +1392,7 @@ async fn a_start_a_peer_never_answered_is_sent_again_under_its_key_and_reported(
         key: Some("k-crash".to_owned()),
         caller: Some(caller.clone()),
         origin: None,
+        labels: Vec::new(),
     };
     let sending = serde_json::json!([{
         "hostId": b_id,
@@ -1611,6 +1616,7 @@ async fn a_thread_on_a_peer_approves_nothing_its_caller_doesnt() {
                 otherwise: Unapproved::Ask,
             }),
             trace: false,
+            labels: Vec::new(),
         })
         .await
         .expect("session/create")

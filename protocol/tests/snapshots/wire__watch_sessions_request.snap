@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&WatchSessionsRequest {})"
+expression: "message(&WatchSessionsRequest::default())"
 ---
 {
   "method": "sessions/watch",

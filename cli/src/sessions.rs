@@ -27,6 +27,8 @@ use weave_host_protocol::sessions::CloseSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::LABELS_FEATURE;
+use weave_host_protocol::sessions::LabelSessionRequest;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::OBSERVE_FEATURE;
 use weave_host_protocol::sessions::SUCCESSORS_FEATURE;
@@ -92,6 +94,22 @@ enum SessionsCommand {
     /// Name the thread an open thread's work goes on in, its successor: clients following it
     /// may follow that, and reports to it go there. Named once.
     SetSuccessor(SuccessorArgs),
+    /// Add labels to an open thread and take others off, and print its labels. Labels mean
+    /// nothing to the Host: they're for finding threads, and labelled threads are kept past
+    /// the Host's two weeks.
+    Label(LabelArgs),
+}
+
+#[derive(Args)]
+struct LabelArgs {
+    #[arg(value_name = "THREAD_ID")]
+    session_id: String,
+    /// A label to add: letters, digits and - _ . : / only.
+    #[arg(long, value_name = "LABEL")]
+    add: Vec<String>,
+    /// A label to take off.
+    #[arg(long, value_name = "LABEL")]
+    remove: Vec<String>,
 }
 
 #[derive(Args)]
@@ -108,6 +126,10 @@ struct ListArgs {
     /// Only the threads doing this.
     #[arg(long, value_parser = ["idle", "running", "waiting"])]
     activity: Option<String>,
+
+    /// Only the threads that carry this label; given again, those that carry every one.
+    #[arg(long = "label", value_name = "LABEL")]
+    labels: Vec<String>,
 
     /// Print them as JSON.
     #[arg(long)]
@@ -214,6 +236,7 @@ pub async fn command(args: SessionsArgs) -> anyhow::Result<ExitCode> {
             | SessionsCommand::Cancel(_)
             | SessionsCommand::Close(_)
             | SessionsCommand::SetSuccessor(_)
+            | SessionsCommand::Label(_)
             | SessionsCommand::Watch
             | SessionsCommand::Follow(_) => Err(exit::unreachable(anyhow!(
                 "the weave Host isn't running, so no threads are open"
@@ -246,11 +269,16 @@ pub async fn command(args: SessionsArgs) -> anyhow::Result<ExitCode> {
 
 async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::Result<()> {
     match command {
-        SessionsCommand::List(ListArgs { activity, json }) => {
+        SessionsCommand::List(ListArgs {
+            activity,
+            labels,
+            json,
+        }) => {
             let mut sessions = open(connection).await?;
             if let Some(activity) = activity {
                 sessions.retain(|session| session.activity.is_some_and(|is| name(is) == activity));
             }
+            sessions.retain(|session| labels.iter().all(|label| session.labels.contains(label)));
             if json {
                 println!("{}", serde_json::to_string_pretty(&sessions)?);
             } else {
@@ -367,6 +395,25 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 .context("naming the thread's successor")?;
             eprintln!("Thread {session_id} continues in thread {successor}.");
         }
+        SessionsCommand::Label(LabelArgs {
+            session_id,
+            add,
+            remove,
+        }) => {
+            offers(connection, LABELS_FEATURE)?;
+            let labelled = connection
+                .send(LabelSessionRequest {
+                    session_id: SessionId::new(session_id.clone()),
+                    add,
+                    remove,
+                })
+                .await
+                .context("labelling the thread")?;
+            match labelled.labels.as_slice() {
+                [] => eprintln!("Thread {session_id} carries no labels."),
+                labels => println!("{}", labels.join("\n")),
+            }
+        }
         SessionsCommand::Watch | SessionsCommand::Follow(_) => {}
     }
     Ok(())
@@ -380,7 +427,7 @@ async fn watch(
 ) -> anyhow::Result<Status> {
     offers(connection, WATCH_FEATURE)?;
     let watched = connection
-        .send(WatchSessionsRequest {})
+        .send(WatchSessionsRequest::default())
         .await
         .context("watching the threads")?;
     for session in watched.sessions {
@@ -608,6 +655,9 @@ fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
         if let Some(starter) = &session.started_by {
             out.push_str(&format!("  started by thread {starter}\n"));
         }
+        if !session.labels.is_empty() {
+            out.push_str(&format!("  labelled {}\n", session.labels.join(", ")));
+        }
     }
     out
 }
@@ -712,6 +762,7 @@ mod tests {
             opened_by: None,
             opened_at: None,
             continued_in: None,
+            labels: Vec::new(),
         };
         assert_eq!(
             describe(std::slice::from_ref(&session), 7_230_000),

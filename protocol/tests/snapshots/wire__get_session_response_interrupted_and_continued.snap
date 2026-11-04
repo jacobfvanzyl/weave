@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&GetSessionResponse\n{\n    session: SessionListing\n    { continued_in: Some(\"s-3\".into()), ..delegated.clone() }, latest_turn:\n    Some(LatestTurn\n    {\n        turn_id: Some(\"t-1\".to_owned()), continues: None, continued_in:\n        Some(\"t-2\".to_owned()), state: TurnState::Interrupted, prompt:\n        vec![text(\"port the parser's tests to the new runner\")], origin:\n        TurnOrigin::Run {}, started_at: 1_760_180_000_000, running: false,\n        response: None, error:\n        Some(weave_host_protocol::errors::interrupted()), message: None,\n    }),\n})"
+expression: "round_trip(&GetSessionResponse\n{\n    session: SessionListing\n    {\n        continued_in: Some(\"s-3\".into()), labels:\n        vec![\"dispatcher\".to_owned(), \"bot:daily\".to_owned()],\n        ..delegated.clone()\n    }, latest_turn:\n    Some(LatestTurn\n    {\n        turn_id: Some(\"t-1\".to_owned()), continues: None, continued_in:\n        Some(\"t-2\".to_owned()), state: TurnState::Interrupted, prompt:\n        vec![text(\"port the parser's tests to the new runner\")], origin:\n        TurnOrigin::Run {}, started_at: 1_760_180_000_000, running: false,\n        response: None, error:\n        Some(weave_host_protocol::errors::interrupted()), message: None,\n    }),\n})"
 ---
 {
   "session": {
@@ -23,6 +23,10 @@ expression: "round_trip(&GetSessionResponse\n{\n    session: SessionListing\n   
     },
     "startedBy": "s-1",
     "continuedIn": "s-3",
+    "labels": [
+      "dispatcher",
+      "bot:daily"
+    ],
     "openedBy": {
       "client": {
         "name": "weave-app",

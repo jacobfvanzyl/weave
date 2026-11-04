@@ -110,9 +110,13 @@ use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::GET_FEATURE;
 use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::GetSessionResponse;
+use weave_host_protocol::sessions::LABELS_FEATURE;
+use weave_host_protocol::sessions::LabelSessionRequest;
+use weave_host_protocol::sessions::LabelSessionResponse;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::MAX_LABELS;
 use weave_host_protocol::sessions::OBSERVE_FEATURE;
 use weave_host_protocol::sessions::RENAME_FEATURE;
 use weave_host_protocol::sessions::RenameSessionRequest;
@@ -123,7 +127,6 @@ use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::SUCCESSORS_FEATURE;
 use weave_host_protocol::sessions::ServiceOrigin;
 use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
@@ -133,6 +136,7 @@ use weave_host_protocol::sessions::UnwatchSessionsRequest;
 use weave_host_protocol::sessions::WATCH_FEATURE;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::sessions::WatchSessionsResponse;
+use weave_host_protocol::sessions::check_label;
 use weave_host_protocol::terminals::AttachTerminalRequest;
 use weave_host_protocol::terminals::AttachTerminalResponse;
 use weave_host_protocol::terminals::CloseTerminalRequest;
@@ -547,13 +551,15 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |_request: WatchSessionsRequest, responder, cx: ConnectionTo<HostClient>| {
+            async move |request: WatchSessionsRequest, responder, cx: ConnectionTo<HostClient>| {
                 if let Err(error) = on_watch.hello_info() {
                     return responder.respond_with_error(error);
                 }
-                on_watch.shared.watch(on_watch.id, cx, |sessions| {
-                    responder.respond(WatchSessionsResponse { sessions })
-                })
+                on_watch
+                    .shared
+                    .watch(on_watch.id, cx, request.labels, |sessions| {
+                        responder.respond(WatchSessionsResponse { sessions })
+                    })
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -637,6 +643,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, label_session),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, set_successor),
             agent_client_protocol::on_receive_request!(),
         )
@@ -716,7 +726,7 @@ const FOR_PEERS: [&str; 12] = [
 
 /// The methods a service may ask (ADR 0027): its hello, and what starting headless turns,
 /// following threads and naming the ones it starts need.
-const FOR_SERVICES: [&str; 16] = [
+const FOR_SERVICES: [&str; 17] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -730,6 +740,7 @@ const FOR_SERVICES: [&str; 16] = [
     "session/detach",
     "session/rename",
     "session/setSuccessor",
+    "session/label",
     "queue/add",
     "turn/steer",
     "turn/cancel",
@@ -982,6 +993,7 @@ impl Connection {
                 LIST_FILES_FEATURE.to_owned(),
                 RENAME_FEATURE.to_owned(),
                 SUCCESSORS_FEATURE.to_owned(),
+                LABELS_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
@@ -1475,6 +1487,7 @@ impl Connection {
     /// agent's own listing, paged by its cursor.
     async fn create(&self, request: CreateSessionRequest) -> Result<Ready, Error> {
         self.hello_info()?;
+        check_labels(&request.labels)?;
         let agent = self.shared.resolve(&request.agent_id).await?;
         let (instance, git) = tokio::join!(
             self.shared
@@ -1520,6 +1533,7 @@ impl Connection {
             Origin::New {
                 started_by: None,
                 started_by_host: None,
+                labels: request.labels,
             },
             servers,
             git,
@@ -1757,8 +1771,7 @@ impl Connection {
         if let Some(dir) = &self.shared.config.journals {
             let _ = std::fs::remove_file(journal::path_for(dir, &session_id));
         }
-        self.shared
-            .tell_watchers(&SessionRemovedNotification { session_id });
+        self.shared.tell_removed(session_id);
         Ok(Empty {})
     }
 
@@ -1811,6 +1824,30 @@ impl Connection {
             })
             .await?;
         Ok(Empty {})
+    }
+
+    /// `session/label`: add labels to an open session and take others off (WVE-173).
+    async fn label_session(
+        &self,
+        request: LabelSessionRequest,
+    ) -> Result<LabelSessionResponse, Error> {
+        let hello = self.hello_info()?;
+        let LabelSessionRequest {
+            session_id,
+            add,
+            remove,
+        } = request;
+        check_labels(&add)?;
+        let session = self.live(&session_id)?;
+        let labels = session
+            .finish(|done| Command::Label {
+                add,
+                remove,
+                by: Some(self.origin(&hello)),
+                done,
+            })
+            .await??;
+        Ok(LabelSessionResponse { labels })
     }
 
     /// `session/setSuccessor`: name the session an open one's work goes on in (WVE-168).
@@ -2200,6 +2237,7 @@ pub(crate) async fn list_sessions(
             if let Some(activity) = request.activity {
                 sessions.retain(|listing| listing.activity == Some(activity));
             }
+            sessions.retain(|listing| labelled(listing, &request.labels));
             Ok(ListSessionsResponse {
                 sessions,
                 next_cursor: None,
@@ -2213,8 +2251,16 @@ pub(crate) async fn list_sessions(
             Err(Error::invalid_params()
                 .data("sessions/list takes an activity only without an agent"))
         }
+        Some(_) if !request.labels.is_empty() => {
+            Err(Error::invalid_params().data("sessions/list takes labels only without an agent"))
+        }
         Some(agent_id) => agent_sessions(shared, &agent_id, request).await,
     }
+}
+
+/// Whether `listing` carries every one of `labels`.
+pub(crate) fn labelled(listing: &SessionListing, labels: &[String]) -> bool {
+    labels.iter().all(|label| listing.labels.contains(label))
 }
 
 /// `sessions/list` for one agent: the Host's own sessions of it in the directory first, then the
@@ -2331,6 +2377,10 @@ async fn agent_sessions(
                 continued_in: known
                     .get(&info.session_id)
                     .and_then(|recorded| recorded.successor.clone()),
+                labels: known
+                    .get(&info.session_id)
+                    .map(|recorded| recorded.labels.clone())
+                    .unwrap_or_default(),
                 opened_by: None,
                 opened_at: None,
                 info,
@@ -2434,6 +2484,7 @@ pub(crate) fn dormant(
         continued_in: recorded.successor.clone(),
         opened_by: None,
         opened_at: None,
+        labels: recorded.labels.clone(),
     }
 }
 
@@ -2718,7 +2769,9 @@ async fn run_now(
         key: _,
         caller: _,
         origin: _,
+        labels,
     } = request;
+    check_labels(&labels)?;
     let cwd = place(shared, cwd, remote.as_deref()).await?;
     let started_by_host = match &origin {
         TurnOrigin::Session { host, .. } if started_by.is_some() => host.clone(),
@@ -2788,6 +2841,7 @@ async fn run_now(
                 Origin::New {
                     started_by,
                     started_by_host,
+                    labels,
                 },
                 servers,
                 git,
@@ -2923,6 +2977,7 @@ async fn reopen(
     let mut queue = earlier.map(Queue::from_records).unwrap_or_default();
     let (started_by, started_by_host) = earlier.map(journal::started_by).unwrap_or_default();
     let successor = earlier.and_then(journal::successor);
+    let labels = earlier.map(journal::labels).unwrap_or_default();
     let mut continuation = None;
     let (journal, policy) = match recovered {
         Some((path, records)) => {
@@ -3006,6 +3061,7 @@ async fn reopen(
             started_by,
             started_by_host,
             successor,
+            labels,
             continuation,
         },
         servers,
@@ -3062,6 +3118,7 @@ enum Origin {
     New {
         started_by: Option<SessionId>,
         started_by_host: Option<String>,
+        labels: Vec<String>,
     },
     /// The agent's session reopened, with the journal a stopped Host left, if there is one,
     /// and the title and queue the Host kept for it, the last title its agent gave it, and when
@@ -3076,6 +3133,7 @@ enum Origin {
         started_by_host: Option<String>,
         /// The session its work goes on in.
         successor: Option<SessionId>,
+        labels: Vec<String>,
         /// The turn the stopped Host cut off, for a headless session to continue.
         continuation: Option<Box<Continuation>>,
     },
@@ -3099,6 +3157,7 @@ fn open(
         Origin::New {
             started_by,
             started_by_host,
+            labels,
         } => (
             None,
             true,
@@ -3106,7 +3165,7 @@ fn open(
             None,
             None,
             Queue::default(),
-            (started_by, started_by_host, None, None),
+            (started_by, started_by_host, None, labels, None),
         ),
         Origin::Reopened {
             journal,
@@ -3117,6 +3176,7 @@ fn open(
             started_by,
             started_by_host,
             successor,
+            labels,
             continuation,
         } => (
             journal,
@@ -3129,11 +3189,12 @@ fn open(
                 started_by,
                 started_by_host,
                 successor,
+                labels,
                 continuation.map(|continuation| *continuation),
             ),
         ),
     };
-    let (started_by, started_by_host, successor, continuation) = starter;
+    let (started_by, started_by_host, successor, labels, continuation) = starter;
     let journal = match journal {
         Some(journal) => *journal,
         None => {
@@ -3152,9 +3213,11 @@ fn open(
                 started_by: starter,
                 started_by_host: starter_host,
                 successor: carried_successor,
+                labels: carried_labels,
                 ..
             } = &mut header
             {
+                carried_labels.clone_from(&labels);
                 carried.extend(queue.prompts.iter().cloned());
                 *queue_paused = queue.paused;
                 starter.clone_from(&started_by);
@@ -3194,9 +3257,24 @@ fn open(
             started_by,
             started_by_host,
             successor,
+            labels,
             continuation,
         },
     ))
+}
+
+/// Whether `labels` may start a session: each a label, and not too many (WVE-173).
+fn check_labels(labels: &[String]) -> Result<(), Error> {
+    for label in labels {
+        check_label(label).map_err(|why| Error::invalid_params().data(why))?;
+    }
+    if labels.len() > MAX_LABELS {
+        return Err(Error::invalid_params().data(format!(
+            "a thread carries at most {MAX_LABELS} labels, not {}",
+            labels.len()
+        )));
+    }
+    Ok(())
 }
 
 fn journal_error(error: &std::io::Error) -> Error {

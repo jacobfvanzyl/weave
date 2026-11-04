@@ -226,6 +226,7 @@ async fn establish(
         mode: None,
         policy: None,
         trace: launch.trace,
+        labels: Vec::new(),
     };
     let attach = |session_id: SessionId| AttachSessionRequest {
         session_id,
@@ -266,6 +267,7 @@ async fn establish(
                     repo: None,
                     activity: None,
                     cursor: None,
+                    labels: Vec::new(),
                 })
                 .await?;
             match listed
@@ -292,6 +294,7 @@ async fn establish(
                     repo: None,
                     activity: None,
                     cursor: None,
+                    labels: Vec::new(),
                 })
                 .await?;
             Ok((None, Vec::new()))

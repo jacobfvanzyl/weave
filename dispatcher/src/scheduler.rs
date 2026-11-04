@@ -36,6 +36,9 @@ use crate::store::Fired;
 use crate::store::StoredSchedule;
 use crate::store::Work;
 
+/// The label of the threads the Dispatcher starts, beside `schedule:<id>` for a schedule's.
+pub(crate) const LABEL: &str = "dispatcher";
+
 /// How far back missed occurrences are caught up.
 pub(crate) const LOOK_BACK: u64 = 7 * 24 * 60 * 60 * 1000;
 
@@ -248,6 +251,11 @@ pub(crate) fn fire(
                 label: format!("schedule {}", schedule.name),
                 id: occurrence.to_owned(),
             }),
+            // A thread it starts says whose it is (WVE-173); one the person named keeps its own.
+            labels: match run.thread {
+                Some(_) => Vec::new(),
+                None => vec![LABEL.to_owned(), format!("schedule:{}", schedule.id)],
+            },
         };
         match run.thread {
             Some(_) => Work::Prompt(request),

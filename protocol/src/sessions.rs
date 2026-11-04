@@ -225,6 +225,9 @@ pub struct SessionState {
     /// Its successor, as its listing's `continuedIn` (WVE-168).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued_in: Option<SessionId>,
+    /// Its labels, as its listing's (WVE-173).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -260,6 +263,9 @@ pub struct SessionListing {
     /// and reports to this one go there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued_in: Option<SessionId>,
+    /// Its labels (feature `labels`, WVE-173), in order, which clients gave it and filter by.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     /// The client whose `session/create` or `session/attach` opened it last, while it's open:
     /// a paired device's names its `device`. A service's `session/run` that opened it gives
     /// the turn's origin. Absent for one another headless run or a Host taking it up opened.
@@ -289,6 +295,9 @@ pub struct ListSessionsRequest {
     /// Only the open sessions doing this. Without an agent only (feature `turnIds`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<Activity>,
+    /// Only the sessions that carry every one of these labels (feature `labels`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
@@ -401,12 +410,17 @@ pub const WATCH_FEATURE: &str = "sessions/watch";
 
 /// `sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a
 /// [`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the
-/// connection ends or the client sends `sessions/unwatch`. Blank sessions never appear.
+/// connection ends or the client sends `sessions/unwatch`. Blank sessions never appear. With
+/// `labels` (feature `labels`), only the sessions that carry every one of them: a change that
+/// makes one stop matching is the last the watcher hears of it, as an update showing its labels.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "sessions/watch", response = WatchSessionsResponse)]
 #[serde(rename_all = "camelCase")]
-pub struct WatchSessionsRequest {}
+pub struct WatchSessionsRequest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -462,6 +476,9 @@ pub struct CreateSessionRequest {
     /// Have the Host trace the agent's protocol.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub trace: bool,
+    /// Its labels from the start (feature `labels`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 /// The Host offers [`AttachSessionRequest::observe`], in `features`.
@@ -575,6 +592,54 @@ pub struct RenameSessionRequest {
     pub title: String,
 }
 
+/// The Host offers [`LabelSessionRequest`] and labels in listings and requests, in `features`
+/// (WVE-173).
+pub const LABELS_FEATURE: &str = "labels";
+
+/// The most labels a session carries.
+pub const MAX_LABELS: usize = 16;
+
+/// The longest label, in characters.
+pub const MAX_LABEL: usize = 64;
+
+/// Whether `label` is one: 1 to [`MAX_LABEL`] letters, digits and `-_.:/`; why not otherwise.
+pub fn check_label(label: &str) -> Result<(), String> {
+    let allowed = |c: char| c.is_alphanumeric() || "-_.:/".contains(c);
+    if label.is_empty() || label.chars().count() > MAX_LABEL {
+        return Err(format!("a label is 1 to {MAX_LABEL} characters: {label:?}"));
+    }
+    if !label.chars().all(allowed) {
+        return Err(format!(
+            "a label is letters, digits and - _ . : / only: {label:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// `session/label`: add labels to an open session and take others off, journaled as a
+/// `labelled` event, answered with its labels after. Labels mean nothing to the Host: clients
+/// give them, and filter `sessions/list` and `sessions/watch` by them. A labelled session's
+/// journal is kept past pruning. Each label is checked with [`check_label`], and a session
+/// carries at most [`MAX_LABELS`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "session/label", response = LabelSessionResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelSessionRequest {
+    pub session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LabelSessionResponse {
+    pub labels: Vec<String>,
+}
+
 /// The Host offers [`SetSuccessorRequest`] and the successors of turns and sessions, in
 /// `features` (WVE-168).
 pub const SUCCESSORS_FEATURE: &str = "successors";
@@ -680,6 +745,10 @@ pub struct RunRequest {
     /// A service's only: what started the turn, which its origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ServiceOrigin>,
+    /// Labels for a session it starts, from the start (feature `labels`); an existing session
+    /// keeps its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcResponse)]

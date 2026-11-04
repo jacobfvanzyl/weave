@@ -113,6 +113,7 @@ mod tests {
             started_by: None,
             started_by_host: None,
             continued_in: None,
+            labels: Vec::new(),
         }
     }
 

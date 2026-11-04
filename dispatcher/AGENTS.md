@@ -31,7 +31,8 @@ of its own; `weave-host` is only a dev-dependency, for the tests' in-process Hos
   change, and every 30 seconds of wall clock at most (`Clock`; tests pass one they move), and
   `Plan`, a schedule's croner expression in its jiff time zone. Catch-ups, the one-week look-back
   and the minute's grace are here; overlap and pausing are in the store, inside the
-  transaction that writes an occurrence down.
+  transaction that writes an occurrence down. A thread an occurrence starts is labelled
+  `dispatcher` (`LABEL`) and `schedule:<id>` (WVE-173).
 - `store/schedules.rs`: `schedules` and `occurrences`. An occurrence and its delivery are
   written in one transaction, unique on schedule, scheduled time and `manual`; delivering it,
   the Host refusing it and its turn ending update it from `store.rs` and `link.rs`.

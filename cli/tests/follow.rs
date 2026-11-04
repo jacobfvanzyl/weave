@@ -192,6 +192,7 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
                 mode: None,
                 policy: None,
                 trace: false,
+                labels: Vec::new(),
             })
             .await
             .expect("session/create");

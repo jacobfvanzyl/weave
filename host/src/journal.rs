@@ -127,6 +127,10 @@ pub(crate) enum Entry {
         /// session's journal (WVE-168).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         successor: Option<SessionId>,
+        /// Its labels when this journal began: those it was started with, or a closed
+        /// session's (WVE-173).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        labels: Vec<String>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -217,6 +221,12 @@ pub(crate) enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<TurnOrigin>,
     },
+    /// A client changed the session's labels (`session/label`, WVE-173): all of them, after.
+    Labelled {
+        labels: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
     /// A client named the session its work goes on in (`session/setSuccessor`, WVE-168).
     ContinuedIn {
         successor: SessionId,
@@ -269,6 +279,7 @@ impl Entry {
             | Entry::Closed { .. }
             | Entry::Notice { .. }
             | Entry::ContinuedIn { .. }
+            | Entry::Labelled { .. }
             | Entry::QueuePaused { .. } => false,
             Entry::Header { .. }
             | Entry::TerminalOutput { .. }
@@ -307,6 +318,7 @@ impl Entry {
             started_by: None,
             started_by_host: None,
             successor: None,
+            labels: Vec::new(),
         }
     }
 
@@ -401,6 +413,10 @@ impl Entry {
             Self::Notice { text } => SessionEvent::Notice { text: text.clone() },
             Self::Renamed { title, by } => SessionEvent::Renamed {
                 title: title.clone(),
+                by: by.clone(),
+            },
+            Self::Labelled { labels, by } => SessionEvent::Labelled {
+                labels: labels.clone(),
                 by: by.clone(),
             },
             Self::ContinuedIn { successor, by } => SessionEvent::ContinuedIn {
@@ -643,6 +659,8 @@ pub struct Recorded {
     pub started_by_host: Option<String>,
     /// The session its work goes on in, which a client named (WVE-168).
     pub successor: Option<SessionId>,
+    /// Its labels (WVE-173); a labelled session's journal is kept past pruning.
+    pub labels: Vec<String>,
 }
 
 impl Recorded {
@@ -664,6 +682,17 @@ pub(crate) fn kept_title(records: &[Record]) -> Option<String> {
             Entry::Header { title, .. } => title.clone().or(kept),
             Entry::Renamed { title, .. } => Some(title.clone()),
             _ => kept,
+        })
+}
+
+/// The labels of the session `records` journal: the last a client gave it, or those its journal
+/// began with.
+pub(crate) fn labels(records: &[Record]) -> Vec<String> {
+    records
+        .iter()
+        .fold(Vec::new(), |labels, record| match &record.entry {
+            Entry::Header { labels, .. } | Entry::Labelled { labels, .. } => labels.clone(),
+            _ => labels,
         })
 }
 
@@ -918,6 +947,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         started_by_host,
         title: mut renamed,
         mut successor,
+        mut labels,
         ..
     } = serde_json::from_str::<Record>(&header).ok()?.entry
     else {
@@ -929,6 +959,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         // Escaped inside a string, these can't match text an agent wrote.
         if line.starts_with(r#"{"type":"renamed""#)
             || line.starts_with(r#"{"type":"continuedIn""#)
+            || line.starts_with(r#"{"type":"labelled""#)
             || line.contains(r#""sessionUpdate":"session_info_update""#)
         {
             match serde_json::from_str::<Record>(&line).map(|record| record.entry) {
@@ -936,6 +967,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
                 Ok(Entry::ContinuedIn {
                     successor: named, ..
                 }) => successor = Some(named),
+                Ok(Entry::Labelled { labels: given, .. }) => labels = given,
                 Ok(entry) => {
                     if let Some(title) = title_given(&entry, &session_id) {
                         agent_title = Some(title);
@@ -974,6 +1006,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
             started_by,
             started_by_host,
             successor,
+            labels,
         },
     ))
 }
@@ -1102,13 +1135,14 @@ pub(crate) struct OpenTurn {
 }
 
 /// Remove journals untouched for `age`: closed sessions, and ones left by a Host that
-/// stopped and never taken up again. The `live` sessions' journals stay, however quiet.
-pub(crate) fn prune(dir: &Path, age: Duration, live: &[SessionId]) {
+/// stopped and never taken up again. The `kept` sessions' journals stay, however quiet: open
+/// ones, and labelled ones, as a Bot's earlier threads are (WVE-173).
+pub(crate) fn prune(dir: &Path, age: Duration, kept: &[SessionId]) {
     let Ok(listing) = std::fs::read_dir(dir) else {
         return;
     };
     let cutoff = SystemTime::now().checked_sub(age).unwrap_or(UNIX_EPOCH);
-    let live: HashSet<PathBuf> = live
+    let kept: HashSet<PathBuf> = kept
         .iter()
         .map(|session_id| path_for(dir, session_id))
         .collect();
@@ -1117,7 +1151,7 @@ pub(crate) fn prune(dir: &Path, age: Duration, live: &[SessionId]) {
         let stale = path
             .extension()
             .is_some_and(|extension| extension == "jsonl")
-            && !live.contains(&path)
+            && !kept.contains(&path)
             && entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
