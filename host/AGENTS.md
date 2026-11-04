@@ -198,54 +198,35 @@ counts for nothing: every WebSocket connection proves a paired device at hello, 
 `host/challenge` with a P-256 key, or pairs with a code `weave pair` offered (`devices.rs`,
 which keeps the Host's id and the devices' public keys in `devices.json`, 0600, and offers in
 memory). A remote client can do what a local one can,
-except `host/shutdown`, `devices/*`, `peers/*`, agent sign-in and sign-out, and `agents/update`
-(`forbidden`), and a peer Host or a service less: the first request handler
-(`Connection::refusal`) answers either `forbidden` for any method outside its list (`FOR_PEERS`,
-ADR 0024; `FOR_SERVICES`, ADR 0027), attaching without `observe` or running with `attach`. A
-service, such as the Dispatcher, is a device whose `NewDevice.service` said so at pairing, never
-a peer Host too; `Connection::origin_for` lets only a service name what started a turn
-(`TurnOrigin::Service`, its name taken from the paired device). The Host
+except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`
+(`forbidden`), and a service less: the first request handler (`Connection::refusal`) answers
+`forbidden` for any method outside `FOR_SERVICES` (ADR 0027), attaching without `observe` or
+running with `attach`. A service, such as the Dispatcher, is a device whose `NewDevice.service`
+said so at pairing; `Connection::origin_for` lets only a service name what started a turn
+(`TurnOrigin::Service`, its name taken from the paired device) or a thread on another Host that
+asks (`caller`). The Host
 pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent beyond the
 replays it asked for (a `Backlog`, which an attach tells its replay's size), which attaches again
 after its position. Remote tests (`tests/remote.rs`) use a real
 loopback WebSocket, and fake agents that take MCP over ACP; `../host-client/examples/remote.rs` is the client for trying it by
 hand.
 
-Peer Hosts (WVE-109, ADRs 0017 and 0024, `peers.rs`; the Host protocol's Peer Hosts section) are
-the person's other Hosts this one pairs with. Its key (`peers::Peers::key`, `host-key.json`,
-0600) is `weave_host_client::remote::DeviceKey`: in the Secure Enclave on a Mac that has one, kept
-as the wrapped form `SecKeyCreateWithData` takes back with that same form as its `toid` attribute
-(`host-client/src/enclave.rs`), otherwise the key itself, read and written by
-`DeviceKey::kept` (`host-client/src/key_file.rs`), as the Dispatcher keeps its own. `peers/add` pairs as a device whose
-`NewDevice.host` is this Host's id; `peers.json` keeps each peer, the turns followed there
-(`following`) and the requests sent there without an answer yet (`sending`). A peer is reached on
-demand (`Peers::reach`, a `weave-host-client` WebSocket connection proving the key, whose
-failures `weave_host_client::reach` names as the Dispatcher's are named) and kept while
-followed, closing after `PeerSettings::idle` unused; `dispatch` hands what it sends to each
-session's follower by session id, and when the peer closes the connection `unlink` notes how
-(`CLOSE_REVOKED` is `refused`), so `peers/list`'s `status` is the last attempt's outcome, except
-that a refusal stands until a hello succeeds (`Peers::note`, the peer's `refused` in
-`peers.json`): a peer that revoked this Host as its last device stops listening, and finding
-nothing there mustn't turn it back into one worth retrying (WVE-165). Host
-tools given `host` (`host_tools::on_peer`) send the method over that connection with `caller`
-naming the calling session. `start_session` and `prompt_session` go through `Peers::begin`: the
-request, under a key made per calling session (`peer_key`), is recorded in `sending` first, and
-once the peer answers its turn moves to `following`; a peer that can't be reached or refuses
-leaves nothing, and a lost answer (an internal error) leaves `deliver` sending it again under the
-same key until one comes, across restarts (`resume`), then telling the caller. `start_session`
-without `cwd` sends the caller's directory under the home (`PeerSettings::home`) as `~/…`, from
-the repository's main worktree, with its `remote` (`host_tools::counterpart`); `client::place`
-on the peer expands `~` and checks the checkout's remote. `watch` observes a followed session
-(`session/attach` with `observe`), `check`s each followed turn with `sessions/get` after the
-attach and every turn end, and reports through `host_tools::tell` with the peer's id and name in
-the origin, reconnecting with backoff and giving up only when the peer refuses this Host or is
-removed, at once when it closed the connection as revoked. Reports that take up a closed caller do so one at a time
-(`Shared::taking_up_for_reports`), or two at once would take it up twice. On the serving side, a
-request handler before all others refuses a peer Host any method outside `FOR_PEERS` (ADR 0024,
-`client::not_for_peers`): it gets what the Host tools and following need, an observing attach,
-and `session/run` without `attach`. `Connection::origin_for` turns a peer's `caller` into the
-`session` origin with the paired device's `host` and name; `Actor::caller` ignores origins on
-another Host, which follows the turn itself; `Summary::turn_from_peer` and `startedByHost` up the
-starting chain keep turns a peer began from reaching this Host's peers
-(`host_tools::from_peer`). Tests (`tests/peers.rs`) run two or three Hosts in-process over
-loopback WebSockets, each with its own home, some restarting from their files.
+Other Hosts (WVE-185, ADR 0029; the Host protocol's Other Hosts section) are reached through the
+Dispatcher: Hosts don't pair with each other. A service that declared `hosts`
+(`Devices::declare_tools`, `hosts_service`) gets the Host tool calls given another Host's `host`:
+`host_tools::elsewhere` works the method's request out here (`request`, `start_elsewhere`: the
+caller's directory under the home, `Shared::home`, as `~/…` from the repository's main worktree
+with its `remote`, `counterpart`; the policy within the caller's; the agent's own key; and
+`room`, `[delegation] running` less this Host's busy delegated sessions, `busy_here`) and
+`ServiceTools::call_host` sends it as `service/hostCall`, answered by `service/answerTool` as a
+service tool call is. This Host keeps no record of it: the Dispatcher follows the turn and
+reports with `session/report` (`client::report_session`, keyed), which `host_tools::tell` tells
+as it tells this Host's own reports. On the serving side `Connection::origin_for` turns a
+service's `caller` into the `session` origin naming the other Host and its name, `client::place`
+expands `~` and checks the checkout's remote, and `Actor::caller` ignores origins on another
+Host. `Summary::turn_from_host` and `startedByHost` up the starting chain keep turns another
+Host's agent began from reaching further (`host_tools::from_other_host`). Reports that take up a
+closed caller do so one at a time (`Shared::taking_up_for_reports`), or two at once would take it
+up twice. Peer Hosts (ADR 0017, WVE-109) are retired: `Devices::load` revokes a pairing that
+names a Host id, and `Daemon::new` removes `DaemonConfig::retired` (`peers.json`,
+`host-key.json`). The tests are the Dispatcher's (`dispatcher/tests/hosts.rs`).

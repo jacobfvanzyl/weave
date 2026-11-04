@@ -1,5 +1,6 @@
 //! What the Dispatcher's tests share: in-process Hosts on loopback WebSockets, each behind a
-//! relay that a restart cuts, as a Host process exiting closes its connections, and a
+//! relay that a restart cuts, as a Host process exiting closes its connections, and each with a
+//! home of its own and agents that call Host tools (the fake agent's `tool` script); and a
 //! Dispatcher answering on its socket.
 
 #![allow(clippy::expect_used, dead_code)]
@@ -8,6 +9,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use agent_client_protocol::Channel;
@@ -51,6 +54,20 @@ use weave_host_protocol::sessions::SessionListing;
 
 pub const WAIT: Duration = Duration::from_secs(10);
 
+/// Git for a test's repositories, away from the configuration of whoever runs the tests.
+pub const ISOLATED_GIT: &[(&str, &str)] = &[
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_AUTHOR_NAME", "Test"),
+    ("GIT_AUTHOR_EMAIL", "test@example.com"),
+    ("GIT_COMMITTER_NAME", "Test"),
+    ("GIT_COMMITTER_EMAIL", "test@example.com"),
+];
+
+/// A Host's configuration: the fake agent, and deep enough delegation for a thread another
+/// Host's agent started to start one of its own, which one hop keeps from other Hosts.
+pub const CONFIG: &str = "[agents.fake]\ncommand = \"fake-agent\"\n\n[delegation]\ndepth = 3\n";
+
 /// One Host's directory, and the Host running from it behind its relay.
 pub struct World {
     pub dir: tempfile::TempDir,
@@ -74,11 +91,8 @@ impl World {
 
     async fn with(journals: bool) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            dir.path().join("config.toml"),
-            "[agents.fake]\ncommand = \"fake-agent\"\n",
-        )
-        .expect("config");
+        std::fs::write(dir.path().join("config.toml"), CONFIG).expect("config");
+        std::fs::create_dir_all(dir.path().join("home")).expect("home");
         let relay = Relay::new().await;
         let daemon = Daemon::new(config_with(dir.path().to_path_buf(), journals));
         let serving = serve(&daemon, &relay).await;
@@ -89,6 +103,20 @@ impl World {
             serving,
             journals,
         }
+    }
+
+    /// The home `~/…` paths between Hosts are under.
+    pub fn home(&self) -> PathBuf {
+        self.dir.path().join("home")
+    }
+
+    /// Add `toml` to the Host's configuration, which it reads as it goes.
+    pub fn configure(&self, toml: &str) {
+        std::fs::write(
+            self.dir.path().join("config.toml"),
+            format!("{CONFIG}{toml}"),
+        )
+        .expect("config");
     }
 
     /// The Host's URL, through its relay.
@@ -139,6 +167,7 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
     let launcher: Launcher = Arc::new(move |_launch: &Launch, options: ClientOptions, _| {
         let config = FakeAgentConfig {
             state_path: Some(state.clone()),
+            mcp_over_acp: true,
             ..FakeAgentConfig::default()
         };
         Box::pin(async move {
@@ -159,7 +188,13 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
         registry_cache: Some(dir.join("cache")),
         agents: Default::default(),
         withheld: Withheld::default(),
-        environment: Environment::default(),
+        environment: Environment {
+            vars: ISOLATED_GIT
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+            ..Environment::default()
+        },
         service: Service::InProcess,
         traces: dir.join("traces"),
         devices: Some(dir.join("devices.json")),
@@ -168,7 +203,8 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
         mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
         remote: None,
         terminals: None,
-        peers: None,
+        home: Some(dir.join("home")),
+        retired: Vec::new(),
     }
 }
 
@@ -190,6 +226,9 @@ pub struct Relay {
     target: Arc<Mutex<Option<SocketAddr>>>,
     last: Mutex<Option<SocketAddr>>,
     open: Arc<Mutex<Vec<AbortHandle>>>,
+    /// Pass what the client sends, and drop what the Host answers, as a Host that stops
+    /// answering mid-request does.
+    deaf: Arc<AtomicBool>,
 }
 
 impl Relay {
@@ -198,15 +237,17 @@ impl Relay {
         let address = listener.local_addr().expect("its address");
         let target: Arc<Mutex<Option<SocketAddr>>> = Arc::default();
         let open: Arc<Mutex<Vec<AbortHandle>>> = Arc::default();
-        let (to, opened) = (Arc::clone(&target), Arc::clone(&open));
+        let deaf: Arc<AtomicBool> = Arc::default();
+        let (to, opened, deafened) = (Arc::clone(&target), Arc::clone(&open), Arc::clone(&deaf));
         tokio::spawn(async move {
-            while let Ok((mut inbound, _)) = listener.accept().await {
+            while let Ok((inbound, _)) = listener.accept().await {
                 let Some(to) = *to.lock().expect("the target") else {
                     continue;
                 };
+                let deaf = Arc::clone(&deafened);
                 let relayed = tokio::spawn(async move {
-                    if let Ok(mut outbound) = TcpStream::connect(to).await {
-                        let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                    if let Ok(outbound) = TcpStream::connect(to).await {
+                        relay(inbound, outbound, deaf).await;
                     }
                 });
                 opened
@@ -220,7 +261,13 @@ impl Relay {
             target,
             last: Mutex::new(None),
             open,
+            deaf,
         }
+    }
+
+    /// Drop what the Host answers from now on, until [`Self::resume`].
+    pub fn deafen(&self) {
+        self.deaf.store(true, Ordering::SeqCst);
     }
 
     pub fn point(&self, to: SocketAddr) {
@@ -230,6 +277,7 @@ impl Relay {
 
     /// Take connections again, to where it pointed before it was cut.
     pub fn resume(&self) {
+        self.deaf.store(false, Ordering::SeqCst);
         *self.target.lock().expect("the target") = *self.last.lock().expect("the last target");
     }
 
@@ -239,6 +287,37 @@ impl Relay {
         for relayed in self.open.lock().expect("the connections").drain(..) {
             relayed.abort();
         }
+    }
+}
+
+/// Copy between `inbound`, a client, and `outbound`, the Host, both ways, dropping what the
+/// Host says while `deaf`.
+async fn relay(inbound: TcpStream, outbound: TcpStream, deaf: Arc<AtomicBool>) {
+    use tokio::io::AsyncReadExt as _;
+    use tokio::io::AsyncWriteExt as _;
+    let (mut client_reads, mut client_writes) = inbound.into_split();
+    let (mut host_reads, mut host_writes) = outbound.into_split();
+    let up = async move {
+        let _ = tokio::io::copy(&mut client_reads, &mut host_writes).await;
+    };
+    let down = async move {
+        let mut buffer = vec![0u8; 16 * 1024];
+        loop {
+            let read = match host_reads.read(&mut buffer).await {
+                Ok(0) | Err(_) => return,
+                Ok(read) => read,
+            };
+            if deaf.load(Ordering::SeqCst) {
+                continue;
+            }
+            if client_writes.write_all(&buffer[..read]).await.is_err() {
+                return;
+            }
+        }
+    };
+    tokio::select! {
+        () = up => {}
+        () = down => {}
     }
 }
 

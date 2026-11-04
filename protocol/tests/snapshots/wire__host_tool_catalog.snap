@@ -26,7 +26,7 @@ expression: round_trip(&host_catalog())
   {
     "name": "list_hosts",
     "title": "List the person's other Hosts",
-    "description": "List the person's other weave Hosts that this thread's Host is paired with, its peer Hosts, usually other computers: each one's id and name, and whether it can be reached now (status reachable), or why not: refused (it revoked this Host), down (its computer answered but its weave Host didn't), unreachable (nothing answered), or otherHost. The other tools take one as host, to list, read, start and prompt threads there. Pairing Hosts is the person's to do. Answers with this Host's id and its peers/list result as JSON.",
+    "description": "List the person's other weave Hosts, usually other computers, which this thread's Host reaches through the person's Dispatcher: each one's id and name, whether the Dispatcher is connected to it now, and if not, why: refused (it revoked the Dispatcher), down (its computer answered but its weave Host didn't), unreachable (nothing answered), or otherHost. The other tools take one as host, to list, read, start and prompt threads there. Pairing Hosts with the Dispatcher is the person's to do. Answers with this Host's id and the Hosts as JSON.",
     "inputSchema": {
       "type": "object",
       "properties": {},

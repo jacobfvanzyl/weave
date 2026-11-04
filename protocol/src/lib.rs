@@ -9,8 +9,6 @@
 //!
 //! - [`hello`]: the first request on every connection: version, authentication, client.
 //! - [`devices`]: pairing the person's other devices, whose remote clients use the WebSocket.
-//! - [`peers`]: the person's other Hosts this Host has paired with, whose threads its agents
-//!   reach.
 //! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
 //! - [`files`]: files on the Host's computer, for clients that aren't on it.
 //! - [`worktrees`]: git repositories on the Host's computer, their worktrees, and where a
@@ -19,6 +17,7 @@
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns, and request keys.
 //! - [`queue`]: the prompts a session's queue holds for its next turns.
+//! - [`reports`]: what the Host tells a thread of a turn its agent began elsewhere.
 //! - [`pending`]: permission requests and elicitations waiting on a person, and client tool
 //!   calls waiting on a client.
 //! - [`tools`]: client tools, which an attached client runs for the agent.
@@ -39,10 +38,10 @@ pub mod files;
 pub mod hello;
 pub mod host;
 pub mod mcp;
-pub mod peers;
 pub mod pending;
 pub mod policy;
 pub mod queue;
+pub mod reports;
 mod role;
 pub mod sessions;
 pub mod terminals;

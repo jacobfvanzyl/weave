@@ -2,11 +2,13 @@
 
 Status: implemented, and checked live through Tailscale Serve from the Host's own Mac on
 2026-10-16. Since 2026-10-21 pairing turns remote access on, and the Host keeps its own Serve
-entry (WVE-100). Since 2026-10-30 the person's other Hosts pair and connect as peer Hosts
-(WVE-109). The decisions are recorded in
+entry (WVE-100). From 2026-10-30 the person's other Hosts paired and connected as peer Hosts
+(WVE-109), until 2026-11-04, when the Dispatcher took that over and peer Hosts were retired
+(WVE-185). The decisions are recorded in
 [ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md),
-[ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md) and
-[ADR 0017](../adr/0017-hosts-pair-as-peers-through-the-tailnet-and-are-managed-through-their-cli.md).
+[ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md),
+[ADR 0027](../adr/0027-the-dispatcher-is-a-program-of-its-own-that-is-a-client-of-the-hosts.md) and
+[ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md).
 
 ## Purpose
 
@@ -141,10 +143,8 @@ gives it as `host.id`, so a client tells Hosts apart, and challenges are bound t
    `publicKey` is a JWK (`{"kty": "EC", "crv": "P-256", "x": …, "y": …}`); an offer made with
    `--name` uses that name instead. The Host takes the offer, so a second use fails, records the
    device, and answers as any hello does, plus `device: {id, name}`. The connection is that
-   device's from then on. Another of the person's Hosts pairing as a peer Host adds its own
-   Host id as `device.host`, which the Host records and gives back in `device` and `Device`
-   (see [Peer Hosts](#peer-hosts)). A service adds `device.service: true`, recorded and given
-   back the same way (see [Services](#services)); a pairing that claims both is refused.
+   device's from then on. A service adds `device.service: true`, which the Host records and
+   gives back in `device` and `Device` (see [Services](#services)).
 
 The code is 128 random bits in Crockford base32.
 
@@ -184,11 +184,11 @@ Every other connection from a paired device:
 
 ## What a remote client may do
 
-Everything a local client may, except administer the Host; a peer Host and a service may do
-less ([Peer Hosts](#peer-hosts), [Services](#services)). These answer `forbidden`:
+Everything a local client may, except administer the Host; a service may do less
+([Services](#services)). These answer `forbidden`:
 
 - `host/shutdown`;
-- `devices/*`, and `peers/*`, so a peer Host can't have this Host reach its own peers;
+- `devices/*`;
 - `agents/authenticate`, `agents/logout` and `agents/terminalSignIn`, since an agent's sign-in
   belongs to the Host's computer. As now, only local clients may claim
   `capabilities.terminalSignIn`.
@@ -212,11 +212,11 @@ All local only.
 **`devices/list`** `{}` → `{devices: Device[]}`
 
 ```ts
-type Device = { id: string; name: string; pairedAt: number; lastSeenAt?: number; connections: number; host?: string; service?: boolean };
+type Device = { id: string; name: string; pairedAt: number; lastSeenAt?: number; connections: number; service?: boolean };
 ```
 
-`host` is a peer Host's id, when the device is one of the person's Hosts. `service` is true for
-a service.
+`service` is true for a service. A pairing a peer Host made (ADR 0017) named its Host id as
+`host`; a Host revokes such a pairing when it starts (ADR 0029).
 
 **`devices/revoke`** `{deviceId}` → `{}`
 
@@ -230,42 +230,31 @@ each device's id, name, public key and pairing and last-seen times. It holds no 
 it unpairs every device. `daemon.log` records pairings, refused hellos and revocations, never
 codes, nonces or signatures.
 
-## Peer Hosts
-
-Another of the person's Hosts is a remote client like any other (ADR 0017,
-[Peer Hosts](wve-85-host-protocol.md#peer-hosts) in the Host protocol): it pairs with the code
-`weave pair` shows, through `weave hosts add` on its own computer (which runs `weave pair --json`
-here over SSH), then proves a key of its own at every hello, a Secure Enclave key where it has
-one. It is listed and revoked among the devices, and keeps remote access on as a paired device
-does; revoking it closes its connections, with `CLOSE_REVOKED`, and refuses the next. What makes
-it a peer is the Host id it gave at pairing: its turns' origins name the session on it whose
-agent asks (`caller`), with that Host id and the name it paired with, and the sessions it starts
-record it as `startedByHost`. Its client name is `weave-host`. It may do less than a paired
-device (ADR 0024): only what the Host tools and following a turn need, every other method
-answering `forbidden`.
-
 ## Services
 
 A service is a client that does work for the person rather than showing them anything, such as
-the Dispatcher (ADR 0027). It pairs as a device does, with the code `weave pair` shows (the
-Dispatcher runs `weave pair --json` over SSH, as `weave hosts add` does), saying
+the Dispatcher (ADR 0027). It pairs as a device does, with the code `weave pair` shows (`weave
+dispatcher add-host` runs `weave pair --json` over SSH), saying
 `device.service: true`, then proves its key at every hello. It is listed among the devices,
 `weave devices` calls it a service, and it is revoked like any of them. Saying it's a service
-only takes from what it may do, which is what starting headless turns, following threads and
-naming the ones it starts need:
+only takes from what it may do, which is what starting headless turns, following threads,
+naming and labelling the ones it starts, serving its tools and reaching the person's other
+Hosts for this Host's agents (ADR 0029) need:
 
 - `host/hello`, `host/challenge`, `host/status`, `agents/list`;
 - `sessions/list`, `sessions/get`, `sessions/watch`, `sessions/unwatch`;
 - `session/run` without `attach`, `session/attach` with `observe`, `session/detach`,
-  `session/rename`;
+  `session/rename`, `session/setSuccessor`, `session/label`, `session/report`;
+- `service/declareTools`, `service/answerTool`;
 - `queue/add`, `turn/steer`, `turn/cancel`.
 
 Everything else answers `forbidden`, before any handler sees it: the computer's files,
 terminals and worktrees, opening or attaching to a session as a client of it, answering a
-thread's pending requests, devices, peers, and agents' sign-in and updates. Its turns' origin
-names its device, as any remote client's does, unless it says what started a turn (`origin` on
+thread's pending requests, devices, and agents' sign-in and updates. Its turns' origin names
+its device, as any remote client's does, unless it says what started a turn (`origin` on
 `session/run`, `queue/add` and `turn/steer`; see
-[Service origins](wve-85-host-protocol.md#service-origins)).
+[Service origins](wve-85-host-protocol.md#service-origins)) or which thread on another Host
+asks (`caller`; see [Other Hosts](wve-85-host-protocol.md#other-hosts)).
 
 ## Security
 

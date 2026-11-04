@@ -601,6 +601,7 @@ impl App {
             | HostEvent::SessionUpdated(_)
             | HostEvent::SessionRemoved(_)
             | HostEvent::ToolCall(_)
+            | HostEvent::HostCall(_)
             | HostEvent::ToolCallCancelled(_) => Vec::new(),
             HostEvent::UpdateAvailable(notification) => {
                 if chat.active_session() == Some(&notification.session_id) {

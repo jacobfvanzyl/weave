@@ -320,7 +320,8 @@ impl World {
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
             remote: None,
             terminals: None,
-            peers: None,
+            home: None,
+            retired: Vec::new(),
         }
     }
 

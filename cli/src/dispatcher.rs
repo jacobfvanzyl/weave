@@ -2,8 +2,8 @@
 //! work on the person's Hosts as a client of each, paired with it as a service. `run` runs it
 //! here; `install` has launchd or systemd keep it running; the rest ask it over its socket.
 //!
-//! `weave dispatcher add-host studio` pairs it with studio's Host over SSH, as `weave hosts
-//! add` pairs Hosts: it runs `weave pair --json` there for a code. Given the URL and code `weave
+//! `weave dispatcher add-host studio` pairs it with studio's Host over SSH ([`crate::ssh`]): it
+//! runs `weave pair --json` there for a code. Given the URL and code `weave
 //! pair` showed there instead, it pairs with those. Its schedules are in [`crate::schedules`].
 
 use std::time::Duration;
@@ -21,19 +21,19 @@ use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
+use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
 use weave_host_protocol::hello::ClientInfo;
-use weave_host_protocol::peers::PeerStatus;
 
 use crate::daemon::ago;
 use crate::daemon::now_ms;
 use crate::devices::Offered;
-use crate::hosts::Reach;
-use crate::hosts::reach;
-use crate::hosts::ssh;
-use crate::hosts::ssh_name;
 use crate::schedules;
 use crate::service;
+use crate::ssh::Reach;
+use crate::ssh::reach;
+use crate::ssh::ssh;
+use crate::ssh::ssh_name;
 
 /// How long `install` waits for the service's Dispatcher to answer.
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -317,13 +317,13 @@ fn describe(hosts: &[DispatcherHost], now_ms: u64) -> String {
                     Some(at) => format!("connected for {}", ago(now_ms, at)),
                     None => "connected".to_owned(),
                 },
-                (false, PeerStatus::Unchecked) => "connecting".to_owned(),
-                (false, PeerStatus::Refused) => {
+                (false, Reachability::Unchecked) => "connecting".to_owned(),
+                (false, Reachability::Refused) => {
                     format!("refused the Dispatcher: {why}; add it again to pair")
                 }
-                (false, PeerStatus::Down) => format!("down: {why}"),
-                (false, PeerStatus::OtherHost) => format!("another Host answers: {why}"),
-                (false, PeerStatus::Reachable | PeerStatus::Unreachable) => {
+                (false, Reachability::Down) => format!("down: {why}"),
+                (false, Reachability::OtherHost) => format!("another Host answers: {why}"),
+                (false, Reachability::Reachable | Reachability::Unreachable) => {
                     format!("can't be reached: {why}")
                 }
             };
@@ -363,11 +363,11 @@ mod tests {
         assert_eq!(
             describe(
                 &[
-                    host("h1", true, PeerStatus::Reachable, None, 0),
+                    host("h1", true, Reachability::Reachable, None, 0),
                     host(
                         "h2",
                         false,
-                        PeerStatus::Refused,
+                        Reachability::Refused,
                         Some("it revoked the Dispatcher"),
                         2
                     ),

@@ -10,6 +10,8 @@
 //!   `service/toolCall` notification to it, naming the calling thread, and the service answers
 //!   with `service/answerTool`. A call while no connection serves them fails at once; one whose
 //!   connection ends first fails as one that may have run.
+//! - **Host calls.** A Host tool call naming another of the person's Hosts (ADR 0029) goes the
+//!   same way to the service that said it reaches them, as a `service/hostCall`.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -22,6 +24,8 @@ use tokio::sync::oneshot;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::devices::DeviceId;
 use weave_host_protocol::tools::ClientToolResult;
+use weave_host_protocol::tools::HostCall;
+use weave_host_protocol::tools::HostCallNotification;
 use weave_host_protocol::tools::MAX_SERVICE_TOOL_NAME;
 use weave_host_protocol::tools::MAX_SERVICE_TOOLS;
 use weave_host_protocol::tools::Tool;
@@ -30,6 +34,7 @@ use weave_host_protocol::tools::ToolCallNotification;
 use weave_host_protocol::tools::ToolCaller;
 
 use crate::session::ClientId;
+use crate::session::Summary;
 use crate::session::lock;
 
 /// A service's tool as a thread offers it: the name agents see, the service's own name for it,
@@ -84,11 +89,61 @@ impl ServiceTools {
         caller: ToolCaller,
         cancelled: impl Future<Output = ()>,
     ) -> Option<ClientToolResult> {
-        let serving = lock(&self.serving).get(&offered.service).cloned();
+        let sent = Sent::Tool(ToolCallNotification {
+            call_id: String::new(),
+            tool: offered.own.clone(),
+            arguments,
+            caller,
+        });
+        let what = format!("{} can't run now", offered.tool.name);
+        self.ask(
+            &offered.service,
+            &offered.service_name,
+            &what,
+            sent,
+            cancelled,
+        )
+        .await
+    }
+
+    /// Pass `call`, a Host tool call naming `host`, to the service `service`, named `name`,
+    /// that reaches the person's Hosts: its answer, or why there's none.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn call_host(
+        &self,
+        service: &DeviceId,
+        name: &str,
+        host: Option<String>,
+        call: HostCall,
+        caller: ToolCaller,
+        room: Option<u32>,
+        cancelled: impl Future<Output = ()>,
+    ) -> Option<ClientToolResult> {
+        let sent = Sent::Host(HostCallNotification {
+            call_id: String::new(),
+            host,
+            call,
+            caller,
+            room,
+        });
+        let what = "this Host can't reach the person's other Hosts now";
+        self.ask(service, name, what, sent, cancelled).await
+    }
+
+    /// Send `sent` to `service`, named `name`, and wait for its answer; or say `what` can't
+    /// happen, and why.
+    async fn ask(
+        &self,
+        service: &DeviceId,
+        name: &str,
+        what: &str,
+        mut sent: Sent,
+        cancelled: impl Future<Output = ()>,
+    ) -> Option<ClientToolResult> {
+        let serving = lock(&self.serving).get(service).cloned();
         let Some((client, cx)) = serving else {
             return Some(ClientToolResult::error(format!(
-                "{} isn't connected to this Host, so {} can't run now.",
-                offered.service_name, offered.tool.name
+                "{name} isn't connected to this Host, so {what}."
             )));
         };
         let call_id = crate::devices::random_id(12);
@@ -96,22 +151,25 @@ impl ServiceTools {
         lock(&self.calls).insert(
             call_id.clone(),
             Waiting {
-                service: offered.service.clone(),
+                service: service.clone(),
                 client,
                 reply,
             },
         );
-        let sent = cx.send_notification(ToolCallNotification {
-            call_id: call_id.clone(),
-            tool: offered.own.clone(),
-            arguments,
-            caller,
-        });
+        let sent = match &mut sent {
+            Sent::Tool(notification) => {
+                notification.call_id.clone_from(&call_id);
+                cx.send_notification(notification.clone())
+            }
+            Sent::Host(notification) => {
+                notification.call_id.clone_from(&call_id);
+                cx.send_notification(notification.clone())
+            }
+        };
         if sent.is_err() {
             lock(&self.calls).remove(&call_id);
             return Some(ClientToolResult::error(format!(
-                "{} went away, so {} can't run now.",
-                offered.service_name, offered.tool.name
+                "{name} went away, so {what}."
             )));
         }
         tokio::select! {
@@ -148,6 +206,23 @@ impl ServiceTools {
         }
         Ok(())
     }
+}
+
+/// The session `summary` lists as a service hears of it calling.
+pub(crate) fn caller(summary: &Summary) -> ToolCaller {
+    ToolCaller {
+        session_id: summary.session_id.clone(),
+        agent_id: summary.agent_id.clone(),
+        cwd: summary.cwd.clone(),
+        policy: summary.policy.clone(),
+        labels: summary.labels.clone(),
+    }
+}
+
+/// What a call to a service sends it.
+enum Sent {
+    Tool(ToolCallNotification),
+    Host(HostCallNotification),
 }
 
 /// What a service named `name` puts before its tools' names: its name lowercased, with

@@ -97,13 +97,6 @@ use weave_host_protocol::mcp::McpServerSource;
 use weave_host_protocol::mcp::McpServerState;
 use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::mcp::McpTransport;
-use weave_host_protocol::peers::AddPeerRequest;
-use weave_host_protocol::peers::AddPeerResponse;
-use weave_host_protocol::peers::ListPeersRequest;
-use weave_host_protocol::peers::ListPeersResponse;
-use weave_host_protocol::peers::Peer;
-use weave_host_protocol::peers::PeerStatus;
-use weave_host_protocol::peers::RemovePeerRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::pending::PendingAddedNotification;
 use weave_host_protocol::pending::PendingKind;
@@ -137,10 +130,12 @@ use weave_host_protocol::sessions::LastCompaction;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
+use weave_host_protocol::sessions::OtherThread;
 use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::Replay;
+use weave_host_protocol::sessions::ReportSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::RunningTurn;
@@ -165,6 +160,8 @@ use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::DeclareToolsRequest;
 use weave_host_protocol::tools::DeclareToolsResponse;
+use weave_host_protocol::tools::HostCall;
+use weave_host_protocol::tools::HostCallNotification;
 use weave_host_protocol::tools::Tool;
 use weave_host_protocol::tools::ToolCallCancelledNotification;
 use weave_host_protocol::tools::ToolCallNotification;
@@ -406,7 +403,6 @@ fn device() -> Device {
         paired_at: 1_760_180_000_000,
         last_seen_at: Some(1_760_180_005_000),
         connections: 1,
-        host: None,
         service: false,
     }
 }
@@ -510,7 +506,6 @@ fn hello() {
             device: Some(DeviceInfo {
                 id: "d-3q8Hf0aZ".to_owned(),
                 name: "Jaco's iPad".to_owned(),
-                host: None,
                 service: false,
             }),
         })
@@ -543,7 +538,6 @@ fn hello() {
                 device: NewDevice {
                     name: "Jaco's iPad".to_owned(),
                     public_key: jwk(),
-                    host: None,
                     service: false,
                 },
             },
@@ -602,67 +596,11 @@ fn devices() {
     );
 }
 
-/// The person's other Hosts: one pairs with a peer as a device that names its Host id, and its
-/// agents' turns there name the session on it that asks.
+/// Services, such as the Dispatcher, and the person's other Hosts it reaches for a Host's
+/// agents (ADR 0029): turns there name the thread on the calling Host that asks, and reports
+/// name the thread they're on.
 #[test]
-fn peers() {
-    let peer = Peer {
-        host_id: "h-7Rk2".to_owned(),
-        name: "studio".to_owned(),
-        url: "wss://studio.example.ts.net:7341".to_owned(),
-        paired_at: 1_760_180_000_000,
-        last_seen_at: Some(1_760_180_005_000),
-        status: PeerStatus::Unreachable,
-        error: Some("it didn't answer within 10 seconds".to_owned()),
-    };
-    insta::assert_json_snapshot!(
-        "add_peer_request",
-        message(&AddPeerRequest {
-            url: "wss://studio.example.ts.net:7341".to_owned(),
-            code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
-            name: None,
-        })
-    );
-    insta::assert_json_snapshot!(
-        "add_peer_response",
-        round_trip(&AddPeerResponse { peer: peer.clone() })
-    );
-    insta::assert_json_snapshot!(
-        "list_peers_request",
-        message(&ListPeersRequest { check: true })
-    );
-    insta::assert_json_snapshot!(
-        "list_peers_response",
-        round_trip(&ListPeersResponse {
-            host_id: "h-2Lm9".to_owned(),
-            peers: vec![peer],
-        })
-    );
-    insta::assert_json_snapshot!(
-        "remove_peer_request",
-        message(&RemovePeerRequest {
-            host_id: "h-7Rk2".to_owned(),
-        })
-    );
-    insta::assert_json_snapshot!(
-        "peer_pairing",
-        round_trip(&Auth::Pair {
-            code: "4F1N2K7Q9R3T5V8W0X6Y2Z4A1B".to_owned(),
-            device: NewDevice {
-                name: "mini".to_owned(),
-                public_key: jwk(),
-                host: Some("h-2Lm9".to_owned()),
-                service: false,
-            },
-        })
-    );
-    insta::assert_json_snapshot!(
-        "peer_device",
-        round_trip(&Device {
-            host: Some("h-2Lm9".to_owned()),
-            ..device()
-        })
-    );
+fn services_and_other_hosts() {
     insta::assert_json_snapshot!(
         "service_pairing",
         round_trip(&Auth::Pair {
@@ -670,7 +608,6 @@ fn peers() {
             device: NewDevice {
                 name: "Dispatcher".to_owned(),
                 public_key: jwk(),
-                host: None,
                 service: true,
             },
         })
@@ -688,29 +625,31 @@ fn peers() {
         round_trip(&DeviceInfo {
             id: "d-3q8Hf0aZ".to_owned(),
             name: "Dispatcher".to_owned(),
-            host: None,
             service: true,
         })
     );
-    insta::assert_json_snapshot!(
-        "peer_run_request",
-        message(&RunRequest {
-            agent_id: "codex".to_owned(),
-            cwd: "~/src/app".into(),
-            remote: Some("github.com/jaco/app".to_owned()),
-            session_id: None,
-            additional_directories: Vec::new(),
-            mode: None,
-            prompt: vec![ContentBlock::from("Review the auth change")],
-            policy: PermissionPolicy::ask(),
-            attach: false,
-            trace: false,
-            key: None,
-            caller: Some("sess-a".into()),
-            origin: None,
-            labels: Vec::new(),
-        })
-    );
+    let caller = OtherThread {
+        session_id: "sess-a".into(),
+        host: "h-2Lm9".to_owned(),
+        host_name: Some("mini".to_owned()),
+    };
+    let run = RunRequest {
+        agent_id: "codex".to_owned(),
+        cwd: "~/src/app".into(),
+        remote: Some("github.com/jaco/app".to_owned()),
+        session_id: None,
+        additional_directories: Vec::new(),
+        mode: None,
+        prompt: vec![ContentBlock::from("Review the auth change")],
+        policy: PermissionPolicy::ask(),
+        attach: false,
+        trace: false,
+        key: Some("Yk9…".to_owned()),
+        caller: Some(caller),
+        origin: None,
+        labels: Vec::new(),
+    };
+    insta::assert_json_snapshot!("other_host_run_request", message(&run));
     insta::assert_json_snapshot!(
         "service_run_request",
         message(&RunRequest {
@@ -744,12 +683,63 @@ fn peers() {
         })
     );
     insta::assert_json_snapshot!(
-        "peer_turn_origin",
+        "other_host_turn_origin",
         round_trip(&TurnOrigin::Session {
             session_id: "sess-a".into(),
             host: Some("h-2Lm9".to_owned()),
             host_name: Some("mini".to_owned()),
             report: false,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "declare_tools_hosts_request",
+        message(&DeclareToolsRequest {
+            tools: Vec::new(),
+            hosts: true,
+        })
+    );
+    let tool_caller = ToolCaller {
+        session_id: "sess-a".into(),
+        agent_id: "claude".to_owned(),
+        cwd: "/Users/jaco/src/app".into(),
+        policy: PermissionPolicy::ask(),
+        labels: Vec::new(),
+    };
+    insta::assert_json_snapshot!(
+        "host_call_notification",
+        message(&HostCallNotification {
+            call_id: "c-2".to_owned(),
+            host: Some("studio".to_owned()),
+            call: HostCall::Run(Box::new(RunRequest {
+                caller: None,
+                key: None,
+                ..run
+            })),
+            caller: tool_caller.clone(),
+            room: Some(2),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "list_hosts_call_notification",
+        message(&HostCallNotification {
+            call_id: "c-3".to_owned(),
+            host: None,
+            call: HostCall::ListHosts,
+            caller: tool_caller,
+            room: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "report_session_request",
+        message(&ReportSessionRequest {
+            session_id: "sess-a".into(),
+            about: OtherThread {
+                session_id: "sess-b".into(),
+                host: "h-7Rk2".to_owned(),
+                host_name: Some("studio".to_owned()),
+            },
+            text: "[weave] Thread sess-b (codex) on studio finished its turn.".to_owned(),
+            key: Some("dispatcher/w-1".to_owned()),
         })
     );
 }
@@ -1950,7 +1940,10 @@ fn service_tools() {
     };
     insta::assert_json_snapshot!(
         "declare_tools_request",
-        message(&DeclareToolsRequest { tools: vec![tool] })
+        message(&DeclareToolsRequest {
+            tools: vec![tool],
+            hosts: false,
+        })
     );
     insta::assert_json_snapshot!(
         "declare_tools_response",

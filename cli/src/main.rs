@@ -4,7 +4,6 @@ mod daemon;
 mod devices;
 mod dispatcher;
 mod exit;
-mod hosts;
 mod recent;
 mod rex_threads;
 mod run;
@@ -12,6 +11,7 @@ mod schedules;
 mod service;
 mod sessions;
 mod smoke;
+mod ssh;
 mod start;
 mod terminal;
 mod turn;
@@ -91,9 +91,6 @@ enum Command {
     Pair(devices::PairArgs),
     /// Devices paired with the weave Host: list them, or revoke one.
     Devices(devices::DevicesArgs),
-    /// Your other Hosts this one pairs with, whose threads its agents reach: list them, pair
-    /// with one over SSH, or forget one.
-    Hosts(hosts::HostsArgs),
     /// The Dispatcher, which starts work on your Hosts while you're away: run or install it,
     /// and pair it with your Hosts.
     Dispatcher(dispatcher::DispatcherArgs),
@@ -182,10 +179,6 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
         Some(Command::Devices(args)) => {
             log_to_stderr("warn");
             devices::devices(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::Hosts(args)) => {
-            log_to_stderr("warn");
-            hosts::hosts(args).await.map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Dispatcher(args)) => {
             // `run`'s stderr is its log, as the Host's is.

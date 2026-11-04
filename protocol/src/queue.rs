@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::Empty;
 use crate::Timestamp;
+use crate::sessions::OtherThread;
 use crate::sessions::ServiceOrigin;
 use crate::sessions::TurnOrigin;
 
@@ -60,10 +61,10 @@ pub struct AddQueuedRequest {
     /// Makes it safe to send again (feature `requestKeys`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// A peer Host's only (feature `peers`): the session on it whose agent asks, which the
-    /// turn's origin names.
+    /// A service's only (feature `otherHosts`): the thread on another Host whose agent asks,
+    /// which the turn's origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller: Option<SessionId>,
+    pub caller: Option<OtherThread>,
     /// A service's only: what started the turn, which its origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ServiceOrigin>,

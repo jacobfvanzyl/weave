@@ -152,7 +152,6 @@ async fn pair(url: &str, code: &str) {
             code: code.to_owned(),
             name: name.clone(),
             key: key.clone(),
-            host: None,
             service: false,
         },
     )

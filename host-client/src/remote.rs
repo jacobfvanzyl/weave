@@ -4,7 +4,7 @@
 //! A device pairs once with the code `weave pair` shows ([`Credentials::Pair`]), then signs
 //! each connection's challenge with its key ([`Credentials::Device`]). Real devices keep that
 //! key in the Secure Enclave. A [`DeviceKey`] is one in memory, for tests and the live check,
-//! or one in this Mac's Secure Enclave, for a Host proving itself to its peer Hosts.
+//! or one in this Mac's Secure Enclave, as the Dispatcher keeps its own.
 
 use std::io;
 use std::sync::Arc;
@@ -41,13 +41,12 @@ pub enum Credentials {
         key: DeviceKey,
         host_id: Option<String>,
     },
-    /// A device pairing with the code `weave pair` showed. A Host pairing as a peer Host gives
-    /// its own Host id as `host`; a service, such as the Dispatcher, says so with `service`.
+    /// A device pairing with the code `weave pair` showed; a service, such as the Dispatcher,
+    /// says so with `service`.
     Pair {
         code: String,
         name: String,
         key: DeviceKey,
-        host: Option<String>,
         service: bool,
     },
 }

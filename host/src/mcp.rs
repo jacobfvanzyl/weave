@@ -59,7 +59,6 @@ use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::mcp::McpTransport;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::Tool;
-use weave_host_protocol::tools::ToolCaller;
 
 use crate::Shared;
 use crate::service_tools::Offered;
@@ -538,7 +537,12 @@ impl Mcp {
             let Some(shared) = self.shared.upgrade() else {
                 return tool_result(ClientToolResult::error("The Host is stopping."));
             };
-            return tool_result(crate::host_tools::call(&shared, &session, tool, &arguments).await);
+            return match crate::host_tools::call(&shared, &session, tool, &arguments, cancelled)
+                .await
+            {
+                Some(result) => tool_result(result),
+                None => McpOutcome::Cancelled,
+            };
         }
         if let Some(offered) = declared
             .service_tools
@@ -548,14 +552,7 @@ impl Mcp {
             let Some(shared) = self.shared.upgrade() else {
                 return tool_result(ClientToolResult::error("The Host is stopping."));
             };
-            let summary = session.summary();
-            let caller = ToolCaller {
-                session_id: summary.session_id,
-                agent_id: summary.agent_id,
-                cwd: summary.cwd,
-                policy: summary.policy,
-                labels: summary.labels,
-            };
+            let caller = crate::service_tools::caller(&session.summary());
             return match shared
                 .service_tools
                 .call(offered, arguments, caller, cancelled)

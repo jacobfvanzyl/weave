@@ -1,14 +1,14 @@
-//! Reaching a Host over its WebSocket as a paired device, and why it couldn't be: what a Host
-//! reaching its peers (ADR 0017) and the Dispatcher reaching the Hosts it pairs with (ADR 0027)
-//! both say when a Host is asleep, down, someone else, or refuses them.
+//! Reaching a Host over its WebSocket as a paired device, and why it couldn't be: what the
+//! Dispatcher says when a Host it pairs with (ADR 0027) is asleep, down, someone else, or
+//! refuses it.
 
 use std::time::Duration;
 
 use tokio::sync::mpsc;
+use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
-use weave_host_protocol::peers::PeerStatus;
 
 use crate::ConnectError;
 use crate::Credentials;
@@ -21,12 +21,12 @@ use crate::remote::connect_websocket;
 /// Why a Host couldn't be reached: refused, down, unreachable or another Host, and how.
 #[derive(Debug)]
 pub struct Unreached {
-    pub status: PeerStatus,
+    pub status: Reachability,
     pub why: String,
 }
 
 impl Unreached {
-    pub fn new(status: PeerStatus, why: impl Into<String>) -> Self {
+    pub fn new(status: Reachability, why: impl Into<String>) -> Self {
         Self {
             status,
             why: why.into(),
@@ -35,13 +35,13 @@ impl Unreached {
 
     /// Nothing answered, or the connection failed.
     pub fn unreachable(why: impl Into<String>) -> Self {
-        Self::new(PeerStatus::Unreachable, why)
+        Self::new(Reachability::Unreachable, why)
     }
 
     /// It refused the key, as after revoking it: pairing again is the way back, so trying
     /// again won't help.
     pub fn refused(&self) -> bool {
-        self.status == PeerStatus::Refused
+        self.status == Reachability::Refused
     }
 }
 
@@ -90,7 +90,7 @@ pub async fn reach(
                 .await
                 .map_err(|error| match answered_without_host(&error) {
                     Some(status) => Unreached::new(
-                        PeerStatus::Down,
+                        Reachability::Down,
                         format!(
                             "its computer answered at {url} (HTTP {status}), but no weave Host \
                              did: the Host may not be running there"
@@ -108,12 +108,12 @@ pub async fn reach(
         .map_err(|error| match error {
             ConnectError::Refused(error) if errors::is(&error, errors::UNAUTHENTICATED) => {
                 Unreached::new(
-                    PeerStatus::Refused,
+                    Reachability::Refused,
                     format!("it refused {me}: {}", error.message),
                 )
             }
             ConnectError::WrongHost => Unreached::new(
-                PeerStatus::OtherHost,
+                Reachability::OtherHost,
                 format!(
                     "another weave Host answers at {url} now: pair again with the one that \
                      should be there"
@@ -140,7 +140,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_peer_is_named_by_its_tailnet_name() {
+    fn a_host_is_named_by_its_tailnet_name() {
         assert_eq!(
             tailnet_name("wss://mac-mini.example.ts.net:7341"),
             "mac-mini"

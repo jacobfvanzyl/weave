@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&DeclareToolsRequest { tools: Vec::new(), hosts: true, })"
+---
+{
+  "method": "service/declareTools",
+  "params": {
+    "tools": [],
+    "hosts": true
+  }
+}

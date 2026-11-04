@@ -1,8 +1,11 @@
 //! The Dispatcher's connection to one Host: kept up, with backoff, from the Dispatcher's side,
 //! since Hosts never connect to it. While connected it watches the Host's threads and sends it
 //! the work written down for it, oldest first, and when a thread a schedule's occurrence
-//! started goes idle it reads how the occurrence's turn ended. A Host that refuses its key, as
-//! after revoking it, isn't tried again until it's paired again.
+//! started goes idle it reads how the occurrence's turn ended. It says, too, that the
+//! Dispatcher reaches the person's Hosts, answers the calls the Host passes it for that
+//! ([`crate::calls`]), and follows the turns other Hosts' calls began there
+//! ([`crate::follows`]). A Host that refuses its key, as after revoking it, isn't tried again
+//! until it's paired again.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,10 +20,11 @@ use tokio_util::sync::CancellationToken;
 use weave_host_client::Credentials;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
+use weave_host_client::HostHandle;
 use weave_host_client::reach::reach;
 use weave_host_client::remote::CloseReason;
+use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::errors;
-use weave_host_protocol::peers::PeerStatus;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::GetSessionRequest;
@@ -29,13 +33,15 @@ use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::tools::DeclareToolsRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 
 use crate::Shared;
+use crate::calls;
 use crate::client_info;
+use crate::follows;
 use crate::lock;
 use crate::now_ms;
-use crate::store::Delivery;
 use crate::store::StoredHost;
 use crate::store::Work;
 
@@ -51,19 +57,22 @@ pub(crate) struct Link {
 #[derive(Clone)]
 pub(crate) struct Seen {
     pub(crate) connected: bool,
-    pub(crate) status: PeerStatus,
+    pub(crate) status: Reachability,
     pub(crate) why: Option<String>,
     pub(crate) connected_at: Option<u64>,
-    threads: HashMap<SessionId, SessionListing>,
+    /// The connection, while there's one, for calls from other Hosts' agents.
+    pub(crate) handle: Option<HostHandle>,
+    pub(crate) threads: HashMap<SessionId, SessionListing>,
 }
 
 impl Default for Seen {
     fn default() -> Self {
         Self {
             connected: false,
-            status: PeerStatus::Unchecked,
+            status: Reachability::Unchecked,
             why: None,
             connected_at: None,
+            handle: None,
             threads: HashMap::new(),
         }
     }
@@ -117,6 +126,10 @@ impl Link {
         lock(&self.seen).clone()
     }
 
+    pub(crate) fn listing(&self, session_id: &SessionId) -> Option<SessionListing> {
+        lock(&self.seen).threads.get(session_id).cloned()
+    }
+
     pub(crate) fn threads(&self) -> Vec<SessionListing> {
         let mut threads: Vec<SessionListing> = lock(&self.seen).threads.values().cloned().collect();
         threads.sort_by(|a, b| a.info.session_id.0.cmp(&b.info.session_id.0));
@@ -133,7 +146,7 @@ async fn keep(
     seen: Arc<Mutex<Seen>>,
 ) {
     if let Some(why) = &host.refused {
-        note(&seen, PeerStatus::Refused, Some(why.clone()));
+        note(&seen, Reachability::Refused, Some(why.clone()));
         return;
     }
     let mut delay = shared.config.retry;
@@ -171,7 +184,7 @@ async fn keep(
                         tracing::info!(host = %host.host_id, "lost the connection to a Host");
                         note(
                             &seen,
-                            PeerStatus::Unreachable,
+                            Reachability::Unreachable,
                             Some("the connection closed".to_owned()),
                         );
                     }
@@ -197,7 +210,7 @@ async fn keep(
 /// Watch the Host's threads and send it its work while the connection lasts.
 #[allow(clippy::too_many_arguments)]
 async fn follow(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     host: &StoredHost,
     wake: &Notify,
     stop: &CancellationToken,
@@ -206,12 +219,24 @@ async fn follow(
     mut events: mpsc::UnboundedReceiver<HostEvent>,
     closed: &CloseReason,
 ) -> Ended {
+    let handle = connection.handle();
+    // The Host passes the Dispatcher its agents' calls naming another Host from now on.
+    let declared = connection
+        .send(DeclareToolsRequest {
+            tools: Vec::new(),
+            hosts: true,
+        })
+        .await;
+    if let Err(error) = declared {
+        tracing::warn!(host = %host.host_id, %error, "a Host didn't take the Dispatcher as reaching the person's Hosts");
+    }
     {
         let mut seen = lock(seen);
         seen.connected = true;
-        seen.status = PeerStatus::Reachable;
+        seen.status = Reachability::Reachable;
         seen.why = None;
         seen.connected_at = Some(now_ms());
+        seen.handle = Some(handle.clone());
     }
     match connection.send(WatchSessionsRequest::default()).await {
         Ok(watched) => {
@@ -225,8 +250,9 @@ async fn follow(
             tracing::warn!(host = %host.host_id, %error, "watching a Host's threads failed")
         }
     }
-    send_pending(shared, host, &connection, seen).await;
+    send_pending(shared, host, &handle, seen).await;
     settle(shared, host, &connection, None).await;
+    look(shared, host, &handle, seen, None).await;
     let ended = loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -234,10 +260,17 @@ async fn follow(
                     let listing = updated.session;
                     let session_id = listing.info.session_id.clone();
                     let idle = !matches!(listing.activity, Some(Activity::Running | Activity::Waiting));
+                    let waiting = listing.activity == Some(Activity::Waiting);
                     lock(seen).threads.insert(session_id.clone(), listing);
                     if idle {
                         settle(shared, host, &connection, Some(&session_id)).await;
+                        follows::check(shared, host, &handle, Some(&session_id)).await;
+                    } else if waiting {
+                        follows::waiting(shared, host, &handle, &session_id).await;
                     }
+                }
+                Some(HostEvent::HostCall(call)) => {
+                    tokio::spawn(calls::answer(Arc::clone(shared), host.clone(), handle.clone(), *call));
                 }
                 Some(HostEvent::SessionRemoved(removed)) => {
                     lock(seen).threads.remove(&removed.session_id);
@@ -246,8 +279,9 @@ async fn follow(
                 Some(_) => {}
             },
             () = wake.notified() => {
-                send_pending(shared, host, &connection, seen).await;
+                send_pending(shared, host, &handle, seen).await;
                 settle(shared, host, &connection, None).await;
+                look(shared, host, &handle, seen, None).await;
             }
             () = stop.cancelled() => break Some(Ended::Stopped),
         }
@@ -256,6 +290,7 @@ async fn follow(
     {
         let mut seen = lock(seen);
         seen.connected = false;
+        seen.handle = None;
         seen.threads.clear();
     }
     match ended {
@@ -271,7 +306,7 @@ async fn follow(
 async fn send_pending(
     shared: &Shared,
     host: &StoredHost,
-    connection: &HostConnection,
+    connection: &HostHandle,
     seen: &Mutex<Seen>,
 ) {
     let pending = match shared.store.pending(&host.host_id) {
@@ -290,12 +325,14 @@ async fn send_pending(
             }
             delivery.work = work;
         }
-        match send(connection, &delivery).await {
+        match send(connection, &delivery.work).await {
             Ok(answer) => {
                 if let Err(why) = shared.store.delivered(&delivery.id, &answer) {
                     tracing::warn!(delivery = %delivery.id, %why, "recording a delivery failed");
                 }
                 tracing::info!(host = %host.host_id, delivery = %delivery.id, "delivered");
+                delivery.answer = Some(answer);
+                calls::settled(shared, host, &delivery, None);
             }
             Err(error) if again(&error) => {
                 tracing::info!(host = %host.host_id, delivery = %delivery.id, %error, "a Host couldn't take work now");
@@ -307,20 +344,20 @@ async fn send_pending(
                     tracing::warn!(delivery = %delivery.id, %why, "recording a delivery failed");
                 }
                 tracing::warn!(host = %host.host_id, delivery = %delivery.id, %why, "a Host refused work");
+                calls::settled(shared, host, &delivery, Some(&why));
             }
         }
     }
 }
 
-async fn send(
-    connection: &HostConnection,
-    delivery: &Delivery,
-) -> Result<serde_json::Value, Error> {
-    let answer = match &delivery.work {
+/// Send `work` over `connection`: the Host's answer, as JSON.
+pub(crate) async fn send(connection: &HostHandle, work: &Work) -> Result<serde_json::Value, Error> {
+    let answer = match work {
         Work::Run(request) | Work::Prompt(request) => {
             serde_json::to_value(connection.send(request.clone()).await?)
         }
         Work::Queue(request) => serde_json::to_value(connection.send(request.clone()).await?),
+        Work::Report(request) => serde_json::to_value(connection.send(request.clone()).await?),
     };
     answer.map_err(|error| Error::internal_error().data(error.to_string()))
 }
@@ -362,6 +399,27 @@ fn into_thread(request: &RunRequest, seen: &Mutex<Seen>) -> Work {
             session_id,
             ..request.clone()
         }),
+    }
+}
+
+/// Look at the turns other Hosts' calls began here: report those over, and what those that
+/// wait on a person ask.
+async fn look(
+    shared: &Shared,
+    host: &StoredHost,
+    handle: &HostHandle,
+    seen: &Mutex<Seen>,
+    only: Option<&SessionId>,
+) {
+    follows::check(shared, host, handle, only).await;
+    let waiting: Vec<SessionId> = lock(seen)
+        .threads
+        .values()
+        .filter(|listing| listing.activity == Some(Activity::Waiting))
+        .map(|listing| listing.info.session_id.clone())
+        .collect();
+    for session_id in waiting {
+        follows::waiting(shared, host, handle, &session_id).await;
     }
 }
 
@@ -462,10 +520,10 @@ fn refused(shared: &Shared, host: &StoredHost, seen: &Mutex<Seen>, why: &str) {
     if let Err(error) = shared.store.set_refused(&host.host_id, Some(why)) {
         tracing::warn!(host = %host.host_id, %error, "recording a refusal failed");
     }
-    note(seen, PeerStatus::Refused, Some(why.to_owned()));
+    note(seen, Reachability::Refused, Some(why.to_owned()));
 }
 
-fn note(seen: &Mutex<Seen>, status: PeerStatus, why: Option<String>) {
+fn note(seen: &Mutex<Seen>, status: Reachability, why: Option<String>) {
     let mut seen = lock(seen);
     seen.status = status;
     seen.why = why;

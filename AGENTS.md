@@ -5,7 +5,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | Path | Ownership |
 | --- | --- |
 | `protocol/` | The Host protocol (`weave-host-protocol`): wire types, roles, error codes and versions, with golden snapshots, the JSON Schema the app's TypeScript comes from (`tests/schema.rs`, feature `schema`), and the permission policy. No I/O. Specs in `docs/specs/`. |
-| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and its peer Hosts. No UI. Read `host/AGENTS.md`. |
+| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and the tools services declare and the calls it passes them. No UI. Read `host/AGENTS.md`. |
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
 | `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, paired with each as a service, that keeps triggers and Bots and starts their work there. Its state is SQLite. Runs no agents; Hosts never connect to it. Read `dispatcher/AGENTS.md`. |

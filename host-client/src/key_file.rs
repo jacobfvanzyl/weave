@@ -1,6 +1,6 @@
 //! A key kept in a file only its user reads: the Secure Enclave's wrapped form of it on a Mac
-//! that has one, otherwise the key itself, in unpadded base64url. A Host proves itself to its
-//! peers with one (`host-key.json`), and the Dispatcher to the Hosts it pairs with.
+//! that has one, otherwise the key itself, in unpadded base64url. The Dispatcher proves itself
+//! to the Hosts it pairs with with one.
 
 use std::io::Write as _;
 use std::path::Path;

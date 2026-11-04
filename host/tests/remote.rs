@@ -69,6 +69,7 @@ use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::sessions::OtherThread;
 use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::ServiceOrigin;
@@ -154,7 +155,8 @@ impl World {
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
             remote: None,
             terminals: None,
-            peers: None,
+            home: None,
+            retired: Vec::new(),
         }
     }
 }
@@ -276,7 +278,6 @@ async fn pair(local: &HostConnection, url: &str, name: &str) -> (DeviceInfo, Dev
             code: offer.code,
             name: name.to_owned(),
             key: key.clone(),
-            host: None,
             service: false,
         },
     )
@@ -331,7 +332,6 @@ async fn a_device_pairs_once_and_connects_with_its_key_after_that() {
         code: offer.code.clone(),
         name: "iPad".to_owned(),
         key: key.clone(),
-        host: None,
         service: false,
     };
     let (connected, _) = remote(&url, pairing.clone()).await;
@@ -500,7 +500,6 @@ async fn the_socket_takes_no_device_auth_and_gives_no_challenges() {
                 code: "x".to_owned(),
                 name: "iPad".to_owned(),
                 key: DeviceKey::generate(),
-                host: None,
                 service: false,
             },
         )
@@ -630,7 +629,6 @@ async fn pair_service(local: &HostConnection, url: &str) -> (DeviceInfo, DeviceK
             code: offer.code,
             name: "Dispatcher".to_owned(),
             key: key.clone(),
-            host: None,
             service: true,
         },
     )
@@ -672,9 +670,6 @@ async fn a_service_may_only_start_and_follow_threads() {
         "files/list",
         "host/drain",
         "host/shutdown",
-        "peers/add",
-        "peers/list",
-        "peers/remove",
         "pending/answer",
         "queue/remove",
         "queue/resume",
@@ -899,7 +894,11 @@ async fn a_services_turns_name_what_started_them() {
         .send(SteerTurnRequest {
             session_id: session_id.clone(),
             prompt: vec![ContentBlock::from("also".to_owned())],
-            caller: Some("s-0".into()),
+            caller: Some(OtherThread {
+                session_id: "s-0".into(),
+                host: "h-other".to_owned(),
+                host_name: None,
+            }),
             origin: Some(origin("schedule daily-review", "o-2")),
         })
         .await
@@ -1204,7 +1203,6 @@ async fn pairing_turns_remote_access_on_and_the_last_revoke_turns_it_off() {
             code: offer.code,
             name: "iPad".to_owned(),
             key: DeviceKey::generate(),
-            host: None,
             service: false,
         },
     )
@@ -1402,6 +1400,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
     let refused = local
         .send(DeclareToolsRequest {
             tools: vec![add_schedule()],
+            hosts: false,
         })
         .await
         .expect_err("not a service");
@@ -1412,6 +1411,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
                 name: "add schedule".to_owned(),
                 ..add_schedule()
             }],
+            hosts: false,
         })
         .await
         .expect_err("not a name");
@@ -1419,6 +1419,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
     let declared = service
         .send(DeclareToolsRequest {
             tools: vec![add_schedule()],
+            hosts: false,
         })
         .await
         .expect("service/declareTools");

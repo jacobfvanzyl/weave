@@ -14,7 +14,7 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
-use weave_host_protocol::peers::PeerStatus;
+use weave_host_protocol::dispatcher::Reachability;
 
 use crate::common::WAIT;
 use crate::common::World;
@@ -160,7 +160,7 @@ async fn a_host_that_revokes_the_dispatcher_is_left_until_paired_again() {
         .expect("devices/revoke");
     local.shutdown().await;
     let refused = host_until(&dispatcher, &host.host_id, |host| {
-        host.status == PeerStatus::Refused
+        host.status == Reachability::Refused
     })
     .await;
     assert!(!refused.connected);
@@ -175,7 +175,7 @@ async fn a_host_that_revokes_the_dispatcher_is_left_until_paired_again() {
         .deliver(&host.host_id, run(&studio, "hello"))
         .expect("written down");
     let still = host_until(&dispatcher, &host.host_id, |host| {
-        host.status == PeerStatus::Refused
+        host.status == Reachability::Refused
     })
     .await;
     assert_eq!(still.pending, 1);

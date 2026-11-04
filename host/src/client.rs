@@ -86,12 +86,6 @@ use weave_host_protocol::host::DrainResponse;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::mcp::FEATURE as MCP_SERVERS_FEATURE;
-use weave_host_protocol::peers::AddPeerRequest;
-use weave_host_protocol::peers::AddPeerResponse;
-use weave_host_protocol::peers::ListPeersRequest;
-use weave_host_protocol::peers::ListPeersResponse;
-use weave_host_protocol::peers::PEERS_FEATURE;
-use weave_host_protocol::peers::RemovePeerRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::queue::AddQueuedRequest;
@@ -119,10 +113,13 @@ use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
 use weave_host_protocol::sessions::MAX_LABELS;
 use weave_host_protocol::sessions::OBSERVE_FEATURE;
+use weave_host_protocol::sessions::OTHER_HOSTS_FEATURE;
+use weave_host_protocol::sessions::OtherThread;
 use weave_host_protocol::sessions::RENAME_FEATURE;
 use weave_host_protocol::sessions::RenameSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionResponse;
+use weave_host_protocol::sessions::ReportSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
 use weave_host_protocol::sessions::SUCCESSORS_FEATURE;
@@ -357,9 +354,8 @@ async fn handlers(
     let on_any = Arc::clone(connection);
     Host.builder()
         .name("weave-host")
-        // A peer Host asks only what the Host tools need (ADR 0024), and a service only what
-        // starting and following threads needs (ADR 0027), refused here before any handler
-        // sees the rest.
+        // A service asks only what starting and following threads needs (ADR 0027), refused
+        // here before any handler sees the rest.
         .on_receive_request(
             async move |request: UntypedMessage, responder: Responder<serde_json::Value>, _cx| {
                 match on_any.refusal(&request) {
@@ -473,18 +469,6 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, list_files),
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            answer!(connection, add_peer),
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            answer!(connection, list_peers),
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            answer!(connection, remove_peer),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -674,6 +658,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, report_session),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, set_config_option),
             agent_client_protocol::on_receive_request!(),
         )
@@ -730,26 +718,10 @@ async fn handlers(
         .await
 }
 
-/// The methods a peer Host may ask (ADR 0024): its hello, and what the Host tools and following
-/// a turn there need.
-const FOR_PEERS: [&str; 12] = [
-    "host/hello",
-    "host/challenge",
-    "host/status",
-    "agents/list",
-    "sessions/list",
-    "sessions/get",
-    "session/run",
-    "session/attach",
-    "session/detach",
-    "queue/add",
-    "turn/steer",
-    "turn/cancel",
-];
-
 /// The methods a service may ask (ADR 0027): its hello, and what starting headless turns,
-/// following threads and naming the ones it starts need.
-const FOR_SERVICES: [&str; 19] = [
+/// following threads, naming the ones it starts, serving tools and reaching the person's other
+/// Hosts for this Host's agents (ADR 0029) need.
+const FOR_SERVICES: [&str; 20] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -764,6 +736,7 @@ const FOR_SERVICES: [&str; 19] = [
     "session/rename",
     "session/setSuccessor",
     "session/label",
+    "session/report",
     "service/declareTools",
     "service/answerTool",
     "queue/add",
@@ -915,34 +888,33 @@ impl Connection {
         }
     }
 
-    /// The peer Host this remote client proved, if it's one of the person's Hosts.
-    fn peer_host(&self) -> Option<String> {
-        lock(&self.device)
-            .as_ref()
-            .and_then(|device| device.host.clone())
-    }
-
-    /// The error `request` gets when this client may not ask it: a peer Host and a service may
-    /// ask only their own methods.
+    /// The error `request` gets when this client may not ask it: a service may ask only its
+    /// own methods.
     fn refusal(&self, request: &UntypedMessage) -> Option<Error> {
         let device = lock(&self.device);
         let device = device.as_ref()?;
-        if device.host.is_some() {
-            not_allowed(request, &FOR_PEERS).map(|asked| errors::not_for_peers(&asked))
-        } else if device.service {
+        if device.service {
             not_allowed(request, &FOR_SERVICES).map(|asked| errors::not_for_services(&asked))
         } else {
             None
         }
     }
 
-    /// The origin of a turn or steer this client sends for `caller`, the session on the peer
-    /// Host whose agent asks, which only a peer Host names, or with `origin`, what started it,
-    /// which only a service names; otherwise this client's, or `otherwise` when given.
+    /// The name of the service this client proved at hello, if it's one.
+    fn service_name(&self) -> Option<String> {
+        lock(&self.device)
+            .as_ref()
+            .filter(|device| device.service)
+            .map(|device| device.name.clone())
+    }
+
+    /// The origin of a turn or steer this client sends for `caller`, the thread on another
+    /// Host whose agent asks, or with `origin`, what started it, which only a service names;
+    /// otherwise this client's, or `otherwise` when given.
     fn origin_for(
         &self,
         hello: &Hello,
-        caller: Option<SessionId>,
+        caller: Option<OtherThread>,
         origin: Option<ServiceOrigin>,
         otherwise: Option<TurnOrigin>,
     ) -> Result<TurnOrigin, Error> {
@@ -950,25 +922,26 @@ impl Connection {
             (Some(_), Some(_)) => {
                 Err(Error::invalid_params().data("a turn names a caller or an origin, not both"))
             }
-            (Some(session_id), None) => {
-                let host = self.peer_host().ok_or_else(|| {
-                    Error::invalid_params().data("only a peer Host names the session that asks")
+            (Some(caller), None) => {
+                self.service_name().ok_or_else(|| {
+                    Error::invalid_params()
+                        .data("only a service names a thread on another Host that asks")
                 })?;
+                if caller.host == self.shared.devices.host_id() {
+                    return Err(Error::invalid_params()
+                        .data("a caller on another Host names another Host than this one"));
+                }
                 Ok(TurnOrigin::Session {
-                    session_id,
-                    host: Some(host),
-                    host_name: self.device_name(),
+                    session_id: caller.session_id,
+                    host: Some(caller.host),
+                    host_name: caller.host_name,
                     report: false,
                 })
             }
             (None, Some(ServiceOrigin { label, id })) => {
-                let name = lock(&self.device)
-                    .as_ref()
-                    .filter(|device| device.service)
-                    .map(|device| device.name.clone())
-                    .ok_or_else(|| {
-                        Error::invalid_params().data("only a service names what started a turn")
-                    })?;
+                let name = self.service_name().ok_or_else(|| {
+                    Error::invalid_params().data("only a service names what started a turn")
+                })?;
                 Ok(TurnOrigin::Service { name, label, id })
             }
             (None, None) => Ok(otherwise.unwrap_or_else(|| self.origin(hello))),
@@ -1028,7 +1001,7 @@ impl Connection {
                 TURN_IDS_FEATURE.to_owned(),
                 DRAIN_FEATURE.to_owned(),
                 OBSERVE_FEATURE.to_owned(),
-                PEERS_FEATURE.to_owned(),
+                OTHER_HOSTS_FEATURE.to_owned(),
                 MCP_SERVERS_FEATURE.to_owned(),
             ]
             .into_iter()
@@ -1244,31 +1217,6 @@ impl Connection {
     }
 
     /// `files/list`, off the dispatch loop's thread: a slow disk shouldn't hold it up.
-    /// The Host's peers, for a local client: remote clients, peer Hosts among them, may not
-    /// manage them, so no peer's request reaches another peer (ADR 0017's one hop).
-    fn peers(&self) -> Result<&crate::peers::Peers, Error> {
-        self.local_hello()?;
-        self.shared
-            .peers
-            .as_ref()
-            .ok_or_else(|| errors::peer_unavailable("this Host doesn't pair with other Hosts"))
-    }
-
-    /// `peers/add`: pair with another of the person's Hosts.
-    async fn add_peer(&self, request: AddPeerRequest) -> Result<AddPeerResponse, Error> {
-        let peer = self.peers()?.add(&self.shared, request).await?;
-        Ok(AddPeerResponse { peer })
-    }
-
-    async fn list_peers(&self, request: ListPeersRequest) -> Result<ListPeersResponse, Error> {
-        Ok(self.peers()?.list(&self.shared, request.check).await)
-    }
-
-    async fn remove_peer(&self, request: RemovePeerRequest) -> Result<Empty, Error> {
-        self.peers()?.remove(&request.host_id)?;
-        Ok(Empty {})
-    }
-
     async fn list_files(&self, request: ListFilesRequest) -> Result<ListFilesResponse, Error> {
         self.hello_info()?;
         let home = home();
@@ -1877,7 +1825,7 @@ impl Connection {
         let names = self
             .shared
             .devices
-            .declare_tools(&service.id, request.tools)
+            .declare_tools(&service.id, request.tools, request.hosts)
             .map_err(|why| Error::invalid_params().data(why))?;
         self.shared.service_tools.serve(&service.id, self.id, cx);
         Ok(DeclareToolsResponse { names })
@@ -1891,6 +1839,45 @@ impl Connection {
             .service_tools
             .answer(&service.id, &request.call_id, request.result)?;
         Ok(Empty {})
+    }
+
+    /// `session/report`: a service's report on a thread on another Host to the session whose
+    /// agent began a turn there (ADR 0029), told as the Host tells its own sessions' reports.
+    async fn report_session(&self, request: ReportSessionRequest) -> Result<Empty, Error> {
+        self.hello_info()?;
+        self.service()?;
+        let digest = admissions::digest(&ReportSessionRequest {
+            key: None,
+            ..request.clone()
+        });
+        let ReportSessionRequest {
+            session_id,
+            about,
+            text,
+            key,
+        } = request;
+        if about.host == self.shared.devices.host_id() {
+            return Err(Error::invalid_params().data("a report is on a thread on another Host"));
+        }
+        let shared = Arc::clone(&self.shared);
+        let told = session_id.clone();
+        keyed(
+            &self.shared,
+            key,
+            "session/report",
+            digest,
+            Some(&told),
+            |_| Some(Empty {}),
+            Empty::clone,
+            async |_key| {
+                let host = Some((about.host, about.host_name));
+                crate::host_tools::tell(shared, session_id, about.session_id, host, text)
+                    .await
+                    .map(|()| Empty {})
+                    .map_err(|why| Error::invalid_params().data(why))
+            },
+        )
+        .await
     }
 
     /// `session/label`: add labels to an open session and take others off (WVE-173).
@@ -2109,15 +2096,18 @@ impl Connection {
         cx: ConnectionTo<HostClient>,
     ) -> Result<RunResponse, Error> {
         let hello = self.hello_info()?;
-        // A peer Host's agent starting a session here: the session is a delegated session of
-        // the one on the peer that asks.
+        // Another Host's agent starting a session here, through a service: the session is a
+        // delegated session of the one there that asks.
         let origin = self.origin_for(
             &hello,
             request.caller.clone(),
             request.origin.clone(),
             Some(TurnOrigin::Run {}),
         )?;
-        let started_by = request.caller.clone();
+        let started_by = request
+            .caller
+            .as_ref()
+            .map(|caller| caller.session_id.clone());
         let link = request.attach.then(|| {
             let client_tools = self.client_tools();
             let backlog = self.backlog();
@@ -2752,7 +2742,7 @@ pub(crate) async fn run(
 }
 
 /// [`run`], its turn from `origin`; a new session is a delegated session of `started_by`'s when
-/// a session's agent starts it (ADR 0020), on the peer Host `origin` names when it's one's.
+/// a session's agent starts it (ADR 0020), on the other Host `origin` names when it's one's.
 pub(crate) async fn run_as(
     shared: &Arc<Shared>,
     request: RunRequest,
@@ -2790,15 +2780,11 @@ pub(crate) async fn run_as(
 }
 
 /// Where `session/run` runs: `cwd`, under the Host's home when it starts with `~`, and a
-/// checkout of `remote` when one is named, as a peer Host's agent asks for the directory it
+/// checkout of `remote` when one is named, as another Host's agent asks for the directory it
 /// works in on its own Host.
 async fn place(shared: &Shared, cwd: PathBuf, remote: Option<&str>) -> Result<PathBuf, Error> {
     let cwd = match cwd.strip_prefix("~") {
-        Ok(rest) => shared
-            .peers
-            .as_ref()
-            .map_or_else(home, crate::peers::Peers::home)
-            .join(rest),
+        Ok(rest) => shared.home().join(rest),
         Err(_) => cwd,
     };
     let Some(remote) = remote else {
@@ -3204,7 +3190,7 @@ fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<
 /// Where a session [`open`] starts came from.
 enum Origin {
     /// `session/create` or a new run: the session is blank until it's prompted. A delegated
-    /// session names the session that started it, and the peer Host that one is on.
+    /// session names the session that started it, and the other Host that one is on.
     New {
         started_by: Option<SessionId>,
         started_by_host: Option<String>,

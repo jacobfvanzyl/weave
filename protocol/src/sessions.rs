@@ -118,10 +118,11 @@ pub enum TurnOrigin {
     #[serde(rename_all = "camelCase")]
     Session {
         session_id: SessionId,
-        /// The Host that session is on, when it isn't this one: a peer Host's id (ADR 0017).
+        /// The Host that session is on, when it isn't this one: the id of another of the
+        /// person's Hosts, as the service that reaches them gave it (ADR 0029).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host: Option<String>,
-        /// What this Host calls that Host: the name it paired with, for clients to show.
+        /// What the person calls that Host, as the service gave it, for clients to show.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_name: Option<String>,
         /// The Host's report on that session, of how a turn this session's agent began there
@@ -148,6 +149,28 @@ pub struct ServiceOrigin {
     pub label: String,
     /// The service's own id for it, such as a trigger's occurrence.
     pub id: String,
+}
+
+/// The [`crate::hello::HelloResponse::features`] entry of a Host whose agents reach the
+/// person's other Hosts through a service, the Dispatcher (ADR 0029, WVE-185): a service may
+/// declare that it reaches them ([`crate::tools::DeclareToolsRequest::hosts`]), and is sent
+/// the Host tool calls that name another Host ([`crate::tools::HostCallNotification`]); it may
+/// name a thread on another Host as a turn's caller ([`RunRequest::caller`]) and report on one
+/// ([`ReportSessionRequest`]); and `session/run` takes a `cwd` under the home, `~/…`, and the
+/// `remote` it has to be a checkout of.
+pub const OTHER_HOSTS_FEATURE: &str = "otherHosts";
+
+/// A thread on another of the person's Hosts (feature `otherHosts`), as a service names it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OtherThread {
+    pub session_id: SessionId,
+    /// The Host it's on, by its id.
+    pub host: String,
+    /// What the person calls that Host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
 }
 
 /// A turn running now.
@@ -219,7 +242,7 @@ pub struct SessionState {
     /// The session whose agent started it, for a delegated session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<SessionId>,
-    /// The peer Host the session that started it is on, when it isn't this one.
+    /// The Host the session that started it is on, when it isn't this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by_host: Option<String>,
     /// Its successor, as its listing's `continuedIn` (WVE-168).
@@ -255,7 +278,7 @@ pub struct SessionListing {
     /// The session whose agent started it, for a delegated session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<SessionId>,
-    /// The peer Host the session that started it is on, when it isn't this one.
+    /// The Host the session that started it is on, when it isn't this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by_host: Option<String>,
     /// Its successor (feature `successors`, WVE-168): the session its work goes on in, which a
@@ -691,6 +714,25 @@ pub struct SetSuccessorRequest {
     pub successor: SessionId,
 }
 
+/// `session/report` (feature `otherHosts`), a service's only: tell a session how a turn its
+/// agent began on another Host went, or that it waits on a person there, as the Host tells it
+/// of its own sessions' turns (ADR 0023): into its running turn if its agent takes steers,
+/// otherwise through its queue, in the last of its successors, taking it up again if it isn't
+/// open. The turn or steer it makes is a report on `about`, which nobody hears the end of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "session/report", response = Empty)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportSessionRequest {
+    pub session_id: SessionId,
+    /// The thread the report is on.
+    pub about: OtherThread,
+    pub text: String,
+    /// Makes it safe to send again (feature `requestKeys`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
 /// `session/setMode`. The change reaches every attached client as an ACP update.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -744,10 +786,10 @@ pub struct ReopenSessionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
     pub agent_id: AgentId,
-    /// Absolute, or under the Host's home as `~/…` (feature `peers`), for a client that doesn't
-    /// know where the home is on the Host's computer.
+    /// Absolute, or under the Host's home as `~/…` (feature `otherHosts`), for a client that
+    /// doesn't know where the home is on the Host's computer.
     pub cwd: PathBuf,
-    /// The repository `cwd` has to be a checkout of (feature `peers`), by its remote as
+    /// The repository `cwd` has to be a checkout of (feature `otherHosts`), by its remote as
     /// [`crate::worktrees::GitLocation::remote`] gives it, such as `github.com/owner/name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
@@ -770,10 +812,10 @@ pub struct RunRequest {
     /// id alone; a client that asked to attach attaches with `session/attach`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// A peer Host's only (feature `peers`): the session on it whose agent asks, which the
-    /// turn's origin names, and a new session's `startedBy`.
+    /// A service's only (feature `otherHosts`): the thread on another Host whose agent asks,
+    /// which the turn's origin names, and a new session's `startedBy` and `startedByHost`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller: Option<SessionId>,
+    pub caller: Option<OtherThread>,
     /// A service's only: what started the turn, which its origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ServiceOrigin>,
@@ -794,7 +836,7 @@ pub struct RunResponse {
     /// When attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<Box<SessionState>>,
-    /// The policy the session runs under (feature `peers`): the one asked for, or an open
+    /// The policy the session runs under (feature `otherHosts`): the one asked for, or an open
     /// session's own. Absent from a repeat under a request key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PermissionPolicy>,

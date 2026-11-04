@@ -3,9 +3,7 @@
 //! proves itself on every connection after that by signing the connection's challenge with a
 //! P-256 key that never leaves it. Managing devices is for local clients only.
 //!
-//! Another of the person's Hosts pairs the same way, as a peer Host (ADR 0017,
-//! [`crate::peers`]): it is a paired device that names its Host id, which the turns its agents
-//! begin carry in their origin.
+//! A service, such as the Dispatcher (ADR 0027), pairs the same way and says it's one.
 
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
@@ -49,12 +47,7 @@ pub struct NewDevice {
     /// instead.
     pub name: String,
     pub public_key: Jwk,
-    /// The Host id of a peer Host pairing, which is one of the person's Hosts rather than a
-    /// device; absent for a device.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
     /// A service pairing, such as the Dispatcher, which may do only what it needs (ADR 0027).
-    /// A peer Host is never one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub service: bool,
 }
@@ -65,9 +58,6 @@ pub struct NewDevice {
 pub struct DeviceInfo {
     pub id: DeviceId,
     pub name: String,
-    /// The peer Host's id, when the device is one of the person's Hosts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
     /// Whether the device is a service.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub service: bool,
@@ -86,9 +76,6 @@ pub struct Device {
     pub last_seen_at: Option<Timestamp>,
     /// Its connections now.
     pub connections: u32,
-    /// The peer Host's id, when the device is one of the person's Hosts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
     /// Whether the device is a service.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub service: bool,

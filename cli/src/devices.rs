@@ -33,13 +33,13 @@ pub struct PairArgs {
     #[arg(long)]
     name: Option<String>,
 
-    /// Print the URL and code as JSON, and don't wait for a device: for `weave hosts add`
-    /// on another Host, which runs this over SSH.
+    /// Print the URL and code as JSON, and don't wait for a device: for `weave dispatcher
+    /// add-host` on another computer, which runs this over SSH.
     #[arg(long)]
     json: bool,
 }
 
-/// What `weave pair --json` prints: the URL and code a device or another Host pairs with.
+/// What `weave pair --json` prints: the URL and code a device or the Dispatcher pairs with.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Offered {
@@ -124,8 +124,8 @@ async fn offer(
     println!("{}\n", qr_code(&pairing_link(url, &offer.code))?);
     println!(
         "Scan this with the device, or enter:\n  Host  {url}\n  Code  {}\n\nThe code works \
-         once, for five minutes. To pair another of your Hosts, run there:\n  weave hosts add \
-         {url} {}",
+         once, for five minutes. To pair the Dispatcher with this Host, run where it runs:\n  \
+         weave dispatcher add-host {url} {}",
         grouped(&offer.code),
         offer.code
     );
@@ -271,15 +271,9 @@ fn describe(devices: &[Device], now_ms: u64) -> String {
                 (1, _) => "connected".to_owned(),
                 (connections, _) => format!("connected {connections} times"),
             };
-            let peer = if device.host.is_some() {
-                ", a peer Host"
-            } else if device.service {
-                ", a service"
-            } else {
-                ""
-            };
+            let kind = if device.service { ", a service" } else { "" };
             format!(
-                "{}  {:width$}  paired {} ago{peer}, {seen}\n",
+                "{}  {:width$}  paired {} ago{kind}, {seen}\n",
                 device.id,
                 device.name,
                 ago(now_ms, device.paired_at)
@@ -312,7 +306,6 @@ mod tests {
             paired_at: 0,
             last_seen_at,
             connections,
-            host: None,
             service: false,
         };
         let day = 86_400_000;

@@ -8,6 +8,9 @@
 //! - [`link`]: a connection to each Host, kept up with backoff, that watches its threads and
 //!   sends it the work written down for it.
 //! - [`scheduler`]: schedules (WVE-145), whose occurrences start headless turns at their times.
+//! - [`calls`] and [`follows`]: the calls Hosts' agents make to the person's other Hosts
+//!   (ADR 0029), which the Dispatcher sends there, and the turns they began, which it follows
+//!   and reports on to the calling thread.
 //! - [`api`]: what the `weave dispatcher` CLI asks over its socket ([`socket`]).
 //! - [`client`]: the CLI's end of that.
 //!
@@ -17,7 +20,9 @@
 //! is `docs/specs/wve-175-dispatcher.md`.
 
 mod api;
+mod calls;
 pub mod client;
+mod follows;
 mod link;
 pub mod paths;
 mod scheduler;
@@ -31,11 +36,13 @@ use std::sync::MutexGuard;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
+use agent_client_protocol::schema::v1::SessionId;
 use tokio::net::UnixListener;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use weave_host_client::Credentials;
+use weave_host_client::HostHandle;
 use weave_host_client::reach::reach;
 use weave_host_client::reach::tailnet_name;
 use weave_host_client::remote::DeviceKey;
@@ -45,13 +52,14 @@ use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatus;
 use weave_host_protocol::dispatcher::Occurrence;
 use weave_host_protocol::dispatcher::Overlap;
+use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::Schedule;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::ClientInfo;
-use weave_host_protocol::peers::PeerStatus;
 use weave_host_protocol::sessions::SessionListing;
 
 use crate::link::Link;
+use crate::link::Seen;
 pub use crate::paths::DispatcherPaths;
 pub use crate::scheduler::Clock;
 use crate::scheduler::Plan;
@@ -258,6 +266,29 @@ impl Shared {
         }
     }
 
+    /// The connection to `host_id`, while there's one.
+    pub(crate) fn handle(&self, host_id: &str) -> Option<HostHandle> {
+        lock(&self.links).get(host_id)?.seen().handle
+    }
+
+    /// How the link to `host_id` stands.
+    pub(crate) fn seen(&self, host_id: &str) -> Seen {
+        lock(&self.links)
+            .get(host_id)
+            .map(Link::seen)
+            .unwrap_or_default()
+    }
+
+    /// The thread `session_id` on `host_id` as the Dispatcher last saw it.
+    pub(crate) fn thread(&self, host_id: &str, session_id: &SessionId) -> Option<SessionListing> {
+        lock(&self.links).get(host_id)?.listing(session_id)
+    }
+
+    /// The Hosts the Dispatcher is paired with, as `hosts/list` gives them.
+    pub(crate) fn listed_hosts(&self) -> Result<Vec<DispatcherHost>, Error> {
+        self.hosts()
+    }
+
     /// The Host `by` names, by id or else by name.
     fn resolve_host(&self, by: &str) -> Result<StoredHost, Error> {
         let stored = self.store.hosts().map_err(internal)?;
@@ -450,7 +481,7 @@ impl Shared {
             .map(|host| {
                 let seen = links.get(&host.host_id).map(Link::seen).unwrap_or_default();
                 let (status, why) = match (&host.refused, seen.status) {
-                    (Some(why), _) => (PeerStatus::Refused, Some(why.clone())),
+                    (Some(why), _) => (Reachability::Refused, Some(why.clone())),
                     (None, status) => (status, seen.why),
                 };
                 Ok(DispatcherHost {
@@ -478,7 +509,6 @@ impl Shared {
             code: request.code,
             name: self.config.name.clone(),
             key: self.key.clone(),
-            host: None,
             service: true,
         };
         let (connection, _events, _closed) = reach(
@@ -546,7 +576,7 @@ fn client_info() -> ClientInfo {
 
 /// A Host couldn't be reached or refused, saying why.
 fn unavailable(why: impl Into<String>) -> Error {
-    Error::new(errors::PEER_UNAVAILABLE, why.into())
+    Error::new(errors::HOST_UNAVAILABLE, why.into())
 }
 
 /// The request was wrong, saying how: in the message, which clients show.

@@ -16,10 +16,29 @@ use crate::Empty;
 use crate::Timestamp;
 use crate::agents::AgentId;
 use crate::hello::ClientInfo;
-use crate::peers::PeerStatus;
 use crate::policy::PermissionPolicy;
 use crate::sessions::TurnState;
 use crate::turns::TurnId;
+
+/// How the Dispatcher's last attempt to connect to a Host went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum Reachability {
+    /// It took the Dispatcher's key at hello; the Dispatcher may be connected to it now.
+    Reachable,
+    /// Not tried since the Dispatcher started.
+    Unchecked,
+    /// It refused the Dispatcher's key, as after it revoked it: pairing again is the way back.
+    Refused,
+    /// Its computer answered at the URL, but no weave Host did, as when the Host isn't running
+    /// there.
+    Down,
+    /// Nothing answered at the URL, as when the computer is asleep or off the tailnet.
+    Unreachable,
+    /// Another weave Host answers at the URL.
+    OtherHost,
+}
 
 /// The Dispatcher API's version, which a client and the Dispatcher must share.
 pub const DISPATCHER_PROTOCOL: u32 = 1;
@@ -78,7 +97,7 @@ pub struct DispatcherHost {
     /// Connected now.
     pub connected: bool,
     /// How the last attempt to connect went.
-    pub status: PeerStatus,
+    pub status: Reachability,
     /// Why it failed, when it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,

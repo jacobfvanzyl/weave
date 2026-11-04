@@ -1,0 +1,37 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&HostCallNotification\n{\n    call_id: \"c-2\".to_owned(), host: Some(\"studio\".to_owned()), call:\n    HostCall::Run(Box::new(RunRequest { caller: None, key: None, ..run })),\n    caller: tool_caller.clone(), room: Some(2),\n})"
+---
+{
+  "method": "service/hostCall",
+  "params": {
+    "callId": "c-2",
+    "host": "studio",
+    "call": {
+      "method": "session/run",
+      "params": {
+        "agentId": "codex",
+        "cwd": "~/src/app",
+        "remote": "github.com/jaco/app",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Review the auth change"
+          }
+        ],
+        "policy": {
+          "otherwise": "ask"
+        }
+      }
+    },
+    "caller": {
+      "sessionId": "sess-a",
+      "agentId": "claude",
+      "cwd": "/Users/jaco/src/app",
+      "policy": {
+        "otherwise": "ask"
+      }
+    },
+    "room": 2
+  }
+}

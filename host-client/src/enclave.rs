@@ -1,5 +1,5 @@
-//! A P-256 key in the Secure Enclave of the Mac this runs on, for a Host proving itself to its
-//! peers (ADR 0017): its private key can't be copied off the computer.
+//! A P-256 key in the Secure Enclave of the Mac this runs on, for the Dispatcher proving itself
+//! to the person's Hosts (ADR 0027): its private key can't be copied off the computer.
 //!
 //! The key isn't kept in a keychain, which an unsigned binary rebuilt often can't use: the
 //! Security framework makes it without one and gives its wrapped form (`toid`), which only this

@@ -23,7 +23,6 @@ use weave_host_protocol::files;
 use weave_host_protocol::hello;
 use weave_host_protocol::host;
 use weave_host_protocol::mcp;
-use weave_host_protocol::peers;
 use weave_host_protocol::pending;
 use weave_host_protocol::queue;
 use weave_host_protocol::sessions;
@@ -103,9 +102,6 @@ fn schema() -> Value {
         "devices/offer" => devices::OfferDeviceRequest,
         "devices/list" => devices::ListDevicesRequest,
         "devices/revoke" => devices::RevokeDeviceRequest,
-        "peers/add" => peers::AddPeerRequest,
-        "peers/list" => peers::ListPeersRequest,
-        "peers/remove" => peers::RemovePeerRequest,
         "files/list" => files::ListFilesRequest,
         "sessions/list" => sessions::ListSessionsRequest,
         "sessions/get" => sessions::GetSessionRequest,
@@ -143,6 +139,7 @@ fn schema() -> Value {
         "terminals/write" => terminals::WriteTerminalRequest,
         "terminals/format" => terminals::FormatTerminalRequest,
         "terminals/attach" => terminals::AttachTerminalRequest,
+        "session/report" => sessions::ReportSessionRequest,
         "service/declareTools" => tools::DeclareToolsRequest,
         "service/answerTool" => tools::AnswerToolRequest,
     };
@@ -159,6 +156,7 @@ fn schema() -> Value {
         "terminals/updated" => terminals::TerminalUpdatedNotification,
         "terminals/removed" => terminals::TerminalRemovedNotification,
         "service/toolCall" => tools::ToolCallNotification,
+        "service/hostCall" => tools::HostCallNotification,
         "service/toolCallCancelled" => tools::ToolCallCancelledNotification,
     };
     // A terminal's stream speaks frames of its own, not JSON-RPC (`terminals::stream`).
@@ -228,7 +226,7 @@ fn schema() -> Value {
                 "unknownTerminal": errors::UNKNOWN_TERMINAL,
                 "terminalUnavailable": errors::TERMINAL_UNAVAILABLE,
                 "unknownTurn": errors::UNKNOWN_TURN,
-                "peerUnavailable": errors::PEER_UNAVAILABLE,
+                "hostUnavailable": errors::HOST_UNAVAILABLE,
                 "interrupted": errors::INTERRUPTED,
             },
             "features": {
@@ -246,7 +244,7 @@ fn schema() -> Value {
                 "drain": host::DRAIN_FEATURE,
                 "terminals": terminals::FEATURE,
                 "turnIds": turns::TURN_IDS_FEATURE,
-                "peers": peers::PEERS_FEATURE,
+                "otherHosts": sessions::OTHER_HOSTS_FEATURE,
                 "mcpServers": mcp::FEATURE,
             },
             "files": {"maxEntries": files::MAX_ENTRIES},

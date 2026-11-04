@@ -2,8 +2,10 @@
 
 Status: implemented 2026-11-03, with `install` and `status` checked live as a launchd service on
 macOS and a systemd user service on Debian 13, each restarting a Dispatcher that was killed.
-Schedules (WVE-145) since 2026-11-04. The decisions are in
-[ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md);
+Schedules (WVE-145) since 2026-11-04, and calls from Hosts' agents to the person's other Hosts
+(WVE-185) since 2026-11-04. The decisions are in
+[ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md)
+and [ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md);
 Bots, which it will keep, in
 [ADR 0028](../adr/0028-bots-are-dispatcher-records-whose-work-goes-on-in-ordinary-threads.md).
 
@@ -11,15 +13,16 @@ Bots, which it will keep, in
 
 The Dispatcher (`weave dispatcher`) keeps triggers and Bots and starts their work on the
 person's Hosts. This is its core: its state, its key, the Hosts it pairs with as a service and
-its connection to each, the one path work takes to a Host, and schedules (WVE-145). Webhooks
+its connection to each, the one path work takes to a Host, schedules (WVE-145), and the calls a
+Host's agents make to the person's other Hosts (WVE-185). Webhooks
 (WVE-146), Bots (WVE-118) and paired devices (WVE-176) build on it.
 
 ## Decisions
 
 - **A client of each Host, paired as a service.** It pairs with a Host as a device does, saying
   `device.service: true` ([Services](wve-90-remote-clients.md#services)), proves its own key at
-  every hello, and may do only what starting and following threads needs. It is never a peer
-  and never a Host; it runs no agents.
+  every hello, and may do only what starting and following threads needs. It is never a Host;
+  it runs no agents.
 - **Hosts never connect to it.** It connects to each Host and keeps the connection up. A Host
   works on, unchanged, while it's away.
 - **One path for work: a delivery,** written down before it is sent and sent until the Host
@@ -35,8 +38,8 @@ its connection to each, the one path work takes to a Host, and schedules (WVE-14
 
 | File | What it holds |
 | --- | --- |
-| `dispatcher.db` | SQLite (WAL), 0600: `hosts`, `deliveries`, `schedules` and `occurrences`; later issues add other triggers and Bots |
-| `key.json` | its key, 0600: the Secure Enclave's wrapped form of it on a Mac that has one, otherwise the key itself, as a Host keeps `host-key.json` |
+| `dispatcher.db` | SQLite (WAL), 0600: `hosts`, `deliveries`, `schedules`, `occurrences`, `calls` and `follows`; later issues add other triggers and Bots |
+| `key.json` | its key, 0600: the Secure Enclave's wrapped form of it on a Mac that has one, otherwise the key itself |
 | `dispatcher.sock` | its API, 0600 |
 | `dispatcher.lock` | held while a Dispatcher runs from the directory, so only one does |
 | `dispatcher.log` | its service's diagnostics |
@@ -46,15 +49,15 @@ transaction, and none changes once released.
 
 ## Hosts
 
-`weave dispatcher add-host studio` runs `weave pair --json` on studio over SSH, as `weave hosts
-add` does, and asks the Dispatcher to pair with the URL and code it gave; `weave dispatcher
+`weave dispatcher add-host studio` runs `weave pair --json` on studio over SSH and asks the
+Dispatcher to pair with the URL and code it gave; `weave dispatcher
 add-host <url> <code>` pairs with the ones `weave pair` showed there. The Dispatcher pairs as
 "Dispatcher on <its computer>", and keeps the Host's id, its name (the computer's, or its
 tailnet name), its URL, the device id the Host gave it and when.
 
 It then keeps a connection to each Host: it connects, says hello with its key as
-`weave-dispatcher`, watches the Host's threads (`sessions/watch`), and sends the Host the work
-waiting for it. When the connection fails or closes it tries again after 1 second, doubling to
+`weave-dispatcher`, says it reaches the person's Hosts (`service/declareTools` with `hosts`),
+watches the Host's threads (`sessions/watch`), and sends the Host the work waiting for it. When the connection fails or closes it tries again after 1 second, doubling to
 a minute. A Host that refuses its key, or revokes it while connected (`CLOSE_REVOKED`), is
 recorded as refused, with why, and not tried again, across restarts, until `add-host` pairs
 with it again, which `weave devices revoke` there and a new code make the way back.
@@ -64,8 +67,8 @@ Host lists the Dispatcher among its devices until it's revoked there.
 
 ## Deliveries
 
-A delivery is a request for one Host, `session/run` or `queue/add`, written to the database
-before it is sent:
+A delivery is a request for one Host, `session/run`, `queue/add` or `session/report`, written to
+the database before it is sent:
 
 - it goes under the request's own key, which a trigger makes from itself and the occurrence's
   scheduled time, or else `dispatcher/<delivery id>`;
@@ -88,6 +91,49 @@ and otherwise `session/run` with its `sessionId`, which opens it. A thread the D
 name a successor (`continuedIn`, WVE-168) is prompted in the last of its successors instead.
 That choice is written down before it's sent, so a repeat asks the same request under its key
 (`key_reused` otherwise).
+
+## Calls from Hosts' agents
+
+A Host's agents reach threads on the person's other Hosts through the Host tools' `host`
+([Other Hosts](wve-85-host-protocol.md#other-hosts) in the Host protocol, ADR 0029). The calling
+Host passes such a call to the Dispatcher over the Dispatcher's own connection, as
+`service/hostCall` `{callId, host, call: {method, params}, caller, room?}`, and the Dispatcher
+answers it with `service/answerTool`. The calling Host keeps no record of it.
+
+- **Which Host.** `host` is the id or name of a Host the Dispatcher is paired with, other than
+  the calling one (a tool error otherwise, naming the Hosts it does reach). It sends the call
+  there only while connected to it: a call for a Host it can't reach now fails at once, with
+  nothing left to send. `list_hosts` (`hosts/list`) answers with the calling Host's id and every
+  other Host, with whether the Dispatcher is connected to it and why not.
+- **For the calling thread.** It sends `session/run`, `queue/add` and `turn/steer` with
+  `caller: {sessionId, host, hostName}`, the calling thread and its Host, so the turn's origin
+  and a new thread's `startedBy` name them. It narrows `session/run`'s policy to the calling
+  thread's, and refuses a call from a thread another Host's agent started (one hop).
+- **Sent once.** `session/run` and `queue/add` are deliveries with a `calls` row naming the
+  calling Host and thread, under a key made from the calling Host, the thread and the agent's
+  own key (or a new one), hashed: one agent's retry is the same request, and two agents' keys
+  never meet. The call's answer is the named Host's, as the tool's; `start_session`'s is
+  `{sessionId, turnId, policy, host}`. When the connection goes before the Host answers, the
+  tool says the Dispatcher keeps asking; the delivery stays pending, is sent again on the next
+  connection, and once the Host answers, the calling thread is told whether it started ("…
+  took the thread your thread asked start_session for after all").
+- **Delegation.** A `start_session` that starts a delegated thread gives `room`, how many more
+  of the caller's delegated threads may run on other Hosts; the Dispatcher refuses it when the
+  turns it follows for that thread, with its calls not yet taken, are as many.
+- **Following.** Once the named Host takes a call that began a turn, a `follows` row keeps the
+  turn: the Host, thread and turn, the calling Host and thread, whether it's delegated, and the
+  pending requests the caller has been told of. When the thread goes idle on the named Host, or
+  the link connects, the Dispatcher reads the turn with `sessions/get`, following one the Host
+  stopped under into its continuation (`continuedIn`), and waiting for that in a headless thread
+  until its Host takes it up. When it's over it reports how it ended to the calling thread, in
+  the Host's words (`weave_host_protocol::reports`), and forgets it, in one transaction. A
+  thread that waits on a person there it observes for a moment (`session/attach` with
+  `observe`) to read what's asked, and reports each request once. A turn whose thread closed
+  before it ran, or stopped with its Host and wasn't taken up again, a turn the Host has no
+  record of, are reported as such.
+- **Reports.** A report is a delivery to the calling Host: `session/report` `{sessionId:
+  <caller>, about: {sessionId, host, hostName}, text}`, which the Host tells the thread as it
+  tells its own reports. It lands however long the calling Host is away.
 
 ## Schedules
 
@@ -170,7 +216,7 @@ type DispatcherHost = {
   deviceId: string;          // what the Host knows the Dispatcher as
   pairedAt: number;
   connected: boolean;
-  status: PeerStatus;        // as peers/list has it: reachable, unchecked, refused, down, unreachable, otherHost
+  status: Reachability;      // reachable, unchecked, refused, down, unreachable, otherHost
   why?: string;              // why the last attempt failed, or why it refused the Dispatcher
   connectedAt?: number;
   pending: number;           // work waiting for it
@@ -180,7 +226,7 @@ type DispatcherHost = {
 **`hosts/add`** `{url, code, name?}` → `{host: DispatcherHost}`
 
 Pairs as a service and starts the connection. A Host that can't be reached, refuses the code
-or doesn't take the Dispatcher as a service answers `peer_unavailable` (-32081), saying why.
+or doesn't take the Dispatcher as a service answers `host_unavailable` (-32081), saying why.
 
 **`hosts/remove`** `{host}` → `{}`
 
@@ -265,6 +311,14 @@ Newest first, 50 by default.
   skipped with `missed: skip`; an occurrence while the last still runs is skipped; a schedule
   that names a thread queues there; three failures in a row pause a schedule, which resumes
   from then on.
+- `tests/hosts.rs` (WVE-185), two or three Hosts and one Dispatcher: an agent lists the Hosts and
+  their agents, starts a thread on another Host whose agent asks permission there, hears that it
+  waits and, once answered there, how it ended; prompts, steers and cancels threads there; a
+  thread without a directory runs in the same checkout under the home there, or is refused;
+  calls fail at once with no Dispatcher, with it away, and for a Host it can't reach, leaving
+  nothing to send; a start whose answer was lost lands once and its caller is told; one hop; the
+  policy ceiling; delegation limits across Hosts; following again after a Dispatcher restart;
+  a turn the named Host stops under followed into its continuation.
 
 ## Later
 
@@ -272,5 +326,6 @@ Newest first, 50 by default.
   deliveries and pushes for it.
 - Paired devices (WVE-176) reach this API over a WebSocket of its own, with keys as a Host's
   devices have.
-- Tools a service declares (WVE-173), labels (WVE-171) and Bots (WVE-118).
+- The Dispatcher's own tools, declared with `service/declareTools` (WVE-171), and Bots
+  (WVE-118).
 - Choosing the Host a piece of work runs on, which a delivery's Host can become a rule for.

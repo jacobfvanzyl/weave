@@ -1,0 +1,27 @@
+---
+source: protocol/tests/wire.rs
+expression: message(&run)
+---
+{
+  "method": "session/run",
+  "params": {
+    "agentId": "codex",
+    "cwd": "~/src/app",
+    "remote": "github.com/jaco/app",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "Review the auth change"
+      }
+    ],
+    "policy": {
+      "otherwise": "ask"
+    },
+    "key": "Yk9…",
+    "caller": {
+      "sessionId": "sess-a",
+      "host": "h-2Lm9",
+      "hostName": "mini"
+    }
+  }
+}

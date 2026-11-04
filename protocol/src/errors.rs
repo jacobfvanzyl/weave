@@ -24,8 +24,8 @@ pub const ALREADY_RESOLVED: i32 = -32066;
 pub const WRONG_AGENT: i32 = -32067;
 /// The sign-in method needs a terminal on the Host's computer.
 pub const REQUIRES_TERMINAL: i32 = -32068;
-/// Only local clients may ask this: it administers the Host. Or a peer Host asked what the
-/// Host tools don't need (ADR 0024).
+/// Only local clients may ask this: it administers the Host. Or a service asked what it
+/// doesn't need (ADR 0027).
 pub const FORBIDDEN: i32 = -32069;
 /// The pending request is a client tool call for another client.
 pub const NOT_TARGET: i32 = -32070;
@@ -49,8 +49,8 @@ pub const UNKNOWN_TERMINAL: i32 = -32078;
 pub const TERMINAL_UNAVAILABLE: i32 = -32079;
 /// The session's journal has no turn with that id.
 pub const UNKNOWN_TURN: i32 = -32080;
-/// A peer Host couldn't be reached, or refused this Host; the message says why.
-pub const PEER_UNAVAILABLE: i32 = -32081;
+/// The Dispatcher couldn't reach a Host, or the Host refused it; the message says why.
+pub const HOST_UNAVAILABLE: i32 = -32081;
 /// A turn's end, not a request's: the Host stopped or crashed while the turn ran, so it was cut
 /// off. A headless session's turn is continued once the Host takes it up again (WVE-144).
 pub const INTERRUPTED: i32 = -32082;
@@ -120,14 +120,6 @@ pub fn forbidden() -> Error {
     )
 }
 
-/// A peer Host asked `method`, which none of the Host tools needs (ADR 0024).
-pub fn not_for_peers(method: &str) -> Error {
-    Error::new(
-        FORBIDDEN,
-        format!("a peer Host may only reach threads as the Host tools do, not ask {method}"),
-    )
-}
-
 /// A service asked `method`, which starting and following threads doesn't need (ADR 0027).
 pub fn not_for_services(method: &str) -> Error {
     Error::new(
@@ -176,8 +168,8 @@ pub fn terminal_unavailable(why: impl Into<String>) -> Error {
     Error::new(TERMINAL_UNAVAILABLE, why)
 }
 
-pub fn peer_unavailable(why: impl Into<String>) -> Error {
-    Error::new(PEER_UNAVAILABLE, why.into())
+pub fn host_unavailable(why: impl Into<String>) -> Error {
+    Error::new(HOST_UNAVAILABLE, why.into())
 }
 
 pub fn unknown_turn(session_id: &str, turn_id: &str) -> Error {

@@ -8,8 +8,9 @@
 //!   method seen from inside the session, answered by the same code (ADR 0020): no tool does
 //!   what no client request can. They need no client, so they work in headless sessions. They
 //!   read and act on any session on the Host (ADR 0023), and start delegated sessions: sessions
-//!   of their own that the calling session starts. Given `host`, they act on a peer Host's
-//!   sessions instead (ADR 0017), through this Host's connection to it.
+//!   of their own that the calling session starts. Given `host`, they act on another of the
+//!   person's Hosts instead (ADR 0029), through the service that reaches them, the Dispatcher,
+//!   as a `service/hostCall`.
 //! - Service tools, which a service declares and answers over its own connection (ADR 0027,
 //!   WVE-171): agents see them as `<service>__<tool>`, and a call is a `service/toolCall` for
 //!   the service that declared it, naming the calling session.
@@ -27,7 +28,14 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::Empty;
+use crate::agents::ListAgentsRequest;
 use crate::policy::PermissionPolicy;
+use crate::queue::AddQueuedRequest;
+use crate::sessions::GetSessionRequest;
+use crate::sessions::ListSessionsRequest;
+use crate::sessions::RunRequest;
+use crate::turns::CancelTurnRequest;
+use crate::turns::SteerTurnRequest;
 
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that offers client tools.
 pub const CLIENT_TOOLS_FEATURE: &str = "clientTools";
@@ -59,8 +67,8 @@ pub const CANCEL_SESSION_TURN: &str = "cancel_session_turn";
 /// The Host tool that lists the agents threads can run, as `agents/list` does.
 pub const LIST_AGENTS: &str = "list_agents";
 
-/// The Host tool that lists this Host's peer Hosts and whether each can be reached, as
-/// `peers/list` does.
+/// The Host tool that lists the person's other Hosts and whether each can be reached, as the
+/// service that reaches them answers [`HostCall::ListHosts`].
 pub const LIST_HOSTS: &str = "list_hosts";
 
 /// The tool kinds a permission policy names, for the tools that take one.
@@ -131,14 +139,14 @@ pub fn host_catalog() -> Vec<Tool> {
         Tool {
             name: LIST_HOSTS.to_owned(),
             title: "List the person's other Hosts".to_owned(),
-            description: "List the person's other weave Hosts that this thread's Host is \
-                          paired with, its peer Hosts, usually other computers: each one's id \
-                          and name, and whether it can be reached now (status reachable), or \
-                          why not: refused (it revoked this Host), down (its computer answered \
-                          but its weave Host didn't), unreachable (nothing answered), or \
-                          otherHost. The other tools take one as host, to list, read, start and \
-                          prompt threads there. Pairing Hosts is the person's to do. Answers \
-                          with this Host's id and its peers/list result as JSON."
+            description: "List the person's other weave Hosts, usually other computers, which \
+                          this thread's Host reaches through the person's Dispatcher: each \
+                          one's id and name, whether the Dispatcher is connected to it now, and \
+                          if not, why: refused (it revoked the Dispatcher), down (its computer \
+                          answered but its weave Host didn't), unreachable (nothing answered), \
+                          or otherHost. The other tools take one as host, to list, read, start \
+                          and prompt threads there. Pairing Hosts with the Dispatcher is the \
+                          person's to do. Answers with this Host's id and the Hosts as JSON."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -355,6 +363,11 @@ pub const MAX_SERVICE_TOOL_NAME: usize = 128 - "mcp__weave__".len();
 #[serde(rename_all = "camelCase")]
 pub struct DeclareToolsRequest {
     pub tools: Vec<Tool>,
+    /// The service reaches the person's other Hosts (feature `otherHosts`, ADR 0029): the Host
+    /// sends it the Host tool calls that name another Host, as `service/hostCall`, until
+    /// another service says so too. Kept with its tools.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hosts: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
@@ -392,6 +405,56 @@ pub struct ToolCallNotification {
     #[serde(default)]
     pub arguments: Map<String, Value>,
     pub caller: ToolCaller,
+}
+
+/// What a Host tool call naming another of the person's Hosts asks there: the Host protocol
+/// method the tool is, and its request as the calling Host made it, with the directory under
+/// the home, the policy within the calling thread's and the request key it worked out. The
+/// service names the calling thread as the `caller`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "method", content = "params")]
+pub enum HostCall {
+    /// `list_hosts`: the Hosts the service reaches, and whether it's connected to each now.
+    #[serde(rename = "hosts/list")]
+    ListHosts,
+    #[serde(rename = "sessions/list")]
+    ListSessions(ListSessionsRequest),
+    #[serde(rename = "agents/list")]
+    ListAgents(ListAgentsRequest),
+    #[serde(rename = "sessions/get")]
+    GetSession(GetSessionRequest),
+    #[serde(rename = "session/run")]
+    Run(Box<RunRequest>),
+    #[serde(rename = "queue/add")]
+    Queue(AddQueuedRequest),
+    #[serde(rename = "turn/steer")]
+    Steer(SteerTurnRequest),
+    #[serde(rename = "turn/cancel")]
+    Cancel(CancelTurnRequest),
+}
+
+/// `service/hostCall` (feature `otherHosts`), to the service that said it reaches the person's
+/// Hosts: a session's agent called a Host tool naming another Host. The service answers with
+/// `service/answerTool`, as for a tool call, with the method's answer as JSON text or a tool
+/// error; `service/toolCallCancelled` says the agent stopped waiting.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "service/hostCall")]
+#[serde(rename_all = "camelCase")]
+pub struct HostCallNotification {
+    pub call_id: String,
+    /// The Host the agent named, by the id or name `list_hosts` gave; absent for
+    /// [`HostCall::ListHosts`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    pub call: HostCall,
+    pub caller: ToolCaller,
+    /// For a call that starts a delegated thread: how many more of the caller's delegated
+    /// threads may run on other Hosts, its Host's `[delegation] running` less those running
+    /// there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<u32>,
 }
 
 /// `service/toolCallCancelled`: the agent stopped waiting for the call; answering it now does

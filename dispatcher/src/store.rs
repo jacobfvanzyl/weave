@@ -1,8 +1,13 @@
 //! The Dispatcher's state, in SQLite (ADR 0027): the Hosts it is paired with, the work
-//! written down for them, and schedules and their occurrences ([`schedules`]). Later issues add
-//! other triggers and Bots, each as a migration of its own.
+//! written down for them, schedules and their occurrences ([`schedules`]), and the calls Hosts'
+//! agents make to the person's other Hosts and the turns they began there ([`calls`]). Later
+//! issues add other triggers and Bots, each as a migration of its own.
 
+mod calls;
 mod schedules;
+
+pub(crate) use calls::Call;
+pub(crate) use calls::Follow;
 
 pub(crate) use schedules::Fired;
 pub(crate) use schedules::StoredSchedule;
@@ -17,13 +22,14 @@ use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use weave_host_protocol::queue::AddQueuedRequest;
+use weave_host_protocol::sessions::ReportSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
 
 use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -79,6 +85,28 @@ const MIGRATIONS: [&str; 2] = [
     CREATE INDEX occurrences_by_delivery ON occurrences (delivery_id);
     CREATE INDEX occurrences_by_state ON occurrences (state);
 ",
+    "
+    CREATE TABLE calls (
+        delivery_id TEXT PRIMARY KEY REFERENCES deliveries (id) ON DELETE CASCADE,
+        calling_host TEXT NOT NULL,
+        caller TEXT NOT NULL,
+        delegated INTEGER NOT NULL,
+        lost INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE follows (
+        id TEXT PRIMARY KEY,
+        host_id TEXT NOT NULL REFERENCES hosts (host_id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        calling_host TEXT NOT NULL,
+        caller TEXT NOT NULL,
+        delegated INTEGER NOT NULL,
+        told TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        UNIQUE (host_id, session_id, turn_id, calling_host, caller)
+    );
+    CREATE INDEX follows_by_host ON follows (host_id, session_id);
+",
 ];
 
 /// A Host the Dispatcher is paired with.
@@ -93,7 +121,8 @@ pub(crate) struct StoredHost {
     pub(crate) refused: Option<String>,
 }
 
-/// What the Dispatcher asks a Host to do: start a headless turn, or add to a thread's queue.
+/// What the Dispatcher asks a Host to do: start a headless turn, add to a thread's queue, or
+/// report to a thread on a turn its agent began on another Host.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Work {
@@ -103,6 +132,7 @@ pub enum Work {
     /// sent, otherwise run in it, which opens it. Which it is is written down before it's sent,
     /// so every send asks the same under its key.
     Prompt(RunRequest),
+    Report(ReportSessionRequest),
 }
 
 impl Work {
@@ -110,6 +140,7 @@ impl Work {
         match self {
             Self::Run(request) | Self::Prompt(request) => request.key.as_deref(),
             Self::Queue(request) => request.key.as_deref(),
+            Self::Report(request) => request.key.as_deref(),
         }
     }
 
@@ -117,6 +148,7 @@ impl Work {
         match &mut self {
             Self::Run(request) | Self::Prompt(request) => request.key = Some(key),
             Self::Queue(request) => request.key = Some(key),
+            Self::Report(request) => request.key = Some(key),
         }
         self
     }
@@ -127,6 +159,7 @@ impl Work {
         match self {
             Self::Run(_) | Self::Prompt(_) => Some((text("sessionId")?, text("turnId")?)),
             Self::Queue(request) => Some((request.session_id.0.to_string(), text("queuedId")?)),
+            Self::Report(_) => None,
         }
     }
 }
@@ -360,6 +393,9 @@ impl Store {
         let started = work
             .and_then(|work| serde_json::from_str::<Work>(&work).ok())
             .and_then(|work| work.started(answer));
+        if let Some((session_id, turn_id)) = &started {
+            calls::begun(&transaction, id, session_id, turn_id).map_err(failed)?;
+        }
         let (session_id, turn_id) = started.unzip();
         transaction
             .execute(
@@ -506,7 +542,7 @@ fn failed(error: rusqlite::Error) -> String {
 }
 
 /// 10 random bytes in lowercase hex.
-fn random_id() -> String {
+pub(crate) fn random_id() -> String {
     let mut bytes = [0u8; 10];
     // The system's random source failing is no state to go on in.
     #[allow(clippy::expect_used)]

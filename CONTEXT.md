@@ -15,20 +15,12 @@ A program connected to the Host on someone's behalf, such as the TUI, `weave run
 _Avoid_: frontend, UI, consumer
 
 **Remote client**:
-A client on another computer than the Host's, which reaches it through the tailnet on behalf of a paired device or a peer Host.
+A client on another computer than the Host's, which reaches it through the tailnet on behalf of a paired device.
 _Avoid_: network client, mobile client
 
 **Paired device**:
 A device of the person's that the Host has paired with and accepts remote clients from until it's revoked.
 _Avoid_: credential, principal, token
-
-**Peer Host**:
-One of the person's Hosts that another has paired with, so that the other's agents can reach its threads; it keeps the other as a paired device, which may do only what the Host tools need. Each pairing goes one way, though `weave hosts add` makes both, and reach is one hop: a Host's agents reach its peers, not their peers.
-_Avoid_: remote Host, linked Host, federated Host
-
-**Host key**:
-The key a Host proves itself to its peer Hosts with, the one secret it keeps: in the Secure Enclave where the computer has one.
-_Avoid_: host certificate, token
 
 **Agent**:
 An ACP agent program the Host can launch, known by an id: a preset, one defined in the Host's configuration, or one from the ACP registry.
@@ -89,11 +81,11 @@ A thread an agent starts under another one. It shares its parent's journal and a
 _Avoid_: subthread
 
 **Delegated thread**:
-A thread of its own, with its own journal and agent, that another thread's agent started through the Host, on this Host or a peer Host. It records the thread that started it, and the peer Host that thread is on.
+A thread of its own, with its own journal and agent, that another thread's agent started through the Host, on this Host or, through the Dispatcher, on another of the person's Hosts. It records the thread that started it, and the other Host that thread is on.
 _Avoid_: child thread, spawned thread, subagent
 
 **Report**:
-The Host's message to a thread about a turn that thread's agent began in another thread, on this Host or a peer Host: how the turn ended, or that it waits on a person.
+The Host's message to a thread about a turn that thread's agent began in another thread, on this Host or, through the Dispatcher, on another of the person's Hosts: how the turn ended, or that it waits on a person.
 _Avoid_: notification, callback
 
 **Label**:
@@ -115,7 +107,7 @@ _Avoid_: restart, reload (the TUI's own restart)
 ### Work while the person is away
 
 **Dispatcher**:
-The person's program, apart from their Hosts, that keeps triggers and Bots and starts their work on the Hosts as a service. Hosts never connect to it, and work on without it.
+The person's program, apart from their Hosts, that keeps triggers and Bots and starts their work on the Hosts as a service, and through which a Host's agents reach the person's other Hosts. Hosts never connect to it, and work on without it.
 _Avoid_: scheduler, coordinator, orchestrator, automation engine
 
 **Trigger**:

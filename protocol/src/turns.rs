@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Empty;
+use crate::sessions::OtherThread;
 use crate::sessions::ServiceOrigin;
 
 /// A turn, by the id of the prompt that started it: the prompt's `queuedId` when it came
@@ -73,10 +74,10 @@ pub const STEER_FEATURE: &str = "turn/steer";
 pub struct SteerTurnRequest {
     pub session_id: SessionId,
     pub prompt: Vec<ContentBlock>,
-    /// A peer Host's only (feature `peers`): the session on it whose agent asks, which the
-    /// steer's origin names.
+    /// A service's only (feature `otherHosts`): the thread on another Host whose agent asks,
+    /// which the steer's origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller: Option<SessionId>,
+    pub caller: Option<OtherThread>,
     /// A service's only: what started the steer, which its origin names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ServiceOrigin>,

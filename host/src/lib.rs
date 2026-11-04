@@ -40,7 +40,6 @@ mod journal;
 pub mod mcp;
 mod modes;
 pub mod paths;
-mod peers;
 mod queue;
 pub mod remote;
 mod service_tools;
@@ -103,7 +102,6 @@ pub use crate::journal::Recorded;
 pub use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 pub use crate::paths::DaemonPaths;
-pub use crate::peers::PeerSettings;
 pub use crate::remote::RemoteSettings;
 pub use crate::remote::Serve;
 use crate::session::Command;
@@ -171,9 +169,11 @@ pub struct DaemonConfig {
     /// What keeps terminals alive for clients (ADR 0022); none for a Host without terminals, as
     /// one inside a client, or one installed without `weave-holder`.
     pub terminals: Option<Arc<dyn terminals::Owner>>,
-    /// How the Host pairs with and reaches the person's other Hosts (ADR 0017); none for a Host
-    /// that doesn't, as one inside a client.
-    pub peers: Option<PeerSettings>,
+    /// The home directory `~/…` paths between Hosts are under (ADR 0029); `$HOME` when none.
+    pub home: Option<PathBuf>,
+    /// Files earlier Hosts left that this one removes when it starts: a peer Host's
+    /// `peers.json` and `host-key.json`, retired with peer Hosts (ADR 0029).
+    pub retired: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -205,7 +205,8 @@ impl DaemonConfig {
             mcp_bridge: bridge_command(),
             remote: None,
             terminals: None,
-            peers: None,
+            home: None,
+            retired: Vec::new(),
         }
     }
 
@@ -220,10 +221,7 @@ impl DaemonConfig {
             mcp_socket: Some(paths.mcp_socket()),
             terminals: terminals::Holders::beside_this_program(paths.terminals())
                 .map(|holders| Arc::new(holders) as Arc<dyn terminals::Owner>),
-            peers: Some(PeerSettings::new(
-                Some(paths.peers()),
-                Some(paths.host_key()),
-            )),
+            retired: paths.retired(),
             ..Self::in_process(None)
         }
     }
@@ -315,8 +313,6 @@ pub(crate) struct Shared {
     drain: Mutex<Option<Drain>>,
     /// Terminals, when the Host has an owner for them.
     pub(crate) terminals: Option<Arc<terminals::Terminals>>,
-    /// The person's other Hosts this one pairs with, when it does.
-    pub(crate) peers: Option<peers::Peers>,
     /// Held while a report takes up the session it's for, so that two reports at once don't
     /// take it up twice (`host_tools::tell`).
     pub(crate) taking_up_for_reports: tokio::sync::Mutex<()>,
@@ -417,6 +413,11 @@ impl Shared {
     }
 
     /// The configuration, read afresh, so edits apply to the next session.
+    /// The home directory `~/…` paths between Hosts are under.
+    pub(crate) fn home(&self) -> PathBuf {
+        self.config.home.clone().unwrap_or_else(client::home)
+    }
+
     pub(crate) fn load_config(&self) -> Result<weave_agents::Config, Error> {
         weave_agents::Config::load(self.config.config_file.as_deref())
             .map(|loaded| loaded.config)
@@ -941,7 +942,17 @@ impl Daemon {
             JOURNAL_RETENTION,
         ));
         let terminals = config.terminals.clone().map(terminals::Terminals::new);
-        let peers = config.peers.clone().map(peers::Peers::load);
+        for retired in &config.retired {
+            match std::fs::remove_file(retired) {
+                Ok(()) => {
+                    tracing::info!(path = %retired.display(), "removed a peer Host's file: Hosts reach each other through the Dispatcher now");
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    tracing::warn!(path = %retired.display(), %error, "couldn't remove a peer Host's file");
+                }
+            }
+        }
         Self {
             shared: Arc::new_cyclic(|shared| Shared {
                 admissions,
@@ -962,7 +973,6 @@ impl Daemon {
                 watchers: Mutex::new(BTreeMap::new()),
                 drain: Mutex::new(None),
                 terminals,
-                peers,
                 taking_up_for_reports: tokio::sync::Mutex::new(()),
             }),
         }
@@ -1055,12 +1065,7 @@ impl Daemon {
                     let quiet = {
                         let registry = self.shared.registry();
                         registry.sessions.is_empty() && registry.clients == 0
-                    } && !self.shared.remote.is_on()
-                        && !self
-                            .shared
-                            .peers
-                            .as_ref()
-                            .is_some_and(peers::Peers::following_any);
+                    } && !self.shared.remote.is_on();
                     if !quiet {
                         idle_since = None;
                     } else if let Some(limit) = idle_exit
@@ -1101,12 +1106,8 @@ impl Daemon {
         self.shared.remote.serving(None);
     }
 
-    /// At startup, turn remote access back on when a device is paired (ADR 0016), and follow
-    /// again the turns on peer Hosts a stopped Host was following (ADR 0017).
+    /// At startup, turn remote access back on when a device is paired (ADR 0016).
     pub async fn resume_remote(&self) {
-        if let Some(peers) = &self.shared.peers {
-            peers.resume(&self.shared);
-        }
         self.shared.remote.resume(&self.shared).await;
     }
 
@@ -1250,10 +1251,6 @@ impl Daemon {
     /// Stop every session's agent, and the spare ones. Their journals stay open, so a later
     /// Host can take them up again.
     pub async fn shutdown(&self) {
-        // Turns followed on peers are followed again by the next Host, from `peers.json`.
-        if let Some(peers) = &self.shared.peers {
-            peers.stop();
-        }
         let sessions: Vec<SessionHandle> =
             self.shared.registry().sessions.values().cloned().collect();
         let stops = sessions.iter().map(|session| {

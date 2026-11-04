@@ -1545,9 +1545,9 @@ export class HostStore {
 
 /**
  * Name the thread that started each delegated one: its title, and its Host when that's another,
- * which a thread a peer Host's agent started is (ADR 0017). The starter may be on a Host this
- * device doesn't pair with, or gone, and is named as well as it can be then. A thread's successor
- * is named by its title too (WVE-168).
+ * as for a thread another Host's agent started through the Dispatcher (ADR 0029). The starter
+ * may be on a Host this device doesn't pair with, or gone, and is named as well as it can be
+ * then. A thread's successor is named by its title too (WVE-168).
  */
 export function labelStarters(sessions: SessionSummary[], hosts: readonly PairedHost[]) {
   const byKey = new Map(sessions.map((session) => [session.key, session]));

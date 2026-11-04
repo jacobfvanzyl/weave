@@ -5,10 +5,8 @@
 
 #![allow(dead_code, clippy::expect_used)]
 
-use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::process::Command;
 use std::process::Output;
 use std::sync::Arc;
@@ -23,9 +21,6 @@ use weave_host::Daemon;
 use weave_host::DaemonConfig;
 use weave_host::DaemonPaths;
 use weave_host::Launcher;
-use weave_host::PeerSettings;
-use weave_host::RemoteSettings;
-use weave_host::Serve;
 use weave_host::socket;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
@@ -41,23 +36,13 @@ pub struct TestHost {
 
 impl TestHost {
     pub fn start() -> Self {
-        Self::start_with(None)
-    }
-
-    /// A Host that pairs with other Hosts as `name`, with remote access through a stand-in
-    /// for Tailscale Serve, so others pair with it too.
-    pub fn start_peer(name: &str) -> Self {
-        Self::start_with(Some(name))
-    }
-
-    fn start_with(peer: Option<&str>) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let config_home = dir.path().join("config");
         std::fs::create_dir_all(config_home.join("weave")).expect("config dir");
         let config_file = config_home.join("weave/config.toml");
         std::fs::write(&config_file, "[agents.fake]\ncommand = \"fake-agent\"\n").expect("config");
         std::fs::create_dir_all(dir.path().join("work")).expect("work dir");
-        let (paths, daemon, runtime) = serve(dir.path(), peer);
+        let (paths, daemon, runtime) = serve(dir.path());
         Self {
             dir,
             paths,
@@ -70,7 +55,7 @@ impl TestHost {
     /// up the headless threads the first left running, as a Host does at startup.
     pub fn restart(&mut self) {
         self.lose();
-        let (paths, daemon, runtime) = serve(self.dir.path(), None);
+        let (paths, daemon, runtime) = serve(self.dir.path());
         let resuming = daemon.clone();
         runtime.spawn(async move { resuming.resume_queues().await });
         self.paths = paths;
@@ -130,7 +115,7 @@ impl TestHost {
 }
 
 /// Serve a Host from `dir`, with the fake agent: its paths, the Host and the runtime it runs on.
-fn serve(dir: &Path, peer: Option<&str>) -> (DaemonPaths, Daemon, Runtime) {
+fn serve(dir: &Path) -> (DaemonPaths, Daemon, Runtime) {
     let paths = DaemonPaths::in_dir(dir.join("host"));
     let config_file = dir.join("config/weave/config.toml");
     let state = dir.join("agent-state.json");
@@ -168,16 +153,6 @@ fn serve(dir: &Path, peer: Option<&str>) -> (DaemonPaths, Daemon, Runtime) {
     config.devices = Some(paths.devices());
     config.traces = dir.join("traces");
     config.launcher = launcher;
-    if let Some(name) = peer {
-        let mut remote = RemoteSettings::new(Arc::new(LoopbackServe));
-        remote.listen = "127.0.0.1:0".parse().expect("an address");
-        config.remote = Some(remote);
-        config.peers = Some(PeerSettings {
-            secure_enclave: false,
-            name: name.to_owned(),
-            ..PeerSettings::new(None, None)
-        });
-    }
     let daemon = Daemon::new(config);
     let serving = daemon.clone();
     runtime.spawn(async move {
@@ -186,25 +161,6 @@ fn serve(dir: &Path, peer: Option<&str>) -> (DaemonPaths, Daemon, Runtime) {
     });
     drop(_entered);
     (paths, daemon, runtime)
-}
-
-/// Tailscale Serve for a test: the Host's own loopback listener is its URL.
-struct LoopbackServe;
-
-impl Serve for LoopbackServe {
-    fn ensure(
-        &self,
-        listen: SocketAddr,
-    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + '_>> {
-        Box::pin(async move { Ok(format!("ws://{listen}")) })
-    }
-
-    fn remove(
-        &self,
-        _listen: SocketAddr,
-    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
-        Box::pin(async move { Ok(()) })
-    }
 }
 
 impl Drop for TestHost {

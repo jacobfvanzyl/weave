@@ -3,8 +3,12 @@
 //! each device has open, so revoking it closes them.
 //!
 //! The Host keeps no secret for a device: a device proves itself by signing its connection's
-//! challenge with a key that never leaves it. Offers live in memory only. A peer Host pairs as
-//! a device does and is kept as one, with its Host id (ADR 0017).
+//! challenge with a key that never leaves it. Offers live in memory only. A service, such as the
+//! Dispatcher, pairs as a device does and is kept as one, with the tools it declared and
+//! whether it reaches the person's other Hosts (ADR 0029).
+//!
+//! Hosts used to pair with each other as peer Hosts (ADR 0017), kept as devices naming their
+//! Host id; ADR 0029 retired that, and a Host revokes such a pairing when it loads one.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -82,15 +86,18 @@ struct Stored {
     paired_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_seen_at: Option<Timestamp>,
-    /// The Host id of a peer Host, which is one of the person's Hosts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    host: Option<String>,
+    /// The Host id of a peer Host pairing (ADR 0017), which a Host revokes when it loads one.
+    #[serde(default, rename = "host", skip_serializing)]
+    peer_host: Option<String>,
     /// A service, such as the Dispatcher (ADR 0027).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     service: bool,
     /// The tools a service declared, which threads offer (WVE-171).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     tools: Vec<Tool>,
+    /// The service reaches the person's other Hosts, as it declared with its tools (ADR 0029).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hosts: bool,
 }
 
 impl Stored {
@@ -98,7 +105,6 @@ impl Stored {
         DeviceInfo {
             id: self.id.clone(),
             name: self.name.clone(),
-            host: self.host.clone(),
             service: self.service,
         }
     }
@@ -131,10 +137,20 @@ impl Devices {
             }
         });
         let fresh = read.is_none();
-        let file = read.unwrap_or_else(|| File {
+        let mut file = read.unwrap_or_else(|| File {
             host_id: random_id(16),
             devices: Vec::new(),
         });
+        // Peer Hosts are retired (ADR 0029): their pairings go.
+        let paired = file.devices.len();
+        file.devices.retain(|device| {
+            let Some(host) = &device.peer_host else {
+                return true;
+            };
+            tracing::info!(device = %device.id, name = %device.name, %host, "revoked a peer Host's pairing: Hosts reach each other through the Dispatcher now");
+            false
+        });
+        let revoked = file.devices.len() < paired;
         let devices = Self {
             path,
             state: Mutex::new(State {
@@ -148,7 +164,7 @@ impl Devices {
                 live: HashMap::new(),
             }),
         };
-        if fresh {
+        if fresh || revoked {
             devices.save(&lock(&devices.state));
         }
         devices
@@ -184,13 +200,9 @@ impl Devices {
     }
 
     /// Pair `device` with the offer whose code is `code`, which no one can take again.
-    /// `None` when there's no such live offer, the key isn't a P-256 point, or the device says
-    /// it's both a peer Host and a service.
+    /// `None` when there's no such live offer or the key isn't a P-256 point.
     pub(crate) fn pair(&self, code: &str, device: NewDevice) -> Option<DeviceInfo> {
         verifying_key(&device.public_key)?;
-        if device.host.is_some() && device.service {
-            return None;
-        }
         let code = normalize_code(code);
         let mut state = lock(&self.state);
         let now = now_ms();
@@ -210,9 +222,10 @@ impl Devices {
             public_key: device.public_key,
             paired_at: now,
             last_seen_at: Some(now),
-            host: device.host,
+            peer_host: None,
             service: device.service,
             tools: Vec::new(),
+            hosts: false,
         };
         state.devices.insert(id, stored.clone());
         self.save(&state);
@@ -222,14 +235,10 @@ impl Devices {
             let device = listing(&stored, 1);
             let _ = offered_by.send_notification(DevicePairedNotification { device });
         }
-        match &info.host {
-            Some(host) => {
-                tracing::info!(device = %info.id, name = %info.name, %host, "a peer Host paired");
-            }
-            None if info.service => {
-                tracing::info!(device = %info.id, name = %info.name, "a service paired");
-            }
-            None => tracing::info!(device = %info.id, name = %info.name, "a device paired"),
+        if info.service {
+            tracing::info!(device = %info.id, name = %info.name, "a service paired");
+        } else {
+            tracing::info!(device = %info.id, name = %info.name, "a device paired");
         }
         Some(info)
     }
@@ -305,13 +314,15 @@ impl Devices {
             .collect()
     }
 
-    /// Replace the tools the service `device_id` serves with `tools`: the names agents see, or
-    /// why they can't be declared. Another service paired under the same name, as one paired
-    /// again without revoking the first is, gives its tools up to this one.
+    /// Replace the tools the service `device_id` serves with `tools`, and say whether it reaches
+    /// the person's other Hosts: the names agents see, or why they can't be declared. Another
+    /// service paired under the same name, as one paired again without revoking the first is,
+    /// gives its tools up to this one, and one that reached the Hosts stops when this one does.
     pub(crate) fn declare_tools(
         &self,
         device_id: &str,
         tools: Vec<Tool>,
+        hosts: bool,
     ) -> Result<Vec<String>, String> {
         let mut state = lock(&self.state);
         let prefix = match state.devices.get(device_id) {
@@ -328,9 +339,14 @@ impl Devices {
                 tracing::info!(service = %other.id, by = %device_id, "a service paired under the same name took its tools over");
                 other.tools.clear();
             }
+            if hosts && other.id != device_id && other.hosts {
+                tracing::info!(service = %other.id, by = %device_id, "another service reaches the person's Hosts now");
+                other.hosts = false;
+            }
         }
         if let Some(stored) = state.devices.get_mut(device_id) {
             stored.tools = tools;
+            stored.hosts = hosts;
         }
         self.save(&state);
         Ok(names)
@@ -356,6 +372,15 @@ impl Devices {
                 })
             })
             .collect()
+    }
+
+    /// The service that reaches the person's other Hosts, if one said so: its id and name.
+    pub(crate) fn hosts_service(&self) -> Option<(DeviceId, String)> {
+        lock(&self.state)
+            .devices
+            .values()
+            .find(|stored| stored.service && stored.hosts)
+            .map(|stored| (stored.id.clone(), stored.name.clone()))
     }
 
     /// Forget a device and close its connections with `code`.
@@ -401,7 +426,6 @@ fn listing(stored: &Stored, connections: u32) -> Device {
         paired_at: stored.paired_at,
         last_seen_at: stored.last_seen_at,
         connections,
-        host: stored.host.clone(),
         service: stored.service,
     }
 }
@@ -523,35 +547,67 @@ mod tests {
         NewDevice {
             name: "iPad".to_owned(),
             public_key: jwk,
-            host: None,
             service: false,
         }
     }
 
     #[test]
-    fn a_service_is_recorded_as_one_and_is_never_a_peer_host_too() {
+    fn a_service_is_recorded_as_one_and_one_at_a_time_reaches_the_hosts() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("devices.json");
         let devices = Devices::load(Some(path.clone()));
-        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
-        let (_, jwk) = key();
-        let both = NewDevice {
-            host: Some("h-2Lm9".to_owned()),
-            service: true,
-            ..new_device(jwk.clone())
-        };
-        assert!(devices.pair(&code, both).is_none());
-
-        let service = NewDevice {
-            service: true,
-            ..new_device(jwk)
-        };
-        let paired = devices
-            .pair(&code, service)
-            .expect("the offer is still good");
-        assert!(paired.service);
+        let mut paired = Vec::new();
+        for name in ["Dispatcher", "Dispatcher on mini"] {
+            let (code, _) = devices.offer(Some(name.to_owned()), None, OFFER_LIFETIME_MS);
+            let (_, jwk) = key();
+            let service = NewDevice {
+                service: true,
+                ..new_device(jwk)
+            };
+            let info = devices.pair(&code, service).expect("a good offer");
+            assert!(info.service);
+            paired.push(info.id);
+        }
+        assert_eq!(devices.hosts_service(), None);
+        devices
+            .declare_tools(&paired[0], Vec::new(), true)
+            .expect("declared");
+        assert_eq!(
+            devices.hosts_service(),
+            Some((paired[0].clone(), "Dispatcher".to_owned()))
+        );
+        devices
+            .declare_tools(&paired[1], Vec::new(), true)
+            .expect("declared");
         let reloaded = Devices::load(Some(path));
         assert!(reloaded.list().iter().all(|device| device.service));
+        assert_eq!(
+            reloaded.hosts_service().map(|(id, _)| id),
+            Some(paired[1].clone())
+        );
+    }
+
+    #[test]
+    fn a_peer_hosts_pairing_is_revoked_when_the_host_loads_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("devices.json");
+        let (_, jwk) = key();
+        let file = serde_json::json!({
+            "hostId": "h-1",
+            "devices": [
+                {"id": "d-peer", "name": "mini", "publicKey": jwk, "pairedAt": 1, "host": "h-2"},
+                {"id": "d-ipad", "name": "iPad", "publicKey": jwk, "pairedAt": 1}
+            ]
+        });
+        std::fs::write(&path, file.to_string()).expect("write");
+        let devices = Devices::load(Some(path.clone()));
+        let ids = |devices: &Devices| -> Vec<String> {
+            devices.list().into_iter().map(|device| device.id).collect()
+        };
+        assert_eq!(ids(&devices), vec!["d-ipad".to_owned()]);
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert!(!written.contains("d-peer"), "{written}");
+        assert_eq!(ids(&Devices::load(Some(path))), vec!["d-ipad".to_owned()]);
     }
 
     #[test]
