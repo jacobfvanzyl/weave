@@ -219,3 +219,7 @@ _Avoid_: widget, MCP App, embed, artifact
 **Visual**:
 A page or picture an agent made that the Host keeps with its own revisions, outliving the turn that made it.
 _Avoid_: artifact, custom visual, render
+
+**Surface**:
+A display the person's device is connected to, on which the app shows part of what the device has, read only, while the device stays where the person types and answers.
+_Avoid_: companion, second screen, external display, mirror, cast

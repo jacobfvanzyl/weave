@@ -8,10 +8,10 @@ The question is how the app could put a view of its own on an AirPlay display (a
 
 - **iOS 27 changed how an app takes over a display.** "Beginning in iOS 27, your app receives a scene with the [`windowExternalDisplayNonInteractive`] role only after it registers a scene accessory. In earlier releases, the system connected this scene automatically, and your app opted out by declining to provide content for it" ([Presenting content on a connected display](https://developer.apple.com/documentation/uikit/presenting-content-on-a-connected-display)). The release note says: "In apps built with the iOS 27.0 SDK, `windowExternalDisplayNonInteractive` scenes are no longer offered automatically by the system. Use `UIViewController.registerSceneAccessory(_:)` with a `UISceneAccessory.externalNonInteractive` instance" ([iOS & iPadOS 27 release notes](https://developer.apple.com/documentation/ios-ipados-release-notes/ios-ipados-27-release-notes), 177015874). The app builds with Xcode 27.0 and the iOS 27.0 SDK, and both of the person's devices run 27.
 - **The companion is non-interactive and full screen.** Nothing on the display takes input, and "Content for this scene spans the full screen" (same article). The device stays the controller.
-- **The companion exists while the app is in front.** The system connects the scene "while your app presents the view controller, the registration is enabled, and an external display is available". It disconnects the scene "when the app dismisses the view controller or the display disconnects". Apple doesn't say what backgrounding or locking does. This is a second screen for when the person is using the app, not a wall display that runs on its own.
+- **The companion exists while the app is in front.** The system connects the scene "while your app presents the view controller, the registration is enabled, and an external display is available". It disconnects the scene "when the app dismisses the view controller or the display disconnects". Apple doesn't say what backgrounding does. On the iPhone it disconnects the scene and goes back to mirroring, and returning connects it again (section 10.1). This is a second screen for when the person is using the app, not a wall display that runs on its own.
 - **The person starts it, not the app.** They choose Screen Mirroring in Control Center. No public API starts screen mirroring, and `AVRoutePickerView` lists media receivers only.
 - **The app has a latent bug.** `AppDelegate` gives every scene role a `SceneDelegate`, which builds a second Capacitor bridge, and with it a second copy of the app. Capacitor's own template has the same flaw ([ionic-team/capacitor#8648](https://github.com/ionic-team/capacitor/issues/8648)). On iOS 16–26 that copy starts when mirroring starts. On the person's devices (iOS 27, SDK 27) it doesn't. The fix is one role check, needed whatever happens to the companion.
-- **Recommendation (section 9):** a scene accessory registered on the bridge's view controller, showing a second, bridge-less `WKWebView`. It runs the same bundle in a display mode, drawing a projection of the `AppModel` that the main web view sends it. The companion is not a Host client, so the Host and protocol need nothing new. Terminals on the display are native `TerminalView`s with streams of their own. The first version would show a **Board** of every thread when no thread is open, and the open thread's **Stage** otherwise: its terminal, or later its Pane.
+- **Recommendation (section 9):** a scene accessory registered on the bridge's view controller, showing a second, bridge-less `WKWebView`. It runs the same bundle in a display mode, drawing a projection of the `AppModel` that the main web view sends it. The companion is not a Host client, so the Host and protocol need nothing new. Terminals on the display are native `TerminalView`s with streams of their own. The device keeps the whole app, and the display shows something else drawn from the same state. What it shows, and what it's called, are still open (sections 9.4 and 9.5).
 
 ## 2. How an app takes over a display
 
@@ -97,12 +97,12 @@ A worktree's terminals stream from their holder through the Host to any number o
 | --- | --- |
 | MCP Apps views and the app's Pane (WVE-94, WVE-96) | ADR 0012 makes placement "per client and never journaled", so a display is one more placement. A `view` event journals the complete input and result, so a view can render from the journal with no calls of its own, which suits a display that takes no input. Views that call tools or send `ui/message` stay on the device. |
 | Visuals (WVE-95) | A diagram, chart or page the agent keeps revising is presentation material, the most natural thing to put on a TV. A revision replaces it in place. |
-| Bots (WVE-178, WVE-118) | Each Bot by name with its state (needs you, working, unread, idle): a row on a Board, or its own section at the top. |
+| Bots (WVE-178, WVE-118) | Each Bot by name with its state (needs you, working, unread, idle): a row in an overview of every thread, or its own section at the top. |
 | Schedules and triggers (WVE-145, WVE-146, WVE-176) | What runs next, and recent occurrences and how they ended. They come through the Dispatcher's device API, so they appear on the display only once the app pairs with the Dispatcher. |
-| Context usage in listings (WVE-174) | A fill bar for each thread on the Board, not only for the open one. |
-| Labels (WVE-173) | The Board follows the app's rule: Bot threads under their Bot, not among the ordinary threads. |
+| Context usage in listings (WVE-174) | A fill bar for each thread in an overview, not only for the open one. |
+| Labels (WVE-173) | An overview follows the app's rule: Bot threads under their Bot, not among the ordinary threads. |
 | Pushes and presence (WVE-177, WVE-147) | The companion isn't a client (section 9.2), so the Host and Dispatcher never see it. Showing a thread on a TV doesn't count as the person having seen it, and doesn't stop a push. |
-| Successors (WVE-168) | The Stage follows a Bot's thread into its successor, as the device does. |
+| Successors (WVE-168) | The display follows a Bot's thread into its successor, as the device does. |
 
 ADR 0018's rule holds: every client decides how far above the text floor it goes. A display is a placement within the app, not a new client, so the decision is the app's.
 
@@ -126,45 +126,96 @@ Terminals are the exception: their bytes stay native, as on the device. The comp
 
 Views and Visuals (after WVE-96) render in the companion from the journal's `view` event, through the same host page the Pane uses, with the view's storage per server as on the device. The display passes no input back, so a view there never calls a tool or sends a message.
 
-### 9.3 What the companion shows
+### 9.3 Two surfaces at once
 
-Two modes, chosen by what's open on the device, which the person can pin:
+The device keeps the whole app, interactive and unchanged. The display shows something else, read only, drawn from the same state: the device is the presenter view and the display is the slide, as in Keynote. It isn't a mirror of the device's pixels. It's the same data drawn another way, and only the device's web view talks to the Hosts.
 
-- **Board**, when no thread is open, or when the person pins it.
-  - Every paired Host and its threads, grouped by Host and project as the sidebar groups them. "Needs you" leads, set apart and saying what each thread waits on. Running threads come next, with their last activity, then idle ones, faded.
-  - A Host that's reconnecting or unreachable says so.
-  - Later: Bots at the top with their state (WVE-178), context fill per thread (WVE-174), and the next scheduled occurrences (WVE-145).
-  - A glance tells the person what needs them across every Host while they work in one thread on the device.
-- **Stage**, when a thread is open: what sits beside the thread, not a copy of it. The device already shows the transcript, so the display shows, in order of preference:
-  1. the thread's Pane, once WVE-96 builds it: its view or its latest Visual;
-  2. otherwise its front terminal, as the device's terminal panel would put it in front (`terminal-layout.ts`);
-  3. otherwise the transcript's live tail: the plan, the running tool calls and the agent's latest message, large, following the end.
+- **Version 1: the device doesn't change** when a display is up. Nothing on the device depends on the display, which comes and goes every time the person leaves the app (section 10.1). Apple's rule is the same: "design your app to remain fully functional without the external display".
+- **Later: hand-off.** "Show on display" on a terminal tab, a view or a Visual moves it to the display. The device then shows a small placeholder in its place and gives the room back to the transcript and the composer. This matters most on the iPhone, where a terminal and a transcript don't both fit. When the display goes away, the thing comes back to the device.
+- **What's shown follows context by default, and the person can pin it** from a menu offered only while a display is connected. Turning it off hands the display back to mirroring. The choice is the device's own and never journaled, as ADR 0012 asks of placement.
 
-  A thin strip along the bottom shows the thread's title, agent, branch, turn status, queue and context usage, plus a count of other threads that need the person.
+Typography follows the display, not the device: type sized for distance, with the HIG's 60/80 pt margin on a TV as design, since the screen reports no overscan (section 10.1). A browser can render the display mode at 1920×1080 with `?mock=`, as it renders the device's layouts.
 
-The thread's header gets a **Display** menu, offered only while `isAvailable` holds. It lets the person pin the Board, a terminal, the Pane or the transcript, and turn the companion off, which hands the display back to mirroring. The pick is the device's own, never journaled, as ADR 0012 asks of placement. The iPhone works the same way, with the phone as the remote.
+### 9.4 Still open: what it shows
 
-Typography follows the display, not the device: the safe area of section 6 on a TV, and type sized for distance. A Mac receiver needs no inset. A browser can render the display mode at 1920×1080 with `?mock=`, as it renders the device's layouts.
+This is the person's decision and isn't settled. The candidates, from what the app has and what's planned:
 
-### 9.4 What this isn't
+- **An overview of every thread:** each Host's threads by project, with those waiting on the person first and saying what they wait on, then running threads with their last activity, then idle ones. Later it could add Bots and their state (WVE-178), how full each thread's context is (WVE-174), and the next scheduled occurrences (WVE-145). It's useful while the person works in one thread on the device, but it adds little to the iPad's own sidebar.
+- **What sits beside the open thread:**
+  - its front terminal, such as a dev server, a test run or logs;
+  - once WVE-96 builds the Pane, its view or latest Visual, the most presentation-like thing an agent makes;
+  - the transcript's live tail at reading distance: the plan, the running tool calls and the agent's latest message.
+- **The thread itself, large**, for showing someone else the work: close to mirroring, but laid out for the display rather than the phone.
 
-The companion lasts while the app is in front. A display that stays up with the iPad asleep, such as a Board on a TV in the corner, is a different client: a page in a browser on the Mac or the Apple TV. Since ADR 0010 that would be a remote client of its own, with a device key, or a read-only role the Host doesn't have yet. If it's wanted, it belongs with the Dispatcher's device API (WVE-176), not here.
+What decides between them is the setting. Working alone at a desk with a TV or a Mac beside it, the terminal or the Pane earns the space. Showing someone the work, the thread or a Visual does. A glance at everything suits a room. One default plus a pinned choice covers more than one of these, so the first version doesn't have to pick only one.
 
-## 10. What a device has to settle
+### 9.5 Still open: what it's called
 
-A spike on the iPad (iPadOS 27.0.1) and the iPhone (iOS 27.2 beta), with an Apple TV and a Mac as receivers:
+"Companion" is this note's working word, and "Board" and "Stage" were working names for two of the candidates above. None is in the glossary. The name should fit how the person turns it on, and what the app's menu says:
 
-- whether the accessory is offered with `UIApplicationSupportsMultipleScenes` false;
-- what the display shows when the app goes to the background or the device locks, and whether the scene comes back on return;
-- on the iPad with a cable, whether Stage Manager's extended display offers the accessory at all;
-- `overscanCompensation`'s default on an Apple TV, and the modes and resolution a Mac receiver offers;
-- the cost: two web views and a second terminal stream, at 60 fps or the display's rate, and the battery and heat over an hour's turn;
-- on an iOS 26 simulator, that the role guard keeps mirroring and that the automatic scene draws the companion.
+- **Display:** plain, and Apple's own word ("connected display"). But it's also what the device itself has, and "the display" is ambiguous in speech.
+- **Second screen:** what people call it, but long, and it says where, not what.
+- **Stage:** the device as presenter and the display as stage. Short, and it suits showing work, but less so the overview.
+- **Tapestry:** woven work hung on a wall for the room to see, in weave's own image. It's distinctive, but a name people have to learn.
+
+Whatever wins goes into `CONTEXT.md` with the words to avoid, mirror among them, since it isn't one.
+
+### 9.6 What this isn't
+
+The companion lasts while the app is in front. A display that stays up with the iPad asleep, such as an overview on a TV in the corner, is a different client: a page in a browser on the Mac or the Apple TV. Since ADR 0010 that would be a remote client of its own, with a device key, or a read-only role the Host doesn't have yet. If it's wanted, it belongs with the Dispatcher's device API (WVE-176), not here.
+
+### 9.7 Decided, 2026-11-04
+
+After the spike, the person settled sections 9.4 and 9.5 for a first phase (WVE-183):
+
+- **The name is Surface** (`CONTEXT.md`), the display the device shows part of the app on. The terminal code's own "surface", Ghostty's word for a terminal view, stays as it is.
+- **The first phase is the iPhone's.** The iPad keeps today's app, and its Surface comes later (WVE-184).
+- **The split.**
+  - The thread list fills the iPhone in portrait, as now.
+  - Selecting a thread puts its thread view on the Surface, without the sidebar or the composer.
+  - The iPhone keeps only the composer and the keyboard, with the thread's pending requests answered above the composer, and may rotate to landscape for a bigger keyboard.
+- **A scrubber** on the iPhone's right edge scrolls the Surface's thread, with a Latest button to follow the end again.
+- **Still open:** what the Surface shows while the iPhone shows the list.
+
+## 10. The spike, and what a device still has to settle
+
+### 10.1 The iPhone, 2026-11-04
+
+A throwaway build on the iPhone (iPhone 17e, iOS 27.2 beta), uncommitted. It had:
+
+- the role guard of section 9.1;
+- a scene accessory registered in `WeaveBridgeViewController.viewDidLoad`;
+- a companion scene with a bridge-less `WKWebView`, which loaded the app's own bundle through Capacitor's `WebViewAssetHandler` (`capacitor://localhost/?mock=running`) on a non-persistent data store;
+- a native strip with the screen's facts, a clock, the scene's frame rate and a log of scene and device events.
+
+It mirrored over AirPlay. What it showed:
+
+- **The accessory works with `UIApplicationSupportsMultipleScenes` false.** At launch the registration was enabled and not available. The moment mirroring started, the system asked `configurationForConnecting` for the role, connected the scene (`sceneAccessoryUserInfo` arrived), and `isAvailable` turned true in `updateProperties`. Mirroring stopped, and the phone kept its own UI and stayed usable.
+- **The bundle runs unchanged in the second web view.** The mock scenario drew the iPad layout full screen at 1080p and 60 fps, as the person saw it. No bridge, no plugins and no Host connection were needed.
+- **The screen is the receiver's, not a TV mode list.** The first receiver gave 2940×1880 pt at scale 1, the second 1920×1080. Each had one mode, 60 fps at most, `overscanCompensation` 2 (`.none`) with zero insets, and a zero safe area. Moving to another receiver disconnected the scene and connected a new one at the new size, within about a second. A TV's overscan is the receiver's to handle, so the HIG's 60/80 pt inset is a design margin, not something the screen reports.
+- **Backgrounding ends it.** Going to the Home Screen sent `willResignActive`, `didEnterBackground` and the companion's `didDisconnect` within about a second, and the display went back to mirroring the phone (the Home Screen). On returning, the scene connected again by itself within 0.3 s of `willEnterForeground`, with nothing new from the app. Since the scene is disconnected, not suspended, the companion must rebuild what it shows on each connection. A projection the main web view sends again handles that.
+- **Heat.** After about 5½ minutes of the companion at 1080p and 60 fps the thermal state rose to fair, and to serious at about 6¼ minutes, with the battery at 65%. Mirroring's own encoding is part of that, and there was no baseline without the companion. Its cost is unmeasured, but it can't be taken as free. The companion should draw only when something changes: a display link at a low preferred rate, and no animation left running when nothing changes.
+
+### 10.2 Still open
+
+- Locking the phone with the companion up. It's probably the same as backgrounding, since locking backgrounds the app.
+- A thermal baseline: the same minutes of plain mirroring, then the companion at a throttled rate.
+- On the iPad with a cable: whether Stage Manager's extended display offers the accessory at all.
+- On an iOS 26 simulator: that the role guard keeps mirroring and that the automatic scene draws the companion.
+- A native terminal and a second stream in the companion's window.
 
 ## 11. Follow-ups this implies
 
-1. **Bug:** on iOS 16–26, AirPlay mirroring starts a second copy of the app (a second bridge for the external-display scene). The role guard of section 9.1, and a simulator check on iOS 26.
-2. **Spike:** a scene accessory with a bridge-less companion web view showing a static page and one terminal, on both devices and both receivers. It answers section 10.
-3. **The companion:** the `Companion` plugin, the display mode and its projection, the Board and the Stage (terminal and transcript), and the Display menu. Includes mock scenarios and the app spec's section.
-4. **Under WVE-96:** the companion as one more placement for the Pane's views and Visuals.
-5. **Notes on WVE-178, WVE-174 and WVE-145:** the Board shows Bots, context fill and the next occurrences once they land.
+1. **Bug:** on iOS 16–26, AirPlay mirroring starts a second copy of the app, a second bridge for the external-display scene. The fix is section 9.1's role guard, with a simulator check on iOS 26.
+2. **The companion** (its name to come):
+   - the scene accessory;
+   - the bridge-less web view and its display mode;
+   - the projection the device's web view sends it;
+   - a native terminal in its window;
+   - the menu that pins what it shows;
+   - mock scenarios and the app spec's section.
+
+   It first settles sections 9.4 and 9.5.
+3. **Hand-off:** showing a terminal, a view or a Visual on the display in place of the device, after the companion.
+
+The Pane's views and Visuals go to the display once WVE-96 builds them. Bots, context use and occurrences go there once WVE-178, WVE-174 and WVE-145 land, if the overview is one of the things it shows.
