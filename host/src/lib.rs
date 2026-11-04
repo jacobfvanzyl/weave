@@ -43,6 +43,7 @@ pub mod paths;
 mod peers;
 mod queue;
 pub mod remote;
+mod service_tools;
 mod session;
 pub mod socket;
 pub mod tailscale;
@@ -299,6 +300,8 @@ pub(crate) struct Shared {
     pub(crate) git: git::Git,
     registry: Mutex<Registry>,
     pub(crate) devices: devices::Devices,
+    /// The connections serving services' tools, and calls waiting on them (WVE-171).
+    pub(crate) service_tools: service_tools::ServiceTools,
     pub(crate) updates: updates::Updates,
     /// Remote access: the WebSocket and the Serve entry, while pairing has them on.
     pub(crate) remote: remote::Remote,
@@ -945,6 +948,7 @@ impl Daemon {
                 mcp: Arc::new(mcp::Mcp::new(shared.clone())),
                 git: git::Git::new(&config.environment.vars),
                 devices,
+                service_tools: service_tools::ServiceTools::default(),
                 updates: updates::Updates::default(),
                 remote: remote::Remote::default(),
                 config,

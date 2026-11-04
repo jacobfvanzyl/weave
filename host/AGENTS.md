@@ -108,7 +108,11 @@ signal's, which skips a drain a client already waited out. Host tests
 (`tests/daemon.rs`) run in-process with fake agents sharing one state file,
 named in a test config.
 
-Client tools (WVE-89, ADR 0009) run on a client's device for an agent: `clipboard_write`,
+Service tools (WVE-171, ADR 0027) are `service_tools.rs`: a service's declared tools are kept
+with its device in `devices.json` (`Devices::declare_tools`, `service_tools`), offered in every
+session set up after (`client::service_tools`, `Mcp::declare`), and a call to one is a
+`service/toolCall` to the connection that declared them last (`ServiceTools::serve`), which
+answers with `service/answerTool`; the connection ending fails its calls. Client tools (WVE-89, ADR 0009) run on a client's device for an agent: `clipboard_write`,
 whose catalog is `weave_host_protocol::tools`. `mcp.rs` is the Host MCP server, `weave`, which
 `client::setup` declares for every session setup under a new `serverId` or token (a
 `Binding` the session keeps, bound to its id once the agent gives it, so calls that come
@@ -204,7 +208,7 @@ a peer Host too; `Connection::origin_for` lets only a service name what started 
 pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent beyond the
 replays it asked for (a `Backlog`, which an attach tells its replay's size), which attaches again
 after its position. Remote tests (`tests/remote.rs`) use a real
-loopback WebSocket; `../host-client/examples/remote.rs` is the client for trying it by
+loopback WebSocket, and fake agents that take MCP over ACP; `../host-client/examples/remote.rs` is the client for trying it by
 hand.
 
 Peer Hosts (WVE-109, ADRs 0017 and 0024, `peers.rs`; the Host protocol's Peer Hosts section) are

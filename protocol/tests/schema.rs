@@ -143,6 +143,8 @@ fn schema() -> Value {
         "terminals/write" => terminals::WriteTerminalRequest,
         "terminals/format" => terminals::FormatTerminalRequest,
         "terminals/attach" => terminals::AttachTerminalRequest,
+        "service/declareTools" => tools::DeclareToolsRequest,
+        "service/answerTool" => tools::AnswerToolRequest,
     };
     let notifications = notifications! { generator, inlined;
         "session/event" => events::SessionEventNotification,
@@ -156,6 +158,8 @@ fn schema() -> Value {
         "devices/paired" => devices::DevicePairedNotification,
         "terminals/updated" => terminals::TerminalUpdatedNotification,
         "terminals/removed" => terminals::TerminalRemovedNotification,
+        "service/toolCall" => tools::ToolCallNotification,
+        "service/toolCallCancelled" => tools::ToolCallCancelledNotification,
     };
     // A terminal's stream speaks frames of its own, not JSON-RPC (`terminals::stream`).
     let stream = json!({

@@ -5472,6 +5472,53 @@ export interface AttachTerminalResponse {
   expiresAt: number;
 }
 /**
+ * `service/declareTools`: the tools a service serves, replacing those it declared before
+ * (feature `serviceTools`). The Host keeps them, across the service's reconnects and its own
+ * restarts, and offers them to the agent of every thread set up from then on, as
+ * `<service>__<tool>`; a thread already open keeps the tools it started with. Only a service
+ * may declare tools. Each name is letters, digits, `_` and `-`, and the names agents see may
+ * be no longer than [`MAX_SERVICE_TOOL_NAME`] nor another service's. Answered with those names.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DeclareToolsRequest".
+ */
+export interface DeclareToolsRequest {
+  tools: Tool[];
+}
+/**
+ * A tool in one of the Host's catalogs, as agents see it in `tools/list`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Tool".
+ */
+export interface Tool {
+  name: string;
+  title: string;
+  description: string;
+  inputSchema: unknown;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DeclareToolsResponse".
+ */
+export interface DeclareToolsResponse {
+  /**
+   * The tools' names as agents see them, in order.
+   */
+  names: string[];
+}
+/**
+ * `service/answerTool`: the result of a call made to this service, which only it may answer,
+ * once.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AnswerToolRequest".
+ */
+export interface AnswerToolRequest {
+  callId: string;
+  result: ClientToolResult;
+}
+/**
  * `session/event`: one journaled event, in order.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -6589,6 +6636,60 @@ export interface TerminalRemovedNotification {
   exitCode?: number | null;
 }
 /**
+ * `service/toolCall`, to the service that declared the tool: a session's agent called it.
+ * The service answers with `service/answerTool`; the agent waits until it does.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ToolCallNotification".
+ */
+export interface ToolCallNotification {
+  callId: string;
+  /**
+   * The tool as the service declared it, without its prefix.
+   */
+  tool: string;
+  arguments?: {
+    [k: string]: unknown;
+  };
+  caller: ToolCaller;
+}
+/**
+ * The session whose agent calls a service tool.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ToolCaller".
+ */
+export interface ToolCaller {
+  sessionId: SessionId;
+  agentId: string;
+  cwd: string;
+  policy: PermissionPolicy2;
+  labels?: string[];
+}
+/**
+ * How a session's permission requests are answered.
+ */
+export interface PermissionPolicy2 {
+  /**
+   * Tool kinds approved without asking anyone.
+   */
+  approve?: ToolKind[];
+  /**
+   * What happens to the rest.
+   */
+  otherwise?: "ask" | "reject";
+}
+/**
+ * `service/toolCallCancelled`: the agent stopped waiting for the call; answering it now does
+ * nothing.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ToolCallCancelledNotification".
+ */
+export interface ToolCallCancelledNotification {
+  callId: string;
+}
+/**
  * The client's first text frame.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -6779,6 +6880,8 @@ export interface HostRequests {
   "terminals/write": { params: WriteTerminalRequest; result: Empty };
   "terminals/format": { params: FormatTerminalRequest; result: FormatTerminalResponse };
   "terminals/attach": { params: AttachTerminalRequest; result: AttachTerminalResponse };
+  "service/declareTools": { params: DeclareToolsRequest; result: DeclareToolsResponse };
+  "service/answerTool": { params: AnswerToolRequest; result: Empty };
 }
 
 /** What each notification the Host sends carries. */
@@ -6794,6 +6897,8 @@ export interface HostNotifications {
   "devices/paired": DevicePairedNotification;
   "terminals/updated": TerminalUpdatedNotification;
   "terminals/removed": TerminalRemovedNotification;
+  "service/toolCall": ToolCallNotification;
+  "service/toolCallCancelled": ToolCallCancelledNotification;
 }
 
 export type HostMethod = keyof HostRequests;

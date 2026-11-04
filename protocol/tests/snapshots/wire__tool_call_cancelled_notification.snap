@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ToolCallCancelledNotification { call_id: \"c-1\".to_owned(), })"
+---
+{
+  "method": "service/toolCallCancelled",
+  "params": {
+    "callId": "c-1"
+  }
+}

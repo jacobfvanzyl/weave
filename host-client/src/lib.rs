@@ -52,6 +52,8 @@ use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::terminals::TerminalRemovedNotification;
 use weave_host_protocol::terminals::TerminalUpdatedNotification;
+use weave_host_protocol::tools::ToolCallCancelledNotification;
+use weave_host_protocol::tools::ToolCallNotification;
 
 pub use crate::remote::Credentials;
 
@@ -76,6 +78,11 @@ pub enum HostEvent {
     TerminalUpdated(Box<TerminalUpdatedNotification>),
     /// A terminal ended, in a scope this client watches.
     TerminalRemoved(TerminalRemovedNotification),
+    /// A session's agent called a tool this service declared (`service/toolCall`); answer it
+    /// with `service/answerTool`.
+    ToolCall(Box<ToolCallNotification>),
+    /// The agent stopped waiting for a call to this service.
+    ToolCallCancelled(ToolCallCancelledNotification),
     /// The answer to [`HostHandle::open`], ahead of the events that follow it.
     Opened {
         tag: u64,
@@ -170,6 +177,8 @@ impl HostConnection {
         let on_session_removed = events.clone();
         let on_terminal_updated = events.clone();
         let on_terminal_removed = events.clone();
+        let on_tool_call = events.clone();
+        let on_tool_call_cancelled = events.clone();
         // Handlers run inside the dispatch loop, in the order messages arrived; each only
         // passes its message on.
         let builder = HostClient
@@ -250,6 +259,20 @@ impl HostConnection {
             .on_receive_notification(
                 async move |notification: TerminalRemovedNotification, _cx| {
                     let _ = on_terminal_removed.send(HostEvent::TerminalRemoved(notification));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: ToolCallNotification, _cx| {
+                    let _ = on_tool_call.send(HostEvent::ToolCall(Box::new(notification)));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |notification: ToolCallCancelledNotification, _cx| {
+                    let _ = on_tool_call_cancelled.send(HostEvent::ToolCallCancelled(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),

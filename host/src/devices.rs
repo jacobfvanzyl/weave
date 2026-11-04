@@ -32,8 +32,10 @@ use weave_host_protocol::devices::DevicePairedNotification;
 use weave_host_protocol::devices::Jwk;
 use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::auth_message;
+use weave_host_protocol::tools::Tool;
 
 use crate::journal::now_ms;
+use crate::service_tools;
 use crate::session::lock;
 
 /// How long an offer stays good.
@@ -86,6 +88,9 @@ struct Stored {
     /// A service, such as the Dispatcher (ADR 0027).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     service: bool,
+    /// The tools a service declared, which threads offer (WVE-171).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<Tool>,
 }
 
 impl Stored {
@@ -207,6 +212,7 @@ impl Devices {
             last_seen_at: Some(now),
             host: device.host,
             service: device.service,
+            tools: Vec::new(),
         };
         state.devices.insert(id, stored.clone());
         self.save(&state);
@@ -295,6 +301,59 @@ impl Devices {
                     u32::try_from(clients.len()).unwrap_or(u32::MAX)
                 });
                 listing(stored, connections)
+            })
+            .collect()
+    }
+
+    /// Replace the tools the service `device_id` serves with `tools`: the names agents see, or
+    /// why they can't be declared. Another service paired under the same name, as one paired
+    /// again without revoking the first is, gives its tools up to this one.
+    pub(crate) fn declare_tools(
+        &self,
+        device_id: &str,
+        tools: Vec<Tool>,
+    ) -> Result<Vec<String>, String> {
+        let mut state = lock(&self.state);
+        let prefix = match state.devices.get(device_id) {
+            Some(stored) if stored.service => service_tools::prefix(&stored.name),
+            _ => return Err("only a service declares tools".to_owned()),
+        };
+        let names = service_tools::named(&prefix, &tools)?;
+        for other in state.devices.values_mut() {
+            if other.id != device_id
+                && other.service
+                && !other.tools.is_empty()
+                && service_tools::prefix(&other.name) == prefix
+            {
+                tracing::info!(service = %other.id, by = %device_id, "a service paired under the same name took its tools over");
+                other.tools.clear();
+            }
+        }
+        if let Some(stored) = state.devices.get_mut(device_id) {
+            stored.tools = tools;
+        }
+        self.save(&state);
+        Ok(names)
+    }
+
+    /// Every tool services declared, as threads offer them.
+    pub(crate) fn service_tools(&self) -> Vec<service_tools::Offered> {
+        let state = lock(&self.state);
+        state
+            .devices
+            .values()
+            .filter(|stored| stored.service)
+            .flat_map(|stored| {
+                let prefix = service_tools::prefix(&stored.name);
+                stored.tools.iter().map(move |tool| service_tools::Offered {
+                    tool: Tool {
+                        name: format!("{prefix}__{}", tool.name),
+                        ..tool.clone()
+                    },
+                    own: tool.name.clone(),
+                    service: stored.id.clone(),
+                    service_name: stored.name.clone(),
+                })
             })
             .collect()
     }

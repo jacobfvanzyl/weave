@@ -152,7 +152,11 @@ use weave_host_protocol::terminals::TerminalsResponse;
 use weave_host_protocol::terminals::UnwatchTerminalsRequest;
 use weave_host_protocol::terminals::WatchTerminalsRequest;
 use weave_host_protocol::terminals::WriteTerminalRequest;
+use weave_host_protocol::tools::AnswerToolRequest;
 use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
+use weave_host_protocol::tools::DeclareToolsRequest;
+use weave_host_protocol::tools::DeclareToolsResponse;
+use weave_host_protocol::tools::SERVICE_TOOLS_FEATURE;
 use weave_host_protocol::tools::Tool;
 use weave_host_protocol::tools::catalog;
 use weave_host_protocol::tools::host_catalog;
@@ -196,6 +200,7 @@ use crate::journal::now_ms;
 use crate::mcp::Servers;
 use crate::modes;
 use crate::queue::Queue;
+use crate::service_tools;
 use crate::session;
 use crate::session::Answer;
 use crate::session::AttachReply;
@@ -301,6 +306,7 @@ async fn serve_as(
         terminals.forget(connection.id);
     }
     shared.lapse_drain(connection.id);
+    shared.service_tools.disconnected(connection.id);
     if let Some(device) = lock(&connection.device).take() {
         shared.devices.disconnected(&device.id, connection.id);
     }
@@ -345,6 +351,7 @@ async fn handlers(
     let on_create = Arc::clone(connection);
     let on_watch = Arc::clone(connection);
     let on_unwatch = Arc::clone(connection);
+    let on_declare = Arc::clone(connection);
     let on_attach = Arc::clone(connection);
     let on_watch_terminals = Arc::clone(connection);
     let on_any = Arc::clone(connection);
@@ -567,6 +574,19 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: DeclareToolsRequest, responder, cx: ConnectionTo<HostClient>| {
+                match on_declare.declare_tools(request, cx) {
+                    Ok(declared) => responder.respond(declared),
+                    Err(error) => responder.respond_with_error(error),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, answer_tool),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |_request: UnwatchSessionsRequest, responder, _cx| {
                 on_unwatch.shared.unwatch(on_unwatch.id);
                 responder.respond(Empty {})
@@ -729,7 +749,7 @@ const FOR_PEERS: [&str; 12] = [
 
 /// The methods a service may ask (ADR 0027): its hello, and what starting headless turns,
 /// following threads and naming the ones it starts need.
-const FOR_SERVICES: [&str; 17] = [
+const FOR_SERVICES: [&str; 19] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -744,6 +764,8 @@ const FOR_SERVICES: [&str; 17] = [
     "session/rename",
     "session/setSuccessor",
     "session/label",
+    "service/declareTools",
+    "service/answerTool",
     "queue/add",
     "turn/steer",
     "turn/cancel",
@@ -998,6 +1020,7 @@ impl Connection {
                 SUCCESSORS_FEATURE.to_owned(),
                 LABELS_FEATURE.to_owned(),
                 CONTEXT_FEATURE.to_owned(),
+                SERVICE_TOOLS_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
@@ -1830,6 +1853,46 @@ impl Connection {
         Ok(Empty {})
     }
 
+    /// The paired service this client proved at hello, if it's one.
+    fn service(&self) -> Result<DeviceInfo, Error> {
+        lock(&self.device)
+            .clone()
+            .filter(|device| device.service)
+            .ok_or_else(|| {
+                Error::new(
+                    errors::FORBIDDEN,
+                    "only a service paired as one declares and answers tools",
+                )
+            })
+    }
+
+    /// `service/declareTools`: the tools this service serves, from this connection (WVE-171).
+    fn declare_tools(
+        &self,
+        request: DeclareToolsRequest,
+        cx: ConnectionTo<HostClient>,
+    ) -> Result<DeclareToolsResponse, Error> {
+        self.hello_info()?;
+        let service = self.service()?;
+        let names = self
+            .shared
+            .devices
+            .declare_tools(&service.id, request.tools)
+            .map_err(|why| Error::invalid_params().data(why))?;
+        self.shared.service_tools.serve(&service.id, self.id, cx);
+        Ok(DeclareToolsResponse { names })
+    }
+
+    /// `service/answerTool`: this service's answer to a call made to it.
+    async fn answer_tool(&self, request: AnswerToolRequest) -> Result<Empty, Error> {
+        self.hello_info()?;
+        let service = self.service()?;
+        self.shared
+            .service_tools
+            .answer(&service.id, &request.call_id, request.result)?;
+        Ok(Empty {})
+    }
+
     /// `session/label`: add labels to an open session and take others off (WVE-173).
     async fn label_session(
         &self,
@@ -2529,6 +2592,7 @@ pub(crate) fn setup(
     let declared = match shared.mcp.declare(
         client_tools(agent),
         host_tools(agent),
+        service_tools(shared, agent),
         &capabilities.mcp_capabilities,
         &shared.config.mcp_bridge,
     ) {
@@ -2578,6 +2642,18 @@ fn host_tools(agent: &Agent) -> Vec<Tool> {
     host_catalog()
         .into_iter()
         .filter(|tool| chosen.is_none_or(|names| names.contains(&tool.name)))
+        .collect()
+}
+
+/// The services' tools `agent` is offered: all they declared, less what its configuration's
+/// `host_tools` leaves out (WVE-171).
+fn service_tools(shared: &Shared, agent: &Agent) -> Vec<service_tools::Offered> {
+    let chosen = agent.config.host_tools(&agent.id);
+    shared
+        .devices
+        .service_tools()
+        .into_iter()
+        .filter(|offered| chosen.is_none_or(|names| names.contains(&offered.tool.name)))
         .collect()
 }
 

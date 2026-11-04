@@ -1,0 +1,9 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&DeclareToolsResponse\n{ names: vec![\"dispatcher__add_schedule\".to_owned()], })"
+---
+{
+  "names": [
+    "dispatcher__add_schedule"
+  ]
+}

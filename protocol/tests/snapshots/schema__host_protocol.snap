@@ -223,6 +223,14 @@ expression: schema()
     "terminals/attach": {
       "params": "AttachTerminalRequest",
       "result": "AttachTerminalResponse"
+    },
+    "service/declareTools": {
+      "params": "DeclareToolsRequest",
+      "result": "DeclareToolsResponse"
+    },
+    "service/answerTool": {
+      "params": "AnswerToolRequest",
+      "result": "Empty"
     }
   },
   "x-weave-notifications": {
@@ -236,7 +244,9 @@ expression: schema()
     "agents/updateAvailable": "UpdateAvailableNotification",
     "devices/paired": "DevicePairedNotification",
     "terminals/updated": "TerminalUpdatedNotification",
-    "terminals/removed": "TerminalRemovedNotification"
+    "terminals/removed": "TerminalRemovedNotification",
+    "service/toolCall": "ToolCallNotification",
+    "service/toolCallCancelled": "ToolCallCancelledNotification"
   },
   "x-weave-terminal-stream": {
     "open": "TerminalStreamOpen",
@@ -7544,6 +7554,74 @@ expression: schema()
         "expiresAt"
       ]
     },
+    "DeclareToolsRequest": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          }
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "description": "`service/declareTools`: the tools a service serves, replacing those it declared before\n(feature `serviceTools`). The Host keeps them, across the service's reconnects and its own\nrestarts, and offers them to the agent of every thread set up from then on, as\n`<service>__<tool>`; a thread already open keeps the tools it started with. Only a service\nmay declare tools. Each name is letters, digits, `_` and `-`, and the names agents see may\nbe no longer than [`MAX_SERVICE_TOOL_NAME`] nor another service's. Answered with those names."
+    },
+    "Tool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": true
+      },
+      "required": [
+        "name",
+        "title",
+        "description",
+        "inputSchema"
+      ],
+      "description": "A tool in one of the Host's catalogs, as agents see it in `tools/list`."
+    },
+    "DeclareToolsResponse": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The tools' names as agents see them, in order."
+        }
+      },
+      "required": [
+        "names"
+      ]
+    },
+    "AnswerToolRequest": {
+      "type": "object",
+      "properties": {
+        "callId": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/ClientToolResult"
+        }
+      },
+      "required": [
+        "callId",
+        "result"
+      ],
+      "description": "`service/answerTool`: the result of a call made to this service, which only it may answer,\nonce."
+    },
     "SessionEventNotification": {
       "type": "object",
       "properties": {
@@ -9580,6 +9658,75 @@ expression: schema()
         "scope"
       ],
       "description": "`terminals/removed`, to clients watching its scope: a terminal ended."
+    },
+    "ToolCallNotification": {
+      "type": "object",
+      "properties": {
+        "callId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string",
+          "description": "The tool as the service declared it, without its prefix."
+        },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "caller": {
+          "$ref": "#/$defs/ToolCaller"
+        }
+      },
+      "required": [
+        "callId",
+        "tool",
+        "caller"
+      ],
+      "description": "`service/toolCall`, to the service that declared the tool: a session's agent called it.\nThe service answers with `service/answerTool`; the agent waits until it does."
+    },
+    "ToolCaller": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/PermissionPolicy",
+          "description": "Its permission policy, which what the call starts should approve no more than."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "sessionId",
+        "agentId",
+        "cwd",
+        "policy"
+      ],
+      "description": "The session whose agent calls a service tool."
+    },
+    "ToolCallCancelledNotification": {
+      "type": "object",
+      "properties": {
+        "callId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "callId"
+      ],
+      "description": "`service/toolCallCancelled`: the agent stopped waiting for the call; answering it now does\nnothing."
     },
     "TerminalStreamOpen": {
       "type": "object",

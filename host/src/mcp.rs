@@ -59,8 +59,10 @@ use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::mcp::McpTransport;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::Tool;
+use weave_host_protocol::tools::ToolCaller;
 
 use crate::Shared;
+use crate::service_tools::Offered;
 use crate::session::ClientToolCall;
 use crate::session::Command;
 use crate::socket::Peer;
@@ -98,10 +100,12 @@ pub(crate) const REFUSED: &str = "This agent's MCP client predates MCP 2026-07-2
 
 /// One session setup's declaration of the server.
 struct Declared {
-    /// What `tools/list` gives: the client tools, then the Host tools.
+    /// What `tools/list` gives: the client tools, then the Host tools, then the services'.
     tools: Vec<Tool>,
     /// Which of them the Host answers itself.
     host_tools: Vec<String>,
+    /// The services' tools among them, which the services that declared them answer.
+    service_tools: Vec<Offered>,
     /// The session's id, once the agent has given it.
     session: watch::Sender<Option<SessionId>>,
     /// How the agent reaches it.
@@ -277,13 +281,14 @@ impl Mcp {
         Arc::new(Provider(Arc::downgrade(self)))
     }
 
-    /// Declare the server for one session setup, with `client_tools` and `host_tools`: over ACP
-    /// when the agent takes that, otherwise as the stdio bridge. `Err` says why it can't be
-    /// declared.
+    /// Declare the server for one session setup, with `client_tools`, `host_tools` and
+    /// `service_tools`: over ACP when the agent takes that, otherwise as the stdio bridge. `Err`
+    /// says why it can't be declared.
     pub(crate) fn declare(
         self: &Arc<Self>,
         client_tools: Vec<Tool>,
         host_tools: Vec<Tool>,
+        service_tools: Vec<Offered>,
         capabilities: &McpCapabilities,
         bridge: &[String],
     ) -> Result<(McpServer, Binding), String> {
@@ -307,7 +312,12 @@ impl Mcp {
         };
         let declared = Arc::new(Declared {
             host_tools: host_tools.iter().map(|tool| tool.name.clone()).collect(),
-            tools: client_tools.into_iter().chain(host_tools).collect(),
+            tools: client_tools
+                .into_iter()
+                .chain(host_tools)
+                .chain(service_tools.iter().map(|offered| offered.tool.clone()))
+                .collect(),
+            service_tools,
             session: watch::Sender::new(None),
             transport: transport(&server),
             connected: AtomicBool::new(false),
@@ -529,6 +539,31 @@ impl Mcp {
                 return tool_result(ClientToolResult::error("The Host is stopping."));
             };
             return tool_result(crate::host_tools::call(&shared, &session, tool, &arguments).await);
+        }
+        if let Some(offered) = declared
+            .service_tools
+            .iter()
+            .find(|offered| offered.tool.name == tool)
+        {
+            let Some(shared) = self.shared.upgrade() else {
+                return tool_result(ClientToolResult::error("The Host is stopping."));
+            };
+            let summary = session.summary();
+            let caller = ToolCaller {
+                session_id: summary.session_id,
+                agent_id: summary.agent_id,
+                cwd: summary.cwd,
+                policy: summary.policy,
+                labels: summary.labels,
+            };
+            return match shared
+                .service_tools
+                .call(offered, arguments, caller, cancelled)
+                .await
+            {
+                Some(result) => tool_result(result),
+                None => McpOutcome::Cancelled,
+            };
         }
         let call = self.next_call.fetch_add(1, Ordering::Relaxed);
         let (reply, answered) = oneshot::channel();

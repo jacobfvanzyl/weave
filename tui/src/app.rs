@@ -596,9 +596,12 @@ impl App {
                 Vec::new()
             }
             // The TUI makes no pairing offers, and watches no sessions.
+            // What the TUI doesn't ask for: watching, offers, and calls to a service.
             HostEvent::DevicePaired(_)
             | HostEvent::SessionUpdated(_)
-            | HostEvent::SessionRemoved(_) => Vec::new(),
+            | HostEvent::SessionRemoved(_)
+            | HostEvent::ToolCall(_)
+            | HostEvent::ToolCallCancelled(_) => Vec::new(),
             HostEvent::UpdateAvailable(notification) => {
                 if chat.active_session() == Some(&notification.session_id) {
                     chat.update_available(notification.update);

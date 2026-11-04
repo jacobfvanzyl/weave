@@ -159,9 +159,16 @@ use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::UnwatchSessionsRequest;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::sessions::WatchSessionsResponse;
+use weave_host_protocol::tools::AnswerToolRequest;
 use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
+use weave_host_protocol::tools::DeclareToolsRequest;
+use weave_host_protocol::tools::DeclareToolsResponse;
+use weave_host_protocol::tools::Tool;
+use weave_host_protocol::tools::ToolCallCancelledNotification;
+use weave_host_protocol::tools::ToolCallNotification;
+use weave_host_protocol::tools::ToolCaller;
 use weave_host_protocol::tools::catalog;
 use weave_host_protocol::tools::host_catalog;
 use weave_host_protocol::turns::CancelTurnRequest;
@@ -1926,6 +1933,60 @@ fn client_tools() {
         round_trip(&ClientToolResult::error(
             "The person's device isn't connected."
         ))
+    );
+}
+
+#[test]
+fn service_tools() {
+    let tool = Tool {
+        name: "add_schedule".to_owned(),
+        title: "Add a schedule".to_owned(),
+        description: "Start a turn at the times a cron expression gives.".to_owned(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"cron": {"type": "string"}},
+            "required": ["cron"],
+        }),
+    };
+    insta::assert_json_snapshot!(
+        "declare_tools_request",
+        message(&DeclareToolsRequest { tools: vec![tool] })
+    );
+    insta::assert_json_snapshot!(
+        "declare_tools_response",
+        round_trip(&DeclareToolsResponse {
+            names: vec!["dispatcher__add_schedule".to_owned()],
+        })
+    );
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("cron".to_owned(), serde_json::json!("0 9 * * *"));
+    insta::assert_json_snapshot!(
+        "tool_call_notification",
+        message(&ToolCallNotification {
+            call_id: "c-1".to_owned(),
+            tool: "add_schedule".to_owned(),
+            arguments,
+            caller: ToolCaller {
+                session_id: "s-1".into(),
+                agent_id: "claude".to_owned(),
+                cwd: "/repo".into(),
+                policy: PermissionPolicy::headless(Vec::new()),
+                labels: vec!["bot:daily".to_owned()],
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "tool_call_cancelled_notification",
+        message(&ToolCallCancelledNotification {
+            call_id: "c-1".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "answer_tool_request",
+        message(&AnswerToolRequest {
+            call_id: "c-1".to_owned(),
+            result: ClientToolResult::text("Scheduled every day at nine."),
+        })
     );
 }
 

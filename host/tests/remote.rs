@@ -74,6 +74,10 @@ use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::ServiceOrigin;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::tools::AnswerToolRequest;
+use weave_host_protocol::tools::ClientToolResult;
+use weave_host_protocol::tools::DeclareToolsRequest;
+use weave_host_protocol::tools::Tool;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::websocket::APP_ORIGIN;
@@ -117,8 +121,10 @@ impl World {
     fn config(&self) -> DaemonConfig {
         let state: PathBuf = self.dir.path().join("agent-state.json");
         let launcher: Launcher = Arc::new(move |_launch: &Launch, options: ClientOptions, _| {
+            // MCP over ACP, which reaches the Host's own MCP server without a bridge process.
             let config = FakeAgentConfig {
                 state_path: Some(state.clone()),
+                mcp_over_acp: true,
                 ..FakeAgentConfig::default()
             };
             Box::pin(async move {
@@ -1305,4 +1311,210 @@ async fn a_host_with_paired_devices_turns_remote_access_back_on() {
         .await
         .expect("devices/offer");
     assert_eq!(offer.url, Some(url));
+}
+
+/// What the agent said in reply to `prompt`, sent to the new session `session_id` through
+/// `local`, which is attached to it.
+async fn reply(
+    local: &HostConnection,
+    events: &mut UnboundedReceiver<HostEvent>,
+    session_id: &weave_acp_core::schema::SessionId,
+    prompt: &str,
+) -> String {
+    local
+        .send(AddQueuedRequest {
+            session_id: session_id.clone(),
+            prompt: vec![ContentBlock::from(prompt.to_owned())],
+            key: None,
+            caller: None,
+            origin: None,
+        })
+        .await
+        .expect("queue/add");
+    let mut said = String::new();
+    loop {
+        let event = tokio::time::timeout(WAIT, events.recv())
+            .await
+            .expect("an event in time")
+            .expect("connected");
+        let HostEvent::Event(event) = event else {
+            continue;
+        };
+        match event.event {
+            SessionEvent::Update { notification } if notification.session_id == *session_id => {
+                if let weave_acp_core::schema::SessionUpdate::AgentMessageChunk(chunk) =
+                    notification.update
+                    && let ContentBlock::Text(text) = chunk.content
+                {
+                    said.push_str(&text.text);
+                }
+            }
+            SessionEvent::TurnEnded {
+                session_id: ended, ..
+            } if ended == *session_id => {
+                return said;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A new session, opened through `local`.
+async fn new_session(local: &HostConnection, world: &World) -> weave_acp_core::schema::SessionId {
+    local
+        .send(CreateSessionRequest {
+            agent_id: "fake".to_owned(),
+            cwd: world.dir.path().to_path_buf(),
+            additional_directories: Vec::new(),
+            mode: None,
+            policy: None,
+            trace: false,
+            labels: Vec::new(),
+        })
+        .await
+        .expect("session/create")
+        .session_id
+}
+
+fn add_schedule() -> Tool {
+    Tool {
+        name: "add_schedule".to_owned(),
+        title: "Add a schedule".to_owned(),
+        description: "Start a turn at the times a cron expression gives.".to_owned(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"cron": {"type": "string"}},
+        }),
+    }
+}
+
+#[tokio::test]
+async fn a_service_declares_tools_that_threads_agents_call() {
+    let world = World::new();
+    let daemon = world.daemon();
+    let url = listen(&daemon, RemoteConfig::default()).await;
+    let (local, mut local_events) = local(&daemon).await;
+    let (device, key) = pair_service(&local, &url).await;
+    let (connected, _) = remote(&url, self::device(&device, &key, None)).await;
+    let (service, mut service_events) = connected.expect("connects");
+
+    // Only a service declares tools, under names that are names.
+    let refused = local
+        .send(DeclareToolsRequest {
+            tools: vec![add_schedule()],
+        })
+        .await
+        .expect_err("not a service");
+    assert!(errors::is(&refused, errors::FORBIDDEN), "{refused:?}");
+    let bad = service
+        .send(DeclareToolsRequest {
+            tools: vec![Tool {
+                name: "add schedule".to_owned(),
+                ..add_schedule()
+            }],
+        })
+        .await
+        .expect_err("not a name");
+    assert_eq!(bad.code, Error::invalid_params().code, "{bad:?}");
+    let declared = service
+        .send(DeclareToolsRequest {
+            tools: vec![add_schedule()],
+        })
+        .await
+        .expect("service/declareTools");
+    assert_eq!(declared.names, ["dispatcher__add_schedule"]);
+
+    // A thread set up from now on offers it beside the Host's own.
+    let session_id = new_session(&local, &world).await;
+    let listed = reply(&local, &mut local_events, &session_id, "tools").await;
+    assert!(listed.contains("dispatcher__add_schedule"), "{listed}");
+    assert!(listed.contains("list_sessions"), "{listed}");
+
+    // A call reaches the service, which answers it, naming the thread that called.
+    let answering = tokio::spawn(async move {
+        loop {
+            let event = tokio::time::timeout(WAIT, service_events.recv())
+                .await
+                .expect("an event in time")
+                .expect("connected");
+            if let HostEvent::ToolCall(call) = event {
+                service
+                    .send(AnswerToolRequest {
+                        call_id: call.call_id.clone(),
+                        result: ClientToolResult::text("Scheduled every day at nine."),
+                    })
+                    .await
+                    .expect("service/answerTool");
+                let again = service
+                    .send(AnswerToolRequest {
+                        call_id: call.call_id.clone(),
+                        result: ClientToolResult::text("twice"),
+                    })
+                    .await
+                    .expect_err("answered once");
+                assert_eq!(again.code, Error::invalid_params().code);
+                return (service, service_events, call);
+            }
+        }
+    });
+    let said = reply(
+        &local,
+        &mut local_events,
+        &session_id,
+        r#"tool dispatcher__add_schedule {"cron": "0 9 * * *"}"#,
+    )
+    .await;
+    assert!(said.contains("Scheduled every day at nine."), "{said}");
+    let (service, service_events, call) = answering.await.expect("answered");
+    assert_eq!(call.tool, "add_schedule");
+    assert_eq!(
+        call.arguments.get("cron"),
+        Some(&serde_json::json!("0 9 * * *"))
+    );
+    assert_eq!(call.caller.session_id, session_id);
+    assert_eq!(call.caller.agent_id, "fake");
+    assert_eq!(call.caller.policy, PermissionPolicy::ask());
+
+    // Another client can't answer for it.
+    let not_it = local
+        .send(AnswerToolRequest {
+            call_id: call.call_id,
+            result: ClientToolResult::text("me"),
+        })
+        .await
+        .expect_err("not the service");
+    assert!(errors::is(&not_it, errors::FORBIDDEN), "{not_it:?}");
+
+    // With the service away, a call fails at once saying so; the tool is still offered.
+    service.shutdown().await;
+    drop(service_events);
+    let away = new_session(&local, &world).await;
+    let listed = reply(&local, &mut local_events, &away, "tools").await;
+    assert!(listed.contains("dispatcher__add_schedule"), "{listed}");
+    let said = reply(
+        &local,
+        &mut local_events,
+        &away,
+        r#"tool dispatcher__add_schedule {}"#,
+    )
+    .await;
+    assert!(said.contains("Dispatcher isn't connected"), "{said}");
+    local.shutdown().await;
+    daemon.shutdown().await;
+
+    // The Host keeps them across a restart, and forgets them when the service is revoked.
+    let daemon = world.daemon();
+    let (local, mut local_events) = self::local(&daemon).await;
+    let restarted = new_session(&local, &world).await;
+    let listed = reply(&local, &mut local_events, &restarted, "tools").await;
+    assert!(listed.contains("dispatcher__add_schedule"), "{listed}");
+    local
+        .send(RevokeDeviceRequest {
+            device_id: device.id.clone(),
+        })
+        .await
+        .expect("devices/revoke");
+    let revoked = new_session(&local, &world).await;
+    let listed = reply(&local, &mut local_events, &revoked, "tools").await;
+    assert!(!listed.contains("dispatcher__"), "{listed}");
 }

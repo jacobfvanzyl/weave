@@ -1,0 +1,18 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AnswerToolRequest\n{\n    call_id: \"c-1\".to_owned(), result:\n    ClientToolResult::text(\"Scheduled every day at nine.\"),\n})"
+---
+{
+  "method": "service/answerTool",
+  "params": {
+    "callId": "c-1",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "Scheduled every day at nine."
+        }
+      ]
+    }
+  }
+}

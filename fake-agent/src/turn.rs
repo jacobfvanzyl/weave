@@ -152,6 +152,7 @@ impl Turn {
             "connect" => self.connect(cx).await?,
             "mcp" => self.list_mcp_servers(cx).await?,
             "tool" => self.call_tool(cx, rest).await?,
+            "tools" => self.list_tools(cx).await?,
             "mcp-legacy" => self.mcp_legacy(cx).await?,
             "think" => self.think(cx).await?,
             "work" => self.work(cx, rest == "fail").await?,
@@ -1149,6 +1150,27 @@ impl Turn {
                 self.say(cx, &format!("weave refused initialize: {why}"))
                     .await
             }
+        }
+    }
+
+    /// Say the names of the tools the `weave` server offers, from `tools/list`.
+    async fn list_tools(&self, cx: &ConnectionTo<Client>) -> Result<(), Error> {
+        let stdio = lock(&self.state).config.stdio_mcp.clone();
+        match crate::mcp::list_tools(cx, &self.mcp_servers, &stdio).await {
+            Ok(listed) => {
+                let names: Vec<&str> = listed
+                    .get("tools")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|tools| {
+                        tools
+                            .iter()
+                            .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.say(cx, &format!("Tools: {}.", names.join(", "))).await
+            }
+            Err(why) => self.say(cx, &format!("Listing tools failed: {why}")).await,
         }
     }
 

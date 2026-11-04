@@ -109,6 +109,21 @@ pub(crate) async fn call_tool(
     request(cx, servers, stdio, "tools/call", params).await
 }
 
+/// `tools/list` on the session's `weave` server: the tools it offers.
+pub(crate) async fn list_tools(
+    cx: &ConnectionTo<Client>,
+    servers: &[McpServer],
+    stdio: &StdioMcp,
+) -> Result<Value, String> {
+    let params = json!({
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientCapabilities": {},
+        },
+    });
+    request(cx, servers, stdio, "tools/list", params).await
+}
+
 /// Open the session with the `weave` server as an MCP client before 2026-07-28 would, with
 /// `initialize`. Returns what the server answered.
 pub(crate) async fn initialize(

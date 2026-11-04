@@ -170,7 +170,9 @@ request with `unauthenticated`.
   `labels` (WVE-173): `session/label`, the `labelled` event, `labels` in listings,
   `SessionState`, `session/create`, `session/run`, `sessions/list` and `sessions/watch` (see
   [Labels](#labels)), and `context` (WVE-174): listings' `context` and `lastCompaction` (see
-  [Context usage](#context-usage)).
+  [Context usage](#context-usage)), and `serviceTools` (WVE-171): `service/declareTools`,
+  `service/toolCall`, `service/toolCallCancelled` and `service/answerTool` (see
+  [Service tools](#service-tools)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -1018,6 +1020,46 @@ pending request every attached client sees, and its target answers with the tool
 running the tool) the agent gets a tool error saying why, at once, and nothing is pending.
 When the target detaches, the agent gets an error saying the tool may have run, and no
 other client runs it. The agent cancelling the call withdraws it.
+
+## Service tools
+
+Feature `serviceTools`, WVE-171, ADR 0027. A service declares tools of its own, which the Host
+offers every thread's agent through `weave` beside the client and Host tools, and answers their
+calls over its own connection. That is how agents reach the Dispatcher though the Host never
+connects to it.
+
+**`service/declareTools`** `{tools: Tool[]}` → `{names: string[]}`
+
+A `Tool` is `{name, title, description, inputSchema}`. The tools replace those the service
+declared before, so a service declares them on every connection, and the connection that
+declared them last serves them. Only a paired service may declare tools (`forbidden`).
+
+- **Names.** Agents see `<service>__<tool>`: the service's paired name lowercased, with
+  anything but letters and digits made `_`, then the tool's name, of letters, digits, `_` and
+  `-`. The whole name, with Claude Code's `mcp__weave__` before it, fits in 128 characters. A
+  service declares at most 64 tools. A service paired under the same name as another, as one
+  paired again without the first revoked is, takes over the other's tools. The answer gives the
+  names agents see.
+- **Kept.** The Host keeps them with the service's paired device, across the service's
+  reconnects and its own restarts, and forgets them when the service is revoked.
+- **Offered from setup.** A thread set up after a declaration lists the tools; a thread already
+  open keeps the tools it started with, since an agent's tools are fixed at setup and changing
+  them costs its prompt cache. An agent's `host_tools` setting leaves them out as it does Host
+  tools, by the names agents see. The thread's permission policy applies to calls as to any
+  `weave` tool.
+
+**`service/toolCall`** `{callId, tool, arguments, caller: {sessionId, agentId, cwd, policy, labels?}}`,
+to the service: a thread's agent called one of its tools, named as the service declared it.
+`caller` is the calling thread, whose policy what the call starts should approve no more than.
+**`service/toolCallCancelled`** `{callId}`: the agent stopped waiting.
+
+**`service/answerTool`** `{callId, result}` → `{}`
+
+The tool's MCP `CallToolResult`, `{content, isError?}`, which the agent gets. Only the service
+the call went to may answer it, once (`forbidden` for another client, invalid params for a call
+that isn't waiting on it). A call while no connection of the service serves its tools fails at
+once as a tool error naming the service; one whose connection ends first fails as one that may
+have run.
 
 ## Host tools
 

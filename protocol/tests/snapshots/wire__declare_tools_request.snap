@@ -1,0 +1,27 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&DeclareToolsRequest { tools: vec![tool] })"
+---
+{
+  "method": "service/declareTools",
+  "params": {
+    "tools": [
+      {
+        "name": "add_schedule",
+        "title": "Add a schedule",
+        "description": "Start a turn at the times a cron expression gives.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cron": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cron"
+          ]
+        }
+      }
+    ]
+  }
+}

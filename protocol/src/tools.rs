@@ -10,11 +10,24 @@
 //!   read and act on any session on the Host (ADR 0023), and start delegated sessions: sessions
 //!   of their own that the calling session starts. Given `host`, they act on a peer Host's
 //!   sessions instead (ADR 0017), through this Host's connection to it.
+//! - Service tools, which a service declares and answers over its own connection (ADR 0027,
+//!   WVE-171): agents see them as `<service>__<tool>`, and a call is a `service/toolCall` for
+//!   the service that declared it, naming the calling session.
 
+use std::path::PathBuf;
+
+use agent_client_protocol::JsonRpcNotification;
+use agent_client_protocol::JsonRpcRequest;
+use agent_client_protocol::JsonRpcResponse;
+use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
+
+use crate::Empty;
+use crate::policy::PermissionPolicy;
 
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that offers client tools.
 pub const CLIENT_TOOLS_FEATURE: &str = "clientTools";
@@ -318,6 +331,88 @@ fn rename_session() -> Tool {
             "additionalProperties": false
         }),
     }
+}
+
+/// The [`crate::hello::HelloResponse::features`] entry of a Host that takes service tools.
+pub const SERVICE_TOOLS_FEATURE: &str = "serviceTools";
+
+/// The most tools one service declares.
+pub const MAX_SERVICE_TOOLS: usize = 64;
+
+/// The longest name agents see for a tool, with the `mcp__weave__` Claude Code puts before it:
+/// it leaves out tools whose whole name is longer than 128 characters.
+pub const MAX_SERVICE_TOOL_NAME: usize = 128 - "mcp__weave__".len();
+
+/// `service/declareTools`: the tools a service serves, replacing those it declared before
+/// (feature `serviceTools`). The Host keeps them, across the service's reconnects and its own
+/// restarts, and offers them to the agent of every thread set up from then on, as
+/// `<service>__<tool>`; a thread already open keeps the tools it started with. Only a service
+/// may declare tools. Each name is letters, digits, `_` and `-`, and the names agents see may
+/// be no longer than [`MAX_SERVICE_TOOL_NAME`] nor another service's. Answered with those names.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "service/declareTools", response = DeclareToolsResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclareToolsRequest {
+    pub tools: Vec<Tool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DeclareToolsResponse {
+    /// The tools' names as agents see them, in order.
+    pub names: Vec<String>,
+}
+
+/// The session whose agent calls a service tool.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCaller {
+    pub session_id: SessionId,
+    pub agent_id: String,
+    pub cwd: PathBuf,
+    /// Its permission policy, which what the call starts should approve no more than.
+    pub policy: PermissionPolicy,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+}
+
+/// `service/toolCall`, to the service that declared the tool: a session's agent called it.
+/// The service answers with `service/answerTool`; the agent waits until it does.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "service/toolCall")]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallNotification {
+    pub call_id: String,
+    /// The tool as the service declared it, without its prefix.
+    pub tool: String,
+    #[serde(default)]
+    pub arguments: Map<String, Value>,
+    pub caller: ToolCaller,
+}
+
+/// `service/toolCallCancelled`: the agent stopped waiting for the call; answering it now does
+/// nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[notification(method = "service/toolCallCancelled")]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallCancelledNotification {
+    pub call_id: String,
+}
+
+/// `service/answerTool`: the result of a call made to this service, which only it may answer,
+/// once.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "service/answerTool", response = Empty)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerToolRequest {
+    pub call_id: String,
+    pub result: ClientToolResult,
 }
 
 /// A client's answer to a client tool call: MCP's `CallToolResult`, which the agent gets as it
