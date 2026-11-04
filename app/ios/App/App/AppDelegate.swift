@@ -38,7 +38,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let config = UISceneConfiguration(name: "Default Configuration",
                                           sessionRole: connectingSceneSession.role)
-        config.delegateClass = SceneDelegate.self
+        // Only the app's own window gets the bridge. Before iOS 27 the system offers every app a
+        // scene on a connected display, and a bridge there would be a second copy of the app
+        // (ionic-team/capacitor#8648); without a delegate it stays empty and the display mirrors.
+        if connectingSceneSession.role == .windowApplication {
+            config.delegateClass = SceneDelegate.self
+        }
         return config
     }
 }
