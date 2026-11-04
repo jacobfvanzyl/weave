@@ -1,6 +1,11 @@
-//! The Dispatcher's state, in SQLite (ADR 0027): the Hosts it is paired with and the work
-//! written down for them. Later issues add triggers, their occurrences and Bots, each as a
-//! migration of its own.
+//! The Dispatcher's state, in SQLite (ADR 0027): the Hosts it is paired with, the work
+//! written down for them, and schedules and their occurrences ([`schedules`]). Later issues add
+//! other triggers and Bots, each as a migration of its own.
+
+mod schedules;
+
+pub(crate) use schedules::Fired;
+pub(crate) use schedules::StoredSchedule;
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -18,7 +23,8 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 1] = ["
+const MIGRATIONS: [&str; 2] = [
+    "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -38,7 +44,42 @@ const MIGRATIONS: [&str; 1] = ["
         error TEXT
     );
     CREATE INDEX deliveries_by_host ON deliveries (host_id, state);
-"];
+",
+    "
+    CREATE TABLE schedules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        cron TEXT NOT NULL,
+        zone TEXT NOT NULL,
+        host_id TEXT NOT NULL REFERENCES hosts (host_id) ON DELETE CASCADE,
+        run TEXT NOT NULL,
+        missed TEXT NOT NULL,
+        overlap TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        considered_until INTEGER NOT NULL,
+        paused TEXT,
+        failures INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE occurrences (
+        id TEXT PRIMARY KEY,
+        schedule_id TEXT NOT NULL REFERENCES schedules (id) ON DELETE CASCADE,
+        scheduled_at INTEGER NOT NULL,
+        late INTEGER NOT NULL,
+        manual INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        outcome TEXT,
+        why TEXT,
+        delivery_id TEXT REFERENCES deliveries (id) ON DELETE SET NULL,
+        session_id TEXT,
+        turn_id TEXT,
+        recorded_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        UNIQUE (schedule_id, scheduled_at, manual)
+    );
+    CREATE INDEX occurrences_by_delivery ON occurrences (delivery_id);
+    CREATE INDEX occurrences_by_state ON occurrences (state);
+",
+];
 
 /// A Host the Dispatcher is paired with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,22 +99,35 @@ pub(crate) struct StoredHost {
 pub enum Work {
     Run(RunRequest),
     Queue(AddQueuedRequest),
+    /// A prompt for the thread `sessionId` names: added to its queue if it's open when first
+    /// sent, otherwise run in it, which opens it. Which it is is written down before it's sent,
+    /// so every send asks the same under its key.
+    Prompt(RunRequest),
 }
 
 impl Work {
     pub(crate) fn key(&self) -> Option<&str> {
         match self {
-            Self::Run(request) => request.key.as_deref(),
+            Self::Run(request) | Self::Prompt(request) => request.key.as_deref(),
             Self::Queue(request) => request.key.as_deref(),
         }
     }
 
     fn keyed(mut self, key: String) -> Self {
         match &mut self {
-            Self::Run(request) => request.key = Some(key),
+            Self::Run(request) | Self::Prompt(request) => request.key = Some(key),
             Self::Queue(request) => request.key = Some(key),
         }
         self
+    }
+
+    /// The thread and turn the Host's `answer` to this says it started, if it says.
+    fn started(&self, answer: &serde_json::Value) -> Option<(String, String)> {
+        let text = |name: &str| answer.get(name)?.as_str().map(str::to_owned);
+        match self {
+            Self::Run(_) | Self::Prompt(_) => Some((text("sessionId")?, text("turnId")?)),
+            Self::Queue(request) => Some((request.session_id.0.to_string(), text("queuedId")?)),
+        }
     }
 }
 
@@ -230,43 +284,14 @@ impl Store {
     /// Write `work` down for `host_id`, under its own request key or else one made from the
     /// delivery's id.
     pub(crate) fn add_delivery(&self, host_id: &str, work: Work) -> Result<Delivery, String> {
-        let id = format!("w-{}", random_id());
-        let work = match work.key() {
-            Some(_) => work,
-            None => work.keyed(format!("dispatcher/{id}")),
-        };
-        let delivery = Delivery {
-            id,
-            host_id: host_id.to_owned(),
-            work,
-            state: DeliveryState::Pending,
-            created_at: now_ms(),
-            delivered_at: None,
-            answer: None,
-            error: None,
-        };
-        let work = serde_json::to_string(&delivery.work).map_err(|error| error.to_string())?;
-        self.lock()
-            .execute(
-                "INSERT INTO deliveries (id, host_id, work, state, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    delivery.id,
-                    delivery.host_id,
-                    work,
-                    delivery.state.name(),
-                    to_sql(delivery.created_at)
-                ],
-            )
-            .map_err(|error| match error {
-                rusqlite::Error::SqliteFailure(failure, _)
-                    if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
-                {
-                    format!("the Dispatcher isn't paired with Host {host_id}")
-                }
-                other => failed(other),
-            })?;
-        Ok(delivery)
+        insert_delivery(&self.lock(), host_id, work).map_err(|error| match error {
+            rusqlite::Error::SqliteFailure(failure, _)
+                if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                format!("the Dispatcher isn't paired with Host {host_id}")
+            }
+            other => failed(other),
+        })
     }
 
     pub(crate) fn delivery(&self, id: &str) -> Result<Option<Delivery>, String> {
@@ -313,27 +338,114 @@ impl Store {
         Ok(count)
     }
 
+    /// The Host took delivery `id`, answering `answer`; an occurrence it was for has started.
     pub(crate) fn delivered(&self, id: &str, answer: &serde_json::Value) -> Result<(), String> {
-        self.lock()
+        let mut connection = self.lock();
+        let transaction = connection.transaction().map_err(failed)?;
+        transaction
             .execute(
                 "UPDATE deliveries SET state = 'delivered', delivered_at = ?2, answer = ?3 \
                  WHERE id = ?1",
                 params![id, to_sql(now_ms()), answer.to_string()],
             )
-            .map(drop)
-            .map_err(failed)
+            .map_err(failed)?;
+        let work: Option<String> = transaction
+            .query_row(
+                "SELECT work FROM deliveries WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(failed)?;
+        let started = work
+            .and_then(|work| serde_json::from_str::<Work>(&work).ok())
+            .and_then(|work| work.started(answer));
+        let (session_id, turn_id) = started.unzip();
+        transaction
+            .execute(
+                "UPDATE occurrences SET state = 'started', session_id = ?2, turn_id = ?3 \
+                 WHERE delivery_id = ?1 AND state = 'waiting'",
+                params![id, session_id, turn_id],
+            )
+            .map_err(failed)?;
+        transaction.commit().map_err(failed)
     }
 
+    /// The Host refused delivery `id`, saying `why`; an occurrence it was for failed.
     pub(crate) fn failed(&self, id: &str, why: &str) -> Result<(), String> {
-        self.lock()
+        let mut connection = self.lock();
+        let transaction = connection.transaction().map_err(failed)?;
+        transaction
             .execute(
                 "UPDATE deliveries SET state = 'failed', delivered_at = ?2, error = ?3 \
                  WHERE id = ?1",
                 params![id, to_sql(now_ms()), why],
             )
+            .map_err(failed)?;
+        let occurrence: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM occurrences WHERE delivery_id = ?1 AND state = 'waiting'",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(failed)?;
+        if let Some(occurrence) = occurrence {
+            schedules::end(&transaction, &occurrence, schedules::Ending::Refused(why))
+                .map_err(failed)?;
+        }
+        transaction.commit().map_err(failed)
+    }
+
+    /// Write down which request delivery `id` asks, before it's first sent.
+    pub(crate) fn settle(&self, id: &str, work: &Work) -> Result<(), String> {
+        let work = serde_json::to_string(work).map_err(|error| error.to_string())?;
+        self.lock()
+            .execute(
+                "UPDATE deliveries SET work = ?2 WHERE id = ?1",
+                params![id, work],
+            )
             .map(drop)
             .map_err(failed)
     }
+}
+
+/// Write `work` down for `host_id`, under its own request key or else one made from the
+/// delivery's id.
+fn insert_delivery(
+    connection: &Connection,
+    host_id: &str,
+    work: Work,
+) -> rusqlite::Result<Delivery> {
+    let id = format!("w-{}", random_id());
+    let work = match work.key() {
+        Some(_) => work,
+        None => work.keyed(format!("dispatcher/{id}")),
+    };
+    let delivery = Delivery {
+        id,
+        host_id: host_id.to_owned(),
+        work,
+        state: DeliveryState::Pending,
+        created_at: now_ms(),
+        delivered_at: None,
+        answer: None,
+        error: None,
+    };
+    let work = serde_json::to_string(&delivery.work)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    connection.execute(
+        "INSERT INTO deliveries (id, host_id, work, state, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            delivery.id,
+            delivery.host_id,
+            work,
+            delivery.state.name(),
+            to_sql(delivery.created_at)
+        ],
+    )?;
+    Ok(delivery)
 }
 
 const SELECT_DELIVERY: &str =

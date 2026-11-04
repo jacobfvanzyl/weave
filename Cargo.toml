@@ -32,6 +32,8 @@ clap = { version = "4", features = ["derive"] }
 # A Host's key in the Secure Enclave, through the Security framework, on macOS.
 core-foundation = "0.10"
 crossterm = "0.29.0"
+# Schedules' cron expressions, with DST handled as GitHub Actions does, over jiff's time zones.
+croner = { version = "4", default-features = false, features = ["jiff"] }
 diffy = "0.4.2"
 flate2 = "1"
 futures = "0.3"
@@ -42,6 +44,8 @@ ignore = "0.4.23"
 # Decoding pasted images for the composer's thumbnails, as Codex decodes its pets' frames.
 image = { version = "0.25", default-features = false }
 insta = "1.46.3"
+# Schedules' IANA time zones, from the system's time zone database.
+jiff = "0.2"
 nucleo-matcher = "0.3"
 # Paired devices' keys: P-256, the curve the Secure Enclave makes keys on.
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }

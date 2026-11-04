@@ -7,6 +7,7 @@
 //!   them ([`Delivery`]).
 //! - [`link`]: a connection to each Host, kept up with backoff, that watches its threads and
 //!   sends it the work written down for it.
+//! - [`scheduler`]: schedules (WVE-145), whose occurrences start headless turns at their times.
 //! - [`api`]: what the `weave dispatcher` CLI asks over its socket ([`socket`]).
 //! - [`client`]: the CLI's end of that.
 //!
@@ -19,6 +20,7 @@ mod api;
 pub mod client;
 mod link;
 pub mod paths;
+mod scheduler;
 pub mod socket;
 mod store;
 
@@ -30,14 +32,20 @@ use std::time::Duration;
 
 use agent_client_protocol::Error;
 use tokio::net::UnixListener;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use weave_host_client::Credentials;
 use weave_host_client::reach::reach;
 use weave_host_client::reach::tailnet_name;
 use weave_host_client::remote::DeviceKey;
 use weave_host_protocol::dispatcher::AddHostRequest;
+use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatus;
+use weave_host_protocol::dispatcher::Occurrence;
+use weave_host_protocol::dispatcher::Overlap;
+use weave_host_protocol::dispatcher::Schedule;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::peers::PeerStatus;
@@ -45,10 +53,15 @@ use weave_host_protocol::sessions::SessionListing;
 
 use crate::link::Link;
 pub use crate::paths::DispatcherPaths;
+pub use crate::scheduler::Clock;
+use crate::scheduler::Plan;
+pub use crate::scheduler::SystemClock;
 pub use crate::store::Delivery;
 pub use crate::store::DeliveryState;
+use crate::store::Fired;
 use crate::store::Store;
 use crate::store::StoredHost;
+use crate::store::StoredSchedule;
 pub use crate::store::Work;
 
 /// How long a Host has to answer a connection before the Dispatcher tries again later.
@@ -69,6 +82,8 @@ pub struct DispatcherConfig {
     /// doubles it, up to `retry_most`.
     pub retry: Duration,
     pub retry_most: Duration,
+    /// The clock schedules run by.
+    pub clock: Arc<dyn Clock>,
 }
 
 impl DispatcherConfig {
@@ -80,6 +95,7 @@ impl DispatcherConfig {
             reach_timeout: DEFAULT_REACH_TIMEOUT,
             retry: Duration::from_secs(1),
             retry_most: Duration::from_secs(60),
+            clock: Arc::new(SystemClock),
         }
     }
 }
@@ -95,9 +111,12 @@ pub(crate) struct Shared {
     pub(crate) store: Store,
     pub(crate) key: DeviceKey,
     started_at: u64,
-    /// Cancelled when it stops: every link closes.
+    /// Cancelled when it stops: every link closes, and schedules stop.
     stop: CancellationToken,
     links: Mutex<HashMap<String, Link>>,
+    /// Rung when a schedule is added, changed or removed.
+    schedules_changed: Notify,
+    scheduler: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Dispatcher {
@@ -117,10 +136,14 @@ impl Dispatcher {
             started_at: now_ms(),
             stop: CancellationToken::new(),
             links: Mutex::new(HashMap::new()),
+            schedules_changed: Notify::new(),
+            scheduler: Mutex::new(None),
         });
         for host in shared.store.hosts()? {
             shared.link(host);
         }
+        let scheduler = tokio::spawn(scheduler::run(Arc::clone(&shared)));
+        *lock(&shared.scheduler) = Some(scheduler);
         Ok(Self { shared })
     }
 
@@ -132,6 +155,10 @@ impl Dispatcher {
     /// Stop: close every Host's connection. Work written down stays for the next start.
     pub async fn stop(&self) {
         self.shared.stop.cancel();
+        let scheduler = lock(&self.shared.scheduler).take();
+        if let Some(scheduler) = scheduler {
+            let _ = scheduler.await;
+        }
         let links: Vec<Link> = lock(&self.shared.links)
             .drain()
             .map(|(_, link)| link)
@@ -179,6 +206,41 @@ impl Dispatcher {
         self.shared.store.delivery(id).map_err(internal)
     }
 
+    pub fn schedules(&self) -> Result<Vec<Schedule>, Error> {
+        self.shared.schedules()
+    }
+
+    pub fn add_schedule(&self, request: AddScheduleRequest) -> Result<Schedule, Error> {
+        self.shared.add_schedule(request)
+    }
+
+    /// Forget the schedule `by` names, by id or name, and its occurrences.
+    pub fn remove_schedule(&self, by: &str) -> Result<(), Error> {
+        self.shared.remove_schedule(by)
+    }
+
+    pub fn pause_schedule(&self, by: &str) -> Result<Schedule, Error> {
+        self.shared.pause_schedule(by)
+    }
+
+    pub fn resume_schedule(&self, by: &str) -> Result<Schedule, Error> {
+        self.shared.resume_schedule(by)
+    }
+
+    /// Run the schedule `by` names now, as an occurrence of its own.
+    pub fn run_schedule(&self, by: &str) -> Result<Occurrence, Error> {
+        self.shared.run_schedule(by)
+    }
+
+    /// The latest occurrences, of the schedule `by` names or of all, newest first.
+    pub fn occurrences(
+        &self,
+        by: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Vec<Occurrence>, Error> {
+        self.shared.occurrences(by, limit)
+    }
+
     /// The threads on `host_id` as the Dispatcher last saw them, while it is connected there.
     pub fn threads(&self, host_id: &str) -> Vec<SessionListing> {
         lock(&self.shared.links)
@@ -189,6 +251,177 @@ impl Dispatcher {
 }
 
 impl Shared {
+    /// Send `host_id` the work written down for it, if it's connected.
+    pub(crate) fn wake(&self, host_id: &str) {
+        if let Some(link) = lock(&self.links).get(host_id) {
+            link.wake();
+        }
+    }
+
+    /// The Host `by` names, by id or else by name.
+    fn resolve_host(&self, by: &str) -> Result<StoredHost, Error> {
+        let stored = self.store.hosts().map_err(internal)?;
+        stored
+            .iter()
+            .find(|stored| stored.host_id == by)
+            .or_else(|| {
+                stored
+                    .iter()
+                    .find(|stored| stored.name.eq_ignore_ascii_case(by))
+            })
+            .cloned()
+            .ok_or_else(|| invalid(format!("the Dispatcher isn't paired with {by}")))
+    }
+
+    fn resolve_schedule(&self, by: &str) -> Result<StoredSchedule, Error> {
+        self.store
+            .find_schedule(by)
+            .map_err(internal)?
+            .ok_or_else(|| invalid(format!("there's no schedule {by}")))
+    }
+
+    fn schedules(&self) -> Result<Vec<Schedule>, Error> {
+        let schedules = self.store.schedules().map_err(internal)?;
+        let hosts = self.store.hosts().map_err(internal)?;
+        let now = self.config.clock.now();
+        schedules
+            .into_iter()
+            .map(|schedule| self.listing(schedule, &hosts, now))
+            .collect()
+    }
+
+    fn schedule(&self, id: &str) -> Result<Schedule, Error> {
+        let schedule = self.resolve_schedule(id)?;
+        let hosts = self.store.hosts().map_err(internal)?;
+        self.listing(schedule, &hosts, self.config.clock.now())
+    }
+
+    fn listing(
+        &self,
+        schedule: StoredSchedule,
+        hosts: &[StoredHost],
+        now: u64,
+    ) -> Result<Schedule, Error> {
+        let next_at = match &schedule.paused {
+            Some(_) => None,
+            None => Plan::new(&schedule.cron, &schedule.zone)
+                .ok()
+                .and_then(|plan| plan.next_after(now).map(|at| (at, plan.describe(at)))),
+        };
+        let last = self
+            .store
+            .occurrences(Some(&schedule.id), 1)
+            .map_err(internal)?
+            .into_iter()
+            .next();
+        Ok(Schedule {
+            host_name: hosts
+                .iter()
+                .find(|host| host.host_id == schedule.host_id)
+                .map(|host| host.name.clone())
+                .unwrap_or_default(),
+            id: schedule.id,
+            name: schedule.name,
+            cron: schedule.cron,
+            zone: schedule.zone,
+            host_id: schedule.host_id,
+            run: schedule.run,
+            missed: schedule.missed,
+            overlap: schedule.overlap,
+            created_at: schedule.created_at,
+            paused: schedule.paused,
+            failures: schedule.failures,
+            next_at: next_at.as_ref().map(|(at, _)| *at),
+            next: next_at.map(|(_, words)| words),
+            last,
+        })
+    }
+
+    fn add_schedule(&self, request: AddScheduleRequest) -> Result<Schedule, Error> {
+        let name = request.name.trim().to_owned();
+        if name.is_empty() {
+            return Err(invalid("a schedule needs a name".to_owned()));
+        }
+        if request.run.prompt.is_empty() {
+            return Err(invalid("a schedule needs a prompt".to_owned()));
+        }
+        if request.run.thread.is_some() && request.overlap == Overlap::Allow {
+            return Err(invalid(
+                "a schedule that prompts one thread can't overlap its runs: they'd queue there"
+                    .to_owned(),
+            ));
+        }
+        let zone = request.zone.unwrap_or_else(scheduler::local_zone);
+        let cron = request.cron.trim().to_owned();
+        Plan::new(&cron, &zone).map_err(invalid)?;
+        let host = self.resolve_host(&request.host)?;
+        let now = self.config.clock.now();
+        let schedule = StoredSchedule {
+            id: StoredSchedule::new_id(),
+            name,
+            cron,
+            zone,
+            host_id: host.host_id,
+            run: request.run,
+            missed: request.missed,
+            overlap: request.overlap,
+            created_at: now,
+            considered_until: now,
+            paused: None,
+            failures: 0,
+        };
+        self.store.add_schedule(&schedule).map_err(invalid)?;
+        tracing::info!(schedule = %schedule.name, "added a schedule");
+        self.schedules_changed.notify_one();
+        self.schedule(&schedule.id)
+    }
+
+    fn remove_schedule(&self, by: &str) -> Result<(), Error> {
+        let schedule = self.resolve_schedule(by)?;
+        self.store.remove_schedule(&schedule.id).map_err(internal)?;
+        tracing::info!(schedule = %schedule.name, "removed a schedule");
+        self.schedules_changed.notify_one();
+        Ok(())
+    }
+
+    fn pause_schedule(&self, by: &str) -> Result<Schedule, Error> {
+        let schedule = self.resolve_schedule(by)?;
+        self.store
+            .pause(&schedule.id, "you paused it")
+            .map_err(internal)?;
+        self.schedules_changed.notify_one();
+        self.schedule(&schedule.id)
+    }
+
+    fn resume_schedule(&self, by: &str) -> Result<Schedule, Error> {
+        let schedule = self.resolve_schedule(by)?;
+        self.store
+            .resume(&schedule.id, self.config.clock.now())
+            .map_err(internal)?;
+        self.schedules_changed.notify_one();
+        self.schedule(&schedule.id)
+    }
+
+    fn run_schedule(&self, by: &str) -> Result<Occurrence, Error> {
+        let schedule = self.resolve_schedule(by)?;
+        let plan = Plan::new(&schedule.cron, &schedule.zone).map_err(internal)?;
+        let now = self.config.clock.now();
+        match scheduler::fire(self, &schedule, &plan, now, false, true, now).map_err(internal)? {
+            Fired::Started(occurrence, _) | Fired::Skipped(occurrence) => Ok(occurrence),
+            Fired::Already => Err(invalid("it was run by hand a moment ago; try again")),
+        }
+    }
+
+    fn occurrences(&self, by: Option<&str>, limit: Option<u32>) -> Result<Vec<Occurrence>, Error> {
+        let schedule = by.map(|by| self.resolve_schedule(by)).transpose()?;
+        self.store
+            .occurrences(
+                schedule.as_ref().map(|schedule| schedule.id.as_str()),
+                limit.unwrap_or(50),
+            )
+            .map_err(internal)
+    }
+
     /// Start a connection to `host`, replacing the one there was.
     fn link(self: &Arc<Self>, host: StoredHost) {
         let host_id = host.host_id.clone();
@@ -287,22 +520,11 @@ impl Shared {
         self.hosts()?
             .into_iter()
             .find(|listed| listed.host_id == host_id)
-            .ok_or_else(|| Error::internal_error().data("the Host it paired with went missing"))
+            .ok_or_else(|| internal("the Host it paired with went missing".to_owned()))
     }
 
     async fn remove_host(&self, host: &str) -> Result<(), Error> {
-        let stored = self.store.hosts().map_err(internal)?;
-        let found = stored
-            .iter()
-            .find(|stored| stored.host_id == host)
-            .or_else(|| {
-                stored
-                    .iter()
-                    .find(|stored| stored.name.eq_ignore_ascii_case(host))
-            })
-            .ok_or_else(|| {
-                Error::invalid_params().data(format!("the Dispatcher isn't paired with {host}"))
-            })?;
+        let found = self.resolve_host(host)?;
         self.store.remove_host(&found.host_id).map_err(internal)?;
         let link = lock(&self.links).remove(&found.host_id);
         if let Some(link) = link {
@@ -327,8 +549,17 @@ fn unavailable(why: impl Into<String>) -> Error {
     Error::new(errors::PEER_UNAVAILABLE, why.into())
 }
 
+/// The request was wrong, saying how: in the message, which clients show.
+fn invalid(why: impl Into<String>) -> Error {
+    let mut error = Error::invalid_params();
+    error.message = why.into();
+    error
+}
+
 fn internal(why: String) -> Error {
-    Error::internal_error().data(why)
+    let mut error = Error::internal_error();
+    error.message = why;
+    error
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

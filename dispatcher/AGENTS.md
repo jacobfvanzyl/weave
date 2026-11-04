@@ -21,9 +21,19 @@ of its own; `weave-host` is only a dev-dependency, for the tests' in-process Hos
   edit one once released, add the next. Times are milliseconds, kept signed.
 - `link.rs`: one task per Host that keeps a connection to it with backoff (`retry` doubling to
   `retry_most`), watches its threads (`sessions/watch`) and sends it its pending deliveries,
-  oldest first. A Host that refuses the Dispatcher's key, or closes with `CLOSE_REVOKED`, is
+  oldest first, settling a thread's prompt (`Work::Prompt`) into `queue/add` or `session/run`
+  before its first send, and reads with `sessions/get` how started occurrences' turns ended
+  when their threads go idle. A Host that refuses the Dispatcher's key, or closes with `CLOSE_REVOKED`, is
   recorded as refused in `hosts.refused` and not tried again until `hosts/add` pairs with it
   again.
+- `scheduler.rs` (WVE-145): the task that considers every schedule when one is due, when they
+  change, and every 30 seconds of wall clock at most (`Clock`; tests pass one they move), and
+  `Plan`, a schedule's croner expression in its jiff time zone. Catch-ups, the one-week look-back
+  and the minute's grace are here; overlap and pausing are in the store, inside the
+  transaction that writes an occurrence down.
+- `store/schedules.rs`: `schedules` and `occurrences`. An occurrence and its delivery are
+  written in one transaction, unique on schedule, scheduled time and `manual`; delivering it,
+  the Host refusing it and its turn ending update it from `store.rs` and `link.rs`.
 - `api.rs`, `client.rs`, `socket.rs`: the Dispatcher's own API (`weave_host_protocol::dispatcher`)
   over a Unix socket in its directory (0600, peer uid checked, one Dispatcher per directory by
   its lock), and the CLI's end of it.

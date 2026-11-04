@@ -126,6 +126,14 @@ _Avoid_: automation, routine, job, cron
 One time a trigger fires, which the Dispatcher records whether it started a turn or was skipped, and why.
 _Avoid_: run, execution, invocation, job
 
+**Schedule**:
+A trigger whose occurrences come at the times a cron expression gives, in a time zone, each starting a turn in a new thread or prompting one named thread.
+_Avoid_: cron job, timer, routine
+
+**Catch-up**:
+An occurrence that starts late, once, for the latest time a schedule missed while the Dispatcher couldn't start it; the times it missed before that are recorded as skipped.
+_Avoid_: backfill, retry
+
 **Bot**:
 A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home directory of its own memory, whose work goes on in one thread at a time.
 _Avoid_: resident, persona, dot, always-on agent, profile

@@ -1,0 +1,170 @@
+# A companion view for AirPlay displays in the app
+
+Research snapshot, 2026-11-04, for WVE-181. Sections 1–6 are about the platform. They use only primary sources: Apple's developer documentation, release notes, WWDC sessions, Apple Support and Apple engineers' replies on the developer forums, and Capacitor's source and issues. These were read on 2026-11-04. Apple's documentation pages were also read as their JSON (`developer.apple.com/tutorials/data/documentation/...`), since their HTML is rendered by script. Sections 7–9 compare that with the app at `7c382072`, judge it against what's planned, and recommend. Nothing was built or run on a device. Section 10 lists what only a device can settle.
+
+The question is how the app could put a view of its own on an AirPlay display (an Apple TV, or a Mac with AirPlay Receiver on), or on a wired one, while the iPad or iPhone stays the controller. And what that view should show.
+
+## 1. In brief
+
+- **iOS 27 changed how an app takes over a display.** "Beginning in iOS 27, your app receives a scene with the [`windowExternalDisplayNonInteractive`] role only after it registers a scene accessory. In earlier releases, the system connected this scene automatically, and your app opted out by declining to provide content for it" ([Presenting content on a connected display](https://developer.apple.com/documentation/uikit/presenting-content-on-a-connected-display)). The release note says: "In apps built with the iOS 27.0 SDK, `windowExternalDisplayNonInteractive` scenes are no longer offered automatically by the system. Use `UIViewController.registerSceneAccessory(_:)` with a `UISceneAccessory.externalNonInteractive` instance" ([iOS & iPadOS 27 release notes](https://developer.apple.com/documentation/ios-ipados-release-notes/ios-ipados-27-release-notes), 177015874). The app builds with Xcode 27.0 and the iOS 27.0 SDK, and both of the person's devices run 27.
+- **The companion is non-interactive and full screen.** Nothing on the display takes input, and "Content for this scene spans the full screen" (same article). The device stays the controller.
+- **The companion exists while the app is in front.** The system connects the scene "while your app presents the view controller, the registration is enabled, and an external display is available". It disconnects the scene "when the app dismisses the view controller or the display disconnects". Apple doesn't say what backgrounding or locking does. This is a second screen for when the person is using the app, not a wall display that runs on its own.
+- **The person starts it, not the app.** They choose Screen Mirroring in Control Center. No public API starts screen mirroring, and `AVRoutePickerView` lists media receivers only.
+- **The app has a latent bug.** `AppDelegate` gives every scene role a `SceneDelegate`, which builds a second Capacitor bridge, and with it a second copy of the app. Capacitor's own template has the same flaw ([ionic-team/capacitor#8648](https://github.com/ionic-team/capacitor/issues/8648)). On iOS 16–26 that copy starts when mirroring starts. On the person's devices (iOS 27, SDK 27) it doesn't. The fix is one role check, needed whatever happens to the companion.
+- **Recommendation (section 9):** a scene accessory registered on the bridge's view controller, showing a second, bridge-less `WKWebView`. It runs the same bundle in a display mode, drawing a projection of the `AppModel` that the main web view sends it. The companion is not a Host client, so the Host and protocol need nothing new. Terminals on the display are native `TerminalView`s with streams of their own. The first version would show a **Board** of every thread when no thread is open, and the open thread's **Stage** otherwise: its terminal, or later its Pane.
+
+## 2. How an app takes over a display
+
+### 2.1 The roles
+
+- `windowExternalDisplayNonInteractive` (iOS 16 and later) is "a scene that displays noninteractive windows on an externally connected display" ([role](https://developer.apple.com/documentation/uikit/uiscenesession/role-swift.struct/windowexternaldisplaynoninteractive)). It replaced `windowExternalDisplay`, which is deprecated: "A scene that displays interactive windows uses windowApplication, even if the windows display on an externally connected screen" ([deprecated role](https://developer.apple.com/documentation/uikit/uiscenesession/role-swift.struct/windowexternaldisplay)).
+- `UIScreen.didConnectNotification` and `UIScreen.screens` are deprecated since iOS 16 in favour of scene connection ([didConnectNotification](https://developer.apple.com/documentation/uikit/uiscreen/didconnectnotification), [screens](https://developer.apple.com/documentation/uikit/uiscreen/screens)). `UIScreen.main` is deprecated since iOS 26 ([main](https://developer.apple.com/documentation/uikit/uiscreen/main)).
+
+### 2.2 iOS 27: scene accessories
+
+From [Presenting content on a connected display](https://developer.apple.com/documentation/uikit/presenting-content-on-a-connected-display) and the [`UISceneAccessory`](https://developer.apple.com/documentation/uikit/uisceneaccessory) and [`registerSceneAccessory(_:)`](https://developer.apple.com/documentation/uikit/uiviewcontroller/registersceneaccessory(_:)) pages:
+
+- A scene accessory "declares supplementary content that the system presents on your app's behalf when associated functionality becomes available, such as an external display connected by cable or AirPlay. Your app declares what content to provide, and the system decides when and where to present it."
+- The app builds a `UISceneConfiguration`, either from a `delegateClass` or a configuration named in the scene manifest. It then registers `.externalNonInteractive(sceneConfiguration:)` on "a view controller in your app's main interface" and keeps the `UISceneAccessoryRegistration` it gets back. The scene delegate's `scene(_:willConnectTo:options:)` gets the scene and puts a `UIWindow` on it. `sceneDidDisconnect(_:)` follows a dismissal or a disconnect.
+- `isEnabled` turns the content on and off. `isAvailable` says whether the system can show it now, observable in `updateProperties()` and `layoutSubviews()`. `unregisterSceneAccessory(_:)` withdraws it. `externalNonInteractive(sceneConfiguration:userInfo:)` passes context, which the delegate reads from `sceneAccessoryUserInfo`.
+- "If more than one view controller in your app registers an external-display accessory, the system presents the registration that belongs to the topmost, most recently presented view controller." Our single bridge view controller is always that.
+- "Because the content appears only when a display is available, design your app to remain fully functional without the external display."
+- An Apple engineer confirms it: "Starting with iOS 27, the system no longer connects a `windowExternalDisplayNonInteractive` scene to the app" ([forum 836437](https://developer.apple.com/forums/thread/836437)).
+
+### 2.3 Before iOS 27
+
+- The system offers the scene to every app. An app takes the display by putting a window on it, as WWDC25's AirPlay timer does ([Make your UIKit app more flexible](https://developer.apple.com/videos/play/wwdc2025/282/)). It declines by leaving the scene empty, which keeps the device mirrored. Apple's DTS: "you do not need to put anything in the scene unless you want to stop mirroring" ([forum 815376](https://developer.apple.com/forums/thread/815376)). A frameworks engineer adds that the scene "is not something that can be blocked" ([forum 745553](https://developer.apple.com/forums/thread/745553)).
+- Apple doesn't say what an app built with the iOS 27 SDK gets on an iOS 26 device. The wording "Beginning in iOS 27" suggests such a device still offers the scene automatically. The app's deployment target is iOS 15, so it has to handle both.
+
+### 2.4 Multiple scenes
+
+The app sets `UIApplicationSupportsMultipleScenes` to false. For that key, "UIKit never creates more than one scene" ([key](https://developer.apple.com/documentation/bundleresources/information-property-list/uiapplicationscenemanifest/uiapplicationsupportsmultiplescenes)), yet Apple's engineers call the external display "a special case" whose callback comes "regardless of the `Info.plist`" (forums 745553, 815376). Apple's accessory example sets a `delegateClass` with no manifest entry, and says nothing about the key. Whether an accessory works with the key false is open (section 10). Turning it on would also let iPadOS open several of the app's windows. The app isn't built for that, so it would be a decision of its own.
+
+## 3. Where the display comes from
+
+- **AirPlay:** Control Center → Screen Mirroring → an Apple TV or a Mac; "Stop Mirroring" ends it ([iPad User Guide](https://support.apple.com/guide/ipad/stream-video-mirror-screen-ipad-ipadf27a8cb7/ipados), [Apple Support 102661](https://support.apple.com/en-us/102661)). A Mac needs AirPlay Receiver on (System Settings → General → AirDrop & Handoff). An app needs nothing to appear in that list.
+- **No API starts it.** `AVRoutePickerView` "presents a list of nearby media receivers" for audio and video ([AVRoutePickerView](https://developer.apple.com/documentation/avkit/avroutepickerview)). Nothing documented starts screen mirroring, so the app can only tell the person how to start it.
+- **A cable:** a USB-C or Lightning AV adapter. On iPad models with extended display it works differently (section 4).
+
+## 4. iPad: Stage Manager's extended display
+
+- "When an external display connects, the system mirrors your app's primary display, or, on compatible iPad models with extended display enabled, presents your app's interactive windows on the external display" (connected-display article). Windows there are ordinary `windowApplication` scenes, placed by the person or the system ([forum 837091](https://developer.apple.com/forums/thread/837091)).
+- Extended display needs "a compatible iPad model and a compatible cable or adapter" ([Move an app to an external display](https://support.apple.com/guide/ipad/move-an-app-to-an-external-display-ipad8baf19a7/ipados)). Apple's AirPlay guide describes mirroring only. Nothing found says AirPlay to an Apple TV ever extends the desktop.
+- Apple's iPadOS 26 list of models that support it includes the iPad Air 11-inch (M3) ([Apple Support 105075](https://support.apple.com/en-us/105075)). That is the person's iPad.
+- Whether a non-interactive accessory is offered while the extended display is in use isn't documented. The likely split is: AirPlay gives the companion, and a cable on that iPad gives a second desktop where the app's one window can be moved. That needs a test.
+
+## 5. iPhone
+
+- The same two paths exist: AirPlay mirroring, or a cable ([iPhone User Guide](https://support.apple.com/guide/iphone/connect-to-a-display-with-a-cable-iph93af723b9/ios)). There's no extended display, so a display is either mirrored or the companion.
+- iPhone Mirroring (a Mac driving the locked iPhone) is a different feature. It requires that the Mac is "not … using AirPlay or Sidecar" ([Apple Support 120421](https://support.apple.com/en-us/120421)), and plays no part in this. WWDC26 notes that apps in it are resizable and their scene's screen isn't `UIScreen.main` ([Modernize your UIKit app](https://developer.apple.com/videos/play/wwdc2026/278/)). That's one more reason to take geometry from the scene.
+- A phone with a companion makes sense: the phone is the remote, and the display holds what doesn't fit on it.
+
+## 6. What the display asks of the content
+
+- **Distance.** Apple has no guidance page for an app's content on another display. Its nearest is tvOS: viewers sit "often 8 feet or more" away ([Designing for tvOS](https://developer.apple.com/design/human-interface-guidelines/designing-for-tvos)). It also gives a TV safe area: "Inset primary content 60 points from the top and bottom … and 80 points from the sides" ([Layout](https://developer.apple.com/design/human-interface-guidelines/layout)). A Mac receiver shows the scene in a window, with no overscan.
+- **Overscan and modes.** `UIScreen.overscanCompensation` scales, insets or leaves overscan to the app ([overscanCompensation](https://developer.apple.com/documentation/uikit/uiscreen/overscancompensation-swift.property)); its default isn't documented. A non-interactive scene may change the screen's mode before it attaches its window ([connected-display article](https://developer.apple.com/documentation/uikit/presenting-content-on-a-connected-display), [currentMode](https://developer.apple.com/documentation/uikit/uiscreen/currentmode)), and `currentMode` defaults to the highest resolution. Display links come from the window scene now: `UIScreen.displayLink(withTarget:selector:)` is deprecated in iOS 27 ([displayLink](https://developer.apple.com/documentation/uikit/uiscreen/displaylink(withtarget:selector:))).
+- **Lifecycle and power.** The scene gets `sceneDidEnterBackground` like any other (WWDC25 pauses its timer there). A suspended app draws nothing, and Apple doesn't say what the display shows then. Apple's only performance advice is the archived guide's: the app "needs to handle the performance implications of using one device's resources to generate a second screen's worth of content … test to discover an optimum frame rate" ([Window and screen guide, archived](https://developer.apple.com/library/archive/documentation/WindowsViews/Conceptual/WindowAndScreenGuide/UsingExternalDisplay/UsingExternalDisplay.html)).
+- **Other routes, rejected.**
+  - AVPlayer's external playback survives backgrounding ([usesExternalPlaybackWhileExternalScreenIsActive](https://developer.apple.com/documentation/avfoundation/avplayer/usesexternalplaybackwhileexternalscreenisactive)), but it carries video, not a live UI.
+  - A tvOS app couldn't run the React UI, since `WKWebView` isn't available there ([WKWebView](https://developer.apple.com/documentation/webkit/wkwebview)). It would be a separate native client of the Host.
+  - A page in the Mac's own browser is a different client entirely (section 9.4).
+
+## 7. What the app has
+
+### 7.1 The shell
+
+- `SceneDelegate.swift` builds a `WeaveBridgeViewController` (a `CAPBridgeViewController`) for each scene it's given. A `WeaveSurfaceContainer` puts the native terminals beneath a transparent web view.
+- `AppDelegate.application(_:configurationForConnecting:options:)` returns `SceneDelegate` for every `connectingSceneSession.role`. This is #8648's bug: on iOS 16–26, mirroring starts a second bridge, so a second copy of the app runs against the same storage, connects to the Hosts again with the same device key, and registers plugins twice. Capacitor's issue reports SQLite "database is locked" errors, and the template on `main` still has the bug.
+- Capacitor 8.5.3's `CAPBridgeViewController` builds its own configuration, asset handler and bridge per instance, so two can run. Several singletons are shared, though: `SceneDelegateProxy.shared`, `ApplicationDelegateProxy.shared`, `KeyValueStore.standard`. The roadmap issue for multi-window, [#4001](https://github.com/ionic-team/capacitor/issues/4001), is closed with discovery "shortly", and nothing documents a second web view without a bridge.
+- Two web views on the default `WKWebsiteDataStore` share cookies and storage ([WKWebsiteDataStore](https://developer.apple.com/documentation/webkit/wkwebsitedatastore)). Each has its own page and JavaScript, so nothing in memory is shared between them.
+
+### 7.2 What a display could draw from
+
+The UI reads one `AppModel` (`app/src/app/app-controller.ts`). All of it is plain data:
+
+- **Hosts:** paired Hosts with their status (connecting, connected, reconnecting, …).
+- **Threads:** every thread on every Host. Each has a title, agent, directory, git repository, worktree and branch, its state and activity (idle, running, waiting), what it waits on, attached clients, whether it's headless, its last activity, and the thread that started it. The sidebar groups them by Host, then project (WVE-162), with "Needs you" for those waiting.
+- **The open thread:** its `AcpTranscript` (entries, plan, subagents, Host-run terminals, modes, `usage` from ACP's `usage_update`, and the turn's status), its queue and whether that's paused, its worktree's terminals with their commands and program status (OSC 7501), and its MCP servers.
+- **Unread:** this device's set of threads whose turn ended since the person last looked.
+
+### 7.3 Terminals
+
+A worktree's terminals stream from their holder through the Host to any number of attachers (ADR 0022). "Size is the owner's policy, and a client's `resize` is a request": the last device to type sets the size and the others clip (protocol spec, Terminals). A display that never types never takes the size, so it can't resize anyone's shell. The app's native plugin holds each stream's WebSocket itself (`TerminalStream.swift`), from a ticket the web view gets with `attachTerminal`. Tickets are good once, so the display needs one of its own. `WeaveTerminalRenderer` takes a grid from a viewport size. A display would need the inverse: the largest font that fits the terminal's `cols × rows` into the screen.
+
+## 8. What's planned, and how it fits a display
+
+| Planned | What it adds to a display |
+| --- | --- |
+| MCP Apps views and the app's Pane (WVE-94, WVE-96) | ADR 0012 makes placement "per client and never journaled", so a display is one more placement. A `view` event journals the complete input and result, so a view can render from the journal with no calls of its own, which suits a display that takes no input. Views that call tools or send `ui/message` stay on the device. |
+| Visuals (WVE-95) | A diagram, chart or page the agent keeps revising is presentation material, the most natural thing to put on a TV. A revision replaces it in place. |
+| Bots (WVE-178, WVE-118) | Each Bot by name with its state (needs you, working, unread, idle): a row on a Board, or its own section at the top. |
+| Schedules and triggers (WVE-145, WVE-146, WVE-176) | What runs next, and recent occurrences and how they ended. They come through the Dispatcher's device API, so they appear on the display only once the app pairs with the Dispatcher. |
+| Context usage in listings (WVE-174) | A fill bar for each thread on the Board, not only for the open one. |
+| Labels (WVE-173) | The Board follows the app's rule: Bot threads under their Bot, not among the ordinary threads. |
+| Pushes and presence (WVE-177, WVE-147) | The companion isn't a client (section 9.2), so the Host and Dispatcher never see it. Showing a thread on a TV doesn't count as the person having seen it, and doesn't stop a push. |
+| Successors (WVE-168) | The Stage follows a Bot's thread into its successor, as the device does. |
+
+ADR 0018's rule holds: every client decides how far above the text floor it goes. A display is a placement within the app, not a new client, so the decision is the app's.
+
+## 9. Recommendation
+
+### 9.1 The platform route
+
+1. **Fix the role bug first.** In `configurationForConnecting`, give `SceneDelegate` only to `.windowApplication`, and in `scene(_:willConnectTo:)` guard on the role, as #8648 proposes. On iOS 16–26 the non-interactive scene then stays empty and the device mirrors, as on iOS 27. This is small and stands alone.
+2. **Register a scene accessory** on `WeaveBridgeViewController`, with a delegate of its own, `CompanionSceneDelegate`. On iOS 16–26, `configurationForConnecting` gives the automatic non-interactive scene the same delegate, so both paths draw the same companion. Below iOS 16 the app keeps mirroring. Raising the deployment target to 16 would remove that branch.
+3. **Keep the registration enabled** whenever the app is in front. Nothing shows on the display unless the person mirrors to it. A setting could disable it, to fall back to mirroring.
+
+### 9.2 What draws the companion
+
+Of the three ways to draw it, the **projection** is recommended:
+
+- **A projection (recommended).** A bridge-less `WKWebView` in the companion's window loads the same bundle in a display mode (`?display=external`), on its own `WKWebsiteDataStore`. A small native plugin, `Companion`, carries messages both ways: the main web view sends it a serialisable projection of the `AppModel` whenever that changes, and the native side posts it into the companion. It also relays the display's state back: available, connected, its size. The companion draws with the app's own components and never talks to a Host. The Host and protocol need nothing new; there's no second connection, device key or attach to count, and no second copy of the stores. The bundle's Content Security Policy already forbids the companion any fetch. What's sent is the person's own data, on the device, between two web views of the same app.
+- **A second Host client** would mean a second `CAPBridgeViewController` (for `DeviceKeyPlugin`), or a native signer for a bare web view. Then a second connection per Host, attached threads that count as clients, and the shared-singleton risks of section 7.1. All of that to show what the device already has.
+- **Native UIKit** would mean redrawing the transcript, Markdown, Mermaid, math and views natively. That's a second renderer to keep in step with the web one.
+
+Terminals are the exception: their bytes stay native, as on the device. The companion's window puts a native `TerminalView` over the companion web view where the projection places it, with a stream of its own. The main web view gets a ticket through `attachTerminal`, and the native side opens the stream. The renderer fits the terminal's size to the space and never sends input, so the size stays with whoever types.
+
+Views and Visuals (after WVE-96) render in the companion from the journal's `view` event, through the same host page the Pane uses, with the view's storage per server as on the device. The display passes no input back, so a view there never calls a tool or sends a message.
+
+### 9.3 What the companion shows
+
+Two modes, chosen by what's open on the device, which the person can pin:
+
+- **Board**, when no thread is open, or when the person pins it.
+  - Every paired Host and its threads, grouped by Host and project as the sidebar groups them. "Needs you" leads, set apart and saying what each thread waits on. Running threads come next, with their last activity, then idle ones, faded.
+  - A Host that's reconnecting or unreachable says so.
+  - Later: Bots at the top with their state (WVE-178), context fill per thread (WVE-174), and the next scheduled occurrences (WVE-145).
+  - A glance tells the person what needs them across every Host while they work in one thread on the device.
+- **Stage**, when a thread is open: what sits beside the thread, not a copy of it. The device already shows the transcript, so the display shows, in order of preference:
+  1. the thread's Pane, once WVE-96 builds it: its view or its latest Visual;
+  2. otherwise its front terminal, as the device's terminal panel would put it in front (`terminal-layout.ts`);
+  3. otherwise the transcript's live tail: the plan, the running tool calls and the agent's latest message, large, following the end.
+
+  A thin strip along the bottom shows the thread's title, agent, branch, turn status, queue and context usage, plus a count of other threads that need the person.
+
+The thread's header gets a **Display** menu, offered only while `isAvailable` holds. It lets the person pin the Board, a terminal, the Pane or the transcript, and turn the companion off, which hands the display back to mirroring. The pick is the device's own, never journaled, as ADR 0012 asks of placement. The iPhone works the same way, with the phone as the remote.
+
+Typography follows the display, not the device: the safe area of section 6 on a TV, and type sized for distance. A Mac receiver needs no inset. A browser can render the display mode at 1920×1080 with `?mock=`, as it renders the device's layouts.
+
+### 9.4 What this isn't
+
+The companion lasts while the app is in front. A display that stays up with the iPad asleep, such as a Board on a TV in the corner, is a different client: a page in a browser on the Mac or the Apple TV. Since ADR 0010 that would be a remote client of its own, with a device key, or a read-only role the Host doesn't have yet. If it's wanted, it belongs with the Dispatcher's device API (WVE-176), not here.
+
+## 10. What a device has to settle
+
+A spike on the iPad (iPadOS 27.0.1) and the iPhone (iOS 27.2 beta), with an Apple TV and a Mac as receivers:
+
+- whether the accessory is offered with `UIApplicationSupportsMultipleScenes` false;
+- what the display shows when the app goes to the background or the device locks, and whether the scene comes back on return;
+- on the iPad with a cable, whether Stage Manager's extended display offers the accessory at all;
+- `overscanCompensation`'s default on an Apple TV, and the modes and resolution a Mac receiver offers;
+- the cost: two web views and a second terminal stream, at 60 fps or the display's rate, and the battery and heat over an hour's turn;
+- on an iOS 26 simulator, that the role guard keeps mirroring and that the automatic scene draws the companion.
+
+## 11. Follow-ups this implies
+
+1. **Bug:** on iOS 16–26, AirPlay mirroring starts a second copy of the app (a second bridge for the external-display scene). The role guard of section 9.1, and a simulator check on iOS 26.
+2. **Spike:** a scene accessory with a bridge-less companion web view showing a static page and one terminal, on both devices and both receivers. It answers section 10.
+3. **The companion:** the `Companion` plugin, the display mode and its projection, the Board and the Stage (terminal and transcript), and the Display menu. Includes mock scenarios and the app spec's section.
+4. **Under WVE-96:** the companion as one more placement for the Pane's views and Visuals.
+5. **Notes on WVE-178, WVE-174 and WVE-145:** the Board shows Bots, context fill and the next occurrences once they land.

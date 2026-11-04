@@ -15,7 +15,9 @@ workspace = true
 weave-host-client = { workspace = true }
 weave-host-protocol = { workspace = true }
 agent-client-protocol = { workspace = true }
+croner = { workspace = true }
 getrandom = { workspace = true }
+jiff = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

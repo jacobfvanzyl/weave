@@ -1,7 +1,8 @@
 //! The Dispatcher's connection to one Host: kept up, with backoff, from the Dispatcher's side,
 //! since Hosts never connect to it. While connected it watches the Host's threads and sends it
-//! the work written down for it, oldest first. A Host that refuses its key, as after revoking
-//! it, isn't tried again until it's paired again.
+//! the work written down for it, oldest first, and when a thread a schedule's occurrence
+//! started goes idle it reads how the occurrence's turn ended. A Host that refuses its key, as
+//! after revoking it, isn't tried again until it's paired again.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,7 +21,13 @@ use weave_host_client::reach::reach;
 use weave_host_client::remote::CloseReason;
 use weave_host_protocol::errors;
 use weave_host_protocol::peers::PeerStatus;
+use weave_host_protocol::queue::AddQueuedRequest;
+use weave_host_protocol::sessions::Activity;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::sessions::SessionStatus;
+use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 
@@ -218,13 +225,19 @@ async fn follow(
             tracing::warn!(host = %host.host_id, %error, "watching a Host's threads failed")
         }
     }
-    send_pending(shared, host, &connection).await;
+    send_pending(shared, host, &connection, seen).await;
+    settle(shared, host, &connection, None).await;
     let ended = loop {
         tokio::select! {
             event = events.recv() => match event {
                 Some(HostEvent::SessionUpdated(updated)) => {
                     let listing = updated.session;
-                    lock(seen).threads.insert(listing.info.session_id.clone(), listing);
+                    let session_id = listing.info.session_id.clone();
+                    let idle = !matches!(listing.activity, Some(Activity::Running | Activity::Waiting));
+                    lock(seen).threads.insert(session_id.clone(), listing);
+                    if idle {
+                        settle(shared, host, &connection, Some(&session_id)).await;
+                    }
                 }
                 Some(HostEvent::SessionRemoved(removed)) => {
                     lock(seen).threads.remove(&removed.session_id);
@@ -232,7 +245,10 @@ async fn follow(
                 Some(HostEvent::Disconnected(_)) | None => break None,
                 Some(_) => {}
             },
-            () = wake.notified() => send_pending(shared, host, &connection).await,
+            () = wake.notified() => {
+                send_pending(shared, host, &connection, seen).await;
+                settle(shared, host, &connection, None).await;
+            }
             () = stop.cancelled() => break Some(Ended::Stopped),
         }
     };
@@ -252,7 +268,12 @@ async fn follow(
 /// Send the Host the work written down for it, oldest first, until it's all taken or the
 /// connection fails. Work the Host refuses is failed, saying why; work it couldn't take now,
 /// as while it stops, is sent again on the next connection.
-async fn send_pending(shared: &Shared, host: &StoredHost, connection: &HostConnection) {
+async fn send_pending(
+    shared: &Shared,
+    host: &StoredHost,
+    connection: &HostConnection,
+    seen: &Mutex<Seen>,
+) {
     let pending = match shared.store.pending(&host.host_id) {
         Ok(pending) => pending,
         Err(why) => {
@@ -260,7 +281,15 @@ async fn send_pending(shared: &Shared, host: &StoredHost, connection: &HostConne
             return;
         }
     };
-    for delivery in pending {
+    for mut delivery in pending {
+        if let Work::Prompt(request) = &delivery.work {
+            let work = into_thread(request, seen);
+            if let Err(why) = shared.store.settle(&delivery.id, &work) {
+                tracing::warn!(delivery = %delivery.id, %why, "recording a delivery failed");
+                return;
+            }
+            delivery.work = work;
+        }
         match send(connection, &delivery).await {
             Ok(answer) => {
                 if let Err(why) = shared.store.delivered(&delivery.id, &answer) {
@@ -288,10 +317,95 @@ async fn send(
     delivery: &Delivery,
 ) -> Result<serde_json::Value, Error> {
     let answer = match &delivery.work {
-        Work::Run(request) => serde_json::to_value(connection.send(request.clone()).await?),
+        Work::Run(request) | Work::Prompt(request) => {
+            serde_json::to_value(connection.send(request.clone()).await?)
+        }
         Work::Queue(request) => serde_json::to_value(connection.send(request.clone()).await?),
     };
     answer.map_err(|error| Error::internal_error().data(error.to_string()))
+}
+
+/// How a prompt for a thread reaches it: added to its queue when it's open on the Host, as
+/// the Dispatcher last saw it, so it waits for whatever runs there; otherwise run in it, which
+/// opens it.
+fn into_thread(request: &RunRequest, seen: &Mutex<Seen>) -> Work {
+    let open = request.session_id.as_ref().is_some_and(|session_id| {
+        lock(seen)
+            .threads
+            .get(session_id)
+            .is_some_and(|listing| listing.state == SessionStatus::Open)
+    });
+    match (&request.session_id, open) {
+        (Some(session_id), true) => Work::Queue(AddQueuedRequest {
+            session_id: session_id.clone(),
+            prompt: request.prompt.clone(),
+            key: request.key.clone(),
+            caller: None,
+            origin: request.origin.clone(),
+        }),
+        _ => Work::Run(request.clone()),
+    }
+}
+
+/// Read how the turns occurrences started on the Host ended, in the thread `only` names or
+/// in all of them, and write down those that are over.
+async fn settle(
+    shared: &Shared,
+    host: &StoredHost,
+    connection: &HostConnection,
+    only: Option<&SessionId>,
+) {
+    let started = match shared.store.started(&host.host_id) {
+        Ok(started) => started,
+        Err(why) => {
+            tracing::warn!(host = %host.host_id, %why, "reading the started occurrences failed");
+            return;
+        }
+    };
+    let signed_out = i32::from(Error::auth_required().code);
+    for (occurrence, session_id, turn_id) in started {
+        if only.is_some_and(|only| *only.0 != *session_id) {
+            continue;
+        }
+        let got = connection
+            .send(GetSessionRequest {
+                session_id: SessionId::new(session_id),
+                turn_id: Some(turn_id),
+            })
+            .await;
+        let ended = match got {
+            Ok(got) => match got.latest_turn {
+                Some(turn) if turn.state.is_over() => Some((
+                    turn.state,
+                    turn.error.as_ref().map(|error| error.message.clone()),
+                    turn.error
+                        .as_ref()
+                        .is_some_and(|error| i32::from(error.code) == signed_out),
+                )),
+                Some(_) => None,
+                None => Some((
+                    TurnState::Failed,
+                    Some("its Host has no record of its turn".to_owned()),
+                    false,
+                )),
+            },
+            Err(error)
+                if errors::is(&error, errors::UNKNOWN_SESSION)
+                    || errors::is(&error, errors::UNKNOWN_TURN) =>
+            {
+                Some((TurnState::Failed, Some(error.message), false))
+            }
+            Err(error) => {
+                tracing::debug!(%occurrence, %error, "reading an occurrence's turn failed");
+                None
+            }
+        };
+        if let Some((outcome, why, signed_out)) = ended
+            && let Err(why) = shared.store.finish(&occurrence, outcome, why, signed_out)
+        {
+            tracing::warn!(%occurrence, %why, "recording how an occurrence ended failed");
+        }
+    }
 }
 
 /// Whether sending `error`'s work again later may go otherwise: the Host is stopping, or the

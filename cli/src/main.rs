@@ -8,6 +8,7 @@ mod hosts;
 mod recent;
 mod rex_threads;
 mod run;
+mod schedules;
 mod service;
 mod sessions;
 mod smoke;

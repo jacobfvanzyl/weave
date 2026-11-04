@@ -4,7 +4,7 @@
 //!
 //! `weave dispatcher add-host studio` pairs it with studio's Host over SSH, as `weave hosts
 //! add` pairs Hosts: it runs `weave pair --json` there for a code. Given the URL and code `weave
-//! pair` showed there instead, it pairs with those.
+//! pair` showed there instead, it pairs with those. Its schedules are in [`crate::schedules`].
 
 use std::time::Duration;
 
@@ -32,6 +32,7 @@ use crate::hosts::Reach;
 use crate::hosts::reach;
 use crate::hosts::ssh;
 use crate::hosts::ssh_name;
+use crate::schedules;
 use crate::service;
 
 /// How long `install` waits for the service's Dispatcher to answer.
@@ -62,6 +63,11 @@ enum DispatcherCommand {
     /// Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its
     /// devices until you revoke it there with `weave devices revoke`.
     RemoveHost(RemoveHostArgs),
+    /// Schedules, which start a headless turn on a Host at the times a cron expression gives:
+    /// list, add, remove, pause, resume or run one.
+    Schedules(schedules::SchedulesArgs),
+    /// What schedules did each time they came due, newest first.
+    Occurrences(schedules::OccurrencesArgs),
 }
 
 #[derive(Args)]
@@ -114,6 +120,8 @@ pub async fn command(args: DispatcherArgs) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        DispatcherCommand::Schedules(args) => schedules::schedules(&paths, args).await,
+        DispatcherCommand::Occurrences(args) => schedules::occurrences(&paths, args).await,
         DispatcherCommand::RemoveHost(args) => {
             let dispatcher = connect(&paths).await?;
             dispatcher
@@ -272,7 +280,7 @@ async fn add_host(paths: &DispatcherPaths, args: AddHostArgs) -> anyhow::Result<
 }
 
 /// The Dispatcher running from `paths`, said hello to.
-async fn connect(paths: &DispatcherPaths) -> anyhow::Result<DispatcherConnection> {
+pub(crate) async fn connect(paths: &DispatcherPaths) -> anyhow::Result<DispatcherConnection> {
     let transport = socket::connect(&paths.socket()).await.with_context(|| {
         format!(
             "the Dispatcher isn't running from {}; `weave dispatcher install` runs it as a \
