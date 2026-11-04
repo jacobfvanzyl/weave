@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0029, under which the Dispatcher also carries agents' calls to the person's other Hosts
 date: 2026-11-02
 ---
 

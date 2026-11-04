@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR 0029: Hosts no longer pair as peers
 date: 2026-10-31
 ---
 
