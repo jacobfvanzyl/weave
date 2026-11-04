@@ -30,6 +30,8 @@ pub struct OpenedSession {
     /// The title the Host shows for it as it opens. A closed session's new journal holds it in
     /// no event, so its replay can't give it.
     pub title: Option<String>,
+    /// The thread its work goes on in, if a client named one (WVE-168).
+    pub successor: Option<SessionId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +60,7 @@ impl OpenedSession {
             notices: state.notices.clone(),
             mcp_servers: state.mcp_servers.clone(),
             title: state.title.clone(),
+            successor: state.continued_in.clone(),
         }
     }
 }
@@ -109,6 +112,7 @@ mod tests {
             update: None,
             started_by: None,
             started_by_host: None,
+            continued_in: None,
         }
     }
 

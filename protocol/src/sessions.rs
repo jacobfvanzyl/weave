@@ -222,6 +222,9 @@ pub struct SessionState {
     /// The peer Host the session that started it is on, when it isn't this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by_host: Option<String>,
+    /// Its successor, as its listing's `continuedIn` (WVE-168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_in: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -252,6 +255,11 @@ pub struct SessionListing {
     /// The peer Host the session that started it is on, when it isn't this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by_host: Option<String>,
+    /// Its successor (feature `successors`, WVE-168): the session its work goes on in, which a
+    /// client named with `session/setSuccessor`. Clients following this one may follow that,
+    /// and reports to this one go there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_in: Option<SessionId>,
     /// The client whose `session/create` or `session/attach` opened it last, while it's open:
     /// a paired device's names its `device`. A service's `session/run` that opened it gives
     /// the turn's origin. Absent for one another headless run or a Host taking it up opened.
@@ -367,6 +375,10 @@ pub struct LatestTurn {
     /// The interrupted turn it continues (WVE-144).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continues: Option<TurnId>,
+    /// Its successor, for an interrupted turn the thread continued: the turn that continues it,
+    /// started as this one ended (WVE-168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_in: Option<TurnId>,
     pub prompt: Vec<ContentBlock>,
     pub origin: TurnOrigin,
     /// When it started; for a queued turn, when it was queued.
@@ -561,6 +573,25 @@ pub const MAX_TITLE: usize = 200;
 pub struct RenameSessionRequest {
     pub session_id: SessionId,
     pub title: String,
+}
+
+/// The Host offers [`SetSuccessorRequest`] and the successors of turns and sessions, in
+/// `features` (WVE-168).
+pub const SUCCESSORS_FEATURE: &str = "successors";
+
+/// `session/setSuccessor`: name the session an open session's work goes on in, as the
+/// Dispatcher does when it starts a Bot's new thread. Journaled as a `continuedIn` event and
+/// listed as the session's `continuedIn`; reports to the session go to its successor from then
+/// on. The successor is a session the Host has a record of, other than this one and not one
+/// whose successors lead back to it. A session's successor is named once: naming the same one
+/// again does nothing, and another is refused.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "session/setSuccessor", response = Empty)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSuccessorRequest {
+    pub session_id: SessionId,
+    pub successor: SessionId,
 }
 
 /// `session/setMode`. The change reaches every attached client as an ACP update.

@@ -57,56 +57,25 @@ impl TestHost {
         let config_file = config_home.join("weave/config.toml");
         std::fs::write(&config_file, "[agents.fake]\ncommand = \"fake-agent\"\n").expect("config");
         std::fs::create_dir_all(dir.path().join("work")).expect("work dir");
-        let paths = DaemonPaths::in_dir(dir.path().join("host"));
-
-        let state = dir.path().join("agent-state.json");
-        let launcher: Launcher = Arc::new(move |_, options, _| {
-            let config = FakeAgentConfig {
-                state_path: Some(state.clone()),
-                ..FakeAgentConfig::default()
-            };
-            Box::pin(async move {
-                let (client, agent) = Channel::duplex();
-                tokio::spawn(weave_fake_agent::serve_with(agent, config));
-                AgentConnection::connect(client, options)
-                    .await
-                    .map_err(|error| Error::internal_error().data(error.to_string()))
-            })
-        });
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let _entered = runtime.enter();
-        let listening = socket::listen(&paths).expect("listen");
-        let mut config = DaemonConfig::in_process(Some(config_file));
-        config.journals = Some(paths.journals());
-        config.devices = Some(paths.devices());
-        config.traces = dir.path().join("traces");
-        config.launcher = launcher;
-        if let Some(name) = peer {
-            let mut remote = RemoteSettings::new(Arc::new(LoopbackServe));
-            remote.listen = "127.0.0.1:0".parse().expect("an address");
-            config.remote = Some(remote);
-            config.peers = Some(PeerSettings {
-                secure_enclave: false,
-                name: name.to_owned(),
-                ..PeerSettings::new(None, None)
-            });
-        }
-        let daemon = Daemon::new(config);
-        let serving = daemon.clone();
-        runtime.spawn(async move {
-            let listener = listening.listener;
-            serving.serve(listener, None).await;
-        });
-        drop(_entered);
+        let (paths, daemon, runtime) = serve(dir.path(), peer);
         Self {
             dir,
             paths,
             daemon,
             runtime: Some(runtime),
         }
+    }
+
+    /// End the Host at once, as a crash would, and start another on its directory, which takes
+    /// up the headless threads the first left running, as a Host does at startup.
+    pub fn restart(&mut self) {
+        self.lose();
+        let (paths, daemon, runtime) = serve(self.dir.path(), None);
+        let resuming = daemon.clone();
+        runtime.spawn(async move { resuming.resume_queues().await });
+        self.paths = paths;
+        self.daemon = daemon;
+        self.runtime = Some(runtime);
     }
 
     /// End the Host at once, its connections and agents with it.
@@ -158,6 +127,65 @@ impl TestHost {
     pub fn weave(&self, args: &[&str]) -> Output {
         self.command(args).output().expect("run weave")
     }
+}
+
+/// Serve a Host from `dir`, with the fake agent: its paths, the Host and the runtime it runs on.
+fn serve(dir: &Path, peer: Option<&str>) -> (DaemonPaths, Daemon, Runtime) {
+    let paths = DaemonPaths::in_dir(dir.join("host"));
+    let config_file = dir.join("config/weave/config.toml");
+    let state = dir.join("agent-state.json");
+    let launcher: Launcher = Arc::new(move |_, options, _| {
+        let config = FakeAgentConfig {
+            state_path: Some(state.clone()),
+            ..FakeAgentConfig::default()
+        };
+        Box::pin(async move {
+            let (client, agent) = Channel::duplex();
+            tokio::spawn(weave_fake_agent::serve_with(agent, config));
+            AgentConnection::connect(client, options)
+                .await
+                .map_err(|error| Error::internal_error().data(error.to_string()))
+        })
+    });
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let _entered = runtime.enter();
+    // A Host just lost may hold its lock a moment longer.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let listening = loop {
+        match socket::listen(&paths) {
+            Ok(listening) => break listening,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(error) => panic!("listen: {error}"),
+        }
+    };
+    let mut config = DaemonConfig::in_process(Some(config_file));
+    config.journals = Some(paths.journals());
+    config.devices = Some(paths.devices());
+    config.traces = dir.join("traces");
+    config.launcher = launcher;
+    if let Some(name) = peer {
+        let mut remote = RemoteSettings::new(Arc::new(LoopbackServe));
+        remote.listen = "127.0.0.1:0".parse().expect("an address");
+        config.remote = Some(remote);
+        config.peers = Some(PeerSettings {
+            secure_enclave: false,
+            name: name.to_owned(),
+            ..PeerSettings::new(None, None)
+        });
+    }
+    let daemon = Daemon::new(config);
+    let serving = daemon.clone();
+    runtime.spawn(async move {
+        let listener = listening.listener;
+        serving.serve(listener, None).await;
+    });
+    drop(_entered);
+    (paths, daemon, runtime)
 }
 
 /// Tailscale Serve for a test: the Host's own loopback listener is its URL.

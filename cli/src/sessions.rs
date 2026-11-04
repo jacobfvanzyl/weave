@@ -24,11 +24,15 @@ use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::CloseSessionRequest;
+use weave_host_protocol::sessions::CloseWhen;
+use weave_host_protocol::sessions::DetachSessionRequest;
 use weave_host_protocol::sessions::GetSessionRequest;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::OBSERVE_FEATURE;
+use weave_host_protocol::sessions::SUCCESSORS_FEATURE;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
+use weave_host_protocol::sessions::SetSuccessorRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::WATCH_FEATURE;
@@ -48,6 +52,8 @@ use crate::run::Output;
 use crate::run::describe_stop;
 use crate::run::prompt_text;
 use crate::turn::Follower;
+use crate::turn::Link;
+use crate::turn::Outcome;
 use crate::turn::Pick;
 use crate::turn::Print;
 use crate::turn::WaitArgs;
@@ -83,6 +89,18 @@ enum SessionsCommand {
     /// Follow an open thread as it goes, without being one of its clients: the agent's reply
     /// as text, or with --json its journal events (`session/event`) as JSON lines.
     Follow(FollowArgs),
+    /// Name the thread an open thread's work goes on in, its successor: clients following it
+    /// may follow that, and reports to it go there. Named once.
+    SetSuccessor(SuccessorArgs),
+}
+
+#[derive(Args)]
+struct SuccessorArgs {
+    #[arg(value_name = "THREAD_ID")]
+    session_id: String,
+    /// The thread its work goes on in.
+    #[arg(value_name = "SUCCESSOR_ID")]
+    successor: String,
 }
 
 #[derive(Args, Default)]
@@ -195,18 +213,31 @@ pub async fn command(args: SessionsArgs) -> anyhow::Result<ExitCode> {
             | SessionsCommand::Steer(_)
             | SessionsCommand::Cancel(_)
             | SessionsCommand::Close(_)
+            | SessionsCommand::SetSuccessor(_)
             | SessionsCommand::Watch
             | SessionsCommand::Follow(_) => Err(exit::unreachable(anyhow!(
                 "the weave Host isn't running, so no threads are open"
             ))),
         };
     };
+    // Following a turn waits for a Host that goes away to come back.
+    let (connection, events) = match command {
+        SessionsCommand::Follow(args) => {
+            let mut link = Link::new(connection, events, Some(paths));
+            let result = follow(&mut link, args).await;
+            link.connection.shutdown().await;
+            return result.map(ExitCode::from);
+        }
+        SessionsCommand::Prompt(args) if args.wait => {
+            let mut link = Link::new(connection, events, Some(paths));
+            let result = prompt_and_wait(&mut link, args).await;
+            link.connection.shutdown().await;
+            return result.map(ExitCode::from);
+        }
+        _ => (connection, events),
+    };
     let result = match command {
         SessionsCommand::Watch => watch(&connection, events).await,
-        SessionsCommand::Follow(args) => follow(&connection, events, args).await,
-        SessionsCommand::Prompt(args) if args.wait => {
-            prompt_and_wait(&connection, events, args).await
-        }
         command => run(&connection, command).await.map(|()| Status::Success),
     };
     connection.shutdown().await;
@@ -322,6 +353,20 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 .context("closing the thread")?;
             eprintln!("Closed {session_id}; weave --resume {session_id} reopens it.");
         }
+        SessionsCommand::SetSuccessor(SuccessorArgs {
+            session_id,
+            successor,
+        }) => {
+            offers(connection, SUCCESSORS_FEATURE)?;
+            connection
+                .send(SetSuccessorRequest {
+                    session_id: SessionId::new(session_id.clone()),
+                    successor: SessionId::new(successor.clone()),
+                })
+                .await
+                .context("naming the thread's successor")?;
+            eprintln!("Thread {session_id} continues in thread {successor}.");
+        }
         SessionsCommand::Watch | SessionsCommand::Follow(_) => {}
     }
     Ok(())
@@ -360,16 +405,12 @@ async fn watch(
 
 /// `weave threads follow`: observe the thread (`session/attach` with `observe`), printing what
 /// happens in it after `--after`, or from now, or the turn `--turn` names.
-async fn follow(
-    connection: &HostConnection,
-    mut events: UnboundedReceiver<HostEvent>,
-    args: FollowArgs,
-) -> anyhow::Result<Status> {
+async fn follow(link: &mut Link, args: FollowArgs) -> anyhow::Result<Status> {
     if args.turn.is_some() {
-        offers(connection, TURN_IDS_FEATURE)?;
+        offers(&link.connection, TURN_IDS_FEATURE)?;
     }
     let session_id = SessionId::new(args.session_id);
-    let observed = observe(connection, &session_id).await?;
+    let observed = observe(&link.connection, &session_id).await?;
     let head = observed.state.journal.head;
     let running = observed
         .state
@@ -392,9 +433,26 @@ async fn follow(
         follower = follower.until_ends(args.waiting.keep_waiting);
     }
     let mut out = Output::new(args.json);
-    let outcome = follower
-        .follow(&mut events, &mut out, args.waiting.deadline())
-        .await?;
+    let deadline = args.waiting.deadline();
+    let mut session_id = session_id;
+    let mut outcome = follower.follow(link, &mut out, deadline).await?;
+    // Its work goes on in a successor: follow that, from its start (WVE-168).
+    while let Outcome::Succeeded(successor) = outcome {
+        if !args.json {
+            eprintln!("weave: thread {session_id} continues in thread {successor}; following it");
+        }
+        let _ = link
+            .connection
+            .send(DetachSessionRequest {
+                session_id: session_id.clone(),
+                close: CloseWhen::Never,
+            })
+            .await;
+        session_id = successor;
+        let observed = observe(&link.connection, &session_id).await?;
+        follower = Follower::new(&observed.state, Pick::After(0), Print::After(0));
+        outcome = follower.follow(link, &mut out, deadline).await?;
+    }
     out.finish()?;
     report(
         outcome,
@@ -407,11 +465,8 @@ async fn follow(
 
 /// `weave threads prompt --wait`: follow the thread, so nothing of its turn is missed, then
 /// prompt it, and wait for that turn as `follow --turn` does.
-async fn prompt_and_wait(
-    connection: &HostConnection,
-    mut events: UnboundedReceiver<HostEvent>,
-    args: PromptArgs,
-) -> anyhow::Result<Status> {
+async fn prompt_and_wait(link: &mut Link, args: PromptArgs) -> anyhow::Result<Status> {
+    let connection = &link.connection;
     offers(connection, TURN_IDS_FEATURE)?;
     let session_id = SessionId::new(args.message.session_id.clone());
     let json = args.message.json;
@@ -426,7 +481,7 @@ async fn prompt_and_wait(
     )
     .until_ends(keep_waiting);
     let mut out = Output::new(json);
-    let outcome = follower.follow(&mut events, &mut out, deadline).await?;
+    let outcome = follower.follow(link, &mut out, deadline).await?;
     out.finish()?;
     report(outcome, &session_id, Some(&queued.queued_id), json, false)
 }
@@ -656,6 +711,7 @@ mod tests {
             started_by_host: None,
             opened_by: None,
             opened_at: None,
+            continued_in: None,
         };
         assert_eq!(
             describe(std::slice::from_ref(&session), 7_230_000),
@@ -686,6 +742,7 @@ mod tests {
             turn_id: None,
             state: TurnState::Running,
             continues: None,
+            continued_in: None,
             prompt: vec![ContentBlock::from(
                 "address the review\non the PR".to_owned(),
             )],

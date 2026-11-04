@@ -33,4 +33,13 @@ describe('labelStarters', () => {
     labelStarters([orphan], [host('studio', 'studio')]);
     expect(orphan.startedBy?.label).toBe('from another thread on another Host');
   });
+
+  it('names the thread one continues in', () => {
+    const old = session('mini', 's1', { continuedIn: { key: 'mini/s2', label: '' } });
+    const successor = session('mini', 's2', { title: 'Daily, week 2' });
+    const gone = session('mini', 's3', { continuedIn: { key: 'mini/s9', label: '' } });
+    labelStarters([old, successor, gone], [host('mini', 'mini')]);
+    expect(old.continuedIn).toEqual({ key: 'mini/s2', label: '“Daily, week 2”' });
+    expect(gone.continuedIn?.label).toBe('another thread');
+  });
 });

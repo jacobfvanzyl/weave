@@ -22,8 +22,9 @@ of its own; `weave-host` is only a dev-dependency, for the tests' in-process Hos
 - `link.rs`: one task per Host that keeps a connection to it with backoff (`retry` doubling to
   `retry_most`), watches its threads (`sessions/watch`) and sends it its pending deliveries,
   oldest first, settling a thread's prompt (`Work::Prompt`) into `queue/add` or `session/run`
-  before its first send, and reads with `sessions/get` how started occurrences' turns ended
-  when their threads go idle. A Host that refuses the Dispatcher's key, or closes with `CLOSE_REVOKED`, is
+  before its first send (in the last of the thread's successors, WVE-168), and reads with
+  `sessions/get` how started occurrences' turns ended when their threads go idle, following an
+  interrupted turn into its continuation (`continuedIn`). A Host that refuses the Dispatcher's key, or closes with `CLOSE_REVOKED`, is
   recorded as refused in `hosts.refused` and not tried again until `hosts/add` pairs with it
   again.
 - `scheduler.rs` (WVE-145): the task that considers every schedule when one is due, when they

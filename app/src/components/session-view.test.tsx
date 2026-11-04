@@ -65,6 +65,18 @@ describe('SessionView', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  it('opens the thread one continues in', async () => {
+    const user = userEvent.setup();
+    const handlers = actions();
+    const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
+    const continued = controller(session, handlers);
+    continued.model.sessions[0] = { ...continued.model.sessions[0], continuedIn: { key: 'h/next', label: '“Week 2”' } };
+    render(<SessionView controller={continued} session={session} />);
+    expect(screen.getByText('This thread continues in “Week 2”')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open' }));
+    expect(handlers.selectSession).toHaveBeenCalledWith('h/next');
+  });
+
   it('updates an agent the Host hasn\'t updated, and moves the thread to it', async () => {
     const user = userEvent.setup();
     const handlers = actions();

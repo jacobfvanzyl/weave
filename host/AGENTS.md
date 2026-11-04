@@ -33,7 +33,13 @@ it as `interrupted`, and a Host starting takes up suspended headless sessions wh
 taken up (`client::reopen`, `errors::interrupted`, WVE-144); a headless session continues its
 own once, from its origin, before its queue starts anything (`session::Continuation`, started
 before the task runs), and its `turnStarted` names the turn in `continues`, which also keeps a
-continuation from being continued again. Those sessions are taken up at startup too. Request keys (`admissions.rs`, feature `requestKeys`) are admitted
+continuation from being continued again. That `turnStarted` is journaled in `client::reopen`
+with the interrupted turn's end, before the agent is prompted, so a reader never finds one
+without the other; `journal::turn` gives the interrupted turn's `continuedIn` from it (WVE-168).
+Those sessions are taken up at startup too. A session's successor (`session/setSuccessor`,
+`Command::SetSuccessor`) is a `continuedIn` entry, kept in `Summary` and `Recorded` and carried
+into a closed session's new journal header; `host_tools::tell` sends a report to the last of the
+caller's successors (`Registry::latest_successor`). Request keys (`admissions.rs`, feature `requestKeys`) are admitted
 before `session/run`, `turn/start` and `queue/add` act: a line in `admissions.jsonl` beside the
 journals, synced, then the answer, or a refusal that frees the key. The key is journaled with the
 `turnStarted` or `queued` entry it caused, so a repeat of a key a stopped Host never answered

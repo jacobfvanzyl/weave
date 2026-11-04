@@ -2,24 +2,37 @@
 //! `weave run` (WVE-108): which turn it is, what of the thread's journal to print meanwhile, and
 //! when to stop: when the turn ends, when it waits on a person (unless asked to wait through
 //! that), or at a deadline. The turn goes on whenever this stops waiting before its end.
+//!
+//! A shared Host that goes away, as one that crashes or is stopped does, is waited for, and the
+//! thread followed again from the last event seen once it's back (WVE-168). A turn the Host
+//! stopped under that the thread continues is followed into its successor, the continuation, as
+//! one turn: it ends as that ends.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::anyhow;
 use clap::Args;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::Instant;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionId;
+use weave_host::DaemonPaths;
+use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
+use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::PendingKind;
 use weave_host_protocol::pending::PendingRequest;
+use weave_host_protocol::sessions::AttachSessionRequest;
+use weave_host_protocol::sessions::GetSessionRequest;
+use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::turns::TurnId;
 
+use crate::daemon::control_with_events;
 use crate::exit;
 use crate::exit::Status;
 use crate::run::Output;
@@ -77,6 +90,64 @@ pub(crate) enum Outcome {
     Closed(String),
     /// Its prompt was taken out of the queue before it started.
     Removed,
+    /// The Host went away, and this can't reach it again; why, if it said.
+    Lost(Option<String>),
+    /// The thread's work goes on in this one, its successor, which following moves on to
+    /// unless it waits for a turn's end.
+    Succeeded(SessionId),
+}
+
+/// How long a Host that went away has to come back, and to take the thread up again.
+const RECONNECT_WINDOW: Duration = Duration::from_secs(60);
+const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
+
+/// The connection a follower reads the Host by, and how to reach the Host again when it goes.
+pub(crate) struct Link {
+    pub(crate) connection: HostConnection,
+    pub(crate) events: UnboundedReceiver<HostEvent>,
+    /// The shared Host's; none for a Host in this process, which ends with it.
+    paths: Option<DaemonPaths>,
+}
+
+impl Link {
+    pub(crate) fn new(
+        connection: HostConnection,
+        events: UnboundedReceiver<HostEvent>,
+        paths: Option<DaemonPaths>,
+    ) -> Self {
+        Self {
+            connection,
+            events,
+            paths,
+        }
+    }
+
+    /// Reach the Host again, waiting for it to come back until `until`.
+    async fn reconnect(&mut self, until: Instant) -> anyhow::Result<()> {
+        let paths = self
+            .paths
+            .clone()
+            .ok_or_else(|| exit::unreachable(anyhow!("lost the weave Host")))?;
+        loop {
+            match control_with_events(&paths).await {
+                Ok(Some((connection, events))) => {
+                    let old = std::mem::replace(&mut self.connection, connection);
+                    old.shutdown().await;
+                    self.events = events;
+                    return Ok(());
+                }
+                Ok(None) | Err(_) if Instant::now() < until => {
+                    tokio::time::sleep(RECONNECT_INTERVAL).await;
+                }
+                Ok(None) => {
+                    return Err(exit::unreachable(anyhow!(
+                        "lost the weave Host, which didn't come back"
+                    )));
+                }
+                Err(error) => return Err(error.context("lost the weave Host")),
+            }
+        }
+    }
 }
 
 /// Following a thread for one of its turns.
@@ -91,6 +162,10 @@ pub(crate) struct Follower {
     /// The journal's head when this attached: events up to it are the journal so far.
     head: u64,
     caught_up: bool,
+    /// The last event seen, to follow on from after the Host comes back.
+    position: JournalPosition,
+    /// The turn ended interrupted, as this saw: a continuation may follow it.
+    interrupted: Option<agent_client_protocol::Error>,
     /// The turn, once known.
     turn: Option<TurnId>,
     /// Its start has been seen.
@@ -117,6 +192,11 @@ impl Follower {
             keep_waiting: false,
             head,
             caught_up: head == 0,
+            position: JournalPosition {
+                journal: state.journal.id.clone(),
+                seq: 0,
+            },
+            interrupted: None,
             turn,
             started: false,
             in_turn: false,
@@ -141,22 +221,140 @@ impl Follower {
     }
 
     /// Handle what the Host sent until waiting stops, or with no deadline and not waiting for
-    /// the turn's end, until the thread closes.
+    /// the turn's end, until the thread closes; through the Host going away and coming back.
     pub(crate) async fn follow(
         &mut self,
-        events: &mut UnboundedReceiver<HostEvent>,
+        link: &mut Link,
         out: &mut Output,
         deadline: Option<Instant>,
     ) -> anyhow::Result<Outcome> {
         loop {
             let event = tokio::select! {
-                event = events.recv() => event,
+                event = link.events.recv() => event,
                 () = sleep_until(deadline) => return Ok(Outcome::TimedOut),
             };
-            if let Some(outcome) = self.handle(event, out)? {
-                return Ok(outcome);
+            match self.handle(event, out)? {
+                Some(Outcome::Lost(_)) => {
+                    if let Some(outcome) = self.reattach(link, out, deadline).await? {
+                        return Ok(outcome);
+                    }
+                }
+                Some(outcome) => return Ok(outcome),
+                None => {}
             }
         }
+    }
+
+    /// After the Host went away: wait for it to come back, then follow the thread again from
+    /// the last event seen. A thread the Host hasn't taken up again is read instead, for the
+    /// turn's end, or its continuation's: why waiting stops, if it does.
+    pub(crate) async fn reattach(
+        &mut self,
+        link: &mut Link,
+        out: &mut Output,
+        deadline: Option<Instant>,
+    ) -> anyhow::Result<Option<Outcome>> {
+        eprintln!("weave: lost the weave Host; waiting for it to come back");
+        let window = Instant::now() + RECONNECT_WINDOW;
+        let until = deadline.map_or(window, |deadline| deadline.min(window));
+        link.reconnect(until).await?;
+        loop {
+            let attached = link
+                .connection
+                .send(AttachSessionRequest {
+                    session_id: self.session_id.clone(),
+                    after: Some(self.position.clone()),
+                    agent_id: None,
+                    cwd: None,
+                    trace: false,
+                    observe: true,
+                })
+                .await;
+            match attached {
+                Ok(attached) => {
+                    self.reattached(&attached.state);
+                    return Ok(None);
+                }
+                Err(error) if errors::is(&error, errors::SESSION_NOT_OPEN) => {
+                    if let Some(outcome) = self.read_over(&link.connection, out).await? {
+                        return Ok(Some(outcome));
+                    }
+                    if Instant::now() >= until {
+                        return Ok(Some(match deadline {
+                            Some(deadline) if deadline <= Instant::now() => Outcome::TimedOut,
+                            _ => Outcome::Lost(Some(
+                                "the weave Host came back, but hasn't taken the thread up again"
+                                    .to_owned(),
+                            )),
+                        }));
+                    }
+                    tokio::time::sleep(RECONNECT_INTERVAL).await;
+                }
+                Err(error) => {
+                    return Err(anyhow::Error::from(error).context("following the thread"));
+                }
+            }
+        }
+    }
+
+    /// The turn's end, read without attaching, once it and any continuations are over.
+    async fn read_over(
+        &mut self,
+        connection: &HostConnection,
+        out: &Output,
+    ) -> anyhow::Result<Option<Outcome>> {
+        if !self.until_ends {
+            return Ok(None);
+        }
+        let Some(mut turn) = self.turn.clone() else {
+            return Ok(None);
+        };
+        loop {
+            let got = connection
+                .send(GetSessionRequest {
+                    session_id: self.session_id.clone(),
+                    turn_id: Some(turn.clone()),
+                })
+                .await
+                .context("reading the thread")?;
+            let Some(latest) = got.latest_turn.filter(|latest| latest.state.is_over()) else {
+                return Ok(None);
+            };
+            match latest.continued_in {
+                Some(next) => {
+                    continued(&turn, &next, out);
+                    self.turn = Some(next.clone());
+                    self.pick = Pick::Turn(next.clone());
+                    turn = next;
+                }
+                None => {
+                    if let Some(message) = latest.message.filter(|_| !out.is_json()) {
+                        println!("{message}");
+                    }
+                    return Ok(Some(Outcome::Ended {
+                        response: latest.response,
+                        error: latest.error,
+                    }));
+                }
+            }
+        }
+    }
+
+    /// Following the thread again, as `state` describes it, after the last event seen.
+    fn reattached(&mut self, state: &SessionState) {
+        self.head = state.journal.head;
+        self.caught_up = self.head <= self.position.seq;
+        if state.journal.id != self.position.journal {
+            self.position = JournalPosition {
+                journal: state.journal.id.clone(),
+                seq: 0,
+            };
+        }
+        self.asks = state
+            .pending
+            .iter()
+            .filter_map(|pending| Some((pending.id.clone(), asks(pending)?)))
+            .collect();
     }
 
     /// Handle one thing the Host sent: why waiting stops, if it does.
@@ -168,6 +366,10 @@ impl Follower {
         match event {
             Some(HostEvent::Event(notification)) if notification.session_id == self.session_id => {
                 let seq = notification.seq;
+                self.position.seq = seq;
+                if let Some(outcome) = self.continues(&notification.event, seq, out) {
+                    return Ok(Some(outcome));
+                }
                 let starts = self.starts(&notification.event, seq);
                 let printed = match self.print {
                     Print::After(after) => seq > after,
@@ -190,14 +392,29 @@ impl Follower {
                         error,
                     } if session_id == self.session_id && self.in_turn => {
                         self.in_turn = false;
-                        if self.until_ends {
-                            return Ok(Some(Outcome::Ended { response, error }));
+                        // A continuation starts with an interrupted turn's end, journaled
+                        // before anyone could attach: one comes next if any does.
+                        match error {
+                            Some(error)
+                                if self.until_ends
+                                    && errors::is(&error, errors::INTERRUPTED)
+                                    && seq < self.head =>
+                            {
+                                self.interrupted = Some(error);
+                            }
+                            error if self.until_ends => {
+                                return Ok(Some(Outcome::Ended { response, error }));
+                            }
+                            _ => {}
                         }
                     }
                     SessionEvent::Unqueued { queued_id, .. }
                         if !self.started && self.turn.as_ref() == Some(&queued_id) =>
                     {
                         return Ok(Some(Outcome::Removed));
+                    }
+                    SessionEvent::ContinuedIn { successor, .. } if !self.until_ends => {
+                        return Ok(Some(Outcome::Succeeded(successor)));
                     }
                     SessionEvent::Closed { reason, .. } => {
                         return Ok(Some(Outcome::Closed(reason)));
@@ -221,13 +438,49 @@ impl Follower {
                 self.asks.remove(&resolved.pending_id);
                 Ok(None)
             }
-            Some(HostEvent::Disconnected(Some(error))) => {
-                Err(exit::unreachable(anyhow!("lost the weave Host: {error}")))
+            Some(HostEvent::Disconnected(error)) => {
+                Ok(Some(Outcome::Lost(error.map(|error| error.to_string()))))
             }
-            Some(HostEvent::Disconnected(None)) | None => {
-                Err(exit::unreachable(anyhow!("lost the weave Host")))
-            }
+            None => Ok(Some(Outcome::Lost(None))),
             Some(_) => Ok(None),
+        }
+    }
+
+    /// After the turn waited for ended interrupted: follow `event`, at `seq`, into its
+    /// continuation, or stop when another turn of the thread's starts first, it closes, or the
+    /// journal as it was on attaching holds no continuation.
+    fn continues(&mut self, event: &SessionEvent, seq: u64, out: &Output) -> Option<Outcome> {
+        let error = self.interrupted.take()?;
+        let ended = || {
+            Some(Outcome::Ended {
+                response: None,
+                error: Some(error.clone()),
+            })
+        };
+        match event {
+            SessionEvent::TurnStarted {
+                session_id,
+                turn_id: Some(next),
+                continues: Some(continues),
+                ..
+            } if *session_id == self.session_id && self.turn.as_ref() == Some(continues) => {
+                if let Some(turn) = &self.turn {
+                    continued(turn, next, out);
+                }
+                self.turn = Some(next.clone());
+                self.pick = Pick::Turn(next.clone());
+                self.in_turn = true;
+                None
+            }
+            SessionEvent::TurnStarted { session_id, .. } if *session_id == self.session_id => {
+                ended()
+            }
+            SessionEvent::Closed { .. } => ended(),
+            _ if seq >= self.head => ended(),
+            _ => {
+                self.interrupted = Some(error);
+                None
+            }
         }
     }
 
@@ -264,6 +517,16 @@ impl Follower {
         }
         let what = self.asks.values().next()?;
         Some(Outcome::Waiting(what.clone()))
+    }
+}
+
+/// Say that `turn` was cut off and goes on in `next`.
+fn continued(turn: &TurnId, next: &TurnId, out: &Output) {
+    if !out.is_json() {
+        eprintln!(
+            "weave: the weave Host stopped while turn {turn} ran; the thread continued it in turn \
+             {next}"
+        );
     }
 }
 
@@ -348,6 +611,14 @@ pub(crate) fn report(
             return Err(anyhow!(
                 "the prompt was taken out of {session_id}'s queue before its turn started"
             ));
+        }
+        Outcome::Succeeded(_) => Status::Success,
+        Outcome::Lost(why) => {
+            let lost = match why {
+                Some(why) => anyhow!("lost the weave Host: {why}"),
+                None => anyhow!("lost the weave Host"),
+            };
+            return Err(exit::unreachable(lost));
         }
     })
 }

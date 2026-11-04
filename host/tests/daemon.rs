@@ -93,6 +93,7 @@ use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::sessions::SessionStatus;
+use weave_host_protocol::sessions::SetSuccessorRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::UnwatchSessionsRequest;
@@ -404,6 +405,8 @@ struct Seen {
     notices: Vec<String>,
     /// Titles the session was renamed to through the Host, and by whom.
     renamed: Vec<(String, Option<TurnOrigin>)>,
+    /// The successors clients named for it.
+    continued_in: Vec<SessionId>,
     /// Each turn's origin, and the queued prompt it started from.
     origins: Vec<(TurnOrigin, Option<String>)>,
     /// Each turn's id.
@@ -781,6 +784,7 @@ impl Seen {
             SessionEvent::Closed { reason, by } => self.closed = Some((reason, by)),
             SessionEvent::Notice { text } => self.notices.push(text),
             SessionEvent::Renamed { title, by } => self.renamed.push((title, by)),
+            SessionEvent::ContinuedIn { successor, .. } => self.continued_in.push(successor),
             SessionEvent::Queued { queued_id, .. } => self.queued.push(queued_id),
             SessionEvent::Unqueued { queued_id, .. } => self.unqueued.push(queued_id),
             SessionEvent::QueuePaused { reason } => self.paused.push(reason),
@@ -3834,6 +3838,9 @@ async fn a_turn_the_host_stopped_under_is_interrupted_and_a_headless_one_continu
     };
     assert_eq!(continued.continues.as_deref(), Some(cut.as_str()));
     assert_eq!(continued.state, TurnState::Ended);
+    // The interrupted turn names its successor, journaled with its end.
+    let interrupted = latest(&daemon, &headless, Some(&cut)).await;
+    assert_eq!(interrupted.continued_in, continued.turn_id);
     assert_eq!(continued.origin, TurnOrigin::Run {});
     let prompt: String = continued
         .prompt
@@ -3872,6 +3879,16 @@ async fn a_turn_the_host_stopped_under_is_interrupted_and_a_headless_one_continu
         .expect("the headless session's journal");
     let text = std::fs::read_to_string(&journal).expect("the journal");
     let lines: Vec<&str> = text.lines().collect();
+    let cut_off = lines
+        .iter()
+        .position(|line| line.contains(r#""type":"turnEnded""#))
+        .expect("the interrupted turn's end");
+    assert!(
+        lines[cut_off + 1].contains(r#""type":"turnStarted""#)
+            && lines[cut_off + 1].contains(&format!(r#""continues":"{cut}""#)),
+        "the continuation starts with the interrupted turn's end: {}",
+        lines[cut_off + 1]
+    );
     let end = lines
         .iter()
         .rposition(|line| line.contains(r#""type":"turnEnded""#))
@@ -4646,6 +4663,136 @@ async fn delegation_stops_at_its_depth_and_its_running_limit() {
     );
     let told = client.told(&mut seen).await;
     assert!(told.contains("had its turn cancelled"), "{told}");
+}
+
+#[tokio::test]
+async fn a_thread_names_its_successor_once_and_listings_and_its_clients_carry_it() {
+    let world = World::new();
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let session_id = client.create(&world).await;
+        client.queue(&session_id, "hello").await;
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        ids.push(session_id);
+    }
+    let [old, new, other] = [ids[0].clone(), ids[1].clone(), ids[2].clone()];
+    let mut watcher = world.client(&daemon).await;
+    watcher.attach(&old).await;
+    let mut watching = world.client(&daemon).await;
+    watching.watch().await;
+    let set = async |session_id: &SessionId, successor: &SessionId| {
+        client
+            .connection
+            .send(SetSuccessorRequest {
+                session_id: session_id.clone(),
+                successor: successor.clone(),
+            })
+            .await
+    };
+
+    // Not itself, nor a thread the Host has no record of.
+    let itself = set(&old, &old).await.expect_err("not itself");
+    assert_eq!(itself.code, Error::invalid_params().code, "{itself:?}");
+    let unknown = set(&old, &SessionId::new("nowhere"))
+        .await
+        .expect_err("not an unknown thread");
+    assert!(errors::is(&unknown, errors::UNKNOWN_SESSION), "{unknown:?}");
+
+    // Named once: the same again does nothing, another is refused, and none leads back.
+    set(&old, &new).await.expect("session/setSuccessor");
+    set(&old, &new).await.expect("the same again");
+    let another = set(&old, &other).await.expect_err("named once");
+    assert!(another.to_string().contains("named once"), "{another:?}");
+    let back = set(&new, &old).await.expect_err("no cycle");
+    assert!(
+        back.to_string().contains("through its successors"),
+        "{back:?}"
+    );
+
+    // Its clients hear of it, and its listing carries it.
+    let mut seen = Seen::default();
+    while seen.continued_in.is_empty() {
+        let event = watcher.next().await;
+        watcher.note(event, &mut seen, None).await;
+    }
+    assert_eq!(seen.continued_in, std::slice::from_ref(&new));
+    // Watchers hear of it as a change to its listing.
+    loop {
+        if let Change::Updated(listing) = watching.change().await
+            && listing.info.session_id == old
+            && listing.continued_in.is_some()
+        {
+            assert_eq!(listing.continued_in, Some(new.clone()));
+            break;
+        }
+    }
+    assert_eq!(
+        client.get(&old).await.session.continued_in,
+        Some(new.clone())
+    );
+    assert_eq!(client.get(&new).await.session.continued_in, None);
+    watcher.connection.shutdown().await;
+    client.connection.shutdown().await;
+    daemon.shutdown().await;
+
+    // It outlasts the Host, and a closed thread's new journal.
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    assert_eq!(
+        client.get(&old).await.session.continued_in,
+        Some(new.clone())
+    );
+    let attached = client.attach(&old).await;
+    assert_eq!(attached.state.continued_in, Some(new.clone()));
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: old.clone(),
+        })
+        .await
+        .expect("session/close");
+    let attached = client.attach(&old).await;
+    assert_eq!(attached.state.continued_in, Some(new));
+}
+
+#[tokio::test]
+async fn a_report_to_a_thread_goes_to_its_successor() {
+    let world = World::new();
+    let daemon = world.daemon(false, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let caller = client.create(&world).await;
+    let successor = client.create(&world).await;
+    let started = client
+        .call_tool(
+            &caller,
+            "start_session",
+            r#"{"agentId": "other", "prompt": "slow 5"}"#,
+        )
+        .await;
+    let delegated = answered_session(&started.agent, "start_session");
+    client
+        .connection
+        .send(SetSuccessorRequest {
+            session_id: caller.clone(),
+            successor: successor.clone(),
+        })
+        .await
+        .expect("session/setSuccessor");
+
+    // The delegated turn's end reaches the successor, where the caller's work goes on.
+    let mut watcher = world.client(&daemon).await;
+    watcher.attach(&successor).await;
+    let mut seen = Seen::default();
+    let told = watcher.told(&mut seen).await;
+    assert!(told.contains("finished its turn"), "{told}");
+    assert!(told.contains(&delegated.to_string()), "{told}");
+    let latest = client.get(&caller).await.latest_turn.expect("a turn");
+    assert!(
+        !matches!(latest.origin, TurnOrigin::Session { report: true, .. }),
+        "{latest:?}"
+    );
 }
 
 #[tokio::test]

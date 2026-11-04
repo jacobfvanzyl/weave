@@ -148,6 +148,14 @@ impl Host {
         connected.map_err(anyhow::Error::from)
     }
 
+    /// The shared Host's paths, to reach it again; none in-process.
+    pub(crate) fn paths(&self) -> Option<DaemonPaths> {
+        match self {
+            Self::Shared(paths) => Some(paths.clone()),
+            Self::InProcess(_) => None,
+        }
+    }
+
     /// Whether sessions outlive this process.
     pub fn is_shared(&self) -> bool {
         matches!(self, Self::Shared(_))
@@ -858,6 +866,7 @@ mod tests {
             started_by_host: None,
             opened_by: None,
             opened_at: None,
+            continued_in: None,
         });
         assert_eq!(
             describe(&status, &paths, 7_230_000),

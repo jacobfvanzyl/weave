@@ -30,6 +30,7 @@ use weave_acp_core::ProtocolVersion;
 use weave_acp_core::SessionSetup;
 use weave_acp_core::schema::AuthMethod;
 use weave_acp_core::schema::ConfigOptionUpdate;
+use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::CurrentModeUpdate;
 use weave_acp_core::schema::InitializeRequest;
 use weave_acp_core::schema::InitializeResponse;
@@ -119,12 +120,14 @@ use weave_host_protocol::sessions::ReopenSessionRequest;
 use weave_host_protocol::sessions::ReopenSessionResponse;
 use weave_host_protocol::sessions::RunRequest;
 use weave_host_protocol::sessions::RunResponse;
+use weave_host_protocol::sessions::SUCCESSORS_FEATURE;
 use weave_host_protocol::sessions::ServiceOrigin;
 use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
+use weave_host_protocol::sessions::SetSuccessorRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::UnwatchSessionsRequest;
 use weave_host_protocol::sessions::WATCH_FEATURE;
@@ -170,6 +173,7 @@ use weave_host_protocol::worktrees::RemoveWorktreeRequest;
 use weave_host_protocol::worktrees::RemoveWorktreeResponse;
 
 use crate::Agent;
+use crate::MAX_SUCCESSORS;
 use crate::Shared;
 use crate::admissions;
 use crate::admissions::Admitted;
@@ -633,6 +637,10 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            answer!(connection, set_successor),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             answer!(connection, set_config_option),
             agent_client_protocol::on_receive_request!(),
         )
@@ -708,7 +716,7 @@ const FOR_PEERS: [&str; 12] = [
 
 /// The methods a service may ask (ADR 0027): its hello, and what starting headless turns,
 /// following threads and naming the ones it starts need.
-const FOR_SERVICES: [&str; 15] = [
+const FOR_SERVICES: [&str; 16] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -721,6 +729,7 @@ const FOR_SERVICES: [&str; 15] = [
     "session/attach",
     "session/detach",
     "session/rename",
+    "session/setSuccessor",
     "queue/add",
     "turn/steer",
     "turn/cancel",
@@ -972,6 +981,7 @@ impl Connection {
                 WATCH_FEATURE.to_owned(),
                 LIST_FILES_FEATURE.to_owned(),
                 RENAME_FEATURE.to_owned(),
+                SUCCESSORS_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
@@ -1803,6 +1813,47 @@ impl Connection {
         Ok(Empty {})
     }
 
+    /// `session/setSuccessor`: name the session an open one's work goes on in (WVE-168).
+    async fn set_successor(&self, request: SetSuccessorRequest) -> Result<Empty, Error> {
+        let hello = self.hello_info()?;
+        let SetSuccessorRequest {
+            session_id,
+            successor,
+        } = request;
+        let session = self.live(&session_id)?;
+        if successor == session_id {
+            return Err(Error::invalid_params().data("a thread can't continue in itself"));
+        }
+        {
+            let registry = self.shared.registry();
+            if !registry.known.contains_key(&successor) {
+                return Err(errors::unknown_session(&successor.to_string()));
+            }
+            // Its successors mustn't lead back here, or following them would never end.
+            let mut next = Some(successor.clone());
+            for _ in 0..MAX_SUCCESSORS {
+                let Some(at) = next else { break };
+                if at == session_id {
+                    return Err(Error::invalid_params().data(format!(
+                        "{successor} already continues, through its successors, in this thread"
+                    )));
+                }
+                next = registry
+                    .known
+                    .get(&at)
+                    .and_then(|recorded| recorded.successor.clone());
+            }
+        }
+        session
+            .finish(|done| Command::SetSuccessor {
+                successor,
+                by: Some(self.origin(&hello)),
+                done,
+            })
+            .await??;
+        Ok(Empty {})
+    }
+
     async fn set_mode(&self, request: SetModeRequest) -> Result<Empty, Error> {
         self.hello_info()?;
         let session = self.live(&request.session_id)?;
@@ -2277,6 +2328,9 @@ async fn agent_sessions(
                 started_by_host: known
                     .get(&info.session_id)
                     .and_then(|recorded| recorded.started_by_host.clone()),
+                continued_in: known
+                    .get(&info.session_id)
+                    .and_then(|recorded| recorded.successor.clone()),
                 opened_by: None,
                 opened_at: None,
                 info,
@@ -2377,6 +2431,7 @@ pub(crate) fn dormant(
         git: recorded.git.clone(),
         started_by: recorded.started_by.clone(),
         started_by_host: recorded.started_by_host.clone(),
+        continued_in: recorded.successor.clone(),
         opened_by: None,
         opened_at: None,
     }
@@ -2867,6 +2922,7 @@ async fn reopen(
     let last_activity_ms = earlier.and_then(journal::last_activity);
     let mut queue = earlier.map(Queue::from_records).unwrap_or_default();
     let (started_by, started_by_host) = earlier.map(journal::started_by).unwrap_or_default();
+    let successor = earlier.and_then(journal::successor);
     let mut continuation = None;
     let (journal, policy) = match recovered {
         Some((path, records)) => {
@@ -2878,6 +2934,7 @@ async fn reopen(
                 })
                 .unwrap_or(policy);
             let open_turns = journal::open_turns(&records);
+            let mut interrupted = None;
             let mut journal = match Journal::reopen(&path, records) {
                 Ok(journal) => journal,
                 Err(error) => return Err((journal_error(&error), Some(instance))),
@@ -2895,12 +2952,29 @@ async fn reopen(
                     && open.continues.is_none()
                     && let Some(turn_id) = open.turn_id
                 {
-                    continuation = Some(Box::new(Continuation {
-                        origin: open.origin,
-                        continues: turn_id,
-                    }));
+                    interrupted = Some((open.origin, turn_id));
                 }
             }
+            // The continuation starts with the interrupted turn's end, in the journal, before
+            // the agent is prompted (WVE-168): nobody reading it finds one without the other.
+            continuation = interrupted.map(|(origin, continues)| {
+                let turn_id = crate::queue::new_id();
+                let (_, started_ms) = journal.append(Entry::TurnStarted {
+                    session_id: session_id.clone(),
+                    at_ms: now_ms(),
+                    prompt: vec![ContentBlock::from(session::CONTINUE.to_owned())],
+                    origin: Some(origin.clone()),
+                    queued_id: None,
+                    turn_id: Some(turn_id.clone()),
+                    key: None,
+                    continues: Some(continues),
+                });
+                Box::new(Continuation {
+                    origin,
+                    turn_id,
+                    started_ms,
+                })
+            });
             if interrupt(&mut queue, &policy) {
                 journal.append(Entry::QueuePaused {
                     reason: QueuePause::Interrupted,
@@ -2924,13 +2998,14 @@ async fn reopen(
         policy,
         snapshot,
         Origin::Reopened {
-            journal,
+            journal: journal.map(Box::new),
             title,
             agent_title,
             last_activity_ms,
             queue,
             started_by,
             started_by_host,
+            successor,
             continuation,
         },
         servers,
@@ -2992,13 +3067,15 @@ enum Origin {
     /// and the title and queue the Host kept for it, the last title its agent gave it, and when
     /// it was last active.
     Reopened {
-        journal: Option<Journal>,
+        journal: Option<Box<Journal>>,
         title: Option<String>,
         agent_title: Option<String>,
         last_activity_ms: Option<u64>,
         queue: Queue,
         started_by: Option<SessionId>,
         started_by_host: Option<String>,
+        /// The session its work goes on in.
+        successor: Option<SessionId>,
         /// The turn the stopped Host cut off, for a headless session to continue.
         continuation: Option<Box<Continuation>>,
     },
@@ -3029,7 +3106,7 @@ fn open(
             None,
             None,
             Queue::default(),
-            (started_by, started_by_host, None),
+            (started_by, started_by_host, None, None),
         ),
         Origin::Reopened {
             journal,
@@ -3039,6 +3116,7 @@ fn open(
             queue,
             started_by,
             started_by_host,
+            successor,
             continuation,
         } => (
             journal,
@@ -3050,13 +3128,14 @@ fn open(
             (
                 started_by,
                 started_by_host,
+                successor,
                 continuation.map(|continuation| *continuation),
             ),
         ),
     };
-    let (started_by, started_by_host, continuation) = starter;
+    let (started_by, started_by_host, successor, continuation) = starter;
     let journal = match journal {
-        Some(journal) => journal,
+        Some(journal) => *journal,
         None => {
             let mut header = Entry::header(
                 session_id.clone(),
@@ -3072,6 +3151,7 @@ fn open(
                 queue_paused,
                 started_by: starter,
                 started_by_host: starter_host,
+                successor: carried_successor,
                 ..
             } = &mut header
             {
@@ -3079,6 +3159,7 @@ fn open(
                 *queue_paused = queue.paused;
                 starter.clone_from(&started_by);
                 starter_host.clone_from(&started_by_host);
+                carried_successor.clone_from(&successor);
             }
             match &shared.config.journals {
                 Some(dir) => Journal::create(dir, &session_id, header)
@@ -3112,6 +3193,7 @@ fn open(
             queue,
             started_by,
             started_by_host,
+            successor,
             continuation,
         },
     ))

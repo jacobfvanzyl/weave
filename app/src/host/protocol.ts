@@ -874,6 +874,14 @@ export type SessionEvent =
       kind: "renamed";
     }
   | {
+      successor: SessionId;
+      /**
+       * The client that named it.
+       */
+      by?: TurnOrigin | null;
+      kind: "continuedIn";
+    }
+  | {
       text: string;
       kind: "notice";
     }
@@ -1386,6 +1394,12 @@ export interface SessionListing {
    * The peer Host the session that started it is on, when it isn't this one.
    */
   startedByHost?: string | null;
+  /**
+   * Its successor (feature `successors`, WVE-168): the session its work goes on in, which a
+   * client named with `session/setSuccessor`. Clients following this one may follow that,
+   * and reports to this one go there.
+   */
+  continuedIn?: SessionId | null;
   /**
    * The client whose `session/create` or `session/attach` opened it last, while it's open:
    * a paired device's names its `device`. A service's `session/run` that opened it gives
@@ -2495,6 +2509,11 @@ export interface LatestTurn {
    * The interrupted turn it continues (WVE-144).
    */
   continues?: string | null;
+  /**
+   * Its successor, for an interrupted turn the thread continued: the turn that continues it,
+   * started as this one ended (WVE-168).
+   */
+  continuedIn?: string | null;
   prompt: ContentBlock[];
   origin: TurnOrigin;
   /**
@@ -3015,6 +3034,10 @@ export interface SessionState {
    * The peer Host the session that started it is on, when it isn't this one.
    */
   startedByHost?: string | null;
+  /**
+   * Its successor, as its listing's `continuedIn` (WVE-168).
+   */
+  continuedIn?: SessionId | null;
 }
 /**
  * The agent a session runs with.
@@ -4421,6 +4444,10 @@ export interface AttachSessionResponse {
    * The peer Host the session that started it is on, when it isn't this one.
    */
   startedByHost?: string | null;
+  /**
+   * Its successor, as its listing's `continuedIn` (WVE-168).
+   */
+  continuedIn?: SessionId | null;
   replay: Replay;
 }
 /**
@@ -4542,6 +4569,21 @@ export interface ReopenSessionResponse {
 export interface RenameSessionRequest {
   sessionId: SessionId;
   title: string;
+}
+/**
+ * `session/setSuccessor`: name the session an open session's work goes on in, as the
+ * Dispatcher does when it starts a Bot's new thread. Journaled as a `continuedIn` event and
+ * listed as the session's `continuedIn`; reports to the session go to its successor from then
+ * on. The successor is a session the Host has a record of, other than this one and not one
+ * whose successors lead back to it. A session's successor is named once: naming the same one
+ * again does nothing, and another is refused.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "SetSuccessorRequest".
+ */
+export interface SetSuccessorRequest {
+  sessionId: SessionId;
+  successor: SessionId;
 }
 /**
  * `session/run`: open a session (this one, or a new one) and start a turn in it, without
@@ -6624,6 +6666,7 @@ export interface HostRequests {
   "session/setConfigOption": { params: SetConfigOptionRequest; result: SetSessionConfigOptionResponse };
   "session/reopen": { params: ReopenSessionRequest; result: ReopenSessionResponse };
   "session/rename": { params: RenameSessionRequest; result: Empty };
+  "session/setSuccessor": { params: SetSuccessorRequest; result: Empty };
   "session/run": { params: RunRequest; result: RunResponse };
   "turn/start": { params: StartTurnRequest; result: StartTurnResponse };
   "turn/steer": { params: SteerTurnRequest; result: SteerTurnResponse };

@@ -835,7 +835,27 @@ impl Registry {
     pub(crate) fn root(&self, session_id: &SessionId) -> SessionId {
         self.children.get(session_id).unwrap_or(session_id).clone()
     }
+
+    /// Where `session_id`'s work goes on now (WVE-168): the last of its successors, or itself
+    /// when it names none.
+    pub(crate) fn latest_successor(&self, session_id: &SessionId) -> SessionId {
+        let mut latest = session_id.clone();
+        for _ in 0..MAX_SUCCESSORS {
+            match self
+                .known
+                .get(&latest)
+                .and_then(|recorded| recorded.successor.clone())
+            {
+                Some(next) => latest = next,
+                None => break,
+            }
+        }
+        latest
+    }
 }
+
+/// How many successors of a session are followed, at most.
+pub(crate) const MAX_SUCCESSORS: usize = 64;
 
 #[derive(Clone)]
 pub struct Daemon {

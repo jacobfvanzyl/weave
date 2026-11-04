@@ -505,6 +505,7 @@ mod tests {
                 device: device.map(str::to_owned),
             }),
             opened_at: opened.map(|(_, at)| at),
+            continued_in: None,
         }
     }
 

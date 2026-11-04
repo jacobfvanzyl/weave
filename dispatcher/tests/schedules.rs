@@ -423,6 +423,41 @@ async fn a_schedule_that_prompts_one_thread_queues_its_prompt_there() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_occurrence_its_host_stops_under_ends_as_the_continuation_does() {
+    let mut studio = World::with_journals().await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let clock = TestClock::at("2026-11-04T08:59:00Z");
+    let (dispatcher, serving) = start_with(dir.path(), clock.clone());
+    pair(&dispatcher, &studio).await;
+    let mut headless = schedule(&studio, "long-job", "0 9 * * *", "slow 20");
+    headless.run.policy = PermissionPolicy::headless(Vec::new());
+    dispatcher.add_schedule(headless).expect("added");
+    clock.set("2026-11-04T09:00:00Z");
+    let started = occurrences_until(&dispatcher, "long-job", |all| {
+        all.first()
+            .is_some_and(|first| first.state == OccurrenceState::Started)
+    })
+    .await;
+    let cut = started[0].turn_id.clone().expect("its turn");
+
+    // The Host stops under the turn; the thread continues it, and the occurrence ends as
+    // the continuation does.
+    studio.restart().await;
+    let occurrences = occurrences_until(&dispatcher, "long-job", |all| {
+        all.first().is_some_and(finished)
+    })
+    .await;
+    let ended = &occurrences[0];
+    assert_eq!(ended.outcome, Some(TurnState::Ended), "{ended:?}");
+    assert_ne!(ended.turn_id.as_ref(), Some(&cut));
+    let continuation = turn(&studio, ended).await;
+    assert_eq!(continuation.continues.as_ref(), Some(&cut));
+
+    dispatcher.stop().await;
+    serving.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn three_failures_in_a_row_pause_a_schedule() {
     let studio = World::new().await;
     let dir = tempfile::tempdir().expect("tempdir");

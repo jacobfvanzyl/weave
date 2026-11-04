@@ -126,6 +126,14 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<TurnOrigin>,
     },
+    /// The session's work goes on in another, its successor, which a client named
+    /// (`session/setSuccessor`, WVE-168): clients following this one may follow that.
+    ContinuedIn {
+        successor: SessionId,
+        /// The client that named it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
     /// Something the Host tells the session's clients, such as why its agent can't use client
     /// tools.
     Notice { text: String },

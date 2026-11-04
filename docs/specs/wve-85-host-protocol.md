@@ -164,7 +164,9 @@ request with `unauthenticated`.
   `session` turn origin's `host`, the `peer_unavailable` error, and the Host tools' `host` and
   `list_hosts` (see [Peer Hosts](#peer-hosts)), and `mcpServers` (WVE-160):
   `SessionState.mcpServers` and `session/changed`'s `mcpServers` (see
-  [MCP servers' status](#mcp-servers-status)).
+  [MCP servers' status](#mcp-servers-status)), and `successors` (WVE-168):
+  `session/setSuccessor`, the `continuedIn` event, `continuedIn` in listings and
+  `SessionState`, and `LatestTurn`'s `continuedIn` (see [Successors](#successors)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -366,6 +368,7 @@ type SessionState = {
   update?: { agentId: string; name: string; running: string; latest: string };  // see Updates
   startedBy?: string;                          // the session whose agent started it; see Delegated sessions
   startedByHost?: string;                      // the peer Host that session is on; see Peer Hosts
+  continuedIn?: string;                        // its successor; see Successors
 };
 ```
 
@@ -397,6 +400,7 @@ type SessionListing = {
   git?: GitLocation;            // as the Host last read it while the session was open
   startedBy?: string;           // the session whose agent started it; see Delegated sessions
   startedByHost?: string;       // the peer Host that session is on; see Peer Hosts
+  continuedIn?: string;         // its successor; see Successors
   openedBy?: TurnOrigin;        // open sessions: the client whose create or attach opened it last,
                                 // or the origin of a service's run that opened it
   openedAt?: number;            // and when
@@ -425,6 +429,7 @@ type LatestTurn = {
   turnId?: string;             // absent for turns journaled before the Host gave ids
   state: "queued" | "running" | "waiting" | "ended" | "stopped" | "cancelled" | "failed" | "interrupted";
   continues?: string;          // the interrupted turn it continues
+  continuedIn?: string;        // the turn that continues it, for an interrupted turn continued
   prompt: ContentBlock[];
   origin: TurnOrigin;
   startedAt: number;           // for a queued turn, when it was queued
@@ -564,6 +569,15 @@ must be 1 to 200 characters; the session must be open (`session_not_open`).
 The `rename_session` Host tool does the same for the calling session (see
 [Host tools](#host-tools)).
 
+**`session/setSuccessor`** `{sessionId, successor}` → `{}`
+
+Feature `successors`. Names the session an open session's work goes on in, its successor (see
+[Successors](#successors)), as the Dispatcher does when it starts a Bot's new thread. The session
+must be open (`session_not_open`); the successor must be one the Host has a record of
+(`unknown_session`), not the session itself, and not one whose successors lead back to it
+(invalid params). A session's successor is named once: naming the same one again does nothing,
+and another fails with invalid params. Services may ask it.
+
 ## Journal and events
 
 Every session has a journal: the numbered record of everything its attached clients are
@@ -594,6 +608,7 @@ the session, as when a closed session is opened again. A client that remembers
 | `closed` | `reason`, `by?`: `origin` | the session closes; `by` is the client whose `session/close` or `session/delete` closed it for everyone, absent when nobody did (its agent exited, it went idle, its worktree was removed) |
 | `notice` | `text` | the Host tells the session's clients something, such as that its agent can't use client tools |
 | `renamed` | `title`, `by?`: `origin` | the session was renamed through the Host (`session/rename`); `by` is the renaming client's origin, absent when the session's own agent renamed it (the `rename_session` Host tool) |
+| `continuedIn` | `successor`: session id, `by?`: `origin` | a client named the session's successor (`session/setSuccessor`); `by` is that client's origin |
 | `queued` | `queuedId`, `prompt`: ACP `ContentBlock[]`, `origin` | a prompt joined the queue (`queue/add`) |
 | `unqueued` | `queuedId`, `by?`: `origin` | a client took a prompt out of the queue (`queue/remove`) |
 | `queuePaused` | `reason`: `"cancelled" \| "failed" \| "interrupted"` | the queue stopped starting turns (see [Queue](#queue)) |
@@ -722,12 +737,38 @@ the session up again, it ends that turn with `turnEnded` whose `error` has the c
   anything, the Host starts a turn with a fixed prompt saying the turn was cut off and to carry
   on after checking what it had done, from the interrupted turn's `origin`, so the thread whose
   agent began it hears how it ends, as it would have. Its `turnStarted` names the interrupted
-  turn in `continues`, as `LatestTurn` does. A continuation that is itself interrupted isn't
-  continued again, so a turn that brings the Host down can't do it over and over. The Host
-  takes up such sessions at startup, as it does headless sessions whose queue waits.
+  turn in `continues`, as `LatestTurn` does, and the interrupted turn's `LatestTurn` names the
+  continuation in `continuedIn`. The continuation's `turnStarted` is journaled with the
+  interrupted turn's `turnEnded`, before the agent is prompted, so nobody reading the journal
+  or attaching finds the one without the other; if the agent won't take the prompt, the
+  continuation ends failed. A continuation that is itself interrupted isn't continued again, so
+  a turn that brings the Host down can't do it over and over. The Host takes up such sessions
+  at startup, as it does headless sessions whose queue waits.
 - **An interactive session doesn't.** It shows the outcome and leaves the turn to the person,
   and its queue pauses as `interrupted` if prompts wait (see [Queue](#queue)).
 - A turn a stopped Host left was journaled as `cancelled` before; such journals stay as they are.
+
+### Successors
+
+WVE-168, ADR 0028. A turn or a session can name the one that carries its work on, its
+successor, and whoever follows it or reports to it follows it there.
+
+- **A turn's successor** is the continuation of an interrupted turn (see
+  [Interrupted turns](#interrupted-turns)): `turnStarted.continues` names the interrupted turn,
+  and the interrupted turn's `LatestTurn.continuedIn` the continuation. `weave run`,
+  `weave threads follow --turn` and `weave threads prompt --wait` treat the two as one turn: they
+  wait for a Host that goes away to come back, follow the thread again from the last event they
+  saw, say on stderr that the turn was cut off and continued, and exit as the continuation ends.
+  The Dispatcher settles an occurrence the same way.
+- **A session's successor** is one a client named with `session/setSuccessor`, journaled as a
+  `continuedIn` event and carried as `continuedIn` in listings, `sessions/updated` and
+  `SessionState`; a suspended session's journal carries it on, and a closed session's new
+  journal begins with it. A report to a session goes to the last of its successors instead
+  (see [Delegated sessions](#delegated-sessions)), and the Dispatcher prompts a thread a
+  schedule names there. `weave threads follow` moves on to the successor, printing it from its
+  start; the TUI offers `/follow` and the app an Open button.
+- A push for an interrupted turn that was continued is worth sending only if the continuation
+  fails (WVE-177).
 
 ### Queue
 
@@ -1737,7 +1778,10 @@ there's one, and otherwise in `host-key.json`, 0600 (see [Peer Hosts](#peer-host
   `--keep-waiting`; and at `--timeout <duration>`, exiting 8, with the turn going on. Either way
   it says how to follow the turn again. `--key` on `threads prompt` and `run` is the request
   key, so a script retrying after a dropped connection starts nothing twice and follows the
-  same turn; a `run` repeated once its session has closed exits as its turn went.
+  same turn; a `run` repeated once its session has closed exits as its turn went. A Host that
+  goes away while it waits is waited for, up to a minute, and a turn it cut off that the
+  session continues is followed into its continuation (see [Successors](#successors)).
+  `weave threads set-successor <id> <successor>` names a session's successor.
 - The exit status says how a command went, for scripts (WVE-108): 0, it worked, or the turn ended
   (`end_turn`); 1, any other error; 2, bad arguments; 3, the Host couldn't be reached (not
   running, for a command that never starts one; didn't start; or went away); 4, the turn failed

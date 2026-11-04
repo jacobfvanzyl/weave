@@ -381,6 +381,14 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
             <AlertDescription>{model.error}</AlertDescription>
           </Alert>
         )}
+        {summary?.continuedIn && (
+          <Alert className='m-2 w-auto' data-slot='successor-notice'>
+            <AlertTitle>This thread continues in {summary.continuedIn.label}</AlertTitle>
+            <AlertAction>
+              <Button size='sm' variant='outline' onClick={() => actions.selectSession(summary.continuedIn?.key)}>Open</Button>
+            </AlertAction>
+          </Alert>
+        )}
         {update && (
           <UpdateNotice
             update={update}

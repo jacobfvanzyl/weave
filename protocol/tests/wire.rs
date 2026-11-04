@@ -149,6 +149,7 @@ use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::sessions::SetConfigOptionRequest;
 use weave_host_protocol::sessions::SetModeRequest;
+use weave_host_protocol::sessions::SetSuccessorRequest;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::UnwatchSessionsRequest;
@@ -340,6 +341,7 @@ fn state() -> SessionState {
         update: Some(update()),
         started_by: None,
         started_by_host: None,
+        continued_in: None,
     }
 }
 
@@ -415,6 +417,7 @@ fn listing() -> SessionListing {
             device: Some("Jaco's iPad".to_owned()),
         }),
         opened_at: Some(1_760_180_000_500),
+        continued_in: None,
     }
 }
 
@@ -917,6 +920,13 @@ fn sessions() {
         })
     );
     insta::assert_json_snapshot!(
+        "set_successor_request",
+        message(&SetSuccessorRequest {
+            session_id: "s-1".into(),
+            successor: "s-2".into(),
+        })
+    );
+    insta::assert_json_snapshot!(
         "set_mode_request",
         message(&SetModeRequest {
             session_id: "s-1".into(),
@@ -1202,6 +1212,7 @@ fn delegated_sessions() {
             latest_turn: Some(LatestTurn {
                 turn_id: Some("t-1".to_owned()),
                 continues: None,
+                continued_in: None,
                 state: TurnState::Ended,
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
@@ -1219,12 +1230,35 @@ fn delegated_sessions() {
         })
     );
     insta::assert_json_snapshot!(
+        "get_session_response_interrupted_and_continued",
+        round_trip(&GetSessionResponse {
+            session: SessionListing {
+                continued_in: Some("s-3".into()),
+                ..delegated.clone()
+            },
+            latest_turn: Some(LatestTurn {
+                turn_id: Some("t-1".to_owned()),
+                continues: None,
+                continued_in: Some("t-2".to_owned()),
+                state: TurnState::Interrupted,
+                prompt: vec![text("port the parser's tests to the new runner")],
+                origin: TurnOrigin::Run {},
+                started_at: 1_760_180_000_000,
+                running: false,
+                response: None,
+                error: Some(weave_host_protocol::errors::interrupted()),
+                message: None,
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
         "get_session_response_running",
         round_trip(&GetSessionResponse {
             session: delegated,
             latest_turn: Some(LatestTurn {
                 turn_id: Some("t-1".to_owned()),
                 continues: None,
+                continued_in: None,
                 state: TurnState::Waiting,
                 prompt: vec![text("port the parser's tests to the new runner")],
                 origin: TurnOrigin::Session {
@@ -1470,6 +1504,20 @@ fn events() {
             SessionEvent::Renamed {
                 title: "Parser fixes".to_owned(),
                 by: None,
+            },
+        ))
+    );
+    insta::assert_json_snapshot!(
+        "event_continued_in",
+        message(&event(
+            39,
+            SessionEvent::ContinuedIn {
+                successor: "s-2".into(),
+                by: Some(TurnOrigin::Service {
+                    name: "Dispatcher".to_owned(),
+                    label: "bot daily".to_owned(),
+                    id: "b-1".to_owned(),
+                }),
             },
         ))
     );

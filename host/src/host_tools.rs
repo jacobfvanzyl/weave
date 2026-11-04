@@ -750,10 +750,11 @@ pub(crate) fn waiting_text(named: &Named<'_>, asks: &Asks) -> String {
     )
 }
 
-/// Report on `about` to the session `caller`, whose agent began a turn there: into its running
-/// turn if its agent takes steers, otherwise through its queue, which starts its next turn. A
-/// caller that isn't open is taken up again for it. One that can't be is left untold, and
-/// `about`'s journal says so. `about` is on the peer Host `host` when there is one.
+/// Report on `about` to the session `caller`, whose agent began a turn there, or to the last of
+/// its successors when it names one, where its work goes on (WVE-168): into its running turn if
+/// its agent takes steers, otherwise through its queue, which starts its next turn. A caller
+/// that isn't open is taken up again for it. One that can't be is left untold, and `about`'s
+/// journal says so. `about` is on the peer Host `host` when there is one.
 pub(crate) async fn tell(
     shared: Arc<Shared>,
     caller: SessionId,
@@ -761,6 +762,7 @@ pub(crate) async fn tell(
     host: Option<String>,
     text: String,
 ) {
+    let caller = shared.registry().latest_successor(&caller);
     let host_name = host
         .as_ref()
         .and_then(|host| shared.peers.as_ref()?.name_of(host));

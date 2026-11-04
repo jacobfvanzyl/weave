@@ -57,10 +57,22 @@ pub struct World {
     pub relay: Relay,
     pub daemon: Daemon,
     serving: JoinHandle<()>,
+    /// It keeps journals, so a restart finds the turns it cut off.
+    journals: bool,
 }
 
 impl World {
     pub async fn new() -> Self {
+        Self::with(false).await
+    }
+
+    /// A Host that keeps journals, whose restarts interrupt the turns it ran, and continue
+    /// headless threads' (WVE-144).
+    pub async fn with_journals() -> Self {
+        Self::with(true).await
+    }
+
+    async fn with(journals: bool) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("config.toml"),
@@ -68,13 +80,14 @@ impl World {
         )
         .expect("config");
         let relay = Relay::new().await;
-        let daemon = Daemon::new(config(dir.path().to_path_buf()));
+        let daemon = Daemon::new(config_with(dir.path().to_path_buf(), journals));
         let serving = serve(&daemon, &relay).await;
         Self {
             dir,
             relay,
             daemon,
             serving,
+            journals,
         }
     }
 
@@ -111,12 +124,17 @@ impl World {
         self.relay.cut();
         self.serving.abort();
         self.daemon.shutdown().await;
-        self.daemon = Daemon::new(config(self.dir.path().to_path_buf()));
+        self.daemon = Daemon::new(config_with(self.dir.path().to_path_buf(), self.journals));
         self.serving = serve(&self.daemon, &self.relay).await;
+        self.daemon.resume_queues().await;
     }
 }
 
 pub fn config(dir: PathBuf) -> DaemonConfig {
+    config_with(dir, false)
+}
+
+pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
     let state = dir.join("agent-state.json");
     let launcher: Launcher = Arc::new(move |_launch: &Launch, options: ClientOptions, _| {
         let config = FakeAgentConfig {
@@ -132,7 +150,7 @@ pub fn config(dir: PathBuf) -> DaemonConfig {
         })
     });
     DaemonConfig {
-        journals: None,
+        journals: journals.then(|| dir.join("journals")),
         idle_grace: Duration::from_secs(60),
         drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
         blank_grace: Duration::from_secs(60),

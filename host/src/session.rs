@@ -351,6 +351,13 @@ pub(crate) enum Command {
         by: Option<TurnOrigin>,
         done: oneshot::Sender<()>,
     },
+    /// Name the session its work goes on in (`session/setSuccessor`), checked already to be
+    /// one the Host knows whose successors don't lead back here.
+    SetSuccessor {
+        successor: SessionId,
+        by: Option<TurnOrigin>,
+        done: oneshot::Sender<Result<(), Error>>,
+    },
 }
 
 /// A title as `session/rename` takes it: trimmed, and 1 to [`MAX_TITLE`] characters.
@@ -390,6 +397,8 @@ pub(crate) struct Summary {
     pub(crate) started_by: Option<SessionId>,
     /// The peer Host `started_by` is on, when it isn't this one.
     pub(crate) started_by_host: Option<String>,
+    /// The session its work goes on in, which a client named (WVE-168).
+    pub(crate) successor: Option<SessionId>,
     /// The peer Host whose session's agent began its running turn, if one did: that turn's
     /// agent reaches no peer Host of this one (ADR 0017's one hop).
     pub(crate) turn_from_peer: Option<String>,
@@ -414,6 +423,7 @@ impl Summary {
             git: self.git.clone(),
             started_by: self.started_by.clone(),
             started_by_host: self.started_by_host.clone(),
+            continued_in: self.successor.clone(),
             opened_by: self.opened.as_ref().map(|(by, _)| by.clone()),
             opened_at: self.opened.as_ref().map(|(_, at)| *at),
         }
@@ -437,10 +447,10 @@ pub(crate) struct SessionHandle {
 
 impl SessionHandle {
     /// Send a command and wait for the session to carry it out.
-    pub(crate) async fn finish(
+    pub(crate) async fn finish<T>(
         &self,
-        command: impl FnOnce(oneshot::Sender<()>) -> Command,
-    ) -> Result<(), Error> {
+        command: impl FnOnce(oneshot::Sender<T>) -> Command,
+    ) -> Result<T, Error> {
         let (done, finished) = oneshot::channel();
         self.send(command(done))?;
         finished.await.map_err(|_| ended())
@@ -501,21 +511,27 @@ pub(crate) struct Opened {
     pub(crate) started_by: Option<SessionId>,
     /// The peer Host `started_by` is on, when it isn't this one.
     pub(crate) started_by_host: Option<String>,
+    /// The session its work goes on in, as its journal says.
+    pub(crate) successor: Option<SessionId>,
     /// The turn a stopped Host cut off, for a headless session to continue first.
     pub(crate) continuation: Option<Continuation>,
 }
 
 /// A headless session's turn that a Host stopping or crashing cut off, which it continues in a
 /// turn of its own as it opens, from the same origin, so whoever began it hears how it ends
-/// (WVE-144, ADR 0011).
+/// (WVE-144, ADR 0011). The continuation's start is journaled with the interrupted turn's end,
+/// before the agent is prompted, so whoever reads the journal finds the one with the other
+/// (WVE-168).
 pub(crate) struct Continuation {
     pub(crate) origin: TurnOrigin,
-    /// The interrupted turn.
-    pub(crate) continues: TurnId,
+    /// The continuation's own id.
+    pub(crate) turn_id: TurnId,
+    /// When its start was journaled.
+    pub(crate) started_ms: u64,
 }
 
 /// What a continuation prompts the agent with.
-const CONTINUE: &str = "[weave] The weave Host stopped while your last turn ran, so it was cut off. \
+pub(crate) const CONTINUE: &str = "[weave] The weave Host stopped while your last turn ran, so it was cut off. \
                         Carry on from where you left off; check what you'd already done first, \
                         since your last steps may not have finished.";
 
@@ -540,6 +556,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         queue,
         started_by,
         started_by_host,
+        successor,
         continuation,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
@@ -559,6 +576,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         git: git.clone(),
         started_by: started_by.clone(),
         started_by_host: started_by_host.clone(),
+        successor: successor.clone(),
         turn_from_peer: None,
         agent_process: instance.process.clone(),
         opened: None,
@@ -598,6 +616,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
                 git,
                 started_by,
                 started_by_host,
+                successor,
             },
         );
     }
@@ -762,6 +781,8 @@ struct Reported {
     mcp_servers: Option<Vec<McpServerStatus>>,
     /// When it last opened: watchers hear of it, attached clients don't.
     opened_at: Option<u64>,
+    /// Its successor: watchers hear of it, attached clients have its `continuedIn` event.
+    successor: Option<SessionId>,
 }
 
 struct Actor {
@@ -1022,6 +1043,13 @@ impl Actor {
                 self.record(Entry::Renamed { title, by });
                 let _ = done.send(());
             }
+            Command::SetSuccessor {
+                successor,
+                by,
+                done,
+            } => {
+                let _ = done.send(self.set_successor(successor, by));
+            }
         }
     }
 
@@ -1228,6 +1256,7 @@ impl Actor {
             update: self.update.clone(),
             started_by: summary.started_by,
             started_by_host: summary.started_by_host,
+            continued_in: summary.successor,
         }
     }
 
@@ -1345,20 +1374,47 @@ impl Actor {
 
     /// Start the first queued prompt, when no turn of the session's own runs and the queue
     /// isn't paused. One the agent won't take goes back to the front, and the queue pauses.
-    /// Continue the turn a stopped Host cut off, from its origin.
+    /// Name the session this one's work goes on in, once: the same again does nothing.
+    fn set_successor(&mut self, successor: SessionId, by: Option<TurnOrigin>) -> Result<(), Error> {
+        let named = lock(&self.summary).successor.clone();
+        match named {
+            Some(named) if named == successor => return Ok(()),
+            Some(named) => {
+                return Err(Error::invalid_params().data(format!(
+                    "this thread already continues in {named}; a thread's successor is named once"
+                )));
+            }
+            None => {}
+        }
+        lock(&self.summary).successor = Some(successor.clone());
+        if let Some(recorded) = self.shared.registry().known.get_mut(&self.root) {
+            recorded.successor = Some(successor.clone());
+        }
+        self.record(Entry::ContinuedIn { successor, by });
+        Ok(())
+    }
+
+    /// Continue the turn a stopped Host cut off, from its origin: prompt the agent for the
+    /// continuation already journaled as started. One the agent won't take ends failed, so the
+    /// continuation always ends.
     fn continue_interrupted(&mut self, continuation: Continuation) {
         let root = self.root.clone();
-        let started = self.prompt(
-            continuation.origin,
-            root,
-            vec![ContentBlock::from(CONTINUE.to_owned())],
-            None,
-            crate::queue::new_id(),
-            None,
-            Some(continuation.continues),
+        self.turns.insert(
+            root.clone(),
+            Turn {
+                id: continuation.turn_id,
+                started_ms: continuation.started_ms,
+                latest: continuation.origin.clone(),
+                origin: continuation.origin,
+            },
         );
-        if let Err(error) = started {
-            tracing::warn!(session = %self.root, %error, "couldn't continue an interrupted turn");
+        let prompt = vec![ContentBlock::from(CONTINUE.to_owned())];
+        match self.handle.prompt(root.clone(), prompt) {
+            Ok(()) => self.blank.store(false, Ordering::Relaxed),
+            Err(error) => {
+                tracing::warn!(session = %self.root, %error, "couldn't continue an interrupted turn");
+                self.turn_ended(root, Err(error));
+            }
         }
     }
 
@@ -1813,7 +1869,7 @@ impl Actor {
             }) => Some(host.clone()),
             _ => None,
         };
-        let (title, git, opened_at) = {
+        let (title, git, opened_at, successor) = {
             let mut summary = lock(&self.summary);
             summary.clients = clients;
             summary.activity = activity;
@@ -1822,6 +1878,7 @@ impl Actor {
                 summary.title.clone(),
                 summary.git.clone(),
                 summary.opened.as_ref().map(|(_, at)| *at),
+                summary.successor.clone(),
             )
         };
         let now = Reported {
@@ -1832,6 +1889,7 @@ impl Actor {
             git,
             mcp_servers: Some(self.servers.statuses()),
             opened_at,
+            successor,
         };
         if now == self.reported {
             return;

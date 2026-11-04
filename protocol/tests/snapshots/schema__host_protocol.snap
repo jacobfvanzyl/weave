@@ -132,6 +132,10 @@ expression: schema()
       "params": "RenameSessionRequest",
       "result": "Empty"
     },
+    "session/setSuccessor": {
+      "params": "SetSuccessorRequest",
+      "result": "Empty"
+    },
     "session/run": {
       "params": "RunRequest",
       "result": "RunResponse"
@@ -855,6 +859,17 @@ expression: schema()
             "null"
           ],
           "description": "The peer Host the session that started it is on, when it isn't this one."
+        },
+        "continuedIn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its successor (feature `successors`, WVE-168): the session its work goes on in, which a\nclient named with `session/setSuccessor`. Clients following this one may follow that,\nand reports to this one go there."
         },
         "openedBy": {
           "anyOf": [
@@ -2389,6 +2404,13 @@ expression: schema()
           ],
           "description": "The interrupted turn it continues (WVE-144)."
         },
+        "continuedIn": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its successor, for an interrupted turn the thread continued: the turn that continues it,\nstarted as this one ended (WVE-168)."
+        },
         "prompt": {
           "type": "array",
           "items": {
@@ -3395,6 +3417,17 @@ expression: schema()
             "null"
           ],
           "description": "The peer Host the session that started it is on, when it isn't this one."
+        },
+        "continuedIn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its successor, as its listing's `continuedIn` (WVE-168)."
         }
       },
       "required": [
@@ -5627,6 +5660,17 @@ expression: schema()
           ],
           "description": "The peer Host the session that started it is on, when it isn't this one."
         },
+        "continuedIn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its successor, as its listing's `continuedIn` (WVE-168)."
+        },
         "replay": {
           "$ref": "#/$defs/Replay"
         }
@@ -5861,6 +5905,22 @@ expression: schema()
         "title"
       ],
       "description": "`session/rename`: give an open session a title of the Host's, which its clients see, journaled\nas a `renamed` event, and which titles the agent sends later don't replace. The title is\ntrimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the session\nkeeps its title: ACP has no way to change it from outside."
+    },
+    "SetSuccessorRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "successor": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "sessionId",
+        "successor"
+      ],
+      "description": "`session/setSuccessor`: name the session an open session's work goes on in, as the\nDispatcher does when it starts a Bot's new thread. Journaled as a `continuedIn` event and\nlisted as the session's `continuedIn`; reports to the session go to its successor from then\non. The successor is a session the Host has a record of, other than this one and not one\nwhose successors lead back to it. A session's successor is named once: naming the same one\nagain does nothing, and another is refused."
     },
     "RunRequest": {
       "type": "object",
@@ -7639,6 +7699,34 @@ expression: schema()
             "title"
           ],
           "description": "The session was renamed through the Host (`session/rename`, or the `rename_session` Host\ntool). Its title is the Host's from then on: titles the agent sends later don't replace\nit."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "successor": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The client that named it."
+            },
+            "kind": {
+              "type": "string",
+              "const": "continuedIn"
+            }
+          },
+          "required": [
+            "kind",
+            "successor"
+          ],
+          "description": "The session's work goes on in another, its successor, which a client named\n(`session/setSuccessor`, WVE-168): clients following this one may follow that."
         },
         {
           "type": "object",

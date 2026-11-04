@@ -1490,6 +1490,7 @@ export class HostStore {
           headless: listing.headless ?? false,
           lastActivityAt: listing.lastActivityAt ?? (listing.info.updatedAt ? Date.parse(listing.info.updatedAt) : undefined),
           ...(listing.startedBy ? { startedBy: { key: sessionKey(listing.startedByHost ?? record.hostId, listing.startedBy), label: '' } } : {}),
+          ...(listing.continuedIn ? { continuedIn: { key: sessionKey(record.hostId, listing.continuedIn), label: '' } } : {}),
         });
       }
       // A session on screen the list doesn't have yet, such as a new one nobody has prompted.
@@ -1545,11 +1546,17 @@ export class HostStore {
 /**
  * Name the thread that started each delegated one: its title, and its Host when that's another,
  * which a thread a peer Host's agent started is (ADR 0017). The starter may be on a Host this
- * device doesn't pair with, or gone, and is named as well as it can be then.
+ * device doesn't pair with, or gone, and is named as well as it can be then. A thread's successor
+ * is named by its title too (WVE-168).
  */
 export function labelStarters(sessions: SessionSummary[], hosts: readonly PairedHost[]) {
   const byKey = new Map(sessions.map((session) => [session.key, session]));
   for (const session of sessions) {
+    if (session.continuedIn) {
+      const successor = byKey.get(session.continuedIn.key);
+      const label = successor?.title ? `“${successor.title}”` : 'another thread';
+      session.continuedIn = { key: session.continuedIn.key, label };
+    }
     if (!session.startedBy) continue;
     const { key } = session.startedBy;
     const hostId = key.slice(0, key.indexOf('/'));

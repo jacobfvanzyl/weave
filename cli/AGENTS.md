@@ -70,7 +70,11 @@ the turn waits on a person, a permission request or a question, since a script o
 shell can't answer it, unless `--keep-waiting`; and at `--timeout`. Either way the turn goes on,
 the thread stays open, and stderr says how to follow it again. `--key` on `prompt` and `run` is
 the request key, so a retry after a dropped connection starts nothing twice and waits for the
-same turn; a `run` repeated after its thread closed exits as its turn went.
+same turn; a `run` repeated after its thread closed exits as its turn went. A shared Host that
+goes away is waited for, up to a minute (`turn::Link`), and the thread followed again from the
+last event seen; an interrupted turn the thread continues is followed into its continuation, as
+one turn (WVE-168). `follow` without a turn moves on to a thread's successor, from its start, and
+`threads set-successor` names one.
 
 What a command reports, it prints with `--json` as the Host protocol's own types, so scripts
 follow the protocol's versioning rather than a shape kept for the CLI: `daemon status`

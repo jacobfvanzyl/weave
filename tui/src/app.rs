@@ -782,6 +782,7 @@ impl App {
                     Some(TurnOrigin::Service { name, .. }) => name,
                 },
             },
+            SessionEvent::ContinuedIn { successor, .. } => ChatEvent::ContinuedIn { successor },
             SessionEvent::Closed { .. } | SessionEvent::Unknown => return Vec::new(),
         };
         chat.handle_journal_event(event, at)

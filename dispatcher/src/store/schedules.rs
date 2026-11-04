@@ -319,6 +319,18 @@ impl Store {
         rows.collect::<Result<_, _>>().map_err(failed)
     }
 
+    /// The occurrence `id`'s turn was interrupted, and its thread continued it in `turn_id`,
+    /// which it ends with.
+    pub(crate) fn continued(&self, id: &str, turn_id: &str) -> Result<(), String> {
+        self.lock()
+            .execute(
+                "UPDATE occurrences SET turn_id = ?2 WHERE id = ?1 AND state = 'started'",
+                params![id, turn_id],
+            )
+            .map(drop)
+            .map_err(failed)
+    }
+
     /// The occurrence `id`'s turn is over, as `outcome` says.
     pub(crate) fn finish(
         &self,

@@ -109,6 +109,10 @@ pub enum ChatEvent {
         title: String,
         by: String,
     },
+    /// The session's work goes on in another, its successor, which a client named (WVE-168).
+    ContinuedIn {
+        successor: SessionId,
+    },
     /// A prompt joined the session's queue in the Host (WVE-107); `mine` when this client
     /// added it.
     Queued {

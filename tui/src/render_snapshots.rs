@@ -95,6 +95,7 @@ fn chat_with(
         notices: Vec::new(),
         mcp_servers: Vec::new(),
         title: None,
+        successor: None,
     });
     chat
 }
@@ -588,6 +589,7 @@ fn thread_panel(servers: Vec<McpServerStatus>, agent_commands: &[&str]) -> Strin
         notices: Vec::new(),
         mcp_servers: servers,
         title: None,
+        successor: None,
     });
     send(
         &mut chat,
@@ -674,6 +676,7 @@ fn panel_thread_terminals_in_rex() {
             None,
         )],
         title: None,
+        successor: None,
     });
     let terminal = |id: &str, label: Option<&str>, opened_from: Option<&str>| HostTerminal {
         id: id.to_owned(),
@@ -766,6 +769,7 @@ fn fullscreen_chat() -> ChatWidget {
         notices: Vec::new(),
         mcp_servers: Vec::new(),
         title: None,
+        successor: None,
     });
     chat
 }
@@ -845,6 +849,7 @@ fn with_update(mut chat: ChatWidget) -> ChatWidget {
         notices: Vec::new(),
         mcp_servers: Vec::new(),
         title: None,
+        successor: None,
     });
     chat.update_available(weave_host_protocol::agents::AgentUpdate {
         agent_id: "claude".into(),
@@ -1211,6 +1216,26 @@ fn fullscreen_turn_a_service_started() {
         SessionUpdate::AgentMessageChunk(text("Three merged; none need follow-up.")),
     );
     insta::assert_snapshot!(full_screen(&chat, 14));
+}
+
+/// A thread whose work goes on in another says so, and offers `/follow` (WVE-168).
+#[test]
+fn fullscreen_thread_continued_in_another() {
+    let mut chat = fullscreen_chat();
+    journal_update(
+        &mut chat,
+        0,
+        SessionUpdate::AgentMessageChunk(text("Saved what's worth keeping to notes/.")),
+    );
+    finish_turn(&mut chat);
+    journal(
+        &mut chat,
+        5,
+        ChatEvent::ContinuedIn {
+            successor: "s2".into(),
+        },
+    );
+    insta::assert_snapshot!(full_screen(&chat, 10));
 }
 
 /// A replayed thread's runs fold as a live one's did, timed by the journal.

@@ -329,23 +329,44 @@ async fn send(
 /// the Dispatcher last saw it, so it waits for whatever runs there; otherwise run in it, which
 /// opens it.
 fn into_thread(request: &RunRequest, seen: &Mutex<Seen>) -> Work {
-    let open = request.session_id.as_ref().is_some_and(|session_id| {
-        lock(seen)
-            .threads
+    let seen = lock(seen);
+    // A thread that continues in another, as a Bot's does, is prompted there (WVE-168).
+    let session_id = request.session_id.as_ref().map(|session_id| {
+        let mut latest = session_id.clone();
+        for _ in 0..MOST_SUCCESSORS {
+            match seen
+                .threads
+                .get(&latest)
+                .and_then(|listing| listing.continued_in.clone())
+            {
+                Some(next) => latest = next,
+                None => break,
+            }
+        }
+        latest
+    });
+    let open = session_id.as_ref().is_some_and(|session_id| {
+        seen.threads
             .get(session_id)
             .is_some_and(|listing| listing.state == SessionStatus::Open)
     });
-    match (&request.session_id, open) {
+    match (session_id, open) {
         (Some(session_id), true) => Work::Queue(AddQueuedRequest {
-            session_id: session_id.clone(),
+            session_id,
             prompt: request.prompt.clone(),
             key: request.key.clone(),
             caller: None,
             origin: request.origin.clone(),
         }),
-        _ => Work::Run(request.clone()),
+        (session_id, _) => Work::Run(RunRequest {
+            session_id,
+            ..request.clone()
+        }),
     }
 }
+
+/// How many successors of a thread are followed, at most.
+const MOST_SUCCESSORS: usize = 64;
 
 /// Read how the turns occurrences started on the Host ended, in the thread `only` names or
 /// in all of them, and write down those that are over.
@@ -367,12 +388,33 @@ async fn settle(
         if only.is_some_and(|only| *only.0 != *session_id) {
             continue;
         }
-        let got = connection
-            .send(GetSessionRequest {
-                session_id: SessionId::new(session_id),
-                turn_id: Some(turn_id),
-            })
-            .await;
+        let session_id = SessionId::new(session_id);
+        let mut turn_id = turn_id;
+        // A turn its Host stopped under that the thread continued ends as its continuation
+        // does (WVE-168).
+        let got = loop {
+            let got = connection
+                .send(GetSessionRequest {
+                    session_id: session_id.clone(),
+                    turn_id: Some(turn_id.clone()),
+                })
+                .await;
+            let next = match &got {
+                Ok(got) => got
+                    .latest_turn
+                    .as_ref()
+                    .filter(|turn| turn.state.is_over())
+                    .and_then(|turn| turn.continued_in.clone()),
+                Err(_) => None,
+            };
+            let Some(next) = next else { break got };
+            if let Err(why) = shared.store.continued(&occurrence, &next) {
+                tracing::warn!(%occurrence, %why, "recording an occurrence's continuation failed");
+                break got;
+            }
+            tracing::info!(%occurrence, interrupted = %turn_id, continuation = %next, "an occurrence's turn was interrupted and continued");
+            turn_id = next;
+        };
         let ended = match got {
             Ok(got) => match got.latest_turn {
                 Some(turn) if turn.state.is_over() => Some((

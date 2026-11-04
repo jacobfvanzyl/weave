@@ -45,6 +45,7 @@ use crate::recent::Recent;
 use crate::start::StartMode;
 use crate::start::choose;
 use crate::turn::Follower;
+use crate::turn::Link;
 use crate::turn::Outcome;
 use crate::turn::Pick;
 use crate::turn::Print;
@@ -130,7 +131,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         bail!("--detach needs the weave Host, which the config turns off");
     }
     let host = target.host(&launch, &args.workspace, args.agent.config_file())?;
-    let (connection, mut events) = host.connect("weave-cli").await?;
+    let (connection, events) = host.connect("weave-cli").await?;
     let session_id = match mode {
         StartMode::Resume(session_id) => Some(session_id),
         // The open session here first, as the Host lists them.
@@ -256,6 +257,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         Some(turn) => Pick::Turn(turn.clone()),
         None => Pick::After(state.journal.head),
     };
+    let mut link = Link::new(connection, events, host.paths());
     // A Host in this process ends with it, and the turn too, so it waits through everything.
     let in_process = matches!(target, Target::InProcess);
     let mut follower =
@@ -265,7 +267,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     let mut cancelling = false;
     let outcome: anyhow::Result<Outcome> = loop {
         let event = tokio::select! {
-            event = events.recv() => event,
+            event = link.events.recv() => event,
             () = sleep_until(deadline) => break Ok(Outcome::TimedOut),
             _ = tokio::signal::ctrl_c() => {
                 if cancelling {
@@ -276,7 +278,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
                 }
                 cancelling = true;
                 eprintln!("\nweave: cancelling (Ctrl-C again to leave it)");
-                connection
+                link.connection
                     .send(CancelTurnRequest {
                         session_id: session_id.clone(),
                     })
@@ -288,6 +290,14 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
         // instead (continued with --resume) waits for one that can answer, and this stops
         // waiting then, unless asked to wait on.
         match follower.handle(event, &mut out) {
+            // The Host went away: follow on once it's back.
+            Ok(Some(Outcome::Lost(_))) => {
+                match follower.reattach(&mut link, &mut out, deadline).await {
+                    Ok(Some(outcome)) => break Ok(outcome),
+                    Ok(None) => {}
+                    Err(error) => break Err(error),
+                }
+            }
             Ok(Some(outcome)) => break Ok(outcome),
             Ok(None) => {}
             Err(error) => break Err(error),
@@ -296,6 +306,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
     out.finish()?;
     // Done with it: close it rather than leave it idle in the Host, unless its turn goes on.
     let goes_on = matches!(&outcome, Ok(Outcome::Waiting(_) | Outcome::TimedOut));
+    let connection = link.connection;
     let _ = connection
         .send(DetachSessionRequest {
             session_id: session_id.clone(),

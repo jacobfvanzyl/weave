@@ -160,6 +160,8 @@ const QUIT_COMMAND: &str = "quit";
 const RENAME_COMMAND: &str = "rename";
 /// Starts the Host's paused queue again.
 const QUEUE_COMMAND: &str = "queue";
+/// Opens the thread this one's work goes on in, its successor (WVE-168).
+const FOLLOW_COMMAND: &str = "follow";
 
 /// How long the note that a selection was copied stays up.
 const COPIED_NOTE: Duration = Duration::from_secs(2);
@@ -495,6 +497,8 @@ pub struct ChatWidget {
     updatable: bool,
     /// The Host renames sessions (`session/rename`), so `/rename` is this client's.
     renamable: bool,
+    /// The thread the active session's work goes on in, which `/follow` opens (WVE-168).
+    successor: Option<SessionId>,
     /// The version of the agent the active session runs.
     release: Option<AgentRelease>,
     /// A newer one, once the Host has found it.
@@ -665,6 +669,7 @@ impl ChatWidget {
             parent_label: None,
             updatable: false,
             renamable: false,
+            successor: None,
             release: None,
             available: None,
             dismissed: BTreeMap::new(),
@@ -917,6 +922,7 @@ impl ChatWidget {
         self.ended = None;
         self.queued.clear();
         self.queue_paused = false;
+        self.successor = None;
         self.commands.clear();
         self.offer_own_commands();
         self.modes = None;
@@ -959,6 +965,7 @@ impl ChatWidget {
         self.modes = opened.modes;
         self.config_options = opened.config_options;
         self.set_mcp_servers(opened.mcp_servers);
+        self.follows(opened.successor);
         // A new, blank thread starts in the Vim composer, for a first message to write out.
         if self.vim && opened.reopened.is_none() {
             self.composer.enter_vim();
@@ -1147,7 +1154,16 @@ impl ChatWidget {
         }
         self.modes = opened.modes;
         self.config_options = opened.config_options;
+        self.follows(opened.successor);
         self.push_cell(TranscriptCell::info("Reconnected to the weave Host"));
+    }
+
+    /// The thread the active session's work goes on in, if it names one: offer `/follow`.
+    fn follows(&mut self, successor: Option<SessionId>) {
+        if self.successor != successor {
+            self.successor = successor;
+            self.offer_own_commands();
+        }
     }
 
     /// The weave Host didn't come back in time.
@@ -1708,6 +1724,13 @@ impl ChatWidget {
                 self.title = Some(title);
                 Vec::new()
             }
+            ChatEvent::ContinuedIn { successor } => {
+                self.push_cell(TranscriptCell::info(&format!(
+                    "This thread continues in thread {successor}; /follow opens it"
+                )));
+                self.follows(Some(successor));
+                Vec::new()
+            }
             ChatEvent::Queued { id, text, mine } => {
                 // Ahead of messages kept here, which the Host hasn't seen yet.
                 let at = self
@@ -1918,6 +1941,9 @@ impl ChatWidget {
         if self.updatable {
             own.push((updates::COMMAND, updates::COMMAND_DESCRIPTION));
         }
+        if self.successor.is_some() {
+            own.push((FOLLOW_COMMAND, "Open the thread this one continues in"));
+        }
         if self.host_queue {
             own.push((
                 QUEUE_COMMAND,
@@ -1963,6 +1989,7 @@ impl ChatWidget {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         chat
     }
@@ -3416,6 +3443,17 @@ impl ChatWidget {
             {
                 return self.slash_update(argument.trim());
             }
+            if let Some(successor) = self
+                .successor
+                .clone()
+                .filter(|_| text.trim() == format!("/{FOLLOW_COMMAND}"))
+            {
+                return vec![AppCommand::OpenSession {
+                    target: SessionTarget::Existing(successor),
+                    title: None,
+                    cwd: None,
+                }];
+            }
             if self.host_queue && text.trim() == format!("/{QUEUE_COMMAND}") {
                 if self.queue_paused && !self.queued.is_empty() {
                     return vec![AppCommand::ResumeQueue];
@@ -4688,6 +4726,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         chat
     }
@@ -4746,6 +4785,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         chat
     }
@@ -4943,6 +4983,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
             "and the rest.".into(),
@@ -5039,6 +5080,32 @@ mod tests {
     }
 
     #[test]
+    fn slash_follow_opens_the_thread_this_one_continues_in() {
+        let mut chat = chat();
+        let offered =
+            |chat: &ChatWidget| chat.commands.iter().any(|command| command.name == "follow");
+        assert!(!offered(&chat));
+        chat.handle_journal_event(
+            ChatEvent::ContinuedIn {
+                successor: "s2".into(),
+            },
+            0,
+        );
+        assert!(offered(&chat));
+        assert_eq!(
+            submit(&mut chat, "/follow"),
+            [AppCommand::OpenSession {
+                target: SessionTarget::Existing("s2".into()),
+                title: None,
+                cwd: None,
+            }]
+        );
+        // Another thread names none.
+        chat.begin_session("s3".into(), None);
+        assert!(!offered(&chat));
+    }
+
+    #[test]
     fn slash_reload_restarts_the_tui_unless_that_would_stop_a_turn() {
         let mut chat = chat();
         assert_eq!(submit(&mut chat, "/reload"), [AppCommand::Reload]);
@@ -5085,6 +5152,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         // The transcript stays as it was, with what happened and that it's back.
         let history = history(&mut chat);
@@ -5113,6 +5181,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         assert_eq!(reopened.blank_session(), None);
     }
@@ -5968,6 +6037,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         assert_eq!(
             history(&mut chat),
@@ -6001,6 +6071,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         assert_eq!(history(&mut chat), ["", "• Thread: new thread"]);
         let footer = rows(&chat, 80).pop().unwrap_or_default();
@@ -6034,6 +6105,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         assert_eq!(history(&mut chat), ["", "• Run it"]);
     }
@@ -6152,6 +6224,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         chat
     }
@@ -6848,6 +6921,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: Some("Parser fixes".into()),
+            successor: None,
         });
         let s2 = |update| ChatEvent::SessionUpdate(SessionNotification::new("s2", update));
         chat.handle_agent_event(s2(SessionUpdate::AgentMessageChunk(ContentChunk::new(
@@ -7231,6 +7305,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         chat
     }
@@ -7264,6 +7339,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         // The agent's own `/rename` gives way to this client's.
         chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
@@ -7308,6 +7384,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         assert_eq!(
             submit(&mut chat, "/rename Parser fixes"),
@@ -7428,6 +7505,7 @@ mod tests {
             notices: Vec::new(),
             mcp_servers: Vec::new(),
             title: None,
+            successor: None,
         });
         let shown = said(&mut chat);
         assert!(

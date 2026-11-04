@@ -104,6 +104,8 @@ export type SessionSummary = {
   waitingOn?: string;
   /** The thread whose agent started it: its key, when this device lists it, and how to name it. */
   startedBy?: { key: string; label: string };
+  /** The thread its work goes on in, its successor (WVE-168): its key, and how to name it. */
+  continuedIn?: { key: string; label: string };
 };
 
 export type AgentChoice = { id: string; name: string };

@@ -84,8 +84,10 @@ Schedules make deliveries ([Schedules](#schedules)); so may the Dispatcher's lib
 
 A delivery may also be a prompt for a thread: the first time it's sent it becomes
 `queue/add` if the Dispatcher last saw the thread open, so it waits for whatever runs there,
-and otherwise `session/run` with its `sessionId`, which opens it. That choice is written down
-before it's sent, so a repeat asks the same request under its key (`key_reused` otherwise).
+and otherwise `session/run` with its `sessionId`, which opens it. A thread the Dispatcher saw
+name a successor (`continuedIn`, WVE-168) is prompted in the last of its successors instead.
+That choice is written down before it's sent, so a repeat asks the same request under its key
+(`key_reused` otherwise).
 
 ## Schedules
 
@@ -118,7 +120,9 @@ An occurrence is `skipped` (with why), `waiting` (written down, its Host hasn't 
 as while it's unreachable), `started`, `finished` (with its turn's `outcome`, and its error),
 or `failed` (its Host refused it, saying why). The Dispatcher reads how a started turn ended
 when the thread it watches goes idle or closes, with `sessions/get` and the turn's id, and
-again on each connection.
+again on each connection. A turn its Host stopped under that the thread continued
+(`continuedIn`, WVE-168) is followed into the continuation, whose id the occurrence takes and
+whose outcome it ends with.
 
 The scheduler wakes when the next occurrence of any schedule is due, when schedules change,
 and at least every 30 seconds by the wall clock, so a computer waking from sleep finds what

@@ -123,6 +123,10 @@ pub(crate) enum Entry {
         /// The peer Host `started_by` is on, when it isn't this one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         started_by_host: Option<String>,
+        /// The session's successor when this journal began, as one that replaced a closed
+        /// session's journal (WVE-168).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        successor: Option<SessionId>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -213,6 +217,12 @@ pub(crate) enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<TurnOrigin>,
     },
+    /// A client named the session its work goes on in (`session/setSuccessor`, WVE-168).
+    ContinuedIn {
+        successor: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<TurnOrigin>,
+    },
     /// A prompt joined the queue; `at` is when.
     #[serde(rename_all = "camelCase")]
     Queued {
@@ -258,6 +268,7 @@ impl Entry {
             Entry::AgentReopened { .. }
             | Entry::Closed { .. }
             | Entry::Notice { .. }
+            | Entry::ContinuedIn { .. }
             | Entry::QueuePaused { .. } => false,
             Entry::Header { .. }
             | Entry::TerminalOutput { .. }
@@ -295,6 +306,7 @@ impl Entry {
             queue_paused: None,
             started_by: None,
             started_by_host: None,
+            successor: None,
         }
     }
 
@@ -389,6 +401,10 @@ impl Entry {
             Self::Notice { text } => SessionEvent::Notice { text: text.clone() },
             Self::Renamed { title, by } => SessionEvent::Renamed {
                 title: title.clone(),
+                by: by.clone(),
+            },
+            Self::ContinuedIn { successor, by } => SessionEvent::ContinuedIn {
+                successor: successor.clone(),
                 by: by.clone(),
             },
             Self::Queued {
@@ -625,6 +641,8 @@ pub struct Recorded {
     pub started_by: Option<SessionId>,
     /// The peer Host `started_by` is on, when it isn't this one.
     pub started_by_host: Option<String>,
+    /// The session its work goes on in, which a client named (WVE-168).
+    pub successor: Option<SessionId>,
 }
 
 impl Recorded {
@@ -646,6 +664,18 @@ pub(crate) fn kept_title(records: &[Record]) -> Option<String> {
             Entry::Header { title, .. } => title.clone().or(kept),
             Entry::Renamed { title, .. } => Some(title.clone()),
             _ => kept,
+        })
+}
+
+/// The successor a client named for the session `records` journal, or the one its journal
+/// began with.
+pub(crate) fn successor(records: &[Record]) -> Option<SessionId> {
+    records
+        .iter()
+        .fold(None, |named, record| match &record.entry {
+            Entry::Header { successor, .. } => successor.clone().or(named),
+            Entry::ContinuedIn { successor, .. } => Some(successor.clone()),
+            _ => named,
         })
 }
 
@@ -734,6 +764,7 @@ pub(crate) fn turn(
             turn_id: Some(queued.id),
             state: TurnState::Queued,
             continues: None,
+            continued_in: None,
             prompt: queued.prompt,
             origin: queued.origin,
             started_at: queued.queued_at,
@@ -754,10 +785,25 @@ pub(crate) fn turn(
     else {
         return None;
     };
+    let turn_id = id.clone().or_else(|| queued_id.clone());
+    let continued_in = turn_id.as_ref().and_then(|ended| {
+        records[start + 1..]
+            .iter()
+            .find_map(|record| match &record.entry {
+                Entry::TurnStarted {
+                    session_id,
+                    turn_id,
+                    continues: Some(continues),
+                    ..
+                } if session_id == root && continues == ended => turn_id.clone(),
+                _ => None,
+            })
+    });
     let mut turn = LatestTurn {
-        turn_id: id.clone().or_else(|| queued_id.clone()),
+        turn_id,
         state: TurnState::Running,
         continues: continues.clone(),
+        continued_in,
         prompt: prompt.clone(),
         origin: origin.clone().unwrap_or(TurnOrigin::Run {}),
         started_at: records[start].at,
@@ -871,6 +917,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         started_by,
         started_by_host,
         title: mut renamed,
+        mut successor,
         ..
     } = serde_json::from_str::<Record>(&header).ok()?.entry
     else {
@@ -881,10 +928,14 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
     for line in lines {
         // Escaped inside a string, these can't match text an agent wrote.
         if line.starts_with(r#"{"type":"renamed""#)
+            || line.starts_with(r#"{"type":"continuedIn""#)
             || line.contains(r#""sessionUpdate":"session_info_update""#)
         {
             match serde_json::from_str::<Record>(&line).map(|record| record.entry) {
                 Ok(Entry::Renamed { title, .. }) => renamed = Some(title),
+                Ok(Entry::ContinuedIn {
+                    successor: named, ..
+                }) => successor = Some(named),
                 Ok(entry) => {
                     if let Some(title) = title_given(&entry, &session_id) {
                         agent_title = Some(title);
@@ -922,6 +973,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
             git,
             started_by,
             started_by_host,
+            successor,
         },
     ))
 }
