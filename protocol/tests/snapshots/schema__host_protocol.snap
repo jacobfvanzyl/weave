@@ -882,6 +882,28 @@ expression: schema()
           },
           "description": "Its labels (feature `labels`, WVE-173), in order, which clients gave it and filter by."
         },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How much of its agent's context window it uses (feature `context`, WVE-174), from its\nlatest ACP `usage_update`."
+        },
+        "lastCompaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LastCompaction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its last completed compaction (feature `context`), from ACP's `compaction_update`; absent\nfor an agent that reports compaction otherwise, as Codex's adapter does in text."
+        },
         "openedBy": {
           "anyOf": [
             {
@@ -1032,6 +1054,48 @@ expression: schema()
         "worktree"
       ],
       "description": "Where in a git repository a session's directory is, as the Host last read it: when the\nsession opened, and again after each of its turns."
+    },
+    "ContextUsage": {
+      "type": "object",
+      "properties": {
+        "used": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "used",
+        "size"
+      ],
+      "description": "A session's context usage, as its agent last reported it: tokens in context, of the window."
+    },
+    "LastCompaction": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "used": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "at"
+      ],
+      "description": "A session's last completed compaction: when it completed, and the tokens in context its\nagent reported next, once it has."
     },
     "TurnOrigin": {
       "oneOf": [

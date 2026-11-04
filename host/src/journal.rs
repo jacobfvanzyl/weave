@@ -31,6 +31,8 @@ use agent_client_protocol::Error;
 use serde::Deserialize;
 use serde::Serialize;
 use weave_acp_core::AgentSpec;
+use weave_acp_core::schema::CompactionId;
+use weave_acp_core::schema::CompactionStatus;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionConfigOption;
@@ -48,6 +50,8 @@ use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::queue::QueuePause;
 use weave_host_protocol::queue::QueuedId;
 use weave_host_protocol::queue::QueuedPrompt;
+use weave_host_protocol::sessions::ContextUsage;
+use weave_host_protocol::sessions::LastCompaction;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::SessionAgent;
 use weave_host_protocol::sessions::TurnOrigin;
@@ -131,6 +135,9 @@ pub(crate) enum Entry {
         /// session's (WVE-173).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         labels: Vec<String>,
+        /// A closed session's context usage and last compaction, carried on (WVE-174).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Box<CarriedUsage>>,
     },
     /// A `session/update`, as clients were sent it.
     Update {
@@ -319,6 +326,7 @@ impl Entry {
             started_by_host: None,
             successor: None,
             labels: Vec::new(),
+            usage: None,
         }
     }
 
@@ -661,6 +669,83 @@ pub struct Recorded {
     pub successor: Option<SessionId>,
     /// Its labels (WVE-173); a labelled session's journal is kept past pruning.
     pub labels: Vec<String>,
+    /// Its context usage and last compaction (WVE-174).
+    pub usage: Usage,
+}
+
+/// What a header carries of a closed session's [`Usage`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CarriedUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) context: Option<ContextUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_compaction: Option<LastCompaction>,
+}
+
+/// A session's context usage and its last completed compaction, as its own agent's updates
+/// give them (WVE-174): ACP's `usage_update` and `compaction_update`, nothing else.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub context: Option<ContextUsage>,
+    pub last_compaction: Option<LastCompaction>,
+    /// The last completed compaction's id, so the same one again, as a replay sends it,
+    /// changes nothing.
+    compaction_id: Option<CompactionId>,
+}
+
+impl Usage {
+    /// Take in `update`, which the session's own agent sent at `at`.
+    pub(crate) fn note(&mut self, update: &SessionUpdate, at: u64) {
+        match update {
+            SessionUpdate::UsageUpdate(usage) => {
+                self.context = Some(ContextUsage {
+                    used: usage.used,
+                    size: usage.size,
+                });
+                // The first report after a compaction says what it left.
+                if let Some(last) = &mut self.last_compaction
+                    && last.used.is_none()
+                {
+                    last.used = Some(usage.used);
+                }
+            }
+            SessionUpdate::CompactionUpdate(update)
+                if update.status == CompactionStatus::Completed
+                    && self.compaction_id.as_ref() != Some(&update.compaction_id) =>
+            {
+                self.compaction_id = Some(update.compaction_id.clone());
+                self.last_compaction = Some(LastCompaction { at, used: None });
+            }
+            _ => {}
+        }
+    }
+
+    /// Take in `entry`, journaled at `at`, of the session `root`.
+    fn note_entry(&mut self, entry: &Entry, at: u64, root: &SessionId) {
+        match entry {
+            Entry::Header { usage, .. } => {
+                self.context = usage.as_ref().and_then(|usage| usage.context);
+                self.last_compaction = usage.as_ref().and_then(|usage| usage.last_compaction);
+            }
+            Entry::Update { notification } if notification.session_id == *root => {
+                self.note(&notification.update, at);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The context usage and last compaction of the session `records` journal.
+pub(crate) fn usage(records: &[Record]) -> Usage {
+    let Some(Entry::Header { session_id, .. }) = records.first().map(|record| &record.entry) else {
+        return Usage::default();
+    };
+    let mut usage = Usage::default();
+    for record in records {
+        usage.note_entry(&record.entry, record.at, session_id);
+    }
+    usage
 }
 
 impl Recorded {
@@ -948,14 +1033,28 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
         title: mut renamed,
         mut successor,
         mut labels,
+        usage: carried,
         ..
     } = serde_json::from_str::<Record>(&header).ok()?.entry
     else {
         return None;
     };
     let mut agent_title = None;
+    let carried = carried.map(|carried| *carried).unwrap_or_default();
+    let mut usage = Usage {
+        context: carried.context,
+        last_compaction: carried.last_compaction,
+        compaction_id: None,
+    };
     let mut tail = VecDeque::from([header]);
     for line in lines {
+        // Usage and compactions, the session's own only.
+        if (line.contains(r#""sessionUpdate":"usage_update""#)
+            || line.contains(r#""sessionUpdate":"compaction_update""#))
+            && let Ok(record) = serde_json::from_str::<Record>(&line)
+        {
+            usage.note_entry(&record.entry, record.at, &session_id);
+        }
         // Escaped inside a string, these can't match text an agent wrote.
         if line.starts_with(r#"{"type":"renamed""#)
             || line.starts_with(r#"{"type":"continuedIn""#)
@@ -1007,6 +1106,7 @@ fn record_of(path: &Path) -> Option<(SessionId, Recorded)> {
             started_by_host,
             successor,
             labels,
+            usage,
         },
     ))
 }
@@ -1206,6 +1306,47 @@ mod tests {
     use weave_acp_core::schema::SessionUpdate;
 
     use super::*;
+
+    #[test]
+    fn usage_is_the_latest_report_and_the_last_completed_compaction() {
+        use weave_acp_core::schema::CompactionUpdate;
+        use weave_acp_core::schema::UsageUpdate;
+
+        let mut usage = Usage::default();
+        let report = |used| SessionUpdate::UsageUpdate(UsageUpdate::new(used, 200_000));
+        let compaction = |id: &str, status| {
+            SessionUpdate::CompactionUpdate(CompactionUpdate::new(id.to_owned(), status))
+        };
+        usage.note(&report(150_000), 1);
+        assert_eq!(
+            usage.context,
+            Some(ContextUsage {
+                used: 150_000,
+                size: 200_000
+            })
+        );
+        // Only a completed one counts, and what the next report says it left.
+        usage.note(&compaction("c1", CompactionStatus::InProgress), 2);
+        usage.note(&compaction("c1", CompactionStatus::Failed), 3);
+        assert_eq!(usage.last_compaction, None);
+        usage.note(&compaction("c2", CompactionStatus::Completed), 4);
+        assert_eq!(
+            usage.last_compaction,
+            Some(LastCompaction { at: 4, used: None })
+        );
+        usage.note(&report(40_000), 5);
+        usage.note(&report(60_000), 6);
+        assert_eq!(
+            usage.last_compaction,
+            Some(LastCompaction {
+                at: 4,
+                used: Some(40_000)
+            })
+        );
+        // The same one again, as a replay sends it, changes nothing.
+        usage.note(&compaction("c2", CompactionStatus::Completed), 7);
+        assert_eq!(usage.last_compaction.map(|last| last.at), Some(4));
+    }
 
     fn header(session_id: &str) -> Entry {
         Entry::header(

@@ -21,7 +21,11 @@ or a labelled session's (`lib::labelled`; the journals are indexed before the st
 their labels are known). Labels (WVE-173) are a `labelled` entry with all of them after each
 change, and the header's `labels` for those a session started with or a closed one carried;
 `Summary` and `Recorded` keep them, `session/label` is `Command::Label`, and `client::check_labels`
-checks those `session/create` and `session/run` give. A prompt is journaled with its turn (`turnStarted`, with the client's origin);
+checks those `session/create` and `session/run` give. Context usage and the last completed compaction
+(WVE-174) are `journal::Usage`, noted from the session's own `usage_update`s and
+`compaction_update`s as `Actor::record` journals them, read again from a journal (`journal::usage`,
+and `record_of` for the index), and carried into a closed session's new journal header; watchers
+hear of usage once it moves by a hundredth of the window (`session::stepped`). A prompt is journaled with its turn (`turnStarted`, with the client's origin);
 turns end in `turnEnded` for every client. `turn/steer` (a `features` entry) passes a steer to
 the agent only while a turn the Host started runs, journals it as `turnSteered` where the
 agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Each session's queue (`queue.rs`,

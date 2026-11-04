@@ -102,6 +102,7 @@ use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::queue::ResumeQueueRequest;
 use weave_host_protocol::sessions::AttachSessionRequest;
+use weave_host_protocol::sessions::CONTEXT_FEATURE;
 use weave_host_protocol::sessions::CloseSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
 use weave_host_protocol::sessions::CreateSessionRequest;
@@ -186,9 +187,11 @@ use crate::files;
 use crate::git;
 use crate::instance::Instance;
 use crate::journal;
+use crate::journal::CarriedUsage;
 use crate::journal::Entry;
 use crate::journal::Journal;
 use crate::journal::Recorded;
+use crate::journal::Usage;
 use crate::journal::now_ms;
 use crate::mcp::Servers;
 use crate::modes;
@@ -994,6 +997,7 @@ impl Connection {
                 RENAME_FEATURE.to_owned(),
                 SUCCESSORS_FEATURE.to_owned(),
                 LABELS_FEATURE.to_owned(),
+                CONTEXT_FEATURE.to_owned(),
                 WORKTREES_FEATURE.to_owned(),
                 QUEUE_FEATURE.to_owned(),
                 REQUEST_KEYS_FEATURE.to_owned(),
@@ -2381,6 +2385,12 @@ async fn agent_sessions(
                     .get(&info.session_id)
                     .map(|recorded| recorded.labels.clone())
                     .unwrap_or_default(),
+                context: known
+                    .get(&info.session_id)
+                    .and_then(|recorded| recorded.usage.context),
+                last_compaction: known
+                    .get(&info.session_id)
+                    .and_then(|recorded| recorded.usage.last_compaction),
                 opened_by: None,
                 opened_at: None,
                 info,
@@ -2485,6 +2495,8 @@ pub(crate) fn dormant(
         opened_by: None,
         opened_at: None,
         labels: recorded.labels.clone(),
+        context: recorded.usage.context,
+        last_compaction: recorded.usage.last_compaction,
     }
 }
 
@@ -2978,6 +2990,7 @@ async fn reopen(
     let (started_by, started_by_host) = earlier.map(journal::started_by).unwrap_or_default();
     let successor = earlier.and_then(journal::successor);
     let labels = earlier.map(journal::labels).unwrap_or_default();
+    let usage = earlier.map(journal::usage).unwrap_or_default();
     let mut continuation = None;
     let (journal, policy) = match recovered {
         Some((path, records)) => {
@@ -3062,6 +3075,7 @@ async fn reopen(
             started_by_host,
             successor,
             labels,
+            usage,
             continuation,
         },
         servers,
@@ -3134,6 +3148,7 @@ enum Origin {
         /// The session its work goes on in.
         successor: Option<SessionId>,
         labels: Vec<String>,
+        usage: Usage,
         /// The turn the stopped Host cut off, for a headless session to continue.
         continuation: Option<Box<Continuation>>,
     },
@@ -3165,7 +3180,14 @@ fn open(
             None,
             None,
             Queue::default(),
-            (started_by, started_by_host, None, labels, None),
+            (
+                started_by,
+                started_by_host,
+                None,
+                labels,
+                Usage::default(),
+                None,
+            ),
         ),
         Origin::Reopened {
             journal,
@@ -3177,6 +3199,7 @@ fn open(
             started_by_host,
             successor,
             labels,
+            usage,
             continuation,
         } => (
             journal,
@@ -3190,11 +3213,12 @@ fn open(
                 started_by_host,
                 successor,
                 labels,
+                usage,
                 continuation.map(|continuation| *continuation),
             ),
         ),
     };
-    let (started_by, started_by_host, successor, labels, continuation) = starter;
+    let (started_by, started_by_host, successor, labels, usage, continuation) = starter;
     let journal = match journal {
         Some(journal) => *journal,
         None => {
@@ -3214,10 +3238,18 @@ fn open(
                 started_by_host: starter_host,
                 successor: carried_successor,
                 labels: carried_labels,
+                usage: carried_usage,
                 ..
             } = &mut header
             {
                 carried_labels.clone_from(&labels);
+                *carried_usage =
+                    (usage.context.is_some() || usage.last_compaction.is_some()).then(|| {
+                        Box::new(CarriedUsage {
+                            context: usage.context,
+                            last_compaction: usage.last_compaction,
+                        })
+                    });
                 carried.extend(queue.prompts.iter().cloned());
                 *queue_paused = queue.paused;
                 starter.clone_from(&started_by);
@@ -3258,6 +3290,7 @@ fn open(
             started_by_host,
             successor,
             labels,
+            usage,
             continuation,
         },
     ))

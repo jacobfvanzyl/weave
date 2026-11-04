@@ -169,7 +169,8 @@ request with `unauthenticated`.
   `SessionState`, and `LatestTurn`'s `continuedIn` (see [Successors](#successors)), and
   `labels` (WVE-173): `session/label`, the `labelled` event, `labels` in listings,
   `SessionState`, `session/create`, `session/run`, `sessions/list` and `sessions/watch` (see
-  [Labels](#labels)).
+  [Labels](#labels)), and `context` (WVE-174): listings' `context` and `lastCompaction` (see
+  [Context usage](#context-usage)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
@@ -406,6 +407,8 @@ type SessionListing = {
   startedByHost?: string;       // the peer Host that session is on; see Peer Hosts
   continuedIn?: string;         // its successor; see Successors
   labels?: string[];            // see Labels
+  context?: { used: number; size: number };        // see Context usage
+  lastCompaction?: { at: number; used?: number };  // see Context usage
   openedBy?: TurnOrigin;        // open sessions: the client whose create or attach opened it last,
                                 // or the origin of a service's run that opened it
   openedAt?: number;            // and when
@@ -464,7 +467,9 @@ attached to them or not, until the connection ends or it sends `sessions/unwatch
 
 - `sessions/updated` `{session: SessionListing}`: a session appeared or changed, as it lists
   now. It's sent when a session opens (a blank one at its first prompt), when its
-  `activity`, `clients` or title change, and when it's suspended or closed; no more often than
+  `activity`, `clients`, title, labels or successor change, when its context usage moves by a
+  hundredth of its window or it compacts (see [Context usage](#context-usage)), and when it's
+  suspended or closed; no more often than
   `session/changed`, from the same changes, its branch included. A closed or suspended session lists with no
   `activity` and no clients.
 - `sessions/removed` `{sessionId}`: a session went away: deleted, its journal pruned, or closed
@@ -787,6 +792,26 @@ carry its label (ADR 0028). Labels mean nothing to the Host.
   threads, reads `labels` from the listing.
 - **Kept:** pruning passes over a labelled session's journal however long it's been quiet, so a
   Bot's earlier threads stay readable.
+
+### Context usage
+
+WVE-174, ADR 0028. A session's listing says how much of its agent's context window it uses and
+when it last compacted, so one `sessions/watch` tells a client such as the Dispatcher when a
+Bot's thread needs compacting or a new thread. Only what ACP defines is read, for the session
+itself, not its subagents:
+
+- `context` `{used, size}`: the tokens in context and the window, from its latest
+  `usage_update`.
+- `lastCompaction` `{at, used?}`: when its last compaction completed (`compaction_update` with
+  `completed`; a failed or cancelled one doesn't count), and `used` from the first
+  `usage_update` after it, what the compaction left. An agent that reports compaction only as
+  text, as Codex's adapter does, leaves it absent.
+
+Both are read again from the journal when the Host takes a session up, and a closed session's
+new journal begins with them. A change in usage alone reaches watchers only once `used` has
+moved by at least a hundredth of `size` since they last heard, or `size` changed; whatever
+`sessions/updated` is sent carries the latest values. Attached clients have every
+`usage_update` in the journal.
 
 ### Successors
 

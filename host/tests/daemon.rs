@@ -4963,6 +4963,66 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
 }
 
 #[tokio::test]
+async fn listings_carry_context_usage_and_the_last_compaction() {
+    let world = World::new();
+    let session_id = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let session_id = client.create(&world).await;
+        client.queue(&session_id, "hello").await;
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        let listed = client.get(&session_id).await.session;
+        let context = listed.context.expect("its usage");
+        assert_eq!(context.size, 200_000);
+        assert!(context.used > 0, "{context:?}");
+        assert_eq!(listed.last_compaction, None);
+
+        // A watcher hears of a compaction, and then of what it left.
+        let mut watching = world.client(&daemon).await;
+        watching.watch().await;
+        client.queue(&session_id, "compact").await;
+        let compacted = loop {
+            if let Change::Updated(listing) = watching.change().await
+                && let Some(last) = listing.last_compaction
+                && last.used.is_some()
+            {
+                break last;
+            }
+        };
+        let listed = client.get(&session_id).await.session;
+        assert_eq!(listed.last_compaction, Some(compacted));
+        watching.connection.shutdown().await;
+        client.connection.shutdown().await;
+        daemon.shutdown().await;
+        session_id
+    };
+
+    // They outlast the Host, suspended and taken up again.
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    let mut client = world.client(&daemon).await;
+    let suspended = client.get(&session_id).await.session;
+    assert!(suspended.context.is_some());
+    assert!(suspended.last_compaction.is_some());
+    client.attach(&session_id).await;
+    let open = client.get(&session_id).await.session;
+    assert_eq!(open.state, SessionStatus::Open);
+    assert_eq!(open.last_compaction, suspended.last_compaction);
+    assert_eq!(open.context, suspended.context);
+
+    // And a closed thread's new journal.
+    client
+        .connection
+        .send(CloseSessionRequest {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("session/close");
+    client.attach(&session_id).await;
+    let reopened = client.get(&session_id).await.session;
+    assert_eq!(reopened.last_compaction, suspended.last_compaction);
+}
+
+#[tokio::test]
 async fn a_labelled_threads_journal_outlasts_pruning() {
     let world = World::new();
     let (labelled, plain) = {

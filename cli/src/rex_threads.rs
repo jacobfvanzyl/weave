@@ -507,6 +507,8 @@ mod tests {
             opened_at: opened.map(|(_, at)| at),
             continued_in: None,
             labels: Vec::new(),
+            context: None,
+            last_compaction: None,
         }
     }
 

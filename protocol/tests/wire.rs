@@ -123,6 +123,7 @@ use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::AttachSessionResponse;
 use weave_host_protocol::sessions::CloseSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
+use weave_host_protocol::sessions::ContextUsage;
 use weave_host_protocol::sessions::CreateSessionRequest;
 use weave_host_protocol::sessions::DeleteSessionRequest;
 use weave_host_protocol::sessions::DetachSessionRequest;
@@ -132,6 +133,7 @@ use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::LabelSessionRequest;
 use weave_host_protocol::sessions::LabelSessionResponse;
+use weave_host_protocol::sessions::LastCompaction;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::ListSessionsRequest;
 use weave_host_protocol::sessions::ListSessionsResponse;
@@ -422,6 +424,8 @@ fn listing() -> SessionListing {
         opened_at: Some(1_760_180_000_500),
         continued_in: None,
         labels: Vec::new(),
+        context: None,
+        last_compaction: None,
     }
 }
 
@@ -1275,6 +1279,14 @@ fn delegated_sessions() {
             session: SessionListing {
                 continued_in: Some("s-3".into()),
                 labels: vec!["dispatcher".to_owned(), "bot:daily".to_owned()],
+                context: Some(ContextUsage {
+                    used: 41_200,
+                    size: 200_000,
+                }),
+                last_compaction: Some(LastCompaction {
+                    at: 1_760_179_000_000,
+                    used: Some(38_000),
+                }),
                 ..delegated.clone()
             },
             latest_turn: Some(LatestTurn {

@@ -79,8 +79,10 @@ use weave_host_protocol::queue::QueuedPrompt;
 use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::AttachSessionResponse;
+use weave_host_protocol::sessions::ContextUsage;
 use weave_host_protocol::sessions::JournalHead;
 use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::sessions::LastCompaction;
 use weave_host_protocol::sessions::LatestTurn;
 use weave_host_protocol::sessions::MAX_LABELS;
 use weave_host_protocol::sessions::MAX_TITLE;
@@ -108,6 +110,7 @@ use crate::journal::Entry;
 use crate::journal::Journal;
 use crate::journal::Recorded;
 use crate::journal::RecordedChoice;
+use crate::journal::Usage;
 use crate::journal::now_ms;
 use crate::mcp::Servers;
 use crate::queue::Queue;
@@ -407,6 +410,8 @@ pub(crate) struct Summary {
     pub(crate) successor: Option<SessionId>,
     /// Its labels (WVE-173).
     pub(crate) labels: Vec<String>,
+    /// Its context usage and last compaction (WVE-174).
+    pub(crate) usage: Usage,
     /// The peer Host whose session's agent began its running turn, if one did: that turn's
     /// agent reaches no peer Host of this one (ADR 0017's one hop).
     pub(crate) turn_from_peer: Option<String>,
@@ -435,6 +440,8 @@ impl Summary {
             opened_by: self.opened.as_ref().map(|(by, _)| by.clone()),
             opened_at: self.opened.as_ref().map(|(_, at)| *at),
             labels: self.labels.clone(),
+            context: self.usage.context,
+            last_compaction: self.usage.last_compaction,
         }
     }
 }
@@ -524,6 +531,8 @@ pub(crate) struct Opened {
     pub(crate) successor: Option<SessionId>,
     /// Its labels, as its journal says or as it was started with.
     pub(crate) labels: Vec<String>,
+    /// Its context usage and last compaction, as its journal says.
+    pub(crate) usage: Usage,
     /// The turn a stopped Host cut off, for a headless session to continue first.
     pub(crate) continuation: Option<Continuation>,
 }
@@ -569,6 +578,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         started_by_host,
         successor,
         labels,
+        usage,
         continuation,
     } = opened;
     let blank = Arc::new(AtomicBool::new(blank));
@@ -590,6 +600,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
         started_by_host: started_by_host.clone(),
         successor: successor.clone(),
         labels: labels.clone(),
+        usage: usage.clone(),
         turn_from_peer: None,
         agent_process: instance.process.clone(),
         opened: None,
@@ -631,6 +642,7 @@ pub(crate) fn start(shared: &Arc<Shared>, opened: Opened) -> SessionHandle {
                 started_by_host,
                 successor,
                 labels,
+                usage,
             },
         );
     }
@@ -799,6 +811,24 @@ struct Reported {
     successor: Option<SessionId>,
     /// Its labels: watchers hear of them, attached clients have its `labelled` events.
     labels: Vec<String>,
+    /// Its context usage as last reported to watchers, which hear again once it moves by a
+    /// step (WVE-174); attached clients have its `usage_update`s.
+    context: Option<ContextUsage>,
+    last_compaction: Option<LastCompaction>,
+}
+
+/// The context usage to report, `now`, given what was `reported`: that again until usage moves
+/// by at least a hundredth of the window, or the window changes.
+fn stepped(reported: Option<ContextUsage>, now: Option<ContextUsage>) -> Option<ContextUsage> {
+    match (reported, now) {
+        (Some(reported), Some(now))
+            if reported.size == now.size
+                && reported.used.abs_diff(now.used) < (now.size / 100).max(1) =>
+        {
+            Some(reported)
+        }
+        _ => now,
+    }
 }
 
 struct Actor {
@@ -1873,7 +1903,16 @@ impl Actor {
     fn record(&mut self, entry: Entry) -> (u64, u64) {
         let event = entry.event();
         let activity = entry.is_activity();
+        let usage = match &entry {
+            Entry::Update { notification } if notification.session_id == self.root => {
+                Some(notification.update.clone())
+            }
+            _ => None,
+        };
         let (seq, at) = self.journal.append(entry);
+        if let Some(update) = usage {
+            lock(&self.summary).usage.note(&update, at);
+        }
         if activity {
             lock(&self.summary).last_activity_ms = at;
         }
@@ -1932,7 +1971,7 @@ impl Actor {
             }) => Some(host.clone()),
             _ => None,
         };
-        let (title, git, opened_at, successor, labels) = {
+        let (title, git, opened_at, successor, labels, usage) = {
             let mut summary = lock(&self.summary);
             summary.clients = clients;
             summary.activity = activity;
@@ -1943,6 +1982,7 @@ impl Actor {
                 summary.opened.as_ref().map(|(_, at)| *at),
                 summary.successor.clone(),
                 summary.labels.clone(),
+                summary.usage.clone(),
             )
         };
         let now = Reported {
@@ -1955,6 +1995,8 @@ impl Actor {
             opened_at,
             successor,
             labels,
+            context: stepped(self.reported.context, usage.context),
+            last_compaction: usage.last_compaction,
         };
         if now == self.reported {
             return;
@@ -1991,9 +2033,13 @@ impl Actor {
         };
         // Nothing reaches this session from now on.
         {
-            let (last_activity_ms, title) = {
+            let (last_activity_ms, title, usage) = {
                 let summary = lock(&self.summary);
-                (summary.last_activity_ms, summary.title.clone())
+                (
+                    summary.last_activity_ms,
+                    summary.title.clone(),
+                    summary.usage.clone(),
+                )
             };
             let mut registry = self.shared.registry();
             registry.sessions.remove(&self.root);
@@ -2007,6 +2053,7 @@ impl Actor {
                 known.closed = !suspended;
                 known.last_activity_ms = last_activity_ms;
                 known.title = title;
+                known.usage = usage;
             }
         }
         if blank {
@@ -2367,4 +2414,42 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn watchers_hear_of_usage_once_it_moves_by_a_hundredth_of_the_window() {
+        let usage = |used, size| Some(ContextUsage { used, size });
+        let reported = usage(100_000, 200_000);
+        assert_eq!(
+            stepped(reported, usage(101_999, 200_000)),
+            reported,
+            "a small change"
+        );
+        assert_eq!(
+            stepped(reported, usage(98_001, 200_000)),
+            reported,
+            "down, a little"
+        );
+        assert_eq!(
+            stepped(reported, usage(102_000, 200_000)),
+            usage(102_000, 200_000)
+        );
+        assert_eq!(
+            stepped(reported, usage(100_000, 1_000_000)),
+            usage(100_000, 1_000_000),
+            "a new window"
+        );
+        assert_eq!(
+            stepped(None, usage(5, 200_000)),
+            usage(5, 200_000),
+            "the first"
+        );
+        assert_eq!(stepped(reported, None), None);
+    }
 }

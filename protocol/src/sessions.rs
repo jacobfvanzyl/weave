@@ -266,6 +266,14 @@ pub struct SessionListing {
     /// Its labels (feature `labels`, WVE-173), in order, which clients gave it and filter by.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// How much of its agent's context window it uses (feature `context`, WVE-174), from its
+    /// latest ACP `usage_update`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextUsage>,
+    /// Its last completed compaction (feature `context`), from ACP's `compaction_update`; absent
+    /// for an agent that reports compaction otherwise, as Codex's adapter does in text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_compaction: Option<LastCompaction>,
     /// The client whose `session/create` or `session/attach` opened it last, while it's open:
     /// a paired device's names its `device`. A service's `session/run` that opened it gives
     /// the turn's origin. Absent for one another headless run or a Host taking it up opened.
@@ -274,6 +282,30 @@ pub struct SessionListing {
     /// When it opened last, while it's open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_at: Option<Timestamp>,
+}
+
+/// The Host offers [`SessionListing::context`] and [`SessionListing::last_compaction`], in
+/// `features` (WVE-174).
+pub const CONTEXT_FEATURE: &str = "context";
+
+/// A session's context usage, as its agent last reported it: tokens in context, of the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsage {
+    pub used: u64,
+    pub size: u64,
+}
+
+/// A session's last completed compaction: when it completed, and the tokens in context its
+/// agent reported next, once it has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LastCompaction {
+    pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<u64>,
 }
 
 /// `sessions/list`. Without an agent: the sessions the Host has a journal for, across

@@ -1413,6 +1413,16 @@ export interface SessionListing {
    */
   labels?: string[];
   /**
+   * How much of its agent's context window it uses (feature `context`, WVE-174), from its
+   * latest ACP `usage_update`.
+   */
+  context?: ContextUsage | null;
+  /**
+   * Its last completed compaction (feature `context`), from ACP's `compaction_update`; absent
+   * for an agent that reports compaction otherwise, as Codex's adapter does in text.
+   */
+  lastCompaction?: LastCompaction | null;
+  /**
    * The client whose `session/create` or `session/attach` opened it last, while it's open:
    * a paired device's names its `device`. A service's `session/run` that opened it gives
    * the turn's origin. Absent for one another headless run or a Host taking it up opened.
@@ -1488,6 +1498,27 @@ export interface GitLocation {
    * that's a path on this computer.
    */
   remote?: string | null;
+}
+/**
+ * A session's context usage, as its agent last reported it: tokens in context, of the window.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ContextUsage".
+ */
+export interface ContextUsage {
+  used: number;
+  size: number;
+}
+/**
+ * A session's last completed compaction: when it completed, and the tokens in context its
+ * agent reported next, once it has.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LastCompaction".
+ */
+export interface LastCompaction {
+  at: number;
+  used?: number | null;
 }
 /**
  * Information about a session returned by session/list

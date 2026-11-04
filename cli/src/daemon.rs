@@ -868,6 +868,8 @@ mod tests {
             opened_at: None,
             continued_in: None,
             labels: Vec::new(),
+            context: None,
+            last_compaction: None,
         });
         assert_eq!(
             describe(&status, &paths, 7_230_000),

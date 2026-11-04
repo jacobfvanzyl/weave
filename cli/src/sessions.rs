@@ -658,6 +658,20 @@ fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
         if !session.labels.is_empty() {
             out.push_str(&format!("  labelled {}\n", session.labels.join(", ")));
         }
+        if let Some(context) = session.context {
+            let percent = (context.used * 100)
+                .checked_div(context.size)
+                .map_or_else(String::new, |percent| format!(" ({percent}%)"));
+            let compacted = session
+                .last_compaction
+                .map(|last| format!(", compacted {} ago", ago(now_ms, last.at)))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  context {} of {} tokens{percent}{compacted}\n",
+                thousands(context.used),
+                thousands(context.size)
+            ));
+        }
     }
     out
 }
@@ -673,6 +687,19 @@ fn name(activity: Activity) -> &'static str {
 
 /// A thread's latest turn, or the one `asked` for: where it came from, how it stands, and its
 /// prompt.
+/// `n` with its thousands apart: 68,000.
+fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 fn describe_turn(latest: &LatestTurn, asked: bool) -> String {
     let from = match &latest.origin {
         TurnOrigin::Client { name, device, .. } => device.clone().unwrap_or_else(|| name.clone()),
@@ -740,6 +767,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use weave_acp_core::schema::PromptResponse;
     use weave_acp_core::schema::SessionInfo;
+    use weave_host_protocol::sessions::ContextUsage;
+    use weave_host_protocol::sessions::LastCompaction;
     use weave_host_protocol::sessions::SessionStatus;
     use weave_host_protocol::worktrees::GitLocation;
 
@@ -763,6 +792,8 @@ mod tests {
             opened_at: None,
             continued_in: None,
             labels: Vec::new(),
+            context: None,
+            last_compaction: None,
         };
         assert_eq!(
             describe(std::slice::from_ref(&session), 7_230_000),
@@ -784,6 +815,23 @@ mod tests {
             ..session.clone()
         };
         assert!(describe(&[delegated], 7_230_000).ends_with("  started by thread s0\n"));
+        let using = SessionListing {
+            context: Some(ContextUsage {
+                used: 68_000,
+                size: 200_000,
+            }),
+            last_compaction: Some(LastCompaction {
+                at: 3_630_000,
+                used: Some(40_000),
+            }),
+            ..session.clone()
+        };
+        assert!(
+            describe(&[using], 7_230_000)
+                .ends_with("  context 68,000 of 200,000 tokens (34%), compacted 1h ago\n")
+        );
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1_234_567), "1,234,567");
         assert!(find(&[session], "s2").is_err());
     }
 
