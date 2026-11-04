@@ -21,6 +21,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `docs/specs/` | The Host protocol (WVE-85), remote clients (WVE-90) and the Dispatcher (WVE-175). |
 | `docs/research/` | Dated research: evidence, not implementation requirements. |
 | `docs/agents/` | Tracker and domain guidance. |
+| `docs/hardware/` | The person's hardware that agents use, such as the bridge Pi: what it's for, how it's set up, and the rules for using it. |
 | `.agents/tools/linear/` | Deliberately isolated, pinned tracker CLI. |
 
 Preserve credentials, Host state, unrelated dirty work, and remote deployments. Do not commit secrets or edit installed dependencies directly. Repository cleanup is not remote deployment teardown. Before Docker work, check memory and verify the preferred explicit context; do not assume local Docker.
