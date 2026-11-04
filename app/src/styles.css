@@ -322,3 +322,10 @@ body:has([data-native-layered]) [data-slot$='-content'] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+
+/* A Surface (WVE-183) is read from across a room: type scales with the display, 24px at 1080p.
+   Nothing on it animates, so it draws only when the device sends a change. */
+html[data-surface] { font-size: max(16px, 1.25vw); }
+html[data-surface] *,
+html[data-surface] *::before,
+html[data-surface] *::after { animation: none !important; transition: none !important; }

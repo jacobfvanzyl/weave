@@ -19,6 +19,7 @@
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 		D15C0E012F00000100A00001 /* DeviceKeyPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = D15C0E022F00000100A00001 /* DeviceKeyPlugin.swift */; };
 		F15A01500000000000000001 /* NativeTerminalPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15A01500000000000000002 /* NativeTerminalPlugin.swift */; };
+		F15A01600000000000000001 /* Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15A01600000000000000002 /* Surface.swift */; };
 		F15A01500000000000000003 /* WeaveTerminalRenderer.mm in Sources */ = {isa = PBXBuildFile; fileRef = F15A01500000000000000004 /* WeaveTerminalRenderer.mm */; };
 		F15A01500000000000000007 /* ghostty-vt.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = F15A01500000000000000008 /* ghostty-vt.xcframework */; };
 		F15A01500000000000000009 /* TerminalFonts in Resources */ = {isa = PBXBuildFile; fileRef = F15A0150000000000000000A /* TerminalFonts */; };
@@ -41,6 +42,7 @@
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		D15C0E022F00000100A00001 /* DeviceKeyPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceKeyPlugin.swift; sourceTree = "<group>"; };
 		F15A01500000000000000002 /* NativeTerminalPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTerminalPlugin.swift; sourceTree = "<group>"; };
+		F15A01600000000000000002 /* Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surface.swift; sourceTree = "<group>"; };
 		F15A01500000000000000004 /* WeaveTerminalRenderer.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WeaveTerminalRenderer.mm; sourceTree = "<group>"; };
 		F15A01500000000000000005 /* WeaveTerminalRenderer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WeaveTerminalRenderer.h; sourceTree = "<group>"; };
 		F15A01500000000000000006 /* NativeTerminal-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NativeTerminal-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -88,6 +90,7 @@
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				D15C0E022F00000100A00001 /* DeviceKeyPlugin.swift */,
 				F15A01500000000000000002 /* NativeTerminalPlugin.swift */,
+				F15A01600000000000000002 /* Surface.swift */,
 				F15A0150000000000000000E /* TerminalStream.swift */,
 				F15A01500000000000000010 /* TerminalView.swift */,
 				F15A01500000000000000005 /* WeaveTerminalRenderer.h */,
@@ -197,6 +200,7 @@
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				D15C0E012F00000100A00001 /* DeviceKeyPlugin.swift in Sources */,
 				F15A01500000000000000001 /* NativeTerminalPlugin.swift in Sources */,
+				F15A01600000000000000001 /* Surface.swift in Sources */,
 				F15A0150000000000000000D /* TerminalStream.swift in Sources */,
 				F15A0150000000000000000F /* TerminalView.swift in Sources */,
 				F15A01500000000000000003 /* WeaveTerminalRenderer.mm in Sources */,

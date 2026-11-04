@@ -1012,6 +1012,10 @@ export const allSubagents = (model: AcpTranscript): TranscriptSubagent[] =>
 /** Whether a request this device can answer waits in this transcript, not counting its subagents'. */
 export const waitsForAnswer = (model: AcpTranscript) => model.entries.some((entry) => statusOf(entry) === 'pending' && entry.kind !== 'client-tool');
 
+/** The requests this device can answer that wait in this transcript, not counting its subagents'. */
+export const pendingRequests = (model: AcpTranscript): TranscriptEntry[] =>
+  model.entries.filter((entry) => statusOf(entry) === 'pending' && entry.kind !== 'client-tool');
+
 export const queueOptimisticPrompt = (
   model: AcpTranscript,
   localId: string,

@@ -16,9 +16,58 @@ private final class WeaveSurfaceContainer: UIView {
 }
 
 final class WeaveBridgeViewController: CAPBridgeViewController {
+    private var surfaceRegistration: AnyObject?
+
+    /** The iPhone may turn to landscape while the open thread is on a Surface (WVE-183). */
+    var landscapeAllowed = false {
+        didSet {
+            guard landscapeAllowed != oldValue, UIDevice.current.userInterfaceIdiom == .phone else { return }
+            if #available(iOS 16.0, *) {
+                setNeedsUpdateOfSupportedInterfaceOrientations()
+                if !landscapeAllowed {
+                    view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+                }
+            }
+        }
+    }
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return super.supportedInterfaceOrientations }
+        return landscapeAllowed ? [.portrait, .landscapeLeft, .landscapeRight] : .portrait
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // A Surface is the iPhone's for now; the iPad mirrors (WVE-184).
+        guard #available(iOS 27.0, *), UIDevice.current.userInterfaceIdiom == .phone else { return }
+        let configuration = UISceneConfiguration(name: "Surface", sessionRole: .windowExternalDisplayNonInteractive)
+        configuration.delegateClass = SurfaceSceneDelegate.self
+        let registration = registerSceneAccessory(.externalNonInteractive(sceneConfiguration: configuration))
+        surfaceRegistration = registration
+        SurfaceRelay.shared.onEnabled = { [weak registration] enabled in registration?.isEnabled = enabled }
+    }
+
+    @available(iOS 26.0, *)
+    override func updateProperties() {
+        super.updateProperties()
+        noteSurfaceAvailability()
+    }
+
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        noteSurfaceAvailability()
+    }
+
+    /** Whether a display is there for the Surface, which the accessory reports as it changes. */
+    private func noteSurfaceAvailability() {
+        guard #available(iOS 27.0, *), let registration = surfaceRegistration as? UISceneAccessoryRegistration else { return }
+        SurfaceRelay.shared.setAvailable(registration.isAvailable)
+    }
+
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(DeviceKeyPlugin())
         bridge?.registerPluginInstance(NativeTerminalPlugin())
+        bridge?.registerPluginInstance(SurfacePlugin())
         guard let webView else { return }
         // Capacitor's root view is the web view; a container lets it follow the keyboard below,
         // with the native terminals beneath it.

@@ -33,6 +33,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
     }
 
+    // The Info.plist keeps the iPhone upright at launch; the view controller allows landscape while
+    // the open thread is on a Surface (WVE-183), so the app as a whole may turn.
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        UIDevice.current.userInterfaceIdiom == .phone ? .allButUpsideDown : .all
+    }
+
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
@@ -43,6 +49,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // (ionic-team/capacitor#8648); without a delegate it stays empty and the display mirrors.
         if connectingSceneSession.role == .windowApplication {
             config.delegateClass = SceneDelegate.self
+        } else if #available(iOS 16.0, *), connectingSceneSession.role == .windowExternalDisplayNonInteractive,
+                  UIDevice.current.userInterfaceIdiom == .phone {
+            // The iPhone's Surface (WVE-183). Since iOS 27 it comes through the scene accessory instead.
+            config.delegateClass = SurfaceSceneDelegate.self
         }
         return config
     }

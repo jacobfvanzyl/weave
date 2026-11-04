@@ -118,6 +118,28 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 - The layout scales to a desktop-sized window, but there is no Electron shell and no desktop
   chrome.
 
+### A Surface
+
+A Surface (WVE-183, `CONTEXT.md`) is a display the iPhone is connected to, through AirPlay
+mirroring or a cable, on which the app shows the open thread while the iPhone keeps the composer.
+The iPad mirrors for now (WVE-184).
+
+- With the list on the iPhone, the Surface shows the thread last open, dimmed, or "weave" before
+  any, and how many threads wait on the person.
+- With a thread open, the Surface shows its transcript, without the sidebar or the composer. The
+  iPhone keeps the thread's header, the requests waiting on the person (its subagents' among
+  them), answered there, and the composer. It may turn to landscape for a bigger keyboard;
+  elsewhere the app stays portrait.
+- A thin scrubber on the iPhone's right edge scrolls the Surface's thread. The Surface follows
+  the end until the person scrolls, and Latest follows it again.
+- The thread's menu turns the Surface off, which hands the display back to mirroring, and on again.
+- The Surface comes and goes with the app in front: leaving the app ends it and the display
+  mirrors the iPhone; returning brings it back. Without one, the thread is as above.
+- The Surface is a second web view on the app's bundle (`?surface`), without a bridge, on a
+  store of its own. It talks to no Host: the iPhone sends it what it shows, the thread's
+  transcript once and then the entries that changed, through the `Surface` plugin, and it says
+  where it's scrolled to. Nothing on it animates.
+
 ### Requests in other sessions
 
 - A session waiting on the person shows under "Needs you". The iPhone's Back button, and the

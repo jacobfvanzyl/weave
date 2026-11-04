@@ -13,6 +13,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { Sidebar, SidebarInset, useSidebar } from '@/components/ui/sidebar';
+import type { SurfaceLink } from '@/surface/surface-link';
+import { useSurface } from '@/surface/use-surface';
 
 function WaitingBadge({ count }: { count: number }) {
   if (count === 0) return null;
@@ -47,12 +49,21 @@ function SidebarToggle({ controller }: { controller: AppController }) {
   );
 }
 
-function PhoneShell({ controller, onOpenHosts }: { controller: AppController; onOpenHosts(): void }) {
+function PhoneShell({ controller, onOpenHosts, surfaceLink }: {
+  controller: AppController;
+  onOpenHosts(): void;
+  surfaceLink?: SurfaceLink;
+}) {
   const { model, actions } = controller;
+  // A Surface (WVE-183) shows the open thread, or the one last open while the list is here.
+  const surface = useSurface(model, surfaceLink);
+  const surfaced = Boolean(surface?.status.connected && model.session);
+  // With the thread on the Surface, the iPhone may turn for a bigger keyboard; elsewhere it stays upright.
+  useEffect(() => surfaceLink?.setLandscape(surfaced), [surfaceLink, surfaced]);
   if (!model.session) return <SessionList controller={controller} onOpenHosts={onOpenHosts} />;
   return (
     <SessionView controller={controller} session={model.session} leading={<BackButton controller={controller} />}
-      onSwipeBack={() => actions.selectSession(undefined)} />
+      onSwipeBack={() => actions.selectSession(undefined)} surface={surface} />
   );
 }
 
@@ -89,10 +100,12 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
  * list as a sidebar beside one session, as wide as its edge is dragged. Which follows the device,
  * not the window's width.
  */
-export function AppShell({ controller, pairingOffer }: {
+export function AppShell({ controller, pairingOffer, surfaceLink }: {
   controller: AppController;
   /** A `weave pair` link the app was opened with, for the person to confirm. */
   pairingOffer?: { url: string; code: string };
+  /** The iPhone's way to a Surface, a display it's connected to (WVE-183). */
+  surfaceLink?: SurfaceLink;
 }) {
   const phone = usePhoneLayout();
   const [hostsOpen, setHostsOpen] = useState(false);
@@ -102,7 +115,7 @@ export function AppShell({ controller, pairingOffer }: {
   }, [pairingOffer]);
   return (
     <ResizableSidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
-      {phone ? <PhoneShell controller={controller} onOpenHosts={openHosts} /> : <SplitShell controller={controller} onOpenHosts={openHosts} />}
+      {phone ? <PhoneShell controller={controller} onOpenHosts={openHosts} surfaceLink={surfaceLink} /> : <SplitShell controller={controller} onOpenHosts={openHosts} />}
       <WaitingBanner controller={controller} />
       <HostsDialog controller={controller} open={hostsOpen} onOpenChange={setHostsOpen} offer={pairingOffer} />
     </ResizableSidebarProvider>

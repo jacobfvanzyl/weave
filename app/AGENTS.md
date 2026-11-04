@@ -26,8 +26,9 @@ the repository's pinned Linear CLI and tracker conventions from `../docs/agents/
 | `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls and their terminals, plans, subagents, elicitations; the recorded journals its tests read (`fixtures/journals`). |
 | `src/components` | The shell (`app-shell.tsx`), the session list and view, the banner and dialogs, and the thread's status sheet (`thread-status-sheet.tsx`, WVE-160: its MCP servers, from the header's menu); `ui` and `ai-elements` are shadcn and AI Elements components. |
 | `src/markdown` | What agent Markdown renders as beyond Streamdown's defaults (WVE-122), kept inert: no script, no fetch, no navigation without consent. `MessageResponse` (`src/components/ai-elements/message.tsx`) puts it together. |
+| `src/surface` | A Surface (WVE-183): the messages and the projection the iPhone sends (`surface-messages.ts`), the link between the two web views (`surface-link.ts`, a BroadcastChannel between tabs in a browser), the iPhone's hook and scrubber, and the Surface's page (`surface-app.tsx`). |
 | `src/terminal` | Terminals beside a thread (WVE-153): the native plugin's bridge, the hook that lays a surface out and keeps it attached, and the layout this device keeps for each thread (`terminal-layout.ts`). The panel is `src/components/terminal-panel.tsx`. |
-| `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout, the web view over the native terminals), `DeviceKeyPlugin.swift` (Secure Enclave keys), and the native terminal: `NativeTerminalPlugin.swift`, `TerminalStream.swift` (the stream's WebSocket), `TerminalView.swift` (keyboard, key bar, selection) and `WeaveTerminalRenderer.mm` (libghostty-vt and CoreText). `ios/App/Native/` is generated and ignored; `ios/App/Tests/` holds the renderer's tests. |
+| `ios` | The Capacitor shell: `SceneDelegate.swift` (device idiom, keyboard layout, the web view over the native terminals), `DeviceKeyPlugin.swift` (Secure Enclave keys), `Surface.swift` (a Surface's scene, its web view and the plugin that relays to it), and the native terminal: `NativeTerminalPlugin.swift`, `TerminalStream.swift` (the stream's WebSocket), `TerminalView.swift` (keyboard, key bar, selection) and `WeaveTerminalRenderer.mm` (libghostty-vt and CoreText). `ios/App/Native/` is generated and ignored; `ios/App/Tests/` holds the renderer's tests. |
 | `scripts/ios.ts` | Builds, installs and launches the iOS app. |
 | `scripts/ghostty.ts` | Puts libghostty-vt for iOS, its headers and the terminal fonts in `ios/App/Native/`, built once per Ghostty pin (`../holder/ghostty.toml`); `ios.ts build` runs it first. |
 
@@ -68,7 +69,7 @@ journals, and review the snapshot's diff.
 
 `?mock=` picks a fixture scenario (`list`, `session`, `running`, `unreachable`, `banner`,
 `empty`, `markdown`, the fake agent's rich Markdown reply, and `terminals`, a thread with its
-worktree's terminals); `?idiom=phone` or `?idiom=pad`
+worktree's terminals); `?surface` in another tab is a Surface for a phone tab at `?mock=…&idiom=phone`; `?idiom=phone` or `?idiom=pad`
 stands in for the device in a browser, since the layout follows the device, not the window's width. A debug build takes the scenario as a launch argument
 instead: `xcrun simctl launch <device> com.veezee.weave --mock running`.
 

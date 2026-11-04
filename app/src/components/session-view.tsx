@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
+import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
 import type { AgentUpdateNotice, AppController, OpenSession, PairedHost, SessionSummary } from '@/app/app-controller';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, sessionLabel, waitsForAnswer } from '@/chat/acp-transcript';
-import { ChatPane } from '@/chat/chat-pane';
+import { ChatPane, SurfacedThread } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { DeleteSessionDialog } from '@/components/delete-session-dialog';
 import { PathLabel } from '@/components/path-label';
@@ -19,6 +19,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { SurfaceScrubber } from '@/surface/surface-scrubber';
+import type { DeviceSurface } from '@/surface/use-surface';
 import { clampPaneWidth, PANE_WIDTH, selectTab } from '@/terminal/terminal-layout';
 import { useThreadTerminals } from '@/terminal/use-thread-terminals';
 
@@ -80,12 +82,14 @@ function RenameDialog({ session, actions, open, onOpenChange }: {
   );
 }
 
-function SessionMenu({ session, actions, canRename, onStatus }: {
+function SessionMenu({ session, actions, canRename, onStatus, surface }: {
   session: SessionSummary;
   actions: AppController['actions'];
   canRename?: boolean;
   /** Show the thread's status sheet. */
   onStatus(): void;
+  /** A connected display the thread can be shown on (WVE-183). */
+  surface?: { enabled: boolean; setEnabled(enabled: boolean): void };
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -101,6 +105,12 @@ function SessionMenu({ session, actions, canRename, onStatus }: {
               <HugeiconsIcon icon={InformationCircleIcon} strokeWidth={2} />
               Thread status
             </DropdownMenuItem>
+            {surface && (
+              <DropdownMenuItem onClick={() => surface.setEnabled(!surface.enabled)}>
+                <HugeiconsIcon icon={Tv01Icon} strokeWidth={2} />
+                {surface.enabled ? 'Turn the Surface off' : 'Show on the Surface'}
+              </DropdownMenuItem>
+            )}
             {canRename && (
               <DropdownMenuItem disabled={session.state !== 'open'} onClick={() => setRenaming(true)}>
                 <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
@@ -220,11 +230,16 @@ function ConnectionNotice({ host }: { host: PairedHost }) {
 }
 
 /** The session on screen: its header, transcript and composer. */
-export function SessionView({ controller, session, leading, onSwipeBack }: {
+export function SessionView({ controller, session, leading, onSwipeBack, surface }: {
   controller: AppController;
   session: OpenSession;
   leading?: ReactNode;
   onSwipeBack?: () => void;
+  /**
+   * The iPhone's Surface (WVE-183). While it's connected, the transcript is there, and the
+   * iPhone keeps the requests waiting on the person and the composer.
+   */
+  surface?: DeviceSurface;
 }) {
   const { model, actions } = controller;
   const summary = model.sessions.find(({ key }) => key === session.key);
@@ -233,7 +248,9 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
   const phone = usePhoneLayout();
   const sessionId = summary?.sessionId ?? session.key.slice(session.key.indexOf('/') + 1);
   const terminals = useThreadTerminals(session.key, sessionId, session.terminals);
-  const canTerminals = Boolean(host?.canTerminals && session.terminals);
+  const surfaced = phone && Boolean(surface?.status.connected);
+  // On the iPhone, a thread on the Surface leaves its terminals for later (WVE-184).
+  const canTerminals = Boolean(host?.canTerminals && session.terminals) && !surfaced;
   const terminalsShown = canTerminals && terminals.thread.shown;
   // On the iPad the terminals sit beside the thread, or over its width, their tabs in its top
   // rail; on the iPhone they take the chat's place under its header.
@@ -315,7 +332,7 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
   const [statusShown, setStatusShown] = useState(false);
   useEffect(() => setStatusShown(false), [session.key]);
   // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
-  const asking = [
+  const asking = surfaced ? [] : [
     ...(subagent && waitsForAnswer(session.transcript) ? [undefined] : []),
     ...allSubagents(session.transcript)
       .filter(({ sessionId, transcript }) => sessionId !== subagent?.sessionId && waitsForAnswer(transcript))
@@ -345,7 +362,10 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
               </Badge>
             )}
             {terminalsButton}
-            {summary && <SessionMenu session={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)} />}
+            {summary && (
+              <SessionMenu session={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)}
+                surface={phone && surface?.status.available ? { enabled: surface.status.enabled, setEnabled: surface.setEnabled } : undefined} />
+            )}
           </SessionHeader>
         )}
         <ThreadStatusSheet
@@ -383,7 +403,21 @@ export function SessionView({ controller, session, leading, onSwipeBack }: {
           );
         })}
         <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col', paned && 'hidden')}>
-          {subagent
+          {surfaced && surface
+            ? (
+              <SurfacedThread
+                key={session.key}
+                draftKey={session.key}
+                model={session.transcript}
+                actions={actions}
+                queued={session.queued}
+                queuePaused={session.queuePaused}
+                canSteer={session.canSteer}
+                canAttachImages={session.canAttachImages}
+                aside={<SurfaceScrubber position={surface.position} onScroll={surface.scroll} onFollow={surface.follow} />}
+              />
+            )
+            : subagent
             ? (
               <>
                 <div data-slot='subagent-bar' className='flex min-h-9 shrink-0 items-center gap-2 border-b bg-muted/40 px-2 text-xs'>
