@@ -10,6 +10,8 @@ The bridge Pi is a computer that sits next to real hardware so the person's agen
 
 Through Rex, not through an MCP server. The Pi runs a Rex server that the person's Rex hosts list as `bridge`, so an agent with a shell uses the rex skill as it would locally: `rex -S bridge new`, `run --wait`, `capture`, `send`. Terminals persist between commands, which suits long-running jobs like an OpenOCD server, a serial monitor or a packet capture, and the person can watch them and take over from the Rex app.
 
+Files go over Tailscale SSH instead, with rsync, logged in as the same `bridge` account. That's about 15 times faster than going through Rex, and an interrupted copy picks up where it stopped. SSH is only for files; commands still go through Rex, where the person can watch them.
+
 Two other options were weighed and set aside for now:
 
 - **A shell exposed as an MCP tool over SSH.** It runs one command at a time and nobody can watch.
