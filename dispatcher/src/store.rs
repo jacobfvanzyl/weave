@@ -1,13 +1,17 @@
 //! The Dispatcher's state, in SQLite (ADR 0027): the Hosts it is paired with, the work
 //! written down for them, schedules and their occurrences ([`schedules`]), and the calls Hosts'
-//! agents make to the person's other Hosts and the turns they began there ([`calls`]). Later
-//! issues add other triggers and Bots, each as a migration of its own.
+//! agents make to the person's other Hosts and the turns they began there ([`calls`]), and its
+//! own id and the devices paired with it ([`devices`]). Later issues add other triggers and
+//! Bots, each as a migration of its own.
 
 mod calls;
+mod devices;
 mod schedules;
 
 pub(crate) use calls::Call;
 pub(crate) use calls::Follow;
+
+pub(crate) use devices::StoredDevice;
 
 pub(crate) use schedules::Fired;
 pub(crate) use schedules::StoredSchedule;
@@ -29,7 +33,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 3] = [
+const MIGRATIONS: [&str; 4] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -106,6 +110,18 @@ const MIGRATIONS: [&str; 3] = [
         UNIQUE (host_id, session_id, turn_id, calling_host, caller)
     );
     CREATE INDEX follows_by_host ON follows (host_id, session_id);
+",
+    "
+    CREATE TABLE identity (
+        id TEXT NOT NULL
+    );
+    CREATE TABLE devices (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        public_key TEXT NOT NULL,
+        paired_at INTEGER NOT NULL,
+        last_seen_at INTEGER
+    );
 ",
 ];
 

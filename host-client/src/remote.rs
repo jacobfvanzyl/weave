@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::Lines;
+use agent_client_protocol::Role;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures::SinkExt as _;
@@ -35,14 +36,14 @@ pub enum Credentials {
     /// A local client, on the Unix socket or in-process.
     Local,
     /// A paired device. With `host_id`, the client checks the challenge comes from the Host
-    /// it paired with before signing it.
+    /// it paired with before signing it; for the Dispatcher, the Dispatcher's id.
     Device {
         device_id: DeviceId,
         key: DeviceKey,
         host_id: Option<String>,
     },
-    /// A device pairing with the code `weave pair` showed; a service, such as the Dispatcher,
-    /// says so with `service`.
+    /// A device pairing with the code `weave pair` (or `weave dispatcher pair`) showed; a
+    /// service, such as the Dispatcher, says so with `service`.
     Pair {
         code: String,
         name: String,
@@ -187,10 +188,19 @@ impl CloseReason {
 pub async fn connect_websocket(
     url: &str,
 ) -> io::Result<(impl ConnectTo<HostClient> + 'static, CloseReason)> {
+    connect_websocket_as(url, SUBPROTOCOL).await
+}
+
+/// Open a WebSocket at `url` asking for `subprotocol`, as the Dispatcher's is
+/// (`weave-dispatcher`), for a client of role `R`.
+pub async fn connect_websocket_as<R: Role>(
+    url: &str,
+    subprotocol: &'static str,
+) -> io::Result<(impl ConnectTo<R> + 'static, CloseReason)> {
     let mut request = url.into_client_request().map_err(io::Error::other)?;
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
-        HeaderValue::from_static(SUBPROTOCOL),
+        HeaderValue::from_static(subprotocol),
     );
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_MESSAGE))

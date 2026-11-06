@@ -4,14 +4,15 @@
 `docs/specs/wve-175-dispatcher.md`): the person's program, apart from their Hosts, that keeps
 triggers and Bots and starts their work on the Hosts. The `weave dispatcher` subcommands in
 `cli/src/commands/dispatcher.rs` run, start, stop and install it as a service, and `weave hosts`
-and `weave schedules` ask it over its socket (`cli/src/dispatcher.rs`).
+and `weave schedules` ask it over its socket, or from another computer paired with it over its
+WebSocket (`cli/src/dispatcher.rs`, `cli/src/paired.rs`; WVE-176).
 
 It is a client of each Host over the Host protocol, paired with it as a **service**
 (`NewDevice.service`), so a Host lets it do only what starting and following threads needs
 (`FOR_SERVICES` in `host/src/client.rs`). It is never a Host: it runs no agents,
 and Hosts never connect to it and work on without it. Keep it that way. It depends on
-`weave-host-client` and `weave-host-protocol`, never on `weave-host`, so it can run on a computer
-of its own; `weave-host` is only a dev-dependency, for the tests' in-process Hosts.
+`weave-host-client`, `weave-host-protocol` and `weave-remote`, never on `weave-host`, so it can run
+on a computer of its own; `weave-host` is only a dev-dependency, for the tests' in-process Hosts.
 
 - `lib.rs`: `Dispatcher`, opened from its directory (`DispatcherPaths`: `$WEAVE_DISPATCHER_DIR`
   or `~/.local/state/weave/dispatcher`), and what the API does: pairing (`add_host`, which pairs
@@ -50,7 +51,17 @@ of its own; `weave-host` is only a dev-dependency, for the tests' in-process Hos
   `Work::Report` deliveries in the Host's words (`weave_host_protocol::reports`).
 - `api.rs`, `client.rs`, `socket.rs`: the Dispatcher's own API (`weave_host_protocol::dispatcher`)
   over a Unix socket in its directory (0600, peer uid checked, one Dispatcher per directory by
-  its lock), and the CLI's end of it.
+  its lock), and the CLI's end of it. One `Connection` answers both the socket (`Peer::Local`)
+  and the WebSocket (`Peer::Remote`): a remote client signs its `dispatcher/challenge` at hello
+  (`dispatcher_auth_message`) or pairs with a code, and may ask everything but `devices/*`
+  (`local_first`, `forbidden`).
+- `devices.rs`, `store/devices.rs` (WVE-176): the person's devices paired with it, as with a
+  Host: offers and live connections in memory (`weave_remote::pairing`), the devices and the
+  Dispatcher's own id (`identity`) in SQLite. The WebSocket is `weave-remote`'s, turned on by
+  `devices/offer` and kept on while a device is paired (`DispatcherConfig::remote`, loopback
+  7342 with its own Tailscale Serve entry as `weave dispatcher run` sets it; none in tests unless
+  they give a fake Serve), and off with the last revoke. It asks for `weave-dispatcher`, so a
+  client pointed at a Host fails at the upgrade.
 
 Work reaches a Host through a **delivery** only: written to SQLite first, under a request key
 (its own, or `dispatcher/<delivery id>`), then sent, and sent again on each connection until
@@ -62,6 +73,8 @@ repeats safe, which `tests/dispatcher.rs` checks across a Host restart and the D
 Its key (`key.json`) is `DeviceKey::kept`, in the Secure Enclave
 on a Mac that has one, otherwise in the file (0600).
 
-Tests: `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
+Tests: `tests/devices.rs` pairs devices over a loopback WebSocket with a fake Serve, and checks
+what proves a device and what doesn't, what a device may ask, revoking, and the Serve entry.
+`tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
 other, the relay deafened to lose an answer. `tests/dispatcher.rs` runs in-process Hosts behind a TCP relay that a restart cuts, as a
 Host process exiting closes its connections, and drives the Dispatcher through its socket.

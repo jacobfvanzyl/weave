@@ -1,7 +1,10 @@
-//! The Dispatcher's API (ADR 0027, WVE-175): what the `weave dispatcher` CLI asks the Dispatcher
-//! over its Unix socket. The Dispatcher is a client of the person's Hosts, paired with each as a
-//! service: the Hosts it is paired with and how it reaches them, and its schedules (WVE-145)
-//! and their occurrences. The specification is `docs/specs/wve-175-dispatcher.md`.
+//! The Dispatcher's API (ADR 0027, WVE-175): what the `weave` CLI asks the Dispatcher, over its
+//! Unix socket on its own computer, or over its WebSocket from the person's other devices,
+//! paired with it as they pair with a Host (WVE-176). The Dispatcher is a client of the
+//! person's Hosts, paired with each as a service: the Hosts it is paired with and how it
+//! reaches them, and its schedules (WVE-145) and their occurrences. Its devices are managed
+//! with the Host's `devices/*` requests, on its own computer only. The specification is
+//! `docs/specs/wve-175-dispatcher.md`.
 
 use std::path::PathBuf;
 
@@ -15,6 +18,8 @@ use serde::Serialize;
 use crate::Empty;
 use crate::Timestamp;
 use crate::agents::AgentId;
+use crate::devices::DeviceInfo;
+use crate::hello::Auth;
 use crate::hello::ClientInfo;
 use crate::policy::PermissionPolicy;
 use crate::sessions::TurnState;
@@ -43,7 +48,18 @@ pub enum Reachability {
 /// The Dispatcher API's version, which a client and the Dispatcher must share.
 pub const DISPATCHER_PROTOCOL: u32 = 1;
 
-/// `dispatcher/hello`: the first request on a connection.
+/// The subprotocol a client of the Dispatcher's WebSocket asks for, so one that reached a Host
+/// instead fails at the upgrade.
+pub const DISPATCHER_SUBPROTOCOL: &str = "weave-dispatcher";
+
+/// What a device signs in `dispatcher/hello`: the UTF-8 bytes of this line, which no Host
+/// takes, as no Dispatcher takes a Host's ([`crate::devices::auth_message`]).
+pub fn dispatcher_auth_message(dispatcher_id: &str, device_id: &str, nonce: &str) -> String {
+    format!("weave-dispatcher-auth/1 {dispatcher_id} {device_id} {nonce}")
+}
+
+/// `dispatcher/hello`: the first request on a connection. Until it succeeds, the Dispatcher
+/// answers every other request with [`crate::errors::UNAUTHENTICATED`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "dispatcher/hello", response = DispatcherHello)]
@@ -51,6 +67,11 @@ pub struct DispatcherHelloRequest {
     /// [`DISPATCHER_PROTOCOL`] as the client speaks it.
     pub protocol: u32,
     pub client: ClientInfo,
+    /// How the connection authenticates: none is [`Auth::Local`], on the Unix socket. On the
+    /// WebSocket, a paired device's signature of its `dispatcher/challenge`, as
+    /// [`dispatcher_auth_message`] spells it, or a pairing with a code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<Auth>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
@@ -59,6 +80,31 @@ pub struct DispatcherHello {
     pub protocol: u32,
     /// The weave release the Dispatcher runs.
     pub version: String,
+    /// The Dispatcher's own id, which stays the same across restarts and which a device checks
+    /// is the Dispatcher it paired with.
+    #[serde(default)]
+    pub id: String,
+    /// The paired device a remote client connected as; none for a local client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<DeviceInfo>,
+}
+
+/// `dispatcher/challenge`: what a paired device signs in its `dispatcher/hello`. Only on the
+/// WebSocket, before hello.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dispatcher/challenge", response = DispatcherChallenge)]
+pub struct DispatcherChallengeRequest {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DispatcherChallenge {
+    /// The Dispatcher's id, which the device checks is the Dispatcher it paired with.
+    pub dispatcher_id: String,
+    /// 32 random bytes, in unpadded base64url, good for one hello on this connection.
+    pub nonce: String,
+    pub expires_at: Timestamp,
 }
 
 /// `dispatcher/status`.
@@ -80,6 +126,15 @@ pub struct DispatcherStatus {
     pub database: String,
     /// Work written down for a Host that the Host hasn't taken yet.
     pub pending: u32,
+    /// Its id, which its paired devices know it by.
+    #[serde(default)]
+    pub id: String,
+    /// Where its WebSocket listens, while a paired device keeps remote access on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// The devices paired with it.
+    #[serde(default)]
+    pub devices: u32,
 }
 
 /// A Host the Dispatcher is paired with, as a service.

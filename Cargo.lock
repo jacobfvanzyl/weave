@@ -4646,6 +4646,7 @@ dependencies = [
  "agent-client-protocol",
  "base64 0.22.1",
  "croner",
+ "futures",
  "getrandom 0.3.4",
  "jiff",
  "libc",
@@ -4664,6 +4665,7 @@ dependencies = [
  "weave-host",
  "weave-host-client",
  "weave-host-protocol",
+ "weave-remote",
 ]
 
 [[package]]

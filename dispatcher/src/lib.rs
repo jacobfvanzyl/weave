@@ -11,7 +11,9 @@
 //! - [`calls`] and [`follows`]: the calls Hosts' agents make to the person's other Hosts
 //!   (ADR 0029), which the Dispatcher sends there, and the turns they began, which it follows
 //!   and reports on to the calling thread.
-//! - [`api`]: what the `weave dispatcher` CLI asks over its socket ([`socket`]).
+//! - [`api`]: what the `weave` CLI asks over its socket ([`socket`]), and over its WebSocket
+//!   from the person's other devices once one pairs ([`devices`], WVE-176), which
+//!   `weave-remote` serves as it does the Host's.
 //! - [`client`]: the CLI's end of that.
 //!
 //! Work reaches a Host once: it is written down before it's sent, under a request key, and
@@ -22,6 +24,7 @@
 mod api;
 mod calls;
 pub mod client;
+mod devices;
 mod follows;
 mod link;
 pub mod paths;
@@ -57,6 +60,8 @@ use weave_host_protocol::dispatcher::Schedule;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::sessions::SessionListing;
+use weave_remote::access::Remote;
+use weave_remote::access::RemoteSettings;
 
 use crate::link::Link;
 use crate::link::Seen;
@@ -75,6 +80,10 @@ pub use crate::store::Work;
 /// How long a Host has to answer a connection before the Dispatcher tries again later.
 pub const DEFAULT_REACH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The loopback address the Dispatcher's WebSocket listens on for the person's devices, beside
+/// the Host's 7341; its Tailscale Serve entry is on HTTPS port 7342.
+pub const DEFAULT_LISTEN: &str = "127.0.0.1:7342";
+
 /// The client name the Dispatcher says hello to Hosts with.
 const CLIENT_NAME: &str = "weave-dispatcher";
 
@@ -92,6 +101,9 @@ pub struct DispatcherConfig {
     pub retry_most: Duration,
     /// The clock schedules run by.
     pub clock: Arc<dyn Clock>,
+    /// How it serves the person's devices once one pairs ([`DEFAULT_LISTEN`] and its own
+    /// Tailscale Serve entry, as `weave dispatcher run` gives it); none serves only the socket.
+    pub remote: Option<RemoteSettings>,
 }
 
 impl DispatcherConfig {
@@ -104,6 +116,7 @@ impl DispatcherConfig {
             retry: Duration::from_secs(1),
             retry_most: Duration::from_secs(60),
             clock: Arc::new(SystemClock),
+            remote: None,
         }
     }
 }
@@ -118,6 +131,13 @@ pub(crate) struct Shared {
     pub(crate) config: DispatcherConfig,
     pub(crate) store: Store,
     pub(crate) key: DeviceKey,
+    /// Its own id, which its paired devices know it by.
+    pub(crate) id: String,
+    /// The WebSocket the person's devices reach it on, while one is paired.
+    pub(crate) remote: Remote,
+    pub(crate) devices: devices::Devices,
+    /// The next number for a connection to its API.
+    pub(crate) next_connection: std::sync::atomic::AtomicU64,
     started_at: u64,
     /// Cancelled when it stops: every link closes, and schedules stop.
     stop: CancellationToken,
@@ -137,10 +157,16 @@ impl Dispatcher {
             .map_err(|error| format!("creating {}: {error}", config.paths.dir.display()))?;
         let store = Store::open(&config.paths.database())?;
         let key = DeviceKey::kept(&config.paths.key(), config.secure_enclave)?;
+        let id = store.identity()?;
+        let remote = Remote::new("Dispatcher", config.remote.clone());
         let shared = Arc::new(Shared {
             config,
             store,
             key,
+            id,
+            remote,
+            devices: devices::Devices::default(),
+            next_connection: std::sync::atomic::AtomicU64::new(1),
             started_at: now_ms(),
             stop: CancellationToken::new(),
             links: Mutex::new(HashMap::new()),
@@ -155,8 +181,10 @@ impl Dispatcher {
         Ok(Self { shared })
     }
 
-    /// Answer the CLI on `listener` until the Dispatcher stops.
+    /// Answer the CLI on `listener` until the Dispatcher stops, and the person's devices on
+    /// its WebSocket while one is paired.
     pub async fn serve(&self, listener: UnixListener) {
+        api::resume_remote(&self.shared).await;
         api::serve(Arc::clone(&self.shared), listener).await;
     }
 
@@ -470,6 +498,10 @@ impl Shared {
             name: self.config.name.clone(),
             database: self.config.paths.database().display().to_string(),
             pending: self.store.pending_count(None).map_err(internal)?,
+            id: self.id.clone(),
+            remote: self.remote.address(),
+            devices: u32::try_from(self.store.devices().map_err(internal)?.len())
+                .unwrap_or(u32::MAX),
         })
     }
 
