@@ -549,7 +549,7 @@ fn starter(shared: &Shared, session_id: &SessionId) -> Option<SessionId> {
 }
 
 /// The session that started `session_id`, or the one it belongs to as a subagent, and the
-/// peer Host that one is on when it isn't this one.
+/// other Host that one is on when it isn't this one.
 fn started_by(shared: &Shared, session_id: &SessionId) -> Option<(SessionId, Option<String>)> {
     let registry = shared.registry();
     let root = registry.root(session_id);

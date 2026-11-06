@@ -124,7 +124,7 @@ pub(crate) enum Entry {
         /// the journal a closed session gets when it opens again.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         started_by: Option<SessionId>,
-        /// The peer Host `started_by` is on, when it isn't this one.
+        /// The other Host `started_by` is on, when it isn't this one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         started_by_host: Option<String>,
         /// The session's successor when this journal began, as one that replaced a closed
@@ -663,7 +663,7 @@ pub struct Recorded {
     pub git: Option<GitLocation>,
     /// The session whose agent started it, for a delegated session.
     pub started_by: Option<SessionId>,
-    /// The peer Host `started_by` is on, when it isn't this one.
+    /// The other Host `started_by` is on, when it isn't this one.
     pub started_by_host: Option<String>,
     /// The session its work goes on in, which a client named (WVE-168).
     pub successor: Option<SessionId>,
@@ -834,7 +834,7 @@ pub(crate) fn last_activity(records: &[Record]) -> Option<u64> {
 }
 
 /// The session whose agent started the session `records` journal, as its header says, and
-/// the peer Host that session is on when it isn't this one.
+/// the other Host that session is on when it isn't this one.
 pub(crate) fn started_by(records: &[Record]) -> (Option<SessionId>, Option<String>) {
     match records.first().map(|record| &record.entry) {
         Some(Entry::Header {
