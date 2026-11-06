@@ -66,6 +66,7 @@ journals.
 ./target/debug/weave agents update --dry-run   # newer agent adapters; without --dry-run, check and use them
 ./target/debug/weave worktrees install-hook    # have worktrunk ask the Host before removing a worktree
 ./target/debug/weave dispatcher           # its status; also start, stop, restart, run, install, uninstall
+./target/debug/weave dispatcher connect homelab   # pair this computer with the Dispatcher there, over SSH
 ./target/debug/weave hosts add studio     # pair the Dispatcher with studio's Host, over SSH
 ./target/debug/weave schedules            # the Dispatcher's schedules; also add, pause, run, occurrences
 ```
@@ -185,7 +186,15 @@ journals and traces) beside the installed one; its log is `daemon.log` there, an
 (`background.rs`, logging to `dispatcher.log`) and waits for it to answer, and `stop` sends SIGTERM
 to whatever listens on its socket (`weave_host::socket::terminate_listener`). It keeps its work as it
 goes, so stopping drains nothing. `weave hosts` and `weave schedules` ask it over its socket
-(`src/dispatcher.rs`).
+(`src/dispatcher.rs`), or, when none runs here, the one this computer is paired with, over its
+WebSocket (WVE-176): `weave dispatcher connect <computer>` runs `weave dispatcher pair --json`
+there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests), or takes the URL and
+code, pairs with a new device key (`DeviceKey::kept`, in the Secure Enclave on a Mac that has
+one) and keeps the pairing in `$XDG_STATE_HOME/weave/client` (`src/paired.rs`, 0600;
+`disconnect` removes it). `$WEAVE_DISPATCHER_DIR` set means only that Dispatcher, so a dev one
+never reaches the person's own. On a paired computer `run`, `start`, `restart` and `install`
+refuse, and `pair` and `devices`, which only the Dispatcher's computer may ask, say where it
+runs. `tests/dispatcher.rs` pairs `weave` with a Dispatcher in the test, over a fake Serve.
 
 Both run against a real agent and its existing login. `--log-file <file>` captures the
 TUI's diagnostics; agent stderr goes to the Host's log (to `--log-file` with

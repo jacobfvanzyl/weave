@@ -6,6 +6,7 @@ mod config;
 mod dispatcher;
 mod exit;
 mod host;
+mod paired;
 mod recent;
 mod rex_threads;
 mod service;
@@ -103,7 +104,7 @@ enum Command {
     /// Manage the weave Host, which runs agents so their threads outlive the TUI.
     Daemon(daemon::DaemonArgs),
     /// The Dispatcher, which starts work on your Hosts while you're away: run, start, stop or
-    /// install it.
+    /// install it, or pair this computer with it where it runs on another.
     Dispatcher(commands::dispatcher::DispatcherArgs),
     /// `weave agents login`, by the name it had before `agents`, which the Host's and the app's
     /// sign-in messages gave.

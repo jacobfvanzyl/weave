@@ -639,7 +639,7 @@ pub(crate) fn now_ms() -> u64 {
 }
 
 /// This computer's name, without macOS's `.local`.
-fn computer_name() -> String {
+pub fn computer_name() -> String {
     #[cfg(unix)]
     {
         let mut buffer = [0u8; 256];

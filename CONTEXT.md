@@ -19,7 +19,7 @@ A client on another computer than the Host's, which reaches it through the tailn
 _Avoid_: network client, mobile client
 
 **Paired device**:
-A device of the person's that the Host has paired with and accepts remote clients from until it's revoked.
+A device of the person's that a Host or the Dispatcher has paired with, and accepts remote clients from until it's revoked there; each keeps its own.
 _Avoid_: credential, principal, token
 
 **Agent**:

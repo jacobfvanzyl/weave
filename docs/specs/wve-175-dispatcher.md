@@ -2,8 +2,9 @@
 
 Status: implemented 2026-11-03, with `install` and `status` checked live as a launchd service on
 macOS and a systemd user service on Debian 13, each restarting a Dispatcher that was killed.
-Schedules (WVE-145) since 2026-11-04, and calls from Hosts' agents to the person's other Hosts
-(WVE-185) since 2026-11-04. The decisions are in
+Schedules (WVE-145) since 2026-11-04, calls from Hosts' agents to the person's other Hosts
+(WVE-185) since 2026-11-04, and the person's devices pairing with it and reaching it over the
+tailnet (WVE-176) since 2026-11-06. The decisions are in
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md)
 and [ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md);
 Bots, which it will keep, in
@@ -14,8 +15,9 @@ Bots, which it will keep, in
 The Dispatcher (`weave dispatcher`) keeps triggers and Bots and starts their work on the
 person's Hosts. This is its core: its state, its key, the Hosts it pairs with as a service and
 its connection to each, the one path work takes to a Host, schedules (WVE-145), and the calls a
-Host's agents make to the person's other Hosts (WVE-185). Webhooks
-(WVE-146), Bots (WVE-118) and paired devices (WVE-176) build on it.
+Host's agents make to the person's other Hosts (WVE-185), and the person's devices, which pair
+with it and reach its API over the tailnet (WVE-176). Webhooks (WVE-146) and Bots (WVE-118)
+build on it.
 
 ## Decisions
 
@@ -38,7 +40,7 @@ Host's agents make to the person's other Hosts (WVE-185). Webhooks
 
 | File | What it holds |
 | --- | --- |
-| `dispatcher.db` | SQLite (WAL), 0600: `hosts`, `deliveries`, `schedules`, `occurrences`, `calls` and `follows`; later issues add other triggers and Bots |
+| `dispatcher.db` | SQLite (WAL), 0600: `hosts`, `deliveries`, `schedules`, `occurrences`, `calls` and `follows`; its own id (`identity`) and its paired `devices`; later issues add other triggers and Bots |
 | `key.json` | its key, 0600: the Secure Enclave's wrapped form of it on a Mac that has one, otherwise the key itself |
 | `dispatcher.sock` | its API, 0600 |
 | `dispatcher.lock` | held while a Dispatcher runs from the directory, so only one does |
@@ -46,6 +48,33 @@ Host's agents make to the person's other Hosts (WVE-185). Webhooks
 
 The database's version is `PRAGMA user_version`: each migration takes it one further, in a
 transaction, and none changes once released.
+
+## Devices
+
+The person's other computers reach its API as paired devices (WVE-176), as their devices reach
+a Host ([remote clients](wve-90-remote-clients.md)); the server's end is the Host's, in
+`weave-remote`. It runs on a computer that's always on, such as the person's homelab, and the
+CLI on every other computer asks it there.
+
+- **A WebSocket of its own,** on loopback port 7342 beside the Host's 7341, with its own
+  Tailscale Serve entry on HTTPS port 7342. `devices/offer` turns both on; they stay on while a
+  device is paired, across restarts, and go when the last is revoked or an offer expires with
+  none paired. The upgrade asks for the `weave-dispatcher` subprotocol, so a client pointed at a
+  Host's URL fails there, and the other way round.
+- **Pairing:** a one-time code good for five minutes, from `weave dispatcher pair` on its
+  computer, taken at `dispatcher/hello` with `auth: {method: "pair", code, device}`. The device
+  makes a P-256 key that never leaves it, and the Dispatcher keeps its public key.
+- **Proving a device:** every WebSocket connection asks `dispatcher/challenge` and signs
+  `weave-dispatcher-auth/1 <dispatcher id> <device id> <nonce>`, the nonce good for one hello
+  and 30 seconds, at `dispatcher/hello` with `auth: {method: "device", deviceId, signature}`. A
+  Host's message is no use here, nor this one at a Host. The id is the Dispatcher's own, made
+  when it first starts. A wrong signature, an unknown or revoked device, or a used or expired
+  nonce answers `unauthenticated` and closes the connection (4002).
+- **What a device may do:** everything in the API but `devices/*`, which answer `forbidden`
+  (-32069) off the Dispatcher's own computer. `hosts/add` is open, so `weave hosts add studio`
+  on a laptop runs `weave pair --json` on studio over SSH from the laptop and hands the code on.
+- **Revoking** a device closes its connections (4000); it has to pair again.
+- **The socket is unchanged:** a hello there without `auth` is the Dispatcher's own user.
 
 ## Hosts
 
@@ -197,16 +226,32 @@ schedule in place (remove it and add it again).
 ## Its API
 
 JSON-RPC 2.0 over its Unix socket, one message per line, as the Host's socket carries the Host
-protocol; types in `weave_host_protocol::dispatcher`. Only the socket owner's user is served.
-Every connection says hello first; anything else before it answers `unauthenticated`.
+protocol, and over its WebSocket ([Devices](#devices)), one message per text frame; types in
+`weave_host_protocol::dispatcher`. Only the socket owner's user is served on the socket. Every
+connection says hello first; anything else before it answers `unauthenticated`.
 
-**`dispatcher/hello`** `{protocol: 1, client: {name, version}}` → `{protocol, version}`
+**`dispatcher/challenge`** `{}` → `{dispatcherId, nonce, expiresAt}`
 
-Another `protocol` answers `incompatible_protocol`.
+Only on the WebSocket, before hello.
 
-**`dispatcher/status`** `{}` → `{version, pid, startedAt, name, database, pending}`
+**`dispatcher/hello`** `{protocol: 1, client: {name, version}, auth?}` → `{protocol, version,
+id, device?}`
 
-`name` is what it pairs with Hosts as; `pending` is the work waiting for any Host.
+Another `protocol` answers `incompatible_protocol`. `auth` is the Host's (`device` or `pair`),
+and none on the socket; `device` is the paired device a WebSocket client connected as.
+
+**`dispatcher/status`** `{}` → `{version, pid, startedAt, name, database, pending, id, remote?,
+devices}`
+
+`name` is what it pairs with Hosts as; `pending` is the work waiting for any Host; `remote`,
+where its WebSocket listens while it's on; `devices`, how many are paired.
+
+**`devices/offer`** `{name?}` → `{code, expiresAt, url}`, **`devices/list`** `{}` →
+`{devices: Device[]}`, **`devices/revoke`** `{deviceId}` → `{}`
+
+The Host's, on its own computer only. The connection that offered is told `devices/paired`
+when a device takes the code. Without remote access configured, an offer answers
+`remote_unavailable`.
 
 **`hosts/list`** `{}` → `{hosts: DispatcherHost[]}`
 
@@ -288,7 +333,11 @@ Newest first, 50 by default.
 | `weave dispatcher start \| stop \| restart` | through the service once it's installed, and otherwise runs `weave dispatcher run` in the background, logging to `dispatcher.log`, or stops it with SIGTERM; `start` and `restart` wait for it to answer. Stopping it drains nothing: its work is kept as it goes. |
 | `weave dispatcher install` | has launchd (`local.weave.dispatcher`) or systemd (`weave-dispatcher.service`) run `weave dispatcher run` from login or boot and restart it, then waits for it to answer; on Linux it turns lingering on as `weave daemon install` does. A Dispatcher directory of its own (`WEAVE_DISPATCHER_DIR`, which the service is given) gets a service of its own, named after it. launchd won't start a weave in `~/Documents`, `~/Desktop` or `~/Downloads`, and a process it starts can't use a removable volume without the person's leave, so install from a copy elsewhere, such as `~/.local/bin/weave`. |
 | `weave dispatcher uninstall` | stops the service and removes it |
-| `weave dispatcher [status] [--json]` | its version, pid, uptime, name and waiting work, and its Hosts |
+| `weave dispatcher [status] [--json]` | its version, pid, uptime, name and waiting work, and its Hosts; from a paired computer, where it runs too |
+| `weave dispatcher pair [--name] [--json]` | on its computer, a code and a QR code (`weave://pair-dispatcher?url=…&code=…`) another computer pairs with, waiting for it; `--json` prints the URL and code and doesn't wait |
+| `weave dispatcher devices [list [--json] \| revoke <id>]` | on its computer, the computers paired with it, and revoking one |
+| `weave dispatcher connect <computer \| url code> [--name]` | on another computer, pairs it: over SSH runs `weave dispatcher pair --json` there; keeps the pairing in `$XDG_STATE_HOME/weave/client` (`dispatcher.json` and the device's `key.json`, 0600), the key in the Secure Enclave on a Mac that has one |
+| `weave dispatcher disconnect` | forgets the pairing and the key; the Dispatcher lists the computer until it's revoked there |
 | `weave hosts add <computer \| url code> [--name] [--json]` | pairs it with a Host |
 | `weave hosts [list] [--json]` | its Hosts, and how it reaches each |
 | `weave hosts remove <host>` | forgets one |
@@ -296,6 +345,11 @@ Newest first, 50 by default.
 | `weave schedules add <name> --cron <expr> --host <host> --agent <id> [--cwd] [--zone] [--thread \| --mode] [--approve <kinds>] [--missed latest\|skip] [--allow-overlap] -- <prompt>` | adds one; `--cwd` is this directory when omitted, `--approve` is `weave run`'s, and the prompt is read from stdin when omitted |
 | `weave schedules remove \| pause \| resume \| run <schedule>` | as the API's methods |
 | `weave schedules occurrences [<schedule>] [--limit] [--json]` | what they did, newest first |
+
+A command that asks the Dispatcher asks the one running from this computer's Dispatcher
+directory if one answers, and otherwise the paired one, and says both when neither does. With
+`$WEAVE_DISPATCHER_DIR` set it asks only that one. On a paired computer, `run`, `start`,
+`restart` and `install` refuse, and `pair` and `devices` say where it runs.
 
 ## Acceptance
 
@@ -320,13 +374,21 @@ Newest first, 50 by default.
   nothing to send; a start whose answer was lost lands once and its caller is told; one hop; the
   policy ceiling; delegation limits across Hosts; following again after a Dispatcher restart;
   a turn the named Host stops under followed into its continuation.
+- `tests/devices.rs` (WVE-176), over a loopback WebSocket with a fake Serve: a device pairs with
+  a code once, proves its key at hello and lists Hosts and schedules; another key, an unknown
+  device, a Host's message, a reused challenge and a hello without one are refused and closed;
+  `devices/*` answer `forbidden` to a device; devices and remote access outlive a restart;
+  revoking closes the device's connections, and the last one gone, or an offer nobody took,
+  removes the Serve entry. CLI `tests/dispatcher.rs`: `weave dispatcher connect` with a code and
+  over SSH, `weave hosts` and `weave schedules` through the pairing, and `disconnect`.
+- Live: the Dispatcher on the homelab as a systemd user service, and `weave hosts` and
+  `weave schedules` from the Mac.
 
 ## Later
 
 - Webhooks (WVE-146) make deliveries as schedules do; the edge (WVE-117) holds webhook
   deliveries and pushes for it.
-- Paired devices (WVE-176) reach this API over a WebSocket of its own, with keys as a Host's
-  devices have.
+- The app pairs with the Dispatcher as the CLI does (WVE-192).
 - The Dispatcher's own tools, declared with `service/declareTools` (WVE-171), and Bots
   (WVE-118).
 - Choosing the Host a piece of work runs on, which a delivery's Host can become a rule for.

@@ -4,7 +4,9 @@ Status: implemented, and checked live through Tailscale Serve from the Host's ow
 2026-10-16. Since 2026-10-21 pairing turns remote access on, and the Host keeps its own Serve
 entry (WVE-100). From 2026-10-30 the person's other Hosts paired and connected as peer Hosts
 (WVE-109), until 2026-11-04, when the Dispatcher took that over and peer Hosts were retired
-(WVE-185). The decisions are recorded in
+(WVE-185). Since 2026-11-06 the person's devices pair with the Dispatcher the same way, with the
+server's end shared in `weave-remote` ([WVE-175's Devices](wve-175-dispatcher.md#devices),
+WVE-176). The decisions are recorded in
 [ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md),
 [ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md),
 [ADR 0027](../adr/0027-the-dispatcher-is-a-program-of-its-own-that-is-a-client-of-the-hosts.md) and

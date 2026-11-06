@@ -19,6 +19,7 @@ weave-dispatcher = { workspace = true }
 weave-host = { workspace = true }
 weave-host-client = { workspace = true }
 weave-host-protocol = { workspace = true }
+weave-remote = { workspace = true }
 weave-tui = { workspace = true }
 agent-client-protocol = { workspace = true }
 anyhow = { workspace = true }

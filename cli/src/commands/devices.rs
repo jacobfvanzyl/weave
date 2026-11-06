@@ -172,7 +172,12 @@ async fn paired(events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>) ->
 
 /// The link the QR code holds, which the mobile client opens.
 fn pairing_link(url: &str, code: &str) -> String {
-    format!("weave://pair?url={}&code={code}", percent_encode(url))
+    link("weave://pair?", url, code)
+}
+
+/// `prefix`, such as `weave://pair?`, with `url` and `code`.
+pub(crate) fn link(prefix: &str, url: &str, code: &str) -> String {
+    format!("{prefix}url={}&code={code}", percent_encode(url))
 }
 
 fn percent_encode(text: &str) -> String {
@@ -187,7 +192,7 @@ fn percent_encode(text: &str) -> String {
 }
 
 /// A code in groups of five, which pairing reads without the dashes.
-fn grouped(code: &str) -> String {
+pub(crate) fn grouped(code: &str) -> String {
     code.as_bytes()
         .chunks(5)
         .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
@@ -197,7 +202,7 @@ fn grouped(code: &str) -> String {
 
 /// `text` as a QR code in the terminal, black on white whatever its colors, so a camera
 /// reads it.
-fn qr_code(text: &str) -> anyhow::Result<String> {
+pub(crate) fn qr_code(text: &str) -> anyhow::Result<String> {
     use qrcode::render::unicode::Dense1x2;
     let code = qrcode::QrCode::new(text.as_bytes()).context("making the QR code")?;
     let rendered = code
@@ -260,6 +265,11 @@ fn describe(devices: &[Device], now_ms: u64) -> String {
     if devices.is_empty() {
         return "No devices are paired; `weave pair` pairs one.\n".to_owned();
     }
+    listing(devices, now_ms)
+}
+
+/// Each device, with when it was paired and last seen.
+pub(crate) fn listing(devices: &[Device], now_ms: u64) -> String {
     let width = devices
         .iter()
         .map(|device| device.name.chars().count())

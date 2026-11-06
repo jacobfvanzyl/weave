@@ -1,6 +1,6 @@
-//! Reaching another of the person's computers to pair with its Host: over SSH, where `weave hosts
-//! add studio` runs `weave pair --json` for a code, or with the URL and code `weave pair` showed
-//! there.
+//! Reaching another of the person's computers to pair with its Host or Dispatcher: over SSH,
+//! where `weave hosts add studio` runs `weave pair --json` for a code (and `weave dispatcher
+//! connect homelab` runs `weave dispatcher pair --json`), or with the URL and code shown there.
 
 use std::process::Command;
 use std::process::Stdio;
@@ -20,10 +20,39 @@ pub(crate) enum Reach {
     Ssh(String),
 }
 
+/// What pairs with a program on another computer: the link its QR code holds, and the command
+/// that shows it.
+pub(crate) struct Pairing {
+    link: &'static str,
+    command: &'static str,
+}
+
+/// Pairing with a Host, as `weave pair` offers it.
+pub(crate) const HOST: Pairing = Pairing {
+    link: "weave://pair?",
+    command: "weave pair",
+};
+
+/// Pairing with the Dispatcher, as `weave dispatcher pair` offers it.
+pub(crate) const DISPATCHER: Pairing = Pairing {
+    link: "weave://pair-dispatcher?",
+    command: "weave dispatcher pair",
+};
+
 /// How `host` and `code` reach a Host: a URL or `weave://pair` link with its code, or
 /// otherwise a computer SSH reaches.
 pub(crate) fn reach(host: &str, code: Option<String>) -> anyhow::Result<Reach> {
-    if let Some(query) = host.strip_prefix("weave://pair?") {
+    reach_for(&HOST, host, code)
+}
+
+/// How `host` and `code` reach what `pairing` pairs with.
+pub(crate) fn reach_for(
+    pairing: &Pairing,
+    host: &str,
+    code: Option<String>,
+) -> anyhow::Result<Reach> {
+    let command = pairing.command;
+    if let Some(query) = host.strip_prefix(pairing.link) {
         let field = |name: &str| {
             query
                 .split('&')
@@ -40,7 +69,7 @@ pub(crate) fn reach(host: &str, code: Option<String>) -> anyhow::Result<Reach> {
     }
     if host.contains("://") {
         let Some(code) = code else {
-            bail!("give the code `weave pair` shows there, after the URL");
+            bail!("give the code `{command}` shows there, after the URL");
         };
         return Ok(Reach::Code {
             url: host.to_owned(),
@@ -49,7 +78,7 @@ pub(crate) fn reach(host: &str, code: Option<String>) -> anyhow::Result<Reach> {
     }
     if code.is_some() {
         bail!(
-            "a code goes with the URL `weave pair` shows there; over SSH, give the computer alone"
+            "a code goes with the URL `{command}` shows there; over SSH, give the computer alone"
         );
     }
     Ok(Reach::Ssh(host.to_owned()))
@@ -156,6 +185,15 @@ mod tests {
             Reach::Ssh("me@studio".to_owned())
         );
         assert!(reach("studio", Some("ABC".to_owned())).is_err());
+        assert_eq!(
+            reach_for(
+                &DISPATCHER,
+                "weave://pair-dispatcher?url=wss%3A%2F%2Fhomelab.example.ts.net%3A7342&code=ABC",
+                None
+            )
+            .expect("a link"),
+            code("wss://homelab.example.ts.net:7342", "ABC")
+        );
     }
 
     #[test]

@@ -4636,6 +4636,7 @@ dependencies = [
  "weave-host",
  "weave-host-client",
  "weave-host-protocol",
+ "weave-remote",
  "weave-tui",
 ]
 
