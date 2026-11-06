@@ -11,7 +11,6 @@
 //! Host id; ADR 0029 retired that, and a Host revokes such a pairing when it loads one.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
@@ -20,11 +19,6 @@ use std::sync::Mutex;
 
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use p256::ecdsa::Signature;
-use p256::ecdsa::VerifyingKey;
-use p256::ecdsa::signature::Verifier as _;
 use serde::Deserialize;
 use serde::Serialize;
 use weave_host_protocol::HostClient;
@@ -37,22 +31,18 @@ use weave_host_protocol::devices::Jwk;
 use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::tools::Tool;
+pub(crate) use weave_remote::pairing::Closer;
+use weave_remote::pairing::Connections;
+use weave_remote::pairing::Offers;
+use weave_remote::pairing::device_id;
+pub(crate) use weave_remote::pairing::random_bytes;
+pub(crate) use weave_remote::pairing::random_id;
+use weave_remote::pairing::signed;
+use weave_remote::pairing::verifying_key;
 
 use crate::journal::now_ms;
 use crate::service_tools;
 use crate::session::lock;
-
-/// How long an offer stays good.
-pub(crate) const OFFER_LIFETIME_MS: Timestamp = 5 * 60 * 1000;
-/// How many offers can be live at once; a new one replaces the oldest.
-const MAX_OFFERS: usize = 3;
-/// Crockford's base32, which pairing codes are written in.
-const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-/// Something that can close one live connection of a device.
-pub(crate) trait Closer: Send + Sync {
-    fn close(&self, code: u16);
-}
 
 pub(crate) struct Devices {
     /// `devices.json`; none for a Host whose devices live in memory.
@@ -63,9 +53,10 @@ pub(crate) struct Devices {
 struct State {
     host_id: String,
     devices: BTreeMap<DeviceId, Stored>,
-    offers: Vec<Offer>,
+    /// Each told, when a device takes it, to the connection that asked for it.
+    offers: Offers<Option<ConnectionTo<HostClient>>>,
     /// Each device's open connections, by client.
-    live: HashMap<DeviceId, HashMap<u64, Arc<dyn Closer>>>,
+    live: Connections,
 }
 
 /// `devices.json`.
@@ -110,14 +101,6 @@ impl Stored {
     }
 }
 
-struct Offer {
-    code: String,
-    name: Option<String>,
-    expires_at: Timestamp,
-    /// The connection that asked for it, told when a device takes it.
-    offered_by: Option<ConnectionTo<HostClient>>,
-}
-
 impl Devices {
     /// The devices `path` records, or none yet; without a path, in memory only. A Host
     /// without a record gets an id and writes one.
@@ -160,8 +143,8 @@ impl Devices {
                     .into_iter()
                     .map(|device| (device.id.clone(), device))
                     .collect(),
-                offers: Vec::new(),
-                live: HashMap::new(),
+                offers: Offers::default(),
+                live: Connections::default(),
             }),
         };
         if fresh || revoked {
@@ -182,40 +165,19 @@ impl Devices {
         offered_by: Option<ConnectionTo<HostClient>>,
         lifetime_ms: Timestamp,
     ) -> (String, Timestamp) {
-        let code = crockford(&random_bytes::<16>());
-        let expires_at = now_ms() + lifetime_ms;
-        let mut state = lock(&self.state);
-        let now = now_ms();
-        state.offers.retain(|offer| offer.expires_at > now);
-        if state.offers.len() >= MAX_OFFERS {
-            state.offers.remove(0);
-        }
-        state.offers.push(Offer {
-            code: code.clone(),
-            name,
-            expires_at,
-            offered_by,
-        });
-        (code, expires_at)
+        lock(&self.state)
+            .offers
+            .offer(name, offered_by, lifetime_ms)
     }
 
     /// Pair `device` with the offer whose code is `code`, which no one can take again.
     /// `None` when there's no such live offer or the key isn't a P-256 point.
     pub(crate) fn pair(&self, code: &str, device: NewDevice) -> Option<DeviceInfo> {
         verifying_key(&device.public_key)?;
-        let code = normalize_code(code);
         let mut state = lock(&self.state);
         let now = now_ms();
-        state.offers.retain(|offer| offer.expires_at > now);
-        let index = state
-            .offers
-            .iter()
-            .position(|offer| constant_time_eq(offer.code.as_bytes(), code.as_bytes()))?;
-        let offer = state.offers.remove(index);
-        let mut id = format!("d-{}", random_id(9));
-        while state.devices.contains_key(&id) {
-            id = format!("d-{}", random_id(9));
-        }
+        let offer = state.offers.take(code)?;
+        let id = device_id(|id| state.devices.contains_key(id));
         let stored = Stored {
             id: id.clone(),
             name: offer.name.unwrap_or(device.name),
@@ -231,7 +193,7 @@ impl Devices {
         self.save(&state);
         drop(state);
         let info = stored.info();
-        if let Some(offered_by) = offer.offered_by {
+        if let Some(offered_by) = offer.by {
             let device = listing(&stored, 1);
             let _ = offered_by.send_notification(DevicePairedNotification { device });
         }
@@ -253,14 +215,10 @@ impl Devices {
         let mut state = lock(&self.state);
         let host_id = state.host_id.clone();
         let stored = state.devices.get_mut(device_id)?;
-        let key = verifying_key(&stored.public_key)?;
-        let der = URL_SAFE_NO_PAD.decode(signature).ok()?;
-        let signature = Signature::from_der(&der).ok()?;
-        key.verify(
-            auth_message(&host_id, device_id, nonce).as_bytes(),
-            &signature,
-        )
-        .ok()?;
+        let message = auth_message(&host_id, device_id, nonce);
+        if !signed(&stored.public_key, &message, signature) {
+            return None;
+        }
         stored.last_seen_at = Some(now_ms());
         let info = stored.info();
         self.save(&state);
@@ -269,21 +227,11 @@ impl Devices {
 
     /// Note a device's connection, for listing and revoking.
     pub(crate) fn connected(&self, device_id: &str, client: u64, closer: Arc<dyn Closer>) {
-        lock(&self.state)
-            .live
-            .entry(device_id.to_owned())
-            .or_default()
-            .insert(client, closer);
+        lock(&self.state).live.connected(device_id, client, closer);
     }
 
     pub(crate) fn disconnected(&self, device_id: &str, client: u64) {
-        let mut state = lock(&self.state);
-        if let Some(clients) = state.live.get_mut(device_id) {
-            clients.remove(&client);
-            if clients.is_empty() {
-                state.live.remove(device_id);
-            }
-        }
+        lock(&self.state).live.disconnected(device_id, client);
     }
 
     /// Whether any device is paired, which keeps remote access on.
@@ -293,11 +241,7 @@ impl Devices {
 
     /// Whether an offer is still good, which keeps remote access on while it is.
     pub(crate) fn offering(&self) -> bool {
-        let now = now_ms();
-        lock(&self.state)
-            .offers
-            .iter()
-            .any(|offer| offer.expires_at > now)
+        lock(&self.state).offers.any_live()
     }
 
     pub(crate) fn list(&self) -> Vec<Device> {
@@ -305,12 +249,7 @@ impl Devices {
         state
             .devices
             .values()
-            .map(|stored| {
-                let connections = state.live.get(&stored.id).map_or(0, |clients| {
-                    u32::try_from(clients.len()).unwrap_or(u32::MAX)
-                });
-                listing(stored, connections)
-            })
+            .map(|stored| listing(stored, state.live.count(&stored.id)))
             .collect()
     }
 
@@ -391,11 +330,7 @@ impl Devices {
                 return Err(Error::invalid_params().data(format!("no device {device_id}")));
             }
             self.save(&state);
-            state
-                .live
-                .remove(device_id)
-                .map(|clients| clients.into_values().collect())
-                .unwrap_or_default()
+            state.live.remove(device_id)
         };
         for closer in closers {
             closer.close(code);
@@ -446,82 +381,15 @@ pub(crate) fn write_private(path: &Path, value: &impl Serialize) -> std::io::Res
     written
 }
 
-/// A P-256 public key from its JWK.
-fn verifying_key(jwk: &Jwk) -> Option<VerifyingKey> {
-    if jwk.kty != "EC" || jwk.crv != "P-256" {
-        return None;
-    }
-    let x = URL_SAFE_NO_PAD.decode(&jwk.x).ok()?;
-    let y = URL_SAFE_NO_PAD.decode(&jwk.y).ok()?;
-    if x.len() != 32 || y.len() != 32 {
-        return None;
-    }
-    let mut point = Vec::with_capacity(65);
-    point.push(0x04);
-    point.extend_from_slice(&x);
-    point.extend_from_slice(&y);
-    VerifyingKey::from_sec1_bytes(&point).ok()
-}
-
-/// `N` bytes from the system's random source.
-pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
-    let mut bytes = [0u8; N];
-    // The system's random source failing is no state to go on in.
-    #[allow(clippy::expect_used)]
-    getrandom::fill(&mut bytes).expect("the system's random source works");
-    bytes
-}
-
-/// `bytes` random bytes in unpadded base64url.
-pub(crate) fn random_id(bytes: usize) -> String {
-    let mut buffer = vec![0u8; bytes];
-    #[allow(clippy::expect_used)]
-    getrandom::fill(&mut buffer).expect("the system's random source works");
-    URL_SAFE_NO_PAD.encode(buffer)
-}
-
-fn crockford(bytes: &[u8]) -> String {
-    let mut out = String::new();
-    let mut buffer: u32 = 0;
-    let mut bits = 0;
-    for byte in bytes {
-        buffer = (buffer << 8) | u32::from(*byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            out.push(char::from(CROCKFORD[((buffer >> bits) & 31) as usize]));
-        }
-    }
-    if bits > 0 {
-        out.push(char::from(
-            CROCKFORD[((buffer << (5 - bits)) & 31) as usize],
-        ));
-    }
-    out
-}
-
-/// A typed code as Crockford base32 reads it: case and dashes don't matter, and O, I and L
-/// are the digits they look like.
-fn normalize_code(code: &str) -> String {
-    code.chars()
-        .filter(|c| !matches!(c, '-' | ' '))
-        .map(|c| match c.to_ascii_uppercase() {
-            'O' => '0',
-            'I' | 'L' => '1',
-            other => other,
-        })
-        .collect()
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use p256::ecdsa::Signature;
     use p256::ecdsa::SigningKey;
     use p256::ecdsa::signature::Signer as _;
     use pretty_assertions::assert_eq;
+    use weave_remote::pairing::OFFER_LIFETIME_MS;
 
     use super::*;
 

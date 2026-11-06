@@ -177,6 +177,7 @@ use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
 use weave_host_protocol::worktrees::ReleaseWorktreeResponse;
 use weave_host_protocol::worktrees::RemoveWorktreeRequest;
 use weave_host_protocol::worktrees::RemoveWorktreeResponse;
+use weave_remote::websocket::Link;
 
 use crate::Agent;
 use crate::MAX_SUCCESSORS;
@@ -215,7 +216,6 @@ use crate::session::lock;
 use crate::terminals;
 use crate::terminals::Terminals;
 use crate::updates;
-use crate::websocket::Link;
 
 /// What a client said at `host/hello`.
 #[derive(Clone)]
@@ -410,8 +410,7 @@ async fn handlers(
                 });
                 // The last device gone turns remote access off (ADR 0016).
                 if revoked.is_ok() {
-                    let shared = &on_revoke.shared;
-                    shared.remote.stop_if_unused(shared).await;
+                    crate::websocket::stop_if_unused(&on_revoke.shared).await;
                 }
                 responder.respond_with_result(revoked)
             },
@@ -1077,25 +1076,22 @@ impl Connection {
         cx: ConnectionTo<HostClient>,
     ) -> Result<OfferDeviceResponse, Error> {
         self.local_hello()?;
-        let settings = self.shared.config.remote.as_ref();
-        let url = match settings {
-            Some(_) => Some(self.shared.remote.start(&self.shared).await?),
-            None => None,
+        let remote = self.shared.remote.settings().is_some();
+        let url = match remote {
+            true => Some(crate::websocket::start(&self.shared).await?),
+            false => None,
         };
-        let lifetime = settings.map_or(
-            std::time::Duration::from_millis(crate::devices::OFFER_LIFETIME_MS),
-            |settings| settings.offer_lifetime,
-        );
+        let lifetime = self.shared.remote.offer_lifetime();
         let lifetime_ms = u64::try_from(lifetime.as_millis()).unwrap_or(u64::MAX);
         let (code, expires_at) = self
             .shared
             .devices
             .offer(request.name, Some(cx), lifetime_ms);
-        if settings.is_some() {
+        if remote {
             let shared = Arc::clone(&self.shared);
             tokio::spawn(async move {
                 tokio::time::sleep(lifetime + std::time::Duration::from_millis(100)).await;
-                shared.remote.stop_if_unused(&shared).await;
+                crate::websocket::stop_if_unused(&shared).await;
             });
         }
         Ok(OfferDeviceResponse {

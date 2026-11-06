@@ -26,7 +26,8 @@
 //! A Host serves a Unix socket ([`socket`]), or, without one, a single client in the same
 //! process ([`Daemon::connect_in_process`]). Remote clients, on the person's other devices,
 //! reach it through a loopback WebSocket and prove a paired device. Pairing turns that on
-//! ([`remote`], ADR 0016), with the Host's own Tailscale Serve entry ([`tailscale`]); tests
+//! (ADR 0016, [`weave_remote::access`]), with the Host's own Tailscale Serve entry
+//! ([`tailscale`]); tests
 //! serve a WebSocket of their own with [`Daemon::serve_remote`].
 
 mod admissions;
@@ -41,11 +42,9 @@ pub mod mcp;
 mod modes;
 pub mod paths;
 mod queue;
-pub mod remote;
 mod service_tools;
 mod session;
 pub mod socket;
-pub mod tailscale;
 pub mod terminals;
 mod updates;
 mod websocket;
@@ -91,6 +90,10 @@ use weave_host_protocol::sessions::SessionListing;
 use weave_host_protocol::sessions::SessionRemovedNotification;
 use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::worktrees::GitLocation;
+pub use weave_remote::access::RemoteSettings;
+pub use weave_remote::access::Serve;
+pub use weave_remote::tailscale;
+pub use weave_remote::websocket::RemoteConfig;
 
 pub use crate::instance::AGENT_PROCESS_VARIABLE;
 use crate::instance::Instance;
@@ -102,13 +105,10 @@ pub use crate::journal::Recorded;
 pub use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 pub use crate::paths::DaemonPaths;
-pub use crate::remote::RemoteSettings;
-pub use crate::remote::Serve;
 use crate::session::Command;
 use crate::session::SessionHandle;
 use crate::session::Summary;
 use crate::session::lock;
-pub use crate::websocket::RemoteConfig;
 
 /// How long a session nothing needs stays open: no client attached, no turn running.
 pub const DEFAULT_IDLE_GRACE: Duration = Duration::from_secs(30 * 60);
@@ -302,7 +302,7 @@ pub(crate) struct Shared {
     pub(crate) service_tools: service_tools::ServiceTools,
     pub(crate) updates: updates::Updates,
     /// Remote access: the WebSocket and the Serve entry, while pairing has them on.
-    pub(crate) remote: remote::Remote,
+    pub(crate) remote: weave_remote::access::Remote,
     started_ms: u64,
     pub(crate) next_client: AtomicU64,
     pub(crate) stop: watch::Sender<bool>,
@@ -961,7 +961,7 @@ impl Daemon {
                 devices,
                 service_tools: service_tools::ServiceTools::default(),
                 updates: updates::Updates::default(),
-                remote: remote::Remote::default(),
+                remote: weave_remote::access::Remote::new("Host", config.remote.clone()),
                 config,
                 registry: Mutex::new(Registry {
                     known,
@@ -1108,7 +1108,12 @@ impl Daemon {
 
     /// At startup, turn remote access back on when a device is paired (ADR 0016).
     pub async fn resume_remote(&self) {
-        self.shared.remote.resume(&self.shared).await;
+        let shared = &self.shared;
+        let paired = shared.devices.any_paired();
+        shared
+            .remote
+            .resume(&websocket::accept(shared), paired)
+            .await;
     }
 
     /// Remove journals untouched for the retention period, except open and labelled sessions',

@@ -9,6 +9,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave agents update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
 | `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, paired with each as a service, that keeps triggers and Bots and starts their work there. Its state is SQLite. Runs no agents; Hosts never connect to it. Read `dispatcher/AGENTS.md`. |
+| `remote/` | The server's end of remote access (`weave-remote`), which the Host and the Dispatcher share: the loopback WebSocket, turning it on with pairing and its Tailscale Serve entry, and pairing offers and signature checks. Each program keeps its own devices. |
 | `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them. |
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |

@@ -4719,6 +4719,7 @@ dependencies = [
  "weave-fake-agent",
  "weave-host-client",
  "weave-host-protocol",
+ "weave-remote",
 ]
 
 [[package]]
@@ -4756,6 +4757,24 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "weave-host-protocol",
+]
+
+[[package]]
+name = "weave-remote"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "base64 0.22.1",
+ "futures",
+ "getrandom 0.3.4",
+ "p256",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
  "weave-host-protocol",
 ]
 

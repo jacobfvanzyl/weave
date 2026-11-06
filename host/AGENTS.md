@@ -188,15 +188,19 @@ reader holds its owner back rather than the Host buffering.
   leaves out `command` and `opened_from`, and against real holders it builds with cargo.
 
 Remote clients (WVE-90, ADRs 0010 and 0016, spec `../docs/specs/wve-90-remote-clients.md`) reach
-the Host over a WebSocket (`websocket.rs`) that listens on loopback only, with Tailscale Serve
-the way in from the tailnet. Pairing turns that on (`remote.rs`): a `devices/offer` has the
-Host listen and make its own Serve entry (`tailscale.rs`, through the `tailscale` command on
-`PATH`, or on macOS where Homebrew or the Mac app put it; on Linux it needs root or the person
-as Tailscale's operator, which the refusal asks for), and
-both stay on while any device is paired, across restarts, until the last is revoked. Loopback
-counts for nothing: every WebSocket connection proves a paired device at hello, signing its
-`host/challenge` with a P-256 key, or pairs with a code `weave pair` offered (`devices.rs`,
-which keeps the Host's id and the devices' public keys in `devices.json`, 0600, and offers in
+the Host over a WebSocket that listens on loopback only, with Tailscale Serve the way in from the
+tailnet. The server's end is `weave-remote` (`../remote/`), which the Dispatcher shares
+(WVE-176): the WebSocket, its pings and limits (`websocket.rs`), turning it on with pairing
+(`access.rs`), the Serve entry (`tailscale.rs`, through the `tailscale` command on `PATH`, or
+on macOS where Homebrew or the Mac app put it; on Linux it needs root or the person as
+Tailscale's operator, which the refusal asks for), and offers, codes and signature checks
+(`pairing.rs`). The Host's own `websocket.rs` takes the upgrade for `weave-host` or a
+terminal's stream and hands the connection to `client.rs`. A `devices/offer` has the Host
+listen and make its own Serve entry, and both stay on while any device is paired, across
+restarts, until the last is revoked. Loopback counts for nothing: every WebSocket connection
+proves a paired device at hello, signing its `host/challenge` with a P-256 key, or pairs with a
+code `weave pair` offered (`devices.rs`, which keeps the Host's id and the devices' public keys
+in `devices.json`, 0600, and offers in
 memory). A remote client can do what a local one can,
 except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`
 (`forbidden`), and a service less: the first request handler (`Connection::refusal`) answers

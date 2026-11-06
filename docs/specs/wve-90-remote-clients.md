@@ -280,7 +280,8 @@ revoking a device, not turning Serve off, is what cuts one off.
 | Crate | Adds |
 | --- | --- |
 | `protocol` | `device` and `pair` auth, `host/challenge`, `devices/*`, `host.id`, the hello's `device`, the turn origin's `device`, `forbidden`, the close codes; golden fixtures for each |
-| `daemon` | The WebSocket listener (`tokio-tungstenite`, as Codex uses), `devices.json`, challenges and signature checks (RustCrypto `p256`), what remote clients may call, pings and the 8 MiB limit; turning remote access on and off with pairing (`remote.rs`) and its Serve entry (`tailscale.rs`) |
+| `remote` | The server's end, which the Host and the Dispatcher share (WVE-176): the WebSocket listener (`tokio-tungstenite`, as Codex uses), pings and the 8 MiB limit (`websocket.rs`); turning remote access on and off with pairing (`access.rs`) and its Serve entry (`tailscale.rs`); offers, codes and signature checks (RustCrypto `p256`, `pairing.rs`) |
+| `daemon` | `devices.json`, `host/challenge` and `host/hello`'s check, what remote clients may call, and the terminal stream's upgrade |
 | `host-client` | A WebSocket transport (`remote::connect_websocket`), device credentials and a software key (`remote::DeviceKey`), for tests and the live check's client (`examples/remote.rs`) |
 | `cli` | `[remote]` as overrides, `weave pair` with a QR code in the terminal, and `weave devices` |
 

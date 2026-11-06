@@ -218,7 +218,7 @@ fn follow_threads_in_rex(
 /// defaults stand.
 fn remote_settings(config: Option<&Path>) -> weave_host::RemoteSettings {
     let mut settings =
-        weave_host::RemoteSettings::new(Arc::new(weave_host::tailscale::TailscaleServe));
+        weave_host::RemoteSettings::new(Arc::new(weave_host::tailscale::TailscaleServe::HOST));
     let configured = match crate::config::Config::load(config) {
         Ok(config) => config.remote,
         Err(error) => {

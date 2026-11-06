@@ -1,7 +1,8 @@
-//! The Host's Tailscale Serve entry (ADR 0016): the one that forwards an HTTPS port of the
-//! Host's own to its loopback WebSocket, so the tailnet's devices reach it. The Host makes it
-//! when remote access turns on and removes it when it turns off, through the `tailscale`
-//! command, and touches no other entry.
+//! A program's Tailscale Serve entry (ADR 0016): the one that forwards an HTTPS port of its
+//! own, the port its loopback WebSocket listens on, so the tailnet's devices reach it. The
+//! program makes it when remote access turns on and removes it when it turns off, through the
+//! `tailscale` command, and touches no other entry: the Host's is on 7341, the Dispatcher's on
+//! 7342.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -10,10 +11,10 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 use serde_json::Value;
 
-use crate::remote::Serve;
+use crate::access::Serve;
 
 /// Where the Mac app keeps its command, and where Homebrew puts one, when `PATH` has neither,
-/// as for a Host launchd started. Elsewhere, as on Linux, `PATH` has it.
+/// as for a program launchd started. Elsewhere, as on Linux, `PATH` has it.
 const MAC_CANDIDATES: [&str; 3] = [
     "/opt/homebrew/bin/tailscale",
     "/usr/local/bin/tailscale",
@@ -24,7 +25,7 @@ const MAC_CANDIDATES: [&str; 3] = [
 /// Serve to be enabled on a tailnet that has it off.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// A Serve entry that forwards to the Host's WebSocket.
+/// A Serve entry that forwards to a program's WebSocket.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Entry {
     /// What devices connect to, as `wss://`.
@@ -188,19 +189,39 @@ fn port_taken(status: &Value, port: u16) -> bool {
 }
 
 /// The real Serve, through the `tailscale` command.
-pub struct TailscaleServe;
+pub struct TailscaleServe {
+    /// The program, in messages: "the Host".
+    pub what: &'static str,
+    /// How the person moves it to another port, in messages, if they can.
+    pub moved_by: Option<&'static str>,
+}
 
 impl TailscaleServe {
-    async fn entry(listen: SocketAddr) -> Result<String, String> {
+    /// The Host's entry, which `[remote] listen` moves.
+    pub const HOST: Self = Self {
+        what: "the Host",
+        moved_by: Some("move the Host with [remote] listen in the config"),
+    };
+
+    /// The Dispatcher's entry, on port 7342.
+    pub const DISPATCHER: Self = Self {
+        what: "the Dispatcher",
+        moved_by: None,
+    };
+
+    async fn entry(&self, listen: SocketAddr) -> Result<String, String> {
         let status = serve_status().await?;
         if let Some(entry) = entry_for(&status, listen) {
-            return checked(entry);
+            return checked(entry, self.what);
         }
         let port = listen.port();
         if port_taken(&status, port) {
+            let or = self
+                .moved_by
+                .map(|moved_by| format!(", or {moved_by}"))
+                .unwrap_or_default();
             return Err(format!(
-                "Tailscale Serve already uses HTTPS port {port} for something else; free it, or \
-                 move the Host with [remote] listen in the config"
+                "Tailscale Serve already uses HTTPS port {port} for something else; free it{or}"
             ));
         }
         tailscale(&[
@@ -213,27 +234,26 @@ impl TailscaleServe {
         tracing::info!(port, "made the Tailscale Serve entry");
         let status = serve_status().await?;
         entry_for(&status, listen).map_or_else(
-            || Err("Tailscale Serve made no entry for the Host".to_owned()),
-            checked,
+            || Err(format!("Tailscale Serve made no entry for {}", self.what)),
+            |entry| checked(entry, self.what),
         )
     }
 }
 
 /// A Serve entry's URL, unless Funnel puts it on the internet.
-fn checked(entry: Entry) -> Result<String, String> {
+fn checked(entry: Entry, what: &str) -> Result<String, String> {
     if entry.funnel {
-        return Err(
-            "Tailscale Funnel puts the Host's WebSocket on the internet; remote clients are for \
+        return Err(format!(
+            "Tailscale Funnel puts {what}'s WebSocket on the internet; remote clients are for \
              your tailnet only. Turn Funnel off for it, then pair"
-                .to_owned(),
-        );
+        ));
     }
     Ok(entry.url)
 }
 
 impl Serve for TailscaleServe {
     fn ensure(&self, listen: SocketAddr) -> BoxFuture<'_, Result<String, String>> {
-        Box::pin(Self::entry(listen))
+        Box::pin(self.entry(listen))
     }
 
     fn remove(&self, listen: SocketAddr) -> BoxFuture<'_, Result<(), String>> {
@@ -295,7 +315,7 @@ mod tests {
                 funnel: true,
             }
         );
-        assert!(checked(entry).is_err());
+        assert!(checked(entry, "the Host").is_err());
     }
 
     #[test]

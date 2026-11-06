@@ -42,13 +42,13 @@ use weave_host_protocol::terminals::stream::Opened;
 use weave_host_protocol::terminals::stream::RESTORE;
 use weave_host_protocol::terminals::stream::Restore;
 use weave_host_protocol::terminals::stream::SUBPROTOCOL;
+use weave_remote::websocket::RemoteConfig;
 
 use super::Control;
 use super::Incoming;
 use super::Terminals;
 use crate::Shared;
 use crate::devices::Closer;
-use crate::websocket::RemoteConfig;
 
 /// What a stream's WebSocket runs over: a TCP connection on the remote listener, or a Unix one
 /// on the terminal socket.
