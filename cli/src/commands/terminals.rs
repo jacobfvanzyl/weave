@@ -1,4 +1,4 @@
-//! `weave terminal attach <id>`: one of the Host's terminals in the terminal this runs in, as
+//! `weave terminals attach <id>`: one of the Host's terminals in the terminal this runs in, as
 //! `ssh` would show a shell (ADR 0022, WVE-167). The TUI opens it in a Rex pane beside itself,
 //! and anyone can run it in any terminal.
 //!

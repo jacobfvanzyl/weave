@@ -1,5 +1,5 @@
-//! `agents.lock`, beside the config file: the versions of presets that `weave update` moved
-//! past weave's built-in ones. Every agent launch reads it, the Host's included, so a new
+//! `agents.lock`, beside the config file: the versions of presets that `weave agents update`
+//! moved past weave's built-in ones. Every agent launch reads it, the Host's included, so a new
 //! version applies to the next session without a rebuild. The newer of a preset's built-in
 //! and locked version is the one launched, so a weave with bumped presets isn't held back by
 //! an old lock; an entry for another package than the preset's is ignored.
@@ -17,8 +17,8 @@ use weave_acp_core::Preset;
 /// The file's name, in the config file's directory.
 pub const FILE: &str = "agents.lock";
 
-const HEADER: &str = "# Written by `weave update`: newer versions of the agents weave launches than its\n\
-                      # built-in ones. `weave update --reset` goes back to those.\n\n";
+const HEADER: &str = "# Written by `weave agents update`: newer versions of the agents weave launches\n\
+                      # than its built-in ones. `weave agents update --reset` goes back to those.\n\n";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -190,7 +190,10 @@ mod tests {
         lock.set(claude(), "99.0.0");
         lock.write(&path).expect("written");
         let text = std::fs::read_to_string(&path).expect("a file");
-        assert!(text.starts_with("# Written by `weave update`"), "{text}");
+        assert!(
+            text.starts_with("# Written by `weave agents update`"),
+            "{text}"
+        );
         assert!(text.contains("[claude]\npackage = \"@agentclientprotocol/claude-agent-acp\"\nversion = \"99.0.0\""), "{text}");
         assert_eq!(Lock::read(&path).expect("read back"), lock);
         Lock::default().write(&path).expect("emptied");

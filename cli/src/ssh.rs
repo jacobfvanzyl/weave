@@ -1,6 +1,6 @@
-//! Reaching another of the person's computers to pair with its Host: over SSH, where `weave
-//! dispatcher add-host studio` runs `weave pair --json` for a code, or with the URL and code
-//! `weave pair` showed there.
+//! Reaching another of the person's computers to pair with its Host: over SSH, where `weave hosts
+//! add studio` runs `weave pair --json` for a code, or with the URL and code `weave pair` showed
+//! there.
 
 use std::process::Command;
 use std::process::Stdio;
@@ -11,7 +11,7 @@ use anyhow::bail;
 /// What runs `ssh`, for tests to stand in for it.
 const SSH_VARIABLE: &str = "WEAVE_SSH";
 
-/// How `weave dispatcher add-host` reaches a Host.
+/// How `weave hosts add` reaches a Host.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Reach {
     /// The URL and code `weave pair` showed there.

@@ -8,17 +8,17 @@ runs inline instead, with finished history in your terminal's own scrollback.
 ## Run
 
 ```bash
-cargo build                                      # from the repository root
-./target/debug/weave --agent claude              # or codex, gemini
-./target/debug/weave --agent opencode            # any agent in the ACP registry
-./target/debug/weave agents                      # list presets, config and registry agents
-./target/debug/weave -- my-agent --acp           # any ACP command
-./target/debug/weave --agent claude --resume     # pick a previous thread
-./target/debug/weave --continue                  # latest thread here, with the agent last used here
-./target/debug/weave login --agent codex         # sign in; `logout` signs out
-./target/debug/weave run --agent claude "…"      # one prompt, headless, reply on stdout
-./target/debug/weave threads                    # threads open in the daemon
-./target/debug/weave smoke --agent claude        # one headless turn, every event printed
+cargo build                                        # from the repository root
+./target/debug/weave --agent claude                # or codex, gemini
+./target/debug/weave --agent opencode              # any agent in the ACP registry
+./target/debug/weave agents                        # list presets, config and registry agents
+./target/debug/weave -- my-agent --acp             # any ACP command
+./target/debug/weave --agent claude --resume       # pick a previous thread
+./target/debug/weave --continue                    # latest thread here, with the agent last used here
+./target/debug/weave agents login --agent codex    # sign in; `agents logout` signs out
+./target/debug/weave run --agent claude "…"        # one prompt, headless, reply on stdout
+./target/debug/weave threads                       # threads open in the daemon
+./target/debug/weave agents smoke --agent claude   # one headless turn, every event printed
 ```
 
 weave remembers the agent last used in each directory in
@@ -26,7 +26,7 @@ weave remembers the agent last used in each directory in
 
 `--agent` takes a preset, an agent from the config, or the id of an agent in the
 [ACP registry](https://agentclientprotocol.com/get-started/registry), in that order. The
-registry is fetched once a day (`weave agents --refresh` fetches it now) and cached under
+registry is fetched once a day (`weave agents list --refresh` fetches it now) and cached under
 `~/.cache/weave` (`$XDG_CACHE_HOME/weave`). A registry agent runs from its own build for
 this platform when it has one: downloaded on first use, checked against the registry's
 sha256 when given, and unpacked into the cache. Otherwise it runs through `npx` or `uvx`,
@@ -86,7 +86,7 @@ ends with it. It waits about 15 seconds for a daemon to come back without starti
 named as the TUI names them (`--resume <id>`, `--continue`). Nobody is there to answer the
 agent, so `--approve` lists the tool kinds it may use (`read`, `edit`, `execute`, …, or
 `all`) and everything else is refused. `--detach` leaves the turn running and prints the
-thread's id; `--json` prints every update. `weave smoke` takes its prompt and `--approve`
+thread's id; `--json` prints every update. `weave agents smoke` takes its prompt and `--approve`
 the same way.
 
 `weave threads` lists the threads open in the daemon, what each is doing and who's

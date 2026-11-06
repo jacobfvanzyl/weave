@@ -3,10 +3,8 @@
 //! stopping the per-user one. `weave daemon` manages it ([`crate::commands::daemon`]).
 
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
 use std::io;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -35,6 +33,7 @@ use crate::args::AgentChoice;
 use crate::args::COMMAND_AGENT;
 use crate::args::HostLaunch;
 use crate::args::WorkspaceArgs;
+use crate::background;
 use crate::exit;
 use crate::service;
 
@@ -42,8 +41,6 @@ use crate::service;
 const BACKGROUND_IDLE_EXIT: Duration = Duration::from_secs(10 * 60);
 /// How long to wait for a Host to start listening, or to stop.
 const STARTUP_WAIT: Duration = Duration::from_secs(10);
-/// A log bigger than this is set aside (as `daemon.log.old`) when a Host starts.
-const LOG_LIMIT: u64 = 10 * 1024 * 1024;
 
 /// Where this invocation's agents run, before it knows which agent.
 pub enum Target {
@@ -241,49 +238,12 @@ pub(crate) fn start_in_background(paths: &DaemonPaths) -> anyhow::Result<()> {
     paths
         .prepare()
         .with_context(|| format!("creating {}", paths.dir.display()))?;
-    let log_path = paths.log();
-    if std::fs::metadata(&log_path).is_ok_and(|metadata| metadata.len() > LOG_LIMIT) {
-        let _ = std::fs::rename(&log_path, log_path.with_extension("log.old"));
-    }
-    let mut log_options = OpenOptions::new();
-    log_options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        log_options.mode(0o600);
-    }
-    let log = log_options
-        .open(&log_path)
-        .with_context(|| format!("opening {}", log_path.display()))?;
-    let executable = std::env::current_exe().context("finding the weave executable")?;
-    let mut command = std::process::Command::new(executable);
-    command
-        .args(["daemon", "run", "--idle-exit"])
-        .arg(BACKGROUND_IDLE_EXIT.as_secs().to_string())
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    // A session of its own, without this terminal: the terminal's signals (Ctrl+C, a closing
-    // window) miss it, and nothing it runs can take the terminal over, as an interactive shell's
-    // job control did, leaving the shell that started it in the background (WVE-154).
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: between fork and exec, setsid only makes the child a session leader; it
-        // allocates nothing and takes no lock.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    let mut child = command.spawn().context("starting the weave Host")?;
-    // Reap it if it exits while this process still runs.
-    std::thread::spawn(move || child.wait());
-    Ok(())
+    let idle_exit = BACKGROUND_IDLE_EXIT.as_secs().to_string();
+    background::spawn(
+        &["daemon", "run", "--idle-exit", &idle_exit],
+        &paths.log(),
+        "the weave Host",
+    )
 }
 
 pub(crate) async fn wait_until_listening(paths: &DaemonPaths) -> anyhow::Result<socket::Transport> {

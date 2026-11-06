@@ -134,6 +134,28 @@ pub(super) fn uninstall_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()
     std::fs::remove_file(&plist).with_context(|| format!("removing {}", plist.display()))
 }
 
+/// Start the Dispatcher's installed service, loading it again if stopping it unloaded it.
+pub(super) fn start_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    let label = dispatcher_label(paths);
+    let plist = agent_plist(&label).context("no home directory for ~/Library/LaunchAgents")?;
+    let domain = format!("gui/{}", owner_of(&paths.dir)?);
+    let target = format!("{domain}/{label}");
+    if launchctl(&["print", &target]).is_ok() {
+        launchctl(&["kickstart", &target])
+    } else {
+        launchctl(&["bootstrap", &domain, &plist.display().to_string()])
+    }
+}
+
+/// Stop the Dispatcher's installed service until it's started again, or the next login.
+pub(super) fn stop_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    let target = format!("gui/{}/{}", owner_of(&paths.dir)?, dispatcher_label(paths));
+    if launchctl(&["print", &target]).is_err() {
+        return Ok(());
+    }
+    launchctl(&["bootout", &target])
+}
+
 /// The Dispatcher service's label: the default Dispatcher's, or one named after another
 /// directory.
 fn dispatcher_label(paths: &DispatcherPaths) -> String {

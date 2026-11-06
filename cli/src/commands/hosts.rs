@@ -1,12 +1,15 @@
-//! The Hosts the Dispatcher is paired with (ADR 0027, WVE-175), which it starts work on as a
-//! service: pairing it with one, listing them, and forgetting one.
+//! `weave hosts`: the person's Hosts the Dispatcher is paired with (ADR 0027, WVE-175), which it
+//! starts work on as a service: listing them, pairing it with one, and forgetting one.
 //!
-//! Adding `studio` pairs the Dispatcher with studio's Host over SSH ([`crate::ssh`]): it runs
-//! `weave pair --json` there for a code. Given the URL and code `weave pair` showed there
+//! `weave hosts add studio` pairs the Dispatcher with studio's Host over SSH ([`crate::ssh`]): it
+//! runs `weave pair --json` there for a code. Given the URL and code `weave pair` showed there
 //! instead, it pairs with those.
+
+use std::process::ExitCode;
 
 use anyhow::Context as _;
 use clap::Args;
+use clap::Subcommand;
 use weave_dispatcher::DispatcherPaths;
 use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::dispatcher::DispatcherHost;
@@ -17,14 +20,43 @@ use weave_host_protocol::dispatcher::RemoveHostRequest;
 use crate::clock::ago;
 use crate::clock::now_ms;
 use crate::commands::devices::Offered;
+use crate::dispatcher;
 use crate::dispatcher::connect;
 use crate::ssh::Reach;
 use crate::ssh::reach;
 use crate::ssh::ssh;
 use crate::ssh::ssh_name;
 
+pub const LOG: &str = "warn";
+
 #[derive(Args)]
-pub struct AddArgs {
+pub struct HostsArgs {
+    #[command(subcommand)]
+    command: Option<HostsCommand>,
+}
+
+#[derive(Subcommand)]
+enum HostsCommand {
+    /// The Hosts the Dispatcher is paired with, and whether it's connected to each (the
+    /// default).
+    List(ListArgs),
+    /// Pair the Dispatcher with a Host as a service, over SSH (`weave hosts add studio`) or with
+    /// the URL and code `weave pair` shows there.
+    Add(AddArgs),
+    /// Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its
+    /// devices until you revoke it there with `weave devices revoke`.
+    Remove(RemoveArgs),
+}
+
+#[derive(Args, Default)]
+struct ListArgs {
+    /// Print them as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct AddArgs {
     /// The computer SSH reaches the Host on, or the URL `weave pair` shows there.
     host: String,
     /// The code `weave pair` shows there, after its URL.
@@ -38,12 +70,25 @@ pub struct AddArgs {
 }
 
 #[derive(Args)]
-pub struct RemoveArgs {
+struct RemoveArgs {
     /// The Host's id or name.
     host: String,
 }
 
-pub(crate) async fn add(paths: &DispatcherPaths, args: AddArgs) -> anyhow::Result<()> {
+pub async fn command(args: HostsArgs) -> anyhow::Result<ExitCode> {
+    let paths = dispatcher::paths()?;
+    let done = match args
+        .command
+        .unwrap_or_else(|| HostsCommand::List(ListArgs::default()))
+    {
+        HostsCommand::List(ListArgs { json }) => list(&paths, json).await,
+        HostsCommand::Add(args) => add(&paths, args).await,
+        HostsCommand::Remove(args) => remove(&paths, args).await,
+    };
+    done.map(|()| ExitCode::SUCCESS)
+}
+
+async fn add(paths: &DispatcherPaths, args: AddArgs) -> anyhow::Result<()> {
     let AddArgs {
         host,
         code,
@@ -78,7 +123,7 @@ pub(crate) async fn add(paths: &DispatcherPaths, args: AddArgs) -> anyhow::Resul
 }
 
 /// The Hosts the Dispatcher is paired with, and how it reaches each.
-pub(crate) async fn list(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()> {
+async fn list(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()> {
     let dispatcher = connect(paths).await?;
     let hosts = dispatcher.send(ListHostsRequest {}).await?.hosts;
     dispatcher.shutdown().await;
@@ -91,7 +136,7 @@ pub(crate) async fn list(paths: &DispatcherPaths, json: bool) -> anyhow::Result<
 }
 
 /// Forget a Host, and the work waiting for it.
-pub(crate) async fn remove(paths: &DispatcherPaths, args: RemoveArgs) -> anyhow::Result<()> {
+async fn remove(paths: &DispatcherPaths, args: RemoveArgs) -> anyhow::Result<()> {
     let dispatcher = connect(paths).await?;
     dispatcher
         .send(RemoveHostRequest {
@@ -109,8 +154,8 @@ pub(crate) async fn remove(paths: &DispatcherPaths, args: RemoveArgs) -> anyhow:
 
 pub(crate) fn describe(hosts: &[DispatcherHost], now_ms: u64) -> String {
     if hosts.is_empty() {
-        return "The Dispatcher pairs with no Hosts; `weave dispatcher add-host <computer>` \
-                pairs it with one over SSH.\n"
+        return "The Dispatcher pairs with no Hosts; `weave hosts add <computer>` pairs it with \
+                one over SSH.\n"
             .to_owned();
     }
     let width = hosts

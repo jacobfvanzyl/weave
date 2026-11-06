@@ -63,7 +63,7 @@ TUI · weave run · weave sessions · weave daemon        (later) iPad app
         claude-agent-acp · codex-acp · gemini · configured and registry agents
 ```
 
-`weave smoke`, `weave login` and `weave logout` keep talking to agents directly, using the
+`weave agents smoke`, `login` and `logout` keep talking to agents directly, using the
 same agent resolution as the Host (see [Crates](#crates)).
 
 ## Principles
@@ -277,13 +277,13 @@ For a client that claimed `terminalSignIn`: the command to run in its own termin
 terminal sign-in method, with only the agent's configured and the method's own variables
 in `env`. The Host stops its idle agent processes for that agent, so the next ones start
 signed in. Other clients get `requires_terminal`, and should tell the person to run
-`weave login <agent>` on the Host's computer.
+`weave agents login --agent <agent>` on the Host's computer.
 
 **`agents/logout`** `{agentId}` → `{}`
 
 **`agents/update`** `{agentId}` → `{version}`
 
-Feature `agents/updates`. What `weave update <agent>` does (WVE-92), through the same code:
+Feature `agents/updates`. What `weave agents update <agent>` does (WVE-92), through the same code:
 for a preset, npm's `latest` for its package, written to `agents.lock` beside the config;
 for a registry agent, a refreshed ACP registry catalog. Only once the new version starts and
 answers `initialize`, launched as the Host launches agents; one that doesn't fails the
@@ -1454,7 +1454,7 @@ Opening the stream:
    the client's libghostty-vt was built from, and its snapshot format. libghostty-vt reports the
    same version at every commit, so only the commit tells two builds apart. `history` asks for
    the history above the screen in a `vt` restore too, and its resyncs, for a client whose own
-   terminal keeps scrollback, as `weave terminal attach` does; a holder from before it sends
+   terminal keeps scrollback, as `weave terminals attach` does; a holder from before it sends
    the screen alone.
 2. The Host answers with `{"terminal": Terminal, "restore": "snapshot" | "vt", "restoreBytes"}`,
    `restoreBytes` saying how much restore follows before the output does, and `terminal` being
@@ -1766,7 +1766,7 @@ its own: the Dispatcher, not the Host, reaches the person's other Hosts (ADR 002
 
 - `/thread`'s panel lists the thread's worktree's terminals too (`terminals/watch`), the
   thread's own first (`openedFrom`), and manages them (WVE-167): in Rex, Enter shows one in a
-  pane running `weave terminal attach`, or focuses its pane, `h` hides it there, `n` starts one
+  pane running `weave terminals attach`, or focuses its pane, `h` hides it there, `n` starts one
   (`terminals/new`) and shows it, `r` renames one and `x` ends one once confirmed; Alt+1 to
   Alt+9 show one without the panel. The first pane goes to the right of the TUI and later ones
   below it, and the TUI keeps which pane shows which terminal, so a `/reload` finds them again.
@@ -1778,7 +1778,7 @@ its own: the Dispatcher, not the Host, reaches the person's other Hosts (ADR 002
 
 ### The CLI
 
-- `weave terminal attach <id>` shows a terminal in the terminal it runs in, as the TUI's Rex
+- `weave terminals attach <id>` shows a terminal in the terminal it runs in, as the TUI's Rex
   panes do: it opens the stream on `terminals.sock` with `history`, writes the VT restore and
   the output to stdout, with the program's queries, OSC 52, 9 and 777, and kitty graphics left
   out, and the Host's clipboard and notification frames written in their place, and sends its
@@ -1800,14 +1800,14 @@ its own: the Dispatcher, not the Host, reaches the person's other Hosts (ADR 002
   `smoke`, `login` and `logout` do, so listing agents doesn't start a Host.
 - `weave --resume <id>` and `--continue` choose through `sessions/list`. `--continue` keeps
   using the agent last used in the directory (`recent.rs`), a client preference.
-- `weave smoke`, `login` and `logout` resolve agents with `weave-agents` and talk to them
+- `weave agents smoke`, `login` and `logout` resolve agents with `weave-agents` and talk to them
   directly, as now.
 - `weave sessions` says a session's branch. `weave worktrees pre-remove [path]` asks a running
   Host (never starting one) for `worktrees/release`, failing while a session in the worktree is
   busy, for worktrunk's `pre-remove` hooks; `weave worktrees install-hook` adds it to
   worktrunk's user config when asked.
-- `weave dispatcher add-host <computer>` pairs the Dispatcher with another of the person's
-  Hosts over SSH (`weave pair --json` there), and `weave dispatcher add-host <url> <code>`, or
+- `weave hosts add <computer>` pairs the Dispatcher with another of the person's
+  Hosts over SSH (`weave pair --json` there), and `weave hosts add <url> <code>`, or
   the `weave://pair` link `weave pair`'s QR code holds, with the code `weave pair` showed. `weave
   pair` says how, and `weave devices` marks the services among the devices.
 - With `--json`, what a command reports is the protocol's own types (WVE-108): `daemon status`
@@ -1815,7 +1815,7 @@ its own: the Dispatcher, not the Host, reaches the person's other Hosts (ADR 002
   `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the paired devices, `run
   --detach` `session/run`'s, and `run` and `threads prompt --wait` their session's
   `session/event` notifications as JSON lines.
-- With no terminal, as over SSH, nothing prompts: `weave login` needs `--method`, and a sign-in
+- With no terminal, as over SSH, nothing prompts: `weave agents login` needs `--method`, and a sign-in
   that runs in a terminal says to use `ssh -t`. `weave daemon install` and `status` say how to
   have a command over SSH find `weave` when the login shell, run as sshd runs one, doesn't.
 - `weave threads watch` prints `sessions/watch` as JSON lines, each `{method, params}`: a

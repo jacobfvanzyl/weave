@@ -4,8 +4,8 @@ use agent_client_protocol::AcpAgentConfig;
 use agent_client_protocol::schema::v1::AuthMethodTerminal;
 
 /// An agent weave knows how to launch: an npm package run through `npx`, at a version pinned
-/// so a session is reproducible until the preset is deliberately bumped. `weave update` can
-/// launch newer versions than these without a rebuild.
+/// so a session is reproducible until the preset is deliberately bumped. `weave agents update`
+/// can launch newer versions than these without a rebuild.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Preset {
     pub id: &'static str,

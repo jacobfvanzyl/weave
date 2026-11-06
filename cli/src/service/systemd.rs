@@ -150,6 +150,18 @@ pub(super) fn uninstall_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()
     Ok(())
 }
 
+pub(super) fn start_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    systemctl(&["start", &dispatcher_unit(paths)])
+}
+
+pub(super) fn stop_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    systemctl(&["stop", &dispatcher_unit(paths)])
+}
+
+pub(super) fn restart_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    systemctl(&["restart", &dispatcher_unit(paths)])
+}
+
 /// The Dispatcher's unit: the default one, or one named after another directory.
 fn dispatcher_unit(paths: &DispatcherPaths) -> String {
     match dispatcher_instance(paths) {

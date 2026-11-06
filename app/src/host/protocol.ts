@@ -2261,9 +2261,9 @@ export interface LogoutAgentRequest {
   agentId: string;
 }
 /**
- * `agents/update`: what `weave update <agent>` does. The Host checks that the newest version
- * starts and answers `initialize`, then launches it for the agent's new sessions; open ones
- * move over with `session/reopen`. A version that doesn't start changes nothing. Remote
+ * `agents/update`: what `weave agents update <agent>` does. The Host checks that the newest
+ * version starts and answers `initialize`, then launches it for the agent's new sessions; open
+ * ones move over with `session/reopen`. A version that doesn't start changes nothing. Remote
  * clients may update agents too: it only ever takes one to its newest version.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -6717,7 +6717,7 @@ export interface TerminalStreamOpen {
   codec: string;
   /**
    * With a VT restore, the history above the screen too, for a client whose terminal
-   * keeps scrollback of its own, as `weave terminal attach` does. A holder from before
+   * keeps scrollback of its own, as `weave terminals attach` does. A holder from before
    * it sends the screen alone.
    */
   history?: boolean;

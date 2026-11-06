@@ -1,5 +1,5 @@
 //! Choosing and opening the first session through the Host, signing in when the agent
-//! requires it; and connecting to an agent directly, for `weave login` and `logout`.
+//! requires it; and connecting to an agent directly, for `weave agents login` and `logout`.
 
 use std::collections::BTreeMap;
 use std::io::BufRead;

@@ -49,9 +49,9 @@ transaction, and none changes once released.
 
 ## Hosts
 
-`weave dispatcher add-host studio` runs `weave pair --json` on studio over SSH and asks the
-Dispatcher to pair with the URL and code it gave; `weave dispatcher
-add-host <url> <code>` pairs with the ones `weave pair` showed there. The Dispatcher pairs as
+`weave hosts add studio` runs `weave pair --json` on studio over SSH and asks the
+Dispatcher to pair with the URL and code it gave; `weave hosts add <url> <code>` pairs with the
+ones `weave pair` showed there. The Dispatcher pairs as
 "Dispatcher on <its computer>", and keeps the Host's id, its name (the computer's, or its
 tailnet name), its URL, the device id the Host gave it and when.
 
@@ -59,10 +59,10 @@ It then keeps a connection to each Host: it connects, says hello with its key as
 `weave-dispatcher`, says it reaches the person's Hosts (`service/declareTools` with `hosts`),
 watches the Host's threads (`sessions/watch`), and sends the Host the work waiting for it. When the connection fails or closes it tries again after 1 second, doubling to
 a minute. A Host that refuses its key, or revokes it while connected (`CLOSE_REVOKED`), is
-recorded as refused, with why, and not tried again, across restarts, until `add-host` pairs
+recorded as refused, with why, and not tried again, across restarts, until `weave hosts add` pairs
 with it again, which `weave devices revoke` there and a new code make the way back.
 
-`weave dispatcher remove-host <id or name>` forgets a Host and the work waiting for it; the
+`weave hosts remove <id or name>` forgets a Host and the work waiting for it; the
 Host lists the Dispatcher among its devices until it's revoked there.
 
 ## Deliveries
@@ -285,16 +285,17 @@ Newest first, 50 by default.
 | Command | What it does |
 | --- | --- |
 | `weave dispatcher run` | runs it here until SIGTERM or SIGINT; its stderr is its log |
+| `weave dispatcher start \| stop \| restart` | through the service once it's installed, and otherwise runs `weave dispatcher run` in the background, logging to `dispatcher.log`, or stops it with SIGTERM; `start` and `restart` wait for it to answer. Stopping it drains nothing: its work is kept as it goes. |
 | `weave dispatcher install` | has launchd (`local.weave.dispatcher`) or systemd (`weave-dispatcher.service`) run `weave dispatcher run` from login or boot and restart it, then waits for it to answer; on Linux it turns lingering on as `weave daemon install` does. A Dispatcher directory of its own (`WEAVE_DISPATCHER_DIR`, which the service is given) gets a service of its own, named after it. launchd won't start a weave in `~/Documents`, `~/Desktop` or `~/Downloads`, and a process it starts can't use a removable volume without the person's leave, so install from a copy elsewhere, such as `~/.local/bin/weave`. |
 | `weave dispatcher uninstall` | stops the service and removes it |
-| `weave dispatcher status [--json]` | its version, pid, uptime, name and waiting work, and its Hosts |
-| `weave dispatcher add-host <computer \| url code> [--name] [--json]` | pairs it with a Host |
-| `weave dispatcher hosts [--json]` | its Hosts, and how it reaches each |
-| `weave dispatcher remove-host <host>` | forgets one |
-| `weave dispatcher schedules [list] [--json]` | the schedules, when each runs next and how it last went |
-| `weave dispatcher schedules add <name> --cron <expr> --host <host> --agent <id> [--cwd] [--zone] [--thread \| --mode] [--approve <kinds>] [--missed latest\|skip] [--allow-overlap] -- <prompt>` | adds one; `--cwd` is this directory when omitted, `--approve` is `weave run`'s, and the prompt is read from stdin when omitted |
-| `weave dispatcher schedules remove \| pause \| resume \| run <schedule>` | as the API's methods |
-| `weave dispatcher occurrences [<schedule>] [--limit] [--json]` | what they did, newest first |
+| `weave dispatcher [status] [--json]` | its version, pid, uptime, name and waiting work, and its Hosts |
+| `weave hosts add <computer \| url code> [--name] [--json]` | pairs it with a Host |
+| `weave hosts [list] [--json]` | its Hosts, and how it reaches each |
+| `weave hosts remove <host>` | forgets one |
+| `weave schedules [list] [--json]` | the schedules, when each runs next and how it last went |
+| `weave schedules add <name> --cron <expr> --host <host> --agent <id> [--cwd] [--zone] [--thread \| --mode] [--approve <kinds>] [--missed latest\|skip] [--allow-overlap] -- <prompt>` | adds one; `--cwd` is this directory when omitted, `--approve` is `weave run`'s, and the prompt is read from stdin when omitted |
+| `weave schedules remove \| pause \| resume \| run <schedule>` | as the API's methods |
+| `weave schedules occurrences [<schedule>] [--limit] [--json]` | what they did, newest first |
 
 ## Acceptance
 

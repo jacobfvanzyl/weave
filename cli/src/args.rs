@@ -219,7 +219,7 @@ impl HostLaunch {
 }
 
 /// Everything needed to launch the agent directly, outside the Host, and set up its sessions:
-/// for `weave smoke`, `login` and `logout`.
+/// for `weave agents smoke`, `login` and `logout`.
 pub struct Launch {
     pub config: Config,
     pub spec: AgentSpec,

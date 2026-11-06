@@ -11,17 +11,15 @@ Usage: weave [OPTIONS] [-- <COMMAND>...]
 Commands:
   run         Run one prompt in a headless thread in the weave Host, printing the reply
   threads     Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
-  worktrees   Git worktrees: what worktrunk asks the weave Host before it removes one
-  terminal    The weave Host's terminals: show one here, as the TUI does in a Rex pane
-  daemon      Manage the weave Host, which runs agents so their threads outlive the TUI
+  agents      The agents weave launches: list them, move them to their newest releases, sign in to or out of one, or try one with a prompt
+  schedules   The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times a cron expression gives: list, add, remove, pause, resume or run one, or see what they did
+  hosts       Your Hosts the Dispatcher starts work on: list them, pair it with one, or forget one
   pair        Pair another of your devices with the weave Host, to reach it over your tailnet
   devices     Devices paired with the weave Host: list them, or revoke one
-  dispatcher  The Dispatcher, which starts work on your Hosts while you're away: run or install it, and pair it with your Hosts
-  update      Move the agents weave launches to their newest releases, after checking each starts
-  smoke       Run one prompt headlessly and print every ACP event the agent sends
-  login       Sign in to the agent with one of the methods it offers
-  logout      Sign out of the agent, if it supports signing out
-  agents      List the agents `--agent` accepts: presets, the config's, and the ACP registry's
+  terminals   The weave Host's terminals: show one here, as the TUI does in a Rex pane
+  worktrees   Git worktrees: what worktrunk asks the weave Host before it removes one
+  daemon      Manage the weave Host, which runs agents so their threads outlive the TUI
+  dispatcher  The Dispatcher, which starts work on your Hosts while you're away: run, start, stop or install it
   help        Print this message or the help of the given subcommand(s)
 
 Arguments:
@@ -353,6 +351,445 @@ Options:
   -h, --help
           Print help
 
+$ weave agents --help
+The agents weave launches: list them, move them to their newest releases, sign in to or out of one, or try one with a prompt
+
+Usage: weave agents [COMMAND]
+
+Commands:
+  list    The agents `--agent` accepts: presets, the config's, and the ACP registry's (the default)
+  update  Move the agents weave launches to their newest releases, after checking each starts
+  login   Sign in to the agent with one of the methods it offers
+  logout  Sign out of the agent, if it supports signing out
+  smoke   Run one prompt headlessly and print every ACP event the agent sends
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave agents list --help
+The agents `--agent` accepts: presets, the config's, and the ACP registry's (the default)
+
+Usage: weave agents list [OPTIONS]
+
+Options:
+      --refresh
+          Fetch the ACP registry again rather than use the copy cached within the last day
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+  -h, --help
+          Print help
+
+$ weave agents update --help
+Move the agents weave launches to their newest releases, after checking each starts
+
+Usage: weave agents update [OPTIONS] [AGENTS]...
+
+Arguments:
+  [AGENTS]...
+          Only these agents. By default, every preset and the registry agents the config names
+
+Options:
+      --dry-run
+          Say what would change, and change nothing
+
+      --reset
+          Go back to weave's built-in preset versions
+
+      --json
+          Print the report as JSON
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml; the lock is beside it
+
+  -h, --help
+          Print help
+
+$ weave agents login --help
+Sign in to the agent with one of the methods it offers
+
+Usage: weave agents login [OPTIONS] [-- <COMMAND>...]
+
+Arguments:
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+      --method <METHOD>
+          The sign-in method's id; asked for when omitted
+
+  -h, --help
+          Print help
+
+$ weave agents logout --help
+Sign out of the agent, if it supports signing out
+
+Usage: weave agents logout [OPTIONS] [-- <COMMAND>...]
+
+Arguments:
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+  -h, --help
+          Print help
+
+$ weave agents smoke --help
+Run one prompt headlessly and print every ACP event the agent sends
+
+Usage: weave agents smoke [OPTIONS] [PROMPT]... [-- <COMMAND>...]
+
+Arguments:
+  [PROMPT]...
+          The prompt to send. Before the agent's arguments, whose custom command comes last, after `--`
+
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+      --cwd <CWD>
+          Thread working directory. Defaults to the current directory
+
+      --add-dir <DIR>
+          An extra workspace root for the thread; repeatable. Needs agent support
+
+      --no-fs
+          Don't offer the agent fs/read_text_file and fs/write_text_file
+
+      --no-terminal
+          Don't offer the agent terminals for running commands
+
+      --approve <KINDS>
+          Tool kinds to allow, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. Everything else is rejected
+
+  -h, --help
+          Print help
+
+$ weave schedules --help
+The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times a cron expression gives: list, add, remove, pause, resume or run one, or see what they did
+
+Usage: weave schedules [COMMAND]
+
+Commands:
+  list         The schedules, when each runs next and how it last went (the default)
+  add          Add a schedule: at the times `--cron` gives, start a headless turn on a Host
+  remove       Forget a schedule and what it did. A turn it started runs on
+  pause        Run nothing on schedule until resumed
+  resume       Run on schedule again from now, catching up nothing missed while paused
+  run          Run it now, paused or not, as an occurrence of its own
+  occurrences  What schedules did each time they came due, newest first
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave schedules list --help
+The schedules, when each runs next and how it last went (the default)
+
+Usage: weave schedules list [OPTIONS]
+
+Options:
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave schedules add --help
+Add a schedule: at the times `--cron` gives, start a headless turn on a Host
+
+Usage: weave schedules add [OPTIONS] --cron <CRON> --host <HOST> --agent <AGENT> <NAME> [-- <PROMPT>...]
+
+Arguments:
+  <NAME>
+          Its name, unique among the Dispatcher's schedules
+
+  [PROMPT]...
+          The prompt; read from stdin when omitted or `-`
+
+Options:
+      --cron <CRON>
+          When it runs: five fields, minute hour day-of-month month day-of-week, such as "0 9 * * 1-5" for 09:00 on weekdays; or @hourly, @daily, @weekly, @monthly
+
+      --zone <ZONE>
+          The IANA time zone its times are in, such as Africa/Johannesburg; the Dispatcher's computer's when omitted
+
+      --host <HOST>
+          The Host it runs on, by name or id: one `weave hosts` lists
+
+      --agent <AGENT>
+          The agent on that Host, as `weave agents` lists them there
+
+      --cwd <CWD>
+          The directory on that Host it runs in; `~/` starts at the home there. This directory when omitted
+
+      --thread <THREAD>
+          Prompt this thread each time, by its id, instead of starting a new one
+
+      --mode <MODE>
+          The mode a new thread starts in; the agent's configured one when omitted
+
+      --approve <KINDS>
+          Tool kinds to allow, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. Everything else is rejected
+
+      --missed <MISSED>
+          What to do about a time it missed, as while the Dispatcher's computer slept: run the latest once, late, within a week (the default), or skip it
+          
+          [default: latest]
+          [possible values: latest, skip]
+
+      --allow-overlap
+          Start an occurrence while its previous one is still waiting or running, in a thread of its own; by default it's skipped
+
+  -h, --help
+          Print help
+
+$ weave schedules remove --help
+Forget a schedule and what it did. A turn it started runs on
+
+Usage: weave schedules remove <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave schedules pause --help
+Run nothing on schedule until resumed
+
+Usage: weave schedules pause <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave schedules resume --help
+Run on schedule again from now, catching up nothing missed while paused
+
+Usage: weave schedules resume <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave schedules run --help
+Run it now, paused or not, as an occurrence of its own
+
+Usage: weave schedules run <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave schedules occurrences --help
+What schedules did each time they came due, newest first
+
+Usage: weave schedules occurrences [OPTIONS] [SCHEDULE]
+
+Arguments:
+  [SCHEDULE]
+          Only this schedule's, by name or id
+
+Options:
+      --limit <LIMIT>
+          How many, newest first
+          
+          [default: 20]
+
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave hosts --help
+Your Hosts the Dispatcher starts work on: list them, pair it with one, or forget one
+
+Usage: weave hosts [COMMAND]
+
+Commands:
+  list    The Hosts the Dispatcher is paired with, and whether it's connected to each (the default)
+  add     Pair the Dispatcher with a Host as a service, over SSH (`weave hosts add studio`) or with the URL and code `weave pair` shows there
+  remove  Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave hosts list --help
+The Hosts the Dispatcher is paired with, and whether it's connected to each (the default)
+
+Usage: weave hosts list [OPTIONS]
+
+Options:
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave hosts add --help
+Pair the Dispatcher with a Host as a service, over SSH (`weave hosts add studio`) or with the URL and code `weave pair` shows there
+
+Usage: weave hosts add [OPTIONS] <HOST> [CODE]
+
+Arguments:
+  <HOST>
+          The computer SSH reaches the Host on, or the URL `weave pair` shows there
+
+  [CODE]
+          The code `weave pair` shows there, after its URL
+
+Options:
+      --name <NAME>
+          What to call it; the computer's name, or its tailnet name, by default
+
+      --json
+          Print the Host as JSON
+
+  -h, --help
+          Print help
+
+$ weave hosts remove --help
+Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
+
+Usage: weave hosts remove <HOST>
+
+Arguments:
+  <HOST>
+          The Host's id or name
+
+Options:
+  -h, --help
+          Print help
+
+$ weave pair --help
+Pair another of your devices with the weave Host, to reach it over your tailnet
+
+Usage: weave pair [OPTIONS]
+
+Options:
+      --name <NAME>
+          The name the device gets, instead of the one it gives
+
+      --json
+          Print the URL and code as JSON, and don't wait for a device: for `weave hosts add` on another computer, which runs this over SSH
+
+  -h, --help
+          Print help
+
+$ weave devices --help
+Devices paired with the weave Host: list them, or revoke one
+
+Usage: weave devices [COMMAND]
+
+Commands:
+  list    List the paired devices (the default)
+  revoke  Forget a device and close its connections. It has to pair again
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave devices list --help
+List the paired devices (the default)
+
+Usage: weave devices list [OPTIONS]
+
+Options:
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave devices revoke --help
+Forget a device and close its connections. It has to pair again
+
+Usage: weave devices revoke <DEVICE_ID>
+
+Arguments:
+  <DEVICE_ID>
+          
+
+Options:
+  -h, --help
+          Print help
+
+$ weave terminals --help
+The weave Host's terminals: show one here, as the TUI does in a Rex pane
+
+Usage: weave terminals <COMMAND>
+
+Commands:
+  attach  Show one of the weave Host's terminals here, and type into it. Closing this leaves the terminal running; it ends when its shell exits
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave terminals attach --help
+Show one of the weave Host's terminals here, and type into it. Closing this leaves the terminal running; it ends when its shell exits
+
+Usage: weave terminals attach <ID>
+
+Arguments:
+  <ID>
+          The terminal's id, as `terminals/list` gives it
+
+Options:
+  -h, --help
+          Print help
+
 $ weave worktrees --help
 Git worktrees: what worktrunk asks the weave Host before it removes one
 
@@ -392,43 +829,17 @@ Options:
   -h, --help
           Print help
 
-$ weave terminal --help
-The weave Host's terminals: show one here, as the TUI does in a Rex pane
-
-Usage: weave terminal <COMMAND>
-
-Commands:
-  attach  Show one of the weave Host's terminals here, and type into it. Closing this leaves the terminal running; it ends when its shell exits
-  help    Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help
-          Print help
-
-$ weave terminal attach --help
-Show one of the weave Host's terminals here, and type into it. Closing this leaves the terminal running; it ends when its shell exits
-
-Usage: weave terminal attach <ID>
-
-Arguments:
-  <ID>
-          The terminal's id, as `terminals/list` gives it
-
-Options:
-  -h, --help
-          Print help
-
 $ weave daemon --help
 Manage the weave Host, which runs agents so their threads outlive the TUI
 
-Usage: weave daemon <COMMAND>
+Usage: weave daemon [COMMAND]
 
 Commands:
   run        Serve in the foreground until stopped (for launchd or systemd, or to watch its log)
   start      Start the Host in the background, if it isn't running
   stop       Stop the Host and its agents once running turns end. Threads it had open can be reopened later
   restart    Stop the Host if it's running, once running turns end, then start it again: after rebuilding weave
-  status     What the Host is running
+  status     What the Host is running (the default)
   install    Run the Host as a service (launchd's on macOS, systemd's on Linux): kept running, with no idle exit
   uninstall  Remove the service `install` wrote, stopping the Host
   help       Print this message or the help of the given subcommand(s)
@@ -486,7 +897,7 @@ Options:
           Print help
 
 $ weave daemon status --help
-What the Host is running
+What the Host is running (the default)
 
 Usage: weave daemon status [OPTIONS]
 
@@ -515,87 +926,70 @@ Options:
   -h, --help
           Print help
 
-$ weave pair --help
-Pair another of your devices with the weave Host, to reach it over your tailnet
-
-Usage: weave pair [OPTIONS]
-
-Options:
-      --name <NAME>
-          The name the device gets, instead of the one it gives
-
-      --json
-          Print the URL and code as JSON, and don't wait for a device: for `weave dispatcher add-host` on another computer, which runs this over SSH
-
-  -h, --help
-          Print help
-
-$ weave devices --help
-Devices paired with the weave Host: list them, or revoke one
-
-Usage: weave devices [COMMAND]
-
-Commands:
-  list    List the paired devices (the default)
-  revoke  Forget a device and close its connections. It has to pair again
-  help    Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help
-          Print help
-
-$ weave devices list --help
-List the paired devices (the default)
-
-Usage: weave devices list [OPTIONS]
-
-Options:
-      --json
-          Print them as JSON
-
-  -h, --help
-          Print help
-
-$ weave devices revoke --help
-Forget a device and close its connections. It has to pair again
-
-Usage: weave devices revoke <DEVICE_ID>
-
-Arguments:
-  <DEVICE_ID>
-          
-
-Options:
-  -h, --help
-          Print help
-
 $ weave dispatcher --help
-The Dispatcher, which starts work on your Hosts while you're away: run or install it, and pair it with your Hosts
+The Dispatcher, which starts work on your Hosts while you're away: run, start, stop or install it
 
-Usage: weave dispatcher <COMMAND>
+Usage: weave dispatcher [COMMAND]
 
 Commands:
-  run          Run the Dispatcher here, until stopped
-  install      Have launchd or systemd run the Dispatcher, from login or boot, and restart it if it stops
-  uninstall    Stop the Dispatcher's service and remove it
-  status       Whether the Dispatcher runs, and how it reaches its Hosts
-  add-host     Pair the Dispatcher with a Host as a service, over SSH (`weave dispatcher add-host studio`) or with the URL and code `weave pair` shows there
-  hosts        The Hosts the Dispatcher is paired with, and whether it's connected to each
-  remove-host  Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
-  schedules    Schedules, which start a headless turn on a Host at the times a cron expression gives: list, add, remove, pause, resume or run one
-  occurrences  What schedules did each time they came due, newest first
-  help         Print this message or the help of the given subcommand(s)
+  run        Run the Dispatcher in the foreground until stopped (for launchd or systemd, or to watch its log)
+  start      Start the Dispatcher in the background, if it isn't running
+  stop       Stop the Dispatcher. Nothing runs on schedule until it starts again; then each schedule catches up as its `--missed` says
+  restart    Stop the Dispatcher if it's running, then start it again: after rebuilding weave
+  status     Whether the Dispatcher runs, and how it reaches its Hosts (the default)
+  install    Have launchd or systemd run the Dispatcher, from login or boot, and restart it if it stops
+  uninstall  Stop the Dispatcher's service and remove it
+  help       Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help
           Print help
 
 $ weave dispatcher run --help
-Run the Dispatcher here, until stopped
+Run the Dispatcher in the foreground until stopped (for launchd or systemd, or to watch its log)
 
 Usage: weave dispatcher run
 
 Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher start --help
+Start the Dispatcher in the background, if it isn't running
+
+Usage: weave dispatcher start
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher stop --help
+Stop the Dispatcher. Nothing runs on schedule until it starts again; then each schedule catches up as its `--missed` says
+
+Usage: weave dispatcher stop
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher restart --help
+Stop the Dispatcher if it's running, then start it again: after rebuilding weave
+
+Usage: weave dispatcher restart
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher status --help
+Whether the Dispatcher runs, and how it reaches its Hosts (the default)
+
+Usage: weave dispatcher status [OPTIONS]
+
+Options:
+      --json
+          Print it as JSON
+
   -h, --help
           Print help
 
@@ -614,343 +1008,5 @@ Stop the Dispatcher's service and remove it
 Usage: weave dispatcher uninstall
 
 Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher status --help
-Whether the Dispatcher runs, and how it reaches its Hosts
-
-Usage: weave dispatcher status [OPTIONS]
-
-Options:
-      --json
-          Print it as JSON
-
-  -h, --help
-          Print help
-
-$ weave dispatcher add-host --help
-Pair the Dispatcher with a Host as a service, over SSH (`weave dispatcher add-host studio`) or with the URL and code `weave pair` shows there
-
-Usage: weave dispatcher add-host [OPTIONS] <HOST> [CODE]
-
-Arguments:
-  <HOST>
-          The computer SSH reaches the Host on, or the URL `weave pair` shows there
-
-  [CODE]
-          The code `weave pair` shows there, after its URL
-
-Options:
-      --name <NAME>
-          What to call it; the computer's name, or its tailnet name, by default
-
-      --json
-          Print the Host as JSON
-
-  -h, --help
-          Print help
-
-$ weave dispatcher hosts --help
-The Hosts the Dispatcher is paired with, and whether it's connected to each
-
-Usage: weave dispatcher hosts [OPTIONS]
-
-Options:
-      --json
-          Print it as JSON
-
-  -h, --help
-          Print help
-
-$ weave dispatcher remove-host --help
-Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
-
-Usage: weave dispatcher remove-host <HOST>
-
-Arguments:
-  <HOST>
-          The Host's id or name
-
-Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher schedules --help
-Schedules, which start a headless turn on a Host at the times a cron expression gives: list, add, remove, pause, resume or run one
-
-Usage: weave dispatcher schedules [COMMAND]
-
-Commands:
-  list    The schedules, when each runs next and how it last went (the default)
-  add     Add a schedule: at the times `--cron` gives, start a headless turn on a Host
-  remove  Forget a schedule and what it did. A turn it started runs on
-  pause   Run nothing on schedule until resumed
-  resume  Run on schedule again from now, catching up nothing missed while paused
-  run     Run it now, paused or not, as an occurrence of its own
-  help    Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher schedules list --help
-The schedules, when each runs next and how it last went (the default)
-
-Usage: weave dispatcher schedules list [OPTIONS]
-
-Options:
-      --json
-          Print them as JSON
-
-  -h, --help
-          Print help
-
-$ weave dispatcher schedules add --help
-Add a schedule: at the times `--cron` gives, start a headless turn on a Host
-
-Usage: weave dispatcher schedules add [OPTIONS] --cron <CRON> --host <HOST> --agent <AGENT> <NAME> [-- <PROMPT>...]
-
-Arguments:
-  <NAME>
-          Its name, unique among the Dispatcher's schedules
-
-  [PROMPT]...
-          The prompt; read from stdin when omitted or `-`
-
-Options:
-      --cron <CRON>
-          When it runs: five fields, minute hour day-of-month month day-of-week, such as "0 9 * * 1-5" for 09:00 on weekdays; or @hourly, @daily, @weekly, @monthly
-
-      --zone <ZONE>
-          The IANA time zone its times are in, such as Africa/Johannesburg; the Dispatcher's computer's when omitted
-
-      --host <HOST>
-          The Host it runs on, by name or id: one `weave dispatcher hosts` lists
-
-      --agent <AGENT>
-          The agent on that Host, as `weave agents` lists them there
-
-      --cwd <CWD>
-          The directory on that Host it runs in; `~/` starts at the home there. This directory when omitted
-
-      --thread <THREAD>
-          Prompt this thread each time, by its id, instead of starting a new one
-
-      --mode <MODE>
-          The mode a new thread starts in; the agent's configured one when omitted
-
-      --approve <KINDS>
-          Tool kinds to allow, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. Everything else is rejected
-
-      --missed <MISSED>
-          What to do about a time it missed, as while the Dispatcher's computer slept: run the latest once, late, within a week (the default), or skip it
-          
-          [default: latest]
-          [possible values: latest, skip]
-
-      --allow-overlap
-          Start an occurrence while its previous one is still waiting or running, in a thread of its own; by default it's skipped
-
-  -h, --help
-          Print help
-
-$ weave dispatcher schedules remove --help
-Forget a schedule and what it did. A turn it started runs on
-
-Usage: weave dispatcher schedules remove <SCHEDULE>
-
-Arguments:
-  <SCHEDULE>
-          The schedule's name or id
-
-Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher schedules pause --help
-Run nothing on schedule until resumed
-
-Usage: weave dispatcher schedules pause <SCHEDULE>
-
-Arguments:
-  <SCHEDULE>
-          The schedule's name or id
-
-Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher schedules resume --help
-Run on schedule again from now, catching up nothing missed while paused
-
-Usage: weave dispatcher schedules resume <SCHEDULE>
-
-Arguments:
-  <SCHEDULE>
-          The schedule's name or id
-
-Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher schedules run --help
-Run it now, paused or not, as an occurrence of its own
-
-Usage: weave dispatcher schedules run <SCHEDULE>
-
-Arguments:
-  <SCHEDULE>
-          The schedule's name or id
-
-Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher occurrences --help
-What schedules did each time they came due, newest first
-
-Usage: weave dispatcher occurrences [OPTIONS] [SCHEDULE]
-
-Arguments:
-  [SCHEDULE]
-          Only this schedule's, by name or id
-
-Options:
-      --limit <LIMIT>
-          How many, newest first
-          
-          [default: 20]
-
-      --json
-          Print them as JSON
-
-  -h, --help
-          Print help
-
-$ weave update --help
-Move the agents weave launches to their newest releases, after checking each starts
-
-Usage: weave update [OPTIONS] [AGENTS]...
-
-Arguments:
-  [AGENTS]...
-          Only these agents. By default, every preset and the registry agents the config names
-
-Options:
-      --dry-run
-          Say what would change, and change nothing
-
-      --reset
-          Go back to weave's built-in preset versions
-
-      --json
-          Print the report as JSON
-
-      --config <CONFIG>
-          Config file. Defaults to ~/.config/weave/config.toml; the lock is beside it
-
-  -h, --help
-          Print help
-
-$ weave smoke --help
-Run one prompt headlessly and print every ACP event the agent sends
-
-Usage: weave smoke [OPTIONS] [PROMPT]... [-- <COMMAND>...]
-
-Arguments:
-  [PROMPT]...
-          The prompt to send. Before the agent's arguments, whose custom command comes last, after `--`
-
-  [COMMAND]...
-          A custom agent command and its arguments, given after `--`
-
-Options:
-      --agent <AGENT>
-          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
-
-      --trace [<TRACE>]
-          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
-
-      --config <CONFIG>
-          Config file. Defaults to ~/.config/weave/config.toml
-
-      --cwd <CWD>
-          Thread working directory. Defaults to the current directory
-
-      --add-dir <DIR>
-          An extra workspace root for the thread; repeatable. Needs agent support
-
-      --no-fs
-          Don't offer the agent fs/read_text_file and fs/write_text_file
-
-      --no-terminal
-          Don't offer the agent terminals for running commands
-
-      --approve <KINDS>
-          Tool kinds to allow, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. Everything else is rejected
-
-  -h, --help
-          Print help
-
-$ weave login --help
-Sign in to the agent with one of the methods it offers
-
-Usage: weave login [OPTIONS] [-- <COMMAND>...]
-
-Arguments:
-  [COMMAND]...
-          A custom agent command and its arguments, given after `--`
-
-Options:
-      --agent <AGENT>
-          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
-
-      --trace [<TRACE>]
-          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
-
-      --config <CONFIG>
-          Config file. Defaults to ~/.config/weave/config.toml
-
-      --method <METHOD>
-          The sign-in method's id; asked for when omitted
-
-  -h, --help
-          Print help
-
-$ weave logout --help
-Sign out of the agent, if it supports signing out
-
-Usage: weave logout [OPTIONS] [-- <COMMAND>...]
-
-Arguments:
-  [COMMAND]...
-          A custom agent command and its arguments, given after `--`
-
-Options:
-      --agent <AGENT>
-          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
-
-      --trace [<TRACE>]
-          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
-
-      --config <CONFIG>
-          Config file. Defaults to ~/.config/weave/config.toml
-
-  -h, --help
-          Print help
-
-$ weave agents --help
-List the agents `--agent` accepts: presets, the config's, and the ACP registry's
-
-Usage: weave agents [OPTIONS]
-
-Options:
-      --refresh
-          Fetch the ACP registry again rather than use the copy cached within the last day
-
-      --config <CONFIG>
-          Config file. Defaults to ~/.config/weave/config.toml
-
   -h, --help
           Print help

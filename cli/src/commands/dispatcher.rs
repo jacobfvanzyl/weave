@@ -1,11 +1,11 @@
 //! `weave dispatcher`: the Dispatcher (ADR 0027, WVE-175), which keeps triggers and starts
-//! work on the person's Hosts as a client of each, paired with it as a service. `run` runs it
-//! here; `install` has launchd or systemd keep it running; `status` asks it over its socket.
-//! The Hosts it's paired with are [`crate::commands::hosts`]'s, its schedules
+//! work on the person's Hosts as a client of each, paired with it as a service. `run` runs it in
+//! the foreground; `start`, `stop` and `restart` in the background, or through its service once
+//! `install` has launchd or systemd keep it running; `status`, the default, asks it over its
+//! socket. Its Hosts are [`crate::commands::hosts`]'s, its schedules
 //! [`crate::commands::schedules`]'.
 
 use std::process::ExitCode;
-use std::time::Duration;
 
 use anyhow::Context as _;
 use anyhow::bail;
@@ -18,10 +18,10 @@ use weave_dispatcher::socket;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
 
+use crate::background;
 use crate::clock::ago;
 use crate::clock::now_ms;
 use crate::commands::hosts;
-use crate::commands::schedules;
 use crate::commands::stop_signal;
 use crate::dispatcher;
 use crate::dispatcher::connect;
@@ -30,42 +30,34 @@ use crate::service;
 /// `run`'s stderr is its log, as the Host's is.
 pub const LOG: &str = "info";
 
-/// How long `install` waits for the service's Dispatcher to answer.
-const START_TIMEOUT: Duration = Duration::from_secs(10);
-
 #[derive(Args)]
 pub struct DispatcherArgs {
     #[command(subcommand)]
-    command: DispatcherCommand,
+    command: Option<DispatcherCommand>,
 }
 
 #[derive(Subcommand)]
 enum DispatcherCommand {
-    /// Run the Dispatcher here, until stopped.
+    /// Run the Dispatcher in the foreground until stopped (for launchd or systemd, or to watch
+    /// its log).
     Run,
+    /// Start the Dispatcher in the background, if it isn't running.
+    Start,
+    /// Stop the Dispatcher. Nothing runs on schedule until it starts again; then each schedule
+    /// catches up as its `--missed` says.
+    Stop,
+    /// Stop the Dispatcher if it's running, then start it again: after rebuilding weave.
+    Restart,
+    /// Whether the Dispatcher runs, and how it reaches its Hosts (the default).
+    Status(JsonArgs),
     /// Have launchd or systemd run the Dispatcher, from login or boot, and restart it if it
     /// stops.
     Install,
     /// Stop the Dispatcher's service and remove it.
     Uninstall,
-    /// Whether the Dispatcher runs, and how it reaches its Hosts.
-    Status(JsonArgs),
-    /// Pair the Dispatcher with a Host as a service, over SSH (`weave dispatcher add-host
-    /// studio`) or with the URL and code `weave pair` shows there.
-    AddHost(hosts::AddArgs),
-    /// The Hosts the Dispatcher is paired with, and whether it's connected to each.
-    Hosts(JsonArgs),
-    /// Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its
-    /// devices until you revoke it there with `weave devices revoke`.
-    RemoveHost(hosts::RemoveArgs),
-    /// Schedules, which start a headless turn on a Host at the times a cron expression gives:
-    /// list, add, remove, pause, resume or run one.
-    Schedules(schedules::SchedulesArgs),
-    /// What schedules did each time they came due, newest first.
-    Occurrences(schedules::OccurrencesArgs),
 }
 
-#[derive(Args)]
+#[derive(Args, Default)]
 struct JsonArgs {
     /// Print it as JSON.
     #[arg(long)]
@@ -74,26 +66,33 @@ struct JsonArgs {
 
 pub async fn command(args: DispatcherArgs) -> anyhow::Result<ExitCode> {
     let paths = dispatcher::paths()?;
-    let done = match args.command {
+    let done = match args
+        .command
+        .unwrap_or_else(|| DispatcherCommand::Status(JsonArgs::default()))
+    {
         DispatcherCommand::Run => run(paths).await,
+        DispatcherCommand::Start => start(&paths).await,
+        DispatcherCommand::Stop => {
+            if !stop(&paths).await? {
+                eprintln!("The Dispatcher isn't running.");
+            }
+            Ok(())
+        }
+        DispatcherCommand::Restart => restart(&paths).await,
+        DispatcherCommand::Status(args) => status(&paths, args.json).await,
         DispatcherCommand::Install => install(&paths).await,
         DispatcherCommand::Uninstall => {
             service::uninstall_dispatcher(&paths)?;
             eprintln!("Removed the Dispatcher's service; it no longer runs.");
             Ok(())
         }
-        DispatcherCommand::Status(args) => status(&paths, args.json).await,
-        DispatcherCommand::AddHost(args) => hosts::add(&paths, args).await,
-        DispatcherCommand::Hosts(args) => hosts::list(&paths, args.json).await,
-        DispatcherCommand::Schedules(args) => schedules::schedules(&paths, args).await,
-        DispatcherCommand::Occurrences(args) => schedules::occurrences(&paths, args).await,
-        DispatcherCommand::RemoveHost(args) => hosts::remove(&paths, args).await,
     };
     done.map(|()| ExitCode::SUCCESS)
 }
 
 /// `weave dispatcher run`: hold the directory's lock, answer on its socket, and keep the
-/// Hosts connected until SIGTERM or SIGINT.
+/// Hosts connected until SIGTERM or SIGINT. Its work is kept as it goes, so stopping it drains
+/// nothing.
 async fn run(paths: DispatcherPaths) -> anyhow::Result<()> {
     let listening = socket::listen(&paths)
         .with_context(|| format!("listening on {}", paths.socket().display()))?;
@@ -113,37 +112,103 @@ async fn run(paths: DispatcherPaths) -> anyhow::Result<()> {
 async fn install(paths: &DispatcherPaths) -> anyhow::Result<()> {
     if !service::dispatcher_installed(paths) && socket::connect(&paths.socket()).await.is_ok() {
         bail!(
-            "a Dispatcher already runs from {}, not as a service: stop it first, and the service \
-             takes over",
+            "a Dispatcher already runs from {}, not as a service: `weave dispatcher stop` stops it, \
+             and the service takes over",
             paths.dir.display()
         );
     }
     let (executable, lingering) = service::install_dispatcher(paths)?;
-    let answered = tokio::time::timeout(START_TIMEOUT, async {
-        loop {
-            if let Ok(dispatcher) = connect(paths).await {
-                dispatcher.shutdown().await;
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await;
-    if answered.is_err() {
+    if !dispatcher::answers(paths).await {
         bail!(
             "installed the Dispatcher's service, but it didn't answer within {} seconds; its log \
              is {}",
-            START_TIMEOUT.as_secs(),
+            dispatcher::STARTUP_WAIT.as_secs(),
             paths.log().display()
         );
     }
     let lingering = lingering.map(|note| format!(" {note}")).unwrap_or_default();
     eprintln!(
         "Installed the Dispatcher as a {} service. It runs {} and restarts it if it stops; \
-         `weave dispatcher uninstall` removes it.{lingering} Pair it with a Host with `weave \
-         dispatcher add-host <computer>`.",
+         `weave dispatcher uninstall` removes it.{lingering} Pair it with a Host with `weave hosts \
+         add <computer>`.",
         service::manager_name(),
         executable.display()
+    );
+    Ok(())
+}
+
+/// Start the Dispatcher in the background, or have its service's manager start it, and wait for
+/// it to answer.
+async fn start(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    if socket::connect(&paths.socket()).await.is_ok() {
+        eprintln!(
+            "The Dispatcher is already running from {}.",
+            paths.dir.display()
+        );
+        return Ok(());
+    }
+    if service::dispatcher_installed(paths) {
+        service::start_dispatcher(paths)?;
+    } else {
+        paths
+            .prepare()
+            .with_context(|| format!("creating {}", paths.dir.display()))?;
+        background::spawn(&["dispatcher", "run"], &paths.log(), "the Dispatcher")?;
+    }
+    if !dispatcher::answers(paths).await {
+        bail!(
+            "the Dispatcher didn't answer within {} seconds; its log is {}",
+            dispatcher::STARTUP_WAIT.as_secs(),
+            paths.log().display()
+        );
+    }
+    eprintln!(
+        "Started the Dispatcher from {}; it logs to {}.",
+        paths.dir.display(),
+        paths.log().display()
+    );
+    Ok(())
+}
+
+/// Stop the Dispatcher, through its service's manager when it's installed, which would start it
+/// again otherwise, and wait for it to go. Returns whether it was running.
+async fn stop(paths: &DispatcherPaths) -> anyhow::Result<bool> {
+    let running = socket::connect(&paths.socket()).await.is_ok();
+    if service::dispatcher_installed(paths) {
+        service::stop_dispatcher(paths)?;
+    } else if running {
+        weave_host::socket::terminate_listener(&paths.socket())
+            .await
+            .with_context(|| format!("stopping the Dispatcher on {}", paths.socket().display()))?;
+    }
+    if !running {
+        return Ok(false);
+    }
+    dispatcher::wait_until_stopped(paths).await?;
+    eprintln!("Stopped the Dispatcher.");
+    Ok(true)
+}
+
+/// Stop the Dispatcher if it's running, and start it again, through its service's manager when
+/// it's installed.
+async fn restart(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    if !service::dispatcher_installed(paths) {
+        stop(paths).await?;
+        return start(paths).await;
+    }
+    service::restart_dispatcher(paths).await?;
+    if !dispatcher::answers(paths).await {
+        bail!(
+            "restarted the Dispatcher's service, but it didn't answer within {} seconds; its log \
+             is {}",
+            dispatcher::STARTUP_WAIT.as_secs(),
+            paths.log().display()
+        );
+    }
+    eprintln!(
+        "Restarted the Dispatcher from {}; it logs to {}.",
+        paths.dir.display(),
+        paths.log().display()
     );
     Ok(())
 }
@@ -157,7 +222,7 @@ async fn status(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()> {
                 paths.log().display()
             )
         } else {
-            "`weave dispatcher install` runs it as a service, or `weave dispatcher run` here."
+            "`weave dispatcher install` runs it as a service, or `weave dispatcher start` here."
                 .to_owned()
         };
         bail!(

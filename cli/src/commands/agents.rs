@@ -1,6 +1,6 @@
-//! The agents weave launches (`weave-agents`): which there are, signing in to and out of one
-//! directly, moving them to their newest releases ([`update`]), and one headless turn with one
-//! that prints every ACP event ([`smoke`]).
+//! `weave agents`: the agents weave launches (`weave-agents`): which there are, moving them to
+//! their newest releases ([`update`]), signing in to and out of one directly, and one headless
+//! turn with one that prints every ACP event ([`smoke`]).
 
 pub mod smoke;
 pub mod update;
@@ -10,6 +10,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use clap::Args;
+use clap::Subcommand;
 use weave_agents::registry;
 
 use crate::args::AgentArgs;
@@ -21,7 +22,41 @@ use crate::start::SignedIn;
 pub const LOG: &str = "warn";
 
 #[derive(Args)]
-pub struct ListArgs {
+pub struct AgentsArgs {
+    #[command(subcommand)]
+    command: Option<AgentsCommand>,
+}
+
+#[derive(Subcommand)]
+enum AgentsCommand {
+    /// The agents `--agent` accepts: presets, the config's, and the ACP registry's (the
+    /// default).
+    List(ListArgs),
+    /// Move the agents weave launches to their newest releases, after checking each starts.
+    Update(update::UpdateArgs),
+    /// Sign in to the agent with one of the methods it offers.
+    Login(LoginArgs),
+    /// Sign out of the agent, if it supports signing out.
+    Logout(LogoutArgs),
+    /// Run one prompt headlessly and print every ACP event the agent sends.
+    Smoke(smoke::SmokeArgs),
+}
+
+pub async fn command(args: AgentsArgs) -> anyhow::Result<ExitCode> {
+    match args
+        .command
+        .unwrap_or_else(|| AgentsCommand::List(ListArgs::default()))
+    {
+        AgentsCommand::List(args) => list(args).await,
+        AgentsCommand::Update(args) => update::command(args).await,
+        AgentsCommand::Login(args) => login(args).await,
+        AgentsCommand::Logout(args) => logout(args).await,
+        AgentsCommand::Smoke(args) => smoke::command(args).await,
+    }
+}
+
+#[derive(Args, Default)]
+struct ListArgs {
     /// Fetch the ACP registry again rather than use the copy cached within the last day.
     #[arg(long)]
     refresh: bool,
@@ -72,7 +107,7 @@ pub async fn logout(args: LogoutArgs) -> anyhow::Result<ExitCode> {
 }
 
 /// The agents `--agent` accepts: presets and the config's, then the ACP registry's.
-pub async fn list(args: ListArgs) -> anyhow::Result<ExitCode> {
+async fn list(args: ListArgs) -> anyhow::Result<ExitCode> {
     let config = Config::load(args.config.as_deref())?;
     if let Some(notice) = &config.notice {
         eprintln!("weave: {notice}");

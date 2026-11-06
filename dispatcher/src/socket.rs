@@ -87,14 +87,14 @@ pub(crate) fn owner(listener: &UnixListener) -> Option<u32> {
 }
 
 /// Whether `stream`'s peer is the socket's owner, or anyone when there's no owner to compare
-/// with: the socket's file mode is then the only check.
-pub(crate) fn from_owner(stream: &UnixStream, owner: Option<u32>) -> bool {
+/// with: the socket's file mode is then the only check. None when the peer can't be told, as
+/// when it has gone already, as the CLI's checks whether the Dispatcher is running do.
+pub(crate) fn from_owner(stream: &UnixStream, owner: Option<u32>) -> Option<bool> {
     let Some(owner) = owner else {
-        return true;
+        return Some(true);
     };
-    stream
-        .peer_cred()
-        .is_ok_and(|credentials| credentials.uid() == owner)
+    let credentials = stream.peer_cred().ok()?;
+    Some(credentials.uid() == owner)
 }
 
 #[cfg(test)]

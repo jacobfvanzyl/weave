@@ -358,7 +358,7 @@ pub mod stream {
         /// `weave-holder --version` names its own.
         pub codec: String,
         /// With a VT restore, the history above the screen too, for a client whose terminal
-        /// keeps scrollback of its own, as `weave terminal attach` does. A holder from before
+        /// keeps scrollback of its own, as `weave terminals attach` does. A holder from before
         /// it sends the screen alone.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub history: bool,

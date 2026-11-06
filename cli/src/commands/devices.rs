@@ -36,8 +36,8 @@ pub struct PairArgs {
     #[arg(long)]
     name: Option<String>,
 
-    /// Print the URL and code as JSON, and don't wait for a device: for `weave dispatcher
-    /// add-host` on another computer, which runs this over SSH.
+    /// Print the URL and code as JSON, and don't wait for a device: for `weave hosts add` on
+    /// another computer, which runs this over SSH.
     #[arg(long)]
     json: bool,
 }
@@ -128,7 +128,7 @@ async fn offer(
     println!(
         "Scan this with the device, or enter:\n  Host  {url}\n  Code  {}\n\nThe code works \
          once, for five minutes. To pair the Dispatcher with this Host, run where it runs:\n  \
-         weave dispatcher add-host {url} {}",
+         weave hosts add {url} {}",
         grouped(&offer.code),
         offer.code
     );

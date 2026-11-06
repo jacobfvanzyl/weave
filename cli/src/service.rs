@@ -7,7 +7,7 @@
 //! A Host directory of its own (`WEAVE_DAEMON_DIR`) gets a service of its own, named after it.
 //!
 //! The Dispatcher (ADR 0027) is installed the same way, as a service of its own: `weave
-//! dispatcher install`.
+//! dispatcher install`, and its `start`, `stop` and `restart` go through the manager too.
 
 mod launchd;
 mod systemd;
@@ -21,6 +21,7 @@ use anyhow::bail;
 use weave_dispatcher::DispatcherPaths;
 use weave_host::DaemonPaths;
 
+use crate::dispatcher;
 use crate::host;
 
 /// Environment the service passes on, as it was when installed, so it uses the same places.
@@ -256,6 +257,34 @@ pub fn uninstall_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
     match manager()? {
         Manager::Launchd => launchd::uninstall_dispatcher(paths),
         Manager::Systemd => systemd::uninstall_dispatcher(paths),
+    }
+}
+
+/// Start the Dispatcher's installed service.
+pub fn start_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    match manager()? {
+        Manager::Launchd => launchd::start_dispatcher(paths),
+        Manager::Systemd => systemd::start_dispatcher(paths),
+    }
+}
+
+/// Stop the Dispatcher's installed service until it's started again.
+pub fn stop_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    match manager()? {
+        Manager::Launchd => launchd::stop_dispatcher(paths),
+        Manager::Systemd => systemd::stop_dispatcher(paths),
+    }
+}
+
+/// Stop the Dispatcher's installed service if it's running, and start it again.
+pub async fn restart_dispatcher(paths: &DispatcherPaths) -> anyhow::Result<()> {
+    match manager()? {
+        Manager::Launchd => {
+            launchd::stop_dispatcher(paths)?;
+            dispatcher::wait_until_stopped(paths).await?;
+            launchd::start_dispatcher(paths)
+        }
+        Manager::Systemd => systemd::restart_dispatcher(paths),
     }
 }
 

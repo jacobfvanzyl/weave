@@ -1,14 +1,14 @@
-//! `weave dispatcher schedules` and `weave dispatcher occurrences`: the Dispatcher's schedules
-//! (WVE-145), which start a headless turn on one of the person's Hosts at the times a cron
-//! expression gives, and what each time did.
+//! `weave schedules`: the Dispatcher's schedules (WVE-145), which start a headless turn on one of
+//! the person's Hosts at the times a cron expression gives, and what each time did.
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::Context as _;
 use clap::Args;
 use clap::Subcommand;
 use clap::ValueEnum;
-use weave_dispatcher::DispatcherPaths;
+use weave_dispatcher::client::DispatcherConnection;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::ListOccurrencesRequest;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
@@ -29,7 +29,10 @@ use crate::args::ApproveArgs;
 use crate::args::prompt_text;
 use crate::clock::ago;
 use crate::clock::now_ms;
+use crate::dispatcher;
 use crate::dispatcher::connect;
+
+pub const LOG: &str = "warn";
 
 #[derive(Args)]
 pub struct SchedulesArgs {
@@ -51,6 +54,8 @@ enum SchedulesCommand {
     Resume(NameArgs),
     /// Run it now, paused or not, as an occurrence of its own.
     Run(NameArgs),
+    /// What schedules did each time they came due, newest first.
+    Occurrences(OccurrencesArgs),
 }
 
 #[derive(Args, Default)]
@@ -81,7 +86,7 @@ struct AddArgs {
     #[arg(long)]
     zone: Option<String>,
 
-    /// The Host it runs on, by name or id: one `weave dispatcher hosts` lists.
+    /// The Host it runs on, by name or id: one `weave hosts` lists.
     #[arg(long)]
     host: String,
 
@@ -127,7 +132,7 @@ enum MissedArg {
 }
 
 #[derive(Args)]
-pub struct OccurrencesArgs {
+struct OccurrencesArgs {
     /// Only this schedule's, by name or id.
     schedule: Option<String>,
 
@@ -140,8 +145,8 @@ pub struct OccurrencesArgs {
     json: bool,
 }
 
-pub async fn schedules(paths: &DispatcherPaths, args: SchedulesArgs) -> anyhow::Result<()> {
-    let dispatcher = connect(paths).await?;
+pub async fn command(args: SchedulesArgs) -> anyhow::Result<ExitCode> {
+    let dispatcher = connect(&dispatcher::paths()?).await?;
     let result = async {
         match args
             .command
@@ -176,7 +181,7 @@ pub async fn schedules(paths: &DispatcherPaths, args: SchedulesArgs) -> anyhow::
                     .await?
                     .schedule;
                 println!(
-                    "Paused {}; `weave dispatcher schedules resume` resumes it.",
+                    "Paused {}; `weave schedules resume` resumes it.",
                     schedule.name
                 );
             }
@@ -203,35 +208,36 @@ pub async fn schedules(paths: &DispatcherPaths, args: SchedulesArgs) -> anyhow::
                         occurrence.why.as_deref().unwrap_or("no reason given")
                     ),
                     _ => println!(
-                        "Running {} now ({}); `weave dispatcher occurrences {}` says how it goes.",
+                        "Running {} now ({}); `weave schedules occurrences {}` says how it goes.",
                         args.schedule, occurrence.id, args.schedule
                     ),
                 }
             }
+            SchedulesCommand::Occurrences(args) => occurrences(&dispatcher, args).await?,
         }
         anyhow::Ok(())
     }
     .await;
     dispatcher.shutdown().await;
-    result
+    result.map(|()| ExitCode::SUCCESS)
 }
 
-pub async fn occurrences(paths: &DispatcherPaths, args: OccurrencesArgs) -> anyhow::Result<()> {
-    let dispatcher = connect(paths).await?;
-    let listed = dispatcher
+async fn occurrences(
+    dispatcher: &DispatcherConnection,
+    args: OccurrencesArgs,
+) -> anyhow::Result<()> {
+    let occurrences = dispatcher
         .send(ListOccurrencesRequest {
             schedule: args.schedule.clone(),
             limit: Some(args.limit),
         })
-        .await;
-    let names = dispatcher.send(ListSchedulesRequest {}).await;
-    dispatcher.shutdown().await;
-    let occurrences = listed?.occurrences;
+        .await?
+        .occurrences;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&occurrences)?);
         return Ok(());
     }
-    let schedules = names?.schedules;
+    let schedules = dispatcher.send(ListSchedulesRequest {}).await?.schedules;
     print!(
         "{}",
         describe_occurrences(&occurrences, &schedules, now_ms())
@@ -285,8 +291,7 @@ fn summary(schedule: &Schedule, now: u64) -> String {
 
 fn describe(schedules: &[Schedule], now: u64) -> String {
     if schedules.is_empty() {
-        return "The Dispatcher has no schedules; `weave dispatcher schedules add` adds one.\n"
-            .to_owned();
+        return "The Dispatcher has no schedules; `weave schedules add` adds one.\n".to_owned();
     }
     schedules
         .iter()

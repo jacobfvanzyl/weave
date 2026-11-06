@@ -39,7 +39,7 @@ pub const LOG: &str = "info,agent_stderr=debug";
 #[derive(Args)]
 pub struct DaemonArgs {
     #[command(subcommand)]
-    command: DaemonCommand,
+    command: Option<DaemonCommand>,
 }
 
 #[derive(Subcommand)]
@@ -54,7 +54,7 @@ enum DaemonCommand {
     /// Stop the Host if it's running, once running turns end, then start it again: after
     /// rebuilding weave.
     Restart(StopArgs),
-    /// What the Host is running.
+    /// What the Host is running (the default).
     Status(StatusArgs),
     /// Run the Host as a service (launchd's on macOS, systemd's on Linux): kept running,
     /// with no idle exit.
@@ -63,7 +63,7 @@ enum DaemonCommand {
     Uninstall,
 }
 
-#[derive(Args)]
+#[derive(Args, Default)]
 struct StatusArgs {
     /// Print the Host's answer (`host/status`) as JSON; nothing when it isn't running.
     #[arg(long)]
@@ -99,7 +99,10 @@ struct RunArgs {
 
 pub async fn command(args: DaemonArgs) -> anyhow::Result<ExitCode> {
     let paths = paths()?;
-    let done = match args.command {
+    let command = args
+        .command
+        .unwrap_or_else(|| DaemonCommand::Status(StatusArgs::default()));
+    let done = match command {
         DaemonCommand::Run(run) => serve(&paths, run).await,
         DaemonCommand::Start => start(&paths).await,
         DaemonCommand::Stop(stop_args) => {

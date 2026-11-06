@@ -1,7 +1,7 @@
 //! Which agents there are and how to launch them: the configuration's agents, the presets
 //! and the ACP registry, with the configuration's settings applied; the environment they
 //! start in; and moving them to newer releases ([`update`]). The Host resolves agents with
-//! this, as do `weave smoke`, `login` and `logout`, which talk to agents directly.
+//! this, as do `weave agents smoke`, `login` and `logout`, which talk to agents directly.
 
 pub mod config;
 pub mod environment;

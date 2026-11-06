@@ -90,7 +90,7 @@ permission request, it journals a `notice` saying which tool, its kind and `--ap
 a newer version in the background, one lookup an hour per package (or for the registry's
 catalog) with the version source swappable (`DaemonConfig.upstream`), and tells the agent's
 sessions of an older one, which tell their clients (`agents/updateAvailable`,
-`SessionState.update`). `agents/update` is `weave update <agent>` checked with the Host's own
+`SessionState.update`). `agents/update` is `weave agents update <agent>` checked with the Host's own
 launcher; `session/reopen` has the session's task swap its agent process for one of the
 current version once no turn runs or request waits, taking the session up through ACP resume
 or load, journaling `agentReopened`, and going back to the old version when the new one

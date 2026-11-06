@@ -1,4 +1,5 @@
 mod args;
+mod background;
 mod clock;
 mod commands;
 mod config;
@@ -31,7 +32,9 @@ use crate::args::WorkspaceArgs;
 use crate::commands::agents;
 use crate::commands::daemon;
 use crate::commands::devices;
+use crate::commands::hosts;
 use crate::commands::run;
+use crate::commands::schedules;
 use crate::commands::terminals;
 use crate::commands::threads;
 use crate::commands::worktrees;
@@ -79,30 +82,36 @@ enum Command {
     /// one.
     #[command(name = "threads", alias = "sessions")]
     Threads(threads::ThreadsArgs),
-    /// Git worktrees: what worktrunk asks the weave Host before it removes one.
-    Worktrees(worktrees::WorktreesArgs),
-    /// The weave Host's terminals: show one here, as the TUI does in a Rex pane.
-    #[command(name = "terminal")]
-    Terminals(terminals::TerminalsArgs),
-    /// Manage the weave Host, which runs agents so their threads outlive the TUI.
-    Daemon(daemon::DaemonArgs),
+    /// The agents weave launches: list them, move them to their newest releases, sign in to or
+    /// out of one, or try one with a prompt.
+    Agents(agents::AgentsArgs),
+    /// The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times
+    /// a cron expression gives: list, add, remove, pause, resume or run one, or see what they
+    /// did.
+    Schedules(schedules::SchedulesArgs),
+    /// Your Hosts the Dispatcher starts work on: list them, pair it with one, or forget one.
+    Hosts(hosts::HostsArgs),
     /// Pair another of your devices with the weave Host, to reach it over your tailnet.
     Pair(devices::PairArgs),
     /// Devices paired with the weave Host: list them, or revoke one.
     Devices(devices::DevicesArgs),
-    /// The Dispatcher, which starts work on your Hosts while you're away: run or install it,
-    /// and pair it with your Hosts.
+    /// The weave Host's terminals: show one here, as the TUI does in a Rex pane.
+    #[command(name = "terminals", alias = "terminal")]
+    Terminals(terminals::TerminalsArgs),
+    /// Git worktrees: what worktrunk asks the weave Host before it removes one.
+    Worktrees(worktrees::WorktreesArgs),
+    /// Manage the weave Host, which runs agents so their threads outlive the TUI.
+    Daemon(daemon::DaemonArgs),
+    /// The Dispatcher, which starts work on your Hosts while you're away: run, start, stop or
+    /// install it.
     Dispatcher(commands::dispatcher::DispatcherArgs),
-    /// Move the agents weave launches to their newest releases, after checking each starts.
-    Update(agents::update::UpdateArgs),
-    /// Run one prompt headlessly and print every ACP event the agent sends.
-    Smoke(agents::smoke::SmokeArgs),
-    /// Sign in to the agent with one of the methods it offers.
+    /// `weave agents login`, by the name it had before `agents`, which the Host's and the app's
+    /// sign-in messages gave.
+    #[command(hide = true)]
     Login(agents::LoginArgs),
-    /// Sign out of the agent, if it supports signing out.
+    /// `weave agents logout`, by the name it had before `agents`.
+    #[command(hide = true)]
     Logout(agents::LogoutArgs),
-    /// List the agents `--agent` accepts: presets, the config's, and the ACP registry's.
-    Agents(agents::ListArgs),
     /// The weave Host's MCP server for an agent: relays MCP on stdio to the Host's MCP socket,
     /// which the environment names. The Host declares it to agents; it isn't for people.
     #[command(hide = true)]
@@ -127,11 +136,14 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
     match command {
         Command::Run(args) => logged(run::LOG, run::command(args)).await,
         Command::Threads(args) => logged(threads::LOG, threads::command(args)).await,
-        Command::Worktrees(args) => logged(worktrees::LOG, worktrees::command(args)).await,
-        Command::Terminals(args) => logged(terminals::LOG, terminals::command(args)).await,
-        Command::Daemon(args) => logged(daemon::LOG, daemon::command(args)).await,
+        Command::Agents(args) => logged(agents::LOG, agents::command(args)).await,
+        Command::Schedules(args) => logged(schedules::LOG, schedules::command(args)).await,
+        Command::Hosts(args) => logged(hosts::LOG, hosts::command(args)).await,
         Command::Pair(args) => logged(devices::LOG, devices::pair(args)).await,
         Command::Devices(args) => logged(devices::LOG, devices::command(args)).await,
+        Command::Terminals(args) => logged(terminals::LOG, terminals::command(args)).await,
+        Command::Worktrees(args) => logged(worktrees::LOG, worktrees::command(args)).await,
+        Command::Daemon(args) => logged(daemon::LOG, daemon::command(args)).await,
         Command::Dispatcher(args) => {
             logged(
                 commands::dispatcher::LOG,
@@ -139,11 +151,8 @@ async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
             )
             .await
         }
-        Command::Update(args) => logged(agents::LOG, agents::update::command(args)).await,
-        Command::Smoke(args) => logged(agents::LOG, agents::smoke::command(args)).await,
         Command::Login(args) => logged(agents::LOG, agents::login(args)).await,
         Command::Logout(args) => logged(agents::LOG, agents::logout(args)).await,
-        Command::Agents(args) => logged(agents::LOG, agents::list(args)).await,
         // Stdout carries MCP; diagnostics go to stderr, the agent's to keep.
         Command::McpBridge => logged("warn", mcp_bridge()).await,
     }
@@ -422,7 +431,14 @@ mod tests {
             "agent",
             "--acp"
         ]));
-        assert!(parses(&["weave", "smoke", "hi", "--approve", "all"]));
+        assert!(parses(&[
+            "weave",
+            "agents",
+            "smoke",
+            "hi",
+            "--approve",
+            "all"
+        ]));
         // Sessions are named the same way everywhere.
         assert!(parses(&["weave", "run", "--resume", "s1", "again"]));
         assert!(parses(&["weave", "run", "--continue", "again"]));
@@ -430,14 +446,45 @@ mod tests {
         assert!(!parses(&["weave", "run", "--session", "s1", "again"]));
         // Signing in takes no workspace.
         assert!(parses(&[
-            "weave", "login", "--agent", "claude", "--trace", "t.jsonl"
+            "weave", "agents", "login", "--agent", "claude", "--trace", "t.jsonl"
         ]));
-        assert!(!parses(&["weave", "login", "--cwd", "/tmp"]));
+        assert!(!parses(&["weave", "agents", "login", "--cwd", "/tmp"]));
+        // What a command lists by default, it lists by name too.
+        for noun in ["threads", "agents", "schedules", "hosts", "devices"] {
+            assert!(parses(&["weave", noun]), "{noun}");
+            assert!(parses(&["weave", noun, "list"]), "{noun}");
+        }
+        // And the Host and the Dispatcher say how they are.
+        assert!(parses(&["weave", "daemon"]));
+        assert!(parses(&["weave", "dispatcher"]));
+        assert!(!parses(&["weave", "worktrees"]));
         assert!(parses(&["weave", "threads"]));
         assert!(parses(&["weave", "threads", "close", "s1"]));
         assert!(parses(&["weave", "threads", "list", "--json"]));
-        // Its name before threads.
-        assert!(parses(&["weave", "sessions", "cancel", "s1"]));
+    }
+
+    /// Names commands had before, which messages, scripts and open panes still give.
+    #[test]
+    fn commands_answer_to_their_earlier_names() {
+        let command = |line: &[&str]| Cli::try_parse_from(line).ok().and_then(|cli| cli.command);
+        assert!(matches!(
+            command(&["weave", "sessions", "cancel", "s1"]),
+            Some(Command::Threads(_))
+        ));
+        // As the TUI's Rex panes ran it.
+        assert!(matches!(
+            command(&["weave", "terminal", "attach", "t-1"]),
+            Some(Command::Terminals(_))
+        ));
+        // As the Host's sign-in error and the app gave it; both run `agents::login`.
+        assert!(matches!(
+            command(&["weave", "login", "--agent", "claude", "--method", "m"]),
+            Some(Command::Login(_))
+        ));
+        assert!(matches!(
+            command(&["weave", "logout", "--agent", "claude"]),
+            Some(Command::Logout(_))
+        ));
     }
 
     /// Every command's `--help`, depth first, so a change to the command line shows in review.

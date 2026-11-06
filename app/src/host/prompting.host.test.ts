@@ -273,7 +273,7 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
 
   it('says to sign in on the Host\'s computer when the agent needs it', async () => {
     await expect(store.actions.createSession({ hostId, cwd: host.cwd, agentId: 'fake-auth' }))
-      .rejects.toThrow(/needs signing in\. Run `weave login --agent fake-auth` on the Host's computer/);
+      .rejects.toThrow(/needs signing in\. Run `weave agents login --agent fake-auth` on the Host's computer/);
   });
 
   it('lists the Host\'s directories, and starts a session in one picked there', async () => {

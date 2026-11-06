@@ -87,7 +87,7 @@ impl DaemonPaths {
         self.socket.with_file_name("mcp.sock")
     }
 
-    /// Where local clients stream the Host's terminals (`weave terminal attach`): beside its
+    /// Where local clients stream the Host's terminals (`weave terminals attach`): beside its
     /// socket.
     pub fn terminal_socket(&self) -> PathBuf {
         self.socket.with_file_name("terminals.sock")

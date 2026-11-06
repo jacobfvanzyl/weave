@@ -1,6 +1,6 @@
 //! A thread's terminals as Rex panes in the TUI's own tab (WVE-167, ADR 0018, ADR 0022), behind
 //! detecting Rex: the TUI runs in a Rex pane (`REX_SESSION`, `REX_BLOCK`) and `rex` is on the
-//! `PATH`. Each pane runs `weave terminal attach <id>` and is only a place to show the terminal:
+//! `PATH`. Each pane runs `weave terminals attach <id>` and is only a place to show the terminal:
 //! the TUI's thread panel starts, names and ends terminals, and closing a pane hides its terminal
 //! here while it keeps running for every device.
 //!
@@ -20,7 +20,7 @@ use serde::Serialize;
 
 /// How much of the tab the column of terminals takes, beside the TUI.
 const COLUMN_PERCENT: u8 = 40;
-/// The variables `weave terminal attach` needs from the TUI to find the same Host, which a
+/// The variables `weave terminals attach` needs from the TUI to find the same Host, which a
 /// Rex pane started from the login shell's environment wouldn't have.
 const PASSED: [&str; 3] = ["WEAVE_DAEMON_DIR", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"];
 
@@ -160,7 +160,7 @@ impl Rex {
         }
     }
 
-    /// The command a pane runs: `weave terminal attach <id>`, with what finds the same Host.
+    /// The command a pane runs: `weave terminals attach <id>`, with what finds the same Host.
     fn attach_command(&self, terminal: &str) -> Vec<String> {
         let passed: Vec<String> = PASSED
             .iter()
@@ -177,7 +177,7 @@ impl Rex {
             command.extend(passed);
         }
         command.push(self.weave.display().to_string());
-        command.extend(["terminal", "attach", terminal].map(str::to_owned));
+        command.extend(["terminals", "attach", terminal].map(str::to_owned));
         command
     }
 
@@ -355,7 +355,7 @@ mod tests {
             "{log:?}"
         );
         assert!(
-            log[0].ends_with("/bin/weave terminal attach t-1"),
+            log[0].ends_with("/bin/weave terminals attach t-1"),
             "{log:?}"
         );
         assert!(

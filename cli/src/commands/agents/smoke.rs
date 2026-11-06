@@ -1,4 +1,4 @@
-//! `weave smoke`: verifies an agent end to end without the TUI.
+//! `weave agents smoke`: verifies an agent end to end without the TUI.
 //!
 //! Initializes, opens a session in the working directory, sends one prompt,
 //! and prints each event until the turn ends. Ctrl-C cancels the turn the way

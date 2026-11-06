@@ -1384,7 +1384,7 @@ export class HostStore {
     if (error instanceof HostError && error.code === AUTH_REQUIRED) {
       const agent = entry?.agents.find(({ id }) => id === agentId);
       const name = agent?.name ?? agentId ?? 'The agent';
-      return new Error(`${name} needs signing in. Run \`weave login --agent ${agentId ?? '<agent>'}\` on the Host's computer, then try again.`);
+      return new Error(`${name} needs signing in. Run \`weave agents login --agent ${agentId ?? '<agent>'}\` on the Host's computer, then try again.`);
     }
     if (error instanceof HostError && error.code === HOST_PROTOCOL.errors.forbidden) {
       return new Error(`${error.message}. That's done on the Host's computer.`);

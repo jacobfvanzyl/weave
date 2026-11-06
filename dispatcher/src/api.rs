@@ -50,15 +50,18 @@ pub(crate) async fn serve(shared: Arc<Shared>, listener: UnixListener) {
             () = shared.stop.cancelled() => return,
         };
         match accepted {
-            Ok((stream, _)) if socket::from_owner(&stream, owner) => {
-                let shared = Arc::clone(&shared);
-                tokio::spawn(async move {
-                    if let Err(error) = answer(shared, socket::transport(stream)).await {
-                        tracing::debug!(%error, "a CLI connection ended");
-                    }
-                });
-            }
-            Ok(_) => tracing::warn!("refused a connection from another user"),
+            Ok((stream, _)) => match socket::from_owner(&stream, owner) {
+                Some(true) => {
+                    let shared = Arc::clone(&shared);
+                    tokio::spawn(async move {
+                        if let Err(error) = answer(shared, socket::transport(stream)).await {
+                            tracing::debug!(%error, "a CLI connection ended");
+                        }
+                    });
+                }
+                Some(false) => tracing::warn!("refused a connection from another user"),
+                None => tracing::debug!("refused a connection whose user can't be told"),
+            },
             Err(error) => tracing::warn!(%error, "accepting a connection failed"),
         }
     }

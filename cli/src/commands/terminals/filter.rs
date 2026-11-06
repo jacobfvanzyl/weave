@@ -1,4 +1,4 @@
-//! What `weave terminal attach` leaves out of a terminal's output before its own terminal sees it
+//! What `weave terminals attach` leaves out of a terminal's output before its own terminal sees it
 //! (ADR 0022, WVE-167). The holder's libghostty-vt answers the program's queries, so the
 //! terminal the attach runs in, which would answer them again, never sees them: device
 //! attributes, status and cursor reports, mode, version, window, key-mode and colour queries,

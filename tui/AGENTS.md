@@ -62,7 +62,7 @@ the TUI's own slash commands (`/thread` opens `thread_panel`, the thread's statu
 composer: its MCP servers as the Host reports them, from `SessionState` and `session/changed`,
 with a pointer to the agent's own `/mcp` when it offers one, WVE-160, and its worktree's
 terminals from `terminals/watch`, which the panel manages, WVE-167: in Rex, `rex` shows each in a
-pane of its own running `weave terminal attach`, to the right of the TUI and then stacked
+pane of its own running `weave terminals attach`, to the right of the TUI and then stacked
 below, focuses, hides and records them in `$XDG_STATE_HOME/weave/rex-panes.json`, all off the
 UI thread, and Alt+1 to Alt+9 show one; outside Rex the panel reads a terminal's screen into the
 transcript and types into it; a `closed` event naming another client quits the TUI, hiding its

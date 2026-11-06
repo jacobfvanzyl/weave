@@ -1967,7 +1967,7 @@ expression: schema()
       "required": [
         "agentId"
       ],
-      "description": "`agents/update`: what `weave update <agent>` does. The Host checks that the newest version\nstarts and answers `initialize`, then launches it for the agent's new sessions; open ones\nmove over with `session/reopen`. A version that doesn't start changes nothing. Remote\nclients may update agents too: it only ever takes one to its newest version."
+      "description": "`agents/update`: what `weave agents update <agent>` does. The Host checks that the newest\nversion starts and answers `initialize`, then launches it for the agent's new sessions; open\nones move over with `session/reopen`. A version that doesn't start changes nothing. Remote\nclients may update agents too: it only ever takes one to its newest version."
     },
     "UpdateAgentResponse": {
       "type": "object",
@@ -9777,7 +9777,7 @@ expression: schema()
         },
         "history": {
           "type": "boolean",
-          "description": "With a VT restore, the history above the screen too, for a client whose terminal\nkeeps scrollback of its own, as `weave terminal attach` does. A holder from before\nit sends the screen alone."
+          "description": "With a VT restore, the history above the screen too, for a client whose terminal\nkeeps scrollback of its own, as `weave terminals attach` does. A holder from before\nit sends the screen alone."
         }
       },
       "required": [

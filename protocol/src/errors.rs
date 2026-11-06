@@ -109,7 +109,8 @@ pub fn wrong_agent(session_id: &str, agent: &str) -> Error {
 pub fn requires_terminal() -> Error {
     Error::new(
         REQUIRES_TERMINAL,
-        "this sign-in method runs in a terminal on the Host's computer: run `weave login` there",
+        "this sign-in method runs in a terminal on the Host's computer: run `weave agents login` \
+         there",
     )
 }
 

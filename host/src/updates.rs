@@ -5,8 +5,8 @@
 //! version are told, and tell their clients.
 //!
 //! `agents/update` moves the agent's new sessions to the newest version through
-//! `weave_agents::update`, as `weave update` does, checking that it starts with the Host's own
-//! launcher and environment; `session/reopen` moves an open one.
+//! `weave_agents::update`, as `weave agents update` does, checking that it starts with the Host's
+//! own launcher and environment; `session/reopen` moves an open one.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -171,7 +171,7 @@ fn offer(shared: &Shared, agent_id: &str, latest: &str) {
     }
 }
 
-/// `agents/update`: what `weave update <agent>` does, checked with this Host's launcher.
+/// `agents/update`: what `weave agents update <agent>` does, checked with this Host's launcher.
 /// Returns the version the agent's new sessions launch.
 pub(crate) async fn update(shared: &Arc<Shared>, agent_id: &str) -> Result<String, Error> {
     let agent = shared.resolve(agent_id).await?;

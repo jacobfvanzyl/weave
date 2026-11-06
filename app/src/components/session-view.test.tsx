@@ -86,7 +86,7 @@ describe('SessionView', () => {
     };
     const { rerender } = render(<SessionView controller={controller(session, handlers)} session={session} />);
     expect(screen.getByText('claude-agent-acp 0.94.0 is out; this thread runs 0.86.0.')).toBeInTheDocument();
-    expect(screen.queryByText(/weave update/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/weave (agents )?update/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Move/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Update to 0.94.0' }));
     expect(handlers.updateAgent).toHaveBeenCalled();

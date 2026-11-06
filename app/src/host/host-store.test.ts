@@ -130,7 +130,7 @@ describe('HostStore', () => {
     // Out, but not on the Host yet: its new sessions launch what this one runs.
     expect(store.snapshot().session?.update).toEqual({ agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' });
 
-    // `weave update claude` on the Host: it tells open sessions again, and the store looks again.
+    // `weave agents update claude` on the Host: it tells open sessions again, and the store looks again.
     launches = '0.94.0';
     const listed = host.asked.filter((method) => method === 'agents/list').length;
     host.notify('agents/updateAvailable', { sessionId: SESSION, agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' });

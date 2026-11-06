@@ -152,7 +152,7 @@ async fn hosts(
 fn no_dispatcher(shared: &Shared) -> String {
     format!(
         "No Dispatcher reaches the person's other Hosts from this Host ({}): the person pairs \
-         one with each of their Hosts, with `weave dispatcher add-host`.",
+         one with each of their Hosts, with `weave hosts add`.",
         shared.devices.host_id()
     )
 }

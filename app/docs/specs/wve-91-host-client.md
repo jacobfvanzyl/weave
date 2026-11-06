@@ -90,7 +90,7 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
   (`agents/updateAvailable`, or `SessionState.update` on attaching), a notice above the
   transcript names it and the version the session runs. Remote clients can't update agents, so
   while the Host's new sessions of the agent launch the version the session runs (`agents/list`'s
-  `version`), the notice says to run `weave update <agent>` on the Host's computer, and offers
+  `version`), the notice says to run `weave agents update <agent>` on the Host's computer, and offers
   nothing. The Host tells open sessions again once it has updated, and the app reads its agents
   again; when they launch another version, the notice offers Move to that version
   (`session/reopen`), which waits for a running turn.
@@ -298,7 +298,7 @@ transcript live and replayed, and an outline of each is a reviewed snapshot.
   `session/setConfigOption`, whose changes come back through the journal for every client.
 - **Rename, Close and Delete** are `session/rename` (WVE-114), `session/close` and
   `session/delete`.
-- **Sign-in.** An agent that answers `auth_required` gets "… needs signing in. Run `weave login
+- **Sign-in.** An agent that answers `auth_required` gets "… needs signing in. Run `weave agents login
   --agent <agent>` on the Host's computer, then try again": remote clients can't sign agents in.
 
 ### Pending requests

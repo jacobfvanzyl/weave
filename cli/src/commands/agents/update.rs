@@ -1,4 +1,4 @@
-//! `weave update`: move the presets' adapters to their newest releases and refresh the ACP
+//! `weave agents update`: move the presets' adapters to their newest releases and refresh the ACP
 //! registry's catalog for the registry agents in use, after checking that each new version
 //! starts. Newer preset versions go in `agents.lock` beside the config, which every launch
 //! reads, so the next session uses them (WVE-92). The work is `weave_agents::update`'s, which
@@ -74,7 +74,7 @@ pub async fn command(args: UpdateArgs) -> anyhow::Result<ExitCode> {
     })
 }
 
-/// The report as `weave update` prints it.
+/// The report as `weave agents update` prints it.
 fn describe(report: &Report) -> String {
     let id_width = report
         .agents

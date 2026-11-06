@@ -6,7 +6,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | --- | --- |
 | `protocol/` | The Host protocol (`weave-host-protocol`): wire types, roles, error codes and versions, with golden snapshots, the JSON Schema the app's TypeScript comes from (`tests/schema.rs`, feature `schema`), and the permission policy. No I/O. Specs in `docs/specs/`. |
 | `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and the tools services declare and the calls it passes them. No UI. Read `host/AGENTS.md`. |
-| `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave update`. Read `agents/AGENTS.md`. |
+| `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave agents update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
 | `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, paired with each as a service, that keeps triggers and Bots and starts their work there. Its state is SQLite. Runs no agents; Hosts never connect to it. Read `dispatcher/AGENTS.md`. |
 | `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them. |
@@ -52,8 +52,8 @@ implementation. Each crate's own guide is the `AGENTS.md` in its directory.
   per open session. Clients speak the Host protocol (`docs/adr/0008-weave-daemon-is-the-host.md`,
   spec `docs/specs/wve-85-host-protocol.md`, types in `protocol/`), which carries ACP's
   content as its payload. `--no-daemon` (`[daemon] enabled = false`) runs the same Host
-  in-process, so there is one code path. `smoke`, `login` and `logout` talk to agents
-  directly. Triggers (schedules, webhooks) live in the Dispatcher (`dispatcher/`, ADR 0027),
+  in-process, so there is one code path. `weave agents smoke`, `login` and `logout` talk to
+  agents directly. Triggers (schedules, webhooks) live in the Dispatcher (`dispatcher/`, ADR 0027),
   a separate program that starts work on the Hosts as a client of them, paired as a service.
   Domain terms are in `CONTEXT.md`.
 
@@ -83,8 +83,8 @@ cargo build
 cargo test
 cargo clippy --all-targets   # Codex's lint set; must be clean
 cargo fmt
-./target/debug/weave --agent claude         # interactive; or codex, gemini, a config agent
-./target/debug/weave smoke --agent claude   # one headless turn
+./target/debug/weave --agent claude                # interactive; or codex, gemini, a config agent
+./target/debug/weave agents smoke --agent claude   # one headless turn
 ./target/debug/weave --no-daemon -- ./target/debug/weave-fake-agent   # scripted agent
 ```
 

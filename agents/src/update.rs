@@ -1,7 +1,7 @@
 //! Moving agents to their newest releases (WVE-92, WVE-93): the presets' adapters to npm's
 //! `latest`, written to `agents.lock` beside the config, and the registry agents in use to a
 //! refreshed ACP registry catalog, each only once it starts and answers `initialize`.
-//! `weave update` runs it from scripts, and the Host for `agents/update`; where new versions
+//! `weave agents update` runs it from scripts, and the Host for `agents/update`; where new versions
 //! come from and how one is started are theirs to say ([`Upstream`], [`Check`]).
 
 use std::cmp::Ordering;

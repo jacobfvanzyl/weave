@@ -194,7 +194,7 @@ Everything a local client may, except administer the Host; a service may do less
   `capabilities.terminalSignIn`.
 
 `agents/update` (WVE-93) isn't administering the Host: it can only take an agent to its newest
-version, which the Host checks starts, as `weave update` does. So remote clients may update an
+version, which the Host checks starts, as `weave agents update` does. So remote clients may update an
 agent and then `session/reopen` their session onto it, as the TUI's `/update` does.
 
 A remote client's turn origin names its device, so transcripts can say where a prompt came
@@ -234,7 +234,7 @@ codes, nonces or signatures.
 
 A service is a client that does work for the person rather than showing them anything, such as
 the Dispatcher (ADR 0027). It pairs as a device does, with the code `weave pair` shows (`weave
-dispatcher add-host` runs `weave pair --json` over SSH), saying
+hosts add` runs `weave pair --json` over SSH), saying
 `device.service: true`, then proves its key at every hello. It is listed among the devices,
 `weave devices` calls it a service, and it is revoked like any of them. Saying it's a service
 only takes from what it may do, which is what starting headless turns, following threads,

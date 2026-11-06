@@ -110,7 +110,7 @@ pub struct Config {
     /// Threads in the Rex on this computer, for the CLI that runs the Host to parse.
     #[serde(default)]
     pub rex: toml::Table,
-    /// The presets' versions `weave update` locked beside the file (`agents.lock`).
+    /// The presets' versions `weave agents update` locked beside the file (`agents.lock`).
     #[serde(skip)]
     pub lock: Lock,
 }
