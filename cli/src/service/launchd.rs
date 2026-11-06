@@ -16,7 +16,7 @@ use super::instance;
 use super::owner_of;
 use super::passed_on;
 use super::user_id;
-use crate::daemon;
+use crate::host;
 
 /// The label of the default Host's service.
 const LABEL: &str = "local.weave.host";
@@ -41,7 +41,7 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     let plist = plist_path(paths).context("no home directory for ~/Library/LaunchAgents")?;
     let executable = startable(executable()?, "weave daemon install")?;
     // A Host started on demand holds the socket; launchd's takes over from it.
-    let was_running = daemon::stop(paths, false).await?;
+    let was_running = host::stop(paths, false).await?;
     if installed(paths) {
         launchctl(&["bootout", &service_target(paths)?]).ok();
     }
@@ -61,7 +61,7 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     }
     std::fs::write(&plist, contents).with_context(|| format!("writing {}", plist.display()))?;
     launchctl(&["bootstrap", &domain(paths)?, &plist.display().to_string()])?;
-    drop(daemon::wait_until_listening(paths).await?);
+    drop(host::wait_until_listening(paths).await?);
     let restarted = if was_running {
         " (it replaced the one that was running; threads it had open reopen when attached)"
     } else {
@@ -159,7 +159,7 @@ pub(super) async fn uninstall(paths: &DaemonPaths) -> anyhow::Result<()> {
     launchctl(&["bootout", &service_target(paths)?]).ok();
     std::fs::remove_file(&plist).with_context(|| format!("removing {}", plist.display()))?;
     if running {
-        daemon::wait_until_stopped(paths).await?;
+        host::wait_until_stopped(paths).await?;
     }
     eprintln!("Removed the weave Host's launchd service; clients start a Host when they need one.");
     Ok(())

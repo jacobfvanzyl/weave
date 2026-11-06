@@ -1,0 +1,956 @@
+---
+source: cli/src/main.rs
+expression: text
+---
+$ weave --help
+Terminal client for ACP agents
+
+Usage: weave [OPTIONS] [-- <COMMAND>...]
+       weave <COMMAND>
+
+Commands:
+  run         Run one prompt in a headless thread in the weave Host, printing the reply
+  threads     Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
+  worktrees   Git worktrees: what worktrunk asks the weave Host before it removes one
+  terminal    The weave Host's terminals: show one here, as the TUI does in a Rex pane
+  daemon      Manage the weave Host, which runs agents so their threads outlive the TUI
+  pair        Pair another of your devices with the weave Host, to reach it over your tailnet
+  devices     Devices paired with the weave Host: list them, or revoke one
+  dispatcher  The Dispatcher, which starts work on your Hosts while you're away: run or install it, and pair it with your Hosts
+  update      Move the agents weave launches to their newest releases, after checking each starts
+  smoke       Run one prompt headlessly and print every ACP event the agent sends
+  login       Sign in to the agent with one of the methods it offers
+  logout      Sign out of the agent, if it supports signing out
+  agents      List the agents `--agent` accepts: presets, the config's, and the ACP registry's
+  help        Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+      --cwd <CWD>
+          Thread working directory. Defaults to the current directory
+
+      --add-dir <DIR>
+          An extra workspace root for the thread; repeatable. Needs agent support
+
+      --no-fs
+          Don't offer the agent fs/read_text_file and fs/write_text_file
+
+      --no-terminal
+          Don't offer the agent terminals for running commands
+
+      --resume [<THREAD_ID>]
+          Reopen a thread: by id, or (in the TUI) choose one from a list when no id is given
+
+      --continue
+          Reopen the thread last used in this directory (one open in the daemon first), with the agent last used here unless --agent or `--` names one
+
+      --log-file <LOG_FILE>
+          Write diagnostics to this file (with --no-daemon, agent stderr too)
+
+      --no-alt-screen
+          Run inline instead of fullscreen: a viewport below the prompt, with history in the terminal's own scrollback. Also `alternate_screen = "never"` under `[tui]` in the config
+
+      --no-daemon
+          Run the agent in a Host inside this process rather than the shared weave Host, so its threads end when weave does. Also `enabled = false` under `[daemon]` in the config
+
+  -h, --help
+          Print help
+
+  -V, --version
+          Print version
+
+$ weave run --help
+Run one prompt in a headless thread in the weave Host, printing the reply
+
+Usage: weave run [OPTIONS] [PROMPT]... [-- <COMMAND>...]
+
+Arguments:
+  [PROMPT]...
+          The prompt; read from stdin when omitted or `-`. Before the agent's arguments, whose custom command comes last, after `--`
+
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+      --cwd <CWD>
+          Thread working directory. Defaults to the current directory
+
+      --add-dir <DIR>
+          An extra workspace root for the thread; repeatable. Needs agent support
+
+      --no-fs
+          Don't offer the agent fs/read_text_file and fs/write_text_file
+
+      --no-terminal
+          Don't offer the agent terminals for running commands
+
+      --resume [<THREAD_ID>]
+          Reopen a thread: by id, or (in the TUI) choose one from a list when no id is given
+
+      --continue
+          Reopen the thread last used in this directory (one open in the daemon first), with the agent last used here unless --agent or `--` names one
+
+      --approve <KINDS>
+          Tool kinds to allow, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. Everything else is rejected
+
+      --mode <MODE>
+          The mode a new thread starts in, by the agent's id or name for it, such as Claude's `default`; the agent's configured `mode` when omitted, which approves for itself what `--approve` doesn't
+
+      --detach
+          Leave the turn running in the weave Host and print the thread's id
+
+      --key <KEY>
+          A name of your choosing, such as a UUID: running again with it, after a dropped connection, starts nothing twice and follows the turn the first run started
+
+      --label <LABEL>
+          A label for a new thread, to find it by (`weave threads list --label`); repeatable
+
+      --timeout <DURATION>
+          Stop waiting after this long, exiting 8; the turn goes on. Seconds, or with a unit: 500ms, 90s, 5m, 2h
+
+      --keep-waiting
+          Wait on while the turn waits on a person to answer it, rather than exiting 7
+
+      --json
+          Print the thread's journal events (`session/event`) as JSON lines instead of the reply's text; with --detach, the Host's answer (`session/run`)
+
+      --no-daemon
+          Run the agent in this process rather than the weave Host
+
+  -h, --help
+          Print help
+
+$ weave threads --help
+Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
+
+Usage: weave threads [COMMAND]
+
+Commands:
+  list           List the threads open in the weave Host (the default)
+  read           Read a thread: how it lists and its latest turn on stderr, and the agent's last message in that turn on stdout
+  prompt         Send a thread a prompt: it starts a turn at once if none runs, or waits in the thread's queue for the running one to end. The prompt's id is its turn's
+  steer          Send a message into a thread's running turn, without starting another; it fails when no turn runs
+  cancel         Stop the turn a thread is running, as Esc does in the TUI
+  close          Close a thread for every client: its turn ends and its agent stops. `weave --resume` can still reopen it from the agent's history
+  watch          Print the Host's threads as they open, change and close, as JSON lines: a `sessions/updated` for each at first, then one for every change, until stopped
+  follow         Follow an open thread as it goes, without being one of its clients: the agent's reply as text, or with --json its journal events (`session/event`) as JSON lines
+  set-successor  Name the thread an open thread's work goes on in, its successor: clients following it may follow that, and reports to it go there. Named once
+  label          Add labels to an open thread and take others off, and print its labels. Labels mean nothing to the Host: they're for finding threads, and labelled threads are kept past the Host's two weeks
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave threads list --help
+List the threads open in the weave Host (the default)
+
+Usage: weave threads list [OPTIONS]
+
+Options:
+      --activity <ACTIVITY>
+          Only the threads doing this
+          
+          [possible values: idle, running, waiting]
+
+      --label <LABEL>
+          Only the threads that carry this label; given again, those that carry every one
+
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave threads read --help
+Read a thread: how it lists and its latest turn on stderr, and the agent's last message in that turn on stdout
+
+Usage: weave threads read [OPTIONS] <THREAD_ID>
+
+Arguments:
+  <THREAD_ID>
+          
+
+Options:
+      --turn <TURN_ID>
+          Read this turn rather than the latest, as `threads prompt` named it
+
+      --json
+          Print the Host's answer (`sessions/get`) as JSON
+
+  -h, --help
+          Print help
+
+$ weave threads prompt --help
+Send a thread a prompt: it starts a turn at once if none runs, or waits in the thread's queue for the running one to end. The prompt's id is its turn's
+
+Usage: weave threads prompt [OPTIONS] <THREAD_ID> [PROMPT]...
+
+Arguments:
+  <THREAD_ID>
+          
+
+  [PROMPT]...
+          The prompt; read from stdin when omitted or `-`
+
+Options:
+      --json
+          Print the Host's answer (`queue/add`, or `turn/steer`) as JSON; with --wait, the turn's journal events as JSON lines
+
+      --key <KEY>
+          A name of your choosing, such as a UUID: prompting again with it, after a dropped connection, queues nothing twice and answers as the first time did
+
+      --wait
+          Wait for the turn and print the agent's reply, exiting as `weave run` does
+
+      --timeout <DURATION>
+          Stop waiting after this long, exiting 8; the turn goes on. Seconds, or with a unit: 500ms, 90s, 5m, 2h
+
+      --keep-waiting
+          Wait on while the turn waits on a person to answer it, rather than exiting 7
+
+  -h, --help
+          Print help
+
+$ weave threads steer --help
+Send a message into a thread's running turn, without starting another; it fails when no turn runs
+
+Usage: weave threads steer [OPTIONS] <THREAD_ID> [PROMPT]...
+
+Arguments:
+  <THREAD_ID>
+          
+
+  [PROMPT]...
+          The prompt; read from stdin when omitted or `-`
+
+Options:
+      --json
+          Print the Host's answer (`queue/add`, or `turn/steer`) as JSON; with --wait, the turn's journal events as JSON lines
+
+  -h, --help
+          Print help
+
+$ weave threads cancel --help
+Stop the turn a thread is running, as Esc does in the TUI
+
+Usage: weave threads cancel <THREAD_ID>
+
+Arguments:
+  <THREAD_ID>
+          
+
+Options:
+  -h, --help
+          Print help
+
+$ weave threads close --help
+Close a thread for every client: its turn ends and its agent stops. `weave --resume` can still reopen it from the agent's history
+
+Usage: weave threads close <THREAD_ID>
+
+Arguments:
+  <THREAD_ID>
+          
+
+Options:
+  -h, --help
+          Print help
+
+$ weave threads watch --help
+Print the Host's threads as they open, change and close, as JSON lines: a `sessions/updated` for each at first, then one for every change, until stopped
+
+Usage: weave threads watch
+
+Options:
+  -h, --help
+          Print help
+
+$ weave threads follow --help
+Follow an open thread as it goes, without being one of its clients: the agent's reply as text, or with --json its journal events (`session/event`) as JSON lines
+
+Usage: weave threads follow [OPTIONS] <THREAD_ID>
+
+Arguments:
+  <THREAD_ID>
+          
+
+Options:
+      --turn <TURN_ID>
+          Follow this turn, as `threads prompt` or `run --detach` named it, from its start to its end, exiting as `weave run` does for it; one that has ended prints at once
+
+      --after <SEQ>
+          Start after this position in its journal rather than with what happens next
+
+      --until-turn-ends
+          Stop when a turn ends, exiting as `weave run` does for it: the next turn to start, or without --after, the one running now
+
+      --timeout <DURATION>
+          Stop waiting after this long, exiting 8; the turn goes on. Seconds, or with a unit: 500ms, 90s, 5m, 2h
+
+      --keep-waiting
+          Wait on while the turn waits on a person to answer it, rather than exiting 7
+
+      --json
+          Print its journal events as JSON lines
+
+  -h, --help
+          Print help
+
+$ weave threads set-successor --help
+Name the thread an open thread's work goes on in, its successor: clients following it may follow that, and reports to it go there. Named once
+
+Usage: weave threads set-successor <THREAD_ID> <SUCCESSOR_ID>
+
+Arguments:
+  <THREAD_ID>
+          
+
+  <SUCCESSOR_ID>
+          The thread its work goes on in
+
+Options:
+  -h, --help
+          Print help
+
+$ weave threads label --help
+Add labels to an open thread and take others off, and print its labels. Labels mean nothing to the Host: they're for finding threads, and labelled threads are kept past the Host's two weeks
+
+Usage: weave threads label [OPTIONS] <THREAD_ID>
+
+Arguments:
+  <THREAD_ID>
+          
+
+Options:
+      --add <LABEL>
+          A label to add: letters, digits and - _ . : / only
+
+      --remove <LABEL>
+          A label to take off
+
+  -h, --help
+          Print help
+
+$ weave worktrees --help
+Git worktrees: what worktrunk asks the weave Host before it removes one
+
+Usage: weave worktrees <COMMAND>
+
+Commands:
+  pre-remove    Before a worktree is removed: fail while a thread in it runs a turn or waits on you, otherwise close its threads. worktrunk runs it as a pre-remove hook in the worktree it removes (`weave worktrees install-hook`)
+  install-hook  Have worktrunk ask the weave Host before it removes a worktree: adds `weave worktrees pre-remove` to the pre-remove hooks in worktrunk's user config
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave worktrees pre-remove --help
+Before a worktree is removed: fail while a thread in it runs a turn or waits on you, otherwise close its threads. worktrunk runs it as a pre-remove hook in the worktree it removes (`weave worktrees install-hook`)
+
+Usage: weave worktrees pre-remove [PATH]
+
+Arguments:
+  [PATH]
+          The worktree; the current directory when absent
+
+Options:
+  -h, --help
+          Print help
+
+$ weave worktrees install-hook --help
+Have worktrunk ask the weave Host before it removes a worktree: adds `weave worktrees pre-remove` to the pre-remove hooks in worktrunk's user config
+
+Usage: weave worktrees install-hook [OPTIONS]
+
+Options:
+      --config <CONFIG>
+          worktrunk's user config. Defaults to $XDG_CONFIG_HOME/worktrunk/config.toml, else ~/.config/worktrunk/config.toml
+
+  -h, --help
+          Print help
+
+$ weave terminal --help
+The weave Host's terminals: show one here, as the TUI does in a Rex pane
+
+Usage: weave terminal <COMMAND>
+
+Commands:
+  attach  Show one of the weave Host's terminals here, and type into it. Closing this leaves the terminal running; it ends when its shell exits
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave terminal attach --help
+Show one of the weave Host's terminals here, and type into it. Closing this leaves the terminal running; it ends when its shell exits
+
+Usage: weave terminal attach <ID>
+
+Arguments:
+  <ID>
+          The terminal's id, as `terminals/list` gives it
+
+Options:
+  -h, --help
+          Print help
+
+$ weave daemon --help
+Manage the weave Host, which runs agents so their threads outlive the TUI
+
+Usage: weave daemon <COMMAND>
+
+Commands:
+  run        Serve in the foreground until stopped (for launchd or systemd, or to watch its log)
+  start      Start the Host in the background, if it isn't running
+  stop       Stop the Host and its agents once running turns end. Threads it had open can be reopened later
+  restart    Stop the Host if it's running, once running turns end, then start it again: after rebuilding weave
+  status     What the Host is running
+  install    Run the Host as a service (launchd's on macOS, systemd's on Linux): kept running, with no idle exit
+  uninstall  Remove the service `install` wrote, stopping the Host
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave daemon run --help
+Serve in the foreground until stopped (for launchd or systemd, or to watch its log)
+
+Usage: weave daemon run [OPTIONS]
+
+Options:
+      --idle-exit <SECONDS>
+          Exit after this many seconds with no threads open and no clients connected
+
+      --config <CONFIG>
+          The config file agents and MCP servers come from. Defaults to ~/.config/weave/config.toml
+
+  -h, --help
+          Print help
+
+$ weave daemon start --help
+Start the Host in the background, if it isn't running
+
+Usage: weave daemon start
+
+Options:
+  -h, --help
+          Print help
+
+$ weave daemon stop --help
+Stop the Host and its agents once running turns end. Threads it had open can be reopened later
+
+Usage: weave daemon stop [OPTIONS]
+
+Options:
+      --now
+          Don't wait for running turns: stop them now. Threads they're in can be reopened later
+
+  -h, --help
+          Print help
+
+$ weave daemon restart --help
+Stop the Host if it's running, once running turns end, then start it again: after rebuilding weave
+
+Usage: weave daemon restart [OPTIONS]
+
+Options:
+      --now
+          Don't wait for running turns: stop them now. Threads they're in can be reopened later
+
+  -h, --help
+          Print help
+
+$ weave daemon status --help
+What the Host is running
+
+Usage: weave daemon status [OPTIONS]
+
+Options:
+      --json
+          Print the Host's answer (`host/status`) as JSON; nothing when it isn't running
+
+  -h, --help
+          Print help
+
+$ weave daemon install --help
+Run the Host as a service (launchd's on macOS, systemd's on Linux): kept running, with no idle exit
+
+Usage: weave daemon install
+
+Options:
+  -h, --help
+          Print help
+
+$ weave daemon uninstall --help
+Remove the service `install` wrote, stopping the Host
+
+Usage: weave daemon uninstall
+
+Options:
+  -h, --help
+          Print help
+
+$ weave pair --help
+Pair another of your devices with the weave Host, to reach it over your tailnet
+
+Usage: weave pair [OPTIONS]
+
+Options:
+      --name <NAME>
+          The name the device gets, instead of the one it gives
+
+      --json
+          Print the URL and code as JSON, and don't wait for a device: for `weave dispatcher add-host` on another computer, which runs this over SSH
+
+  -h, --help
+          Print help
+
+$ weave devices --help
+Devices paired with the weave Host: list them, or revoke one
+
+Usage: weave devices [COMMAND]
+
+Commands:
+  list    List the paired devices (the default)
+  revoke  Forget a device and close its connections. It has to pair again
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave devices list --help
+List the paired devices (the default)
+
+Usage: weave devices list [OPTIONS]
+
+Options:
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave devices revoke --help
+Forget a device and close its connections. It has to pair again
+
+Usage: weave devices revoke <DEVICE_ID>
+
+Arguments:
+  <DEVICE_ID>
+          
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher --help
+The Dispatcher, which starts work on your Hosts while you're away: run or install it, and pair it with your Hosts
+
+Usage: weave dispatcher <COMMAND>
+
+Commands:
+  run          Run the Dispatcher here, until stopped
+  install      Have launchd or systemd run the Dispatcher, from login or boot, and restart it if it stops
+  uninstall    Stop the Dispatcher's service and remove it
+  status       Whether the Dispatcher runs, and how it reaches its Hosts
+  add-host     Pair the Dispatcher with a Host as a service, over SSH (`weave dispatcher add-host studio`) or with the URL and code `weave pair` shows there
+  hosts        The Hosts the Dispatcher is paired with, and whether it's connected to each
+  remove-host  Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
+  schedules    Schedules, which start a headless turn on a Host at the times a cron expression gives: list, add, remove, pause, resume or run one
+  occurrences  What schedules did each time they came due, newest first
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher run --help
+Run the Dispatcher here, until stopped
+
+Usage: weave dispatcher run
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher install --help
+Have launchd or systemd run the Dispatcher, from login or boot, and restart it if it stops
+
+Usage: weave dispatcher install
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher uninstall --help
+Stop the Dispatcher's service and remove it
+
+Usage: weave dispatcher uninstall
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher status --help
+Whether the Dispatcher runs, and how it reaches its Hosts
+
+Usage: weave dispatcher status [OPTIONS]
+
+Options:
+      --json
+          Print it as JSON
+
+  -h, --help
+          Print help
+
+$ weave dispatcher add-host --help
+Pair the Dispatcher with a Host as a service, over SSH (`weave dispatcher add-host studio`) or with the URL and code `weave pair` shows there
+
+Usage: weave dispatcher add-host [OPTIONS] <HOST> [CODE]
+
+Arguments:
+  <HOST>
+          The computer SSH reaches the Host on, or the URL `weave pair` shows there
+
+  [CODE]
+          The code `weave pair` shows there, after its URL
+
+Options:
+      --name <NAME>
+          What to call it; the computer's name, or its tailnet name, by default
+
+      --json
+          Print the Host as JSON
+
+  -h, --help
+          Print help
+
+$ weave dispatcher hosts --help
+The Hosts the Dispatcher is paired with, and whether it's connected to each
+
+Usage: weave dispatcher hosts [OPTIONS]
+
+Options:
+      --json
+          Print it as JSON
+
+  -h, --help
+          Print help
+
+$ weave dispatcher remove-host --help
+Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
+
+Usage: weave dispatcher remove-host <HOST>
+
+Arguments:
+  <HOST>
+          The Host's id or name
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher schedules --help
+Schedules, which start a headless turn on a Host at the times a cron expression gives: list, add, remove, pause, resume or run one
+
+Usage: weave dispatcher schedules [COMMAND]
+
+Commands:
+  list    The schedules, when each runs next and how it last went (the default)
+  add     Add a schedule: at the times `--cron` gives, start a headless turn on a Host
+  remove  Forget a schedule and what it did. A turn it started runs on
+  pause   Run nothing on schedule until resumed
+  resume  Run on schedule again from now, catching up nothing missed while paused
+  run     Run it now, paused or not, as an occurrence of its own
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher schedules list --help
+The schedules, when each runs next and how it last went (the default)
+
+Usage: weave dispatcher schedules list [OPTIONS]
+
+Options:
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave dispatcher schedules add --help
+Add a schedule: at the times `--cron` gives, start a headless turn on a Host
+
+Usage: weave dispatcher schedules add [OPTIONS] --cron <CRON> --host <HOST> --agent <AGENT> <NAME> [-- <PROMPT>...]
+
+Arguments:
+  <NAME>
+          Its name, unique among the Dispatcher's schedules
+
+  [PROMPT]...
+          The prompt; read from stdin when omitted or `-`
+
+Options:
+      --cron <CRON>
+          When it runs: five fields, minute hour day-of-month month day-of-week, such as "0 9 * * 1-5" for 09:00 on weekdays; or @hourly, @daily, @weekly, @monthly
+
+      --zone <ZONE>
+          The IANA time zone its times are in, such as Africa/Johannesburg; the Dispatcher's computer's when omitted
+
+      --host <HOST>
+          The Host it runs on, by name or id: one `weave dispatcher hosts` lists
+
+      --agent <AGENT>
+          The agent on that Host, as `weave agents` lists them there
+
+      --cwd <CWD>
+          The directory on that Host it runs in; `~/` starts at the home there. This directory when omitted
+
+      --thread <THREAD>
+          Prompt this thread each time, by its id, instead of starting a new one
+
+      --mode <MODE>
+          The mode a new thread starts in; the agent's configured one when omitted
+
+      --approve <KINDS>
+          Tool kinds to allow, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. Everything else is rejected
+
+      --missed <MISSED>
+          What to do about a time it missed, as while the Dispatcher's computer slept: run the latest once, late, within a week (the default), or skip it
+          
+          [default: latest]
+          [possible values: latest, skip]
+
+      --allow-overlap
+          Start an occurrence while its previous one is still waiting or running, in a thread of its own; by default it's skipped
+
+  -h, --help
+          Print help
+
+$ weave dispatcher schedules remove --help
+Forget a schedule and what it did. A turn it started runs on
+
+Usage: weave dispatcher schedules remove <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher schedules pause --help
+Run nothing on schedule until resumed
+
+Usage: weave dispatcher schedules pause <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher schedules resume --help
+Run on schedule again from now, catching up nothing missed while paused
+
+Usage: weave dispatcher schedules resume <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher schedules run --help
+Run it now, paused or not, as an occurrence of its own
+
+Usage: weave dispatcher schedules run <SCHEDULE>
+
+Arguments:
+  <SCHEDULE>
+          The schedule's name or id
+
+Options:
+  -h, --help
+          Print help
+
+$ weave dispatcher occurrences --help
+What schedules did each time they came due, newest first
+
+Usage: weave dispatcher occurrences [OPTIONS] [SCHEDULE]
+
+Arguments:
+  [SCHEDULE]
+          Only this schedule's, by name or id
+
+Options:
+      --limit <LIMIT>
+          How many, newest first
+          
+          [default: 20]
+
+      --json
+          Print them as JSON
+
+  -h, --help
+          Print help
+
+$ weave update --help
+Move the agents weave launches to their newest releases, after checking each starts
+
+Usage: weave update [OPTIONS] [AGENTS]...
+
+Arguments:
+  [AGENTS]...
+          Only these agents. By default, every preset and the registry agents the config names
+
+Options:
+      --dry-run
+          Say what would change, and change nothing
+
+      --reset
+          Go back to weave's built-in preset versions
+
+      --json
+          Print the report as JSON
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml; the lock is beside it
+
+  -h, --help
+          Print help
+
+$ weave smoke --help
+Run one prompt headlessly and print every ACP event the agent sends
+
+Usage: weave smoke [OPTIONS] [PROMPT]... [-- <COMMAND>...]
+
+Arguments:
+  [PROMPT]...
+          The prompt to send. Before the agent's arguments, whose custom command comes last, after `--`
+
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+      --cwd <CWD>
+          Thread working directory. Defaults to the current directory
+
+      --add-dir <DIR>
+          An extra workspace root for the thread; repeatable. Needs agent support
+
+      --no-fs
+          Don't offer the agent fs/read_text_file and fs/write_text_file
+
+      --no-terminal
+          Don't offer the agent terminals for running commands
+
+      --approve <KINDS>
+          Tool kinds to allow, comma-separated: read, edit, delete, move, search, execute, think, fetch, switch_mode, other; or all. Everything else is rejected
+
+  -h, --help
+          Print help
+
+$ weave login --help
+Sign in to the agent with one of the methods it offers
+
+Usage: weave login [OPTIONS] [-- <COMMAND>...]
+
+Arguments:
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+      --method <METHOD>
+          The sign-in method's id; asked for when omitted
+
+  -h, --help
+          Print help
+
+$ weave logout --help
+Sign out of the agent, if it supports signing out
+
+Usage: weave logout [OPTIONS] [-- <COMMAND>...]
+
+Arguments:
+  [COMMAND]...
+          A custom agent command and its arguments, given after `--`
+
+Options:
+      --agent <AGENT>
+          Agent to launch: a preset (claude, codex, gemini), one defined in the config file, or an ACP registry agent's id (`weave agents` lists them)
+
+      --trace [<TRACE>]
+          Append a protocol trace of the agent to this file, viewable with agent-client-protocol-trace-viewer. Through the weave Host, which writes the trace in its own directory and says where, give it without a file
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+  -h, --help
+          Print help
+
+$ weave agents --help
+List the agents `--agent` accepts: presets, the config's, and the ACP registry's
+
+Usage: weave agents [OPTIONS]
+
+Options:
+      --refresh
+          Fetch the ACP registry again rather than use the copy cached within the last day
+
+      --config <CONFIG>
+          Config file. Defaults to ~/.config/weave/config.toml
+
+  -h, --help
+          Print help

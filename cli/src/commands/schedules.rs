@@ -26,10 +26,10 @@ use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::sessions::TurnState;
 
 use crate::args::ApproveArgs;
-use crate::daemon::ago;
-use crate::daemon::now_ms;
+use crate::args::prompt_text;
+use crate::clock::ago;
+use crate::clock::now_ms;
 use crate::dispatcher::connect;
-use crate::run::prompt_text;
 
 #[derive(Args)]
 pub struct SchedulesArgs {

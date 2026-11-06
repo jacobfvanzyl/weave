@@ -3,7 +3,8 @@
 `weave-dispatcher` is the Dispatcher (ADR 0027, WVE-175; spec
 `docs/specs/wve-175-dispatcher.md`): the person's program, apart from their Hosts, that keeps
 triggers and Bots and starts their work on the Hosts. The `weave dispatcher` subcommands in
-`cli/src/dispatcher.rs` run it, install it as a service and ask it over its socket.
+`cli/src/commands/dispatcher.rs` run it and install it as a service, and the CLI asks it over its
+socket (`cli/src/dispatcher.rs`).
 
 It is a client of each Host over the Host protocol, paired with it as a **service**
 (`NewDevice.service`), so a Host lets it do only what starting and following threads needs

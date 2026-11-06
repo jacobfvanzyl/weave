@@ -44,31 +44,33 @@ use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::TURN_IDS_FEATURE;
 
-use crate::daemon::ago;
-use crate::daemon::control_with_events;
-use crate::daemon::now_ms;
-use crate::daemon::paths;
+use crate::args::prompt_text;
+use crate::clock::ago;
+use crate::clock::now_ms;
 use crate::exit;
 use crate::exit::Status;
-use crate::run::Output;
-use crate::run::describe_stop;
-use crate::run::prompt_text;
+use crate::host::control_with_events;
+use crate::host::paths;
 use crate::turn::Follower;
 use crate::turn::Link;
 use crate::turn::Outcome;
+use crate::turn::Output;
 use crate::turn::Pick;
 use crate::turn::Print;
 use crate::turn::WaitArgs;
+use crate::turn::describe_stop;
 use crate::turn::report;
 
+pub const LOG: &str = "warn";
+
 #[derive(Args)]
-pub struct SessionsArgs {
+pub struct ThreadsArgs {
     #[command(subcommand)]
-    command: Option<SessionsCommand>,
+    command: Option<ThreadsCommand>,
 }
 
 #[derive(Subcommand)]
-enum SessionsCommand {
+enum ThreadsCommand {
     /// List the threads open in the weave Host (the default).
     List(ListArgs),
     /// Read a thread: how it lists and its latest turn on stderr, and the agent's last message
@@ -215,43 +217,43 @@ struct FollowArgs {
     json: bool,
 }
 
-pub async fn command(args: SessionsArgs) -> anyhow::Result<ExitCode> {
+pub async fn command(args: ThreadsArgs) -> anyhow::Result<ExitCode> {
     let paths = paths()?;
     let command = args
         .command
-        .unwrap_or_else(|| SessionsCommand::List(ListArgs::default()));
+        .unwrap_or_else(|| ThreadsCommand::List(ListArgs::default()));
     let Some((connection, events)) = control_with_events(&paths).await? else {
         return match command {
-            SessionsCommand::List(ListArgs { json: true, .. }) => {
+            ThreadsCommand::List(ListArgs { json: true, .. }) => {
                 println!("[]");
                 Ok(ExitCode::SUCCESS)
             }
-            SessionsCommand::List(_) => {
+            ThreadsCommand::List(_) => {
                 println!("The weave Host isn't running, so no threads are open.");
                 Ok(ExitCode::SUCCESS)
             }
-            SessionsCommand::Read(_)
-            | SessionsCommand::Prompt(_)
-            | SessionsCommand::Steer(_)
-            | SessionsCommand::Cancel(_)
-            | SessionsCommand::Close(_)
-            | SessionsCommand::SetSuccessor(_)
-            | SessionsCommand::Label(_)
-            | SessionsCommand::Watch
-            | SessionsCommand::Follow(_) => Err(exit::unreachable(anyhow!(
+            ThreadsCommand::Read(_)
+            | ThreadsCommand::Prompt(_)
+            | ThreadsCommand::Steer(_)
+            | ThreadsCommand::Cancel(_)
+            | ThreadsCommand::Close(_)
+            | ThreadsCommand::SetSuccessor(_)
+            | ThreadsCommand::Label(_)
+            | ThreadsCommand::Watch
+            | ThreadsCommand::Follow(_) => Err(exit::unreachable(anyhow!(
                 "the weave Host isn't running, so no threads are open"
             ))),
         };
     };
     // Following a turn waits for a Host that goes away to come back.
     let (connection, events) = match command {
-        SessionsCommand::Follow(args) => {
+        ThreadsCommand::Follow(args) => {
             let mut link = Link::new(connection, events, Some(paths));
             let result = follow(&mut link, args).await;
             link.connection.shutdown().await;
             return result.map(ExitCode::from);
         }
-        SessionsCommand::Prompt(args) if args.wait => {
+        ThreadsCommand::Prompt(args) if args.wait => {
             let mut link = Link::new(connection, events, Some(paths));
             let result = prompt_and_wait(&mut link, args).await;
             link.connection.shutdown().await;
@@ -260,16 +262,16 @@ pub async fn command(args: SessionsArgs) -> anyhow::Result<ExitCode> {
         _ => (connection, events),
     };
     let result = match command {
-        SessionsCommand::Watch => watch(&connection, events).await,
+        ThreadsCommand::Watch => watch(&connection, events).await,
         command => run(&connection, command).await.map(|()| Status::Success),
     };
     connection.shutdown().await;
     result.map(ExitCode::from)
 }
 
-async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::Result<()> {
+async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Result<()> {
     match command {
-        SessionsCommand::List(ListArgs {
+        ThreadsCommand::List(ListArgs {
             activity,
             labels,
             json,
@@ -285,7 +287,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 print!("{}", describe(&sessions, now_ms()));
             }
         }
-        SessionsCommand::Read(ReadArgs {
+        ThreadsCommand::Read(ReadArgs {
             session_id,
             turn,
             json,
@@ -316,7 +318,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 None => eprintln!("No turns yet."),
             }
         }
-        SessionsCommand::Prompt(args) => {
+        ThreadsCommand::Prompt(args) => {
             let session_id = args.message.session_id.clone();
             let json = args.message.json;
             let queued = add_prompt(connection, args).await?;
@@ -329,7 +331,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 eprintln!("Queued turn {turn} for {session_id}, after the turn it's running.");
             }
         }
-        SessionsCommand::Steer(MessageArgs {
+        ThreadsCommand::Steer(MessageArgs {
             session_id,
             prompt,
             json,
@@ -357,7 +359,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 ),
             }
         }
-        SessionsCommand::Cancel(SessionArg { session_id }) => {
+        ThreadsCommand::Cancel(SessionArg { session_id }) => {
             let sessions = open(connection).await?;
             let session = find(&sessions, &session_id)?;
             if session.activity == Some(Activity::Idle) {
@@ -371,7 +373,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 .await?;
             eprintln!("Asked the agent to stop the turn in {session_id}.");
         }
-        SessionsCommand::Close(SessionArg { session_id }) => {
+        ThreadsCommand::Close(SessionArg { session_id }) => {
             find(&open(connection).await?, &session_id)?;
             connection
                 .send(CloseSessionRequest {
@@ -381,7 +383,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 .context("closing the thread")?;
             eprintln!("Closed {session_id}; weave --resume {session_id} reopens it.");
         }
-        SessionsCommand::SetSuccessor(SuccessorArgs {
+        ThreadsCommand::SetSuccessor(SuccessorArgs {
             session_id,
             successor,
         }) => {
@@ -395,7 +397,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 .context("naming the thread's successor")?;
             eprintln!("Thread {session_id} continues in thread {successor}.");
         }
-        SessionsCommand::Label(LabelArgs {
+        ThreadsCommand::Label(LabelArgs {
             session_id,
             add,
             remove,
@@ -414,7 +416,7 @@ async fn run(connection: &HostConnection, command: SessionsCommand) -> anyhow::R
                 labels => println!("{}", labels.join("\n")),
             }
         }
-        SessionsCommand::Watch | SessionsCommand::Follow(_) => {}
+        ThreadsCommand::Watch | ThreadsCommand::Follow(_) => {}
     }
     Ok(())
 }

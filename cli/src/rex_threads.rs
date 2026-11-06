@@ -31,7 +31,7 @@ use weave_host_protocol::sessions::SessionStatus;
 use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 
-use crate::daemon;
+use crate::host;
 
 /// This client's name to the Host.
 const CLIENT: &str = "weave-rex";
@@ -43,8 +43,8 @@ const UNTITLED: &str = "New thread";
 pub async fn follow(daemon: weave_host::Daemon, rex: PathBuf, record: PathBuf) {
     let connected = HostConnection::connect(
         daemon.connect_beside(),
-        daemon::client_info(CLIENT),
-        daemon::capabilities(CLIENT),
+        host::client_info(CLIENT),
+        host::capabilities(CLIENT),
     )
     .await;
     let (connection, mut events) = match connected {

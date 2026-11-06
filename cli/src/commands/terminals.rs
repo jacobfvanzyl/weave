@@ -46,7 +46,10 @@ use weave_host_protocol::terminals::stream::RESTORE;
 use weave_host_protocol::terminals::stream::SUBPROTOCOL;
 
 use self::filter::Filter;
-use crate::daemon;
+use crate::host;
+
+/// Its stdout is the terminal's screen.
+pub const LOG: &str = "error";
 
 /// This client's name to the Host.
 const CLIENT: &str = "weave-terminal";
@@ -56,13 +59,13 @@ const RETRY: Duration = Duration::from_millis(500);
 const CODEC: &str = "none";
 
 #[derive(Args)]
-pub struct TerminalArgs {
+pub struct TerminalsArgs {
     #[command(subcommand)]
-    command: TerminalCommand,
+    command: TerminalsCommand,
 }
 
 #[derive(Subcommand)]
-enum TerminalCommand {
+enum TerminalsCommand {
     /// Show one of the weave Host's terminals here, and type into it. Closing this leaves the
     /// terminal running; it ends when its shell exits.
     Attach {
@@ -71,14 +74,14 @@ enum TerminalCommand {
     },
 }
 
-pub async fn command(args: TerminalArgs) -> anyhow::Result<ExitCode> {
+pub async fn command(args: TerminalsArgs) -> anyhow::Result<ExitCode> {
     match args.command {
-        TerminalCommand::Attach { id } => attach(&id).await,
+        TerminalsCommand::Attach { id } => attach(&id).await,
     }
 }
 
 async fn attach(id: &str) -> anyhow::Result<ExitCode> {
-    let paths = daemon::paths()?;
+    let paths = host::paths()?;
     let raw = RawMode::enable()?;
     let (input, mut typed) = mpsc::unbounded_channel();
     std::thread::spawn(move || read_stdin(input));
@@ -129,8 +132,8 @@ async fn session(
     };
     let Ok((connection, _events)) = HostConnection::connect(
         transport,
-        daemon::client_info(CLIENT),
-        daemon::capabilities(CLIENT),
+        host::client_info(CLIENT),
+        host::capabilities(CLIENT),
     )
     .await
     else {

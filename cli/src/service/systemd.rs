@@ -20,7 +20,7 @@ use super::instance;
 use super::owner_of;
 use super::passed_on;
 use super::user_id;
-use crate::daemon;
+use crate::host;
 
 /// The default Host's unit, without its `.service`.
 const UNIT: &str = "weave-host";
@@ -50,7 +50,7 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     // Fails here, before anything changes, without a user manager to reach.
     systemctl(&["daemon-reload"])?;
     // A Host started on demand holds the socket; systemd's takes over from it.
-    let was_running = daemon::stop(paths, false).await?;
+    let was_running = host::stop(paths, false).await?;
     paths
         .prepare()
         .with_context(|| format!("creating {}", paths.dir.display()))?;
@@ -71,7 +71,7 @@ pub(super) async fn install(paths: &DaemonPaths) -> anyhow::Result<()> {
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", &unit])?;
     systemctl(&["restart", &unit])?;
-    drop(daemon::wait_until_listening(paths).await?);
+    drop(host::wait_until_listening(paths).await?);
     let restarted = if was_running {
         " (it replaced the one that was running; threads it had open reopen when attached)"
     } else {
@@ -165,7 +165,7 @@ pub(super) async fn uninstall(paths: &DaemonPaths) -> anyhow::Result<()> {
     std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
     systemctl(&["daemon-reload"]).ok();
     if running {
-        daemon::wait_until_stopped(paths).await?;
+        host::wait_until_stopped(paths).await?;
     }
     eprintln!(
         "Removed the weave Host's systemd service; clients start a Host when they need one. \

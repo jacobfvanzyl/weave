@@ -9,6 +9,7 @@
 //! one turn: it ends as that ends.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -16,13 +17,17 @@ use anyhow::anyhow;
 use clap::Args;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::Instant;
+use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionId;
+use weave_acp_core::schema::SessionUpdate;
+use weave_acp_core::schema::StopReason;
 use weave_host::DaemonPaths;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::events::SessionEventNotification;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::PendingKind;
 use weave_host_protocol::pending::PendingRequest;
@@ -32,11 +37,9 @@ use weave_host_protocol::sessions::JournalPosition;
 use weave_host_protocol::sessions::SessionState;
 use weave_host_protocol::turns::TurnId;
 
-use crate::daemon::control_with_events;
 use crate::exit;
 use crate::exit::Status;
-use crate::run::Output;
-use crate::run::describe_stop;
+use crate::host::control_with_events;
 
 /// How long to wait for a turn, and whether through its waiting on a person.
 #[derive(Args, Clone, Debug, Default)]
@@ -641,6 +644,93 @@ pub(crate) fn parse_timeout(text: &str) -> Result<Duration, String> {
         other => return Err(format!("{other:?} isn't a unit: use ms, s, m or h")),
     };
     Duration::try_from_secs_f64(seconds).map_err(|error| error.to_string())
+}
+
+pub(crate) fn describe_stop(reason: StopReason) -> &'static str {
+    match reason {
+        StopReason::Cancelled => "cancelled",
+        StopReason::MaxTokens => "the agent reached its token limit",
+        StopReason::MaxTurnRequests => "too many model requests",
+        StopReason::Refusal => "the agent refused",
+        _ => "for an unrecognized reason",
+    }
+}
+
+/// The reply as it streams: text to stdout, tool calls noted on stderr; or every journal event
+/// as a JSON line. `weave threads follow` prints a thread it follows the same way.
+pub(crate) struct Output {
+    json: bool,
+    /// Whether the last thing written to stdout ended its line.
+    at_line_start: bool,
+}
+
+impl Output {
+    pub(crate) fn new(json: bool) -> Self {
+        Self {
+            json,
+            at_line_start: true,
+        }
+    }
+
+    pub(crate) fn event(
+        &mut self,
+        session_id: &SessionId,
+        notification: &SessionEventNotification,
+    ) -> anyhow::Result<()> {
+        if self.json {
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "{}", serde_json::to_string(notification)?)?;
+            return Ok(stdout.flush()?);
+        }
+        match &notification.event {
+            SessionEvent::Update { notification } if notification.session_id == *session_id => {
+                self.update(&notification.update)
+            }
+            SessionEvent::Notice { text } => {
+                self.break_line()?;
+                eprintln!("weave: {text}");
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn update(&mut self, update: &SessionUpdate) -> anyhow::Result<()> {
+        let mut stdout = std::io::stdout().lock();
+        match update {
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                if let ContentBlock::Text(text) = &chunk.content {
+                    write!(stdout, "{}", text.text)?;
+                    self.at_line_start = text.text.ends_with('\n');
+                }
+            }
+            SessionUpdate::ToolCall(call) => {
+                eprintln!("• {}", call.title);
+            }
+            _ => {}
+        }
+        Ok(stdout.flush()?)
+    }
+
+    /// End the reply's line, so what goes to stderr starts on one of its own.
+    fn break_line(&mut self) -> anyhow::Result<()> {
+        if !self.at_line_start {
+            println!();
+            self.at_line_start = true;
+        }
+        Ok(std::io::stdout().flush()?)
+    }
+
+    pub(crate) fn is_json(&self) -> bool {
+        self.json
+    }
+
+    pub(crate) fn finish(&mut self) -> anyhow::Result<()> {
+        if !self.json && !self.at_line_start {
+            println!();
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

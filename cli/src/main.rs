@@ -1,22 +1,16 @@
 mod args;
+mod clock;
+mod commands;
 mod config;
-mod daemon;
-mod devices;
 mod dispatcher;
 mod exit;
+mod host;
 mod recent;
 mod rex_threads;
-mod run;
-mod schedules;
 mod service;
-mod sessions;
-mod smoke;
 mod ssh;
 mod start;
-mod terminal;
 mod turn;
-mod update;
-mod worktrees;
 
 use std::fs::File;
 use std::io::IsTerminal;
@@ -25,22 +19,26 @@ use std::process::ExitCode;
 use std::sync::Mutex;
 
 use anyhow::Context;
-use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
 use weave_acp_core::schema::SessionId;
-use weave_agents::registry;
 
 use crate::args::AgentArgs;
 use crate::args::AgentChoice;
 use crate::args::SessionArgs;
 use crate::args::WorkspaceArgs;
+use crate::commands::agents;
+use crate::commands::daemon;
+use crate::commands::devices;
+use crate::commands::run;
+use crate::commands::terminals;
+use crate::commands::threads;
+use crate::commands::worktrees;
 use crate::config::AlternateScreen;
-use crate::daemon::Target;
 use crate::exit::Status;
+use crate::host::Target;
 use crate::recent::Recent;
-use crate::start::SignedIn;
 
 /// Terminal client for ACP agents.
 #[derive(Parser)]
@@ -80,11 +78,12 @@ enum Command {
     /// Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close
     /// one.
     #[command(name = "threads", alias = "sessions")]
-    Sessions(sessions::SessionsArgs),
+    Threads(threads::ThreadsArgs),
     /// Git worktrees: what worktrunk asks the weave Host before it removes one.
     Worktrees(worktrees::WorktreesArgs),
     /// The weave Host's terminals: show one here, as the TUI does in a Rex pane.
-    Terminal(terminal::TerminalArgs),
+    #[command(name = "terminal")]
+    Terminals(terminals::TerminalsArgs),
     /// Manage the weave Host, which runs agents so their threads outlive the TUI.
     Daemon(daemon::DaemonArgs),
     /// Pair another of your devices with the weave Host, to reach it over your tailnet.
@@ -93,48 +92,21 @@ enum Command {
     Devices(devices::DevicesArgs),
     /// The Dispatcher, which starts work on your Hosts while you're away: run or install it,
     /// and pair it with your Hosts.
-    Dispatcher(dispatcher::DispatcherArgs),
+    Dispatcher(commands::dispatcher::DispatcherArgs),
     /// Move the agents weave launches to their newest releases, after checking each starts.
-    Update(update::UpdateArgs),
+    Update(agents::update::UpdateArgs),
     /// Run one prompt headlessly and print every ACP event the agent sends.
-    Smoke(smoke::SmokeArgs),
+    Smoke(agents::smoke::SmokeArgs),
     /// Sign in to the agent with one of the methods it offers.
-    Login(LoginArgs),
+    Login(agents::LoginArgs),
     /// Sign out of the agent, if it supports signing out.
-    Logout(LogoutArgs),
+    Logout(agents::LogoutArgs),
     /// List the agents `--agent` accepts: presets, the config's, and the ACP registry's.
-    Agents(AgentsArgs),
+    Agents(agents::ListArgs),
     /// The weave Host's MCP server for an agent: relays MCP on stdio to the Host's MCP socket,
     /// which the environment names. The Host declares it to agents; it isn't for people.
     #[command(hide = true)]
     McpBridge,
-}
-
-#[derive(Args)]
-struct AgentsArgs {
-    /// Fetch the ACP registry again rather than use the copy cached within the last day.
-    #[arg(long)]
-    refresh: bool,
-
-    /// Config file. Defaults to ~/.config/weave/config.toml.
-    #[arg(long)]
-    config: Option<PathBuf>,
-}
-
-#[derive(Args)]
-struct LoginArgs {
-    #[command(flatten)]
-    agent: AgentArgs,
-
-    /// The sign-in method's id; asked for when omitted.
-    #[arg(long)]
-    method: Option<String>,
-}
-
-#[derive(Args)]
-struct LogoutArgs {
-    #[command(flatten)]
-    agent: AgentArgs,
 }
 
 #[tokio::main]
@@ -149,85 +121,59 @@ async fn main() -> ExitCode {
 }
 
 async fn command(mut cli: Cli) -> anyhow::Result<ExitCode> {
-    match cli.command.take() {
-        Some(Command::Run(args)) => {
-            log_to_stderr("warn");
-            run::run(args).await
+    let Some(command) = cli.command.take() else {
+        return tui(cli).await;
+    };
+    match command {
+        Command::Run(args) => logged(run::LOG, run::command(args)).await,
+        Command::Threads(args) => logged(threads::LOG, threads::command(args)).await,
+        Command::Worktrees(args) => logged(worktrees::LOG, worktrees::command(args)).await,
+        Command::Terminals(args) => logged(terminals::LOG, terminals::command(args)).await,
+        Command::Daemon(args) => logged(daemon::LOG, daemon::command(args)).await,
+        Command::Pair(args) => logged(devices::LOG, devices::pair(args)).await,
+        Command::Devices(args) => logged(devices::LOG, devices::command(args)).await,
+        Command::Dispatcher(args) => {
+            logged(
+                commands::dispatcher::LOG,
+                commands::dispatcher::command(args),
+            )
+            .await
         }
-        Some(Command::Sessions(args)) => {
-            log_to_stderr("warn");
-            sessions::command(args).await
-        }
-        Some(Command::Worktrees(args)) => {
-            log_to_stderr("warn");
-            worktrees::command(args).await
-        }
-        Some(Command::Terminal(args)) => {
-            // Its stdout is the terminal's screen.
-            log_to_stderr("error");
-            terminal::command(args).await
-        }
-        Some(Command::Daemon(args)) => {
-            // A Host's stderr is its log, agents' stderr included, as `--log-file` has it.
-            log_to_stderr("info,agent_stderr=debug");
-            daemon::command(args).await
-        }
-        Some(Command::Pair(args)) => {
-            log_to_stderr("warn");
-            devices::pair(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::Devices(args)) => {
-            log_to_stderr("warn");
-            devices::devices(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::Dispatcher(args)) => {
-            // `run`'s stderr is its log, as the Host's is.
-            log_to_stderr("info");
-            dispatcher::command(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::Update(args)) => {
-            log_to_stderr("warn");
-            update::command(args).await
-        }
-        Some(Command::Smoke(args)) => {
-            log_to_stderr("warn");
-            smoke::run(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::Login(args)) => {
-            log_to_stderr("warn");
-            login(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::Logout(args)) => {
-            log_to_stderr("warn");
-            logout(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::Agents(args)) => {
-            log_to_stderr("warn");
-            agents(args).await.map(|()| ExitCode::SUCCESS)
-        }
-        Some(Command::McpBridge) => {
-            // Stdout carries MCP; diagnostics go to stderr, the agent's to keep.
-            log_to_stderr("warn");
-            mcp_bridge().await.map(|()| ExitCode::SUCCESS)
-        }
-        None => {
-            // The TUI owns the terminal, so diagnostics can only go to a file.
-            if let Some(path) = &cli.log_file {
-                let file = File::create(path)
-                    .with_context(|| format!("creating log {}", path.display()))?;
-                tracing_subscriber::fmt()
-                    .with_env_filter(env_filter("info,agent_stderr=debug"))
-                    .with_writer(Mutex::new(file))
-                    .with_ansi(false)
-                    .init();
-            }
-            run_tui(cli).await.map(|()| ExitCode::SUCCESS)
-        }
+        Command::Update(args) => logged(agents::LOG, agents::update::command(args)).await,
+        Command::Smoke(args) => logged(agents::LOG, agents::smoke::command(args)).await,
+        Command::Login(args) => logged(agents::LOG, agents::login(args)).await,
+        Command::Logout(args) => logged(agents::LOG, agents::logout(args)).await,
+        Command::Agents(args) => logged(agents::LOG, agents::list(args)).await,
+        // Stdout carries MCP; diagnostics go to stderr, the agent's to keep.
+        Command::McpBridge => logged("warn", mcp_bridge()).await,
     }
 }
 
+/// A subcommand, with its diagnostics on stderr at `level` unless `RUST_LOG` says otherwise.
+async fn logged(
+    level: &str,
+    command: impl Future<Output = anyhow::Result<ExitCode>>,
+) -> anyhow::Result<ExitCode> {
+    log_to_stderr(level);
+    command.await
+}
+
+/// The TUI, which owns the terminal, so diagnostics can only go to a file.
+async fn tui(cli: Cli) -> anyhow::Result<ExitCode> {
+    if let Some(path) = &cli.log_file {
+        let file =
+            File::create(path).with_context(|| format!("creating log {}", path.display()))?;
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter("info,agent_stderr=debug"))
+            .with_writer(Mutex::new(file))
+            .with_ansi(false)
+            .init();
+    }
+    run_tui(cli).await.map(|()| ExitCode::SUCCESS)
+}
+
 /// `weave mcp-bridge`: relay the agent's MCP between stdio and the Host's MCP socket.
-async fn mcp_bridge() -> anyhow::Result<()> {
+async fn mcp_bridge() -> anyhow::Result<ExitCode> {
     let socket = std::env::var_os(weave_host::mcp::SOCKET_VARIABLE)
         .map(PathBuf::from)
         .context("the weave Host starts this for its agents; it has no MCP socket to relay to")?;
@@ -235,7 +181,8 @@ async fn mcp_bridge() -> anyhow::Result<()> {
         .context("the weave Host starts this for its agents; it has no token to relay with")?;
     weave_host::mcp::relay(&socket, &token, tokio::io::stdin(), tokio::io::stdout())
         .await
-        .with_context(|| format!("relaying to {}", socket.display()))
+        .with_context(|| format!("relaying to {}", socket.display()))?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Diagnostics (including agent stderr at `RUST_LOG=agent_stderr=debug`) go to stderr.
@@ -452,115 +399,6 @@ fn resume_args(
     words
 }
 
-async fn login(args: LoginArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch_here(&WorkspaceArgs::default()).await?;
-    let (connection, _events) = start::connect_direct(&launch).await?;
-    let result = start::sign_in(&connection, &launch.spec, args.method.as_deref()).await;
-    connection.shutdown().await;
-    match result? {
-        SignedIn::Ready => eprintln!("Signed in."),
-        SignedIn::Reconnect => eprintln!("Signed in. The next thread will use it."),
-    }
-    Ok(())
-}
-
-async fn logout(args: LogoutArgs) -> anyhow::Result<()> {
-    let launch = args.agent.launch_here(&WorkspaceArgs::default()).await?;
-    let (connection, _events) = start::connect_direct(&launch).await?;
-    let result = connection.logout().await;
-    connection.shutdown().await;
-    result.context("logout")?;
-    eprintln!("Signed out.");
-    Ok(())
-}
-
-async fn agents(args: AgentsArgs) -> anyhow::Result<()> {
-    let config = config::Config::load(args.config.as_deref())?;
-    if let Some(notice) = &config.notice {
-        eprintln!("weave: {notice}");
-    }
-    let config = config.agents;
-    let default = config.default_agent.as_deref();
-    let marker = |id: &str| {
-        if Some(id) == default {
-            "  (default)"
-        } else {
-            ""
-        }
-    };
-    let local: Vec<(String, String)> = config
-        .known_agents()
-        .into_iter()
-        .filter_map(|id| {
-            let spec = config.local_agent(&id)?;
-            Some((id, spec.display_command()))
-        })
-        .collect();
-    let width = local
-        .iter()
-        .map(|(id, _)| id.len())
-        .max()
-        .unwrap_or_default();
-    println!("Presets and configured agents:");
-    for (id, command) in &local {
-        println!("  {id:width$}  {command}{}", marker(id));
-    }
-
-    let cache = registry::Cache::default_location()?;
-    let loaded = registry::load(&cache, args.refresh).await?;
-    if let Some(warning) = &loaded.warning {
-        eprintln!("weave: {warning}");
-    }
-    let agents = &loaded.registry.agents;
-    let platform = registry::platform();
-    println!();
-    println!(
-        "ACP registry ({} agents, fetched {} ago):",
-        agents.len(),
-        registry::age(loaded.fetched)
-    );
-    let id_width = agents
-        .iter()
-        .map(|agent| agent.id.len())
-        .max()
-        .unwrap_or_default();
-    let name_width = agents
-        .iter()
-        .map(|agent| agent.name.chars().count() + 1 + agent.version.len())
-        .max()
-        .unwrap_or_default();
-    for agent in agents {
-        let name = format!("{} {}", agent.name, agent.version);
-        let how = agent
-            .launcher(&platform)
-            .map_or("-", registry::Launcher::kind);
-        let note = if local.iter().any(|(id, _)| *id == agent.id) {
-            "  (the preset or config agent of this name is used)".to_owned()
-        } else if how == "-" {
-            format!("  (no build for {platform})")
-        } else {
-            marker(&agent.id).to_owned()
-        };
-        println!(
-            "  {:id_width$}  {name:name_width$}  {how:6}  {}{note}",
-            agent.id,
-            shorten(&agent.description, 60),
-        );
-    }
-    println!();
-    println!("Start one with: weave --agent <id>");
-    Ok(())
-}
-
-/// `text` cut to `max` characters, with an ellipsis when cut.
-fn shorten(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_owned();
-    }
-    let kept: String = text.chars().take(max.saturating_sub(1)).collect();
-    format!("{}…", kept.trim_end())
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -600,6 +438,32 @@ mod tests {
         assert!(parses(&["weave", "threads", "list", "--json"]));
         // Its name before threads.
         assert!(parses(&["weave", "sessions", "cancel", "s1"]));
+    }
+
+    /// Every command's `--help`, depth first, so a change to the command line shows in review.
+    #[test]
+    fn every_command_says_what_it_does() {
+        use clap::CommandFactory;
+        let mut command = Cli::command();
+        command.build();
+        let mut text = String::new();
+        help(&mut command, &mut text);
+        insta::assert_snapshot!(text);
+    }
+
+    fn help(command: &mut clap::Command, text: &mut String) {
+        let name = command
+            .get_bin_name()
+            .unwrap_or(command.get_name())
+            .to_owned();
+        let rendered = command.render_long_help().to_string();
+        text.push_str(&format!("$ {name} --help\n{}\n", rendered.trim_end()));
+        for command in command.get_subcommands_mut() {
+            if !command.is_hide_set() && command.get_name() != "help" {
+                text.push('\n');
+                help(command, text);
+            }
+        }
     }
 
     fn words(line: &str) -> Vec<String> {

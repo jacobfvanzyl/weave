@@ -7,9 +7,6 @@
 //! turn is left running in the Host, to attach to later with `weave --resume`, and the thread's
 //! id, or with `--json` the Host's answer (`session/run`), is printed.
 
-use std::io::IsTerminal;
-use std::io::Read;
-use std::io::Write;
 use std::process::ExitCode;
 
 use anyhow::Context;
@@ -17,11 +14,7 @@ use anyhow::bail;
 use clap::Args;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::SessionId;
-use weave_acp_core::schema::SessionUpdate;
-use weave_acp_core::schema::StopReason;
 use weave_host_client::HostConnection;
-use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::events::SessionEventNotification;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::sessions::AttachSessionRequest;
 use weave_host_protocol::sessions::CloseWhen;
@@ -37,21 +30,25 @@ use crate::args::AgentArgs;
 use crate::args::ApproveArgs;
 use crate::args::SessionArgs;
 use crate::args::WorkspaceArgs;
+use crate::args::prompt_text;
 use crate::args::reopen_command;
-use crate::daemon::Target;
 use crate::exit;
 use crate::exit::Status;
+use crate::host::Target;
 use crate::recent::Recent;
 use crate::start::StartMode;
 use crate::start::choose;
 use crate::turn::Follower;
 use crate::turn::Link;
 use crate::turn::Outcome;
+use crate::turn::Output;
 use crate::turn::Pick;
 use crate::turn::Print;
 use crate::turn::WaitArgs;
 use crate::turn::report;
 use crate::turn::sleep_until;
+
+pub const LOG: &str = "warn";
 
 #[derive(Args)]
 pub struct RunArgs {
@@ -105,7 +102,7 @@ pub struct RunArgs {
     no_daemon: bool,
 }
 
-pub async fn run(args: RunArgs) -> anyhow::Result<ExitCode> {
+pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     let prompt = prompt_text(&args.prompt)?;
     let policy = PermissionPolicy::headless(args.approve.kinds()?);
     let mode = args.session.mode();
@@ -357,113 +354,4 @@ async fn ended_turn(
         .await
         .ok()?;
     got.latest_turn.filter(|turn| turn.state.is_over())
-}
-
-/// The prompt from the arguments, or stdin when there are none or just `-`.
-pub(crate) fn prompt_text(words: &[String]) -> anyhow::Result<String> {
-    let from_stdin = words.is_empty() || words == ["-"];
-    let text = if from_stdin {
-        if std::io::stdin().is_terminal() {
-            bail!("give a prompt, or pipe one in");
-        }
-        let mut text = String::new();
-        std::io::stdin()
-            .read_to_string(&mut text)
-            .context("reading the prompt from stdin")?;
-        text
-    } else {
-        words.join(" ")
-    };
-    let text = text.trim().to_owned();
-    if text.is_empty() {
-        bail!("the prompt is empty");
-    }
-    Ok(text)
-}
-
-pub(crate) fn describe_stop(reason: StopReason) -> &'static str {
-    match reason {
-        StopReason::Cancelled => "cancelled",
-        StopReason::MaxTokens => "the agent reached its token limit",
-        StopReason::MaxTurnRequests => "too many model requests",
-        StopReason::Refusal => "the agent refused",
-        _ => "for an unrecognized reason",
-    }
-}
-
-/// The reply as it streams: text to stdout, tool calls noted on stderr; or every journal event
-/// as a JSON line. `weave threads follow` prints a thread it follows the same way.
-pub(crate) struct Output {
-    json: bool,
-    /// Whether the last thing written to stdout ended its line.
-    at_line_start: bool,
-}
-
-impl Output {
-    pub(crate) fn new(json: bool) -> Self {
-        Self {
-            json,
-            at_line_start: true,
-        }
-    }
-
-    pub(crate) fn event(
-        &mut self,
-        session_id: &SessionId,
-        notification: &SessionEventNotification,
-    ) -> anyhow::Result<()> {
-        if self.json {
-            let mut stdout = std::io::stdout().lock();
-            writeln!(stdout, "{}", serde_json::to_string(notification)?)?;
-            return Ok(stdout.flush()?);
-        }
-        match &notification.event {
-            SessionEvent::Update { notification } if notification.session_id == *session_id => {
-                self.update(&notification.update)
-            }
-            SessionEvent::Notice { text } => {
-                self.break_line()?;
-                eprintln!("weave: {text}");
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn update(&mut self, update: &SessionUpdate) -> anyhow::Result<()> {
-        let mut stdout = std::io::stdout().lock();
-        match update {
-            SessionUpdate::AgentMessageChunk(chunk) => {
-                if let ContentBlock::Text(text) = &chunk.content {
-                    write!(stdout, "{}", text.text)?;
-                    self.at_line_start = text.text.ends_with('\n');
-                }
-            }
-            SessionUpdate::ToolCall(call) => {
-                eprintln!("• {}", call.title);
-            }
-            _ => {}
-        }
-        Ok(stdout.flush()?)
-    }
-
-    /// End the reply's line, so what goes to stderr starts on one of its own.
-    fn break_line(&mut self) -> anyhow::Result<()> {
-        if !self.at_line_start {
-            println!();
-            self.at_line_start = true;
-        }
-        Ok(std::io::stdout().flush()?)
-    }
-
-    pub(crate) fn is_json(&self) -> bool {
-        self.json
-    }
-
-    pub(crate) fn finish(&mut self) -> anyhow::Result<()> {
-        if !self.json && !self.at_line_start {
-            println!();
-        }
-        Ok(())
-    }
 }

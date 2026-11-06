@@ -3,6 +3,16 @@
 The `weave` binary and its subcommands (`weave-cli`), Host autostart and the launchd and systemd
 services included. Read the root `AGENTS.md` first; its Commands section builds and runs it.
 
+Each top-level command is a module of `src/commands/`, named for what the person manages
+(`threads`, `agents`, `daemon`, …), with its arguments, its `command` and `LOG`, the level it logs
+to stderr at by default; `main.rs` holds the TUI's command line and one line per command. What
+several commands use stays in `src/`: reaching the Host (`host.rs`) and the Dispatcher
+(`dispatcher.rs`), the argument groups (`args.rs`), waiting for a turn (`turn.rs`), exit statuses
+(`exit.rs`), services (`service.rs`) and SSH (`ssh.rs`). A command uses another's module only
+for what's that command's own, as `hosts` reads what `pair --json` prints. `src/snapshots/` holds every
+command's `--help` (`main.rs`'s `every_command_says_what_it_does`), so a change to the command line
+shows in review: run `INSTA_UPDATE=always cargo test -p weave-cli --bin weave` and read the diff.
+
 Clients name agents by id, so `-- <command>` works only with `--no-daemon` (the in-process
 Host is given it as agent `command`); for the shared Host, define the agent under
 `[agents.<id>]`, as `[agents.fake] command = "…/weave-fake-agent"`. Likewise `--no-fs` and
@@ -19,9 +29,9 @@ that exists; see `../agents/src/config.rs`), whose `[tui]` and `[daemon]` are th
 (`src/config.rs`), as are `[remote]`, optional overrides for remote access (port, URL,
 other origins) that `weave daemon run` reads (a restart picks up a change), and `[rex]`.
 
-`weave terminal attach <id>` (`src/terminal.rs`, WVE-167) shows one of the Host's terminals in
+`weave terminal attach <id>` (`src/commands/terminals.rs`, WVE-167) shows one of the Host's terminals in
 the terminal it runs in, as the TUI's Rex panes do: the stream on the Host's `terminals.sock`,
-its VT restore with history and the output to stdout through `terminal/filter.rs`, which leaves
+its VT restore with history and the output to stdout through `terminals/filter.rs`, which leaves
 out queries the holder answers, OSC 52, 9 and 777, and kitty graphics, byte for byte otherwise
 and across chunks, and stdin back as input, read on a thread of its own so the process can exit.
 While another device's size holds it draws nothing and says so, and typing takes the size back
@@ -48,7 +58,7 @@ journals.
 ./target/debug/weave worktrees install-hook   # have worktrunk ask the Host before removing a worktree
 ```
 
-`weave threads` (`cli/src/sessions.rs`; alias `sessions`) acts on any thread without attaching,
+`weave threads` (`src/commands/threads.rs`; alias `sessions`) acts on any thread without attaching,
 as Rex's CLI does on its blocks, so scripts and agents' shells compose threads (ADR 0023):
 `read` gives how a thread lists and its latest turn on stderr and the agent's last message on
 stdout (`--json` for `sessions/get`; `--turn` for a turn other than the latest), `prompt` is
@@ -97,7 +107,7 @@ is made with `exit::fail` or `exit::unreachable`, which keep its message and cau
 (`tests/`) run `weave` against a Host inside the test (`tests/support`), with the fake agent
 in-process, whose `stop <reason>` and `fail` scripts end turns each way.
 
-`weave worktrees pre-remove` is worktrunk's `pre-remove` hook (`cli/src/worktrees.rs`): run in the
+`weave worktrees pre-remove` is worktrunk's `pre-remove` hook (`src/commands/worktrees.rs`): run in the
 worktree being removed, it asks a running Host for `worktrees/release` and exits non-zero while a
 session there runs a turn or waits on the person, which stops `wt remove`, `wt merge` and `wt step
 prune`; with no Host running it passes. `install-hook` adds it to worktrunk's user config
@@ -131,7 +141,7 @@ a systemd user service on Linux (`service/systemd.rs`, `weave-host.service`), wh
 lingering on so the Host runs from boot and after the person logs out of SSH. While it's
 installed, clients never start a Host and `start`/`stop`/`restart` use `launchctl` or `systemctl
 --user` (a restart is one systemd job, so an agent inside the Host can ask for it); `uninstall`
-removes it. `weave daemon stop` and `restart` drain the Host first (`daemon::drain`,
+removes it. `weave daemon stop` and `restart` drain the Host first (`host::drain`,
 `host/drain`): they say how many turns they wait for and wait up to 5 minutes, unless `--now`
 or Ctrl+C; run by an agent, they leave its own turn out (`WEAVE_AGENT_PROCESS`), and they keep
 the drain's connection open until the Host has stopped. `weave daemon run` drains on its first

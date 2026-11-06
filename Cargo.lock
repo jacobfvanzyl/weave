@@ -4617,6 +4617,7 @@ dependencies = [
  "clap",
  "crossterm",
  "futures",
+ "insta",
  "libc",
  "pretty_assertions",
  "qrcode",

@@ -4,6 +4,7 @@
 //! (`docs/specs/wve-90-remote-clients.md`, ADR 0016).
 
 use std::io::IsTerminal as _;
+use std::process::ExitCode;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -22,10 +23,12 @@ use weave_host_protocol::errors;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::StatusRequest;
 
-use crate::daemon;
-use crate::daemon::ago;
-use crate::daemon::now_ms;
+use crate::clock::ago;
+use crate::clock::now_ms;
+use crate::host;
 use crate::service;
+
+pub const LOG: &str = "warn";
 
 #[derive(Args)]
 pub struct PairArgs {
@@ -76,18 +79,18 @@ struct RevokeArgs {
 
 /// `weave pair`: show a code a device pairs with, and wait for it. The offer turns the
 /// Host's remote access on, Tailscale Serve entry and all (ADR 0016).
-pub async fn pair(args: PairArgs) -> anyhow::Result<()> {
-    let paths = daemon::paths()?;
-    let transport = daemon::open(&paths).await?;
+pub async fn pair(args: PairArgs) -> anyhow::Result<ExitCode> {
+    let paths = host::paths()?;
+    let transport = host::open(&paths).await?;
     let (connection, mut events) = HostConnection::connect(
         transport,
-        daemon::client_info("weave-cli"),
-        daemon::capabilities("weave-cli"),
+        host::client_info("weave-cli"),
+        host::capabilities("weave-cli"),
     )
     .await?;
     let result = offer(&connection, &mut events, args, &paths).await;
     connection.shutdown().await;
-    result
+    result.map(|()| ExitCode::SUCCESS)
 }
 
 async fn offer(
@@ -214,16 +217,16 @@ fn qr_code(text: &str) -> anyhow::Result<String> {
 }
 
 /// `weave devices`: list or revoke paired devices.
-pub async fn devices(args: DevicesArgs) -> anyhow::Result<()> {
-    let paths = daemon::paths()?;
+pub async fn command(args: DevicesArgs) -> anyhow::Result<ExitCode> {
+    let paths = host::paths()?;
     let command = args
         .command
         .unwrap_or_else(|| DevicesCommand::List(ListArgs::default()));
-    let transport = daemon::open(&paths).await?;
+    let transport = host::open(&paths).await?;
     let (connection, _events) = HostConnection::connect(
         transport,
-        daemon::client_info("weave-cli"),
-        daemon::capabilities("weave-cli"),
+        host::client_info("weave-cli"),
+        host::capabilities("weave-cli"),
     )
     .await?;
     let result = match command {
@@ -250,7 +253,7 @@ pub async fn devices(args: DevicesArgs) -> anyhow::Result<()> {
             .map_err(anyhow::Error::from),
     };
     connection.shutdown().await;
-    result
+    result.map(|()| ExitCode::SUCCESS)
 }
 
 fn describe(devices: &[Device], now_ms: u64) -> String {

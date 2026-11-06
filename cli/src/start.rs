@@ -36,9 +36,9 @@ use crate::args::AgentChoice;
 use crate::args::HostLaunch;
 use crate::args::Launch;
 use crate::args::WorkspaceArgs;
-use crate::daemon;
-use crate::daemon::Host;
-use crate::daemon::Target;
+use crate::host::Host;
+use crate::host::TUI;
+use crate::host::Target;
 use crate::recent::Recent;
 
 /// The agent and directory to open a session with.
@@ -168,7 +168,7 @@ pub async fn connect_direct(
 /// Connect to the Host and open the session `mode` asks for, signing in first if the agent
 /// requires it.
 pub async fn start(launch: &HostLaunch, host: &Host, mode: &StartMode) -> anyhow::Result<Started> {
-    let (connection, events) = host.connect(daemon::TUI).await?;
+    let (connection, events) = host.connect(TUI).await?;
     let handle = connection.handle();
     let mut attempts = 0;
     let (opened, notices) = loop {

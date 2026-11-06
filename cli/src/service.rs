@@ -21,7 +21,7 @@ use anyhow::bail;
 use weave_dispatcher::DispatcherPaths;
 use weave_host::DaemonPaths;
 
-use crate::daemon;
+use crate::host;
 
 /// Environment the service passes on, as it was when installed, so it uses the same places.
 const PASSED_ON: [&str; 6] = [
@@ -118,7 +118,7 @@ pub async fn restart(paths: &DaemonPaths) -> anyhow::Result<()> {
     match manager()? {
         Manager::Launchd => {
             launchd::stop(paths)?;
-            daemon::wait_until_stopped(paths).await?;
+            host::wait_until_stopped(paths).await?;
             launchd::start(paths)
         }
         // One job of systemd's, which finishes even when the restart was asked for from

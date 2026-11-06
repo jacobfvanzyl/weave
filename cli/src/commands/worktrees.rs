@@ -17,8 +17,10 @@ use weave_host_protocol::errors;
 use weave_host_protocol::worktrees::FEATURE;
 use weave_host_protocol::worktrees::ReleaseWorktreeRequest;
 
-use crate::daemon::control;
-use crate::daemon::paths;
+use crate::host::control;
+use crate::host::paths;
+
+pub const LOG: &str = "warn";
 
 /// The hook's name among worktrunk's `pre-remove` hooks.
 const HOOK_NAME: &str = "weave";

@@ -1,6 +1,8 @@
 //! The argument groups commands share: which agent, the workspace it works in, which
-//! session, and what a headless turn may do without asking.
+//! session, and what a headless turn may do without asking; and the prompt they're given.
 
+use std::io::IsTerminal;
+use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -385,6 +387,28 @@ async fn resolve(
         eprintln!("weave: {warning}");
     }
     Ok((resolved.spec, resolved.options))
+}
+
+/// The prompt from the arguments, or stdin when there are none or just `-`.
+pub(crate) fn prompt_text(words: &[String]) -> anyhow::Result<String> {
+    let from_stdin = words.is_empty() || words == ["-"];
+    let text = if from_stdin {
+        if std::io::stdin().is_terminal() {
+            bail!("give a prompt, or pipe one in");
+        }
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .context("reading the prompt from stdin")?;
+        text
+    } else {
+        words.join(" ")
+    };
+    let text = text.trim().to_owned();
+    if text.is_empty() {
+        bail!("the prompt is empty");
+    }
+    Ok(text)
 }
 
 #[cfg(test)]

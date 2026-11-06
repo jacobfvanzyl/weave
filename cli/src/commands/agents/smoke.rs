@@ -5,6 +5,7 @@
 //! the protocol requires; a second Ctrl-C abandons it.
 
 use std::io::Write;
+use std::process::ExitCode;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -50,7 +51,11 @@ pub struct SmokeArgs {
 /// What smoke asks when no prompt is given.
 const DEFAULT_PROMPT: &str = "Reply with one short sentence confirming you can read this.";
 
-pub async fn run(args: SmokeArgs) -> anyhow::Result<()> {
+pub async fn command(args: SmokeArgs) -> anyhow::Result<ExitCode> {
+    smoke(args).await.map(|()| ExitCode::SUCCESS)
+}
+
+async fn smoke(args: SmokeArgs) -> anyhow::Result<()> {
     let prompt = if args.prompt.is_empty() {
         DEFAULT_PROMPT.to_owned()
     } else {
