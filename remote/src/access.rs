@@ -150,6 +150,7 @@ impl Remote {
         match url(&settings, running.listen).await {
             Ok(url) => {
                 if let Some(retry) = running.retry.take() {
+                    tracing::info!(%url, "Tailscale Serve reaches the {}", self.what);
                     retry.abort();
                 }
                 running.url = Some(url.clone());
