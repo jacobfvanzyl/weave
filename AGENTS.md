@@ -8,8 +8,8 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and the tools services declare and the calls it passes them. No UI. Read `host/AGENTS.md`. |
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave agents update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
-| `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, paired with each as a service, that keeps triggers and Bots and starts their work there. Its state is SQLite. Runs no agents; Hosts never connect to it. Read `dispatcher/AGENTS.md`. |
-| `remote/` | The server's end of remote access (`weave-remote`), which the Host and the Dispatcher share: the loopback WebSocket, turning it on with pairing and its Tailscale Serve entry, and pairing offers and signature checks. Each program keeps its own devices. |
+| `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, as a service, that keeps triggers and Bots and starts their work there. Hosts join it and keep a connection open to it (ADR 0030); it never dials them. Its state is SQLite. Runs no agents. Read `dispatcher/AGENTS.md`. |
+| `remote/` | The server's end of remote access (`weave-remote`), which the Host and the Dispatcher share: the loopback WebSocket, turning it on with pairing and its Tailscale Serve entry, pairing offers and signature checks, and the first requests on a Host's connection to the Dispatcher it joined. Each program keeps its own devices. |
 | `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them. |
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
@@ -55,7 +55,8 @@ implementation. Each crate's own guide is the `AGENTS.md` in its directory.
   content as its payload. `--no-daemon` (`[daemon] enabled = false`) runs the same Host
   in-process, so there is one code path. `weave agents smoke`, `login` and `logout` talk to
   agents directly. Triggers (schedules, webhooks) live in the Dispatcher (`dispatcher/`, ADR 0027),
-  a separate program that starts work on the Hosts as a client of them, paired as a service.
+  a separate program that starts work on the Hosts as a client of them, as a service, over the
+  connection each Host that joined it keeps open (ADR 0030).
   Domain terms are in `CONTEXT.md`.
 
 ### Stack

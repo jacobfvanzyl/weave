@@ -4773,6 +4773,7 @@ dependencies = [
  "getrandom 0.3.4",
  "p256",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite",

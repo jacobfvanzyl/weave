@@ -1,5 +1,6 @@
 //! `weave dispatcher`: the Dispatcher (ADR 0027, WVE-175), which keeps triggers and starts
-//! work on the person's Hosts as a client of each, paired with it as a service. `run` runs it in
+//! work on the person's Hosts as a client of each, over the connection each Host that joined it
+//! keeps open (ADR 0030). `run` runs it in
 //! the foreground; `start`, `stop` and `restart` in the background, or through its service once
 //! `install` has launchd or systemd keep it running; `status`, the default, asks it. Its Hosts
 //! are [`crate::commands::hosts`]'s, its schedules [`crate::commands::schedules`]'.
@@ -7,8 +8,8 @@
 //! The person's other computers pair with it as devices (WVE-176): `pair` shows a code on its
 //! computer, `devices` lists and revokes them there, and `connect` on another computer pairs
 //! that one, over SSH or with the code, so `weave hosts` and `weave schedules` reach it from
-//! there ([`crate::paired`]); `disconnect` forgets it. `connect` offers the other pairing too:
-//! the Dispatcher with that computer's Host, so it starts work there.
+//! there ([`crate::paired`]); `disconnect` forgets it. `connect` offers to have that computer's
+//! Host join the Dispatcher too, so it starts work there.
 
 use std::io::BufRead as _;
 use std::io::IsTerminal as _;
@@ -34,6 +35,7 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
+use weave_host_protocol::dispatcher::Reachability;
 use weave_remote::access::RemoteSettings;
 use weave_remote::tailscale::TailscaleServe;
 
@@ -91,8 +93,8 @@ enum DispatcherCommand {
     /// List the computers paired with the Dispatcher, or revoke one.
     Devices(DevicesArgs),
     /// Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect
-    /// homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to pair
-    /// the Dispatcher with this computer's Host.
+    /// homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to
+    /// have this computer's Host join the Dispatcher.
     Connect(ConnectArgs),
     /// Forget the Dispatcher this computer is paired with.
     Disconnect,
@@ -146,7 +148,7 @@ struct ConnectArgs {
     /// What the Dispatcher calls this computer, and its Host; its name by default.
     #[arg(long)]
     name: Option<String>,
-    /// Pair the Dispatcher with this computer's Host too, so it starts work here, without
+    /// Have this computer's Host join the Dispatcher too, so it starts work here, without
     /// asking.
     #[arg(long, conflicts_with = "no_host")]
     host: bool,
@@ -395,7 +397,7 @@ async fn status(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()> {
         (devices, None) => format!(" {devices} other computers are paired with it."),
     };
     println!(
-        "The Dispatcher {} (pid {}) has run for {} {place}. It pairs with Hosts as \"{}\", and {} \
+        "The Dispatcher {} (pid {}) has run for {} {place}. Hosts that join it know it as \"{}\", and it {} \
          waiting for a Host.{devices}",
         status.version,
         status.pid,
@@ -534,7 +536,7 @@ async fn devices(paths: &DispatcherPaths, args: DevicesArgs) -> anyhow::Result<(
 
 /// `weave dispatcher connect`: pair this computer with the Dispatcher on another, with a code
 /// from `weave dispatcher pair` there, which this runs over SSH unless given one, and keep the
-/// pairing. Then offer to pair the Dispatcher with this computer's Host, the other way round.
+/// pairing. Then offer to have this computer's Host join the Dispatcher.
 async fn connect(paths: &DispatcherPaths, args: ConnectArgs) -> anyhow::Result<()> {
     if std::env::var_os(weave_dispatcher::paths::DIR_VARIABLE).is_some_and(|dir| !dir.is_empty()) {
         bail!(
@@ -626,9 +628,9 @@ fn keep_pairing(
 
 /// What `connect` says when it leaves this computer's Host alone.
 const ADD_HERE_LATER: &str =
-    "`weave hosts add` pairs the Dispatcher with this computer's Host, so it starts work here.";
+    "`weave hosts add` has this computer's Host join the Dispatcher, so it starts work here.";
 
-/// Pair the Dispatcher with this computer's Host too, as `name`, unless it is already, or
+/// Have this computer's Host join the Dispatcher too, as `name`, unless it has already, or
 /// `wanted` or the person says not to. With no terminal to ask in, it only says how.
 async fn pair_host_here(
     dispatcher: &DispatcherConnection,
@@ -637,20 +639,25 @@ async fn pair_host_here(
 ) -> anyhow::Result<()> {
     let Some(here) = host::control(&host::paths()?).await? else {
         if wanted == Some(true) {
-            bail!("no weave Host runs here to pair the Dispatcher with");
+            bail!("no weave Host runs here to join the Dispatcher");
         }
         println!(
             "No weave Host runs here, so the Dispatcher has nothing to start work on here; once \
-             one does, `weave hosts add` pairs them."
+             one does, `weave hosts add` has it join."
         );
         return Ok(());
     };
     let result = async {
         let host_id = &here.hello().host.id;
         let hosts = dispatcher.send(ListHostsRequest {}).await?.hosts;
-        if let Some(known) = hosts.iter().find(|known| &known.host_id == host_id) {
+        let joined = hosts.iter().find(|known| {
+            &known.host_id == host_id
+                && known.joined_at.is_some()
+                && known.status != Reachability::Refused
+        });
+        if let Some(known) = joined {
             println!(
-                "The Dispatcher already starts work on this computer's Host, as {}.",
+                "This computer's Host already joined the Dispatcher, as {}.",
                 known.name
             );
             return Ok(());
@@ -658,7 +665,7 @@ async fn pair_host_here(
         let wanted = match wanted {
             Some(wanted) => wanted,
             None if std::io::stdin().is_terminal() => ask(
-                "Pair the Dispatcher with this computer's Host too, so it starts work here? [Y/n] ",
+                "Have this computer's Host join the Dispatcher too, so it starts work here? [Y/n] ",
             )?,
             None => false,
         };
@@ -666,13 +673,12 @@ async fn pair_host_here(
             println!("{ADD_HERE_LATER}");
             return Ok(());
         }
-        let host = hosts::add_from(dispatcher, &here, name)
+        let joined = hosts::join_from(dispatcher, &here, name, false)
             .await
-            .context("pairing the Dispatcher with this computer's Host")?;
+            .context("having this computer's Host join the Dispatcher")?;
         println!(
-            "Paired the Dispatcher with this computer's Host as {}: it starts work here. The Host \
-             lists it among its devices as {}.",
-            host.name, host.device_id
+            "This computer's Host joined the {} as {}: it starts work here.",
+            joined.name, joined.host_name
         );
         Ok(())
     }

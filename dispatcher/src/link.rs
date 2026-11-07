@@ -1,30 +1,31 @@
-//! The Dispatcher's connection to one Host: kept up, with backoff, from the Dispatcher's side,
-//! since Hosts never connect to it. While connected it watches the Host's threads and sends it
-//! the work written down for it, oldest first, and when a thread a schedule's occurrence
-//! started goes idle it reads how the occurrence's turn ended. It says, too, that the
-//! Dispatcher reaches the person's Hosts, answers the calls the Host passes it for that
-//! ([`crate::calls`]), and follows the turns other Hosts' calls began there
-//! ([`crate::follows`]). A Host that refuses its key, as after revoking it, isn't tried again
-//! until it's paired again.
+//! The Dispatcher's connection to one Host: the one the Host opened when it joined, or since
+//! (ADR 0030), which the Dispatcher takes up once the Host has proved itself ([`crate::joins`]).
+//! Over it the Dispatcher is a client of the Host: while connected it watches the Host's
+//! threads and sends it the work written down for it, oldest first, and when a thread a
+//! schedule's occurrence started goes idle it reads how the occurrence's turn ended. It says,
+//! too, that the Dispatcher reaches the person's Hosts, answers the calls the Host passes it
+//! for that ([`crate::calls`]), and follows the turns other Hosts' calls began there
+//! ([`crate::follows`]). A Host that leaves isn't taken up again until it joins again.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::v1::SessionId;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use weave_host_client::Credentials;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::HostHandle;
-use weave_host_client::reach::reach;
-use weave_host_client::remote::CloseReason;
 use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::errors;
+use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::sessions::Activity;
 use weave_host_protocol::sessions::GetSessionRequest;
@@ -35,6 +36,8 @@ use weave_host_protocol::sessions::TurnState;
 use weave_host_protocol::sessions::WatchSessionsRequest;
 use weave_host_protocol::tools::DeclareToolsRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
+use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
+use weave_remote::websocket;
 
 use crate::Shared;
 use crate::calls;
@@ -50,7 +53,23 @@ pub(crate) struct Link {
     wake: Arc<Notify>,
     stop: CancellationToken,
     seen: Arc<Mutex<Seen>>,
+    /// The Host's connection, to close it with a code of the Dispatcher's choosing.
+    closer: Arc<websocket::Link>,
+    /// Told once the connection has closed.
+    gone: Mutex<Option<oneshot::Receiver<()>>>,
     task: JoinHandle<()>,
+}
+
+/// How long stopping waits for a Host's connection to close, beyond the WebSocket's own grace.
+const GONE_WAIT: Duration = Duration::from_secs(6);
+
+/// A Host's own connection, once it has proved itself: what the Dispatcher says the Host
+/// protocol over.
+pub(crate) struct Arrival {
+    pub(crate) transport: websocket::Transport,
+    pub(crate) link: Arc<websocket::Link>,
+    /// Told once the connection has closed, after the link is done with it.
+    pub(crate) gone: oneshot::Receiver<()>,
 }
 
 /// How the link stands, and the Host's threads as it last saw them.
@@ -80,30 +99,48 @@ impl Default for Seen {
 
 /// How a connection ended.
 enum Ended {
-    /// The Dispatcher stopped, or let the Host go.
+    /// The Dispatcher stopped, let the Host go, or took up a newer connection from it.
     Stopped,
-    /// The Host revoked the Dispatcher.
+    /// The Host left the Dispatcher.
     Revoked,
     /// It closed, or nothing came from it.
     Lost,
 }
 
 impl Link {
-    pub(crate) fn start(shared: Arc<Shared>, host: StoredHost) -> Self {
+    /// Take up `arrival`, the connection `host` opened, until it closes or the link stops;
+    /// `done` is told once it has, and the connection may close.
+    pub(crate) fn start(
+        shared: Arc<Shared>,
+        host: StoredHost,
+        arrival: Arrival,
+        done: oneshot::Sender<()>,
+    ) -> Self {
         let wake = Arc::new(Notify::new());
         let stop = shared.stop.child_token();
         let seen = Arc::new(Mutex::new(Seen::default()));
-        let task = tokio::spawn(keep(
+        let closer = Arc::clone(&arrival.link);
+        let Arrival {
+            transport,
+            link,
+            gone,
+        } = arrival;
+        let task = tokio::spawn(take(
             shared,
             host,
+            transport,
+            link,
             Arc::clone(&wake),
             stop.clone(),
             Arc::clone(&seen),
+            done,
         ));
         Self {
             wake,
             stop,
             seen,
+            closer,
+            gone: Mutex::new(Some(gone)),
             task,
         }
     }
@@ -116,10 +153,21 @@ impl Link {
         self.stop.cancel();
     }
 
-    /// Wait for the link to end, once it's been stopped.
+    /// Close the Host's connection telling it it was removed, so it forgets the Dispatcher,
+    /// and stop.
+    pub(crate) fn revoke(&self) {
+        self.closer.close(CLOSE_REVOKED);
+        self.stop.cancel();
+    }
+
+    /// Wait for the link to end, once it's been stopped, and for its connection to close.
     pub(crate) async fn stopped(self) {
         self.stop.cancel();
         let _ = self.task.await;
+        let gone = lock(&self.gone).take();
+        if let Some(gone) = gone {
+            let _ = tokio::time::timeout(GONE_WAIT, gone).await;
+        }
     }
 
     pub(crate) fn seen(&self) -> Seen {
@@ -137,74 +185,78 @@ impl Link {
     }
 }
 
-/// Keep a connection to `host` until stopped or refused.
-async fn keep(
+/// Say hello to `host` over the connection it opened, and follow it until it ends.
+#[allow(clippy::too_many_arguments)]
+async fn take(
     shared: Arc<Shared>,
     host: StoredHost,
+    transport: websocket::Transport,
+    closer: Arc<websocket::Link>,
     wake: Arc<Notify>,
     stop: CancellationToken,
     seen: Arc<Mutex<Seen>>,
+    done: oneshot::Sender<()>,
 ) {
-    if let Some(why) = &host.refused {
-        note(&seen, Reachability::Refused, Some(why.clone()));
-        return;
-    }
-    let mut delay = shared.config.retry;
-    loop {
-        let credentials = Credentials::Device {
-            device_id: host.device_id.clone(),
-            key: shared.key.clone(),
-            host_id: Some(host.host_id.clone()),
-        };
-        let attempt = tokio::select! {
-            reached = reach(
-                &host.url,
-                client_info(),
-                credentials,
-                shared.config.reach_timeout,
-                "the Dispatcher",
-            ) => reached,
-            () = stop.cancelled() => return,
-        };
-        match attempt {
-            Ok((connection, events, closed)) => {
-                delay = shared.config.retry;
-                tracing::info!(host = %host.host_id, "connected to a Host");
-                match follow(
-                    &shared, &host, &wake, &stop, &seen, connection, events, &closed,
-                )
-                .await
-                {
-                    Ended::Stopped => return,
-                    Ended::Revoked => {
-                        refused(&shared, &host, &seen, "it revoked the Dispatcher");
-                        return;
-                    }
-                    Ended::Lost => {
-                        tracing::info!(host = %host.host_id, "lost the connection to a Host");
-                        note(
-                            &seen,
-                            Reachability::Unreachable,
-                            Some("the connection closed".to_owned()),
-                        );
-                    }
+    let credentials = Credentials::Device {
+        device_id: shared.id.clone(),
+        key: shared.key.clone(),
+        host_id: Some(host.host_id.clone()),
+    };
+    let hello = tokio::time::timeout(
+        shared.config.reach_timeout,
+        HostConnection::connect_with(
+            transport,
+            client_info(),
+            ClientCapabilities::default(),
+            credentials,
+        ),
+    );
+    let said = tokio::select! {
+        said = hello => said,
+        () = stop.cancelled() => {
+            let _ = done.send(());
+            return;
+        }
+    };
+    match said {
+        Ok(Ok((connection, events))) => {
+            tracing::info!(host = %host.host_id, "a Host connected");
+            match follow(
+                &shared, &host, &wake, &stop, &seen, connection, events, &closer,
+            )
+            .await
+            {
+                Ended::Stopped => {}
+                Ended::Revoked => refused(&shared, &host, &seen, "it left the Dispatcher"),
+                Ended::Lost => {
+                    tracing::info!(host = %host.host_id, "lost a Host's connection");
+                    note(
+                        &seen,
+                        Reachability::Unreachable,
+                        Some("its connection closed; it connects again when it can".to_owned()),
+                    );
                 }
             }
-            Err(unreached) if unreached.refused() => {
-                refused(&shared, &host, &seen, &unreached.why);
-                return;
-            }
-            Err(unreached) => {
-                tracing::debug!(host = %host.host_id, why = %unreached, "couldn't reach a Host");
-                note(&seen, unreached.status, Some(unreached.why));
-            }
         }
-        tokio::select! {
-            () = tokio::time::sleep(delay) => {}
-            () = stop.cancelled() => return,
+        Ok(Err(error)) => {
+            tracing::warn!(host = %host.host_id, %error, "a Host refused the Dispatcher's hello");
+            note(
+                &seen,
+                Reachability::Refused,
+                Some(format!("it refused the Dispatcher's hello: {error}")),
+            );
+            closer.close(CLOSE_UNAUTHENTICATED);
         }
-        delay = delay.saturating_mul(2).min(shared.config.retry_most);
+        Err(_) => note(
+            &seen,
+            Reachability::Unreachable,
+            Some(format!(
+                "it didn't answer the Dispatcher's hello within {} seconds",
+                shared.config.reach_timeout.as_secs_f32()
+            )),
+        ),
     }
+    let _ = done.send(());
 }
 
 /// Watch the Host's threads and send it its work while the connection lasts.
@@ -217,7 +269,7 @@ async fn follow(
     seen: &Mutex<Seen>,
     connection: HostConnection,
     mut events: mpsc::UnboundedReceiver<HostEvent>,
-    closed: &CloseReason,
+    closer: &websocket::Link,
 ) -> Ended {
     let handle = connection.handle();
     // The Host passes the Dispatcher its agents' calls naming another Host from now on.
@@ -295,7 +347,7 @@ async fn follow(
     }
     match ended {
         Some(ended) => ended,
-        None if closed.get().is_some_and(|(code, _)| code == CLOSE_REVOKED) => Ended::Revoked,
+        None if closer.peer_closed() == Some(CLOSE_REVOKED) => Ended::Revoked,
         None => Ended::Lost,
     }
 }
@@ -516,7 +568,7 @@ fn again(error: &Error) -> bool {
 
 /// The Host refused the Dispatcher: say why until it's paired again, which a restart keeps.
 fn refused(shared: &Shared, host: &StoredHost, seen: &Mutex<Seen>, why: &str) {
-    tracing::warn!(host = %host.host_id, %why, "a Host refused the Dispatcher; pair it again to reach it");
+    tracing::warn!(host = %host.host_id, %why, "a Host left the Dispatcher; it has to join again");
     if let Err(error) = shared.store.set_refused(&host.host_id, Some(why)) {
         tracing::warn!(host = %host.host_id, %error, "recording a refusal failed");
     }

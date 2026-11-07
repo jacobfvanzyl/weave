@@ -76,6 +76,17 @@ impl DaemonPaths {
         self.dir.join("devices.json")
     }
 
+    /// The Dispatcher the Host joined, and where it is (ADR 0030).
+    pub fn dispatcher(&self) -> PathBuf {
+        self.dir.join("dispatcher.json")
+    }
+
+    /// The key the Host proves itself to the Dispatcher it joined with: in the Secure Enclave
+    /// on a Mac that has one, otherwise in the file.
+    pub fn key(&self) -> PathBuf {
+        self.dir.join("key.json")
+    }
+
     /// What a Host that paired with peer Hosts kept (ADR 0017), retired with them (ADR 0029):
     /// its peers and the turns it followed there, and the key it proved itself with.
     pub fn retired(&self) -> Vec<PathBuf> {

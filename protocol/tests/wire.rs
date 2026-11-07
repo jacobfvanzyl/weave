@@ -69,6 +69,11 @@ use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::DispatcherAddress;
+use weave_host_protocol::dispatcher::JoinDispatcherRequest;
+use weave_host_protocol::dispatcher::JoinDispatcherResponse;
+use weave_host_protocol::dispatcher::JoinedDispatcher;
+use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::SessionChangedNotification;
 use weave_host_protocol::events::SessionEvent;
@@ -1983,6 +1988,57 @@ fn service_tools() {
     );
 }
 
+/// The Dispatcher a Host joined, connected over the tailnet.
+fn joined() -> JoinedDispatcher {
+    JoinedDispatcher {
+        id: "D7qK2mN4pR8sT1vX".to_owned(),
+        name: "Dispatcher on homelab-1".to_owned(),
+        address: DispatcherAddress::Url("wss://homelab-1.example.ts.net:7342".to_owned()),
+        host_name: "studio".to_owned(),
+        joined_at: 1_760_180_000_000,
+        connected: true,
+        connected_at: Some(1_760_180_000_500),
+        why: None,
+    }
+}
+
+#[test]
+fn joining_the_dispatcher() {
+    insta::assert_json_snapshot!(
+        "join_dispatcher_request",
+        message(&JoinDispatcherRequest {
+            address: DispatcherAddress::Url("wss://homelab-1.example.ts.net:7342".to_owned()),
+            code: "8M3QK0V4WZ7HC1RP9F2D5XTNAG".to_owned(),
+            name: Some("studio".to_owned()),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "join_dispatcher_here_request",
+        message(&JoinDispatcherRequest {
+            address: DispatcherAddress::Socket(
+                "/Users/jaco/.local/state/weave/dispatcher/hosts.sock".into()
+            ),
+            code: "8M3QK0V4WZ7HC1RP9F2D5XTNAG".to_owned(),
+            name: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "join_dispatcher_response",
+        round_trip(&JoinDispatcherResponse {
+            dispatcher: JoinedDispatcher {
+                connected: false,
+                connected_at: None,
+                why: Some("its connection closed; connecting again".to_owned()),
+                ..joined()
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "leave_dispatcher_request",
+        message(&LeaveDispatcherRequest {})
+    );
+}
+
 #[test]
 fn host() {
     insta::assert_json_snapshot!("status_request", message(&StatusRequest {}));
@@ -1997,6 +2053,7 @@ fn host() {
             environment: EnvironmentSource::LoginShell,
             sessions: vec![listing()],
             remote: Some("127.0.0.1:7341".to_owned()),
+            dispatcher: Some(joined()),
         })
     );
     insta::assert_json_snapshot!("shutdown_request", message(&ShutdownRequest {}));

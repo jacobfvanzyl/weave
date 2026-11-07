@@ -6,11 +6,14 @@ entry (WVE-100). From 2026-10-30 the person's other Hosts paired and connected a
 (WVE-109), until 2026-11-04, when the Dispatcher took that over and peer Hosts were retired
 (WVE-185). Since 2026-11-06 the person's devices pair with the Dispatcher the same way, with the
 server's end shared in `weave-remote` ([WVE-175's Devices](wve-175-dispatcher.md#devices),
-WVE-176). The decisions are recorded in
+WVE-176), and since 2026-11-07 a Host joins the Dispatcher and connects to it itself, over the
+same WebSocket code ([WVE-175's Hosts](wve-175-dispatcher.md#hosts), WVE-194). The decisions are
+recorded in
 [ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md),
 [ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md),
-[ADR 0027](../adr/0027-the-dispatcher-is-a-program-of-its-own-that-is-a-client-of-the-hosts.md) and
-[ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md).
+[ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
+[ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md) and
+[ADR 0030](../adr/0030-the-dispatcher-is-the-hub-hosts-dial-out-to-it-and-devices-reach-every-host-through-it.md).
 
 ## Purpose
 
@@ -239,11 +242,13 @@ codes, nonces or signatures.
 ## Services
 
 A service is a client that does work for the person rather than showing them anything, such as
-the Dispatcher (ADR 0027). It pairs as a device does, with the code `weave pair` shows (`weave
-hosts add` runs `weave pair --json` over SSH), saying
-`device.service: true`, then proves its key at every hello. It is listed among the devices,
-`weave devices` calls it a service, and it is revoked like any of them. Saying it's a service
-only takes from what it may do, which is what starting headless turns, following threads,
+the Dispatcher (ADR 0027). A Host joins the Dispatcher (ADR 0030), with a code `hosts/offer`
+gives there, and keeps its key as a joined service: it takes the key at hello only on the
+connection the Host opened to the Dispatcher, doesn't list it among its devices or keep remote
+access on for it, and forgets it with `dispatcher/leave` or when the Dispatcher removes the Host
+([WVE-175's Hosts](wve-175-dispatcher.md#hosts)). Before that, a service paired as a device
+does, saying `device.service: true`, and such a pairing is listed and revoked as a device;
+joining revokes the Dispatcher's. Being a service only takes from what it may do, which is what starting headless turns, following threads,
 naming and labelling the ones it starts, serving its tools and reaching the person's other
 Hosts for this Host's agents (ADR 0029) need:
 

@@ -33,6 +33,7 @@
 mod admissions;
 mod client;
 mod devices;
+mod dispatcher;
 mod files;
 mod git;
 mod host_tools;
@@ -95,6 +96,7 @@ pub use weave_remote::access::Serve;
 pub use weave_remote::tailscale;
 pub use weave_remote::websocket::RemoteConfig;
 
+pub use crate::dispatcher::DispatcherSettings;
 pub use crate::instance::AGENT_PROCESS_VARIABLE;
 use crate::instance::Instance;
 pub use crate::instance::Launch;
@@ -174,6 +176,9 @@ pub struct DaemonConfig {
     /// Files earlier Hosts left that this one removes when it starts: a peer Host's
     /// `peers.json` and `host-key.json`, retired with peer Hosts (ADR 0029).
     pub retired: Vec<PathBuf>,
+    /// Where the Host keeps the Dispatcher it joins (ADR 0030) and its own key for it; none for
+    /// a Host that joins none, as one inside a client.
+    pub dispatcher: Option<DispatcherSettings>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -207,6 +212,7 @@ impl DaemonConfig {
             terminals: None,
             home: None,
             retired: Vec::new(),
+            dispatcher: None,
         }
     }
 
@@ -222,6 +228,7 @@ impl DaemonConfig {
             terminals: terminals::Holders::beside_this_program(paths.terminals())
                 .map(|holders| Arc::new(holders) as Arc<dyn terminals::Owner>),
             retired: paths.retired(),
+            dispatcher: Some(DispatcherSettings::in_dir(paths)),
             ..Self::in_process(None)
         }
     }
@@ -298,6 +305,8 @@ pub(crate) struct Shared {
     pub(crate) git: git::Git,
     registry: Mutex<Registry>,
     pub(crate) devices: devices::Devices,
+    /// The Dispatcher the Host joined, and its connection to it (ADR 0030).
+    pub(crate) dispatcher: dispatcher::Joined,
     /// The connections serving services' tools, and calls waiting on them (WVE-171).
     pub(crate) service_tools: service_tools::ServiceTools,
     pub(crate) updates: updates::Updates,
@@ -836,6 +845,7 @@ impl Shared {
             },
             sessions: sessions.iter().map(session::Summary::listing).collect(),
             remote: self.remote.address(),
+            dispatcher: self.dispatcher.status(),
         }
     }
 }
@@ -937,6 +947,7 @@ impl Daemon {
         };
         let (stop, _) = watch::channel(false);
         let devices = devices::Devices::load(config.devices.clone());
+        let joined = dispatcher::Joined::load(config.dispatcher.clone());
         let admissions = Arc::new(admissions::Admissions::load(
             config.journals.as_deref(),
             JOURNAL_RETENTION,
@@ -959,6 +970,7 @@ impl Daemon {
                 mcp: Arc::new(mcp::Mcp::new(shared.clone())),
                 git: git::Git::new(&config.environment.vars),
                 devices,
+                dispatcher: joined,
                 service_tools: service_tools::ServiceTools::default(),
                 updates: updates::Updates::default(),
                 remote: weave_remote::access::Remote::new("Host", config.remote.clone()),
@@ -1065,7 +1077,8 @@ impl Daemon {
                     let quiet = {
                         let registry = self.shared.registry();
                         registry.sessions.is_empty() && registry.clients == 0
-                    } && !self.shared.remote.is_on();
+                    } && !self.shared.remote.is_on()
+                        && !self.shared.dispatcher.is_joined();
                     if !quiet {
                         idle_since = None;
                     } else if let Some(limit) = idle_exit
@@ -1104,6 +1117,25 @@ impl Daemon {
         let forever = tokio_util::sync::CancellationToken::new();
         websocket::serve(Arc::clone(&self.shared), listener, config, forever).await;
         self.shared.remote.serving(None);
+    }
+
+    /// At startup, connect to the Dispatcher the Host joined, if it joined one (ADR 0030).
+    pub fn resume_dispatcher(&self) {
+        dispatcher::resume(&self.shared);
+    }
+
+    /// Join the Dispatcher at `request.address` with the code it gave, as `dispatcher/join`
+    /// does, and keep a connection to it.
+    pub async fn join_dispatcher(
+        &self,
+        request: weave_host_protocol::dispatcher::JoinDispatcherRequest,
+    ) -> Result<weave_host_protocol::dispatcher::JoinedDispatcher, Error> {
+        dispatcher::join(&self.shared, request).await
+    }
+
+    /// The Dispatcher the Host joined, and how its connection stands.
+    pub fn dispatcher(&self) -> Option<weave_host_protocol::dispatcher::JoinedDispatcher> {
+        self.shared.dispatcher.status()
     }
 
     /// At startup, turn remote access back on when a device is paired (ADR 0016).
@@ -1256,6 +1288,7 @@ impl Daemon {
     /// Stop every session's agent, and the spare ones. Their journals stay open, so a later
     /// Host can take them up again.
     pub async fn shutdown(&self) {
+        dispatcher::stop(&self.shared);
         let sessions: Vec<SessionHandle> =
             self.shared.registry().sessions.values().cloned().collect();
         let stops = sessions.iter().map(|session| {

@@ -28,9 +28,10 @@ use futures::SinkExt as _;
 use futures::StreamExt as _;
 use futures::stream::BoxStream;
 use futures::stream::SplitSink;
-use tokio::net::TcpStream;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
-use tokio_tungstenite::WebSocketStream;
+pub use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
@@ -97,6 +98,8 @@ pub struct Link {
     last_pong_ms: AtomicU64,
     /// It has proved a paired device.
     proved: AtomicBool,
+    /// The close code the peer sent, once it has; 0 until then.
+    peer_close: AtomicU16,
     /// Bytes of replay it asked for that haven't been sent: room beyond the limit, which shrinks
     /// as the connection sends.
     replay: AtomicUsize,
@@ -132,6 +135,15 @@ impl Link {
     /// Close with `code` as soon as what's being written has gone.
     pub fn close(&self, code: u16) {
         let _ = self.close.send(code);
+    }
+
+    /// The close code the peer sent, if it has closed the connection, as a Host leaving the
+    /// Dispatcher does with [`weave_host_protocol::websocket::CLOSE_REVOKED`].
+    pub fn peer_closed(&self) -> Option<u16> {
+        match self.peer_close.load(Ordering::SeqCst) {
+            0 => None,
+            code => Some(code),
+        }
     }
 
     /// The client asked for `bytes` of replay, which may wait to be sent beyond the limit.
@@ -198,11 +210,12 @@ fn refusal(status: StatusCode, why: String) -> ErrorResponse {
 
 /// Take `stream`'s WebSocket upgrade if it asks for one of `protocols`, the first of which
 /// the error names, giving the one chosen. `None`, having answered why, when it may not.
-pub async fn upgrade(
-    stream: TcpStream,
+/// `stream` is a TCP connection from Tailscale Serve, or a Unix socket's.
+pub async fn upgrade<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: S,
     origins: &[String],
     protocols: &[&'static str],
-) -> Option<(&'static str, WebSocketStream<TcpStream>)> {
+) -> Option<(&'static str, WebSocketStream<S>)> {
     let chosen = Mutex::new(None);
     // tungstenite's upgrade callback returns its HTTP response as the error, unboxed.
     #[allow(clippy::result_large_err)]
@@ -238,11 +251,14 @@ pub async fn upgrade(
 
 /// Carry JSON-RPC over `socket` for `serve`, which answers the connection through the
 /// [`Transport`] and proves a device at hello on its [`Link`], until either end closes it.
-pub async fn serve_rpc<Serve, Served>(
-    socket: WebSocketStream<TcpStream>,
+/// `socket` is one this program accepted, or one it opened itself, as a Host opens one to the
+/// Dispatcher it joined (WVE-194).
+pub async fn serve_rpc<S, Serve, Served>(
+    socket: WebSocketStream<S>,
     config: &RemoteConfig,
     serve: Serve,
 ) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     Serve: FnOnce(Transport, Arc<Link>) -> Served,
     Served: Future<Output = Result<(), agent_client_protocol::Error>>,
 {
@@ -254,6 +270,7 @@ pub async fn serve_rpc<Serve, Served>(
         challenge: Mutex::new(None),
         last_pong_ms: AtomicU64::new(now_ms()),
         proved: AtomicBool::new(false),
+        peer_close: AtomicU16::new(0),
         replay: AtomicUsize::new(0),
     });
     let deadline = {
@@ -294,7 +311,14 @@ pub async fn serve_rpc<Serve, Served>(
                         io::ErrorKind::InvalidData,
                         "JSON-RPC messages are sent in text frames",
                     ))),
-                    Ok(Message::Ping(_) | Message::Close(_) | Message::Frame(_)) => None,
+                    Ok(Message::Close(frame)) => {
+                        if let Some(frame) = frame {
+                            link.peer_close
+                                .store(u16::from(frame.code), Ordering::SeqCst);
+                        }
+                        None
+                    }
+                    Ok(Message::Ping(_) | Message::Frame(_)) => None,
                     Err(error) => Some(Err(io::Error::other(error))),
                 })
             })
@@ -356,7 +380,7 @@ impl futures::Sink<String> for Outgoing {
     }
 }
 
-type Sink = SplitSink<WebSocketStream<TcpStream>, Message>;
+type Sink<S> = SplitSink<WebSocketStream<S>, Message>;
 
 /// What happened to one frame.
 enum Sent {
@@ -367,7 +391,11 @@ enum Sent {
 }
 
 /// Send `message`, unless asked to close first.
-async fn send(sink: &mut Sink, message: Message, close: &mut mpsc::UnboundedReceiver<u16>) -> Sent {
+async fn send<S: AsyncRead + AsyncWrite + Unpin>(
+    sink: &mut Sink<S>,
+    message: Message,
+    close: &mut mpsc::UnboundedReceiver<u16>,
+) -> Sent {
     tokio::select! {
         biased;
         code = close.recv() => Sent::Close(code.unwrap_or(u16::from(CloseCode::Normal))),
@@ -376,8 +404,8 @@ async fn send(sink: &mut Sink, message: Message, close: &mut mpsc::UnboundedRece
 }
 
 /// Send what the client connection queues, pings, and the close frame.
-async fn write(
-    mut sink: Sink,
+async fn write<S: AsyncRead + AsyncWrite + Unpin>(
+    mut sink: Sink<S>,
     mut data: mpsc::UnboundedReceiver<String>,
     mut close: mpsc::UnboundedReceiver<u16>,
     queued: Arc<AtomicUsize>,
@@ -463,6 +491,7 @@ mod tests {
             challenge: Mutex::new(None),
             last_pong_ms: AtomicU64::new(0),
             proved: AtomicBool::new(false),
+            peer_close: AtomicU16::new(0),
             replay: AtomicUsize::new(0),
         });
         (link, close_rx)

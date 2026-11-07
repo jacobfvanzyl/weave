@@ -1,0 +1,14 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&JoinDispatcherRequest\n{\n    address:\n    DispatcherAddress::Url(\"wss://homelab-1.example.ts.net:7342\".to_owned()),\n    code: \"8M3QK0V4WZ7HC1RP9F2D5XTNAG\".to_owned(), name:\n    Some(\"studio\".to_owned()),\n})"
+---
+{
+  "method": "dispatcher/join",
+  "params": {
+    "address": {
+      "url": "wss://homelab-1.example.ts.net:7342"
+    },
+    "code": "8M3QK0V4WZ7HC1RP9F2D5XTNAG",
+    "name": "studio"
+  }
+}

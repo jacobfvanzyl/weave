@@ -1,11 +1,11 @@
-//! What the Dispatcher's tests share: in-process Hosts on loopback WebSockets, each behind a
-//! relay that a restart cuts, as a Host process exiting closes its connections, and each with a
-//! home of its own and agents that call Host tools (the fake agent's `tool` script); and a
-//! Dispatcher answering on its socket.
+//! What the Dispatcher's tests share: in-process Hosts that join the Dispatcher over its socket
+//! (ADR 0030), each through a relay that a restart cuts, as a Host process exiting closes its
+//! connections, and each with a home of its own and agents that call Host tools (the fake
+//! agent's `tool` script); and a Dispatcher answering on its socket.
 
 #![allow(clippy::expect_used, dead_code)]
 
-use std::net::SocketAddr;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -16,8 +16,8 @@ use std::time::Duration;
 use agent_client_protocol::Channel;
 use agent_client_protocol::Error;
 use pretty_assertions::assert_eq;
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
+use tokio::net::UnixListener;
+use tokio::net::UnixStream;
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 use weave_acp_core::AgentConnection;
@@ -36,13 +36,16 @@ use weave_dispatcher::socket;
 use weave_fake_agent::FakeAgentConfig;
 use weave_host::Daemon;
 use weave_host::DaemonConfig;
+use weave_host::DispatcherSettings;
 use weave_host::Launch;
 use weave_host::Launcher;
 use weave_host::RemoteConfig;
 use weave_host::Withheld;
 use weave_host_client::HostConnection;
-use weave_host_protocol::devices::OfferDeviceRequest;
+use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherHost;
+use weave_host_protocol::dispatcher::JoinDispatcherRequest;
+use weave_host_protocol::dispatcher::JoinedDispatcher;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::host::Service;
@@ -68,12 +71,12 @@ pub const ISOLATED_GIT: &[(&str, &str)] = &[
 /// Host's agent started to start one of its own, which one hop keeps from other Hosts.
 pub const CONFIG: &str = "[agents.fake]\ncommand = \"fake-agent\"\n\n[delegation]\ndepth = 3\n";
 
-/// One Host's directory, and the Host running from it behind its relay.
+/// One Host's directory, and the Host running from it, which reaches the Dispatcher through its
+/// relay.
 pub struct World {
     pub dir: tempfile::TempDir,
     pub relay: Relay,
     pub daemon: Daemon,
-    serving: JoinHandle<()>,
     /// It keeps journals, so a restart finds the turns it cut off.
     journals: bool,
 }
@@ -93,16 +96,48 @@ impl World {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("config.toml"), CONFIG).expect("config");
         std::fs::create_dir_all(dir.path().join("home")).expect("home");
-        let relay = Relay::new().await;
+        let relay = Relay::new(&dir.path().join("relay.sock")).await;
         let daemon = Daemon::new(config_with(dir.path().to_path_buf(), journals));
-        let serving = serve(&daemon, &relay).await;
         Self {
             dir,
             relay,
             daemon,
-            serving,
             journals,
         }
+    }
+
+    /// The Host's id.
+    pub async fn host_id(&self) -> String {
+        let local = self.local().await;
+        let id = local.hello().host.id.clone();
+        local.shutdown().await;
+        id
+    }
+
+    /// Join the Dispatcher from `dispatcher_dir`, through the relay to its socket, as `name`.
+    pub async fn join(&self, dispatcher: &Dispatcher, dispatcher_dir: &Path, name: &str) {
+        let code = dispatcher.offer_host(true).await.expect("hosts/offer").code;
+        self.join_with(dispatcher_dir, code, name)
+            .await
+            .expect("joined");
+    }
+
+    /// Join the Dispatcher from `dispatcher_dir` with `code`, through the relay to its socket.
+    pub async fn join_with(
+        &self,
+        dispatcher_dir: &Path,
+        code: String,
+        name: &str,
+    ) -> Result<JoinedDispatcher, Error> {
+        self.relay
+            .point(&dispatcher_config(dispatcher_dir).paths.hosts_socket());
+        self.daemon
+            .join_dispatcher(JoinDispatcherRequest {
+                address: DispatcherAddress::Socket(self.relay.path.clone()),
+                code,
+                name: Some(name.to_owned()),
+            })
+            .await
     }
 
     /// The home `~/…` paths between Hosts are under.
@@ -119,11 +154,6 @@ impl World {
         .expect("config");
     }
 
-    /// The Host's URL, through its relay.
-    pub fn url(&self) -> String {
-        format!("ws://{}", self.relay.address)
-    }
-
     pub async fn local(&self) -> HostConnection {
         let (connection, _events) = HostConnection::connect(
             self.daemon.connect_in_process(),
@@ -135,25 +165,14 @@ impl World {
         connection
     }
 
-    /// A code the Dispatcher pairs with.
-    pub async fn offer(&self) -> String {
-        let local = self.local().await;
-        let offer = local
-            .send(OfferDeviceRequest { name: None })
-            .await
-            .expect("devices/offer");
-        local.shutdown().await;
-        offer.code
-    }
-
-    /// Stop the Host, closing every connection to it, and start another from the same
-    /// directory, which is the same Host with the same paired devices.
+    /// Stop the Host, closing every connection it has, and start another from the same
+    /// directory, which is the same Host, joined to the same Dispatcher.
     pub async fn restart(&mut self) {
         self.relay.cut();
-        self.serving.abort();
         self.daemon.shutdown().await;
         self.daemon = Daemon::new(config_with(self.dir.path().to_path_buf(), self.journals));
-        self.serving = serve(&self.daemon, &self.relay).await;
+        self.relay.resume();
+        self.daemon.resume_dispatcher();
         self.daemon.resume_queues().await;
     }
 }
@@ -205,48 +224,44 @@ pub fn config_with(dir: PathBuf, journals: bool) -> DaemonConfig {
         terminals: None,
         home: Some(dir.join("home")),
         retired: Vec::new(),
+        dispatcher: Some(DispatcherSettings {
+            secure_enclave: false,
+            timeout: Duration::from_secs(2),
+            retry: Duration::from_millis(50),
+            retry_most: Duration::from_millis(200),
+            websocket: RemoteConfig::default(),
+            ..DispatcherSettings::in_dir(&weave_host::DaemonPaths::in_dir(dir))
+        }),
     }
 }
 
-/// Serve `daemon`'s WebSocket on a port of its own, and point `relay` at it.
-pub async fn serve(daemon: &Daemon, relay: &Relay) -> JoinHandle<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
-    relay.point(listener.local_addr().expect("its address"));
-    let serving = daemon.clone();
-    tokio::spawn(async move {
-        serving
-            .serve_remote(listener, RemoteConfig::default())
-            .await
-    })
-}
-
-/// A TCP relay on a port that stays the same, to wherever it points now.
+/// A relay on a Unix socket of its own, which a Host joins the Dispatcher through, to the
+/// Dispatcher's socket wherever it points now.
 pub struct Relay {
-    pub address: SocketAddr,
-    target: Arc<Mutex<Option<SocketAddr>>>,
-    last: Mutex<Option<SocketAddr>>,
+    pub path: PathBuf,
+    target: Arc<Mutex<Option<PathBuf>>>,
+    last: Mutex<Option<PathBuf>>,
     open: Arc<Mutex<Vec<AbortHandle>>>,
-    /// Pass what the client sends, and drop what the Host answers, as a Host that stops
+    /// Pass what the Dispatcher sends, and drop what the Host answers, as a Host that stops
     /// answering mid-request does.
     deaf: Arc<AtomicBool>,
 }
 
 impl Relay {
-    pub async fn new() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
-        let address = listener.local_addr().expect("its address");
-        let target: Arc<Mutex<Option<SocketAddr>>> = Arc::default();
+    pub async fn new(path: &Path) -> Self {
+        let listener = UnixListener::bind(path).expect("a socket");
+        let target: Arc<Mutex<Option<PathBuf>>> = Arc::default();
         let open: Arc<Mutex<Vec<AbortHandle>>> = Arc::default();
         let deaf: Arc<AtomicBool> = Arc::default();
         let (to, opened, deafened) = (Arc::clone(&target), Arc::clone(&open), Arc::clone(&deaf));
         tokio::spawn(async move {
             while let Ok((inbound, _)) = listener.accept().await {
-                let Some(to) = *to.lock().expect("the target") else {
+                let Some(to) = to.lock().expect("the target").clone() else {
                     continue;
                 };
                 let deaf = Arc::clone(&deafened);
                 let relayed = tokio::spawn(async move {
-                    if let Ok(outbound) = TcpStream::connect(to).await {
+                    if let Ok(outbound) = UnixStream::connect(&to).await {
                         relay(inbound, outbound, deaf).await;
                     }
                 });
@@ -257,7 +272,7 @@ impl Relay {
             }
         });
         Self {
-            address,
+            path: path.to_path_buf(),
             target,
             last: Mutex::new(None),
             open,
@@ -270,15 +285,16 @@ impl Relay {
         self.deaf.store(true, Ordering::SeqCst);
     }
 
-    pub fn point(&self, to: SocketAddr) {
-        *self.target.lock().expect("the target") = Some(to);
-        *self.last.lock().expect("the last target") = Some(to);
+    pub fn point(&self, to: &Path) {
+        *self.target.lock().expect("the target") = Some(to.to_path_buf());
+        *self.last.lock().expect("the last target") = Some(to.to_path_buf());
     }
 
     /// Take connections again, to where it pointed before it was cut.
     pub fn resume(&self) {
         self.deaf.store(false, Ordering::SeqCst);
-        *self.target.lock().expect("the target") = *self.last.lock().expect("the last target");
+        *self.target.lock().expect("the target") =
+            self.last.lock().expect("the last target").clone();
     }
 
     /// Close every connection through it, and take no more until pointed again.
@@ -290,17 +306,14 @@ impl Relay {
     }
 }
 
-/// Copy between `inbound`, a client, and `outbound`, the Host, both ways, dropping what the
-/// Host says while `deaf`.
-async fn relay(inbound: TcpStream, outbound: TcpStream, deaf: Arc<AtomicBool>) {
+/// Copy between `inbound`, the Host, and `outbound`, the Dispatcher, both ways, dropping what
+/// the Host says while `deaf`.
+async fn relay(inbound: UnixStream, outbound: UnixStream, deaf: Arc<AtomicBool>) {
     use tokio::io::AsyncReadExt as _;
     use tokio::io::AsyncWriteExt as _;
-    let (mut client_reads, mut client_writes) = inbound.into_split();
-    let (mut host_reads, mut host_writes) = outbound.into_split();
+    let (mut host_reads, mut host_writes) = inbound.into_split();
+    let (mut dispatcher_reads, mut dispatcher_writes) = outbound.into_split();
     let up = async move {
-        let _ = tokio::io::copy(&mut client_reads, &mut host_writes).await;
-    };
-    let down = async move {
         let mut buffer = vec![0u8; 16 * 1024];
         loop {
             let read = match host_reads.read(&mut buffer).await {
@@ -310,10 +323,13 @@ async fn relay(inbound: TcpStream, outbound: TcpStream, deaf: Arc<AtomicBool>) {
             if deaf.load(Ordering::SeqCst) {
                 continue;
             }
-            if client_writes.write_all(&buffer[..read]).await.is_err() {
+            if dispatcher_writes.write_all(&buffer[..read]).await.is_err() {
                 return;
             }
         }
+    };
+    let down = async move {
+        let _ = tokio::io::copy(&mut dispatcher_reads, &mut host_writes).await;
     };
     tokio::select! {
         () = up => {}
@@ -338,8 +354,6 @@ pub fn dispatcher_config_with(dir: &std::path::Path, clock: Arc<dyn Clock>) -> D
         name: "Dispatcher".to_owned(),
         secure_enclave: false,
         reach_timeout: Duration::from_secs(2),
-        retry: Duration::from_millis(50),
-        retry_most: Duration::from_millis(200),
         ..DispatcherConfig::new(DispatcherPaths::in_dir(dir.join("dispatcher")))
     }
 }

@@ -167,6 +167,7 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     };
     let resuming = daemon.clone();
     tokio::spawn(async move { resuming.resume_remote().await });
+    daemon.resume_dispatcher();
     let queues = daemon.clone();
     tokio::spawn(async move { queues.resume_queues().await });
     let streams = daemon.clone();
@@ -367,8 +368,24 @@ fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
         .as_ref()
         .map(|address| format!("  remote   {address}, for paired devices (`weave devices`)\n"))
         .unwrap_or_default();
+    let dispatcher = status
+        .dispatcher
+        .as_ref()
+        .map(|joined| {
+            let state = match (joined.connected, joined.connected_at, &joined.why) {
+                (true, Some(at), _) => format!("connected for {}", ago(now_ms, at)),
+                (true, None, _) => "connected".to_owned(),
+                (false, _, Some(why)) => format!("not connected: {why}"),
+                (false, _, None) => "not connected yet".to_owned(),
+            };
+            format!(
+                "  joined   the {} at {}, as {}; {state}\n",
+                joined.name, joined.address, joined.host_name
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n{remote}  agents get {environment} environment\n\n{sessions}\n",
+        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n{remote}{dispatcher}  agents get {environment} environment\n\n{sessions}\n",
         status.version,
         status.pid,
         ago(now_ms, status.started_at),
@@ -400,6 +417,7 @@ mod tests {
             environment: EnvironmentSource::LoginShell,
             sessions: Vec::new(),
             remote: None,
+            dispatcher: None,
         };
         assert!(describe(&status, &paths, 90_000).ends_with("No threads open.\n"));
         status.sessions.push(SessionListing {
@@ -432,5 +450,21 @@ mod tests {
             describe(&status, &paths, 7_230_000)
                 .contains("\n  remote   127.0.0.1:7341, for paired devices (`weave devices`)\n")
         );
+        status.dispatcher = Some(weave_host_protocol::dispatcher::JoinedDispatcher {
+            id: "D1".to_owned(),
+            name: "Dispatcher on homelab-1".to_owned(),
+            address: weave_host_protocol::dispatcher::DispatcherAddress::Url(
+                "wss://homelab-1.example.ts.net:7342".to_owned(),
+            ),
+            host_name: "studio".to_owned(),
+            joined_at: 0,
+            connected: true,
+            connected_at: Some(7_170_000),
+            why: None,
+        });
+        assert!(describe(&status, &paths, 7_230_000).contains(
+            "\n  joined   the Dispatcher on homelab-1 at wss://homelab-1.example.ts.net:7342, as \
+             studio; connected for 1m\n"
+        ));
     }
 }

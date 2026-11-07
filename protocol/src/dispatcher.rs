@@ -1,9 +1,14 @@
 //! The Dispatcher's API (ADR 0027, WVE-175): what the `weave` CLI asks the Dispatcher, over its
 //! Unix socket on its own computer, or over its WebSocket from the person's other devices,
 //! paired with it as they pair with a Host (WVE-176). The Dispatcher is a client of the
-//! person's Hosts, paired with each as a service: the Hosts it is paired with and how it
-//! reaches them, and its schedules (WVE-145) and their occurrences. Its devices are managed
-//! with the Host's `devices/*` requests, on its own computer only. The specification is
+//! person's Hosts, which join it and keep a connection open to it (ADR 0030, WVE-194): the
+//! Hosts that joined and how each stands, and its schedules (WVE-145) and their occurrences.
+//! Its devices are managed with the Host's `devices/*` requests, on its own computer only.
+//!
+//! A Host's own connection begins with `dispatcher/challenge` and [`ConnectHostRequest`], after
+//! which the Dispatcher says `host/hello` to it on the same connection. The Host's side of
+//! joining is in the Host protocol: [`JoinDispatcherRequest`] and [`LeaveDispatcherRequest`],
+//! for clients on the Host's own computer. The specification is
 //! `docs/specs/wve-175-dispatcher.md`.
 
 use std::path::PathBuf;
@@ -19,6 +24,7 @@ use crate::Empty;
 use crate::Timestamp;
 use crate::agents::AgentId;
 use crate::devices::DeviceInfo;
+use crate::devices::Jwk;
 use crate::hello::Auth;
 use crate::hello::ClientInfo;
 use crate::policy::PermissionPolicy;
@@ -32,10 +38,13 @@ use crate::turns::TurnId;
 pub enum Reachability {
     /// It took the Dispatcher's key at hello; the Dispatcher may be connected to it now.
     Reachable,
-    /// Not tried since the Dispatcher started.
+    /// It hasn't connected since the Dispatcher started.
     Unchecked,
-    /// It refused the Dispatcher's key, as after it revoked it: pairing again is the way back.
+    /// It left the Dispatcher, or refused its key: joining again is the way back.
     Refused,
+    /// It was paired before Hosts joined the Dispatcher (ADR 0030), which no longer dials it:
+    /// `weave hosts add` there joins it.
+    Unjoined,
     /// Its computer answered at the URL, but no weave Host did, as when the Host isn't running
     /// there.
     Down,
@@ -52,10 +61,39 @@ pub const DISPATCHER_PROTOCOL: u32 = 1;
 /// instead fails at the upgrade.
 pub const DISPATCHER_SUBPROTOCOL: &str = "weave-dispatcher";
 
+/// The subprotocol a Host asks for on the connection it opens to the Dispatcher it joined
+/// (ADR 0030), beside the devices' [`DISPATCHER_SUBPROTOCOL`].
+pub const DISPATCHER_HOST_SUBPROTOCOL: &str = "weave-dispatcher-host";
+
 /// What a device signs in `dispatcher/hello`: the UTF-8 bytes of this line, which no Host
 /// takes, as no Dispatcher takes a Host's ([`crate::devices::auth_message`]).
 pub fn dispatcher_auth_message(dispatcher_id: &str, device_id: &str, nonce: &str) -> String {
     format!("weave-dispatcher-auth/1 {dispatcher_id} {device_id} {nonce}")
+}
+
+/// What a Host signs in `hosts/connect`: the UTF-8 bytes of this line, which neither a device's
+/// hello to the Dispatcher nor a Host's hello takes.
+pub fn host_connect_message(dispatcher_id: &str, host_id: &str, nonce: &str) -> String {
+    format!("weave-dispatcher-host-auth/1 {dispatcher_id} {host_id} {nonce}")
+}
+
+/// Where a Host reaches the Dispatcher: its WebSocket, through its Tailscale Serve entry, or on
+/// the Dispatcher's own computer the socket in its directory that Hosts connect to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum DispatcherAddress {
+    Url(String),
+    Socket(PathBuf),
+}
+
+impl std::fmt::Display for DispatcherAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Url(url) => f.write_str(url),
+            Self::Socket(path) => write!(f, "{}", path.display()),
+        }
+    }
 }
 
 /// `dispatcher/hello`: the first request on a connection. Until it succeeds, the Dispatcher
@@ -120,7 +158,7 @@ pub struct DispatcherStatus {
     pub version: String,
     pub pid: u32,
     pub started_at: Timestamp,
-    /// The name it pairs with Hosts as.
+    /// What it calls itself to the Hosts that join it.
     pub name: String,
     /// Its database.
     pub database: String,
@@ -129,7 +167,8 @@ pub struct DispatcherStatus {
     /// Its id, which its paired devices know it by.
     #[serde(default)]
     pub id: String,
-    /// Where its WebSocket listens, while a paired device keeps remote access on.
+    /// Where its WebSocket listens, while a paired device or a Host that joined over it keeps
+    /// remote access on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
     /// The devices paired with it.
@@ -137,7 +176,7 @@ pub struct DispatcherStatus {
     pub devices: u32,
 }
 
-/// A Host the Dispatcher is paired with, as a service.
+/// A Host that joined the Dispatcher, which is a client of it with the `service` role.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -145,10 +184,20 @@ pub struct DispatcherHost {
     pub host_id: String,
     /// What the Dispatcher calls it.
     pub name: String,
+    /// Where the Dispatcher dialed it, for a Host paired before Hosts joined it
+    /// ([`Reachability::Unjoined`]); empty for one that joined.
+    #[serde(default)]
     pub url: String,
-    /// The device the Host knows the Dispatcher as, which `weave devices revoke` there takes.
+    /// The device the Host knows the Dispatcher as.
     pub device_id: String,
+    /// When it first paired or joined.
     pub paired_at: Timestamp,
+    /// When it last joined; none for a Host paired before Hosts joined the Dispatcher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_at: Option<Timestamp>,
+    /// It joined over the Dispatcher's socket, on the Dispatcher's own computer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub here: bool,
     /// Connected now.
     pub connected: bool,
     /// How the last attempt to connect went.
@@ -175,28 +224,77 @@ pub struct ListHostsResponse {
     pub hosts: Vec<DispatcherHost>,
 }
 
-/// `hosts/add`: pair with the Host at `url` as a service, with the code `weave pair` showed
-/// there.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+/// `hosts/offer`: a one-time code a Host joins the Dispatcher with, good for five minutes
+/// (ADR 0030). For a Host on another computer it turns the Dispatcher's WebSocket on, as
+/// `devices/offer` does, and gives its URL. For one on the Dispatcher's own computer (`here`),
+/// which only a client there may ask for, it gives the socket Hosts connect to instead.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[request(method = "hosts/add", response = AddHostResponse)]
-pub struct AddHostRequest {
-    pub url: String,
-    pub code: String,
-    /// What to call it; its tailnet name when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+#[request(method = "hosts/offer", response = OfferHostResponse)]
+pub struct OfferHostRequest {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub here: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct AddHostResponse {
-    pub host: DispatcherHost,
+#[serde(rename_all = "camelCase")]
+pub struct OfferHostResponse {
+    /// 128 random bits in Crockford base32.
+    pub code: String,
+    pub expires_at: Timestamp,
+    /// Where the Host connects to join.
+    pub address: DispatcherAddress,
 }
 
-/// `hosts/remove`: forget a Host, by id or name, and close the connection to it. Work still
-/// written down for it is dropped. The Host keeps the Dispatcher as a device until it's
-/// revoked there.
+/// `hosts/connect`: the request a Host's own connection begins with, after
+/// `dispatcher/challenge`: who it is, and its signature of the challenge, as
+/// [`host_connect_message`] spells it. Joining, it gives the code `hosts/offer` showed and the
+/// key it signs with. Once the Dispatcher answers, it says `host/hello` to the Host on the same
+/// connection; a refusal answers [`crate::errors::UNAUTHENTICATED`] and closes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "hosts/connect", response = HostConnected)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectHostRequest {
+    /// [`DISPATCHER_PROTOCOL`] as the Host speaks it.
+    pub protocol: u32,
+    pub host_id: String,
+    /// What the Host calls itself, which the Dispatcher calls it when it joins.
+    pub name: String,
+    /// The weave release the Host runs.
+    pub version: String,
+    pub signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<HostJoin>,
+}
+
+/// A Host joining: the code `hosts/offer` gave, and the Host's P-256 public key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HostJoin {
+    pub code: String,
+    pub public_key: Jwk,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HostConnected {
+    pub dispatcher_id: String,
+    /// What the Dispatcher calls itself.
+    pub dispatcher_name: String,
+    /// The Dispatcher's P-256 public key. At `host/hello` it signs the Host's challenge with it,
+    /// as [`crate::devices::auth_message`] spells it, with its id as the device's.
+    pub public_key: Jwk,
+    /// What the Dispatcher calls the Host.
+    pub name: String,
+}
+
+/// `hosts/remove`: forget a Host, by id or name, and the work still written down for it. A
+/// Host connected now is told, as its connection closes with
+/// [`crate::websocket::CLOSE_REVOKED`], and forgets that it joined.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "hosts/remove", response = Empty)]
@@ -427,4 +525,54 @@ pub struct ListOccurrencesRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ListOccurrencesResponse {
     pub occurrences: Vec<Occurrence>,
+}
+
+/// `dispatcher/join`, in the Host protocol: have the Host join the Dispatcher at `address` with
+/// the code `hosts/offer` gave there, and keep a connection open to it from then on (ADR 0030).
+/// Only clients on the Host's own computer may ask. A Host joins one Dispatcher: joining another
+/// leaves the first.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dispatcher/join", response = JoinDispatcherResponse)]
+pub struct JoinDispatcherRequest {
+    pub address: DispatcherAddress,
+    pub code: String,
+    /// What the Dispatcher calls this Host; the computer's name when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct JoinDispatcherResponse {
+    pub dispatcher: JoinedDispatcher,
+}
+
+/// `dispatcher/leave`, in the Host protocol: forget the Dispatcher the Host joined and close the
+/// connection to it, which tells the Dispatcher. Only clients on the Host's own computer may ask.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dispatcher/leave", response = Empty)]
+pub struct LeaveDispatcherRequest {}
+
+/// The Dispatcher a Host joined, and its connection to it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JoinedDispatcher {
+    pub id: String,
+    /// What the Dispatcher calls itself.
+    pub name: String,
+    pub address: DispatcherAddress,
+    /// What the Dispatcher calls this Host.
+    pub host_name: String,
+    pub joined_at: Timestamp,
+    /// Connected now.
+    pub connected: bool,
+    /// When it last connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_at: Option<Timestamp>,
+    /// Why the last connection failed or closed, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }

@@ -322,6 +322,7 @@ impl World {
             terminals: None,
             home: None,
             retired: Vec::new(),
+            dispatcher: None,
         }
     }
 

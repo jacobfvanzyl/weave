@@ -1,0 +1,17 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&JoinDispatcherResponse\n{\n    dispatcher: JoinedDispatcher\n    {\n        connected: false, connected_at: None, why:\n        Some(\"its connection closed; connecting again\".to_owned()), ..joined()\n    },\n})"
+---
+{
+  "dispatcher": {
+    "id": "D7qK2mN4pR8sT1vX",
+    "name": "Dispatcher on homelab-1",
+    "address": {
+      "url": "wss://homelab-1.example.ts.net:7342"
+    },
+    "hostName": "studio",
+    "joinedAt": 1760180000000,
+    "connected": false,
+    "why": "its connection closed; connecting again"
+  }
+}

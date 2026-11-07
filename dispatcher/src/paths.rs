@@ -53,6 +53,12 @@ impl DispatcherPaths {
         self.dir.join("dispatcher.sock")
     }
 
+    /// The socket a Host on the Dispatcher's own computer connects to, joined (ADR 0030), and
+    /// speaks the WebSocket of a Host's own connection over.
+    pub fn hosts_socket(&self) -> PathBuf {
+        self.dir.join("hosts.sock")
+    }
+
     /// Held for as long as a Dispatcher runs from this directory.
     pub fn lock(&self) -> PathBuf {
         self.dir.join("dispatcher.lock")

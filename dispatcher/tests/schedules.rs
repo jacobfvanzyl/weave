@@ -17,7 +17,6 @@ use tokio::sync::watch;
 use weave_acp_core::schema::ContentBlock;
 use weave_dispatcher::Clock;
 use weave_dispatcher::Dispatcher;
-use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
 use weave_host_protocol::dispatcher::Missed;
@@ -74,18 +73,13 @@ fn ms(time: &str) -> u64 {
     u64::try_from(at.as_millisecond()).expect("after 1970")
 }
 
-/// Pair `dispatcher` with `world`'s Host, and wait until it's connected: the Host's id.
-async fn pair(dispatcher: &Dispatcher, world: &World) -> String {
-    let host = dispatcher
-        .add_host(AddHostRequest {
-            url: world.url(),
-            code: world.offer().await,
-            name: Some("studio".to_owned()),
-        })
-        .await
-        .expect("paired");
-    host_until(dispatcher, &host.host_id, |host| host.connected).await;
-    host.host_id
+/// Have `world`'s Host join the Dispatcher from `dir` as studio, and wait until it's connected:
+/// the Host's id.
+async fn pair(dispatcher: &Dispatcher, dir: &std::path::Path, world: &World) -> String {
+    world.join(dispatcher, dir, "studio").await;
+    let host_id = world.host_id().await;
+    host_until(dispatcher, &host_id, |host| host.connected).await;
+    host_id
 }
 
 fn schedule(world: &World, name: &str, cron: &str, prompt: &str) -> AddScheduleRequest {
@@ -167,7 +161,7 @@ async fn a_schedule_starts_a_turn_at_its_time_naming_itself() {
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = TestClock::at("2026-11-04T08:59:00Z");
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
-    pair(&dispatcher, &studio).await;
+    pair(&dispatcher, dir.path(), &studio).await;
 
     // Added through its socket, it says when it next runs.
     let cli = ask(dir.path()).await;
@@ -252,7 +246,7 @@ async fn an_occurrence_written_down_starts_once_after_a_restart_and_a_host_that_
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = TestClock::at("2026-11-04T08:59:00Z");
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
-    pair(&dispatcher, &studio).await;
+    pair(&dispatcher, dir.path(), &studio).await;
     dispatcher
         .add_schedule(schedule(&studio, "daily-review", "0 9 * * *", "hello"))
         .expect("added");
@@ -289,7 +283,7 @@ async fn what_was_missed_catches_up_once_late_unless_the_schedule_skips_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = TestClock::at("2026-11-04T08:00:00Z");
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
-    pair(&dispatcher, &studio).await;
+    pair(&dispatcher, dir.path(), &studio).await;
     dispatcher
         .add_schedule(schedule(&studio, "daily-review", "0 9 * * *", "Review"))
         .expect("added");
@@ -363,7 +357,7 @@ async fn an_occurrence_while_the_last_still_runs_is_skipped() {
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = TestClock::at("2026-11-04T08:59:30Z");
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
-    pair(&dispatcher, &studio).await;
+    pair(&dispatcher, dir.path(), &studio).await;
     dispatcher
         .add_schedule(schedule(&studio, "watch", "* * * * *", "/slow 10"))
         .expect("added");
@@ -400,7 +394,7 @@ async fn a_schedule_that_prompts_one_thread_queues_its_prompt_there() {
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = TestClock::at("2026-11-04T08:59:00Z");
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
-    pair(&dispatcher, &studio).await;
+    pair(&dispatcher, dir.path(), &studio).await;
     dispatcher
         .add_schedule(schedule(&studio, "first", "0 9 * * *", "hello"))
         .expect("added");
@@ -438,7 +432,7 @@ async fn an_occurrence_its_host_stops_under_ends_as_the_continuation_does() {
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = TestClock::at("2026-11-04T08:59:00Z");
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
-    pair(&dispatcher, &studio).await;
+    pair(&dispatcher, dir.path(), &studio).await;
     let mut headless = schedule(&studio, "long-job", "0 9 * * *", "slow 20");
     headless.run.policy = PermissionPolicy::headless(Vec::new());
     dispatcher.add_schedule(headless).expect("added");
@@ -473,7 +467,7 @@ async fn three_failures_in_a_row_pause_a_schedule() {
     let dir = tempfile::tempdir().expect("tempdir");
     let clock = TestClock::at("2026-11-04T08:59:30Z");
     let (dispatcher, serving) = start_with(dir.path(), clock.clone());
-    pair(&dispatcher, &studio).await;
+    pair(&dispatcher, dir.path(), &studio).await;
     let mut broken = schedule(&studio, "broken", "* * * * *", "hello");
     broken.run.agent_id = "nobody".to_owned();
     dispatcher.add_schedule(broken).expect("added");

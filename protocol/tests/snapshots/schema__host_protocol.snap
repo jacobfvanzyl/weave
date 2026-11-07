@@ -64,6 +64,14 @@ expression: schema()
       "params": "RevokeDeviceRequest",
       "result": "Empty"
     },
+    "dispatcher/join": {
+      "params": "JoinDispatcherRequest",
+      "result": "JoinDispatcherResponse"
+    },
+    "dispatcher/leave": {
+      "params": "LeaveDispatcherRequest",
+      "result": "Empty"
+    },
     "files/list": {
       "params": "ListFilesRequest",
       "result": "ListFilesResponse"
@@ -729,6 +737,17 @@ expression: schema()
             "null"
           ],
           "description": "The loopback address of the WebSocket remote clients reach, when the Host serves one."
+        },
+        "dispatcher": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JoinedDispatcher"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The Dispatcher the Host joined, and its connection to it (ADR 0030)."
         }
       },
       "required": [
@@ -1205,6 +1224,88 @@ expression: schema()
         }
       ],
       "description": "Who started a turn."
+    },
+    "JoinedDispatcher": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "description": "What the Dispatcher calls itself."
+        },
+        "address": {
+          "$ref": "#/$defs/DispatcherAddress"
+        },
+        "hostName": {
+          "type": "string",
+          "description": "What the Dispatcher calls this Host."
+        },
+        "joinedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "connected": {
+          "type": "boolean",
+          "description": "Connected now."
+        },
+        "connectedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it last connected."
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the last connection failed or closed, when it did."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "address",
+        "hostName",
+        "joinedAt",
+        "connected"
+      ],
+      "description": "The Dispatcher a Host joined, and its connection to it."
+    },
+    "DispatcherAddress": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "socket": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "socket"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Where a Host reaches the Dispatcher: its WebSocket, through its Tailscale Serve entry, or on\nthe Dispatcher's own computer the socket in its directory that Hosts connect to."
     },
     "DrainRequest": {
       "type": "object",
@@ -2090,6 +2191,44 @@ expression: schema()
         "deviceId"
       ],
       "description": "`devices/revoke`: forget a device and close its connections. It has to pair again."
+    },
+    "JoinDispatcherRequest": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/DispatcherAddress"
+        },
+        "code": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the Dispatcher calls this Host; the computer's name when absent."
+        }
+      },
+      "required": [
+        "address",
+        "code"
+      ],
+      "description": "`dispatcher/join`, in the Host protocol: have the Host join the Dispatcher at `address` with\nthe code `hosts/offer` gave there, and keep a connection open to it from then on (ADR 0030).\nOnly clients on the Host's own computer may ask. A Host joins one Dispatcher: joining another\nleaves the first."
+    },
+    "JoinDispatcherResponse": {
+      "type": "object",
+      "properties": {
+        "dispatcher": {
+          "$ref": "#/$defs/JoinedDispatcher"
+        }
+      },
+      "required": [
+        "dispatcher"
+      ]
+    },
+    "LeaveDispatcherRequest": {
+      "type": "object",
+      "description": "`dispatcher/leave`, in the Host protocol: forget the Dispatcher the Host joined and close the\nconnection to it, which tells the Dispatcher. Only clients on the Host's own computer may ask."
     },
     "ListFilesRequest": {
       "type": "object",

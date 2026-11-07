@@ -583,6 +583,9 @@ mod tests {
                 device_id: "d-1".to_owned(),
                 paired_at: 1,
                 refused: None,
+                public_key: None,
+                joined_at: None,
+                here: false,
             })
             .expect("a Host");
         let schedule = StoredSchedule {

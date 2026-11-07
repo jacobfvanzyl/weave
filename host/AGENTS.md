@@ -215,6 +215,20 @@ after its position. Remote tests (`tests/remote.rs`) use a real
 loopback WebSocket, and fake agents that take MCP over ACP; `../host-client/examples/remote.rs` is the client for trying it by
 hand.
 
+The Dispatcher the Host joined (ADR 0030, WVE-194, spec `../docs/specs/wve-175-dispatcher.md`'s
+Hosts) is `dispatcher.rs`: `dispatcher/join`, local only, takes a code `hosts/offer` gave there and
+the Dispatcher's URL or, on its computer, its `hosts.sock` (`weave_host_client::remote::Opened`).
+The Host proves a key of its own (`key.json`, `DeviceKey::kept`) in the first two requests
+(`weave_remote::preamble`), keeps the Dispatcher's key among its devices as a joined service
+(`Devices::join`, `leave`; taken at hello only on `Peer::Joined`, the connection the Host opened,
+kept out of `devices/list` and `any_paired`) and where it is in `dispatcher.json`, then serves the
+connection with `client::serve_joined` through `weave_remote::websocket::serve_rpc`, as an
+accepted one. `keep` dials again with backoff (`DispatcherSettings`), and forgets the Dispatcher
+when it closes with `CLOSE_REVOKED` or refuses the Host's key; `dispatcher/leave` closes with
+`CLOSE_REVOKED` itself. A joined Host doesn't exit when idle, `host/status` names the Dispatcher,
+and `Daemon::shutdown` closes the connection (`dispatcher::stop`); `resume_dispatcher` connects
+again at startup. The tests are the Dispatcher's (`dispatcher/tests/joins.rs`).
+
 Other Hosts (WVE-185, ADR 0029; the Host protocol's Other Hosts section) are reached through the
 Dispatcher: Hosts don't pair with each other. A service that declared `hosts`
 (`Devices::declare_tools`, `hosts_service`) gets the Host tool calls given another Host's `host`:

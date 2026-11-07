@@ -1,0 +1,13 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&JoinDispatcherRequest\n{\n    address:\n    DispatcherAddress::Socket(\"/Users/jaco/.local/state/weave/dispatcher/hosts.sock\".into()),\n    code: \"8M3QK0V4WZ7HC1RP9F2D5XTNAG\".to_owned(), name: None,\n})"
+---
+{
+  "method": "dispatcher/join",
+  "params": {
+    "address": {
+      "socket": "/Users/jaco/.local/state/weave/dispatcher/hosts.sock"
+    },
+    "code": "8M3QK0V4WZ7HC1RP9F2D5XTNAG"
+  }
+}

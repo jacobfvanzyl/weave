@@ -1,6 +1,7 @@
-//! Reaching another of the person's computers to pair with its Host or Dispatcher: over SSH,
-//! where `weave hosts add studio` runs `weave pair --json` for a code (and `weave dispatcher
-//! connect homelab` runs `weave dispatcher pair --json`), or with the URL and code shown there.
+//! Reaching another of the person's computers to have its Host join the Dispatcher, or to pair
+//! with the Dispatcher there: over SSH, where `weave hosts add studio` runs `weave hosts add
+//! <url> <code> --json` (and `weave dispatcher connect homelab` runs `weave dispatcher pair
+//! --json`), or with the URL and code shown elsewhere.
 
 use std::process::Command;
 use std::process::Stdio;
@@ -11,7 +12,7 @@ use anyhow::bail;
 /// What runs `ssh`, for tests to stand in for it.
 const SSH_VARIABLE: &str = "WEAVE_SSH";
 
-/// How `weave hosts add` reaches a Host.
+/// How `weave hosts add` reaches a Host, or `weave dispatcher connect` the Dispatcher.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Reach {
     /// The URL and code `weave pair` showed there.
@@ -27,23 +28,18 @@ pub(crate) struct Pairing {
     command: &'static str,
 }
 
-/// Pairing with a Host, as `weave pair` offers it.
-pub(crate) const HOST: Pairing = Pairing {
-    link: "weave://pair?",
-    command: "weave pair",
-};
-
 /// Pairing with the Dispatcher, as `weave dispatcher pair` offers it.
 pub(crate) const DISPATCHER: Pairing = Pairing {
     link: "weave://pair-dispatcher?",
     command: "weave dispatcher pair",
 };
 
-/// How `host` and `code` reach a Host: a URL or `weave://pair` link with its code, or
-/// otherwise a computer SSH reaches.
-pub(crate) fn reach(host: &str, code: Option<String>) -> anyhow::Result<Reach> {
-    reach_for(&HOST, host, code)
-}
+/// A Host joining the Dispatcher with the URL and code `weave hosts add --code` shows (ADR 0030),
+/// or a `weave://join-dispatcher?url=…&code=…` link to them.
+pub(crate) const JOIN: Pairing = Pairing {
+    link: "weave://join-dispatcher?",
+    command: "weave hosts add --code",
+};
 
 /// How `host` and `code` reach what `pairing` pairs with.
 pub(crate) fn reach_for(
@@ -163,29 +159,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_host_is_reached_by_url_and_code_or_over_ssh() {
+    fn a_host_joins_by_url_and_code_or_over_ssh() {
         let code = |url: &str, code: &str| Reach::Code {
             url: url.to_owned(),
             code: code.to_owned(),
         };
+        let join =
+            |host: &str, given: Option<&str>| reach_for(&JOIN, host, given.map(str::to_owned));
         assert_eq!(
-            reach(
-                "weave://pair?url=wss%3A%2F%2Fstudio.example.ts.net%3A7341&code=ABC",
+            join(
+                "weave://join-dispatcher?url=wss%3A%2F%2Fhomelab.example.ts.net%3A7342&code=ABC",
                 None
             )
             .expect("a link"),
-            code("wss://studio.example.ts.net:7341", "ABC")
+            code("wss://homelab.example.ts.net:7342", "ABC")
         );
         assert_eq!(
-            reach("wss://studio.example.ts.net:7341", Some("ABC".to_owned())).expect("as given"),
-            code("wss://studio.example.ts.net:7341", "ABC")
+            join("wss://homelab.example.ts.net:7342", Some("ABC")).expect("as given"),
+            code("wss://homelab.example.ts.net:7342", "ABC")
         );
-        assert!(reach("wss://studio.example.ts.net:7341", None).is_err());
+        assert!(join("wss://homelab.example.ts.net:7342", None).is_err());
         assert_eq!(
-            reach("me@studio", None).expect("SSH"),
+            join("me@studio", None).expect("SSH"),
             Reach::Ssh("me@studio".to_owned())
         );
-        assert!(reach("studio", Some("ABC".to_owned())).is_err());
+        assert!(join("studio", Some("ABC")).is_err());
         assert_eq!(
             reach_for(
                 &DISPATCHER,

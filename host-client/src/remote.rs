@@ -20,6 +20,10 @@ use futures::StreamExt as _;
 use p256::ecdsa::Signature;
 use p256::ecdsa::SigningKey;
 use p256::ecdsa::signature::Signer as _;
+use tokio::net::TcpStream;
+use tokio::net::UnixStream;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -27,6 +31,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::devices::DeviceId;
 use weave_host_protocol::devices::Jwk;
+use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::websocket::MAX_MESSAGE;
 use weave_host_protocol::websocket::SUBPROTOCOL;
 
@@ -191,23 +196,70 @@ pub async fn connect_websocket(
     connect_websocket_as(url, SUBPROTOCOL).await
 }
 
+/// A WebSocket this program opened: over TCP, with TLS for `wss://`, or over a Unix socket, as
+/// a Host opens one to the Dispatcher on its own computer (ADR 0030).
+pub enum Opened {
+    Tcp(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
+    Unix(Box<WebSocketStream<UnixStream>>),
+}
+
+fn limits() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE))
+        .max_frame_size(Some(MAX_MESSAGE))
+}
+
+/// Open the WebSocket at `url`, asking for `subprotocol`.
+pub async fn open_websocket(
+    url: &str,
+    subprotocol: &'static str,
+) -> io::Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+    let mut request = url.into_client_request().map_err(io::Error::other)?;
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        HeaderValue::from_static(subprotocol),
+    );
+    let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(limits()), false)
+        .await
+        .map_err(io::Error::other)?;
+    Ok(socket)
+}
+
+/// Open the WebSocket at `address`, the Dispatcher's URL or its socket, asking for
+/// `subprotocol`.
+pub async fn open_dispatcher(
+    address: &DispatcherAddress,
+    subprotocol: &'static str,
+) -> io::Result<Opened> {
+    match address {
+        DispatcherAddress::Url(url) => open_websocket(url, subprotocol)
+            .await
+            .map(|socket| Opened::Tcp(Box::new(socket))),
+        DispatcherAddress::Socket(path) => {
+            let stream = UnixStream::connect(path).await?;
+            let mut request = "ws://localhost/"
+                .into_client_request()
+                .map_err(io::Error::other)?;
+            request.headers_mut().insert(
+                "Sec-WebSocket-Protocol",
+                HeaderValue::from_static(subprotocol),
+            );
+            let (socket, _) =
+                tokio_tungstenite::client_async_with_config(request, stream, Some(limits()))
+                    .await
+                    .map_err(io::Error::other)?;
+            Ok(Opened::Unix(Box::new(socket)))
+        }
+    }
+}
+
 /// Open a WebSocket at `url` asking for `subprotocol`, as the Dispatcher's is
 /// (`weave-dispatcher`), for a client of role `R`.
 pub async fn connect_websocket_as<R: Role>(
     url: &str,
     subprotocol: &'static str,
 ) -> io::Result<(impl ConnectTo<R> + 'static, CloseReason)> {
-    let mut request = url.into_client_request().map_err(io::Error::other)?;
-    request.headers_mut().insert(
-        "Sec-WebSocket-Protocol",
-        HeaderValue::from_static(subprotocol),
-    );
-    let config = WebSocketConfig::default()
-        .max_message_size(Some(MAX_MESSAGE))
-        .max_frame_size(Some(MAX_MESSAGE));
-    let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false)
-        .await
-        .map_err(io::Error::other)?;
+    let socket = open_websocket(url, subprotocol).await?;
     let (sink, stream) = socket.split();
     let outgoing = sink
         .sink_map_err(io::Error::other)

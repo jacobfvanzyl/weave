@@ -1,5 +1,5 @@
-//! The Dispatcher against in-process Hosts on loopback WebSockets: pairing as a service through
-//! its socket, reconnecting after a Host restarts, and starting work once across its own
+//! The Dispatcher against in-process Hosts that join it (ADR 0030): joining with a code its
+//! socket gave, connecting again after a Host restarts, and starting work once across its own
 //! restarts.
 
 #![allow(clippy::expect_used)]
@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use weave_host_protocol::devices::ListDevicesRequest;
-use weave_host_protocol::devices::RevokeDeviceRequest;
-use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
+use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
+use weave_host_protocol::dispatcher::OfferHostRequest;
 use weave_host_protocol::dispatcher::Reachability;
 
 use crate::common::WAIT;
@@ -33,21 +33,23 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (dispatcher, serving) = start(dir.path());
 
-    // Paired through its socket, as a service of each Host.
+    // Each joins with a code its socket gave, and is a client of the Dispatcher as a service.
     let cli = ask(dir.path()).await;
     let mut added = Vec::new();
     for (world, name) in [(&studio, "studio"), (&mini, "mini")] {
-        let host = cli
-            .send(AddHostRequest {
-                url: world.url(),
-                code: world.offer().await,
-                name: Some(name.to_owned()),
-            })
+        let offer = cli
+            .send(OfferHostRequest { here: true })
             .await
-            .expect("hosts/add")
-            .host;
-        assert_eq!(host.name, name);
-        added.push(host.host_id);
+            .expect("hosts/offer");
+        let joined = world
+            .join_with(dir.path(), offer.code, name)
+            .await
+            .expect("dispatcher/join");
+        assert_eq!(
+            (joined.name.as_str(), joined.host_name.as_str()),
+            ("Dispatcher", name)
+        );
+        added.push(world.host_id().await);
     }
     let (studio_id, mini_id) = (added[0].clone(), added[1].clone());
     let local = studio.local().await;
@@ -56,19 +58,23 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
         .await
         .expect("devices/list")
         .devices;
-    assert_eq!(
-        devices
-            .iter()
-            .map(|device| (device.name.as_str(), device.service))
-            .collect::<Vec<_>>(),
-        vec![("Dispatcher", true)]
+    assert!(
+        devices.is_empty(),
+        "the Dispatcher it joined isn't one of its devices: {devices:?}"
     );
     local.shutdown().await;
     for host_id in [&studio_id, &mini_id] {
         host_until(&dispatcher, host_id, |host| host.connected).await;
     }
     let listed = cli.send(ListHostsRequest {}).await.expect("hosts/list");
-    assert_eq!(listed.hosts.len(), 2);
+    assert_eq!(
+        listed
+            .hosts
+            .iter()
+            .map(|host| (host.name.as_str(), host.here, host.joined_at.is_some()))
+            .collect::<Vec<_>>(),
+        vec![("mini", true, true), ("studio", true, true)]
+    );
 
     // A headless turn on each.
     let first = dispatcher
@@ -91,7 +97,7 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
     .await
     .expect("the thread it started, watched");
 
-    // One Host restarts: the Dispatcher connects again, and work waiting for it gets there.
+    // One Host restarts: it connects again, and work waiting for it gets there.
     let before = host_until(&dispatcher, &mini_id, |host| host.connected)
         .await
         .connected_at;
@@ -106,7 +112,8 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
     delivered(&dispatcher, &after.id).await;
 
     // The Dispatcher stops after the Host took the work but before it wrote that down, as a
-    // crash would: started again, it sends it again, and the Host starts nothing twice.
+    // crash would: started again, the Host connects again, the Dispatcher sends the work
+    // again, and the Host starts nothing twice.
     cli.shutdown().await;
     dispatcher.stop().await;
     serving.abort();
@@ -137,58 +144,44 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_host_that_revokes_the_dispatcher_is_left_until_paired_again() {
+async fn a_host_that_leaves_the_dispatcher_is_left_until_it_joins_again() {
     let studio = World::new().await;
     let dir = tempfile::tempdir().expect("tempdir");
     let (dispatcher, serving) = start(dir.path());
-    let host = dispatcher
-        .add_host(AddHostRequest {
-            url: studio.url(),
-            code: studio.offer().await,
-            name: None,
-        })
-        .await
-        .expect("paired");
-    host_until(&dispatcher, &host.host_id, |host| host.connected).await;
+    studio.join(&dispatcher, dir.path(), "studio").await;
+    let host_id = studio.host_id().await;
+    host_until(&dispatcher, &host_id, |host| host.connected).await;
 
     let local = studio.local().await;
     local
-        .send(RevokeDeviceRequest {
-            device_id: host.device_id.clone(),
-        })
+        .send(LeaveDispatcherRequest {})
         .await
-        .expect("devices/revoke");
+        .expect("dispatcher/leave");
     local.shutdown().await;
-    let refused = host_until(&dispatcher, &host.host_id, |host| {
+    assert_eq!(studio.daemon.dispatcher(), None);
+    let left = host_until(&dispatcher, &host_id, |host| {
         host.status == Reachability::Refused
     })
     .await;
-    assert!(!refused.connected);
-    assert_eq!(refused.why.as_deref(), Some("it revoked the Dispatcher"));
+    assert!(!left.connected);
+    assert_eq!(left.why.as_deref(), Some("it left the Dispatcher"));
 
-    // A refusal stands across a restart, and work waits for the Host meanwhile.
+    // Leaving stands across a restart, and work waits for the Host meanwhile.
     dispatcher.stop().await;
     serving.abort();
     let _ = serving.await;
     let (dispatcher, serving) = start(dir.path());
     let waiting = dispatcher
-        .deliver(&host.host_id, run(&studio, "hello"))
+        .deliver(&host_id, run(&studio, "hello"))
         .expect("written down");
-    let still = host_until(&dispatcher, &host.host_id, |host| {
+    let still = host_until(&dispatcher, &host_id, |host| {
         host.status == Reachability::Refused
     })
     .await;
     assert_eq!(still.pending, 1);
 
-    // Pairing again is the way back, and the waiting work gets there.
-    dispatcher
-        .add_host(AddHostRequest {
-            url: studio.url(),
-            code: studio.offer().await,
-            name: None,
-        })
-        .await
-        .expect("paired again");
+    // Joining again is the way back, and the waiting work gets there.
+    studio.join(&dispatcher, dir.path(), "studio").await;
     delivered(&dispatcher, &waiting.id).await;
     dispatcher.stop().await;
     serving.abort();

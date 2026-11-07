@@ -27,7 +27,6 @@ use weave_dispatcher::Dispatcher;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::HostHandle;
-use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::SessionEvent;
 use weave_host_protocol::hello::ClientCapabilities;
@@ -68,20 +67,13 @@ impl Running {
         }
     }
 
-    /// Pair with `world`'s Host as `name`, and wait until it's connected there and reaches the
-    /// person's Hosts for it: the Host's id.
+    /// Have `world`'s Host join as `name`, and wait until it's connected and the Dispatcher
+    /// reaches the person's Hosts for it: the Host's id.
     async fn pair(&self, world: &World, name: &str) -> String {
-        let host = self
-            .dispatcher
-            .add_host(AddHostRequest {
-                url: world.url(),
-                code: world.offer().await,
-                name: Some(name.to_owned()),
-            })
-            .await
-            .expect("hosts/add");
-        host_until(&self.dispatcher, &host.host_id, |host| host.connected).await;
-        host.host_id
+        world.join(&self.dispatcher, self.dir.path(), name).await;
+        let host_id = world.host_id().await;
+        host_until(&self.dispatcher, &host_id, |host| host.connected).await;
+        host_id
     }
 
     async fn stop(self) -> tempfile::TempDir {

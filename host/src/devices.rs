@@ -7,6 +7,11 @@
 //! Dispatcher, pairs as a device does and is kept as one, with the tools it declared and
 //! whether it reaches the person's other Hosts (ADR 0029).
 //!
+//! The Dispatcher the Host joined (ADR 0030) is kept as a service too, so the tools it declared
+//! outlive its connections, but marked joined: it is taken at hello only on the connection the
+//! Host opened to it ([`crate::dispatcher`]), it keeps no remote access on, and the person's
+//! devices aren't listed with it.
+//!
 //! Hosts used to pair with each other as peer Hosts (ADR 0017), kept as devices naming their
 //! Host id; ADR 0029 retired that, and a Host revokes such a pairing when it loads one.
 
@@ -89,6 +94,9 @@ struct Stored {
     /// The service reaches the person's other Hosts, as it declared with its tools (ADR 0029).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     hosts: bool,
+    /// The Dispatcher the Host joined (ADR 0030), rather than a device that paired.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    joined: bool,
 }
 
 impl Stored {
@@ -188,6 +196,7 @@ impl Devices {
             service: device.service,
             tools: Vec::new(),
             hosts: false,
+            joined: false,
         };
         state.devices.insert(id, stored.clone());
         self.save(&state);
@@ -205,16 +214,22 @@ impl Devices {
         Some(info)
     }
 
-    /// The device `device_id`, when `signature` is its signature of the challenge `nonce`.
+    /// The device `device_id`, when `signature` is its signature of the challenge `nonce`. On
+    /// the connection the Host opened to the Dispatcher it joined (`joined`), only that
+    /// Dispatcher; on any other, only a device that paired.
     pub(crate) fn verify(
         &self,
         device_id: &str,
         nonce: &str,
         signature: &str,
+        joined: bool,
     ) -> Option<DeviceInfo> {
         let mut state = lock(&self.state);
         let host_id = state.host_id.clone();
-        let stored = state.devices.get_mut(device_id)?;
+        let stored = state
+            .devices
+            .get_mut(device_id)
+            .filter(|stored| stored.joined == joined)?;
         let message = auth_message(&host_id, device_id, nonce);
         if !signed(&stored.public_key, &message, signature) {
             return None;
@@ -236,7 +251,65 @@ impl Devices {
 
     /// Whether any device is paired, which keeps remote access on.
     pub(crate) fn any_paired(&self) -> bool {
-        !lock(&self.state).devices.is_empty()
+        lock(&self.state)
+            .devices
+            .values()
+            .any(|stored| !stored.joined)
+    }
+
+    /// Keep the Dispatcher the Host joined, `id` with `public_key`, as a service, in place of
+    /// any it joined before. Devices paired with the same key, as the Dispatcher was before
+    /// Hosts joined it, are revoked, closing their connections with `code`; their tools pass
+    /// to it when it declares its own.
+    pub(crate) fn join(&self, id: &str, name: &str, public_key: Jwk, code: u16) {
+        let closers: Vec<Arc<dyn Closer>> = {
+            let mut state = lock(&self.state);
+            let gone: Vec<DeviceId> = state
+                .devices
+                .values()
+                .filter(|stored| stored.joined || stored.public_key == public_key)
+                .map(|stored| stored.id.clone())
+                .collect();
+            let mut closers = Vec::new();
+            for device in gone {
+                if let Some(stored) = state.devices.remove(&device)
+                    && !stored.joined
+                {
+                    tracing::info!(device = %stored.id, name = %stored.name, "revoked the Dispatcher's pairing from before Hosts joined it");
+                    closers.extend(state.live.remove(&device));
+                }
+            }
+            state.devices.insert(
+                id.to_owned(),
+                Stored {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    public_key,
+                    paired_at: now_ms(),
+                    last_seen_at: None,
+                    peer_host: None,
+                    service: true,
+                    tools: Vec::new(),
+                    hosts: false,
+                    joined: true,
+                },
+            );
+            self.save(&state);
+            closers
+        };
+        for closer in closers {
+            closer.close(code);
+        }
+    }
+
+    /// Forget the Dispatcher the Host joined, and the tools it declared.
+    pub(crate) fn leave(&self) {
+        let mut state = lock(&self.state);
+        let before = state.devices.len();
+        state.devices.retain(|_, stored| !stored.joined);
+        if state.devices.len() != before {
+            self.save(&state);
+        }
     }
 
     /// Whether an offer is still good, which keeps remote access on while it is.
@@ -249,6 +322,7 @@ impl Devices {
         state
             .devices
             .values()
+            .filter(|stored| !stored.joined)
             .map(|stored| listing(stored, state.live.count(&stored.id)))
             .collect()
     }
@@ -326,9 +400,14 @@ impl Devices {
     pub(crate) fn revoke(&self, device_id: &str, code: u16) -> Result<(), Error> {
         let closers: Vec<Arc<dyn Closer>> = {
             let mut state = lock(&self.state);
-            if state.devices.remove(device_id).is_none() {
+            if state
+                .devices
+                .get(device_id)
+                .is_none_or(|stored| stored.joined)
+            {
                 return Err(Error::invalid_params().data(format!("no device {device_id}")));
             }
+            state.devices.remove(device_id);
             self.save(&state);
             state.live.remove(device_id)
         };
@@ -479,6 +558,70 @@ mod tests {
     }
 
     #[test]
+    fn the_dispatcher_it_joined_is_kept_apart_from_the_devices_that_paired() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("devices.json");
+        let devices = Devices::load(Some(path.clone()));
+        let (signing, jwk) = key();
+        // The Dispatcher paired as a service before Hosts joined it, with the key it keeps.
+        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
+        let old = devices
+            .pair(
+                &code,
+                NewDevice {
+                    service: true,
+                    ..new_device(jwk.clone())
+                },
+            )
+            .expect("pairs");
+        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
+        let (_, ipad) = key();
+        devices
+            .pair(&code, new_device(ipad))
+            .expect("an iPad pairs");
+
+        devices.join("D-1", "Dispatcher on homelab-1", jwk, 4001);
+        let listed: Vec<String> = devices
+            .list()
+            .into_iter()
+            .map(|device| device.name)
+            .collect();
+        assert_eq!(
+            listed,
+            vec!["iPad".to_owned()],
+            "its old pairing is revoked"
+        );
+        assert!(devices.verify(&old.id, "n", "", false).is_none());
+
+        // Only on the connection the Host opened to it, and as a service.
+        let host_id = devices.host_id();
+        let signature = sign(&signing, &host_id, "D-1", "n1");
+        assert_eq!(devices.verify("D-1", "n1", &signature, false), None);
+        let joined = devices
+            .verify("D-1", "n1", &signature, true)
+            .expect("the Dispatcher");
+        assert!(joined.service);
+        assert!(
+            devices.revoke("D-1", 4001).is_err(),
+            "it isn't revoked as a device"
+        );
+
+        // It keeps no remote access on, and leaving forgets it, across a restart too.
+        devices
+            .revoke(&devices.list()[0].id, 4001)
+            .expect("the iPad revoked");
+        assert!(!devices.any_paired());
+        let reloaded = Devices::load(Some(path.clone()));
+        assert!(reloaded.verify("D-1", "n1", &signature, true).is_some());
+        reloaded.leave();
+        assert!(
+            Devices::load(Some(path))
+                .verify("D-1", "n1", &signature, true)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn a_device_pairs_once_and_proves_itself_with_its_key() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("devices.json");
@@ -495,24 +638,29 @@ mod tests {
         let host_id = devices.host_id();
         let signature = sign(&signing, &host_id, &paired.id, "n1");
         assert_eq!(
-            devices.verify(&paired.id, "n1", &signature),
+            devices.verify(&paired.id, "n1", &signature, false),
             Some(paired.clone())
         );
         assert!(
-            devices.verify(&paired.id, "n2", &signature).is_none(),
+            devices
+                .verify(&paired.id, "n2", &signature, false)
+                .is_none(),
             "another nonce"
         );
         let (other, _) = key();
         let forged = sign(&other, &host_id, &paired.id, "n1");
         assert!(
-            devices.verify(&paired.id, "n1", &forged).is_none(),
+            devices.verify(&paired.id, "n1", &forged, false).is_none(),
             "another key"
         );
 
         // The record outlives the Host, and holds no secret.
         let reloaded = Devices::load(Some(path.clone()));
         assert_eq!(reloaded.host_id(), host_id);
-        assert_eq!(reloaded.verify(&paired.id, "n1", &signature), Some(paired));
+        assert_eq!(
+            reloaded.verify(&paired.id, "n1", &signature, false),
+            Some(paired)
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -572,7 +720,7 @@ mod tests {
         devices.revoke(&paired.id, 4000).expect("revoked");
         assert_eq!(*lock(&closer.0), vec![4000]);
         let signature = sign(&signing, &devices.host_id(), &paired.id, "n");
-        assert!(devices.verify(&paired.id, "n", &signature).is_none());
+        assert!(devices.verify(&paired.id, "n", &signature, false).is_none());
         assert!(devices.list().is_empty());
         assert!(devices.revoke(&paired.id, 4000).is_err());
     }

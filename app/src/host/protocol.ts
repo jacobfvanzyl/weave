@@ -119,6 +119,20 @@ export type TurnOrigin =
       };
     };
 /**
+ * Where a Host reaches the Dispatcher: its WebSocket, through its Tailscale Serve entry, or on
+ * the Dispatcher's own computer the socket in its directory that Hosts connect to.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DispatcherAddress".
+ */
+export type DispatcherAddress =
+  | {
+      url: string;
+    }
+  | {
+      socket: string;
+    };
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "AgentSource".
  */
@@ -1395,6 +1409,10 @@ export interface HostStatus {
    * The loopback address of the WebSocket remote clients reach, when the Host serves one.
    */
   remote?: string | null;
+  /**
+   * The Dispatcher the Host joined, and its connection to it (ADR 0030).
+   */
+  dispatcher?: JoinedDispatcher | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -1544,6 +1562,37 @@ export interface ContextUsage {
 export interface LastCompaction {
   at: number;
   used?: number | null;
+}
+/**
+ * The Dispatcher a Host joined, and its connection to it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "JoinedDispatcher".
+ */
+export interface JoinedDispatcher {
+  id: string;
+  /**
+   * What the Dispatcher calls itself.
+   */
+  name: string;
+  address: DispatcherAddress;
+  /**
+   * What the Dispatcher calls this Host.
+   */
+  hostName: string;
+  joinedAt: number;
+  /**
+   * Connected now.
+   */
+  connected: boolean;
+  /**
+   * When it last connected.
+   */
+  connectedAt?: number | null;
+  /**
+   * Why the last connection failed or closed, when it did.
+   */
+  why?: string | null;
 }
 /**
  * Information about a session returned by session/list
@@ -2356,6 +2405,38 @@ export interface Device {
 export interface RevokeDeviceRequest {
   deviceId: string;
 }
+/**
+ * `dispatcher/join`, in the Host protocol: have the Host join the Dispatcher at `address` with
+ * the code `hosts/offer` gave there, and keep a connection open to it from then on (ADR 0030).
+ * Only clients on the Host's own computer may ask. A Host joins one Dispatcher: joining another
+ * leaves the first.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "JoinDispatcherRequest".
+ */
+export interface JoinDispatcherRequest {
+  address: DispatcherAddress;
+  code: string;
+  /**
+   * What the Dispatcher calls this Host; the computer's name when absent.
+   */
+  name?: string | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "JoinDispatcherResponse".
+ */
+export interface JoinDispatcherResponse {
+  dispatcher: JoinedDispatcher;
+}
+/**
+ * `dispatcher/leave`, in the Host protocol: forget the Dispatcher the Host joined and close the
+ * connection to it, which tells the Dispatcher. Only clients on the Host's own computer may ask.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "LeaveDispatcherRequest".
+ */
+export interface LeaveDispatcherRequest {}
 /**
  * `files/list`: what a directory on the Host's computer holds, by name and kind.
  *
@@ -6852,6 +6933,8 @@ export interface HostRequests {
   "devices/offer": { params: OfferDeviceRequest; result: OfferDeviceResponse };
   "devices/list": { params: ListDevicesRequest; result: ListDevicesResponse };
   "devices/revoke": { params: RevokeDeviceRequest; result: Empty };
+  "dispatcher/join": { params: JoinDispatcherRequest; result: JoinDispatcherResponse };
+  "dispatcher/leave": { params: LeaveDispatcherRequest; result: Empty };
   "files/list": { params: ListFilesRequest; result: ListFilesResponse };
   "sessions/list": { params: ListSessionsRequest; result: ListSessionsResponse };
   "sessions/get": { params: GetSessionRequest; result: GetSessionResponse };

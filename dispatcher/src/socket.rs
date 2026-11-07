@@ -43,21 +43,32 @@ pub fn listen(paths: &DispatcherPaths) -> io::Result<Listening> {
         ),
         std::fs::TryLockError::Error(error) => error,
     })?;
-    let socket = paths.socket();
-    match std::fs::remove_file(&socket) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-        _ => {}
-    }
-    let listener = UnixListener::bind(&socket)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
-    }
+    let listener = bind_private(&paths.socket())?;
     Ok(Listening {
         listener,
         _lock: lock,
     })
+}
+
+/// Listen on the socket Hosts on this computer connect to (ADR 0030), once the directory's lock
+/// is held, replacing one a Dispatcher that died left.
+pub fn listen_hosts(paths: &DispatcherPaths) -> io::Result<UnixListener> {
+    bind_private(&paths.hosts_socket())
+}
+
+/// Bind `socket`, replacing what's there, for its owner only.
+fn bind_private(socket: &Path) -> io::Result<UnixListener> {
+    match std::fs::remove_file(socket) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    let listener = UnixListener::bind(socket)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(listener)
 }
 
 /// Connect to a Dispatcher's socket.

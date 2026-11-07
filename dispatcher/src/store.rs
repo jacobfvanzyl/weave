@@ -25,6 +25,7 @@ use rusqlite::OptionalExtension as _;
 use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
+use weave_host_protocol::devices::Jwk;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::sessions::ReportSessionRequest;
 use weave_host_protocol::sessions::RunRequest;
@@ -33,7 +34,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 5] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -123,18 +124,32 @@ const MIGRATIONS: [&str; 4] = [
         last_seen_at INTEGER
     );
 ",
+    // Hosts join the Dispatcher (ADR 0030): a Host with no key was paired before that.
+    "
+    ALTER TABLE hosts ADD COLUMN public_key TEXT;
+    ALTER TABLE hosts ADD COLUMN joined_at INTEGER;
+    ALTER TABLE hosts ADD COLUMN here INTEGER NOT NULL DEFAULT 0;
+",
 ];
 
-/// A Host the Dispatcher is paired with.
+/// A Host that joined the Dispatcher, or was paired with it before Hosts joined it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoredHost {
     pub(crate) host_id: String,
     pub(crate) name: String,
+    /// Where the Dispatcher dialed a Host paired before Hosts joined it; empty for one that
+    /// joined.
     pub(crate) url: String,
+    /// The device the Host knows the Dispatcher as: its own id, for a Host that joined.
     pub(crate) device_id: String,
     pub(crate) paired_at: u64,
-    /// Why it refused the Dispatcher, as after revoking it, until it's paired again.
+    /// Why it left or refused the Dispatcher, until it joins again.
     pub(crate) refused: Option<String>,
+    /// The key it proves itself with; none for a Host paired before Hosts joined.
+    pub(crate) public_key: Option<Jwk>,
+    pub(crate) joined_at: Option<u64>,
+    /// It joined over the Dispatcher's socket, on the Dispatcher's own computer.
+    pub(crate) here: bool,
 }
 
 /// What the Dispatcher asks a Host to do: start a headless turn, add to a thread's queue, or
@@ -272,8 +287,8 @@ impl Store {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT host_id, name, url, device_id, paired_at, refused FROM hosts \
-                 ORDER BY name, host_id",
+                "SELECT host_id, name, url, device_id, paired_at, refused, public_key, \
+                 joined_at, here FROM hosts ORDER BY name, host_id",
             )
             .map_err(failed)?;
         let rows = statement
@@ -285,30 +300,65 @@ impl Store {
                     device_id: row.get(3)?,
                     paired_at: from_sql(row.get(4)?),
                     refused: row.get(5)?,
+                    public_key: row
+                        .get::<_, Option<String>>(6)?
+                        .map(|key| json(6, &key))
+                        .transpose()?,
+                    joined_at: row.get::<_, Option<i64>>(7)?.map(from_sql),
+                    here: row.get(8)?,
                 })
             })
             .map_err(failed)?;
         rows.collect::<Result<_, _>>().map_err(failed)
     }
 
-    /// Keep `host`, replacing what pairing with it before kept, its refusal included.
+    /// The Host `host_id`, if it's known.
+    pub(crate) fn host(&self, host_id: &str) -> Result<Option<StoredHost>, String> {
+        Ok(self
+            .hosts()?
+            .into_iter()
+            .find(|host| host.host_id == host_id))
+    }
+
+    /// Keep `host`, replacing what joining or pairing before kept, its refusal included.
     pub(crate) fn put_host(&self, host: &StoredHost) -> Result<(), String> {
+        let key = host
+            .public_key
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| error.to_string())?;
         self.lock()
             .execute(
-                "INSERT INTO hosts (host_id, name, url, device_id, paired_at, refused) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                "INSERT INTO hosts (host_id, name, url, device_id, paired_at, refused, \
+                 public_key, joined_at, here) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
                  ON CONFLICT (host_id) DO UPDATE SET name = ?2, url = ?3, device_id = ?4, \
-                 paired_at = ?5, refused = ?6",
+                 paired_at = ?5, refused = ?6, public_key = ?7, joined_at = ?8, here = ?9",
                 params![
                     host.host_id,
                     host.name,
                     host.url,
                     host.device_id,
                     to_sql(host.paired_at),
-                    host.refused
+                    host.refused,
+                    key,
+                    host.joined_at.map(to_sql),
+                    host.here
                 ],
             )
             .map(drop)
+            .map_err(failed)
+    }
+
+    /// Whether a Host joined over the WebSocket, which keeps remote access on for it.
+    pub(crate) fn any_remote_host(&self) -> Result<bool, String> {
+        self.lock()
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM hosts WHERE public_key IS NOT NULL AND here = 0 \
+                 AND refused IS NULL)",
+                [],
+                |row| row.get(0),
+            )
             .map_err(failed)
     }
 
@@ -581,6 +631,9 @@ mod tests {
             device_id: format!("d-{id}"),
             paired_at: 1,
             refused: None,
+            public_key: None,
+            joined_at: None,
+            here: false,
         }
     }
 

@@ -7,12 +7,15 @@
 //! - [`access`]: turning it on when a device pairs and off when none is left, with its Serve
 //!   entry ([`access::Serve`], [`tailscale`]).
 //! - [`pairing`]: pairing offers and their codes, and checking a device's signature.
+//! - [`preamble`]: the requests on a WebSocket before the ACP SDK takes it, as a Host joining
+//!   the Dispatcher sends them (WVE-194).
 //!
 //! Each program keeps its own devices and answers its own hello; this crate holds no state of
 //! theirs.
 
 pub mod access;
 pub mod pairing;
+pub mod preamble;
 pub mod tailscale;
 pub mod websocket;
 

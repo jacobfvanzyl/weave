@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::Empty;
 use crate::Timestamp;
+use crate::dispatcher::JoinedDispatcher;
 use crate::sessions::SessionListing;
 
 /// `host/status`.
@@ -30,6 +31,9 @@ pub struct HostStatus {
     /// The loopback address of the WebSocket remote clients reach, when the Host serves one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
+    /// The Dispatcher the Host joined, and its connection to it (ADR 0030).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatcher: Option<JoinedDispatcher>,
 }
 
 /// How the Host runs.

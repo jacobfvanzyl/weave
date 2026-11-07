@@ -1,9 +1,11 @@
-//! What the `weave` CLI asks the Dispatcher: its status, the Hosts it is paired with, its
-//! schedules and their occurrences, and its devices. Each connection says hello first, with
-//! the API's version. On the Unix socket the CLI is the Dispatcher's own user; on the WebSocket
-//! (WVE-176), which `weave-remote` serves while a device is paired, every connection proves a
-//! paired device at hello, by signing its `dispatcher/challenge`, or pairs with a code. A device
-//! may ask everything but `devices/*`, which stay on the Dispatcher's own computer.
+//! What the `weave` CLI asks the Dispatcher: its status, the Hosts that joined it and codes
+//! to join with, its schedules and their occurrences, and its devices. Each connection says
+//! hello first, with the API's version. On the Unix socket the CLI is the Dispatcher's own
+//! user; on the WebSocket (WVE-176), which `weave-remote` serves while a device is paired or a
+//! Host joined over it, every connection proves a paired device at hello, by signing its
+//! `dispatcher/challenge`, or pairs with a code. A device may ask everything but `devices/*`,
+//! which stay on the Dispatcher's own computer. A Host's own connection asks for a subprotocol
+//! of its own, and [`crate::joins`] takes it.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -28,11 +30,11 @@ use weave_host_protocol::devices::ListDevicesResponse;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
-use weave_host_protocol::dispatcher::AddHostRequest;
-use weave_host_protocol::dispatcher::AddHostResponse;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
+use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
+use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherChallenge;
 use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
 use weave_host_protocol::dispatcher::DispatcherHello;
@@ -45,6 +47,8 @@ use weave_host_protocol::dispatcher::ListOccurrencesResponse;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
 use weave_host_protocol::dispatcher::ListSchedulesResponse;
 use weave_host_protocol::dispatcher::OccurrenceResponse;
+use weave_host_protocol::dispatcher::OfferHostRequest;
+use weave_host_protocol::dispatcher::OfferHostResponse;
 use weave_host_protocol::dispatcher::PauseScheduleRequest;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
 use weave_host_protocol::dispatcher::RemoveScheduleRequest;
@@ -93,10 +97,51 @@ pub(crate) async fn serve(shared: Arc<Shared>, listener: UnixListener) {
     }
 }
 
-/// At startup, turn the WebSocket back on when a device is paired (ADR 0016).
+/// At startup, turn the WebSocket back on when a device is paired or a Host joined over it
+/// (ADR 0016).
 pub(crate) async fn resume_remote(shared: &Arc<Shared>) {
-    let paired = shared.store.any_device().unwrap_or(false);
+    let paired = shared.store.any_device().unwrap_or(false)
+        || shared.store.any_remote_host().unwrap_or(false);
     shared.remote.resume(&accept(shared), paired).await;
+}
+
+/// A code a Host joins with, and where it connects: for a Host elsewhere the WebSocket, which
+/// this turns on and back off once the code expires if no Host joined with it; for one `here`,
+/// the socket.
+pub(crate) async fn offer_host(
+    shared: &Arc<Shared>,
+    here: bool,
+) -> Result<OfferHostResponse, Error> {
+    let address = match here {
+        true => DispatcherAddress::Socket(shared.config.paths.hosts_socket()),
+        false => {
+            let url = shared
+                .remote
+                .start(&accept(shared), || remote_in_use(shared))
+                .await?;
+            DispatcherAddress::Url(url)
+        }
+    };
+    let lifetime = shared.remote.offer_lifetime();
+    let lifetime_ms = u64::try_from(lifetime.as_millis()).unwrap_or(u64::MAX);
+    let (code, expires_at) = shared.joins.offer(lifetime_ms);
+    if !here {
+        let later = Arc::clone(shared);
+        tokio::spawn(async move {
+            tokio::time::sleep(lifetime + std::time::Duration::from_millis(100)).await;
+            stop_if_unused(&later).await;
+        });
+    }
+    Ok(OfferHostResponse {
+        code,
+        expires_at,
+        address,
+    })
+}
+
+/// Whether a device is paired or a Host joined over the WebSocket, either of which keeps it on.
+fn remote_in_use(shared: &Shared) -> bool {
+    shared.store.any_device().unwrap_or(true) || shared.store.any_remote_host().unwrap_or(true)
 }
 
 /// What remote access does with its listener: answer the person's devices on it.
@@ -133,23 +178,30 @@ async fn serve_websocket(shared: Arc<Shared>, listener: TcpListener, stop: Cance
 }
 
 async fn websocket(shared: Arc<Shared>, stream: TcpStream, config: Arc<RemoteConfig>) {
-    let protocols = [DISPATCHER_SUBPROTOCOL];
-    let Some((_, socket)) =
+    let protocols = [DISPATCHER_SUBPROTOCOL, DISPATCHER_HOST_SUBPROTOCOL];
+    let Some((protocol, socket)) =
         weave_remote::websocket::upgrade(stream, &config.origins, &protocols).await
     else {
         return;
     };
+    if protocol == DISPATCHER_HOST_SUBPROTOCOL {
+        crate::joins::connection(shared, socket, config, false).await;
+        return;
+    }
     weave_remote::websocket::serve_rpc(socket, &config, |transport, link| {
         answer(shared, transport, Peer::Remote(link))
     })
     .await;
 }
 
-/// Turn remote access off when no device is paired and no offer is good.
-async fn stop_if_unused(shared: &Arc<Shared>) {
+/// Turn remote access off when no device is paired, no Host joined over it and no offer is
+/// good.
+pub(crate) async fn stop_if_unused(shared: &Arc<Shared>) {
     shared
         .remote
-        .stop_if_unused(|| shared.store.any_device().unwrap_or(true) || shared.devices.offering())
+        .stop_if_unused(|| {
+            remote_in_use(shared) || shared.devices.offering() || shared.joins.offering()
+        })
         .await;
 }
 
@@ -293,9 +345,7 @@ impl Connection {
         let shared = &self.shared;
         let url = shared
             .remote
-            .start(&accept(shared), || {
-                shared.store.any_device().unwrap_or(true)
-            })
+            .start(&accept(shared), || remote_in_use(shared))
             .await?;
         let lifetime = shared.remote.offer_lifetime();
         let lifetime_ms = u64::try_from(lifetime.as_millis()).unwrap_or(u64::MAX);
@@ -310,6 +360,17 @@ impl Connection {
             expires_at,
             url: Some(url),
         })
+    }
+
+    /// `hosts/offer`: a code a Host joins with. For a Host elsewhere it turns remote access on,
+    /// and back off once the code expires if no Host joined with it; for one here (`here`),
+    /// which only a client on the Dispatcher's computer may ask for, it gives the socket.
+    async fn offer_host(&self, request: OfferHostRequest) -> Result<OfferHostResponse, Error> {
+        match request.here {
+            true => self.local_first()?,
+            false => self.greeted_first()?,
+        }
+        offer_host(&self.shared, request.here).await
     }
 
     /// `devices/revoke`: forget a device and close its connections. The last one gone turns
@@ -382,6 +443,7 @@ async fn handlers(
     let on_offer = Arc::clone(connection);
     let on_list = Arc::clone(connection);
     let on_revoke = Arc::clone(connection);
+    let on_offer_host = Arc::clone(connection);
     let builder = Dispatcher
         .builder()
         .name("weave-dispatcher")
@@ -423,6 +485,17 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: OfferHostRequest,
+                        responder: Responder<_>,
+                        cx: ConnectionTo<DispatcherClient>| {
+                let connection = Arc::clone(&on_offer_host);
+                cx.spawn(async move {
+                    responder.respond_with_result(connection.offer_host(request).await)
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: RevokeDeviceRequest,
                         responder: Responder<_>,
                         cx: ConnectionTo<DispatcherClient>| {
@@ -436,8 +509,6 @@ async fn handlers(
     handle!(builder, connection, shared, _request: DispatcherStatusRequest => shared.status());
     handle!(builder, connection, shared, _request: ListHostsRequest =>
         shared.hosts().map(|hosts| ListHostsResponse { hosts }));
-    handle!(builder, connection, shared, request: AddHostRequest =>
-        shared.add_host(request).await.map(|host| AddHostResponse { host }));
     handle!(builder, connection, shared, request: RemoveHostRequest =>
         shared.remove_host(&request.host).await.map(|()| Empty {}));
     handle!(builder, connection, shared, _request: ListSchedulesRequest =>

@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&HostStatus\n{\n    protocol: 2, version: \"0.1.0\".to_owned(), pid: 4242, started_at:\n    1_760_180_000_000, service: Service::OnDemand, environment:\n    EnvironmentSource::LoginShell, sessions: vec![listing()], remote:\n    Some(\"127.0.0.1:7341\".to_owned()),\n})"
+expression: "round_trip(&HostStatus\n{\n    protocol: 2, version: \"0.1.0\".to_owned(), pid: 4242, started_at:\n    1_760_180_000_000, service: Service::OnDemand, environment:\n    EnvironmentSource::LoginShell, sessions: vec![listing()], remote:\n    Some(\"127.0.0.1:7341\".to_owned()), dispatcher: Some(joined()),\n})"
 ---
 {
   "protocol": 2,
@@ -38,5 +38,16 @@ expression: "round_trip(&HostStatus\n{\n    protocol: 2, version: \"0.1.0\".to_o
       "openedAt": 1760180000500
     }
   ],
-  "remote": "127.0.0.1:7341"
+  "remote": "127.0.0.1:7341",
+  "dispatcher": {
+    "id": "D7qK2mN4pR8sT1vX",
+    "name": "Dispatcher on homelab-1",
+    "address": {
+      "url": "wss://homelab-1.example.ts.net:7342"
+    },
+    "hostName": "studio",
+    "joinedAt": 1760180000000,
+    "connected": true,
+    "connectedAt": 1760180000500
+  }
 }

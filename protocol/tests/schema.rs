@@ -17,6 +17,7 @@ use weave_host_protocol::OLDEST_SUPPORTED_VERSION;
 use weave_host_protocol::PROTOCOL_VERSION;
 use weave_host_protocol::agents;
 use weave_host_protocol::devices;
+use weave_host_protocol::dispatcher;
 use weave_host_protocol::errors;
 use weave_host_protocol::events;
 use weave_host_protocol::files;
@@ -102,6 +103,8 @@ fn schema() -> Value {
         "devices/offer" => devices::OfferDeviceRequest,
         "devices/list" => devices::ListDevicesRequest,
         "devices/revoke" => devices::RevokeDeviceRequest,
+        "dispatcher/join" => dispatcher::JoinDispatcherRequest,
+        "dispatcher/leave" => dispatcher::LeaveDispatcherRequest,
         "files/list" => files::ListFilesRequest,
         "sessions/list" => sessions::ListSessionsRequest,
         "sessions/get" => sessions::GetSessionRequest,

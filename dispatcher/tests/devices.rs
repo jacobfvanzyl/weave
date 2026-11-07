@@ -31,11 +31,13 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
+use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
 use weave_host_protocol::dispatcher::DispatcherHelloRequest;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
+use weave_host_protocol::dispatcher::OfferHostRequest;
 use weave_host_protocol::dispatcher::dispatcher_auth_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::Auth;
@@ -188,15 +190,8 @@ async fn a_device_pairs_once_then_proves_its_key_and_asks_the_dispatcher() {
     let serve = Arc::new(FakeServe::default());
     let (dispatcher, _serving) = start(dir.path(), Arc::clone(&serve));
     let mut cli = ask(dir.path()).await;
-    let host = cli
-        .send(weave_host_protocol::dispatcher::AddHostRequest {
-            url: world.url(),
-            code: world.offer().await,
-            name: Some("studio".to_owned()),
-        })
-        .await
-        .expect("hosts/add")
-        .host;
+    world.join(&dispatcher, dir.path(), "studio").await;
+    let host_id = world.host_id().await;
     let status = cli.send(DispatcherStatusRequest {}).await.expect("status");
     assert_eq!((status.remote, status.devices), (None, 0));
 
@@ -240,8 +235,22 @@ async fn a_device_pairs_once_then_proves_its_key_and_asks_the_dispatcher() {
             .iter()
             .map(|host| host.host_id.clone())
             .collect::<Vec<_>>(),
-        vec![host.host_id]
+        vec![host_id]
     );
+    // It may ask for a code a Host elsewhere joins with, but not for the socket here.
+    let offered = remote
+        .send(OfferHostRequest { here: false })
+        .await
+        .expect("hosts/offer");
+    assert!(
+        matches!(offered.address, DispatcherAddress::Url(_)),
+        "{offered:?}"
+    );
+    let here = remote
+        .send(OfferHostRequest { here: true })
+        .await
+        .expect_err("only the Dispatcher's computer gets its socket");
+    assert!(errors::is(&here, errors::FORBIDDEN), "{here}");
     let schedules = remote
         .send(ListSchedulesRequest {})
         .await

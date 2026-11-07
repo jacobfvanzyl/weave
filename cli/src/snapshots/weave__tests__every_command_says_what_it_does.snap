@@ -13,7 +13,7 @@ Commands:
   threads     Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
   agents      The agents weave launches: list them, move them to their newest releases, sign in to or out of one, or try one with a prompt
   schedules   The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times a cron expression gives: list, add, remove, pause, resume or run one, or see what they did
-  hosts       Your Hosts the Dispatcher starts work on: list them, pair it with one, or forget one
+  hosts       Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one
   pair        Pair another of your devices with the weave Host, to reach it over your tailnet
   devices     Devices paired with the weave Host: list them, or revoke one
   terminals   The weave Host's terminals: show one here, as the TUI does in a Rex pane
@@ -649,14 +649,14 @@ Options:
           Print help
 
 $ weave hosts --help
-Your Hosts the Dispatcher starts work on: list them, pair it with one, or forget one
+Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one
 
 Usage: weave hosts [COMMAND]
 
 Commands:
-  list    The Hosts the Dispatcher is paired with, and whether it's connected to each (the default)
-  add     Pair the Dispatcher with a Host as a service: this computer's, or another's over SSH (`weave hosts add studio`) or with the URL and code `weave pair` shows there
-  remove  Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
+  list    The Hosts that joined the Dispatcher, and whether each is connected (the default)
+  add     Have a Host join the Dispatcher, so it starts work there: this computer's, another's over SSH (`weave hosts add studio`), or, on the Host's computer, with the URL and code `weave hosts add --code` shows
+  remove  Remove a Host, and the work waiting for it. A Host connected now forgets the Dispatcher; one that isn't is refused when it next connects
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -664,7 +664,7 @@ Options:
           Print help
 
 $ weave hosts list --help
-The Hosts the Dispatcher is paired with, and whether it's connected to each (the default)
+The Hosts that joined the Dispatcher, and whether each is connected (the default)
 
 Usage: weave hosts list [OPTIONS]
 
@@ -676,29 +676,32 @@ Options:
           Print help
 
 $ weave hosts add --help
-Pair the Dispatcher with a Host as a service: this computer's, or another's over SSH (`weave hosts add studio`) or with the URL and code `weave pair` shows there
+Have a Host join the Dispatcher, so it starts work there: this computer's, another's over SSH (`weave hosts add studio`), or, on the Host's computer, with the URL and code `weave hosts add --code` shows
 
 Usage: weave hosts add [OPTIONS] [HOST] [CODE]
 
 Arguments:
   [HOST]
-          The computer SSH reaches the Host on, or the URL `weave pair` shows there; this computer's Host without one
+          The computer SSH reaches the Host on, or the Dispatcher's URL that `weave hosts add --code` shows; this computer's Host without one
 
   [CODE]
-          The code `weave pair` shows there, after its URL
+          The code `weave hosts add --code` shows, after the Dispatcher's URL
 
 Options:
+      --code
+          Show a URL and code that join a Host on a computer SSH doesn't reach, instead
+
       --name <NAME>
-          What to call it; the computer's name, or its tailnet name, by default
+          What the Dispatcher calls the Host; its computer's name by default
 
       --json
-          Print the Host as JSON
+          Print what the Host joined as JSON
 
   -h, --help
           Print help
 
 $ weave hosts remove --help
-Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its devices until you revoke it there with `weave devices revoke`
+Remove a Host, and the work waiting for it. A Host connected now forgets the Dispatcher; one that isn't is refused when it next connects
 
 Usage: weave hosts remove <HOST>
 
@@ -941,7 +944,7 @@ Commands:
   uninstall   Stop the Dispatcher's service and remove it
   pair        Show a code another of your computers pairs with the Dispatcher with, and wait for it (`weave dispatcher connect` there runs this over SSH)
   devices     List the computers paired with the Dispatcher, or revoke one
-  connect     Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to pair the Dispatcher with this computer's Host
+  connect     Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to have this computer's Host join the Dispatcher
   disconnect  Forget the Dispatcher this computer is paired with
   help        Print this message or the help of the given subcommand(s)
 
@@ -1070,7 +1073,7 @@ Options:
           Print help
 
 $ weave dispatcher connect --help
-Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to pair the Dispatcher with this computer's Host
+Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to have this computer's Host join the Dispatcher
 
 Usage: weave dispatcher connect [OPTIONS] <DISPATCHER> [CODE]
 
@@ -1086,7 +1089,7 @@ Options:
           What the Dispatcher calls this computer, and its Host; its name by default
 
       --host
-          Pair the Dispatcher with this computer's Host too, so it starts work here, without asking
+          Have this computer's Host join the Dispatcher too, so it starts work here, without asking
 
       --no-host
           Leave this computer's Host alone, without asking

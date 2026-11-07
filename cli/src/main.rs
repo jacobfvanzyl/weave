@@ -90,7 +90,7 @@ enum Command {
     /// a cron expression gives: list, add, remove, pause, resume or run one, or see what they
     /// did.
     Schedules(schedules::SchedulesArgs),
-    /// Your Hosts the Dispatcher starts work on: list them, pair it with one, or forget one.
+    /// Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one.
     Hosts(hosts::HostsArgs),
     /// Pair another of your devices with the weave Host, to reach it over your tailnet.
     Pair(devices::PairArgs),

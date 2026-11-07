@@ -1,12 +1,13 @@
 //! The Dispatcher (`weave dispatcher`, ADR 0027): the person's program, apart from their Hosts,
-//! that keeps triggers and Bots and starts their work on the Hosts. It is a client of each Host,
-//! paired with it as a service, never a peer and never a Host itself, and it runs no agents.
-//! Hosts never connect to it and work on without it.
+//! that keeps triggers and Bots and starts their work on the Hosts. Hosts join it and keep a
+//! connection open to it (ADR 0030), over which it is a client of each Host with the `service`
+//! role, never a peer and never a Host itself; it runs no agents. Hosts work on without it.
 //!
-//! - [`store`]: its state in SQLite: the Hosts it is paired with and the work written down for
+//! - [`store`]: its state in SQLite: the Hosts that joined it and the work written down for
 //!   them ([`Delivery`]).
-//! - [`link`]: a connection to each Host, kept up with backoff, that watches its threads and
-//!   sends it the work written down for it.
+//! - [`joins`]: Hosts joining with a code, and proving their keys on each connection after.
+//! - [`link`]: each Host's connection, once it has proved itself, over which the Dispatcher
+//!   watches its threads and sends it the work written down for it.
 //! - [`scheduler`]: schedules (WVE-145), whose occurrences start headless turns at their times.
 //! - [`calls`] and [`follows`]: the calls Hosts' agents make to the person's other Hosts
 //!   (ADR 0029), which the Dispatcher sends there, and the turns they began, which it follows
@@ -26,6 +27,7 @@ mod calls;
 pub mod client;
 mod devices;
 mod follows;
+mod joins;
 mod link;
 pub mod paths;
 mod scheduler;
@@ -44,20 +46,16 @@ use tokio::net::UnixListener;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use weave_host_client::Credentials;
 use weave_host_client::HostHandle;
-use weave_host_client::reach::reach;
-use weave_host_client::reach::tailnet_name;
 use weave_host_client::remote::DeviceKey;
-use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatus;
 use weave_host_protocol::dispatcher::Occurrence;
+use weave_host_protocol::dispatcher::OfferHostResponse;
 use weave_host_protocol::dispatcher::Overlap;
 use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::Schedule;
-use weave_host_protocol::errors;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::sessions::SessionListing;
 use weave_remote::access::Remote;
@@ -77,7 +75,7 @@ use crate::store::StoredHost;
 use crate::store::StoredSchedule;
 pub use crate::store::Work;
 
-/// How long a Host has to answer a connection before the Dispatcher tries again later.
+/// How long a Host has to answer the Dispatcher's hello on the connection it opened.
 pub const DEFAULT_REACH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The loopback address the Dispatcher's WebSocket listens on for the person's devices, beside
@@ -89,16 +87,11 @@ const CLIENT_NAME: &str = "weave-dispatcher";
 
 pub struct DispatcherConfig {
     pub paths: DispatcherPaths,
-    /// What it pairs with Hosts as, which their `weave devices` lists: "Dispatcher on
-    /// <computer>" by default.
+    /// What it calls itself to the Hosts that join it: "Dispatcher on <computer>" by default.
     pub name: String,
     /// Keep its key in the Secure Enclave where there is one; tests keep it in the file.
     pub secure_enclave: bool,
     pub reach_timeout: Duration,
-    /// How long it waits to try a Host again after the first failure; each failure after that
-    /// doubles it, up to `retry_most`.
-    pub retry: Duration,
-    pub retry_most: Duration,
     /// The clock schedules run by.
     pub clock: Arc<dyn Clock>,
     /// How it serves the person's devices once one pairs ([`DEFAULT_LISTEN`] and its own
@@ -113,8 +106,6 @@ impl DispatcherConfig {
             name: format!("Dispatcher on {}", computer_name()),
             secure_enclave: true,
             reach_timeout: DEFAULT_REACH_TIMEOUT,
-            retry: Duration::from_secs(1),
-            retry_most: Duration::from_secs(60),
             clock: Arc::new(SystemClock),
             remote: None,
         }
@@ -136,20 +127,23 @@ pub(crate) struct Shared {
     /// The WebSocket the person's devices reach it on, while one is paired.
     pub(crate) remote: Remote,
     pub(crate) devices: devices::Devices,
+    /// The codes Hosts join with.
+    pub(crate) joins: joins::Joins,
     /// The next number for a connection to its API.
     pub(crate) next_connection: std::sync::atomic::AtomicU64,
     started_at: u64,
     /// Cancelled when it stops: every link closes, and schedules stop.
-    stop: CancellationToken,
-    links: Mutex<HashMap<String, Link>>,
+    pub(crate) stop: CancellationToken,
+    /// Each Host's connection, once it has connected since the Dispatcher started.
+    pub(crate) links: Mutex<HashMap<String, Link>>,
     /// Rung when a schedule is added, changed or removed.
     schedules_changed: Notify,
     scheduler: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Dispatcher {
-    /// Open the database and key in `config.paths`, making them if there are none, and connect
-    /// to every Host it is paired with.
+    /// Open the database and key in `config.paths`, making them if there are none. Hosts that
+    /// joined it connect to it once it serves.
     pub fn open(config: DispatcherConfig) -> Result<Self, String> {
         config
             .paths
@@ -166,6 +160,7 @@ impl Dispatcher {
             id,
             remote,
             devices: devices::Devices::default(),
+            joins: joins::Joins::default(),
             next_connection: std::sync::atomic::AtomicU64::new(1),
             started_at: now_ms(),
             stop: CancellationToken::new(),
@@ -173,17 +168,23 @@ impl Dispatcher {
             schedules_changed: Notify::new(),
             scheduler: Mutex::new(None),
         });
-        for host in shared.store.hosts()? {
-            shared.link(host);
-        }
         let scheduler = tokio::spawn(scheduler::run(Arc::clone(&shared)));
         *lock(&shared.scheduler) = Some(scheduler);
         Ok(Self { shared })
     }
 
-    /// Answer the CLI on `listener` until the Dispatcher stops, and the person's devices on
-    /// its WebSocket while one is paired.
+    /// Answer the CLI on `listener` until the Dispatcher stops, Hosts on this computer on the
+    /// socket beside it, and the person's devices and other Hosts on its WebSocket while one is
+    /// paired or joined.
     pub async fn serve(&self, listener: UnixListener) {
+        match socket::listen_hosts(&self.shared.config.paths) {
+            Ok(hosts) => {
+                tokio::spawn(joins::serve_socket(Arc::clone(&self.shared), hosts));
+            }
+            Err(error) => {
+                tracing::error!(%error, "Hosts on this computer can't connect to the Dispatcher");
+            }
+        }
         api::resume_remote(&self.shared).await;
         api::serve(Arc::clone(&self.shared), listener).await;
     }
@@ -208,15 +209,15 @@ impl Dispatcher {
         self.shared.status()
     }
 
-    /// The Hosts it is paired with, and how it reaches each.
+    /// The Hosts that joined it, and how each stands.
     pub fn hosts(&self) -> Result<Vec<DispatcherHost>, Error> {
         self.shared.hosts()
     }
 
-    /// Pair with the Host at `request.url` as a service, with the code `weave pair` showed
-    /// there, and keep a connection to it.
-    pub async fn add_host(&self, request: AddHostRequest) -> Result<DispatcherHost, Error> {
-        self.shared.add_host(request).await
+    /// A code a Host joins with, and where it connects: the WebSocket, turned on if it isn't,
+    /// or for a Host on this computer (`here`) the socket beside the Dispatcher's own.
+    pub async fn offer_host(&self, here: bool) -> Result<OfferHostResponse, Error> {
+        api::offer_host(&self.shared, here).await
     }
 
     /// Forget the Host `host` names, by id or name, and the work written down for it.
@@ -329,7 +330,7 @@ impl Shared {
                     .find(|stored| stored.name.eq_ignore_ascii_case(by))
             })
             .cloned()
-            .ok_or_else(|| invalid(format!("the Dispatcher isn't paired with {by}")))
+            .ok_or_else(|| invalid(format!("no Host called {by} has joined the Dispatcher")))
     }
 
     fn resolve_schedule(&self, by: &str) -> Result<StoredSchedule, Error> {
@@ -481,15 +482,6 @@ impl Shared {
             .map_err(internal)
     }
 
-    /// Start a connection to `host`, replacing the one there was.
-    fn link(self: &Arc<Self>, host: StoredHost) {
-        let host_id = host.host_id.clone();
-        let link = Link::start(Arc::clone(self), host);
-        if let Some(old) = lock(&self.links).insert(host_id, link) {
-            old.stop();
-        }
-    }
-
     fn status(&self) -> Result<DispatcherStatus, Error> {
         Ok(DispatcherStatus {
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -512,9 +504,23 @@ impl Shared {
             .into_iter()
             .map(|host| {
                 let seen = links.get(&host.host_id).map(Link::seen).unwrap_or_default();
-                let (status, why) = match (&host.refused, seen.status) {
+                let (status, why) = match (&host.refused, &host.public_key) {
                     (Some(why), _) => (Reachability::Refused, Some(why.clone())),
-                    (None, status) => (status, seen.why),
+                    (None, None) => (
+                        Reachability::Unjoined,
+                        Some(
+                            "it was paired before Hosts joined the Dispatcher: `weave hosts add` \
+                             there joins it"
+                                .to_owned(),
+                        ),
+                    ),
+                    (None, Some(_)) => match (seen.status, seen.why) {
+                        (Reachability::Unchecked, None) => (
+                            Reachability::Unchecked,
+                            Some("it hasn't connected since the Dispatcher started".to_owned()),
+                        ),
+                        (status, why) => (status, why),
+                    },
                 };
                 Ok(DispatcherHost {
                     pending: self
@@ -526,6 +532,8 @@ impl Shared {
                     url: host.url,
                     device_id: host.device_id,
                     paired_at: host.paired_at,
+                    joined_at: host.joined_at,
+                    here: host.here,
                     connected: seen.connected,
                     status,
                     why,
@@ -535,65 +543,16 @@ impl Shared {
             .collect()
     }
 
-    async fn add_host(self: &Arc<Self>, request: AddHostRequest) -> Result<DispatcherHost, Error> {
-        let url = request.url.trim().to_owned();
-        let credentials = Credentials::Pair {
-            code: request.code,
-            name: self.config.name.clone(),
-            key: self.key.clone(),
-            service: true,
-        };
-        let (connection, _events, _closed) = reach(
-            &url,
-            client_info(),
-            credentials,
-            self.config.reach_timeout,
-            "the Dispatcher",
-        )
-        .await
-        .map_err(|unreached| {
-            if unreached.refused() {
-                unavailable(
-                    "it refused the code, which may have expired or been used: show a new one \
-                     with `weave pair` there",
-                )
-            } else {
-                unavailable(unreached.why)
-            }
-        })?;
-        let hello = connection.hello().clone();
-        connection.shutdown().await;
-        let device = hello
-            .device
-            .filter(|device| device.service)
-            .ok_or_else(|| unavailable("it didn't take the Dispatcher as a service"))?;
-        let host = StoredHost {
-            host_id: hello.host.id.clone(),
-            name: request.name.unwrap_or_else(|| tailnet_name(&url)),
-            url,
-            device_id: device.id,
-            paired_at: now_ms(),
-            refused: None,
-        };
-        self.store.put_host(&host).map_err(internal)?;
-        tracing::info!(host = %host.host_id, name = %host.name, "paired with a Host");
-        let host_id = host.host_id.clone();
-        self.link(host);
-        self.hosts()?
-            .into_iter()
-            .find(|listed| listed.host_id == host_id)
-            .ok_or_else(|| internal("the Host it paired with went missing".to_owned()))
-    }
-
-    async fn remove_host(&self, host: &str) -> Result<(), Error> {
+    async fn remove_host(self: &Arc<Self>, host: &str) -> Result<(), Error> {
         let found = self.resolve_host(host)?;
         self.store.remove_host(&found.host_id).map_err(internal)?;
         let link = lock(&self.links).remove(&found.host_id);
         if let Some(link) = link {
-            link.stop();
+            link.revoke();
             link.stopped().await;
         }
         tracing::info!(host = %found.host_id, name = %found.name, "forgot a Host");
+        api::stop_if_unused(self).await;
         Ok(())
     }
 }
@@ -604,11 +563,6 @@ fn client_info() -> ClientInfo {
         name: CLIENT_NAME.to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
     }
-}
-
-/// A Host couldn't be reached or refused, saying why.
-fn unavailable(why: impl Into<String>) -> Error {
-    Error::new(errors::HOST_UNAVAILABLE, why.into())
 }
 
 /// The request was wrong, saying how: in the message, which clients show.

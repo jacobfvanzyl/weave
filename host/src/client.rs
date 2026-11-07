@@ -67,6 +67,9 @@ use weave_host_protocol::devices::ListDevicesResponse;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::JoinDispatcherRequest;
+use weave_host_protocol::dispatcher::JoinDispatcherResponse;
+use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::files::LIST_FEATURE as LIST_FILES_FEATURE;
 use weave_host_protocol::files::ListFilesRequest;
@@ -230,6 +233,9 @@ enum Peer {
     Local,
     /// The WebSocket: a remote client, which proves a paired device at hello.
     Remote(Arc<Link>),
+    /// The connection the Host opened to the Dispatcher it joined (ADR 0030), whose hello takes
+    /// only that Dispatcher's key.
+    Joined(Arc<Link>),
 }
 
 struct Connection {
@@ -274,6 +280,16 @@ pub(crate) async fn serve_remote(
     link: Arc<Link>,
 ) -> Result<(), Error> {
     serve_as(shared, transport, Peer::Remote(link), true).await
+}
+
+/// Serve the Dispatcher the Host joined over the connection the Host opened to it
+/// ([`crate::dispatcher`]): it proves its key at hello, as a remote client does.
+pub(crate) async fn serve_joined(
+    shared: Arc<Shared>,
+    transport: impl ConnectTo<Host> + 'static,
+    link: Arc<Link>,
+) -> Result<(), Error> {
+    serve_as(shared, transport, Peer::Joined(link), true).await
 }
 
 /// `counted`: the client keeps an idle Host running while it's connected.
@@ -436,6 +452,14 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, drain),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, join_dispatcher),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, leave_dispatcher),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -838,7 +862,7 @@ impl Connection {
     fn backlog(&self) -> Option<Arc<dyn Backlog>> {
         match &self.peer {
             Peer::Local => None,
-            Peer::Remote(link) => Some(Arc::clone(link) as Arc<dyn Backlog>),
+            Peer::Remote(link) | Peer::Joined(link) => Some(Arc::clone(link) as Arc<dyn Backlog>),
         }
     }
 
@@ -863,11 +887,28 @@ impl Connection {
         })
     }
 
+    /// `dispatcher/join`: join the Dispatcher with the code it gave (ADR 0030).
+    async fn join_dispatcher(
+        &self,
+        request: JoinDispatcherRequest,
+    ) -> Result<JoinDispatcherResponse, Error> {
+        self.local_hello()?;
+        crate::dispatcher::join(&self.shared, request)
+            .await
+            .map(|dispatcher| JoinDispatcherResponse { dispatcher })
+    }
+
+    /// `dispatcher/leave`: forget the Dispatcher the Host joined.
+    async fn leave_dispatcher(&self, _request: LeaveDispatcherRequest) -> Result<Empty, Error> {
+        self.local_hello()?;
+        crate::dispatcher::leave(&self.shared).map(|()| Empty {})
+    }
+
     fn local_hello(&self) -> Result<Hello, Error> {
         let hello = self.hello_info()?;
         match self.peer {
             Peer::Local => Ok(hello),
-            Peer::Remote(_) => Err(errors::forbidden()),
+            Peer::Remote(_) | Peer::Joined(_) => Err(errors::forbidden()),
         }
     }
 
@@ -955,7 +996,7 @@ impl Connection {
             .ok_or_else(|| errors::incompatible_protocol(supported))?;
         let device = self.identify(request.auth)?;
         let mut capabilities = request.capabilities;
-        if let (Some(device), Peer::Remote(link)) = (&device, &self.peer) {
+        if let (Some(device), Peer::Remote(link) | Peer::Joined(link)) = (&device, &self.peer) {
             // Only local clients may run a sign-in command on the Host's computer.
             capabilities.terminal_sign_in = false;
             let mut current = lock(&self.device);
@@ -1023,22 +1064,29 @@ impl Connection {
     /// for a local client, and the device it proves for a remote one. A remote client that
     /// proves none is closed after the error.
     fn identify(&self, auth: Auth) -> Result<Option<DeviceInfo>, Error> {
-        let Peer::Remote(link) = &self.peer else {
-            return match auth {
-                Auth::Local => Ok(None),
-                Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
-                Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
-                    "devices connect over the Host's WebSocket",
-                )),
-            };
+        let (link, joined) = match &self.peer {
+            Peer::Remote(link) => (link, false),
+            Peer::Joined(link) => (link, true),
+            Peer::Local => {
+                return match auth {
+                    Auth::Local => Ok(None),
+                    Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
+                    Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
+                        "devices connect over the Host's WebSocket",
+                    )),
+                };
+            }
         };
         let device = match auth {
             Auth::Device {
                 device_id,
                 signature,
-            } => link
-                .take_challenge()
-                .and_then(|nonce| self.shared.devices.verify(&device_id, &nonce, &signature)),
+            } => link.take_challenge().and_then(|nonce| {
+                self.shared
+                    .devices
+                    .verify(&device_id, &nonce, &signature, joined)
+            }),
+            Auth::Pair { .. } if joined => None,
             Auth::Pair { code, device } => self.shared.devices.pair(&code, device),
             Auth::Local | Auth::Token { .. } => None,
         };
@@ -1054,7 +1102,7 @@ impl Connection {
 
     /// `host/challenge`, for a remote client to sign at hello.
     fn challenge(&self) -> Result<ChallengeResponse, Error> {
-        let Peer::Remote(link) = &self.peer else {
+        let (Peer::Remote(link) | Peer::Joined(link)) = &self.peer else {
             return Err(errors::unauthenticated(
                 "challenges are for the Host's WebSocket",
             ));
