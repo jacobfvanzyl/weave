@@ -2,7 +2,8 @@
 //! own, the port its loopback WebSocket listens on, so the tailnet's devices reach it. The
 //! program makes it when remote access turns on and removes it when it turns off, through the
 //! `tailscale` command, and touches no other entry: the Host's is on 7341, the Dispatcher's on
-//! 7342.
+//! 7342. Only an entry under the computer's tailnet name now counts: one under a name it had
+//! before being renamed gives a URL that no longer resolves.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -138,21 +139,53 @@ async fn serve_status() -> Result<Value, String> {
     serde_json::from_str(&output).map_err(|error| format!("reading Serve's status: {error}"))
 }
 
-/// The Serve entry in `status` that forwards to `listen`, background ones and those of
-/// `tailscale serve` running in a terminal alike.
-pub fn entry_for(status: &Value, listen: SocketAddr) -> Option<Entry> {
+/// This computer's name on the tailnet, as `tailscale status` gives it, without the final dot;
+/// none when it can't say.
+async fn node_name() -> Option<String> {
+    let output = tailscale(&["status", "--json", "--peers=false"])
+        .await
+        .ok()?;
+    node_name_in(&serde_json::from_str(&output).ok()?)
+}
+
+fn node_name_in(status: &Value) -> Option<String> {
+    let name = status.get("Self")?.get("DNSName")?.as_str()?;
+    let name = name.trim_end_matches('.');
+    (!name.is_empty()).then(|| name.to_ascii_lowercase())
+}
+
+/// The Serve entry in `status` that forwards to `listen` under `node`, the computer's tailnet
+/// name (any name when it isn't known), background ones and those of `tailscale serve` running
+/// in a terminal alike.
+pub fn entry_for(status: &Value, listen: SocketAddr, node: Option<&str>) -> Option<Entry> {
+    configs(status)
+        .into_iter()
+        .find_map(|config| entry_in(config, listen, node))
+}
+
+/// Serve's background config in `status`, and each `tailscale serve` running in a terminal.
+fn configs(status: &Value) -> Vec<&Value> {
     let mut configs = vec![status];
     if let Some(foreground) = status.get("Foreground").and_then(Value::as_object) {
         configs.extend(foreground.values());
     }
     configs
-        .into_iter()
-        .find_map(|config| entry_in(config, listen))
 }
 
-fn entry_in(config: &Value, listen: SocketAddr) -> Option<Entry> {
+/// Whether a Serve site's `host:port` is under `node`, or any name when it isn't known.
+fn under(host_port: &str, node: Option<&str>) -> bool {
+    let host = host_port
+        .rsplit_once(':')
+        .map_or(host_port, |(host, _)| host);
+    node.is_none_or(|node| host.eq_ignore_ascii_case(node))
+}
+
+fn entry_in(config: &Value, listen: SocketAddr, node: Option<&str>) -> Option<Entry> {
     let web = config.get("Web")?.as_object()?;
     for (host_port, site) in web {
+        if !under(host_port, node) {
+            continue;
+        }
         let Some(handlers) = site.get("Handlers").and_then(Value::as_object) else {
             continue;
         };
@@ -192,12 +225,40 @@ fn forwards_to(proxy: &str, listen: SocketAddr) -> bool {
     loopback && port.parse::<u16>().ok() == Some(listen.port())
 }
 
-/// Whether Serve already uses `port` for something, on the tailnet or through Funnel.
-fn port_taken(status: &Value, port: u16) -> bool {
-    status
+/// Whether Serve already uses `port` for something other than `listen`, on the tailnet or
+/// through Funnel. Sites on it that forward to `listen`, as one under a name the computer had
+/// before being renamed does, leave it free for an entry under its name now.
+fn port_taken(status: &Value, port: u16, listen: SocketAddr) -> bool {
+    let used = status
         .get("TCP")
         .and_then(Value::as_object)
-        .is_some_and(|tcp| tcp.contains_key(&port.to_string()))
+        .is_some_and(|tcp| tcp.contains_key(&port.to_string()));
+    if !used {
+        return false;
+    }
+    let suffix = format!(":{port}");
+    let mut ours = false;
+    for site in configs(status)
+        .into_iter()
+        .filter_map(|config| config.get("Web")?.as_object())
+        .flatten()
+        .filter(|(host_port, _)| host_port.ends_with(&suffix))
+        .map(|(_, site)| site)
+    {
+        let proxies = site
+            .get("Handlers")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .map(|(_, handler)| handler.get("Proxy").and_then(Value::as_str));
+        for proxy in proxies {
+            if !proxy.is_some_and(|proxy| forwards_to(proxy, listen)) {
+                return true;
+            }
+            ours = true;
+        }
+    }
+    !ours
 }
 
 /// The real Serve, through the `tailscale` command.
@@ -223,11 +284,12 @@ impl TailscaleServe {
 
     async fn entry(&self, listen: SocketAddr) -> Result<String, String> {
         let status = serve_status().await?;
-        if let Some(entry) = entry_for(&status, listen) {
+        let node = node_name().await;
+        if let Some(entry) = entry_for(&status, listen, node.as_deref()) {
             return checked(entry, self.what);
         }
         let port = listen.port();
-        if port_taken(&status, port) {
+        if port_taken(&status, port, listen) {
             let or = self
                 .moved_by
                 .map(|moved_by| format!(", or {moved_by}"))
@@ -245,7 +307,7 @@ impl TailscaleServe {
         .await?;
         tracing::info!(port, "made the Tailscale Serve entry");
         let status = serve_status().await?;
-        entry_for(&status, listen).map_or_else(
+        entry_for(&status, listen, node.as_deref()).map_or_else(
             || Err(format!("Tailscale Serve made no entry for {}", self.what)),
             |entry| checked(entry, self.what),
         )
@@ -271,7 +333,8 @@ impl Serve for TailscaleServe {
     fn remove(&self, listen: SocketAddr) -> BoxFuture<'_, Result<(), String>> {
         Box::pin(async move {
             let status = serve_status().await?;
-            if entry_for(&status, listen).is_none() {
+            let node = node_name().await;
+            if entry_for(&status, listen, node.as_deref()).is_none() {
                 return Ok(());
             }
             let port = listen.port();
@@ -303,7 +366,7 @@ mod tests {
             }
         });
         assert_eq!(
-            entry_for(&status, listen()),
+            entry_for(&status, listen(), Some("mac.example.ts.net")),
             Some(Entry {
                 url: "wss://mac.example.ts.net:7341".to_owned(),
                 funnel: false,
@@ -319,7 +382,7 @@ mod tests {
             },
             "AllowFunnel": {"mac.example.ts.net:443": true}
         });
-        let entry = entry_for(&status, listen()).expect("the entry");
+        let entry = entry_for(&status, listen(), None).expect("the entry");
         assert_eq!(
             entry,
             Entry {
@@ -337,20 +400,69 @@ mod tests {
                 "mac.example.ts.net:7341": {"Handlers": {"/": {"Proxy": "http://[::1]:7341"}}},
             }}},
         });
-        assert!(entry_for(&status, listen()).is_some());
+        assert!(entry_for(&status, listen(), Some("mac.example.ts.net")).is_some());
         let elsewhere = json!({"Web": {
             "mac.example.ts.net:7341": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7342"}}},
         }});
-        assert_eq!(entry_for(&elsewhere, listen()), None);
-        assert_eq!(entry_for(&json!({}), listen()), None);
+        assert_eq!(entry_for(&elsewhere, listen(), None), None);
+        assert_eq!(entry_for(&json!({}), listen(), None), None);
     }
 
     #[test]
     fn a_port_serving_something_else_is_taken() {
         let status = json!({"TCP": {"7341": {"HTTPS": true}}});
-        assert!(port_taken(&status, 7341));
-        assert!(!port_taken(&status, 7342));
-        assert!(!port_taken(&Value::Null, 7341));
+        assert!(port_taken(&status, 7341, listen()));
+        assert!(!port_taken(&status, 7342, listen()));
+        assert!(!port_taken(&Value::Null, 7341, listen()));
+        let elsewhere = json!({
+            "TCP": {"7341": {"HTTPS": true}},
+            "Web": {"mac.example.ts.net:7341": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:3000"}}}},
+        });
+        assert!(port_taken(&elsewhere, 7341, listen()));
+    }
+
+    /// homelab-1's, renamed from bazzite with the Host's entry under its old name.
+    fn renamed() -> Value {
+        json!({
+            "TCP": {"443": {"HTTPS": true}, "7341": {"HTTPS": true}},
+            "Web": {
+                "bazzite.example.ts.net:443": {"Handlers": {"/": {"Proxy": "unix:/run/rex/serve.sock"}}},
+                "bazzite.example.ts.net:7341": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7341"}}},
+                "homelab-1.example.ts.net:443": {"Handlers": {"/": {"Proxy": "unix:/run/rex/serve.sock"}}},
+            }
+        })
+    }
+
+    #[test]
+    fn an_entry_under_a_name_the_computer_had_before_is_gone() {
+        let status = renamed();
+        assert_eq!(
+            entry_for(&status, listen(), Some("homelab-1.example.ts.net")),
+            None
+        );
+        // Its port is free for one under the name now, which is the one that counts.
+        assert!(!port_taken(&status, 7341, listen()));
+        let mut remade = status;
+        remade["Web"]["homelab-1.example.ts.net:7341"] =
+            json!({"Handlers": {"/": {"Proxy": "http://127.0.0.1:7341"}}});
+        assert_eq!(
+            entry_for(&remade, listen(), Some("homelab-1.example.ts.net")).map(|entry| entry.url),
+            Some("wss://homelab-1.example.ts.net:7341".to_owned())
+        );
+        // Without the name, as when `tailscale status` fails, any name counts, as before.
+        assert!(entry_for(&renamed(), listen(), None).is_some());
+    }
+
+    #[test]
+    fn the_computers_name_is_read_from_status() {
+        let status =
+            json!({"Self": {"DNSName": "Homelab-1.example.ts.net.", "HostName": "homelab"}});
+        assert_eq!(
+            node_name_in(&status).as_deref(),
+            Some("homelab-1.example.ts.net")
+        );
+        assert_eq!(node_name_in(&json!({"Self": {"DNSName": ""}})), None);
+        assert_eq!(node_name_in(&json!({})), None);
     }
 
     #[test]

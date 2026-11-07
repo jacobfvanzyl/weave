@@ -66,7 +66,9 @@ Nothing needs configuring. Pairing turns remote access on (ADR 0016):
 - **On.** A `devices/offer`, as `weave pair` makes, has the Host listen on `127.0.0.1:7341` and
   make its Serve entry, which forwards HTTPS port 7341 on the Host's tailnet name to that
   listener (`tailscale serve --bg --https=7341 http://127.0.0.1:7341`). The offer answers with
-  the URL devices connect to, `wss://<computer>.<tailnet>.ts.net:7341`.
+  the URL devices connect to, `wss://<computer>.<tailnet>.ts.net:7341`. Only an entry under the
+  computer's tailnet name now counts (`tailscale status`): one under a name it had before being
+  renamed no longer resolves, so the Host makes another under the new one.
 - **Staying on.** While any device is paired, remote access stays on, across restarts: a Host
   starting with paired devices listens and makes the entry again. One whose entry can't be made
   yet, as when Tailscale starts after it, listens anyway and tries again every minute.
