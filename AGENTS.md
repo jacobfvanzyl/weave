@@ -17,7 +17,7 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | `holder/` | The holder (`weave-holder`, ADR 0022): keeps one terminal's PTY, shell and screen alive for the Host, with libghostty-vt, which it builds with Zig at the commit `ghostty.toml` pins. Read `holder/AGENTS.md`. |
 | `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
-| `scripts/` | `update-hosts`: rebuild weave in release and restart the installed Host, here and on the person's other computers over SSH. |
+| `scripts/` | `update-hosts`: rebuild weave in release, install a copy in `~/.local/bin` and restart the Host, here and on the person's other computers over SSH. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |
 | `docs/specs/` | The Host protocol (WVE-85), remote clients (WVE-90) and the Dispatcher (WVE-175). |
 | `docs/research/` | Dated research: evidence, not implementation requirements. |
@@ -96,19 +96,21 @@ Unless `$ZIG` or `PATH` has the pinned Zig, it downloads that first. See `holder
 Host offers terminals only when `weave-holder` sits beside its own binary.
 
 `scripts/update-hosts [--now] [--here | --hosts-only] [HOST...]` rebuilds the release here,
-`weave-holder` included, and restarts the Host (`~/.local/bin/weave` points at
-`target/release/weave`, beside the holder), then copies this working tree to the hosts in
-`$WEAVE_HOSTS` over SSH, builds it there in `~/.cache/weave/build`, installs rustup first if
-needed, and restarts that Host too. Named HOSTs are the only ones it updates, this computer too
-with `--here`; `--hosts-only` leaves this one alone.
+`weave-holder` included, copies both to `~/.local/bin`, and restarts the Host, then copies this
+working tree to the hosts in `$WEAVE_HOSTS` over SSH, builds it there in `~/.cache/weave/build`,
+installs rustup first if needed, and installs and restarts it there too. Named HOSTs are the only
+ones it updates, this computer too with `--here`; `--hosts-only` leaves this one alone. The
+installed `weave` is a copy, never a link into `target/release`, which the script replaces if it
+finds one: launchd won't start a program in `~/Documents`, where this checkout may be, so `weave
+daemon install` refuses one. A plain `cargo build --release` therefore leaves the installed weave
+as it was; `scripts/update-hosts --here` installs it.
 
 Keep only the latest debug build in `target/debug`, which otherwise grows with every rebuild
 and can fill the disk: clear `target/debug/incremental` (old incremental sessions pile up
 there, gigabytes at a time) when done building, and when it still holds artifacts of earlier
-dependency or profile settings, `cargo clean --profile dev` and build again. Never remove
-`target/release`: an installed `weave` (`~/.local/bin/weave`) may be a symlink to
-`target/release/weave`, so rebuild it with `cargo build --release` instead, and plain
-`cargo clean` removes it too.
+dependency or profile settings, `cargo clean --profile dev` and build again. Leave
+`target/release` alone too: `scripts/update-hosts` builds on it incrementally, and plain `cargo
+clean` removes it.
 
 The workspace also builds and passes its tests on Linux, x86_64 and aarch64 (WVE-116), where the
 Host runs as a systemd user service. There's no CI, so check changes to platform code there, in

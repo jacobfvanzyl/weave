@@ -7,15 +7,17 @@
 # HOSTs are the only ones updated, this computer only with --here; --hosts-only leaves this
 # computer alone either way.
 #
-# Here, `cargo build --release` of weave and weave-holder in this checkout, with
-# ~/.local/bin/weave pointing at target/release/weave (or given a copy of it, and then a copy of
-# weave-holder beside it, where the Host looks for it), then `weave daemon restart`. Terminals
-# already running keep the holder they started with. On each HOST, this working tree, less the
-# app and the trackpad, replaces ~/.cache/weave/build/src there, and the same script builds it
-# with its target directory beside it, so builds after the first are incremental, copies the
-# binary over ~/.local/bin/weave and restarts the Host. A host without rustup gets it in
-# ~/.cargo, leaving its shell's files alone; the toolchain comes from rust-toolchain.toml.
-# Restarts wait for running turns, unless --now.
+# Here, `cargo build --release` of weave and weave-holder in this checkout, copied to
+# ~/.local/bin/weave and weave-holder beside it, where the Host looks for it, then `weave daemon
+# restart`. They're copies, not links into the build, even replacing a link found there: launchd
+# won't start a program in ~/Documents, ~/Desktop or ~/Downloads, where a checkout may be, and a
+# copy outlives `cargo clean`. Terminals already running keep the holder they started with.
+#
+# On each HOST, this working tree, less the app and the trackpad, replaces
+# ~/.cache/weave/build/src there, and the same script builds it with its target directory beside
+# it, so builds after the first are incremental, copies both binaries into ~/.local/bin and
+# restarts the Host. A host without rustup gets it in ~/.cargo, leaving its shell's files alone;
+# the toolchain comes from rust-toolchain.toml. Restarts wait for running turns, unless --now.
 #
 # Each host runs `scripts/update-hosts --here-only [--now] --target-dir DIR` from its copy.
 
@@ -52,10 +54,7 @@ build_dir=".cache/weave/build"
 
 step() { printf '\n==> %s\n' "$*"; }
 
-# Where `path` leads, symlinks followed.
-resolve() { readlink -f "$1" 2>/dev/null || true; }
-
-# Build weave here, make ~/.local/bin/weave this build, and restart the Host.
+# Build weave here, copy it to ~/.local/bin with weave-holder, and restart the Host.
 update_here() {
   local where="$1"
   local dir
@@ -75,23 +74,21 @@ update_here() {
   local target="${target_dir:-$repo/target}"
   (cd "$repo" && CARGO_TARGET_DIR="$target" cargo build --release -p weave-cli -p weave-holder)
 
-  local built="$target/release/weave"
   local installed="$HOME/.local/bin/weave"
-  if [ "$(resolve "$installed")" != "$(resolve "$built")" ]; then
-    # A copy of weave, so weave-holder is copied beside it; a link finds it in the build.
-    local name
-    for name in weave weave-holder; do
-      local from="$target/release/$name"
-      local to
-      to="$(dirname "$installed")/$name"
-      if ! cmp -s "$from" "$to"; then
-        mkdir -p "$(dirname "$to")"
-        install -m 755 "$from" "$(dirname "$to")/.$name.new"
-        mv -f "$(dirname "$to")/.$name.new" "$to"
-        echo "Copied $name to $to."
-      fi
-    done
-  fi
+  local name
+  for name in weave weave-holder; do
+    local from="$target/release/$name"
+    local to
+    to="$(dirname "$installed")/$name"
+    # A link into the build is replaced too; renaming over it leaves the build alone, and the
+    # running Host keeps the binary it started with.
+    if [ -L "$to" ] || ! cmp -s "$from" "$to"; then
+      mkdir -p "$(dirname "$to")"
+      install -m 755 "$from" "$(dirname "$to")/.$name.new"
+      mv -f "$(dirname "$to")/.$name.new" "$to"
+      echo "Copied $name to $to."
+    fi
+  done
 
   step "Restarting the weave Host on $where"
   "$installed" daemon restart $now
