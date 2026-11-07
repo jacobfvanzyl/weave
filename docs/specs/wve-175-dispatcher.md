@@ -73,6 +73,12 @@ CLI on every other computer asks it there.
 - **What a device may do:** everything in the API but `devices/*`, which answer `forbidden`
   (-32069) off the Dispatcher's own computer. `hosts/add` is open, so `weave hosts add studio`
   on a laptop runs `weave pair --json` on studio over SSH from the laptop and hands the code on.
+- **Both ways at once:** pairing a computer with the Dispatcher lets it ask the Dispatcher;
+  pairing the Dispatcher with that computer's Host lets the Dispatcher start work there. They're
+  different permissions, so `weave dispatcher connect` asks before doing the second: with a Host
+  running here that the Dispatcher isn't paired with, it asks, defaulting to yes; `--host` and
+  `--no-host` answer ahead; with no terminal and neither, it says `weave hosts add` does it.
+  The Host gets the computer's name in the Dispatcher too.
 - **Revoking** a device closes its connections (4000); it has to pair again.
 - **The socket is unchanged:** a hello there without `auth` is the Dispatcher's own user.
 
@@ -80,7 +86,8 @@ CLI on every other computer asks it there.
 
 `weave hosts add studio` runs `weave pair --json` on studio over SSH and asks the
 Dispatcher to pair with the URL and code it gave; `weave hosts add <url> <code>` pairs with the
-ones `weave pair` showed there. The Dispatcher pairs as
+ones `weave pair` showed there; `weave hosts add` alone asks this computer's Host for a code
+itself, as `weave dispatcher connect` offers to (see Devices). The Dispatcher pairs as
 "Dispatcher on <its computer>", and keeps the Host's id, its name (the computer's, or its
 tailnet name), its URL, the device id the Host gave it and when.
 
@@ -336,9 +343,9 @@ Newest first, 50 by default.
 | `weave dispatcher [status] [--json]` | its version, pid, uptime, name and waiting work, and its Hosts; from a paired computer, where it runs too |
 | `weave dispatcher pair [--name] [--json]` | on its computer, a code and a QR code (`weave://pair-dispatcher?url=…&code=…`) another computer pairs with, waiting for it; `--json` prints the URL and code and doesn't wait |
 | `weave dispatcher devices [list [--json] \| revoke <id>]` | on its computer, the computers paired with it, and revoking one |
-| `weave dispatcher connect <computer \| url code> [--name]` | on another computer, pairs it: over SSH runs `weave dispatcher pair --json` there; keeps the pairing in `$XDG_STATE_HOME/weave/client` (`dispatcher.json` and the device's `key.json`, 0600), the key in the Secure Enclave on a Mac that has one |
+| `weave dispatcher connect <computer \| url code> [--name] [--host \| --no-host]` | on another computer, pairs it: over SSH runs `weave dispatcher pair --json` there; keeps the pairing in `$XDG_STATE_HOME/weave/client` (`dispatcher.json` and the device's `key.json`, 0600), the key in the Secure Enclave on a Mac that has one; then offers to pair the Dispatcher with this computer's Host |
 | `weave dispatcher disconnect` | forgets the pairing and the key; the Dispatcher lists the computer until it's revoked there |
-| `weave hosts add <computer \| url code> [--name] [--json]` | pairs it with a Host |
+| `weave hosts add [computer \| url code] [--name] [--json]` | pairs it with a Host; this computer's, given neither |
 | `weave hosts [list] [--json]` | its Hosts, and how it reaches each |
 | `weave hosts remove <host>` | forgets one |
 | `weave schedules [list] [--json]` | the schedules, when each runs next and how it last went |
@@ -380,7 +387,10 @@ directory if one answers, and otherwise the paired one, and says both when neith
   `devices/*` answer `forbidden` to a device; devices and remote access outlive a restart;
   revoking closes the device's connections, and the last one gone, or an offer nobody took,
   removes the Serve entry. CLI `tests/dispatcher.rs`: `weave dispatcher connect` with a code and
-  over SSH, `weave hosts` and `weave schedules` through the pairing, and `disconnect`.
+  over SSH, `weave hosts` and `weave schedules` through the pairing, and `disconnect`; with a
+  Host on the computer, `connect` pairs the Dispatcher with it too when told to, says how when
+  there's no terminal to ask in, and leaves it when it's paired already; `weave hosts add` alone
+  pairs with it.
 - Live: the Dispatcher on the homelab as a systemd user service, and `weave hosts` and
   `weave schedules` from the Mac.
 

@@ -1,6 +1,7 @@
 //! `weave dispatcher connect` (WVE-176) against a Dispatcher in the test, on a loopback
 //! WebSocket with a fake Tailscale Serve, as a Dispatcher on another computer: then `weave hosts`
-//! and `weave schedules` reach it through the pairing, and `disconnect` forgets it.
+//! and `weave schedules` reach it through the pairing, and `disconnect` forgets it. With a Host
+//! on this computer, also in the test, `connect` offers to pair the Dispatcher with it too.
 
 #![allow(clippy::expect_used)]
 
@@ -18,9 +19,14 @@ use weave_dispatcher::DispatcherConfig;
 use weave_dispatcher::DispatcherPaths;
 use weave_dispatcher::client::DispatcherConnection;
 use weave_dispatcher::socket;
+use weave_host::Daemon;
+use weave_host::DaemonConfig;
+use weave_host_client::HostConnection;
+use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_remote::access::RemoteSettings;
 use weave_remote::access::Serve;
@@ -44,6 +50,8 @@ struct World {
     dir: tempfile::TempDir,
     paths: DispatcherPaths,
     dispatcher: Dispatcher,
+    /// This computer's Host, when the test runs one.
+    host: Option<Daemon>,
     runtime: Runtime,
 }
 
@@ -74,8 +82,56 @@ impl World {
             dir,
             paths,
             dispatcher,
+            host: None,
             runtime,
         }
+    }
+
+    /// Run a Host on this computer, where `weave` finds it, whose offers turn on a WebSocket of
+    /// its own the Dispatcher pairs with.
+    fn start_host(&mut self) {
+        let paths = weave_host::DaemonPaths::in_dir(self.dir.path().join("here/host"));
+        let mut remote = RemoteSettings::new(Arc::new(FakeServe));
+        remote.listen = "127.0.0.1:0".parse().expect("an address");
+        let mut config = DaemonConfig::in_process(None);
+        config.devices = Some(paths.devices());
+        config.traces = self.dir.path().join("here/traces");
+        config.remote = Some(remote);
+        let host = self.runtime.block_on(async {
+            let listening = weave_host::socket::listen(&paths).expect("the Host's socket");
+            let host = Daemon::new(config);
+            let serving = host.clone();
+            tokio::spawn(async move {
+                let listener = listening.listener;
+                serving.serve(listener, None).await;
+            });
+            host
+        });
+        self.host = Some(host);
+    }
+
+    /// The devices this computer's Host is paired with.
+    fn host_devices(&self) -> Vec<Device> {
+        let host = self.host.as_ref().expect("a Host here");
+        self.runtime.block_on(async {
+            let (connection, _events) = HostConnection::connect(
+                host.connect_in_process(),
+                ClientInfo {
+                    name: "test".to_owned(),
+                    version: "0".to_owned(),
+                },
+                ClientCapabilities::default(),
+            )
+            .await
+            .expect("hello");
+            let devices = connection
+                .send(ListDevicesRequest {})
+                .await
+                .expect("devices/list")
+                .devices;
+            connection.shutdown().await;
+            devices
+        })
     }
 
     /// The Dispatcher's own CLI, on its socket.
@@ -137,6 +193,9 @@ impl Drop for World {
         let dispatcher = self.dispatcher.clone();
         self.runtime
             .block_on(async move { dispatcher.stop().await });
+        if let Some(host) = &self.host {
+            host.stop();
+        }
     }
 }
 
@@ -161,6 +220,11 @@ fn a_computer_paired_with_the_dispatcher_asks_it_from_there() {
     assert!(connected.status.success(), "{}", said(&connected));
     assert!(
         said(&connected).contains("Paired this computer"),
+        "{}",
+        said(&connected)
+    );
+    assert!(
+        said(&connected).contains("No weave Host runs here"),
         "{}",
         said(&connected)
     );
@@ -332,4 +396,77 @@ fn connect_pairs_over_ssh_with_the_code_pair_shows_there() {
     );
     let status = json(&world.weave(&["dispatcher", "status", "--json"]));
     assert_eq!(status["paired"]["computer"], serde_json::json!("homelab"));
+}
+
+#[test]
+fn connect_offers_to_pair_the_dispatcher_with_this_computers_host_too() {
+    let mut world = World::new();
+    world.start_host();
+    let names = |world: &World| {
+        world
+            .dispatcher
+            .hosts()
+            .expect("its Hosts")
+            .into_iter()
+            .map(|host| host.name)
+            .collect::<Vec<_>>()
+    };
+
+    // With no terminal to ask in, it only says how.
+    let (url, code) = world.offer();
+    let asked = world.weave(&["dispatcher", "connect", &url, &code, "--name", "laptop"]);
+    assert!(asked.status.success(), "{}", said(&asked));
+    assert!(
+        said(&asked).contains("`weave hosts add` pairs the Dispatcher with this computer's Host"),
+        "{}",
+        said(&asked)
+    );
+    assert!(names(&world).is_empty());
+
+    // Told to, it pairs the Dispatcher with this computer's Host, by the same name, which lists
+    // the Dispatcher as a service.
+    let (url, code) = world.offer();
+    let both = world.weave(&[
+        "dispatcher",
+        "connect",
+        &url,
+        &code,
+        "--name",
+        "laptop",
+        "--host",
+    ]);
+    assert!(both.status.success(), "{}", said(&both));
+    assert!(
+        said(&both).contains("Paired the Dispatcher with this computer's Host as laptop"),
+        "{}",
+        said(&both)
+    );
+    assert_eq!(names(&world), vec!["laptop"]);
+    let device_id = world.dispatcher.hosts().expect("its Hosts")[0]
+        .device_id
+        .clone();
+    let services = world
+        .host_devices()
+        .into_iter()
+        .filter(|device| device.service)
+        .map(|device| device.id)
+        .collect::<Vec<_>>();
+    assert_eq!(services, vec![device_id]);
+
+    // Paired already, it leaves it.
+    let (url, code) = world.offer();
+    let again = world.weave(&["dispatcher", "connect", &url, &code, "--host"]);
+    assert!(again.status.success(), "{}", said(&again));
+    assert!(
+        said(&again).contains("already starts work on this computer's Host, as laptop"),
+        "{}",
+        said(&again)
+    );
+
+    // `weave hosts add` alone pairs it with this computer's Host, through the pairing.
+    let removed = world.weave(&["hosts", "remove", "laptop"]);
+    assert!(removed.status.success(), "{}", said(&removed));
+    let added = json(&world.weave(&["hosts", "add", "--name", "studio", "--json"]));
+    assert_eq!(added["name"], serde_json::json!("studio"));
+    assert_eq!(names(&world), vec!["studio"]);
 }

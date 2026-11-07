@@ -7,8 +7,12 @@
 //! The person's other computers pair with it as devices (WVE-176): `pair` shows a code on its
 //! computer, `devices` lists and revokes them there, and `connect` on another computer pairs
 //! that one, over SSH or with the code, so `weave hosts` and `weave schedules` reach it from
-//! there ([`crate::paired`]); `disconnect` forgets it.
+//! there ([`crate::paired`]); `disconnect` forgets it. `connect` offers the other pairing too:
+//! the Dispatcher with that computer's Host, so it starts work there.
 
+use std::io::BufRead as _;
+use std::io::IsTerminal as _;
+use std::io::Write as _;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -27,6 +31,7 @@ use weave_host_client::Credentials;
 use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
 use weave_remote::access::RemoteSettings;
@@ -42,6 +47,7 @@ use crate::commands::stop_signal;
 use crate::dispatcher;
 use crate::dispatcher::connect_here;
 use crate::dispatcher::remote_pairing;
+use crate::host;
 use crate::paired;
 use crate::paired::Paired;
 use crate::service;
@@ -85,7 +91,8 @@ enum DispatcherCommand {
     /// List the computers paired with the Dispatcher, or revoke one.
     Devices(DevicesArgs),
     /// Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect
-    /// homelab`) or with the URL and code `weave dispatcher pair` shows there.
+    /// homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to pair
+    /// the Dispatcher with this computer's Host.
     Connect(ConnectArgs),
     /// Forget the Dispatcher this computer is paired with.
     Disconnect,
@@ -136,9 +143,16 @@ struct ConnectArgs {
     dispatcher: String,
     /// The code `weave dispatcher pair` shows there, after its URL.
     code: Option<String>,
-    /// What the Dispatcher calls this computer; its name by default.
+    /// What the Dispatcher calls this computer, and its Host; its name by default.
     #[arg(long)]
     name: Option<String>,
+    /// Pair the Dispatcher with this computer's Host too, so it starts work here, without
+    /// asking.
+    #[arg(long, conflicts_with = "no_host")]
+    host: bool,
+    /// Leave this computer's Host alone, without asking.
+    #[arg(long)]
+    no_host: bool,
 }
 
 #[derive(Args, Default)]
@@ -520,7 +534,7 @@ async fn devices(paths: &DispatcherPaths, args: DevicesArgs) -> anyhow::Result<(
 
 /// `weave dispatcher connect`: pair this computer with the Dispatcher on another, with a code
 /// from `weave dispatcher pair` there, which this runs over SSH unless given one, and keep the
-/// pairing.
+/// pairing. Then offer to pair the Dispatcher with this computer's Host, the other way round.
 async fn connect(paths: &DispatcherPaths, args: ConnectArgs) -> anyhow::Result<()> {
     if std::env::var_os(weave_dispatcher::paths::DIR_VARIABLE).is_some_and(|dir| !dir.is_empty()) {
         bail!(
@@ -550,7 +564,7 @@ async fn connect(paths: &DispatcherPaths, args: ConnectArgs) -> anyhow::Result<(
     let name = args.name.unwrap_or_else(computer_name);
     let credentials = Credentials::Pair {
         code,
-        name,
+        name: name.clone(),
         key: paired::new_key()?,
         service: false,
     };
@@ -558,7 +572,28 @@ async fn connect(paths: &DispatcherPaths, args: ConnectArgs) -> anyhow::Result<(
         .await
         .context("pairing with the Dispatcher")?;
     let hello = dispatcher.hello().clone();
+    let paired = keep_pairing(url, computer, hello);
+    let host = match paired {
+        Ok(()) => {
+            let wanted = match (args.host, args.no_host) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            };
+            pair_host_here(&dispatcher, name, wanted).await
+        }
+        Err(error) => Err(error),
+    };
     dispatcher.shutdown().await;
+    host
+}
+
+/// Keep the pairing `hello` says this computer has with the Dispatcher at `url`, and say so.
+fn keep_pairing(
+    url: String,
+    computer: Option<String>,
+    hello: DispatcherHello,
+) -> anyhow::Result<()> {
     let device = hello
         .device
         .context("the Dispatcher didn't say which device this computer is")?;
@@ -587,6 +622,76 @@ async fn connect(paths: &DispatcherPaths, args: ConnectArgs) -> anyhow::Result<(
         device.id
     );
     Ok(())
+}
+
+/// What `connect` says when it leaves this computer's Host alone.
+const ADD_HERE_LATER: &str =
+    "`weave hosts add` pairs the Dispatcher with this computer's Host, so it starts work here.";
+
+/// Pair the Dispatcher with this computer's Host too, as `name`, unless it is already, or
+/// `wanted` or the person says not to. With no terminal to ask in, it only says how.
+async fn pair_host_here(
+    dispatcher: &DispatcherConnection,
+    name: String,
+    wanted: Option<bool>,
+) -> anyhow::Result<()> {
+    let Some(here) = host::control(&host::paths()?).await? else {
+        if wanted == Some(true) {
+            bail!("no weave Host runs here to pair the Dispatcher with");
+        }
+        println!(
+            "No weave Host runs here, so the Dispatcher has nothing to start work on here; once \
+             one does, `weave hosts add` pairs them."
+        );
+        return Ok(());
+    };
+    let result = async {
+        let host_id = &here.hello().host.id;
+        let hosts = dispatcher.send(ListHostsRequest {}).await?.hosts;
+        if let Some(known) = hosts.iter().find(|known| &known.host_id == host_id) {
+            println!(
+                "The Dispatcher already starts work on this computer's Host, as {}.",
+                known.name
+            );
+            return Ok(());
+        }
+        let wanted = match wanted {
+            Some(wanted) => wanted,
+            None if std::io::stdin().is_terminal() => ask(
+                "Pair the Dispatcher with this computer's Host too, so it starts work here? [Y/n] ",
+            )?,
+            None => false,
+        };
+        if !wanted {
+            println!("{ADD_HERE_LATER}");
+            return Ok(());
+        }
+        let host = hosts::add_from(dispatcher, &here, name)
+            .await
+            .context("pairing the Dispatcher with this computer's Host")?;
+        println!(
+            "Paired the Dispatcher with this computer's Host as {}: it starts work here. The Host \
+             lists it among its devices as {}.",
+            host.name, host.device_id
+        );
+        Ok(())
+    }
+    .await;
+    here.shutdown().await;
+    result
+}
+
+/// Ask `question` at the terminal: yes unless the answer is no.
+fn ask(question: &str) -> anyhow::Result<bool> {
+    let mut stderr = std::io::stderr();
+    write!(stderr, "{question}")?;
+    stderr.flush()?;
+    let mut answer = String::new();
+    if std::io::stdin().lock().read_line(&mut answer)? == 0 {
+        return Ok(false);
+    }
+    let answer = answer.trim().to_ascii_lowercase();
+    Ok(!matches!(answer.as_str(), "n" | "no"))
 }
 
 /// `weave dispatcher disconnect`: forget the pairing, and the key this computer proved itself

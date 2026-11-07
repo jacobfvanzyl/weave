@@ -111,8 +111,9 @@ pub(crate) fn ssh(destination: &str, args: &[&str]) -> anyhow::Result<String> {
     let said = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     match output.status.code() {
         Some(127) => bail!(
-            "a command over SSH on {destination} doesn't find weave: {said}. `weave daemon \
-             install` there says how to have it"
+            "a command over SSH on {destination} doesn't find weave: {said}. The shell runs it \
+             without its interactive startup files, so put weave on PATH where it looks: for \
+             zsh, `export PATH=\"$HOME/.local/bin:$PATH\"` in ~/.zshenv there"
         ),
         Some(255) => bail!("couldn't reach {destination} over SSH: {said}"),
         _ => bail!("`weave {}` failed on {destination}: {said}", args.join(" ")),

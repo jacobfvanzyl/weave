@@ -66,7 +66,7 @@ journals.
 ./target/debug/weave agents update --dry-run   # newer agent adapters; without --dry-run, check and use them
 ./target/debug/weave worktrees install-hook    # have worktrunk ask the Host before removing a worktree
 ./target/debug/weave dispatcher           # its status; also start, stop, restart, run, install, uninstall
-./target/debug/weave dispatcher connect homelab   # pair this computer with the Dispatcher there, over SSH
+./target/debug/weave dispatcher connect homelab   # pair this computer with the Dispatcher there, over SSH, and offer its Host to it
 ./target/debug/weave hosts add studio     # pair the Dispatcher with studio's Host, over SSH
 ./target/debug/weave schedules            # the Dispatcher's schedules; also add, pause, run, occurrences
 ```
@@ -191,7 +191,9 @@ WebSocket (WVE-176): `weave dispatcher connect <computer>` runs `weave dispatche
 there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests), or takes the URL and
 code, pairs with a new device key (`DeviceKey::kept`, in the Secure Enclave on a Mac that has
 one) and keeps the pairing in `$XDG_STATE_HOME/weave/client` (`src/paired.rs`, 0600;
-`disconnect` removes it). `$WEAVE_DISPATCHER_DIR` set means only that Dispatcher, so a dev one
+`disconnect` removes it). Then it offers the other way round, the Dispatcher paired with this
+computer's Host (`hosts::add_from`, which `weave hosts add` with no computer runs too), asking at
+a terminal unless `--host` or `--no-host` answers. `$WEAVE_DISPATCHER_DIR` set means only that Dispatcher, so a dev one
 never reaches the person's own. On a paired computer `run`, `start`, `restart` and `install`
 refuse, and `pair` and `devices`, which only the Dispatcher's computer may ask, say where it
 runs. `tests/dispatcher.rs` pairs `weave` with a Dispatcher in the test, over a fake Serve.

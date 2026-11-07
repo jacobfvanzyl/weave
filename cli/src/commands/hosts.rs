@@ -3,25 +3,33 @@
 //!
 //! `weave hosts add studio` pairs the Dispatcher with studio's Host over SSH ([`crate::ssh`]): it
 //! runs `weave pair --json` there for a code. Given the URL and code `weave pair` showed there
-//! instead, it pairs with those.
+//! instead, it pairs with those; given neither, with this computer's Host, which it asks for a
+//! code itself ([`add_here`]), as `weave dispatcher connect` offers to.
 
 use std::process::ExitCode;
 
 use anyhow::Context as _;
+use anyhow::bail;
 use clap::Args;
 use clap::Subcommand;
 use weave_dispatcher::DispatcherPaths;
+use weave_dispatcher::client::DispatcherConnection;
+use weave_dispatcher::computer_name;
+use weave_host_client::HostConnection;
+use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::dispatcher::AddHostRequest;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::ListHostsRequest;
 use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
+use weave_host_protocol::errors;
 
 use crate::clock::ago;
 use crate::clock::now_ms;
 use crate::commands::devices::Offered;
 use crate::dispatcher;
 use crate::dispatcher::connect;
+use crate::host;
 use crate::ssh::Reach;
 use crate::ssh::reach;
 use crate::ssh::ssh;
@@ -40,8 +48,8 @@ enum HostsCommand {
     /// The Hosts the Dispatcher is paired with, and whether it's connected to each (the
     /// default).
     List(ListArgs),
-    /// Pair the Dispatcher with a Host as a service, over SSH (`weave hosts add studio`) or with
-    /// the URL and code `weave pair` shows there.
+    /// Pair the Dispatcher with a Host as a service: this computer's, or another's over SSH
+    /// (`weave hosts add studio`) or with the URL and code `weave pair` shows there.
     Add(AddArgs),
     /// Forget a Host, and the work waiting for it. The Host lists the Dispatcher among its
     /// devices until you revoke it there with `weave devices revoke`.
@@ -57,8 +65,9 @@ struct ListArgs {
 
 #[derive(Args)]
 struct AddArgs {
-    /// The computer SSH reaches the Host on, or the URL `weave pair` shows there.
-    host: String,
+    /// The computer SSH reaches the Host on, or the URL `weave pair` shows there; this
+    /// computer's Host without one.
+    host: Option<String>,
     /// The code `weave pair` shows there, after its URL.
     code: Option<String>,
     /// What to call it; the computer's name, or its tailnet name, by default.
@@ -96,20 +105,12 @@ async fn add(paths: &DispatcherPaths, args: AddArgs) -> anyhow::Result<()> {
         json,
     } = args;
     let dispatcher = connect(paths).await?;
-    let (url, code, name) = match reach(&host, code)? {
-        Reach::Code { url, code } => (url, code, name),
-        Reach::Ssh(destination) => {
-            let offered: Offered = serde_json::from_str(
-                &ssh(&destination, &["pair", "--json"]).context("asking it for a code")?,
-            )
-            .context("reading what `weave pair --json` said there")?;
-            let name = name.or_else(|| Some(ssh_name(&destination)));
-            (offered.url, offered.code, name)
-        }
+    let added = match host {
+        Some(host) => add_elsewhere(&dispatcher, &host, code, name).await,
+        None => add_here(&dispatcher, name.unwrap_or_else(computer_name)).await,
     };
-    let added = dispatcher.send(AddHostRequest { url, code, name }).await;
     dispatcher.shutdown().await;
-    let host = added?.host;
+    let host = added?;
     if json {
         println!("{}", serde_json::to_string_pretty(&host)?);
     } else {
@@ -120,6 +121,74 @@ async fn add(paths: &DispatcherPaths, args: AddArgs) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Pair the Dispatcher with the Host `host` and `code` reach.
+async fn add_elsewhere(
+    dispatcher: &DispatcherConnection,
+    host: &str,
+    code: Option<String>,
+    name: Option<String>,
+) -> anyhow::Result<DispatcherHost> {
+    let (url, code, name) = match reach(host, code)? {
+        Reach::Code { url, code } => (url, code, name),
+        Reach::Ssh(destination) => {
+            let offered: Offered = serde_json::from_str(
+                &ssh(&destination, &["pair", "--json"]).context("asking it for a code")?,
+            )
+            .context("reading what `weave pair --json` said there")?;
+            let name = name.or_else(|| Some(ssh_name(&destination)));
+            (offered.url, offered.code, name)
+        }
+    };
+    Ok(dispatcher
+        .send(AddHostRequest { url, code, name })
+        .await?
+        .host)
+}
+
+/// Pair the Dispatcher with this computer's Host, as `name`, with a code it asks that Host for.
+pub(crate) async fn add_here(
+    dispatcher: &DispatcherConnection,
+    name: String,
+) -> anyhow::Result<DispatcherHost> {
+    let Some(here) = host::control(&host::paths()?).await? else {
+        bail!(
+            "no weave Host runs here to pair the Dispatcher with; `weave daemon install` keeps \
+             one running"
+        );
+    };
+    let added = add_from(dispatcher, &here, name).await;
+    here.shutdown().await;
+    added
+}
+
+/// Pair the Dispatcher with the Host `here` is connected to, as `name`, with a code from it. The
+/// offer turns that Host's remote access on, as `weave pair` does, for the Dispatcher to reach it.
+pub(crate) async fn add_from(
+    dispatcher: &DispatcherConnection,
+    here: &HostConnection,
+    name: String,
+) -> anyhow::Result<DispatcherHost> {
+    let offer = match here.send(OfferDeviceRequest { name: None }).await {
+        Ok(offer) => offer,
+        Err(error) if errors::is(&error, errors::REMOTE_UNAVAILABLE) => bail!("{}", error.message),
+        Err(error) => return Err(error.into()),
+    };
+    let Some(url) = offer.url else {
+        bail!(
+            "the running weave Host is older than this weave and can't turn remote access on; \
+             restart it with `weave daemon restart`"
+        );
+    };
+    Ok(dispatcher
+        .send(AddHostRequest {
+            url,
+            code: offer.code,
+            name: Some(name),
+        })
+        .await?
+        .host)
 }
 
 /// The Hosts the Dispatcher is paired with, and how it reaches each.
