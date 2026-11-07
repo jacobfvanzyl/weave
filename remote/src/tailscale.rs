@@ -90,6 +90,11 @@ async fn tailscale(args: &[&str]) -> Result<String, String> {
              up`), then pair again"
                 .to_owned(),
         )
+    } else if needs_root(&stderr) {
+        Err(format!(
+            "Tailscale lets only root change Serve while its config serves a path or Unix socket, \
+             as another program's entry does here: run `sudo {shown}` yourself"
+        ))
     } else if needs_operator(&stderr) {
         Err(
             "Tailscale lets only root and its operator change Serve on this computer. Make \
@@ -115,6 +120,13 @@ fn enable_link(output: &str) -> Option<String> {
 /// `sudo` or `tailscale set --operator`.
 fn needs_operator(stderr: &str) -> bool {
     stderr.contains("set --operator")
+}
+
+/// Whether `tailscale` was refused, operator or not, because Serve's config has an entry for a
+/// path or a Unix socket, as another program's may, which only root (or an operator who can
+/// `sudo tailscale`) may send along with a change.
+fn needs_root(stderr: &str) -> bool {
+    stderr.contains("must be root")
 }
 
 /// `tailscale serve status --json`.
@@ -348,6 +360,15 @@ mod tests {
                        tailscale set --operator=$USER' once.";
         assert!(needs_operator(refused));
         assert!(!needs_operator("tailscaled is not running"));
+    }
+
+    #[test]
+    fn a_refusal_over_another_programs_socket_entry_asks_for_root() {
+        let refused = "sending serve config: 401 Unauthorized: must be root, or be an operator \
+                       and able to run 'sudo tailscale' to serve a path or Unix socket";
+        assert!(needs_root(refused));
+        assert!(!needs_operator(refused));
+        assert!(!needs_root("tailscaled is not running"));
     }
 
     #[test]

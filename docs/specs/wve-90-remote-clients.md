@@ -76,7 +76,9 @@ Nothing needs configuring. Pairing turns remote access on (ADR 0016):
   `remote_unavailable` saying why: Tailscale isn't installed, running or signed in, Serve or
   HTTPS is off for the tailnet (with Tailscale's link that turns it on), Tailscale lets only root
   change Serve (on Linux, until the person is made its operator with `sudo tailscale set
-  --operator=$USER`), port 7341 already serves something else, or Funnel would expose the entry.
+  --operator=$USER`), or only root while Serve's config has another program's entry for a path or
+  Unix socket (then it gives the `sudo tailscale serve …` to run once, and the Host uses the entry
+  that makes), port 7341 already serves something else, or Funnel would expose the entry.
   The Host finds `tailscale` on `PATH`, or on macOS where Homebrew or the Mac app put it.
 - **Idle.** A Host with remote access on doesn't exit when idle, because a remote device can't
   start one. `weave daemon install` keeps it running across restarts; `weave pair` says so when
