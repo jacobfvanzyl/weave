@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0030: clients reach every Host through the Dispatcher too, and a Host keeps a key to prove itself to it
 date: 2026-11-04
 ---
 

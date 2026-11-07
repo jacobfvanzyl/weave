@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0030: a Bot's thread is reached through the Dispatcher, and a Bot moves to another Host by starting a new thread
 date: 2026-11-02
 ---
 

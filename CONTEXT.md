@@ -15,11 +15,11 @@ A program connected to the Host on someone's behalf, such as the TUI, `weave run
 _Avoid_: frontend, UI, consumer
 
 **Remote client**:
-A client on another computer than the Host's, which reaches it through the tailnet on behalf of a paired device.
+A client on another computer than the Host's, which reaches it through the Dispatcher on behalf of a paired device.
 _Avoid_: network client, mobile client
 
 **Paired device**:
-A device of the person's that a Host or the Dispatcher has paired with, and accepts remote clients from until it's revoked there; each keeps its own.
+A device of the person's that the Dispatcher has paired with, and lets reach the person's Hosts until it's revoked there.
 _Avoid_: credential, principal, token
 
 **Agent**:
@@ -53,7 +53,7 @@ _Avoid_: remote tool, plugin
 ### Threads
 
 **Thread**:
-A conversation with one agent in one directory, identified by the id of the agent's ACP session.
+A conversation with one agent in one directory on one Host, which it never leaves, identified by the id of the agent's ACP session.
 _Avoid_: session (ACP's word for the agent's side of it), chat, conversation
 
 **Open thread**:
@@ -107,7 +107,7 @@ _Avoid_: restart, reload (the TUI's own restart)
 ### Work while the person is away
 
 **Dispatcher**:
-The person's program, apart from their Hosts, that keeps triggers and Bots and starts their work on the Hosts as a service, and through which a Host's agents reach the person's other Hosts. Hosts never connect to it, and work on without it.
+The person's program, apart from their Hosts, that the Hosts connect to and the person's devices and agents reach them through; it keeps triggers and Bots and starts their work on the Hosts as a service. Hosts work on without it.
 _Avoid_: scheduler, coordinator, orchestrator, automation engine
 
 **Trigger**:
@@ -127,7 +127,7 @@ An occurrence that starts late, once, for the latest time a schedule missed whil
 _Avoid_: backfill, retry
 
 **Bot**:
-A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home directory of its own memory, whose work goes on in one thread at a time.
+A named assistant the Dispatcher keeps, with an agent, a permission policy, triggers and a home directory of its own memory, whose work goes on in one thread at a time, each on a Host the Dispatcher chooses.
 _Avoid_: resident, persona, dot, always-on agent, profile
 
 **Edge**:

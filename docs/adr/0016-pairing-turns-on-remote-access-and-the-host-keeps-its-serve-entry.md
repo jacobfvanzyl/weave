@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0030: Hosts no longer listen for remote clients or make a Serve entry, and the Dispatcher keeps its own as this describes
 date: 2026-10-21
 ---
 

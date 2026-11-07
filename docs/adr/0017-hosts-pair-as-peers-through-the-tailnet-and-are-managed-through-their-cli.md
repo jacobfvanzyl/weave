@@ -1,5 +1,5 @@
 ---
-status: accepted; what a peer may do, and pairing both ways, are amended by ADR 0024; what a service may do, by ADR 0027; Hosts pairing as peers is superseded by ADR 0029, under which agents reach other Hosts through the Dispatcher
+status: accepted; what a peer may do, and pairing both ways, are amended by ADR 0024; what a service may do, by ADR 0027; Hosts pairing as peers is superseded by ADR 0029, under which agents reach other Hosts through the Dispatcher; under ADR 0030 Hosts no longer listen for remote connections: they dial out to the Dispatcher, which the person's devices reach them through
 date: 2026-10-21
 ---
 

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0030: only the Dispatcher listens in the tailnet, and devices prove their key to it
 date: 2026-10-16
 ---
 
