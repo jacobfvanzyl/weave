@@ -1,30 +1,58 @@
-// The Host store against a scripted Host, for what a dev Host can't produce on demand, such as a
-// newer version of an agent being out.
+// The Host store against a scripted Dispatcher and Host, for what a dev Host can't produce on
+// demand, such as a newer version of an agent being out, or what the Dispatcher says of a Host.
 import { describe, expect, it } from 'vitest';
 import { threadKey } from '@/app/app-controller';
 import { blocksText } from '@/chat/acp-transcript';
-import type { Connector, TransportEvents } from './connection';
+import type { TransportEvents } from './connection';
 import { APP_PROTOCOL } from './connection';
+import { DISPATCHER, type SocketOpener } from './dispatcher';
 import { HOST_PROTOCOL } from './protocol';
 import { HostStore, type HostStoreOptions } from './host-store';
-import type { AgentSummary, PendingRequest, ThreadListing, ThreadState } from './protocol';
-import { memoryStorage } from './storage';
+import type { AgentSummary, DispatcherHost, PendingRequest, ThreadListing, ThreadState } from './protocol';
+import { type DispatcherRecord, memoryStorage } from './storage';
 
 const HOST = 'host-1';
 const THREAD = 's-1';
+const DISPATCHER_ID = 'dispatcher-1';
 
 type Answer = { result: unknown } | { error: { code: number; message: string; data?: unknown } };
+type Answers = Record<string, (params: unknown) => Answer | 'silent' | undefined>;
+
+/** What the Dispatcher lists of the scripted Host. */
+const listed = (host: Partial<DispatcherHost> = {}): DispatcherHost => ({
+  hostId: HOST, name: 'mac', deviceId: 'dispatcher-device', pairedAt: 0, joinedAt: 0, connected: true, status: 'reachable', pending: 0, ...host,
+});
+
+/** Messages over a fake WebSocket: each request answered by `answer`, unless it says nothing. */
+function fakeSocket(transport: TransportEvents, answer: (method: string, params: unknown) => Answer | 'silent') {
+  let open = true;
+  return {
+    send(text: string) {
+      const { id, method, params } = JSON.parse(text) as { id: number; method: string; params: unknown };
+      const answered = answer(method, params);
+      if (answered === 'silent') return;
+      queueMicrotask(() => { if (open) transport.message(JSON.stringify({ jsonrpc: '2.0', id, ...answered })); });
+    },
+    close() { open = false; },
+  };
+}
 
 /**
- * A Host that answers what the store asks, with the agents `agents` gives at the time; `answers`
- * overrides what it answers a method, and one answering `'silent'` answers nothing.
+ * A Dispatcher and the one Host it carries connections to, which answer what the store asks, the
+ * Host with the agents `agents` gives at the time; `answers` overrides what either answers a
+ * method, and one answering `'silent'` answers nothing.
  */
-function scriptedHost(agents: () => AgentSummary[], answers: Record<string, (params: unknown) => Answer | 'silent' | undefined> = {}) {
+function scriptedHost(agents: () => AgentSummary[], answers: Answers = {}) {
   let events: TransportEvents | undefined;
+  let api: TransportEvents | undefined;
+  /** What the store asked the Host, after the Dispatcher carried the connection. */
   const asked: string[] = [];
   const params: Record<string, unknown[]> = {};
-  /** Connections opened, and how many tries to leave opening until they're abandoned. */
-  const connects = { opened: 0, hang: 0 };
+  /** What the store asked the Dispatcher's API. */
+  const askedDispatcher: string[] = [];
+  /** Connections carried to the Host, and how many tries to leave opening until they're abandoned. */
+  const connects = { opened: 0, hang: 0, api: 0 };
+  const dispatcher = { hosts: [listed()], refuse: false };
   const state = {
     threadId: THREAD,
     agent: { id: 'claude', name: 'Claude', initialize: { protocolVersion: 1 }, release: { name: 'claude-agent-acp', version: '0.86.0' } },
@@ -37,48 +65,68 @@ function scriptedHost(agents: () => AgentSummary[], answers: Record<string, (par
     journal: { id: 'j-1', head: 0 },
     update: { agentId: 'claude', name: '@agentclientprotocol/claude-agent-acp', running: '0.86.0', latest: '0.94.0' },
   } satisfies Partial<ThreadState> as unknown as ThreadState;
+  const preamble: Record<string, () => Answer> = {
+    'dispatcher/challenge': () => ({ result: { dispatcherId: DISPATCHER_ID, nonce: 'n', expiresAt: 0 } }),
+    'dispatcher/hello': () => dispatcher.refuse
+      ? { error: { code: HOST_PROTOCOL.errors.unauthenticated, message: "this device couldn't be authenticated" } }
+      : { result: { protocol: DISPATCHER.protocol, version: '0', id: DISPATCHER_ID, device: { id: 'd-1', name: 'iPad' } } },
+  };
   const results: Record<string, () => unknown> = {
-    'host/challenge': () => ({ hostId: HOST, nonce: 'n' }),
+    'hosts/list': () => ({ hosts: dispatcher.hosts }),
+    'dispatcher/status': () => ({ name: 'homelab' }),
     'host/hello': () => ({ protocol: 3, clientId: 'c1', host: { id: HOST, version: '0', pid: 1, startedAt: 0 }, features: [], acp: { protocolVersion: 1 }, device: { id: 'd-1', name: 'iPad' } }),
     'agents/list': () => ({ agents: agents() }),
     'threads/list': () => ({ threads: [{ info: { sessionId: THREAD, cwd: '/work' }, agentId: 'claude', state: 'open', activity: 'idle', clients: 1, headless: false }] }),
     'thread/attach': () => ({ ...state, replay: { from: 1, reset: true } }),
   };
-  const connector: Connector = async (transport, signal) => {
+  const answer = (method: string, given: unknown): Answer | 'silent' =>
+    answers[method]?.(given) ?? preamble[method]?.() ?? { result: results[method]?.() ?? {} };
+  const socket: SocketOpener = (_url, subprotocol) => async (transport, signal) => {
+    if (subprotocol === DISPATCHER.subprotocol) {
+      connects.api += 1;
+      api = transport;
+      return fakeSocket(transport, (method, given) => {
+        askedDispatcher.push(method);
+        return answer(method, given);
+      });
+    }
     if (connects.hang > 0) {
       connects.hang -= 1;
       return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)));
     }
     connects.opened += 1;
     events = transport;
-    let open = true;
-    return {
-      send(text) {
-        const { id, method, params: given } = JSON.parse(text) as { id: number; method: string; params: unknown };
+    return fakeSocket(transport, (method, given) => {
+      if (method === 'hosts/open') {
+        const host = dispatcher.hosts.find(({ hostId }) => hostId === (given as { host: string }).host);
+        return host?.connected
+          ? { result: { hostId: host.hostId, name: host.name } }
+          : { error: { code: HOST_PROTOCOL.errors.hostUnavailable, message: 'unavailable', data: { status: host?.status ?? 'unreachable', why: host?.why ?? "It isn't connected." } } };
+      }
+      if (!(method in preamble)) {
         asked.push(method);
         (params[method] ??= []).push(given);
-        const answer = answers[method]?.(given) ?? { result: results[method]?.() ?? {} };
-        if (answer === 'silent') return;
-        queueMicrotask(() => { if (open) transport.message(JSON.stringify({ jsonrpc: '2.0', id, ...answer })); });
-      },
-      close() { open = false; },
-    };
+      }
+      return answer(method, given);
+    });
   };
   const notify = (method: string, params: unknown) => events?.message(JSON.stringify({ jsonrpc: '2.0', method, params }));
-  /** The Host closes the latest connection, with a WebSocket close code. */
+  /** The Host closes the latest connection carried to it, with a WebSocket close code. */
   const close = (code: number, reason = '') => events?.closed({ code, reason });
-  return { connector, asked, params, connects, notify, close, state };
+  /** The Dispatcher closes its API's latest connection. */
+  const closeApi = (code: number, reason = '') => api?.closed({ code, reason });
+  return { socket, asked, askedDispatcher, params, connects, notify, close, closeApi, state, dispatcher };
 }
 
 const settle = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const PAIRED = { hostId: HOST, name: 'mac', url: 'wss://mac', deviceId: 'd-1', keyId: 'k' };
+const PAIRED: DispatcherRecord = { dispatcherId: DISPATCHER_ID, name: 'homelab', url: 'wss://homelab', deviceId: 'd-1', keyId: 'k' };
 
-const storeFor = (connector: Connector, options: Partial<HostStoreOptions> = {}) => new HostStore({
-  storage: memoryStorage([PAIRED]),
+const storeFor = (socket: SocketOpener, options: Partial<HostStoreOptions> = {}) => new HostStore({
+  storage: memoryStorage(PAIRED),
   keyFor: () => ({ publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }), sign: async () => 'signature', forget: async () => {} }),
   newKey: () => Promise.reject(new Error('no pairing here')),
-  connectorFor: () => connector,
+  socket,
   client: { name: 'test', version: '0' },
   deviceName: 'iPad',
   schedule: (notify) => queueMicrotask(notify),
@@ -115,15 +163,7 @@ describe('HostStore', () => {
   it('offers to move a thread to a newer agent only once the Host launches it', async () => {
     let launches = '0.86.0';
     const host = scriptedHost(() => [{ id: 'claude', name: 'Claude', source: 'preset', version: launches, installed: true }]);
-    const store = new HostStore({
-      storage: memoryStorage([{ hostId: HOST, name: 'mac', url: 'wss://mac', deviceId: 'd-1', keyId: 'k' }]),
-      keyFor: () => ({ publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }), sign: async () => 'signature', forget: async () => {} }),
-      newKey: () => Promise.reject(new Error('no pairing here')),
-      connectorFor: () => host.connector,
-      client: { name: 'test', version: '0' },
-      deviceName: 'iPad',
-      schedule: (notify) => queueMicrotask(notify),
-    });
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -152,7 +192,7 @@ describe('HostStore', () => {
     const host = scriptedHost(() => [{ id: 'claude', name: 'Claude', source: 'preset', version: '0.86.0', installed: true }], {
       'agents/update': () => ({ result: { version: '0.94.0' } }),
     });
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -171,7 +211,7 @@ describe('HostStore', () => {
     const host = scriptedHost(() => [{ id: 'claude', name: 'Claude', source: 'preset', version: '0.86.0', installed: true }], {
       'agents/update': () => ({ error: { code: HOST_PROTOCOL.errors.forbidden, message: 'Remote clients can\'t administer the Host' } }),
     });
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -186,7 +226,7 @@ describe('HostStore', () => {
     let attach: () => Answer = () => ({ result: {} });
     const host = scriptedHost(() => [], { 'thread/attach': () => attach() });
     attach = () => ({ result: { ...host.state, journal: { id: 'j-1', head: 2 }, pending: [write], replay: { from: 1, reset: true } } });
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -219,7 +259,7 @@ describe('HostStore', () => {
       'thread/attach': () => ({ result: { ...host.state, journal: { id: 'j-1', head: 0 }, pending: [write], replay: { from: 1, reset: true } } }),
       'pending/answer': () => answer,
     });
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -248,7 +288,7 @@ describe('HostStore', () => {
       }),
       'threads/watch': () => ({ result: { threads: [listing(THREAD)] } }),
     });
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     await settle();
     expect(host.asked).toContain('threads/watch');
@@ -268,7 +308,7 @@ describe('HostStore', () => {
     store.stop();
 
     const older = scriptedHost(() => []);
-    const listed = storeFor(older.connector);
+    const listed = storeFor(older.socket);
     await listed.start();
     await settle();
     expect(older.asked).toContain('threads/list');
@@ -282,7 +322,7 @@ describe('HostStore closing and deleting', () => {
     const host = scriptedHost(() => [], {
       'thread/delete': () => ({ error: { code: -32603, message: 'Internal error', data: 'the agent couldn\'t start' } }),
     });
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     await settle();
     await store.actions.deleteThread(threadKey(HOST, THREAD));
@@ -295,7 +335,7 @@ describe('HostStore closing and deleting', () => {
 describe('HostStore journal times', () => {
   it('dates the transcript\'s entries by when the journal says their events happened', async () => {
     const host = scriptedHost(() => []);
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -307,29 +347,136 @@ describe('HostStore journal times', () => {
   });
 });
 
-describe('HostStore reconnecting', () => {
-  it('renames a Host on this device only, and keeps the name', async () => {
+describe('HostStore and the Dispatcher', () => {
+  it('pairs with the Dispatcher, keeps the one record, and deletes the Hosts it paired with before', async () => {
     const host = scriptedHost(() => []);
-    const storage = memoryStorage([PAIRED]);
-    const store = storeFor(host.connector, { storage });
+    const storage = memoryStorage(undefined, ['old-mac', 'old-studio']);
+    const forgotten: string[] = [];
+    const store = storeFor(host.socket, {
+      storage,
+      keyFor: (keyId) => ({ publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }), sign: async () => 'signature', forget: async () => { forgotten.push(keyId); } }),
+      newKey: async () => ({ keyId: 'new', key: { publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }), sign: async () => 'signature', forget: async () => { forgotten.push('new'); } } }),
+    });
     await store.start();
-    await settle();
-    const asked = host.asked.length;
-    await store.actions.renameHost(HOST, '  Studio Mac ');
-    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, name: 'Studio Mac', url: 'wss://mac' }]);
-    expect(await storage.load()).toEqual([{ ...PAIRED, name: 'Studio Mac' }]);
-    // The Host isn't told: the name is this device's own.
-    expect(host.asked.length).toBe(asked);
-    await expect(store.actions.renameHost(HOST, ' ')).rejects.toThrow("A Host's name can't be empty.");
-    expect(store.snapshot().hosts[0].name).toBe('Studio Mac');
+    // Not paired yet: the pairing screen, and nothing deleted.
+    expect(store.snapshot()).toMatchObject({ hosts: [], threads: [] });
+    expect(store.snapshot().dispatcher).toBeUndefined();
+    expect(store.snapshot().starting).toBeUndefined();
+    expect(forgotten).toEqual([]);
+
+    await store.actions.pairDispatcher({ url: 'https://homelab.example.ts.net:7342', code: 'abcd-efgh', name: 'Test iPad' });
+    expect(host.askedDispatcher).toEqual(['dispatcher/hello', 'dispatcher/status', 'hosts/list']);
+    expect(store.snapshot().dispatcher).toEqual({ id: DISPATCHER_ID, name: 'homelab', url: 'wss://homelab.example.ts.net:7342', status: 'connected' });
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, name: 'mac', status: 'connected' }]);
+    expect(storage.current()).toEqual({
+      dispatcherId: DISPATCHER_ID, name: 'homelab', url: 'wss://homelab.example.ts.net:7342', deviceId: 'd-1', keyId: 'new',
+      hosts: [{ id: HOST, name: 'mac' }],
+    });
+    expect(forgotten).toEqual(['old-mac', 'old-studio']);
+    expect(await storage.oldHostKeys()).toEqual([]);
     store.stop();
   });
 
-  it('forgets the pairing when the Host revokes the device (4000), and says to pair again', async () => {
+  it('deletes the Hosts an earlier version paired with once it starts paired', async () => {
     const host = scriptedHost(() => []);
-    const storage = memoryStorage([PAIRED]);
     const forgotten: string[] = [];
-    const store = storeFor(host.connector, {
+    const store = storeFor(host.socket, {
+      storage: memoryStorage(PAIRED, ['old-mac']),
+      keyFor: (keyId) => ({ publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }), sign: async () => 'signature', forget: async () => { forgotten.push(keyId); } }),
+    });
+    await store.start();
+    expect(forgotten).toEqual(['old-mac']);
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'connected' }]);
+    store.stop();
+  });
+
+  it("says why a Host the Dispatcher can't reach isn't connected, and connects once it lists it connected", async () => {
+    const host = scriptedHost(() => []);
+    host.dispatcher.hosts = [listed({ connected: false, status: 'unreachable', why: 'Its connection dropped 2 minutes ago.' })];
+    const store = storeFor(host.socket, { backoff: [20] });
+    await store.start();
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'unreachable', error: 'Its connection dropped 2 minutes ago.' }]);
+    expect(host.connects.opened).toBe(0);
+
+    host.dispatcher.hosts = [listed()];
+    await settle(60);
+    expect(host.connects.opened).toBe(1);
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'connected' }]);
+    store.stop();
+  });
+
+  it('says why when the Dispatcher no longer reaches a Host it listed, and lists again', async () => {
+    const host = scriptedHost(() => []);
+    const store = storeFor(host.socket, { backoff: [20] });
+    await store.start();
+    host.dispatcher.hosts = [listed({ connected: false, status: 'unreachable', why: 'It went away.' })];
+    host.close(1006);
+    await settle(60);
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'unreachable', error: 'It went away.' }]);
+    expect(host.askedDispatcher.filter((method) => method === 'hosts/list').length).toBeGreaterThan(1);
+    store.stop();
+  });
+
+  it('drops a Host the Dispatcher no longer lists, with its threads', async () => {
+    const host = scriptedHost(() => []);
+    const store = storeFor(host.socket);
+    await store.start();
+    expect(store.snapshot().threads).toHaveLength(1);
+    host.dispatcher.hosts = [];
+    await store.refresh();
+    expect(store.snapshot().hosts).toEqual([]);
+    expect(store.snapshot().threads).toEqual([]);
+    store.stop();
+  });
+
+  it("keeps the Hosts it last listed while the Dispatcher can't be reached, and connects again once it can", async () => {
+    const host = scriptedHost(() => []);
+    let down = true;
+    const socket: SocketOpener = (url, subprotocol) => async (events, signal) => {
+      if (down) throw new Error('connection refused');
+      return host.socket(url, subprotocol)(events, signal);
+    };
+    const store = storeFor(socket, { storage: memoryStorage({ ...PAIRED, hosts: [{ id: HOST, name: 'mac' }] }), backoff: [20] });
+    await store.start();
+    expect(store.snapshot().dispatcher).toMatchObject({ status: 'reconnecting', error: expect.stringContaining("Couldn't reach the Dispatcher") });
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, name: 'mac' }]);
+    expect(host.connects.opened).toBe(0);
+
+    down = false;
+    await settle(60);
+    expect(store.snapshot().dispatcher?.status).toBe('connected');
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'connected' }]);
+
+    // It drops: the Hosts stay as it last listed them, and it comes back.
+    down = true;
+    host.closeApi(1006);
+    await settle(5);
+    expect(store.snapshot().dispatcher?.status).toBe('reconnecting');
+    expect(store.snapshot().hosts).toMatchObject([{ id: HOST }]);
+    down = false;
+    await settle(60);
+    expect(store.snapshot().dispatcher?.status).toBe('connected');
+    store.stop();
+  });
+
+  it("stops trying when the Dispatcher refuses the device, and says to pair again", async () => {
+    const host = scriptedHost(() => []);
+    host.dispatcher.refuse = true;
+    const store = storeFor(host.socket, { backoff: [5] });
+    await store.start();
+    expect(store.snapshot().dispatcher).toMatchObject({ status: 'refused', error: expect.stringContaining('Pair it again') });
+    await settle(30);
+    expect(host.connects.api).toBe(1);
+    await store.refresh();
+    expect(host.connects.api).toBe(1);
+    store.stop();
+  });
+
+  it('forgets the pairing when the Dispatcher revokes the device (4000), and says to pair again', async () => {
+    const host = scriptedHost(() => []);
+    const storage = memoryStorage(PAIRED);
+    const forgotten: string[] = [];
+    const store = storeFor(host.socket, {
       storage,
       keyFor: (keyId) => ({
         publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }),
@@ -345,20 +492,39 @@ describe('HostStore reconnecting', () => {
 
     host.close(HOST_PROTOCOL.websocket.closeRevoked, 'the device was revoked');
     await settle(30);
-    expect(store.snapshot().hosts).toMatchObject([{ id: HOST, status: 'revoked', error: expect.stringContaining('Pair it again') }]);
+    expect(store.snapshot().dispatcher).toMatchObject({ status: 'revoked', error: expect.stringContaining('Pair it again') });
+    expect(store.snapshot().hosts).toEqual([]);
     expect(store.snapshot().threads).toEqual([]);
     expect(store.snapshot().thread).toBeUndefined();
     expect(forgotten).toEqual(['k']);
-    expect(await storage.load()).toEqual([]);
+    expect(storage.current()).toBeUndefined();
     // Nothing to connect with: coming to the front, or asking, tries nothing.
     await store.refresh();
-    await store.actions.reconnectHost(HOST);
+    await store.actions.reconnectDispatcher();
+    expect(host.connects.api).toBe(1);
     expect(host.connects.opened).toBe(1);
-    await store.actions.forgetHost(HOST);
-    expect(store.snapshot().hosts).toEqual([]);
     store.stop();
   });
 
+  it('forgets the Dispatcher and its key when asked', async () => {
+    const host = scriptedHost(() => []);
+    const storage = memoryStorage(PAIRED);
+    const forgotten: string[] = [];
+    const store = storeFor(host.socket, {
+      storage,
+      keyFor: (keyId) => ({ publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: '', y: '' }), sign: async () => 'signature', forget: async () => { forgotten.push(keyId); } }),
+    });
+    await store.start();
+    await store.actions.forgetDispatcher();
+    expect(store.snapshot().dispatcher).toBeUndefined();
+    expect(store.snapshot().hosts).toEqual([]);
+    expect(forgotten).toEqual(['k']);
+    expect(storage.current()).toBeUndefined();
+    store.stop();
+  });
+});
+
+describe('HostStore reconnecting', () => {
   it('reconnects at once when it fell behind (4001), and gets only what it missed', async () => {
     const host = scriptedHost(() => [], {
       'thread/attach': (given) => {
@@ -366,7 +532,7 @@ describe('HostStore reconnecting', () => {
         return { result: { ...host.state, journal: { id: 'j-1', head: after?.seq ?? 0 }, replay: { from: (after?.seq ?? 0) + 1, reset: !after } } };
       },
     });
-    const store = storeFor(host.connector, { backoff: [60_000] });
+    const store = storeFor(host.socket, { backoff: [60_000] });
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -395,7 +561,7 @@ describe('HostStore reconnecting', () => {
         return { result: { ...host.state, journal: { id: 'j-1', head }, replay: { from: (after?.seq ?? 0) + 1, reset: !after } } };
       },
     });
-    const store = storeFor(host.connector, { backoff: [60_000] });
+    const store = storeFor(host.socket, { backoff: [60_000] });
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -431,7 +597,7 @@ describe('HostStore reconnecting', () => {
         return 'silent';
       },
     });
-    const store = storeFor(host.connector, { backoff: [60] });
+    const store = storeFor(host.socket, { backoff: [60] });
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -455,12 +621,12 @@ describe('HostStore reconnecting', () => {
         return { error: { code: HOST_PROTOCOL.errors.unauthenticated, message: "this device couldn't be authenticated" } };
       },
     });
-    const store = storeFor(host.connector, { backoff: [5] });
+    const store = storeFor(host.socket, { backoff: [5] });
     await store.start();
     await settle(30);
     expect(store.snapshot().hosts).toMatchObject([{
       status: 'disconnected',
-      error: "The Host refused this device (this device couldn't be authenticated). Pair it again.",
+      error: "The Host refused this device (this device couldn't be authenticated).",
     }]);
     await store.refresh();
     expect(host.connects.opened).toBe(1);
@@ -475,7 +641,7 @@ describe('HostStore reconnecting', () => {
         return 'silent';
       },
     });
-    const store = storeFor(host.connector, { backoff: [5] });
+    const store = storeFor(host.socket, { backoff: [5] });
     await store.start();
     await settle(30);
     expect(host.connects.opened).toBeGreaterThan(1);
@@ -495,7 +661,7 @@ describe('HostStore reconnecting', () => {
     const host = scriptedHost(() => [], {
       'host/hello': () => ({ error: { code: HOST_PROTOCOL.errors.incompatibleProtocol, message: 'no common version', data: range } }),
     });
-    const store = storeFor(host.connector, { backoff: [5] });
+    const store = storeFor(host.socket, { backoff: [5] });
     await store.start();
     const app = APP_PROTOCOL.min === APP_PROTOCOL.max ? `version ${APP_PROTOCOL.min}` : `versions ${APP_PROTOCOL.min} to ${APP_PROTOCOL.max}`;
     expect(store.snapshot().hosts).toMatchObject([{
@@ -516,7 +682,7 @@ describe('HostStore reconnecting', () => {
   it('replaces a connection that no longer answers when the app comes to the front, and keeps one that does', async () => {
     let silent = false;
     const host = scriptedHost(() => [], { 'threads/list': () => silent ? 'silent' : undefined });
-    const store = storeFor(host.connector, { probeTimeout: 20 });
+    const store = storeFor(host.socket, { probeTimeout: 20 });
     await store.start();
     await store.refresh();
     expect(host.connects.opened).toBe(1);
@@ -534,7 +700,7 @@ describe('HostStore reconnecting', () => {
 
   it('tries again at once when the app comes to the front, rather than waiting out the backoff', async () => {
     const host = scriptedHost(() => []);
-    const store = storeFor(host.connector, { backoff: [60_000] });
+    const store = storeFor(host.socket, { backoff: [60_000] });
     await store.start();
     host.close(1006);
     await settle();
@@ -548,7 +714,7 @@ describe('HostStore reconnecting', () => {
   it('gives up on a try that never opens, and tries again', async () => {
     const host = scriptedHost(() => []);
     host.connects.hang = 1;
-    const store = storeFor(host.connector, { connectTimeout: 20, backoff: [5] });
+    const store = storeFor(host.socket, { connectTimeout: 20, backoff: [5] });
     await store.start();
     expect(store.snapshot().hosts[0]).toMatchObject({ status: 'reconnecting', error: expect.stringContaining("didn't answer") });
     await settle(30);
@@ -567,7 +733,7 @@ describe('HostStore MCP servers', () => {
     const declared = { name: 'weave', source: 'host', transport: 'stdio', state: 'declared' } as const;
     const host = scriptedHost(() => [], { 'host/hello': hello([HOST_PROTOCOL.features.mcpServers]) });
     host.state.mcpServers = [declared];
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -585,7 +751,7 @@ describe('HostStore MCP servers', () => {
 
   it("reports none from a Host that doesn't", async () => {
     const host = scriptedHost(() => []);
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -608,7 +774,7 @@ describe('HostStore terminals', () => {
       'terminals/attach': () => ({ result: { ticket: 'k2Vx', expiresAt: 30_000 } }),
       'terminals/setLabel': (params) => ({ result: { terminal: terminal('t-3', { label: (params as { label?: string }).label }) } }),
     });
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -636,7 +802,7 @@ describe('HostStore terminals', () => {
     expect(host.params['terminals/new']).toEqual([{ directory: '/work', openedFrom: THREAD }]);
     expect(store.snapshot().thread?.terminals?.map(({ id }) => id)).toEqual(['t-2', 't-3']);
     // Its stream is on the Host's own listener.
-    expect(await store.actions.attachTerminal('t-3')).toEqual({ url: 'wss://mac', ticket: 'k2Vx' });
+    expect(await store.actions.attachTerminal('t-3')).toEqual({ url: 'wss://homelab', ticket: 'k2Vx', carry: { dispatcherId: DISPATCHER_ID, deviceId: 'd-1', keyId: 'k', host: HOST } });
     await store.actions.renameTerminal('t-3', '  tests ');
     expect(store.snapshot().thread?.terminals?.find(({ id }) => id === 't-3')?.label).toBe('tests');
     await store.actions.renameTerminal('t-3', '');
@@ -650,7 +816,7 @@ describe('HostStore terminals', () => {
 
   it("doesn't ask a Host without terminals for them", async () => {
     const host = scriptedHost(() => []);
-    const store = storeFor(host.connector);
+    const store = storeFor(host.socket);
     await store.start();
     store.actions.selectThread(threadKey(HOST, THREAD));
     await settle();
@@ -664,7 +830,7 @@ describe('HostStore terminals', () => {
     const busy = (data: unknown) => () => ({ error: { code: HOST_PROTOCOL.errors.worktreeBusy, message: 'busy', data } });
     const removal = async (data: unknown) => {
       const host = scriptedHost(() => [], { 'worktrees/remove': busy(data) });
-      const store = storeFor(host.connector);
+      const store = storeFor(host.socket);
       await store.start();
       await settle();
       const removed = store.actions.removeWorktree({ hostId: HOST, path: '/work.feature' });

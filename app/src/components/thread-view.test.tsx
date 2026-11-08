@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppActions, AppController, OpenThread, PairedHost, TerminalSummary } from '@/app/app-controller';
+import type { AppActions, AppController, OpenThread, HostSummary, TerminalSummary } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { ThreadView } from './thread-view';
 
@@ -15,9 +15,9 @@ const actions = (): AppActions => ({
   closeThread: vi.fn(),
   renameThread: vi.fn(),
   deleteThread: vi.fn(),
-  pairHost: vi.fn(),
-  forgetHost: vi.fn(),
-  renameHost: vi.fn(),
+  pairDispatcher: vi.fn(),
+  forgetDispatcher: vi.fn(),
+  reconnectDispatcher: vi.fn(),
   reconnectHost: vi.fn(),
   send: vi.fn(),
   removeQueued: vi.fn(),
@@ -35,9 +35,9 @@ const actions = (): AppActions => ({
   attachTerminal: vi.fn(),
 });
 
-const controller = (thread: OpenThread, handlers = actions(), host: Partial<PairedHost> = {}): AppController => ({
+const controller = (thread: OpenThread, handlers = actions(), host: Partial<HostSummary> = {}): AppController => ({
   model: {
-    hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected', canRename: true, ...host }],
+    hosts: [{ id: 'h', name: 'mac', status: 'connected', canRename: true, ...host }],
     threads: [{
       key: thread.key, hostId: 'h', threadId: 'main', title: 'Count the files', agentId: 'claude', agentName: 'Claude',
       cwd: '/work/project', state: 'open', activity: 'idle', clients: 1, headless: false,
@@ -58,9 +58,9 @@ describe('ThreadView', () => {
   it('says while its Host is away, and why when it stopped trying', () => {
     const thread: OpenThread = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
     const { rerender } = render(<ThreadView controller={controller(thread, actions(), { status: 'reconnecting' })} thread={thread} />);
-    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting to mac.example.ts.net…');
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting to mac…');
     rerender(<ThreadView controller={controller(thread, actions(), { status: 'incompatible', error: 'This Host needs a newer version of the app.' })} thread={thread} />);
-    expect(screen.getByRole('status')).toHaveTextContent("mac.example.ts.net isn't connected. This Host needs a newer version of the app.");
+    expect(screen.getByRole('status')).toHaveTextContent("mac isn't connected. This Host needs a newer version of the app.");
     rerender(<ThreadView controller={controller(thread)} thread={thread} />);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });

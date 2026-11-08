@@ -2,6 +2,7 @@
 // e30f6e93 (product/alpha/src/terminal/native-terminal.ts) by way of the WVE-150 spike. The plugin
 // holds each terminal's stream itself; only its messages come here.
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import type { TerminalTicket } from '@/app/app-controller';
 import { HOST_PROTOCOL, type HostTerminal } from '@/host/protocol';
 
 /** What a surface's stream says, as the plugin passes it on. */
@@ -37,8 +38,12 @@ export type NativeTerminalBridge = {
   create(input: { fontSize: number }): Promise<{ surfaceId: string; codec: string }>;
   /** Places the surface under the web view; resolves to the grid that fits it. */
   layout(bounds: NativeTerminalBounds): Promise<{ cols: number; rows: number }>;
-  /** Opens a terminal's stream, closing one already open. */
-  attach(input: { surfaceId: string; url: string; ticket: string }): Promise<void>;
+  /**
+   * Opens a terminal's stream through the Dispatcher at `url`, closing one already open: it proves
+   * the device with the Keychain key `carry.keyId` names, asks `hosts/open` for `carry.host`'s
+   * terminal stream, then opens it with `ticket`.
+   */
+  attach(input: { surfaceId: string } & TerminalTicket): Promise<void>;
   detach(input: { surfaceId: string }): Promise<void>;
   setFontSize(input: { surfaceId: string; fontSize: number }): Promise<{ cols: number; rows: number; fontSize: number }>;
   focus(input: { surfaceId: string }): Promise<void>;

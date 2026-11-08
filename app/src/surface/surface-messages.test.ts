@@ -52,7 +52,7 @@ const summary = (key: string, activity: ThreadSummary['activity'], title?: strin
 });
 
 const model = (thread?: OpenThread): AppModel => ({
-  hosts: [{ id: 'h', name: 'mac', url: 'wss://mac', status: 'connected' }],
+  hosts: [{ id: 'h', name: 'mac', status: 'connected' }],
   threads: [summary('h/main', 'running', 'Count the files'), summary('h/other', 'waiting'), summary('h/third', 'waiting')],
   agents: {},
   selectedKey: thread?.key,

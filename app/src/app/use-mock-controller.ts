@@ -6,7 +6,8 @@ import {
   type AgentChoice,
   type AppController,
   type AppModel,
-  type PairedHost,
+  type DispatcherSummary,
+  type HostSummary,
   type PromptImage,
   type QueuedPrompt,
   type RepositoryListing,
@@ -17,8 +18,13 @@ import {
 } from './app-controller';
 import { ThreadReadState } from './thread-read-state';
 
-/** Fixture states for UI work and tests until the app talks to a Host (WVE-100). */
-export const MOCK_SCENARIOS = ['list', 'thread', 'running', 'unreachable', 'banner', 'empty', 'markdown', 'terminals'] as const;
+/**
+ * Fixture states for UI work and tests. `unpaired` is the pairing screen, before the app pairs
+ * with the Dispatcher; `empty`, a Dispatcher no Host has joined; `unreachable`, a Host the
+ * Dispatcher can't reach; `offline`, the Dispatcher itself out of reach, with the Hosts it last
+ * listed.
+ */
+export const MOCK_SCENARIOS = ['list', 'thread', 'running', 'unreachable', 'offline', 'banner', 'empty', 'unpaired', 'markdown', 'terminals'] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const mockScenarioFromLocation = (search = location.search): MockScenario => {
@@ -40,19 +46,36 @@ const AGENTS: AgentChoice[] = [
 /** Gemini stands in for an agent that can't take steers, so its messages queue. */
 const steers = (agentId: string) => agentId !== 'gemini';
 
-const hosts = (now: number, unreachable: boolean): PairedHost[] => [
-  { id: MAC, name: 'mac.tail1234.ts.net', url: 'https://mac.tail1234.ts.net:7341', status: 'connected', canBrowse: true, canRename: true, canWorktree: true, canTerminals: true },
-  {
-    id: SERVER,
-    name: 'build.tail1234.ts.net',
-    url: 'https://build.tail1234.ts.net:7341',
-    status: unreachable ? 'reconnecting' : 'connected',
-    canBrowse: true,
-    canRename: true,
-    canWorktree: true,
-    ...(unreachable ? { error: `Unreachable since ${new Date(now - 4 * MINUTE).toLocaleTimeString()}` } : {}),
-  },
-];
+const DISPATCHER: DispatcherSummary = { id: 'dispatcher-homelab', name: 'homelab', url: 'wss://homelab.tail1234.ts.net:7342', status: 'connected' };
+
+const dispatcher = (offline: boolean, now: number): DispatcherSummary => offline
+  ? { ...DISPATCHER, status: 'reconnecting', error: `Couldn't reach the Dispatcher since ${new Date(now - 2 * MINUTE).toLocaleTimeString()}.` }
+  : DISPATCHER;
+
+const hosts = (now: number, scenario: MockScenario): HostSummary[] => {
+  const offline = scenario === 'offline';
+  const unreachable = scenario === 'unreachable';
+  return [
+    {
+      id: MAC,
+      name: 'mac',
+      status: offline ? 'reconnecting' : 'connected',
+      canBrowse: true,
+      canRename: true,
+      canWorktree: true,
+      canTerminals: true,
+    },
+    {
+      id: SERVER,
+      name: 'build',
+      status: offline ? 'reconnecting' : unreachable ? 'unreachable' : 'connected',
+      canBrowse: true,
+      canRename: true,
+      canWorktree: true,
+      ...(unreachable ? { error: `It hasn't connected to the Dispatcher since ${new Date(now - 4 * MINUTE).toLocaleTimeString()}.` } : {}),
+    },
+  ];
+};
 
 /** Each Host's directories, for browsing: a path and the directories in it. */
 const DIRECTORIES: Record<string, Record<string, string[]>> = {
@@ -211,8 +234,11 @@ const transcriptFor = (thread: ThreadSummary): AcpTranscript => {
 };
 
 const initialState = (scenario: MockScenario, now: number): MockState => {
-  if (scenario === 'empty') {
+  if (scenario === 'unpaired') {
     return { model: { hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {} };
+  }
+  if (scenario === 'empty') {
+    return { model: { dispatcher: DISPATCHER, hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {} };
   }
   const list = scenario === 'markdown'
     ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain }), ...threads(now)]
@@ -228,7 +254,8 @@ const initialState = (scenario: MockScenario, now: number): MockState => {
           : undefined;
   return {
     model: {
-      hosts: hosts(now, scenario === 'unreachable'),
+      dispatcher: dispatcher(scenario === 'offline', now),
+      hosts: hosts(now, scenario),
       threads: list,
       agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
       selectedKey,
@@ -474,37 +501,37 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           },
         }));
       },
-      pairHost({ url, code }) {
+      pairDispatcher({ url, code }) {
         const parsed = new URL(url);
         if (!code.trim()) throw new Error('The pairing code is missing.');
-        const id = localId('host');
+        const now = Date.now();
         update((current) => ({
           ...current,
           model: {
             ...current.model,
-            hosts: [...current.model.hosts, { id, name: parsed.hostname, url, status: 'connected' }],
-            agents: { ...current.model.agents, [id]: AGENTS },
+            dispatcher: { ...DISPATCHER, name: parsed.hostname.split('.')[0], url },
+            hosts: hosts(now, 'list'),
+            threads: threads(now),
+            agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
           },
+          repositories: repositories(),
+          terminals: { [MAC]: terminals(now) },
         }));
       },
-      forgetHost(hostId) {
+      forgetDispatcher() {
+        update((current) => ({
+          ...current,
+          model: { ...current.model, dispatcher: undefined, hosts: [], threads: [], agents: {}, selectedKey: undefined },
+        }));
+      },
+      reconnectDispatcher() {
         update((current) => ({
           ...current,
           model: {
             ...current.model,
-            hosts: current.model.hosts.filter(({ id }) => id !== hostId),
-            threads: current.model.threads.filter((item) => item.hostId !== hostId),
-            selectedKey: current.model.threads.some((item) => item.hostId === hostId && item.key === current.model.selectedKey)
-              ? undefined
-              : current.model.selectedKey,
+            ...(current.model.dispatcher ? { dispatcher: { ...current.model.dispatcher, status: 'connected', error: undefined } } : {}),
+            hosts: current.model.hosts.map((host) => host.status === 'reconnecting' ? { ...host, status: 'connected' } : host),
           },
-        }));
-      },
-      renameHost(hostId, name) {
-        if (!name.trim()) throw new Error("A Host's name can't be empty.");
-        update((current) => ({
-          ...current,
-          model: { ...current.model, hosts: current.model.hosts.map((host) => host.id === hostId ? { ...host, name: name.trim() } : host) },
         }));
       },
       reconnectHost(hostId) {

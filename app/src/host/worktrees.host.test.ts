@@ -1,15 +1,15 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// The app's Host store making, using and removing a git worktree on a real dev Host
-// (`testing/dev-host.ts`). Skipped unless the debug `weave` and fake agent are built.
+// The app's Host store making, using and removing a git worktree on a real dev Host, reached
+// through a dev Dispatcher it joined (`testing/dev-dispatcher.ts`). Skipped unless the debug
+// `weave` and fake agent are built.
 import { mkdir } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { HostConnection, websocketConnector } from './connection';
-import { type DeviceKey, webCryptoDeviceKey } from './device-key';
-import { HostStore } from './host-store';
-import { memoryStorage } from './storage';
+import { HostConnection } from './connection';
+import type { HostStore } from './host-store';
+import { devStore, startDevDispatcher, type DevDispatcher } from './testing/dev-dispatcher';
 import { devHostAvailable, startDevHost, unixConnector, type DevHost } from './testing/dev-host';
 
 const waitFor = async <T,>(find: () => T | undefined, what: string, ms = 15_000): Promise<T> => {
@@ -44,10 +44,11 @@ describe.skipIf(!devHostAvailable())('worktrees through the Host store with a de
   let local: HostConnection;
   let store: HostStore;
   let repo: string;
-  const keys = new Map<string, DeviceKey>();
+  let dispatcher: DevDispatcher;
 
   beforeAll(async () => {
-    host = await startDevHost();
+    [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+    await dispatcher.join(host, 'studio');
     const made = join(dirname(host.cwd), 'code', 'weave');
     await mkdir(made, { recursive: true });
     git(made, 'init', '-q', '-b', 'main');
@@ -63,28 +64,16 @@ describe.skipIf(!devHostAvailable())('worktrees through the Host store with a de
       credentials: { method: 'local' },
       onEvent: () => {},
     });
-    store = new HostStore({
-      storage: memoryStorage(),
-      keyFor: (keyId) => keys.get(keyId)!,
-      async newKey() {
-        const keyId = crypto.randomUUID();
-        keys.set(keyId, await webCryptoDeviceKey());
-        return { keyId, key: keys.get(keyId)! };
-      },
-      connectorFor: (url) => websocketConnector(url),
-      client: { name: 'weave-app-test', version: '0' },
-      deviceName: 'Test iPad',
-      backoff: [50],
-    });
+    ({ store } = devStore());
     await store.start();
-    const { code } = await local.request('devices/offer', {});
-    await store.actions.pairHost({ url: host.url, code, name: 'Test iPad' });
+    await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer(), name: 'Test iPad' });
   }, 60_000);
 
   afterAll(async () => {
     store?.stop();
     local?.close();
     await host?.stop();
+    await dispatcher?.stop();
   });
 
   it('makes a worktree beside the repository, starts a thread in it, and removes it', async () => {

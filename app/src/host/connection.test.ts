@@ -23,7 +23,7 @@ class StuckSocket {
 describe('websocketConnector', () => {
   it('closes a WebSocket still opening when the try is abandoned', async () => {
     const abort = new AbortController();
-    const opening = websocketConnector('wss://mac', StuckSocket as unknown as typeof WebSocket)({ message() {}, closed() {} }, abort.signal);
+    const opening = websocketConnector('wss://mac', 'weave-dispatcher', StuckSocket as unknown as typeof WebSocket)({ message() {}, closed() {} }, abort.signal);
     abort.abort(new Error('gave up'));
     await expect(opening).rejects.toThrow('gave up');
     expect(StuckSocket.last?.closed).toBe(true);

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { AppActions, AppController, DirectoryListing, PairedHost, RepositoryListing } from '@/app/app-controller';
+import type { AppActions, AppController, DirectoryListing, HostSummary, RepositoryListing } from '@/app/app-controller';
 import { homePath } from './directory-picker';
 import { NewThreadDialog } from './new-thread-dialog';
 
@@ -28,9 +28,9 @@ const listDirectory = vi.fn(async ({ path, hidden }: { hostId: string; path?: st
   };
 });
 
-const controller = (host: Partial<PairedHost> = {}): AppController => ({
+const controller = (host: Partial<HostSummary> = {}): AppController => ({
   model: {
-    hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected', canBrowse: true, ...host }],
+    hosts: [{ id: 'h', name: 'mac', status: 'connected', canBrowse: true, ...host }],
     threads: [{
       key: 'h/s', hostId: 'h', threadId: 's', agentId: 'claude', agentName: 'Claude', cwd: '/Users/jaco/Projects/weave',
       state: 'open', activity: 'idle', clients: 0, headless: false,

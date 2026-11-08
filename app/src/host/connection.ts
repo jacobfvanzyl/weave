@@ -1,4 +1,3 @@
-import { authMessage, type DeviceKey } from './device-key';
 import {
   HOST_PROTOCOL,
   type AttachThreadRequest,
@@ -17,8 +16,8 @@ import {
 } from './protocol';
 
 /**
- * One connection's way of carrying JSON-RPC messages: the Host's WebSocket, one message per
- * text frame, or in tests its Unix socket, one per line.
+ * One connection's way of carrying JSON-RPC messages: a WebSocket the Dispatcher carries to the
+ * Host, one message per text frame, or in tests the Host's Unix socket, one per line.
  */
 export type Transport = {
   send(message: string): void;
@@ -56,24 +55,32 @@ const METHOD_NOT_FOUND = -32601;
 export const CONNECTION_CLOSED = -32099;
 
 export type ConnectErrorKind =
-  /** The Host couldn't be reached. */
+  /** The Dispatcher, or the Host, couldn't be reached: trying again later may work. */
   | 'connection'
-  /** The Host and this app share no protocol version. */
+  /** The Dispatcher can't reach the Host now; `data` says why, as `hosts/list` would. */
+  | 'unavailable'
+  /** The Dispatcher, or the Host, and this app share no protocol version. */
   | 'incompatible'
-  /** The Host refused `host/hello`: an unknown or revoked device, or a bad code. */
+  /** The Host refused `host/hello`. */
   | 'refused'
-  /** The Host isn't the one this device paired with. */
-  | 'wrongHost';
+  /**
+   * The Dispatcher refused this device, as after revoking it, or another Dispatcher answers at
+   * its address: pairing again is the way back.
+   */
+  | 'unpaired';
 
 export class ConnectError extends Error {
   readonly kind: ConnectErrorKind;
   readonly cause?: unknown;
+  /** What the refusal carried, such as `host_unavailable`'s status and why. */
+  readonly data?: unknown;
 
-  constructor(kind: ConnectErrorKind, message: string, cause?: unknown) {
+  constructor(kind: ConnectErrorKind, message: string, cause?: unknown, data?: unknown) {
     super(message);
     this.name = 'ConnectError';
     this.kind = kind;
     this.cause = cause;
+    this.data = data;
   }
 }
 
@@ -82,12 +89,13 @@ export const APP_PROTOCOL: VersionRange = { min: HOST_PROTOCOL.protocol.oldestSu
 
 /** How a connection proves itself at `host/hello`. */
 export type Credentials =
-  /** A local client: only on the Unix socket. */
+  /** A local client: only on the Unix socket, as tests are. */
   | { method: 'local' }
-  /** A paired device, which signs the connection's challenge. With `hostId`, it checks first that the challenge comes from the Host it paired with. */
-  | { method: 'device'; deviceId: string; key: DeviceKey; hostId?: string }
-  /** A device pairing with the code `weave pair` showed. */
-  | { method: 'pair'; code: string; name: string; key: DeviceKey };
+  /**
+   * A device the Dispatcher carries to the Host (ADR 0030), having proved it there: the Host
+   * takes the Dispatcher's word for which device it is.
+   */
+  | { method: 'dispatcher' };
 
 /** A thread `open` attached this client to. */
 export type OpenedThread = {
@@ -155,6 +163,8 @@ export class HostConnection {
       }, signal);
     } catch (cause) {
       if (signal?.aborted) throw abandoned();
+      // A carried connection says itself why the Dispatcher didn't carry it.
+      if (cause instanceof ConnectError) throw cause;
       throw new ConnectError('connection', `Couldn't reach the weave Host: ${describe(cause)}`, cause);
     }
     const abort = () => connection.close();
@@ -277,28 +287,10 @@ export class HostConnection {
   }
 }
 
-/** `host/hello` with `credentials`, after the challenge a paired device signs. */
+/** `host/hello` with `credentials`. */
 async function sayHello(connection: HostConnection, options: ConnectOptions): Promise<HelloResponse> {
-  const { credentials } = options;
-  let auth: Auth;
+  const auth: Auth = { method: options.credentials.method };
   try {
-    switch (credentials.method) {
-      case 'local':
-        auth = { method: 'local' };
-        break;
-      case 'pair':
-        auth = { method: 'pair', code: credentials.code, device: { name: credentials.name, publicKey: await credentials.key.publicKey() } };
-        break;
-      case 'device': {
-        const challenge = await connection.request('host/challenge', {});
-        if (credentials.hostId !== undefined && challenge.hostId !== credentials.hostId) {
-          throw new ConnectError('wrongHost', "This isn't the weave Host this device paired with.");
-        }
-        const signature = await credentials.key.sign(authMessage(challenge.hostId, credentials.deviceId, challenge.nonce));
-        auth = { method: 'device', deviceId: credentials.deviceId, signature };
-        break;
-      }
-    }
     return await connection.request('host/hello', {
       protocol: APP_PROTOCOL,
       client: options.client,
@@ -344,12 +336,13 @@ function incompatible(error: HostError): ConnectError {
 }
 
 /**
- * The Host's WebSocket at `url` (`wss://` through Tailscale Serve), offering the protocol's
- * subprotocol. In the app this is the web view's own WebSocket, which sends the app's `Origin`.
+ * A WebSocket at `url` (`wss://` through Tailscale Serve) offering `subprotocol`: the
+ * Dispatcher's API, or a connection it carries to a Host. In the app this is the web view's own
+ * WebSocket, which sends the app's `Origin`.
  */
-export function websocketConnector(url: string, WebSocketImpl: typeof WebSocket = WebSocket): Connector {
+export function websocketConnector(url: string, subprotocol: string, WebSocketImpl: typeof WebSocket = WebSocket): Connector {
   return (events, signal) => new Promise((resolve, reject) => {
-    const socket = new WebSocketImpl(url, HOST_PROTOCOL.websocket.subprotocol);
+    const socket = new WebSocketImpl(url, subprotocol);
     let open = false;
     // One still opening, as on a network that's gone, is closed rather than waited for.
     const abort = () => {

@@ -1,16 +1,17 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// Reconnecting against real dev Hosts (`testing/dev-host.ts`), WVE-105: a network dropped mid-turn,
-// a Host restarting under the app, a revoked device pairing again, and two Hosts at once. Skipped
-// unless the debug `weave` and fake agent are built.
+// Reconnecting against a real dev Dispatcher and the dev Hosts that joined it
+// (`testing/dev-dispatcher.ts`), WVE-105 and WVE-196: a network dropped mid-turn, a Host
+// restarting under the app, the Dispatcher going away and coming back, a revoked device pairing
+// again, and two Hosts at once. Skipped unless the debug `weave` and fake agent are built.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppModel, OpenThread } from '@/app/app-controller';
 import { blocksText, type TranscriptEntry } from '@/chat/acp-transcript';
-import { type Connector, HostConnection, websocketConnector } from './connection';
-import { type DeviceKey, webCryptoDeviceKey } from './device-key';
-import { HostStore, type HostStoreOptions } from './host-store';
-import { memoryStorage } from './storage';
-import { devHostAvailable, startDevHost, unixConnector, type DevHost } from './testing/dev-host';
+import { websocketConnector } from './connection';
+import { DISPATCHER, type SocketOpener } from './dispatcher';
+import type { HostStore } from './host-store';
+import { devStore, startDevDispatcher, type DevDispatcher } from './testing/dev-dispatcher';
+import { devHostAvailable, startDevHost, type DevHost } from './testing/dev-host';
 
 const waitFor = async <T,>(find: () => T | undefined | false, what: string, ms = 20_000): Promise<T> => {
   const deadline = Date.now() + ms;
@@ -42,19 +43,21 @@ const slowChunks = (count: number) => Array.from({ length: count }, (_, index) =
  */
 function network() {
   const live = new Set<() => void>();
-  const state = { offline: false, opened: 0 };
-  const connector = (url: string): Connector => async (events, signal) => {
+  /** Connections opened: to the Dispatcher's API, and carried to a Host. */
+  const state = { offline: false, opened: 0, api: 0 };
+  const socket: SocketOpener = (url, subprotocol) => async (events, signal) => {
     if (state.offline) throw new Error('the network is down');
     let gone = false;
     let drop = () => {};
-    const transport = await websocketConnector(url)({
+    const transport = await websocketConnector(url, subprotocol)({
       message(text) { if (!gone) events.message(text); },
       closed(close) {
         live.delete(drop);
         if (!gone) events.closed(close);
       },
     }, signal);
-    state.opened += 1;
+    if (subprotocol === DISPATCHER.subprotocol) state.api += 1;
+    else state.opened += 1;
     drop = () => {
       gone = true;
       live.delete(drop);
@@ -71,55 +74,23 @@ function network() {
     };
   };
   return {
-    connector,
+    socket,
     state,
     /** Takes the network away from every connection. */
     drop: () => { for (const drop of [...live]) drop(); },
   };
 }
 
-/** A store pairing with WebCrypto keys, which says which of them it forgot. */
-function appStore(options: Partial<HostStoreOptions> = {}) {
-  const keys = new Map<string, DeviceKey>();
-  const forgotten: string[] = [];
-  const store = new HostStore({
-    storage: memoryStorage(),
-    keyFor: (keyId) => keys.get(keyId)!,
-    async newKey() {
-      const keyId = crypto.randomUUID();
-      const key = await webCryptoDeviceKey();
-      keys.set(keyId, { ...key, forget: async () => { forgotten.push(keyId); } });
-      return { keyId, key: keys.get(keyId)! };
-    },
-    connectorFor: (url) => websocketConnector(url),
-    client: { name: 'weave-app-test', version: '0' },
-    deviceName: 'Test iPhone',
-    backoff: [50],
-    schedule: (notify) => queueMicrotask(notify),
-    ...options,
-  });
-  return { store, forgotten };
-}
-
-const local = (host: DevHost) => HostConnection.connect({
-  connector: unixConnector(host.socket),
-  client: { name: 'weave-tui', version: '0' },
-  credentials: { method: 'local' },
-  onEvent: () => {},
-});
-
-const pair = async (store: HostStore, host: DevHost, name = 'Test iPhone') => {
-  const tui = await local(host);
-  const { code } = await tui.request('devices/offer', {});
-  tui.close();
-  await store.actions.pairHost({ url: host.url, code, name });
+const pair = async (store: HostStore, dispatcher: DevDispatcher, name = 'Test iPhone') => {
+  await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer(), name });
 };
 
-describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
+describe.skipIf(!devHostAvailable())('reconnecting through a dev Dispatcher', () => {
+  let dispatcher: DevDispatcher;
   let host: DevHost;
   const net = network();
   let store: HostStore;
-  let storage: ReturnType<typeof memoryStorage>;
+  let storage: ReturnType<typeof devStore>['storage'];
   let forgotten: string[];
   let hostId: string;
 
@@ -131,20 +102,21 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
   };
   const until = (what: string, done: (open: OpenThread) => boolean, ms?: number) =>
     waitFor(() => model().thread && done(thread()) ? thread() : undefined, what, ms);
-  const connected = () => waitFor(() => model().hosts.find(({ id }) => id === hostId)?.status === 'connected', 'the Host to be connected');
+  const connected = (ms?: number) => waitFor(() => model().hosts.find(({ id }) => id === hostId)?.status === 'connected', 'the Host to be connected', ms);
 
   beforeAll(async () => {
-    host = await startDevHost();
-    storage = memoryStorage();
-    ({ store, forgotten } = appStore({ storage, connectorFor: net.connector }));
+    [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+    hostId = await dispatcher.join(host, 'studio');
+    ({ store, storage, forgotten } = devStore({ socket: net.socket, deviceName: 'Test iPhone', schedule: (notify) => queueMicrotask(notify) }));
     await store.start();
-    await pair(store, host);
-    hostId = model().hosts[0].id;
+    await pair(store, dispatcher);
+    expect(model().hosts).toMatchObject([{ id: hostId, name: 'studio', status: 'connected' }]);
   }, 60_000);
 
   afterAll(async () => {
     store?.stop();
     await host?.stop();
+    await dispatcher?.stop();
   });
 
   it('catches up after a network dropped mid-turn, with every chunk once and in order', async () => {
@@ -154,7 +126,7 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
 
     net.state.offline = true;
     net.drop();
-    await waitFor(() => model().hosts[0].status === 'reconnecting', 'the app to notice');
+    await waitFor(() => model().dispatcher?.status === 'reconnecting', 'the app to notice');
     // The turn goes on in the Host while the app is away.
     await Bun.sleep(1_500);
     expect(said(thread())).not.toContain('Chunk 15 of 40.');
@@ -174,7 +146,8 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
     const before = await until('a few chunks', (open) => said(open).split('Chunk 3 of 40.').length === 3);
 
     await host.restart();
-    await connected();
+    // It joins the Dispatcher again by itself, a second or more after it starts.
+    await connected(30_000);
     const resumed = await until('the interrupted turn to end', (open) =>
       open.transcript.turn.status !== 'running' && open.transcript.entries.some((entry) => line(entry) === 'info: Interrupted: the weave Host stopped while this turn ran'));
     // The Host continued the thread's journal, and the app went on after its position.
@@ -190,70 +163,93 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
     expect(answered.transcript.entries.map(line).slice(-2)).toEqual(['user: after the restart', 'assistant: You said: after the restart']);
   }, 60_000);
 
-  it('forgets the pairing when the Host revokes the device, and pairs again', async () => {
-    const tui = await local(host);
-    const { devices } = await tui.request('devices/list', {});
+  it("keeps the Hosts it last listed while the Dispatcher can't be reached, and goes on once it can", async () => {
+    const key = thread().key;
+    const threads = model().threads.length;
+    await dispatcher.down();
+    await waitFor(() => model().dispatcher?.status === 'reconnecting', 'the app to say the Dispatcher is away');
+    expect(model().dispatcher?.error).toBeTruthy();
+    // The last list stays, its threads with it.
+    expect(model().hosts).toMatchObject([{ id: hostId, name: 'studio' }]);
+    expect(model().threads).toHaveLength(threads);
+    expect(storage.current()?.hosts).toEqual([{ id: hostId, name: 'studio' }]);
+
+    await dispatcher.up();
+    await waitFor(() => model().dispatcher?.status === 'connected', 'the Dispatcher again', 30_000);
+    await connected(30_000);
+    expect(thread().key).toBe(key);
+    await store.actions.send('after the Dispatcher came back');
+    await until('the answer', (open) => open.transcript.entries.map(line).includes('assistant: You said: after the Dispatcher came back'));
+  }, 60_000);
+
+  it('forgets the pairing when the Dispatcher revokes the device, and pairs again', async () => {
+    const local = await dispatcher.local();
+    const { devices } = await local.request('devices/list', {});
     const device = devices.find(({ name }) => name === 'Test iPhone');
     expect(device).toBeDefined();
-    await tui.request('devices/revoke', { deviceId: device!.id });
-    tui.close();
+    await local.request('devices/revoke', { deviceId: device!.id });
 
-    await waitFor(() => model().hosts[0]?.status === 'revoked', 'the app to hear of it');
-    expect(model().hosts[0].error).toContain('Pair it again');
+    await waitFor(() => model().dispatcher?.status === 'revoked', 'the app to hear of it');
+    expect(model().dispatcher?.error).toContain('Pair it again');
+    expect(model().hosts).toEqual([]);
     expect(model().threads).toEqual([]);
     expect(model().thread).toBeUndefined();
-    expect(await storage.load()).toEqual([]);
+    expect(storage.current()).toBeUndefined();
     expect(forgotten).toHaveLength(1);
 
-    await pair(store, host);
+    await pair(store, dispatcher);
+    expect(model().dispatcher?.status).toBe('connected');
     expect(model().hosts).toMatchObject([{ id: hostId, status: 'connected' }]);
-    expect(await storage.load()).toHaveLength(1);
+    expect(storage.current()?.deviceId).not.toBe(device!.id);
     await waitFor(() => model().threads.length > 0 || undefined, 'its threads again');
   }, 30_000);
 });
 
-describe.skipIf(!devHostAvailable())('two dev Hosts', () => {
+describe.skipIf(!devHostAvailable())('two dev Hosts through one Dispatcher', () => {
+  let dispatcher: DevDispatcher;
   let first: DevHost;
   let second: DevHost;
   let store: HostStore;
-  let forgotten: string[];
-  const storage = memoryStorage();
+  let storage: ReturnType<typeof devStore>['storage'];
 
   beforeAll(async () => {
-    [first, second] = await Promise.all([startDevHost(), startDevHost()]);
-    ({ store, forgotten } = appStore({ storage }));
+    [dispatcher, first, second] = await Promise.all([startDevDispatcher(), startDevHost(), startDevHost()]);
+    await dispatcher.join(first, 'mac');
+    await dispatcher.join(second, 'homelab');
+    ({ store, storage } = devStore({ schedule: (notify) => queueMicrotask(notify) }));
     await store.start();
   }, 60_000);
 
   afterAll(async () => {
     store?.stop();
     await Promise.all([first?.stop(), second?.stop()]);
+    await dispatcher?.stop();
   });
 
-  it('keeps a connection and a device id for each, and forgets one with its key', async () => {
-    await pair(store, first);
-    await pair(store, second);
+  it('pairs once and reaches each, and drops one the Dispatcher removes, with its threads', async () => {
+    await pair(store, dispatcher);
     const hosts = store.snapshot().hosts;
-    expect(hosts).toHaveLength(2);
+    expect(hosts.map(({ name }) => name).sort()).toEqual(['homelab', 'mac']);
     expect(hosts.every(({ status }) => status === 'connected')).toBe(true);
-    expect(new Set(hosts.map(({ id }) => id)).size).toBe(2);
-    const records = await storage.load();
-    expect(new Set(records.map(({ deviceId }) => deviceId)).size).toBe(2);
-    expect(new Set(records.map(({ keyId }) => keyId)).size).toBe(2);
+    // One pairing, for both.
+    expect(storage.current()?.hosts?.map(({ name }) => name).sort()).toEqual(['homelab', 'mac']);
 
     // A thread on each, both in the one list: the first from its Host's listing, once the second is on screen.
     const keys: string[] = [];
-    for (const [index, host] of hosts.entries()) {
-      await store.actions.createThread({ hostId: host.id, cwd: [first, second][index].cwd, agentId: 'fake' });
+    for (const host of hosts) {
+      await store.actions.createThread({ hostId: host.id, cwd: (host.name === 'mac' ? first : second).cwd, agentId: 'fake' });
       await store.actions.send('hello');
       keys.push(store.snapshot().thread!.key);
     }
     await waitFor(() => keys.every((key) => store.snapshot().threads.some((listed) => listed.key === key)) || undefined, 'both threads in the list');
 
-    await store.actions.forgetHost(hosts[0].id);
-    expect(forgotten).toEqual([records.find(({ hostId }) => hostId === hosts[0].id)!.keyId]);
-    expect(store.snapshot().hosts).toMatchObject([{ id: hosts[1].id, status: 'connected' }]);
-    expect(store.snapshot().threads.every(({ hostId }) => hostId === hosts[1].id)).toBe(true);
-    expect((await storage.load()).map(({ hostId }) => hostId)).toEqual([hosts[1].id]);
+    // `weave hosts remove mac` on the Dispatcher's computer: what it carried there closes, and the Host goes.
+    const removed = hosts.find(({ name }) => name === 'mac')!;
+    const kept = hosts.find(({ name }) => name === 'homelab')!;
+    await (await dispatcher.local()).request('hosts/remove', { host: 'mac' });
+    await waitFor(() => store.snapshot().hosts.length === 1 || undefined, 'the removed Host to go');
+    expect(store.snapshot().hosts).toMatchObject([{ id: kept.id, status: 'connected' }]);
+    expect(store.snapshot().threads.every(({ hostId }) => hostId === kept.id)).toBe(true);
+    expect(store.snapshot().threads.some(({ hostId }) => hostId === removed.id)).toBe(false);
   }, 60_000);
 });

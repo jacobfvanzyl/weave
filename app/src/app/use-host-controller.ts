@@ -13,13 +13,13 @@ import { useNetworkChange } from './use-network-change';
 
 const client = { name: 'weave-app', version: '0.1.0' };
 
-const emptyModel: AppModel = { hosts: [], threads: [], agents: {}, unread: new Set() };
+const emptyModel: AppModel = { starting: true, hosts: [], threads: [], agents: {}, unread: new Set() };
 
 // A browser, during development, keeps its keys in memory: after a reload it pairs again.
 const browserKeys = new Map<string, DeviceKey>();
 const lostKey = (): DeviceKey => ({
-  publicKey: () => Promise.reject(new Error('This browser no longer has its key for the Host. Pair it again.')),
-  sign: () => Promise.reject(new Error('This browser no longer has its key for the Host. Pair it again.')),
+  publicKey: () => Promise.reject(new Error('This browser no longer has its key for the Dispatcher. Pair it again.')),
+  sign: () => Promise.reject(new Error('This browser no longer has its key for the Dispatcher. Pair it again.')),
   forget: async () => {},
 });
 
@@ -36,7 +36,7 @@ function newStore() {
       browserKeys.set(keyId, key);
       return { keyId, key };
     },
-    connectorFor: (url) => websocketConnector(url),
+    socket: (url, subprotocol) => websocketConnector(url, subprotocol),
     // The native plugin writes without a tap first, as an agent's call needs.
     clientTools: { [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite((text) => Clipboard.write({ string: text })) },
     client,
@@ -57,9 +57,9 @@ const idleActions: AppController['actions'] = {
   closeThread() {},
   renameThread() {},
   deleteThread() {},
-  pairHost: () => Promise.reject(new Error('The app is still starting.')),
-  forgetHost() {},
-  renameHost() {},
+  pairDispatcher: () => Promise.reject(new Error('The app is still starting.')),
+  forgetDispatcher() {},
+  reconnectDispatcher() {},
   reconnectHost() {},
   send() {},
   removeQueued() {},
@@ -77,7 +77,7 @@ const idleActions: AppController['actions'] = {
   attachTerminal: () => Promise.reject(new Error('The app is still starting.')),
 };
 
-/** The app's controller backed by its paired Hosts (`HostStore`). */
+/** The app's controller backed by the Dispatcher it's paired with and the Hosts it lists (`HostStore`). */
 export function useHostController(): AppController {
   const [store, setStore] = useState<HostStore>();
   useEffect(() => {

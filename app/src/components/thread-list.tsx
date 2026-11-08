@@ -1,7 +1,7 @@
 import { useRef, useState, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { Add01Icon, BubbleChatIcon, ComputerIcon, Delete02Icon, GitBranchIcon, LaptopIcon, Search01Icon, StopIcon, ViewIcon, ViewOffIcon } from '@hugeicons/core-free-icons';
-import type { AppController, HostStatus, PairedHost, ThreadSummary } from '@/app/app-controller';
+import type { AppController, DispatcherSummary, HostStatus, HostSummary, ThreadSummary } from '@/app/app-controller';
 import { type DirectoryGroup, subdirectory, threadListView } from '@/app/thread-list';
 import { ActivityIndicator } from '@/components/activity-indicator';
 import { DeleteThreadDialog } from '@/components/delete-thread-dialog';
@@ -46,7 +46,7 @@ const branchLabel = (thread: ThreadSummary) =>
  */
 function ThreadRow({ thread, host, selected, unread, onOpen, actions }: {
   thread: ThreadSummary;
-  host?: PairedHost;
+  host?: HostSummary;
   selected: boolean;
   unread: boolean;
   onOpen(): void;
@@ -124,18 +124,18 @@ function ThreadRow({ thread, host, selected, unread, onOpen, actions }: {
 const hostStatus: Record<HostStatus, string | undefined> = {
   connected: undefined,
   connecting: 'connecting',
-  reconnecting: 'unreachable',
+  reconnecting: 'reconnecting',
+  unreachable: 'unreachable',
   disconnected: 'disconnected',
-  revoked: 'revoked',
   incompatible: 'incompatible',
 };
 
 /** A Host's heading: its name, and how it's connected when it isn't. */
-function HostHeading({ host, onNewThread }: { host: PairedHost; onNewThread(): void }) {
+function HostHeading({ host, onNewThread }: { host: HostSummary; onNewThread(): void }) {
   const status = hostStatus[host.status];
   return (
     <>
-      <SidebarGroupLabel title={host.url} className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
+      <SidebarGroupLabel title={host.error} className='h-9 gap-2 pr-9 text-sm font-medium text-sidebar-foreground [&>svg]:size-4.5'>
         <HugeiconsIcon icon={LaptopIcon} strokeWidth={1.75} className='text-icon-muted' aria-hidden />
         <span className='min-w-0 truncate'>{host.name}</span>
         {status && <span className='shrink-0 text-[0.6875rem] font-normal text-muted-foreground'>· {status}</span>}
@@ -159,6 +159,37 @@ function DirectoryHeading({ group, onNewThread }: { group: DirectoryGroup; onNew
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </SidebarGroupAction>
     </>
+  );
+}
+
+/**
+ * The Dispatcher can't be reached, or won't take this device: no Host can be reached until it
+ * can, so the list below is as it last was.
+ */
+function DispatcherBanner({ dispatcher, actions, onOpenHosts }: {
+  dispatcher: DispatcherSummary;
+  actions: AppController['actions'];
+  onOpenHosts(): void;
+}) {
+  const unreachable = dispatcher.status === 'reconnecting';
+  const title = unreachable
+    ? `Can't reach the Dispatcher on ${dispatcher.name}`
+    : dispatcher.status === 'incompatible'
+      ? `The Dispatcher on ${dispatcher.name} needs another version of the app`
+      : `The Dispatcher on ${dispatcher.name} refused this device`;
+  return (
+    <div role='alert' data-slot='dispatcher-banner' className='mx-2 mt-2 grid gap-1.5 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-[0.6875rem]'>
+      <p className='font-medium text-sidebar-foreground'>{title}</p>
+      <p className='text-muted-foreground'>
+        {unreachable ? 'Your Hosts are shown as it last listed them, until it can be reached. ' : ''}
+        {dispatcher.error}
+      </p>
+      <div className='flex gap-1.5'>
+        {unreachable
+          ? <Button size='sm' variant='outline' onClick={() => void actions.reconnectDispatcher()}>Try again</Button>
+          : <Button size='sm' variant='outline' onClick={onOpenHosts}>Pair again</Button>}
+      </div>
+    </div>
   );
 }
 
@@ -191,7 +222,11 @@ function usePullToRefresh(onRefresh?: () => Promise<void> | void) {
   };
 }
 
-/** Every paired Host's threads: a group per Host, and under it one per directory or repository. */
+/**
+ * The threads of every Host the Dispatcher lists: a group per Host, and under it one per directory
+ * or repository. While the Dispatcher can't be reached, a banner says so, and the Hosts it last
+ * listed stay, greyed out.
+ */
 export function ThreadList({ controller, onOpen, onOpenHosts }: {
   controller: AppController;
   onOpen?(): void;
@@ -206,7 +241,9 @@ export function ThreadList({ controller, onOpen, onOpenHosts }: {
   const host = (id: string) => model.hosts.find((item) => item.id === id);
   // Hosts show once any has a thread to list.
   const listed = view.hosts.some(({ directories }) => directories.length > 0);
-  const unreachable = model.hosts.filter(({ status }) => status !== 'connected').length;
+  const { dispatcher } = model;
+  const away = dispatcher !== undefined && dispatcher.status !== 'connected';
+  const unreachable = model.hosts.filter(({ status }) => status !== 'connected').length + (away ? 1 : 0);
   const open = (key: string) => {
     actions.selectThread(key);
     onOpen?.();
@@ -248,23 +285,34 @@ export function ThreadList({ controller, onOpen, onOpenHosts }: {
             {pull.state === 'pulled' ? 'Release to refresh' : 'Refreshing…'}
           </p>
         )}
+        {dispatcher && away && dispatcher.status !== 'connecting' && (
+          <DispatcherBanner dispatcher={dispatcher} actions={actions} onOpenHosts={onOpenHosts} />
+        )}
         {model.error && (
           <p role='alert' className='px-3 py-2 text-[0.6875rem] text-destructive'>{model.error}</p>
         )}
-        {model.hosts.length === 0 && (
+        {dispatcher && model.hosts.length === 0 && (
           <Empty className='p-6'>
             <EmptyHeader>
               <EmptyTitle>No Hosts yet</EmptyTitle>
-              <EmptyDescription>Pair this device with a weave Host to see its threads.</EmptyDescription>
+              <EmptyDescription>
+                {away
+                  ? 'Your Hosts show once the Dispatcher can be reached.'
+                  : <>No Host has joined the Dispatcher. <code>weave hosts add</code> on a computer has its Host join.</>}
+              </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button onClick={onOpenHosts}>Pair a Host</Button>
+              <Button onClick={onOpenHosts}>Hosts</Button>
             </EmptyContent>
           </Empty>
         )}
         {listed && view.hosts.map(({ host: paired, directories }) => (
-          <SidebarGroup key={paired.id} role='group' aria-label={paired.name} className='py-1.5'>
+          <SidebarGroup key={paired.id} role='group' aria-label={paired.name} data-away={away || undefined}
+            className={cn('py-1.5', away && 'opacity-60')}>
             <HostHeading host={paired} onNewThread={() => setNewThread({ hostId: paired.id })} />
+            {!away && paired.status !== 'connected' && paired.error && (
+              <p className='px-2 pb-1 text-[0.6875rem] text-muted-foreground'>{paired.error}</p>
+            )}
             {directories.map((group) => (
               <div key={group.key} role='group' aria-label={group.name} className='relative'>
                 <DirectoryHeading group={group} onNewThread={() => setNewThread({ hostId: group.hostId, cwd: group.cwd })} />

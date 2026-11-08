@@ -12,8 +12,9 @@ import type {
   AppActions,
   DirectoryListing,
   AppModel,
+  DispatcherStatus,
   HostStatus,
-  PairedHost,
+  HostSummary,
   PromptImage,
   QueuedPrompt,
   RepositoryListing,
@@ -26,8 +27,9 @@ import type {
 import { threadKey } from '@/app/app-controller';
 import { ThreadReadState } from '@/app/thread-read-state';
 import { type ClientTool, toolError } from './client-tools';
-import { CONNECTION_CLOSED, ConnectError, type Connector, HostConnection, HostError, type HostEvent, type OpenedThread } from './connection';
+import { CONNECTION_CLOSED, ConnectError, HostConnection, HostError, type HostEvent, type OpenedThread } from './connection';
 import type { DeviceKey } from './device-key';
+import { DISPATCHER, DispatcherConnection, type SocketOpener, carriedConnector } from './dispatcher';
 import { JournalFollower, originLabel, transcriptEvents } from './journal';
 import {
   HOST_PROTOCOL,
@@ -36,6 +38,7 @@ import {
   type ClientCapabilities,
   type ClientInfo,
   type ContentBlock,
+  type DispatcherHost,
   type GitLocation,
   type HostTerminal,
   type PendingRequest,
@@ -46,19 +49,23 @@ import {
   type ThreadState,
   type TurnOrigin,
 } from './protocol';
-import { type HostStorage, type PairedHostRecord, websocketUrl } from './storage';
+import { type DispatcherRecord, type PairingStorage, websocketUrl } from './storage';
 
 export type HostStoreOptions = {
-  storage: HostStorage;
-  /** The device key a paired Host knows this device by. */
+  storage: PairingStorage;
+  /** The device key the Dispatcher knows this device by, or an earlier version's for a Host. */
   keyFor(keyId: string): DeviceKey;
-  /** A new device key, for pairing with another Host. */
+  /** A new device key, for pairing with the Dispatcher. */
   newKey(): Promise<{ keyId: string; key: DeviceKey }>;
-  connectorFor(url: string): Connector;
+  /** A WebSocket to the Dispatcher: its API, or a connection it carries to a Host. */
+  socket: SocketOpener;
   client: ClientInfo;
   /** What a new pairing calls this device when the person names it nothing else. */
   deviceName: string;
-  /** Delays between reconnecting tries, in milliseconds; the last repeats. */
+  /**
+   * Delays between reconnecting tries, in milliseconds, and between listing the Hosts again
+   * while one is away; the last repeats.
+   */
   backoff?: number[];
   /** How long connecting and saying hello may take before it counts as a failed try. Defaults to 15 seconds. */
   connectTimeout?: number;
@@ -76,8 +83,32 @@ export type HostStoreOptions = {
   schedule?(notify: () => void): void;
 };
 
+/** The Dispatcher this device is paired with (ADR 0030), and the connection to its API. */
+type DispatcherEntry = {
+  record: DispatcherRecord;
+  key: DeviceKey;
+  status: DispatcherStatus;
+  error?: string;
+  connection?: DispatcherConnection;
+  /** The try under way; a newer one abandons it. */
+  connecting?: AbortController;
+  /** Whether it connected before, so a try is reconnecting, as is any after the first. */
+  connected: boolean;
+  attempt: number;
+  retry?: ReturnType<typeof setTimeout>;
+  /** Listing the Hosts again, while one is away, and how many times since none was. */
+  relist?: ReturnType<typeof setTimeout>;
+  relists: number;
+  /** No more tries until the person asks: it refused or revoked this device, or speaks another version. */
+  stopped: boolean;
+};
+
+/** One of the person's Hosts, as the Dispatcher lists it, and its connection through the Dispatcher. */
 type HostEntry = {
-  record: PairedHostRecord;
+  hostId: string;
+  name: string;
+  /** How the Dispatcher last listed it; none before it has. */
+  listed?: DispatcherHost;
   status: HostStatus;
   error?: string;
   connection?: HostConnection;
@@ -87,11 +118,9 @@ type HostEntry = {
   connected: boolean;
   threads: ThreadListing[];
   agents: AgentSummary[];
-  attempt: number;
-  retry?: ReturnType<typeof setTimeout>;
   /** An attach was cut off by the connection ending before its answer, as a replay that fell behind would be. */
   attachCut?: boolean;
-  /** No more tries until the person asks: the device was revoked, or the Host refuses it or speaks another protocol. */
+  /** No more tries until the person asks: the Host refuses this device, or speaks another protocol. */
   stopped: boolean;
 };
 
@@ -202,16 +231,31 @@ export const promptBlocks = (text: string, images: PromptImage[] = []): ContentB
   ...images.map(({ mimeType, data }) => ({ type: 'image' as const, mimeType, data })),
 ];
 
+/** Why the Dispatcher isn't connected to a Host, as it lists it. */
+const hostAway = (host: DispatcherHost) => {
+  if (host.why) return host.why;
+  switch (host.status) {
+    case 'unchecked': return "It hasn't connected to the Dispatcher since the Dispatcher started.";
+    case 'refused': return 'It left the Dispatcher: `weave hosts add` on its computer joins it again.';
+    case 'unjoined': return 'It was paired before Hosts joined the Dispatcher: `weave hosts add` on its computer joins it.';
+    default: return "The Dispatcher can't reach it now.";
+  }
+};
+
 const meta = (value: unknown, ...path: string[]): unknown =>
   path.reduce<unknown>((current, key) => typeof current === 'object' && current !== null ? (current as Record<string, unknown>)[key] : undefined, value);
 
 /**
- * The app's Hosts and the thread on screen, kept up to date from their connections, for the
- * app's controller (`use-host-controller.ts`).
+ * The Dispatcher this device is paired with, the Hosts it lists, and the thread on screen, kept up
+ * to date from their connections, for the app's controller (`use-host-controller.ts`). The app
+ * pairs only with the Dispatcher and reaches every Host through it (ADR 0030): one connection to
+ * its API lists the Hosts, and each Host has a connection of its own that the Dispatcher carries.
  */
 export class HostStore {
   readonly #options: HostStoreOptions;
-  readonly #hosts = new Map<string, HostEntry>();
+  #dispatcher?: DispatcherEntry;
+  /** In the Dispatcher's order. */
+  #hosts = new Map<string, HostEntry>();
   readonly #followed = new Map<string, Followed>();
   readonly #creating = new Map<number, Creating>();
   /** Client tool calls running on this device, by pending id. */
@@ -225,6 +269,7 @@ export class HostStore {
   #snapshot?: AppModel;
   #notifying = false;
   #stopped = false;
+  #starting = true;
 
   constructor(options: HostStoreOptions) {
     this.#options = options;
@@ -241,33 +286,61 @@ export class HostStore {
     return this.#snapshot;
   };
 
-  /** Loads the paired Hosts and connects to each. */
+  /**
+   * Loads the pairing and connects to the Dispatcher, which lists the Hosts to connect to. Once
+   * paired with it, the app no longer keeps the Hosts an earlier version paired with one by one.
+   */
   async start() {
-    for (const record of await this.#options.storage.load()) {
-      this.#hosts.set(record.hostId, this.#entry(record));
+    const record = await this.#options.storage.load();
+    this.#starting = false;
+    if (!record || this.#stopped) {
+      this.#changed();
+      return;
     }
+    this.#adopt(record);
     this.#changed();
-    await Promise.all([...this.#hosts.values()].map((entry) => this.#connect(entry)));
+    await this.#forgetOldHosts();
+    await this.#connectDispatcher();
   }
 
   /** Closes every connection. */
   stop() {
     this.#stopped = true;
-    for (const entry of this.#hosts.values()) {
-      clearTimeout(entry.retry);
-      entry.connecting?.abort();
-      entry.connection?.close();
-    }
+    if (this.#dispatcher) this.#letGo(this.#dispatcher);
+    for (const entry of this.#hosts.values()) this.#closeHost(entry);
   }
 
   /**
-   * Lists every Host's threads again, and reconnects at once to the ones that dropped, or whose
-   * connection doesn't answer within `probeTimeout`: the app came to the front, the network
-   * changed, or the list was pulled down. A Host that keeps the list live (`threads/watch`) is
-   * asked to start over, so nothing older than what it last said comes after it.
+   * Lists the Hosts and every Host's threads again, and reconnects at once to what dropped, or
+   * doesn't answer within `probeTimeout`: the app came to the front, the network changed, or the
+   * list was pulled down. A Host that keeps the list live (`threads/watch`) is asked to start
+   * over, so nothing older than what it last said comes after it.
    */
   async refresh() {
-    await Promise.all([...this.#hosts.values()].map((entry) => this.#wake(entry)));
+    const dispatcher = this.#dispatcher;
+    if (!dispatcher || dispatcher.stopped || this.#stopped) return;
+    dispatcher.relists = 0;
+    await Promise.all([this.#wakeDispatcher(dispatcher), ...[...this.#hosts.values()].map((entry) => this.#wake(entry))]);
+  }
+
+  /** Lists the Hosts again, or replaces the Dispatcher's connection when it doesn't answer within `probeTimeout`. */
+  async #wakeDispatcher(dispatcher: DispatcherEntry) {
+    const connection = dispatcher.connection;
+    if (connection && !connection.closed) {
+      const listing = connection.request('hosts/list', {});
+      if (await this.#within(listing.then(() => !connection.closed, () => false))) {
+        await this.#hostsListed(dispatcher, (await listing).hosts);
+        return;
+      }
+      // Likely on a network that's gone: the Dispatcher will see it go, and this device needn't wait.
+      if (dispatcher.connection === connection) {
+        dispatcher.connection = undefined;
+        connection.close();
+      }
+    }
+    if (this.#dispatcher !== dispatcher || dispatcher.stopped || dispatcher.connection) return;
+    dispatcher.attempt = 0;
+    await this.#connectDispatcher();
   }
 
   async #wake(entry: HostEntry) {
@@ -278,19 +351,25 @@ export class HostStore {
       // Likely on a network that's gone: the Host will see it go, and this device needn't wait.
       if (entry.connection === connection) this.#drop(entry);
     }
-    if (entry.connection || entry.stopped || this.#hosts.get(entry.record.hostId) !== entry) return;
-    entry.attempt = 0;
+    if (entry.connection || entry.connecting || entry.stopped || this.#hosts.get(entry.hostId) !== entry) return;
+    // One the Dispatcher can't reach comes back when it lists it connected.
+    if (entry.listed && !entry.listed.connected) return;
     await this.#connect(entry);
   }
 
   /** Whether a connection still answers: it lists the threads again within `probeTimeout`. */
-  async #answers(entry: HostEntry, connection: HostConnection): Promise<boolean> {
+  #answers(entry: HostEntry, connection: HostConnection): Promise<boolean> {
+    return this.#within(this.#list(entry).then(() => !connection.closed));
+  }
+
+  /** Whether `answered` says yes within `probeTimeout`. */
+  async #within(answered: Promise<boolean>): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const silent = new Promise<false>((resolve) => {
       timer = setTimeout(() => resolve(false), this.#options.probeTimeout ?? 5_000);
     });
     try {
-      return await Promise.race([this.#list(entry).then(() => !connection.closed), silent]);
+      return await Promise.race([answered, silent]);
     } finally {
       clearTimeout(timer);
     }
@@ -299,15 +378,20 @@ export class HostStore {
   readonly actions: AppActions = {
     selectThread: (key) => this.#select(key),
     refresh: () => this.refresh(),
-    pairHost: (input) => this.#pair(input),
-    forgetHost: (hostId) => this.#forget(hostId),
-    renameHost: (hostId, name) => this.#renameHost(hostId, name),
+    pairDispatcher: (input) => this.#pair(input),
+    forgetDispatcher: () => this.#forget(),
+    reconnectDispatcher: async () => {
+      const dispatcher = this.#dispatcher;
+      // A revoked device has no pairing left to connect with.
+      if (!dispatcher || dispatcher.status === 'revoked') return;
+      dispatcher.stopped = false;
+      dispatcher.attempt = 0;
+      await this.#connectDispatcher();
+    },
     reconnectHost: async (hostId) => {
       const entry = this.#hosts.get(hostId);
-      // A revoked device has no pairing left to connect with.
-      if (!entry || entry.status === 'revoked') return;
+      if (!entry || this.#dispatcher?.stopped) return;
       entry.stopped = false;
-      entry.attempt = 0;
       await this.#connect(entry);
     },
     createThread: (input) => this.#create(input),
@@ -403,8 +487,8 @@ export class HostStore {
     return { clientTools: Object.keys(this.#options.clientTools ?? {}) };
   }
 
-  #entry(record: PairedHostRecord): HostEntry {
-    return { record, status: 'connecting', connected: false, threads: [], agents: [], attempt: 0, stopped: false };
+  #entry(hostId: string, name: string): HostEntry {
+    return { hostId, name, status: 'connecting', connected: false, threads: [], agents: [], stopped: false };
   }
 
   #changed() {
@@ -417,32 +501,282 @@ export class HostStore {
     });
   }
 
+  #backoff(attempt: number) {
+    const backoff = this.#options.backoff ?? [1_000, 2_000, 5_000, 10_000, 30_000];
+    return backoff[Math.min(attempt, backoff.length - 1)];
+  }
+
+  /** `record` is the pairing from now on, with the Hosts it last listed. */
+  #adopt(record: DispatcherRecord): DispatcherEntry {
+    const dispatcher: DispatcherEntry = {
+      record,
+      key: this.#options.keyFor(record.keyId),
+      status: 'connecting',
+      connected: false,
+      attempt: 0,
+      relists: 0,
+      stopped: false,
+    };
+    this.#dispatcher = dispatcher;
+    this.#hosts = new Map((record.hosts ?? []).map(({ id, name }) => [id, this.#entry(id, name)]));
+    return dispatcher;
+  }
+
+  /** Deletes the keys of the Hosts an earlier version of the app paired with, and their records. */
+  async #forgetOldHosts() {
+    const keys = await this.#options.storage.oldHostKeys().catch(() => []);
+    if (keys.length === 0) return;
+    await Promise.all(keys.map((keyId) => this.#options.keyFor(keyId).forget().catch(() => {})));
+    await this.#options.storage.forgetOldHosts().catch(() => {});
+  }
+
   /**
-   * Proves the device to the Host again, and once connected attaches after the last position of
-   * the thread on screen. A try still under way, as on a network that has since changed, is
-   * abandoned.
+   * Proves the device to the Dispatcher again, then lists the Hosts and connects to each it's
+   * connected to. A try still under way, as on a network that has since changed, is abandoned.
+   */
+  async #connectDispatcher() {
+    const dispatcher = this.#dispatcher;
+    if (this.#stopped || !dispatcher || dispatcher.stopped) return;
+    clearTimeout(dispatcher.retry);
+    dispatcher.retry = undefined;
+    const previous = dispatcher.connection;
+    dispatcher.connection = undefined;
+    previous?.close();
+    dispatcher.connecting?.abort();
+    const connecting = new AbortController();
+    dispatcher.connecting = connecting;
+    const timeout = this.#options.connectTimeout ?? 15_000;
+    const timer = setTimeout(() => connecting.abort(new Error(`The Dispatcher didn't answer within ${timeout / 1_000} seconds.`)), timeout);
+    dispatcher.status = dispatcher.connected || dispatcher.attempt > 0 ? 'reconnecting' : 'connecting';
+    this.#changed();
+    const { record, key } = dispatcher;
+    const current = () => this.#dispatcher === dispatcher && dispatcher.connecting === connecting && !this.#stopped;
+    let connection: DispatcherConnection | undefined;
+    try {
+      connection = await DispatcherConnection.connect({
+        connector: this.#options.socket(record.url, DISPATCHER.subprotocol),
+        client: this.#options.client,
+        credentials: { method: 'device', dispatcherId: record.dispatcherId, deviceId: record.deviceId, key },
+        onClosed: (close) => { if (connection) this.#dispatcherClosed(dispatcher, connection, close); },
+        signal: connecting.signal,
+      });
+    } catch (error) {
+      if (!current()) return;
+      dispatcher.connecting = undefined;
+      this.#dispatcherFailed(dispatcher, error);
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!current()) {
+      connection.close();
+      return;
+    }
+    dispatcher.connecting = undefined;
+    await this.#dispatcherConnected(dispatcher, connection);
+  }
+
+  async #dispatcherConnected(dispatcher: DispatcherEntry, connection: DispatcherConnection) {
+    dispatcher.connection = connection;
+    dispatcher.connected = true;
+    dispatcher.status = 'connected';
+    dispatcher.error = undefined;
+    dispatcher.attempt = 0;
+    dispatcher.relists = 0;
+    this.#changed();
+    await this.#listHosts();
+  }
+
+  #dispatcherFailed(dispatcher: DispatcherEntry, error: unknown) {
+    const kind = error instanceof ConnectError ? error.kind : 'connection';
+    switch (kind) {
+      case 'unpaired':
+        this.#haltDispatcher(dispatcher, 'refused', describe(error));
+        return;
+      case 'incompatible':
+        this.#haltDispatcher(dispatcher, 'incompatible', describe(error));
+        return;
+      default:
+        dispatcher.error = describe(error);
+        this.#retryDispatcher(dispatcher);
+    }
+  }
+
+  #dispatcherClosed(dispatcher: DispatcherEntry, connection: DispatcherConnection, close: { code?: number; reason?: string }) {
+    if (dispatcher.connection !== connection) return;
+    dispatcher.connection = undefined;
+    switch (close.code) {
+      case HOST_PROTOCOL.websocket.closeRevoked:
+        void this.#revoked();
+        return;
+      case HOST_PROTOCOL.websocket.closeUnauthenticated:
+        this.#haltDispatcher(dispatcher, 'refused', `The Dispatcher closed the connection: ${close.reason || "this device isn't authenticated"}. Pair it again.`);
+        return;
+      default:
+        // A dropped network or a Dispatcher restart: try again, backing off.
+        dispatcher.error = close.reason || 'Its connection dropped.';
+        this.#retryDispatcher(dispatcher);
+    }
+  }
+
+  #retryDispatcher(dispatcher: DispatcherEntry) {
+    clearTimeout(dispatcher.relist);
+    dispatcher.relist = undefined;
+    const delay = this.#backoff(dispatcher.attempt);
+    dispatcher.attempt += 1;
+    dispatcher.status = 'reconnecting';
+    dispatcher.retry = setTimeout(() => void this.#connectDispatcher(), delay);
+    this.#changed();
+  }
+
+  /** Lets go of the Dispatcher's connection and stops its timers. */
+  #letGo(dispatcher: DispatcherEntry) {
+    clearTimeout(dispatcher.retry);
+    clearTimeout(dispatcher.relist);
+    dispatcher.retry = undefined;
+    dispatcher.relist = undefined;
+    dispatcher.connecting?.abort();
+    dispatcher.connecting = undefined;
+    const connection = dispatcher.connection;
+    dispatcher.connection = undefined;
+    connection?.close();
+  }
+
+  /**
+   * Stops trying until the person asks, saying why. No Host is reached without the Dispatcher, so
+   * their connections close too, and they stay listed as it last listed them.
+   */
+  #haltDispatcher(dispatcher: DispatcherEntry, status: DispatcherStatus, error: string) {
+    this.#letGo(dispatcher);
+    dispatcher.status = status;
+    dispatcher.stopped = true;
+    dispatcher.error = error;
+    for (const entry of this.#hosts.values()) this.#closeHost(entry);
+    this.#changed();
+  }
+
+  /**
+   * The Dispatcher revoked this device (4000), on any of its connections, so its pairing is gone:
+   * the app deletes its key and record, forgets the Hosts it listed, and says to pair again.
+   */
+  async #revoked() {
+    const dispatcher = this.#dispatcher;
+    if (!dispatcher || dispatcher.status === 'revoked') return;
+    this.#haltDispatcher(dispatcher, 'revoked', 'The Dispatcher revoked this device, which has forgotten the pairing. Pair it again to reach your Hosts.');
+    this.#hosts = new Map();
+    this.#followed.clear();
+    this.#selectedKey = undefined;
+    this.#changed();
+    await dispatcher.key.forget().catch(() => {});
+    if (this.#dispatcher === dispatcher) await this.#options.storage.save(undefined);
+  }
+
+  /**
+   * The Hosts the Dispatcher lists now, how each stands, and a connection to each it's connected
+   * to. While one is away, it lists them again, backing off, so a Host that comes back is
+   * connected once the Dispatcher is: it says nothing of its own when one does.
+   */
+  async #listHosts() {
+    const dispatcher = this.#dispatcher;
+    const connection = dispatcher?.connection;
+    if (!dispatcher || !connection || connection.closed) return;
+    clearTimeout(dispatcher.relist);
+    dispatcher.relist = undefined;
+    let hosts: DispatcherHost[];
+    try {
+      ({ hosts } = await connection.request('hosts/list', {}));
+    } catch (error) {
+      // A connection that ended shows in the Dispatcher's status.
+      if (failedWith(error, CONNECTION_CLOSED)) return;
+      this.#error = describe(error);
+      this.#changed();
+      return;
+    }
+    await this.#hostsListed(dispatcher, hosts);
+  }
+
+  /** The Hosts the Dispatcher listed: kept in its order, and connected to once it is. */
+  async #hostsListed(dispatcher: DispatcherEntry, hosts: DispatcherHost[]) {
+    if (this.#dispatcher !== dispatcher || dispatcher.stopped) return;
+    clearTimeout(dispatcher.relist);
+    dispatcher.relist = undefined;
+    const before = this.#hosts;
+    // A Host it no longer has is gone, with its threads.
+    for (const [hostId, entry] of before) {
+      if (hosts.some((host) => host.hostId === hostId)) continue;
+      this.#closeHost(entry);
+      this.#unfollow(hostId);
+    }
+    this.#hosts = new Map(hosts.map((host) => {
+      const entry = before.get(host.hostId) ?? this.#entry(host.hostId, host.name);
+      entry.name = host.name;
+      entry.listed = host;
+      return [host.hostId, entry];
+    }));
+    const connecting: Promise<void>[] = [];
+    for (const entry of this.#hosts.values()) {
+      if (entry.connection || entry.connecting || entry.stopped) continue;
+      if (entry.listed?.connected) {
+        connecting.push(this.#connect(entry));
+      } else if (entry.listed) {
+        entry.status = 'unreachable';
+        entry.error = hostAway(entry.listed);
+      }
+    }
+    this.#changed();
+    await this.#keepHosts(dispatcher);
+    await Promise.all(connecting);
+    if (this.#dispatcher !== dispatcher) return;
+    if ([...this.#hosts.values()].some((entry) => !entry.connection && !entry.connecting && !entry.stopped)) this.#relist(dispatcher);
+    else dispatcher.relists = 0;
+  }
+
+  /** Lists the Hosts again later, backing off, while one is away. */
+  #relist(dispatcher: DispatcherEntry) {
+    if (dispatcher.relist || !dispatcher.connection || dispatcher.stopped || this.#stopped) return;
+    const delay = this.#backoff(dispatcher.relists);
+    dispatcher.relists += 1;
+    dispatcher.relist = setTimeout(() => {
+      dispatcher.relist = undefined;
+      void this.#listHosts();
+    }, delay);
+  }
+
+  /** Keeps the Hosts it listed with the pairing, for when it can't be reached. */
+  async #keepHosts(dispatcher: DispatcherEntry) {
+    const hosts = [...this.#hosts.values()].map(({ hostId, name }) => ({ id: hostId, name }));
+    if (JSON.stringify(hosts) === JSON.stringify(dispatcher.record.hosts ?? [])) return;
+    dispatcher.record = { ...dispatcher.record, hosts };
+    await this.#options.storage.save(dispatcher.record).catch(() => {});
+  }
+
+  /**
+   * Has the Dispatcher carry a connection to the Host, says hello there, and once connected
+   * attaches after the last position of the thread on screen. A try still under way, as on a
+   * network that has since changed, is abandoned.
    */
   async #connect(entry: HostEntry) {
-    if (this.#stopped) return;
-    clearTimeout(entry.retry);
-    entry.retry = undefined;
+    const dispatcher = this.#dispatcher;
+    if (this.#stopped || !dispatcher || dispatcher.stopped) return;
     this.#drop(entry);
     entry.connecting?.abort();
     const connecting = new AbortController();
     entry.connecting = connecting;
     const timeout = this.#options.connectTimeout ?? 15_000;
-    const timer = setTimeout(() => connecting.abort(new Error(`The weave Host didn't answer within ${timeout / 1_000} seconds.`)), timeout);
-    entry.status = entry.connected || entry.attempt > 0 ? 'reconnecting' : 'connecting';
+    const timer = setTimeout(() => connecting.abort(new Error(`${entry.name} didn't answer through the Dispatcher within ${timeout / 1_000} seconds.`)), timeout);
+    // Any try after the first is reconnecting.
+    entry.status = entry.connected || entry.status !== 'connecting' ? 'reconnecting' : 'connecting';
     this.#changed();
-    const { record } = entry;
-    const current = () => this.#hosts.get(record.hostId) === entry && entry.connecting === connecting && !this.#stopped;
+    const { record, key } = dispatcher;
+    const pairing = { url: record.url, dispatcherId: record.dispatcherId, deviceId: record.deviceId, key };
+    const current = () => this.#hosts.get(entry.hostId) === entry && entry.connecting === connecting && this.#dispatcher === dispatcher && !this.#stopped;
     let connection: HostConnection | undefined;
     try {
       connection = await HostConnection.connect({
-        connector: this.#options.connectorFor(record.url),
+        connector: carriedConnector(this.#options.socket, pairing, entry.hostId, this.#options.client),
         client: this.#options.client,
         capabilities: this.#capabilities(),
-        credentials: { method: 'device', deviceId: record.deviceId, key: this.#options.keyFor(record.keyId), hostId: record.hostId },
+        credentials: { method: 'dispatcher' },
         // What it sends during hello, its close included, is answered by `connect` failing.
         onEvent: (event) => { if (connection) this.#event(entry, connection, event); },
         signal: connecting.signal,
@@ -468,48 +802,48 @@ export class HostStore {
     entry.connected = true;
     entry.status = 'connected';
     entry.error = undefined;
-    entry.attempt = 0;
     this.#changed();
     await this.#loadAgents(entry);
     await this.#list(entry);
     // Catch up on the thread on screen, after the last event this client handled.
     const selected = this.#selected();
-    if (selected && selected.hostId === entry.record.hostId && entry.connection === connection) this.#attach(selected);
+    if (selected && selected.hostId === entry.hostId && entry.connection === connection) this.#attach(selected);
   }
 
   #connectFailed(entry: HostEntry, error: unknown) {
     const kind = error instanceof ConnectError ? error.kind : 'connection';
     switch (kind) {
       case 'connection':
+        entry.status = 'reconnecting';
         entry.error = describe(error);
-        this.#retry(entry);
+        this.#away(entry);
+        return;
+      case 'unavailable':
+        entry.status = 'unreachable';
+        entry.error = describe(error);
+        this.#away(entry);
+        return;
+      case 'unpaired':
+        if (this.#dispatcher) this.#haltDispatcher(this.#dispatcher, 'refused', describe(error));
         return;
       case 'refused':
         // 4002 follows the error: trying again would only be refused again.
-        this.#halt(entry, 'disconnected', `The Host refused this device (${describe(error)}). Pair it again.`);
+        this.#halt(entry, 'disconnected', `The Host refused this device (${describe(error)}).`);
         return;
       case 'incompatible':
         this.#halt(entry, 'incompatible', describe(error));
         return;
-      case 'wrongHost':
-        this.#halt(entry, 'disconnected', describe(error));
-        return;
     }
   }
 
-  #retry(entry: HostEntry) {
-    const backoff = this.#options.backoff ?? [1_000, 2_000, 5_000, 10_000, 30_000];
-    const delay = backoff[Math.min(entry.attempt, backoff.length - 1)];
-    entry.attempt += 1;
-    entry.status = 'reconnecting';
-    entry.retry = setTimeout(() => void this.#connect(entry), delay);
+  /** A Host's connection failed or dropped: the Dispatcher lists the Hosts again before long, and says whether it still reaches it. */
+  #away(entry: HostEntry) {
     this.#changed();
+    if (this.#dispatcher && this.#hosts.get(entry.hostId) === entry) this.#relist(this.#dispatcher);
   }
 
   /** Stops trying until the person asks, saying why. */
   #halt(entry: HostEntry, status: HostStatus, error: string) {
-    clearTimeout(entry.retry);
-    entry.retry = undefined;
     entry.status = status;
     entry.stopped = true;
     entry.error = error;
@@ -524,28 +858,20 @@ export class HostStore {
     connection.close();
   }
 
+  /** Lets go of a Host's connection and any try under way. */
+  #closeHost(entry: HostEntry) {
+    entry.connecting?.abort();
+    entry.connecting = undefined;
+    this.#drop(entry);
+  }
+
   /** The Host's connection ended: steers on their way failed with it, and their senders say so. */
   #lost(entry: HostEntry) {
     entry.connection = undefined;
     for (const followed of this.#followed.values()) {
-      if (followed.hostId === entry.record.hostId) followed.steering = [];
+      if (followed.hostId === entry.hostId) followed.steering = [];
     }
     this.#changed();
-  }
-
-  /**
-   * The Host revoked this device (4000), so its pairing is gone: the app deletes its key and
-   * record, and keeps the Host listed, revoked, until it's paired again or forgotten.
-   */
-  async #revoked(entry: HostEntry) {
-    const { hostId, keyId } = entry.record;
-    this.#halt(entry, 'revoked', 'This device was revoked on the Host, and has forgotten the pairing. Pair it again to see its threads.');
-    entry.threads = [];
-    entry.agents = [];
-    this.#unfollow(hostId);
-    this.#changed();
-    await this.#options.keyFor(keyId).forget().catch(() => {});
-    await this.#save();
   }
 
   /** Forgets what the app followed in a Host's threads, and leaves the one on screen. */
@@ -580,7 +906,7 @@ export class HostStore {
         ? (await connection.request('threads/watch', {})).threads
         : (await connection.request('threads/list', {})).threads;
       for (const listing of entry.threads) {
-        this.#read.observe(threadKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
+        this.#read.observe(threadKey(entry.hostId, listing.info.sessionId), listing.activity ?? undefined);
       }
       this.#changed();
     } catch (error) {
@@ -601,7 +927,7 @@ export class HostStore {
       const title = listing.info.title ?? entry.threads[index].info.title;
       entry.threads = entry.threads.map((current, at) => at === index ? { ...listing, info: { ...listing.info, ...(title ? { title } : {}) } } : current);
     }
-    this.#read.observe(threadKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
+    this.#read.observe(threadKey(entry.hostId, listing.info.sessionId), listing.activity ?? undefined);
     this.#changed();
   }
 
@@ -619,7 +945,8 @@ export class HostStore {
         this.#lost(entry);
         switch (event.code) {
           case HOST_PROTOCOL.websocket.closeRevoked:
-            void this.#revoked(entry);
+            // The Dispatcher revoked this device, which closes everything it carried.
+            void this.#revoked();
             return;
           case HOST_PROTOCOL.websocket.closeUnauthenticated:
             this.#halt(entry, 'disconnected', `The Host closed the connection: ${event.reason || "this device isn't authenticated"}.`);
@@ -628,16 +955,15 @@ export class HostStore {
             // Fell behind: catch up after the position, at once, unless an attach fell behind
             // before its answer came, whose position didn't move: then trying again at once
             // would ask for the same replay, so back off.
-            if (attachCut) {
-              this.#retry(entry);
-              return;
-            }
-            entry.attempt = 0;
-            void this.#connect(entry);
+            entry.status = 'reconnecting';
+            if (attachCut) this.#away(entry);
+            else void this.#connect(entry);
             return;
           default:
-            // A dropped network or a Host restart: try again, backing off.
-            this.#retry(entry);
+            // A dropped network, a Host restart, or the Dispatcher's: the Dispatcher says
+            // whether it still reaches the Host, backing off.
+            entry.status = 'reconnecting';
+            this.#away(entry);
             return;
         }
       }
@@ -648,7 +974,7 @@ export class HostStore {
             return;
           case 'thread/changed': {
             const { threadId, activity, clients, title, blank, mcpServers } = event.params;
-            const followed = this.#followed.get(threadKey(entry.record.hostId, threadId));
+            const followed = this.#followed.get(threadKey(entry.hostId, threadId));
             if (followed?.state) {
               followed.state = {
                 ...followed.state,
@@ -669,7 +995,7 @@ export class HostStore {
               // A new thread's first prompt lists it; a watched list hears of it anyway.
               void this.#list(entry);
             }
-            this.#read.observe(threadKey(entry.record.hostId, threadId), activity ?? listing?.activity ?? undefined);
+            this.#read.observe(threadKey(entry.hostId, threadId), activity ?? listing?.activity ?? undefined);
             this.#changed();
             return;
           }
@@ -683,27 +1009,27 @@ export class HostStore {
             return;
           }
           case 'pending/added': {
-            const followed = this.#followed.get(threadKey(entry.record.hostId, event.params.threadId));
+            const followed = this.#followed.get(threadKey(entry.hostId, event.params.threadId));
             if (followed) this.#pendingAdded(followed, connection, event.params.pending);
             return;
           }
           case 'pending/resolved': {
-            const followed = this.#followed.get(threadKey(entry.record.hostId, event.params.threadId));
+            const followed = this.#followed.get(threadKey(entry.hostId, event.params.threadId));
             if (followed) this.#pendingResolved(followed, connection, event.params);
             return;
           }
           case 'thread/elicitationCompleted': {
-            const followed = this.#followed.get(threadKey(entry.record.hostId, event.params.threadId));
+            const followed = this.#followed.get(threadKey(entry.hostId, event.params.threadId));
             if (followed) this.#apply(followed, [{ type: 'elicitation/completed', notification: event.params.notification }]);
             return;
           }
           case 'terminals/updated':
-            this.#terminalUpdated(entry.record.hostId, event.params.terminal);
+            this.#terminalUpdated(entry.hostId, event.params.terminal);
             return;
           case 'terminals/removed': {
             const { id, scope } = event.params;
             for (const followed of this.#followed.values()) {
-              if (followed.hostId !== entry.record.hostId || followed.terminals?.scope !== scope) continue;
+              if (followed.hostId !== entry.hostId || followed.terminals?.scope !== scope) continue;
               followed.terminals = { scope, list: followed.terminals.list.filter((terminal) => terminal.id !== id) };
             }
             this.#changed();
@@ -711,7 +1037,7 @@ export class HostStore {
           }
           case 'agents/updateAvailable': {
             const { threadId, agentId, name, running, latest } = event.params;
-            const followed = this.#followed.get(threadKey(entry.record.hostId, threadId));
+            const followed = this.#followed.get(threadKey(entry.hostId, threadId));
             if (!followed) return;
             followed.update = { agentId, name, running, latest };
             this.#changed();
@@ -727,7 +1053,7 @@ export class HostStore {
   }
 
   #journalEvent(entry: HostEntry, notification: ThreadEventNotification) {
-    const followed = this.#followed.get(threadKey(entry.record.hostId, notification.threadId));
+    const followed = this.#followed.get(threadKey(entry.hostId, notification.threadId));
     if (!followed || !followed.follower.accept(notification)) return;
     const history = followed.follower.isHistory(notification);
     const { event } = notification;
@@ -794,7 +1120,7 @@ export class HostStore {
   #connection(followed: Followed): HostConnection {
     const entry = this.#hosts.get(followed.hostId);
     const connection = entry?.connection;
-    if (!connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    if (!connection || connection.closed) throw new Error(`${entry?.name ?? 'The Host'} isn't connected.`);
     return connection;
   }
 
@@ -876,7 +1202,7 @@ export class HostStore {
       creating.resolve();
       return;
     }
-    const followed = [...this.#followed.values()].find(({ hostId, tag }) => hostId === entry.record.hostId && tag === event.tag);
+    const followed = [...this.#followed.values()].find(({ hostId, tag }) => hostId === entry.hostId && tag === event.tag);
     if (!followed) return;
     followed.tag = undefined;
     if (event.type === 'openFailed' && failedWith(event.error, CONNECTION_CLOSED)) {
@@ -981,11 +1307,16 @@ export class HostStore {
 
   async #attachTerminal(id: string): Promise<TerminalTicket> {
     const followed = this.#terminalsOf();
-    const entry = this.#hosts.get(followed.hostId);
     const connection = this.#connection(followed);
     const { ticket } = await connection.request('terminals/attach', { id });
-    // The stream is on the listener the Host's connection is.
-    return { url: entry!.record.url, ticket };
+    const record = this.#dispatcher?.record;
+    if (!record) throw new Error('This device isn\'t paired with the Dispatcher.');
+    // The Dispatcher carries the stream too, as this device: its ticket is this device's.
+    return {
+      url: record.url,
+      ticket,
+      carry: { dispatcherId: record.dispatcherId, deviceId: record.deviceId, keyId: record.keyId, host: followed.hostId },
+    };
   }
 
   /** Shows what waits in a thread, once its replay is done. */
@@ -1097,7 +1428,7 @@ export class HostStore {
   async #listDirectory({ hostId, path, hidden }: { hostId: string; path?: string; hidden?: boolean }): Promise<DirectoryListing> {
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
-    if (!entry || !connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    if (!entry || !connection || connection.closed) throw new Error(`${entry?.name ?? 'The Host'} isn't connected.`);
     try {
       const listed = await connection.request('files/list', { ...(path ? { path } : {}), ...(hidden ? { hidden } : {}) });
       return {
@@ -1118,7 +1449,7 @@ export class HostStore {
   #requestable(hostId: string): HostConnection {
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
-    if (!entry || !connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    if (!entry || !connection || connection.closed) throw new Error(`${entry?.name ?? 'The Host'} isn't connected.`);
     return connection;
   }
 
@@ -1170,7 +1501,7 @@ export class HostStore {
     const entry = this.#hosts.get(input.hostId);
     const connection = entry?.connection;
     if (!entry || !connection || connection.closed) {
-      return Promise.reject(new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`));
+      return Promise.reject(new Error(`${entry?.name ?? 'The Host'} isn't connected.`));
     }
     const tag = this.#nextTag++;
     return new Promise((resolve, reject) => {
@@ -1180,10 +1511,10 @@ export class HostStore {
   }
 
   #created(entry: HostEntry, thread: OpenedThread) {
-    const key = threadKey(entry.record.hostId, thread.state.threadId);
+    const key = threadKey(entry.hostId, thread.state.threadId);
     const previous = this.#selected();
     if (previous) this.#leave(previous);
-    const followed = this.#follow(entry.record.hostId, thread.state.threadId);
+    const followed = this.#follow(entry.hostId, thread.state.threadId);
     this.#followed.set(key, followed);
     this.#selectedKey = key;
     this.#read.focus(key);
@@ -1337,7 +1668,7 @@ export class HostStore {
     const [hostId, ...rest] = key.split('/');
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
-    if (!entry || !connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    if (!entry || !connection || connection.closed) throw new Error(`${entry?.name ?? 'The Host'} isn't connected.`);
     try {
       // The new title comes back to every client: in the journal, and as the thread's change.
       await connection.request('thread/rename', { threadId: rest.join('/'), title });
@@ -1352,7 +1683,7 @@ export class HostStore {
     const [hostId, ...rest] = key.split('/');
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
-    if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    if (!entry || !connection) throw new Error(`${entry?.name ?? 'The Host'} isn't connected.`);
     await connection.request('thread/close', { threadId: rest.join('/') }).catch((error: unknown) => {
       throw failed("Couldn't close the thread", error);
     });
@@ -1366,7 +1697,7 @@ export class HostStore {
     const threadId = rest.join('/');
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
-    if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
+    if (!entry || !connection) throw new Error(`${entry?.name ?? 'The Host'} isn't connected.`);
     const agentId = entry.threads.find(({ info }) => info.sessionId === threadId)?.agentId ?? this.#followed.get(key)?.state?.agent.id;
     await connection.request('thread/delete', { threadId, ...(agentId ? { agentId } : {}) }).catch((error: unknown) => {
       throw failed("Couldn't delete the thread", error);
@@ -1392,79 +1723,79 @@ export class HostStore {
     return error instanceof Error ? error : new Error(String(error));
   }
 
+  /**
+   * Pairs with the Dispatcher with a code `weave dispatcher pair` showed, in place of any pairing
+   * before, then lists its Hosts. The Hosts an earlier version paired with go.
+   */
   async #pair(input: { url: string; code: string; name?: string }) {
     const url = websocketUrl(input.url);
     const { keyId, key } = await this.#options.newKey();
-    let connection: HostConnection;
-    let entry: HostEntry | undefined;
+    let connection: DispatcherConnection | undefined;
+    let adopted: DispatcherEntry | undefined;
     try {
-      connection = await HostConnection.connect({
-        connector: this.#options.connectorFor(url),
+      connection = await DispatcherConnection.connect({
+        connector: this.#options.socket(url, DISPATCHER.subprotocol),
         client: this.#options.client,
-        capabilities: this.#capabilities(),
         credentials: { method: 'pair', code: input.code.replaceAll(/[\s-]/g, ''), name: input.name?.trim() || this.#options.deviceName, key },
-        onEvent: (event) => { if (entry) this.#event(entry, connection, event); },
+        onClosed: (close) => { if (adopted && connection) this.#dispatcherClosed(adopted, connection, close); },
       });
     } catch (error) {
       await key.forget().catch(() => {});
       throw error instanceof ConnectError ? new Error(error.message) : error;
     }
-    const { host, device } = connection.hello;
-    if (!host.id || !device) {
+    const { id, device } = connection.hello;
+    if (!id || !device) {
       connection.close();
       await key.forget().catch(() => {});
-      throw new Error('The Host paired no device. Is it a weave Host?');
+      throw new Error('The Dispatcher paired no device. Is it a weave Dispatcher?');
     }
-    const previous = this.#hosts.get(host.id);
-    // A name the person gave the Host outlasts pairing with it again.
-    const renamed = previous && previous.record.name !== new URL(previous.record.url).hostname;
-    const name = renamed ? previous.record.name : new URL(url).hostname;
-    if (previous) await this.#forget(host.id);
-    entry = this.#entry({ hostId: host.id, name, url, deviceId: device.id, keyId });
-    this.#hosts.set(host.id, entry);
-    await this.#save();
-    await this.#connected(entry, connection);
+    let name = new URL(url).hostname;
+    try {
+      name = (await connection.request('dispatcher/status', {})).name || name;
+    } catch {
+      // Its address names it well enough.
+    }
+    await this.#unpair();
+    const record: DispatcherRecord = { dispatcherId: id, name, url, deviceId: device.id, keyId };
+    await this.#options.storage.save(record);
+    adopted = this.#adopt(record);
+    this.#error = undefined;
+    await this.#forgetOldHosts();
+    await this.#dispatcherConnected(adopted, connection);
   }
 
-  async #forget(hostId: string) {
-    const entry = this.#hosts.get(hostId);
-    if (!entry) return;
-    clearTimeout(entry.retry);
-    entry.connecting?.abort();
-    entry.connection?.close();
-    this.#hosts.delete(hostId);
-    this.#unfollow(hostId);
-    await this.#options.keyFor(entry.record.keyId).forget().catch(() => {});
-    await this.#save();
+  /** Lets go of the Dispatcher, its Hosts and their threads, and deletes its key. */
+  async #unpair() {
+    const dispatcher = this.#dispatcher;
+    if (!dispatcher) return;
+    this.#letGo(dispatcher);
+    for (const entry of this.#hosts.values()) this.#closeHost(entry);
+    this.#hosts = new Map();
+    this.#followed.clear();
+    this.#selectedKey = undefined;
+    this.#dispatcher = undefined;
+    // A revoked device's key went already.
+    if (dispatcher.status !== 'revoked') await dispatcher.key.forget().catch(() => {});
+  }
+
+  /** Forgets the pairing: the Dispatcher lists this device until it's revoked there. */
+  async #forget() {
+    await this.#unpair();
+    await this.#options.storage.save(undefined);
     this.#changed();
-  }
-
-  async #renameHost(hostId: string, name: string) {
-    const entry = this.#hosts.get(hostId);
-    if (!entry) return;
-    const trimmed = name.trim();
-    if (!trimmed) throw new Error("A Host's name can't be empty.");
-    entry.record = { ...entry.record, name: trimmed };
-    await this.#save();
-    this.#changed();
-  }
-
-  /** The pairings this device keeps; a revoked one is listed only until the app quits. */
-  #save() {
-    return this.#options.storage.save([...this.#hosts.values()].filter(({ status }) => status !== 'revoked').map(({ record }) => record));
   }
 
   #model(): AppModel {
-    const hosts: PairedHost[] = [];
+    const hosts: HostSummary[] = [];
     const threads: ThreadSummary[] = [];
     const agents: Record<string, AgentChoice[]> = {};
     const selected = this.#selected();
+    const dispatcher = this.#dispatcher;
     for (const entry of this.#hosts.values()) {
-      const { record } = entry;
+      const { hostId } = entry;
       hosts.push({
-        id: record.hostId,
-        name: record.name,
-        url: record.url,
+        id: hostId,
+        name: entry.name,
         status: entry.status,
         ...(entry.error ? { error: entry.error } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.listFiles) ? { canBrowse: true } : {}),
@@ -1472,12 +1803,12 @@ export class HostStore {
         ...(entry.connection?.supports(HOST_PROTOCOL.features.worktrees) ? { canWorktree: true } : {}),
         ...(entry.connection?.supports(HOST_PROTOCOL.features.terminals) ? { canTerminals: true } : {}),
       });
-      agents[record.hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
+      agents[hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
       for (const listing of entry.threads) {
         threads.push({
-          key: threadKey(record.hostId, listing.info.sessionId),
-          hostId: record.hostId,
+          key: threadKey(hostId, listing.info.sessionId),
+          hostId: hostId,
           threadId: listing.info.sessionId,
           ...(listing.info.title ? { title: listing.info.title } : {}),
           agentId: listing.agentId,
@@ -1489,16 +1820,16 @@ export class HostStore {
           clients: listing.clients ?? 0,
           headless: listing.headless ?? false,
           lastActivityAt: listing.lastActivityAt ?? (listing.info.updatedAt ? Date.parse(listing.info.updatedAt) : undefined),
-          ...(listing.startedBy ? { startedBy: { key: threadKey(listing.startedByHost ?? record.hostId, listing.startedBy), label: '' } } : {}),
-          ...(listing.continuedIn ? { continuedIn: { key: threadKey(record.hostId, listing.continuedIn), label: '' } } : {}),
+          ...(listing.startedBy ? { startedBy: { key: threadKey(listing.startedByHost ?? hostId, listing.startedBy), label: '' } } : {}),
+          ...(listing.continuedIn ? { continuedIn: { key: threadKey(hostId, listing.continuedIn), label: '' } } : {}),
         });
       }
       // A thread on screen the list doesn't have yet, such as a new one nobody has prompted.
-      const state = selected?.hostId === record.hostId ? selected.state : undefined;
+      const state = selected?.hostId === hostId ? selected.state : undefined;
       if (state && !entry.threads.some(({ info }) => info.sessionId === state.threadId)) {
         threads.push({
-          key: threadKey(record.hostId, state.threadId),
-          hostId: record.hostId,
+          key: threadKey(hostId, state.threadId),
+          hostId: hostId,
           threadId: state.threadId,
           ...(state.title ? { title: state.title } : {}),
           agentId: state.agent.id,
@@ -1515,6 +1846,18 @@ export class HostStore {
     }
     labelStarters(threads, hosts);
     return {
+      ...(this.#starting ? { starting: true } : {}),
+      ...(dispatcher
+        ? {
+            dispatcher: {
+              id: dispatcher.record.dispatcherId,
+              name: dispatcher.record.name,
+              url: dispatcher.record.url,
+              status: dispatcher.status,
+              ...(dispatcher.error ? { error: dispatcher.error } : {}),
+            },
+          }
+        : {}),
       hosts,
       threads,
       agents,
@@ -1546,10 +1889,10 @@ export class HostStore {
 /**
  * Name the thread that started each delegated one: its title, and its Host when that's another,
  * as for a thread another Host's agent started through the Dispatcher (ADR 0029). The starter
- * may be on a Host this device doesn't pair with, or gone, and is named as well as it can be
+ * may be on a Host the Dispatcher no longer lists, or gone, and is named as well as it can be
  * then. A thread's successor is named by its title too (WVE-168).
  */
-export function labelStarters(threads: ThreadSummary[], hosts: readonly PairedHost[]) {
+export function labelStarters(threads: ThreadSummary[], hosts: readonly HostSummary[]) {
   const byKey = new Map(threads.map((thread) => [thread.key, thread]));
   for (const thread of threads) {
     if (thread.continuedIn) {

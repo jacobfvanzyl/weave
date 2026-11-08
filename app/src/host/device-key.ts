@@ -3,8 +3,9 @@ import { toBase64Url } from './base64url';
 import type { Jwk } from './protocol';
 
 /**
- * This device's key for one Host: it introduces the device at pairing and signs each
- * connection's challenge. On a device it lives in the Secure Enclave and never leaves it.
+ * This device's key for the Dispatcher it pairs with (ADR 0030): it introduces the device at
+ * pairing and signs each connection's challenge, its connections carried to Hosts included. On a
+ * device it lives in the Secure Enclave and never leaves it.
  */
 export type DeviceKey = {
   publicKey(): Promise<Jwk>;
@@ -13,10 +14,6 @@ export type DeviceKey = {
   /** Deletes the key; the device has to pair again. */
   forget(): Promise<void>;
 };
-
-/** What a paired device signs at `host/hello`. */
-export const authMessage = (hostId: string, deviceId: string, nonce: string) =>
-  `weave-host-auth/1 ${hostId} ${deviceId} ${nonce}`;
 
 type DeviceKeyPlugin = {
   generate(options: { keyId: string }): Promise<{ publicKey: Jwk }>;

@@ -1,4 +1,4 @@
-import type { PairedHost, ThreadGit, ThreadSummary } from './app-controller';
+import type { HostSummary, ThreadGit, ThreadSummary } from './app-controller';
 import { directoryName } from '@/lib/display-path';
 
 /** The threads one Host runs in one directory, or in one git repository's worktrees. */
@@ -13,15 +13,15 @@ export type DirectoryGroup = {
   threads: ThreadSummary[];
 };
 
-/** A paired Host and its directories and repositories that have threads shown. */
+/** A Host the Dispatcher lists, and its directories and repositories that have threads shown. */
 export type HostGroup = {
-  host: PairedHost;
+  host: HostSummary;
   /** The most recently active first. */
   directories: DirectoryGroup[];
 };
 
 export type ThreadListView = {
-  /** In pairing order; a Host with nothing shown only while the list isn't filtered. */
+  /** In the Dispatcher's order; a Host with nothing shown only while the list isn't filtered. */
   hosts: HostGroup[];
 };
 
@@ -69,13 +69,14 @@ function located(threads: readonly ThreadSummary[]): ThreadSummary[] {
 }
 
 /**
- * The thread list: closed threads only when asked for, one group per Host in pairing order,
- * then one per directory, the most recently active first. Threads in a git repository group by
- * repository, across its worktrees; a repository's place is its latest activity in any of them.
+ * The thread list: closed threads only when asked for, one group per Host in the Dispatcher's
+ * order, then one per directory, the most recently active first. Threads in a git repository
+ * group by repository, across its worktrees; a repository's place is its latest activity in any
+ * of them.
  */
 export function threadListView(
   threads: readonly ThreadSummary[],
-  hosts: readonly PairedHost[],
+  hosts: readonly HostSummary[],
   options: { query?: string; showClosed?: boolean } = {},
 ): ThreadListView {
   const query = options.query?.trim().toLocaleLowerCase() ?? '';

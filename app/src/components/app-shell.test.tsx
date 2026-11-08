@@ -19,12 +19,12 @@ describe('the thread list', () => {
   it('groups threads by Host, then directory or repository, naming each one\u2019s agent and branch', () => {
     setIdiom('phone');
     render(<MockApp />);
-    const mac = screen.getByRole('group', { name: 'mac.tail1234.ts.net' });
+    const mac = screen.getByRole('group', { name: 'mac' });
     const weave = within(mac).getByRole('group', { name: 'weave' });
     // A repository's threads list together, across its worktrees, with the branch after the agent.
     expect(within(weave).getByRole('button', { name: /Fix the flaky reconnect test.*Claude\s*· fix-reconnect/ })).toBeInTheDocument();
     expect(within(weave).getByRole('button', { name: /^Steer handling in the TUI.*Claude\s*· main \/ tui/ })).toBeInTheDocument();
-    const build = screen.getByRole('group', { name: 'build.tail1234.ts.net' });
+    const build = screen.getByRole('group', { name: 'build' });
     expect(within(build).getByRole('group', { name: 'odin' })).toBeInTheDocument();
     // Waiting threads stay in place, marked on their tile.
     expect(within(weave).getByRole('img', { name: 'Waiting for you' })).toBeInTheDocument();
@@ -73,11 +73,42 @@ describe('the thread list', () => {
     expect(screen.queryByText('Bring Alpha back')).not.toBeInTheDocument();
   });
 
-  it('offers pairing when no Host is paired', () => {
+  it('shows the pairing screen until the app is paired with the Dispatcher, then the list', async () => {
+    setIdiom('phone');
+    const user = userEvent.setup();
+    render(<MockApp scenario='unpaired' />);
+    expect(screen.getByRole('heading', { name: 'Pair with your Dispatcher' })).toBeInTheDocument();
+    expect(screen.queryByRole('searchbox', { name: 'Filter threads' })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('URL'), 'wss://homelab.example.ts.net:7342');
+    await user.type(screen.getByLabelText('Code'), 'ABCD');
+    await user.click(screen.getByRole('button', { name: 'Pair' }));
+    expect(await screen.findByRole('group', { name: 'mac' })).toBeInTheDocument();
+  });
+
+  it('says when no Host has joined the Dispatcher', () => {
     setIdiom('phone');
     render(<MockApp scenario='empty' />);
     expect(screen.getByText('No Hosts yet')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pair a Host' })).toBeInTheDocument();
+    expect(screen.getByText(/No Host has joined the Dispatcher/)).toBeInTheDocument();
+  });
+
+  it("says when the Dispatcher can't be reached, and keeps the Hosts it last listed, greyed out", async () => {
+    setIdiom('pad');
+    const user = userEvent.setup();
+    render(<MockApp scenario='offline' />);
+    const banner = screen.getByRole('alert');
+    expect(banner).toHaveTextContent("Can't reach the Dispatcher on homelab");
+    expect(screen.getByRole('group', { name: 'mac' })).toHaveAttribute('data-away', 'true');
+    expect(screen.getByText('Diagnose upload failures')).toBeInTheDocument();
+    await user.click(within(banner).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(screen.getByRole('group', { name: 'mac' })).not.toHaveAttribute('data-away');
+  });
+
+  it("says why the Dispatcher can't reach a Host, on its row", () => {
+    setIdiom('pad');
+    render(<MockApp scenario='unreachable' />);
+    expect(within(screen.getByRole('group', { name: 'build' })).getByText(/hasn't connected to the Dispatcher/)).toBeInTheDocument();
   });
 
   it('starts a thread in a directory from its heading', async () => {
@@ -112,7 +143,7 @@ describe('worktrees', () => {
     expect(await within(form).findByRole('button', { name: 'Worktree' })).toHaveTextContent('feature/authweave.feature-auth');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
     await screen.findByRole('region', { name: 'New thread' });
-    const weave = within(screen.getByRole('group', { name: 'mac.tail1234.ts.net' })).getByRole('group', { name: 'weave' });
+    const weave = within(screen.getByRole('group', { name: 'mac' })).getByRole('group', { name: 'weave' });
     const row = within(weave).getByRole('button', { name: /^New thread.*· feature\/auth/ });
 
     await user.pointer({ keys: '[MouseRight]', target: row });
@@ -148,11 +179,11 @@ describe('on an iPhone', () => {
     const user = userEvent.setup();
     render(<MockApp />);
     await user.click(screen.getByText('Bring Alpha back'));
-    expect(screen.queryByRole('group', { name: 'mac.tail1234.ts.net' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'mac' })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Bring Alpha back' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Message agent' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Threads, 1 waiting' }));
-    expect(screen.getByRole('group', { name: 'mac.tail1234.ts.net' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'mac' })).toBeInTheDocument();
   });
 
   it('says how many other clients are attached', async () => {
@@ -165,22 +196,17 @@ describe('on an iPhone', () => {
 });
 
 describe('Hosts', () => {
-  it('renames a Host on this device, and the list says the new name', async () => {
+  it('lists the Dispatcher and the Hosts it reaches, and forgetting it goes back to the pairing screen', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
     await user.click(screen.getByRole('button', { name: 'Hosts' }));
     const hosts = await screen.findByRole('dialog', { name: 'Hosts' });
-    await user.click(within(hosts).getByRole('button', { name: 'Rename mac.tail1234.ts.net' }));
-    const rename = await screen.findByRole('dialog', { name: 'Rename Host' });
-    const name = within(rename).getByRole('textbox', { name: 'Name' });
-    await user.clear(name);
-    await user.type(name, 'Studio Mac{Enter}');
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Rename Host' })).not.toBeInTheDocument());
-    expect(within(hosts).getByText('Studio Mac')).toBeInTheDocument();
-    await user.keyboard('{Escape}');
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Hosts' })).not.toBeInTheDocument());
-    expect(within(screen.getByRole('group', { name: 'Studio Mac' })).getByRole('group', { name: 'weave' })).toBeInTheDocument();
+    expect(within(hosts).getByRole('region', { name: 'Dispatcher' })).toHaveTextContent('Dispatcher on homelab');
+    expect(within(within(hosts).getByRole('list', { name: 'Hosts' })).getAllByRole('listitem')).toHaveLength(2);
+    await user.click(within(hosts).getByRole('button', { name: 'Forget the Dispatcher' }));
+    await user.click(await screen.findByRole('button', { name: 'Forget Dispatcher' }));
+    expect(await screen.findByRole('heading', { name: 'Pair with your Dispatcher' })).toBeInTheDocument();
   });
 });
 
@@ -192,7 +218,7 @@ describe('on an iPad', () => {
     expect(screen.getByText('No thread open')).toBeInTheDocument();
     await user.click(screen.getByText('Diagnose upload failures'));
     expect(screen.getByRole('region', { name: 'Diagnose upload failures' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'mac.tail1234.ts.net' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'mac' })).toBeInTheDocument();
   });
 
   it('drags the list\'s edge, or moves it with the arrow keys, and keeps the width', async () => {

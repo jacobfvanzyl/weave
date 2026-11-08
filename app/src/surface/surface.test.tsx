@@ -18,9 +18,9 @@ const actions = (): AppActions => ({
   closeThread: vi.fn(),
   renameThread: vi.fn(),
   deleteThread: vi.fn(),
-  pairHost: vi.fn(),
-  forgetHost: vi.fn(),
-  renameHost: vi.fn(),
+  pairDispatcher: vi.fn(),
+  forgetDispatcher: vi.fn(),
+  reconnectDispatcher: vi.fn(),
   reconnectHost: vi.fn(),
   send: vi.fn(),
   removeQueued: vi.fn(),
@@ -40,7 +40,8 @@ const actions = (): AppActions => ({
 
 const controller = (thread: OpenThread | undefined, handlers: AppActions): AppController => ({
   model: {
-    hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected' }],
+    dispatcher: { id: 'd', name: 'homelab', url: 'wss://homelab', status: 'connected' },
+    hosts: [{ id: 'h', name: 'mac', status: 'connected' }],
     threads: [
       {
         key: 'h/main', hostId: 'h', threadId: 'main', title: 'Count the files', agentId: 'claude', agentName: 'Claude',

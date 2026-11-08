@@ -1,9 +1,11 @@
 /// <reference types="bun" />
 // A dev weave Host for integration tests: the repository's debug `weave`, in a directory of its own
-// (`WEAVE_DAEMON_DIR`), so it never touches an installed Host, with the fake agent as `fake` and
-// its WebSocket on a free loopback port. `fake-minimal` is the fake agent advertising nothing
-// optional, steering included, and `fake-auth` one that needs signing in. With the debug holder
-// beside `weave`, it has terminals too. Build the binaries first:
+// (`WEAVE_DAEMON_DIR`), so it never touches an installed Host, with the fake agent as `fake`.
+// `fake-minimal` is the fake agent advertising nothing optional, steering included, and
+// `fake-auth` one that needs signing in. With the debug holder beside `weave`, it has terminals
+// too. The app reaches it through a dev Dispatcher it joins (`dev-dispatcher.ts`); its own
+// WebSocket, which nothing turns on, is on a free loopback port with `[remote] url` set, so it
+// would make no Tailscale Serve entry either. Build the binaries first:
 //
 //   (cd .. && cargo build -p weave-cli -p weave-fake-agent -p weave-holder)
 import { existsSync } from 'node:fs';
@@ -13,7 +15,7 @@ import { join, resolve } from 'node:path';
 import type { Connector } from '../connection';
 
 const repository = resolve(import.meta.dirname, '../../../..');
-const weave = join(repository, 'target/debug/weave');
+export const weave = join(repository, 'target/debug/weave');
 const fakeAgent = join(repository, 'target/debug/weave-fake-agent');
 
 /** Whether the debug binaries are there; the integration tests skip without them. */
@@ -22,10 +24,10 @@ export const devHostAvailable = () => existsSync(weave) && existsSync(fakeAgent)
 export const devHostHasTerminals = () => devHostAvailable() && existsSync(join(repository, 'target/debug/weave-holder'));
 
 export type DevHost = {
+  /** Its directory (`WEAVE_DAEMON_DIR`). */
+  dir: string;
   /** The Unix socket local clients use. */
   socket: string;
-  /** The WebSocket remote clients use, once an offer turns it on: `ws://127.0.0.1:<port>`. */
-  url: string;
   /** A directory threads can run in. */
   cwd: string;
   /**
@@ -36,17 +38,17 @@ export type DevHost = {
   stop(): Promise<void>;
 };
 
-const freePort = () => {
+export const freePort = () => {
   const server = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
   const { port } = server;
   server.stop(true);
   return port;
 };
 
-const until = async (ready: () => boolean | Promise<boolean>, what: string, ms = 30_000) => {
+export const until = async (ready: () => boolean | Promise<boolean>, what: string, ms = 30_000) => {
   const deadline = Date.now() + ms;
   while (!(await ready())) {
-    if (Date.now() > deadline) throw new Error(`The dev Host didn't get ${what} within ${ms} ms.`);
+    if (Date.now() > deadline) throw new Error(`Didn't get ${what} within ${ms} ms.`);
     await Bun.sleep(50);
   }
 };
@@ -97,8 +99,8 @@ export async function startDevHost(): Promise<DevHost> {
     await halt();
     await rm(root, { recursive: true, force: true });
   };
-  // Its WebSocket listens once a pairing offer turns remote access on (ADR 0016), and again after
-  // a restart while a device is paired; with `[remote] url` set, it makes no Tailscale Serve entry.
+  // Its own WebSocket would listen only once a pairing offer turned remote access on (ADR 0016),
+  // which nothing here asks for; with `[remote] url` set, it would make no Tailscale Serve entry.
   const started = async () => {
     try {
       await until(() => existsSync(socket), 'its socket');
@@ -113,7 +115,7 @@ export async function startDevHost(): Promise<DevHost> {
     host = spawn();
     await started();
   };
-  return { socket, url, cwd, restart, stop };
+  return { dir: daemon, socket, cwd, restart, stop };
 }
 
 /** The Host's Unix socket as a transport: one JSON-RPC message per line. */

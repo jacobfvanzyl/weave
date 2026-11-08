@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
-import { ComputerIcon, Delete02Icon, Edit02Icon, Link01Icon, RefreshIcon } from '@hugeicons/core-free-icons';
-import type { AppController, PairedHost } from '@/app/app-controller';
+import { ComputerIcon, Delete02Icon, RefreshIcon, ServerStack01Icon } from '@hugeicons/core-free-icons';
+import type { AppController, DispatcherSummary, HostSummary } from '@/app/app-controller';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,144 +13,104 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { PairDispatcherForm } from '@/components/pair-dispatcher';
+import { cn } from '@/lib/utils';
 
-const statusLabel: Record<PairedHost['status'], string> = {
+const dispatcherStatus: Record<DispatcherSummary['status'], string> = {
   connected: 'Connected',
   connecting: 'Connecting',
-  reconnecting: 'Reconnecting',
-  disconnected: 'Disconnected',
+  reconnecting: 'Unreachable',
+  refused: 'Refused',
   revoked: 'Revoked',
   incompatible: 'Incompatible',
 };
 
-/** The address `weave pair` shows for a Host's WebSocket. */
-const pairingUrl = (url: string) => url.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+const hostStatus: Record<HostSummary['status'], string> = {
+  connected: 'Connected',
+  connecting: 'Connecting',
+  reconnecting: 'Reconnecting',
+  unreachable: 'Unreachable',
+  disconnected: 'Disconnected',
+  incompatible: 'Incompatible',
+};
 
-/** Renames a paired Host on this device only. */
-function RenameHostDialog({ host, actions, open, onOpenChange }: {
-  host: PairedHost;
-  actions: AppController['actions'];
-  open: boolean;
-  onOpenChange(open: boolean): void;
-}) {
-  const [name, setName] = useState('');
-  const [error, setError] = useState<string>();
-  const [saving, setSaving] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    setName(host.name);
-    setError(undefined);
-    // Starts from the name it has when it opens.
-  }, [open]);
+/** The Dispatcher this device is paired with: how it's connected, trying again, and forgetting it. */
+function DispatcherRow({ dispatcher, actions }: { dispatcher: DispatcherSummary; actions: AppController['actions'] }) {
+  const halted = dispatcher.status === 'refused' || dispatcher.status === 'incompatible';
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='w-[min(28rem,calc(100%-2rem))] max-w-none sm:max-w-md'>
-        <DialogHeader>
-          <DialogTitle>Rename Host</DialogTitle>
-          <DialogDescription>Only this device shows the new name. The Host and your other devices keep their own.</DialogDescription>
-        </DialogHeader>
-        <form aria-label='Rename Host' className='grid gap-3' onSubmit={async (event) => {
-          event.preventDefault();
-          setSaving(true);
-          setError(undefined);
-          try {
-            await actions.renameHost(host.id, name);
-            onOpenChange(false);
-          } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-          } finally {
-            setSaving(false);
-          }
-        }}>
-          <Input aria-label='Name' autoFocus autoCorrect='off' value={name} onChange={(event) => setName(event.target.value)} />
-          {error && <Alert variant='destructive'><AlertDescription>{error}</AlertDescription></Alert>}
-          <DialogFooter>
-            <Button type='submit' disabled={saving || !name.trim()}>{saving ? 'Renaming…' : 'Rename'}</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <section aria-label='Dispatcher' className='grid gap-2 rounded-lg border border-border p-3'>
+      <div className='flex items-center gap-3'>
+        <span className='flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground'>
+          <HugeiconsIcon icon={ServerStack01Icon} strokeWidth={2} />
+        </span>
+        <span className='min-w-0 flex-1'>
+          <span className='flex items-center gap-2'>
+            <span className='truncate font-medium'>Dispatcher on {dispatcher.name}</span>
+            <Badge variant={dispatcher.status === 'connected' ? 'default' : halted ? 'destructive' : 'secondary'}>{dispatcherStatus[dispatcher.status]}</Badge>
+          </span>
+          <span className='block truncate text-muted-foreground'>{dispatcher.url}</span>
+        </span>
+        {dispatcher.status !== 'connected' && dispatcher.status !== 'connecting' && (
+          <Button variant='outline' size='icon' aria-label='Reconnect to the Dispatcher' onClick={() => void actions.reconnectDispatcher()}>
+            <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
+          </Button>
+        )}
+        <AlertDialog>
+          <AlertDialogTrigger render={<Button variant='ghost' size='icon' aria-label='Forget the Dispatcher' />}>
+            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Forget the Dispatcher on {dispatcher.name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This device deletes its key and reaches no Host until it pairs again. Your threads keep running on your
+                Hosts. To cut this device off on the Dispatcher too, run <code>weave dispatcher devices revoke</code> there.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction variant='destructive' onClick={() => void actions.forgetDispatcher()}>Forget Dispatcher</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+      {dispatcher.error && dispatcher.status !== 'connected' && <p className='text-muted-foreground'>{dispatcher.error}</p>}
+    </section>
   );
 }
 
-function HostRow({ host, actions, onPairAgain }: {
-  host: PairedHost;
-  actions: AppController['actions'];
-  onPairAgain(url: string): void;
-}) {
-  const revoked = host.status === 'revoked';
-  const [renaming, setRenaming] = useState(false);
+/** One of the Hosts the Dispatcher lists, as it reaches it. */
+function HostRow({ host, away, actions }: { host: HostSummary; away: boolean; actions: AppController['actions'] }) {
+  const stopped = host.status === 'disconnected' || host.status === 'incompatible';
   return (
-    <li className='grid gap-2 rounded-lg border border-border p-3'>
+    <li className={cn('grid gap-2 rounded-lg border border-border p-3', away && 'opacity-60')}>
       <div className='flex items-center gap-3'>
         <span className='flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground'>
           <HugeiconsIcon icon={ComputerIcon} strokeWidth={2} />
         </span>
-        <span className='min-w-0 flex-1'>
-          <span className='flex items-center gap-2'>
-            <span className='truncate font-medium'>{host.name}</span>
-            <Badge variant={host.status === 'connected' ? 'default' : revoked ? 'destructive' : 'secondary'}>{statusLabel[host.status]}</Badge>
-          </span>
-          <span className='block truncate text-muted-foreground'>{host.url}</span>
+        <span className='flex min-w-0 flex-1 items-center gap-2'>
+          <span className='truncate font-medium'>{host.name}</span>
+          <Badge variant={host.status === 'connected' ? 'default' : stopped ? 'destructive' : 'secondary'}>{hostStatus[host.status]}</Badge>
         </span>
-        {revoked && (
-          <>
-            <Button variant='outline' size='sm' onClick={() => onPairAgain(pairingUrl(host.url))}>Pair again</Button>
-            <Button variant='ghost' size='icon' aria-label={`Remove ${host.name}`} onClick={() => void actions.forgetHost(host.id)}>
-              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-            </Button>
-          </>
-        )}
-        {!revoked && host.status !== 'connected' && (
+        {stopped && !away && (
           <Button variant='outline' size='icon' aria-label={`Reconnect to ${host.name}`} onClick={() => void actions.reconnectHost(host.id)}>
             <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
           </Button>
         )}
-        {!revoked && (
-          <Button variant='ghost' size='icon' aria-label={`Rename ${host.name}`} onClick={() => setRenaming(true)}>
-            <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
-          </Button>
-        )}
-        {!revoked && (
-          <AlertDialog>
-            <AlertDialogTrigger render={<Button variant='ghost' size='icon' aria-label={`Forget ${host.name}`} />}>
-              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Forget {host.name}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This device deletes its key for the Host and stops showing its threads. They keep running on the
-                  Host. To cut this device off on the Host too, run <code>weave devices revoke</code> there.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction variant='destructive' onClick={() => void actions.forgetHost(host.id)}>Forget Host</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
       </div>
-      {host.error && <p className='text-muted-foreground'>{host.error}</p>}
-      <RenameHostDialog host={host} actions={actions} open={renaming} onOpenChange={setRenaming} />
+      {host.error && host.status !== 'connected' && <p className='text-muted-foreground'>{host.error}</p>}
     </li>
   );
 }
 
-/** What a new pairing calls this device until the person names it. */
-const defaultDeviceName = () => {
-  const idiom = document.documentElement.dataset.deviceIdiom;
-  return idiom === 'phone' ? 'iPhone' : idiom === 'pad' ? 'iPad' : 'Browser';
-};
-
-/** The paired Hosts, and pairing another with the URL and code `weave pair` shows. */
+/**
+ * The Dispatcher this device is paired with and the Hosts it lists, each saying how the
+ * Dispatcher reaches it; and pairing with the Dispatcher, again or for the first time, with the URL
+ * and code `weave dispatcher pair` shows.
+ */
 export function HostsDialog({ controller, open, onOpenChange, offer }: {
   controller: AppController;
   open: boolean;
@@ -159,98 +119,44 @@ export function HostsDialog({ controller, open, onOpenChange, offer }: {
   offer?: { url: string; code: string };
 }) {
   const { model, actions } = controller;
-  const [url, setUrl] = useState('');
-  const [code, setCode] = useState('');
-  const [name, setName] = useState(defaultDeviceName);
-  const [error, setError] = useState<string>();
+  const { dispatcher } = model;
+  const away = dispatcher?.status !== 'connected';
+  const unpaired = !dispatcher || dispatcher.status === 'revoked' || dispatcher.status === 'refused';
   const [pairing, setPairing] = useState(false);
-  const codeRef = useRef<HTMLInputElement>(null);
-  const pairAgain = (hostUrl: string) => {
-    setUrl(hostUrl);
-    setCode('');
-    setError(undefined);
-    codeRef.current?.focus();
-  };
-
   useEffect(() => {
-    if (!offer) return;
-    setUrl(offer.url);
-    setCode(offer.code);
-    setError(undefined);
+    if (offer) setPairing(true);
   }, [offer]);
-
-  const offeredHost = (() => {
-    try {
-      return offer ? new URL(offer.url).hostname : undefined;
-    } catch {
-      return undefined;
-    }
-  })();
-
-  const pair = async (event: FormEvent) => {
-    event.preventDefault();
-    setError(undefined);
-    setPairing(true);
-    try {
-      await actions.pairHost({ url: url.trim(), code: code.trim(), name: name.trim() });
-      setUrl('');
-      setCode('');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setPairing(false);
-    }
-  };
+  useEffect(() => {
+    if (!open) setPairing(false);
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-h-[calc(100dvh-2rem)] w-[min(36rem,calc(100%-2rem))] max-w-none overflow-y-auto sm:max-w-xl'>
         <DialogHeader>
           <DialogTitle>Hosts</DialogTitle>
-          <DialogDescription>The weave Hosts this device is paired with. Its key never leaves this device.</DialogDescription>
+          <DialogDescription>
+            This device reaches your Hosts through the Dispatcher it's paired with. Its key never leaves this device.
+          </DialogDescription>
         </DialogHeader>
+        {dispatcher && dispatcher.status !== 'revoked' && <DispatcherRow dispatcher={dispatcher} actions={actions} />}
         {model.hosts.length > 0 && (
-          <ul aria-label='Paired Hosts' className='grid gap-2'>
-            {model.hosts.map((host) => <HostRow key={host.id} host={host} actions={actions} onPairAgain={pairAgain} />)}
+          <ul aria-label='Hosts' className='grid gap-2'>
+            {model.hosts.map((host) => <HostRow key={host.id} host={host} away={away} actions={actions} />)}
           </ul>
         )}
-        <form aria-label='Pair a Host' className='grid gap-3 rounded-lg border border-border p-3' onSubmit={pair}>
-          <div className='flex items-center gap-2 font-medium'>
-            <HugeiconsIcon icon={Link01Icon} strokeWidth={2} />
-            Pair a Host
-          </div>
-          {offeredHost
-            ? <p>Pair with <strong>{offeredHost}</strong>? Only pair with a Host you just ran <code>weave pair</code> on.</p>
-            : (
-              <p className='text-muted-foreground'>
-                Run <code>weave pair</code> on the Host's computer and scan its QR code with the Camera, or enter the URL and
-                code it shows.
-              </p>
-            )}
-          <div className='grid gap-1.5'>
-            <Label htmlFor='pair-url'>URL</Label>
-            <Input id='pair-url' required inputMode='url' autoCapitalize='off' autoCorrect='off' value={url}
-              placeholder='https://mac.example.ts.net:7341' onChange={(event) => setUrl(event.target.value)} />
-          </div>
-          <div className='grid gap-1.5'>
-            <Label htmlFor='pair-code'>Code</Label>
-            <Input id='pair-code' ref={codeRef} required autoCapitalize='characters' autoCorrect='off' value={code}
-              onChange={(event) => setCode(event.target.value)} />
-          </div>
-          <div className='grid gap-1.5'>
-            <Label htmlFor='pair-name'>This device's name</Label>
-            <Input id='pair-name' required value={name} onChange={(event) => setName(event.target.value)} />
-          </div>
-          {error && (
-            <Alert variant='destructive'>
-              <AlertTitle>Couldn't pair</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
+        {dispatcher?.status === 'connected' && model.hosts.length === 0 && (
+          <p className='text-muted-foreground'>
+            No Host has joined the Dispatcher yet. <code>weave hosts add</code> on a computer has its Host join.
+          </p>
+        )}
+        {unpaired || pairing
+          ? <PairDispatcherForm controller={controller} offer={offer} onPaired={() => setPairing(false)} />
+          : (
+            <div className='flex justify-end'>
+              <Button variant='outline' onClick={() => setPairing(true)}>Pair again</Button>
+            </div>
           )}
-          <DialogFooter>
-            <Button type='submit' disabled={pairing || !url.trim() || !code.trim() || !name.trim()}>Pair</Button>
-          </DialogFooter>
-        </form>
       </DialogContent>
     </Dialog>
   );

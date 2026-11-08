@@ -1,16 +1,17 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// The app's Host store and a terminal's stream against a real dev Host (`testing/dev-host.ts`),
-// whose terminals run in real holders (WVE-153). Skipped unless the debug `weave`, its holder and
-// the fake agent are built.
+// The app's Host store and a terminal's stream against a real dev Host, whose terminals run in
+// real holders (WVE-153), both reached through a dev Dispatcher it joined
+// (`testing/dev-dispatcher.ts`, ADR 0030). Skipped unless the debug `weave`, its holder and the
+// fake agent are built.
 import { realpathSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { threadKey } from '@/app/app-controller';
-import { HostConnection, websocketConnector } from './connection';
-import { type DeviceKey, webCryptoDeviceKey } from './device-key';
-import { HostStore } from './host-store';
+import { HostConnection } from './connection';
+import { DISPATCHER, dispatcherAuthMessage } from './dispatcher';
+import type { HostStore } from './host-store';
 import { HOST_PROTOCOL, type TerminalStreamOpened } from './protocol';
-import { memoryStorage } from './storage';
+import { devStore, startDevDispatcher, type DevDispatcher } from './testing/dev-dispatcher';
 import { devHostHasTerminals, startDevHost, unixConnector, type DevHost } from './testing/dev-host';
 
 const waitFor = async <T,>(find: () => T | undefined | false, what: string, ms = 15_000): Promise<T> => {
@@ -27,32 +28,21 @@ describe.skipIf(!devHostHasTerminals())('terminals through the Host store with a
   let host: DevHost;
   let local: HostConnection;
   let store: HostStore;
-  const keys = new Map<string, DeviceKey>();
+  let dispatcher: DevDispatcher;
+  let keys: ReturnType<typeof devStore>['keys'];
 
   beforeAll(async () => {
-    host = await startDevHost();
+    [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+    await dispatcher.join(host, 'studio');
     local = await HostConnection.connect({
       connector: unixConnector(host.socket),
       client: { name: 'weave-app-test', version: '0' },
       credentials: { method: 'local' },
       onEvent: () => {},
     });
-    store = new HostStore({
-      storage: memoryStorage(),
-      keyFor: (keyId) => keys.get(keyId)!,
-      async newKey() {
-        const keyId = crypto.randomUUID();
-        keys.set(keyId, await webCryptoDeviceKey());
-        return { keyId, key: keys.get(keyId)! };
-      },
-      connectorFor: (url) => websocketConnector(url),
-      client: { name: 'weave-app-test', version: '0' },
-      deviceName: 'Test iPad',
-      backoff: [50],
-    });
+    ({ store, keys } = devStore());
     await store.start();
-    const { code } = await local.request('devices/offer', {});
-    await store.actions.pairHost({ url: host.url, code, name: 'Test iPad' });
+    await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer(), name: 'Test iPad' });
   }, 60_000);
 
   afterAll(async () => {
@@ -69,6 +59,7 @@ describe.skipIf(!devHostHasTerminals())('terminals through the Host store with a
     store?.stop();
     local?.close();
     await host?.stop();
+    await dispatcher?.stop();
   }, 30_000);
 
   it("lists the open thread's terminals, live, and starts, renames, streams and ends them", async () => {
@@ -91,25 +82,43 @@ describe.skipIf(!devHostHasTerminals())('terminals through the Host store with a
     await store.actions.renameTerminal(id, 'tests');
     await waitFor(() => store.snapshot().thread?.terminals?.find((terminal) => terminal.id === id)?.label === 'tests', 'the name');
 
-    // The stream, as the native plugin opens it: from a codec that isn't the holder's, so the
-    // restore is the formatter's VT, at the size the stream opened with.
-    const { url, ticket } = await store.actions.attachTerminal(id);
-    expect(url).toBe(host.url);
-    const socket = new WebSocket(url, HOST_PROTOCOL.terminalStream.subprotocol);
+    // The stream, as the native plugin opens it: through the Dispatcher, which this device proves
+    // itself to and asks for the Host's terminal stream, then from a codec that isn't the holder's,
+    // so the restore is the formatter's VT, at the size the stream opened with.
+    const { url, ticket, carry } = await store.actions.attachTerminal(id);
+    expect(url).toBe(dispatcher.url);
+    expect(carry.host).toBe(paired.id);
+    const socket = new WebSocket(url, DISPATCHER.carrySubprotocol);
     socket.binaryType = 'arraybuffer';
+    const answers = new Map<number, { result?: Record<string, string>; error?: unknown }>();
+    let carried = false;
     const texts: unknown[] = [];
     let restored = 0;
     let output = '';
     socket.addEventListener('message', ({ data }) => {
       if (typeof data === 'string') {
-        texts.push(JSON.parse(data));
+        const message = JSON.parse(data);
+        if (carried) texts.push(message);
+        else answers.set(message.id, message);
         return;
       }
       const bytes = new Uint8Array(data as ArrayBuffer);
       if (bytes[0] === HOST_PROTOCOL.terminalStream.restore) restored += bytes.length - 1;
       if (bytes[0] === HOST_PROTOCOL.terminalStream.output) output += new TextDecoder().decode(bytes.subarray(1));
     });
+    const ask = async (id: number, method: string, params: unknown) => {
+      socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+      const answer = await waitFor(() => answers.get(id), `the answer to ${method}`);
+      if (!answer.result) throw new Error(`${method} failed: ${JSON.stringify(answer.error)}`);
+      return answer.result;
+    };
     await new Promise((opened) => socket.addEventListener('open', opened, { once: true }));
+    const { nonce } = await ask(1, 'dispatcher/challenge', {});
+    const signature = await keys.get(carry.keyId)!.sign(dispatcherAuthMessage(carry.dispatcherId, carry.deviceId, nonce));
+    await ask(2, 'dispatcher/hello', { protocol: DISPATCHER.protocol, client: { name: 'weave-app-test', version: '0' }, auth: { method: 'device', deviceId: carry.deviceId, signature } });
+    expect(await ask(3, 'hosts/open', { host: carry.host, stream: 'terminal' })).toMatchObject({ hostId: paired.id });
+    // From here the stream is the Host's.
+    carried = true;
     socket.send(JSON.stringify({ ticket, size: { cols: 70, rows: 20 }, codec: 'not the holder\'s' }));
     const opened = await waitFor(() => texts[0] as TerminalStreamOpened | undefined, 'the stream to open');
     expect(opened).toMatchObject({ restore: 'vt', terminal: { id, size: { cols: 70, rows: 20 } } });

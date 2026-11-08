@@ -27,7 +27,7 @@ const props = (extra: Partial<TerminalPanelProps> = {}): TerminalPanelProps => (
   onWide: vi.fn(),
   onFontSize: vi.fn(),
   onDone: vi.fn(),
-  attach: vi.fn(async () => ({ url: 'wss://mac', ticket: 'k' })),
+  attach: vi.fn(async () => ({ url: 'wss://homelab', ticket: 'k', carry: { dispatcherId: 'd', deviceId: 'v', keyId: 'key', host: 'h' } })),
   ...extra,
 });
 

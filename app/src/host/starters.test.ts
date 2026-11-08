@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { PairedHost, ThreadSummary } from '@/app/app-controller';
+import type { HostSummary, ThreadSummary } from '@/app/app-controller';
 import { labelStarters } from './host-store';
 
-const host = (id: string, name: string): PairedHost => ({ id, name, url: `https://${name}`, status: 'connected' });
+const host = (id: string, name: string): HostSummary => ({ id, name, status: 'connected' });
 
 const thread = (hostId: string, threadId: string, extra: Partial<ThreadSummary> = {}): ThreadSummary => ({
   key: `${hostId}/${threadId}`,

@@ -1,17 +1,18 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// Prompting from the app against a real dev Host (`testing/dev-host.ts`), WVE-102: new threads,
-// prompts, steers, queued prompts, cancelling, modes and an agent that needs signing in. Skipped
-// unless the debug `weave` and fake agent are built.
+// Prompting from the app against a real dev Host, reached through a dev Dispatcher it joined
+// (`testing/dev-dispatcher.ts`), WVE-102: new threads, prompts, steers, queued prompts,
+// cancelling, modes and an agent that needs signing in. Skipped unless the debug `weave` and fake
+// agent are built.
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppModel, OpenThread } from '@/app/app-controller';
 import { blocksText, type TranscriptEntry } from '@/chat/acp-transcript';
-import { type Connector, HostConnection, websocketConnector } from './connection';
-import { type DeviceKey, webCryptoDeviceKey } from './device-key';
-import { HostStore } from './host-store';
-import { memoryStorage } from './storage';
+import { HostConnection, websocketConnector } from './connection';
+import type { SocketOpener } from './dispatcher';
+import type { HostStore } from './host-store';
+import { devStore, startDevDispatcher, type DevDispatcher } from './testing/dev-dispatcher';
 import { devHostAvailable, startDevHost, unixConnector, type DevHost } from './testing/dev-host';
 
 const waitFor = async <T,>(find: () => T | undefined | false, what: string, ms = 15_000): Promise<T> => {
@@ -40,10 +41,10 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
   let local: HostConnection;
   let store: HostStore;
   let hostId: string;
-  const keys = new Map<string, DeviceKey>();
+  let dispatcher: DevDispatcher;
   // Holds back the Host's notifications, but not its answers, while `held`.
   const gate = { held: false, queue: [] as (() => void)[] };
-  const gated = (url: string): Connector => (events) => websocketConnector(url)({
+  const gated: SocketOpener = (url, subprotocol) => (events) => websocketConnector(url, subprotocol)({
     message(text) {
       const message = JSON.parse(text) as Record<string, unknown>;
       if (gate.held && 'method' in message && !('id' in message)) gate.queue.push(() => events.message(text));
@@ -73,30 +74,17 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     open.transcript.turn.status === 'running' && current.some((entry) => entry.startsWith('assistant: Chunk')));
 
   beforeAll(async () => {
-    host = await startDevHost();
+    [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+    await dispatcher.join(host, 'studio');
     local = await HostConnection.connect({
       connector: unixConnector(host.socket),
       client: { name: 'weave-tui', version: '0' },
       credentials: { method: 'local' },
       onEvent: () => {},
     });
-    store = new HostStore({
-      storage: memoryStorage(),
-      keyFor: (keyId) => keys.get(keyId)!,
-      async newKey() {
-        const keyId = crypto.randomUUID();
-        keys.set(keyId, await webCryptoDeviceKey());
-        return { keyId, key: keys.get(keyId)! };
-      },
-      connectorFor: gated,
-      client: { name: 'weave-app-test', version: '0' },
-      deviceName: 'Test iPad',
-      backoff: [50],
-      schedule: (notify) => queueMicrotask(notify),
-    });
+    ({ store } = devStore({ socket: gated, schedule: (notify) => queueMicrotask(notify) }));
     await store.start();
-    const { code } = await local.request('devices/offer', {});
-    await store.actions.pairHost({ url: host.url, code });
+    await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer() });
     hostId = model().hosts[0].id;
   }, 60_000);
 
@@ -105,6 +93,7 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     store?.stop();
     local?.close();
     await host?.stop();
+    await dispatcher?.stop();
   });
 
   it('starts a thread and prompts it', async () => {

@@ -1,7 +1,7 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// Pending requests and client tools from the app against a real dev Host (`testing/dev-host.ts`),
-// WVE-103: permissions, form and URL elicitations, the TUI answering first, requests already
+// Pending requests and client tools from the app against a real dev Host, reached through a dev
+// Dispatcher it joined (`testing/dev-dispatcher.ts`), WVE-103: permissions, form and URL elicitations, the TUI answering first, requests already
 // waiting on attaching, a subagent's request, and `clipboard_write` in the app's turns and the
 // TUI's; and the thread list kept live (`threads/watch`, WVE-104) while the TUI drives a
 // thread the app isn't in. Skipped unless the debug `weave` and fake agent are built.
@@ -16,11 +16,10 @@ import {
   type TranscriptToolCall,
 } from '@/chat/acp-transcript';
 import { clipboardWrite } from './client-tools';
-import { HostConnection, type HostEvent, websocketConnector } from './connection';
-import { type DeviceKey, webCryptoDeviceKey } from './device-key';
-import { HostStore } from './host-store';
+import { HostConnection, type HostEvent } from './connection';
+import type { HostStore } from './host-store';
 import { HOST_PROTOCOL, type PendingRequest } from './protocol';
-import { memoryStorage } from './storage';
+import { devStore, startDevDispatcher, type DevDispatcher } from './testing/dev-dispatcher';
 import { devHostAvailable, startDevHost, unixConnector, type DevHost } from './testing/dev-host';
 
 const waitFor = async <T,>(find: () => T | undefined | false, what: string, ms = 15_000): Promise<T> => {
@@ -56,13 +55,13 @@ const permissionTool = (transcript: AcpTranscript, status = 'pending') =>
   last(transcript.entries, (entry) => entry.kind === 'tool' && entry.permission?.status === status) as TranscriptToolCall | undefined;
 
 describe.skipIf(!devHostAvailable())('pending requests in the app with a dev Host', { timeout: 30_000 }, () => {
+  let dispatcher: DevDispatcher;
   let host: DevHost;
   // The TUI: a local client that runs `clipboard_write` too.
   let tui: HostConnection;
   const tuiEvents: HostEvent[] = [];
   let store: HostStore;
   let hostId: string;
-  const keys = new Map<string, DeviceKey>();
   const clipboard: string[] = [];
 
   const model = (): AppModel => store.snapshot();
@@ -86,7 +85,8 @@ describe.skipIf(!devHostAvailable())('pending requests in the app with a dev Hos
   const tuiPrompts = (text: string) => tui.request('turn/start', { threadId: threadId(), prompt: [{ type: 'text', text }] });
 
   beforeAll(async () => {
-    host = await startDevHost();
+    [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+    await dispatcher.join(host, 'studio');
     tui = await HostConnection.connect({
       connector: unixConnector(host.socket),
       client: { name: 'weave-tui', version: '0' },
@@ -94,24 +94,13 @@ describe.skipIf(!devHostAvailable())('pending requests in the app with a dev Hos
       credentials: { method: 'local' },
       onEvent: (event) => tuiEvents.push(event),
     });
-    store = new HostStore({
-      storage: memoryStorage(),
-      keyFor: (keyId) => keys.get(keyId)!,
-      async newKey() {
-        const keyId = crypto.randomUUID();
-        keys.set(keyId, await webCryptoDeviceKey());
-        return { keyId, key: keys.get(keyId)! };
-      },
-      connectorFor: (url) => websocketConnector(url),
+    ({ store } = devStore({
       clientTools: { [HOST_PROTOCOL.clientTools.clipboardWrite]: clipboardWrite(async (text) => { clipboard.push(text); }) },
-      client: { name: 'weave-app-test', version: '0' },
       deviceName: 'Test iPhone',
-      backoff: [50],
       schedule: (notify) => queueMicrotask(notify),
-    });
+    }));
     await store.start();
-    const { code } = await tui.request('devices/offer', {});
-    await store.actions.pairHost({ url: host.url, code });
+    await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer() });
     hostId = model().hosts[0].id;
     await store.actions.createThread({ hostId, cwd: host.cwd, agentId: 'fake' });
   }, 60_000);
@@ -120,6 +109,7 @@ describe.skipIf(!devHostAvailable())('pending requests in the app with a dev Hos
     store?.stop();
     tui?.close();
     await host?.stop();
+    await dispatcher?.stop();
   });
 
   it('answers a permission request, and the thread waits on the person until then', async () => {

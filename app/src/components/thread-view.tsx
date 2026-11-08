@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
-import type { AgentUpdateNotice, AppController, OpenThread, PairedHost, ThreadSummary } from '@/app/app-controller';
+import type { AgentUpdateNotice, AppController, DispatcherSummary, HostSummary, OpenThread, ThreadSummary } from '@/app/app-controller';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
 import { allSubagents, findSubagent, threadLabel, waitsForAnswer } from '@/chat/acp-transcript';
@@ -215,13 +215,18 @@ function TerminalsButton({ shown, count, onToggle }: { shown: boolean; count: nu
   );
 }
 
-/** The thread's Host isn't connected: the transcript catches up once it is. */
-function ConnectionNotice({ host }: { host: PairedHost }) {
-  const text = host.status === 'connecting'
-    ? `Connecting to ${host.name}…`
-    : host.status === 'reconnecting'
-      ? `Reconnecting to ${host.name}…`
-      : `${host.name} isn't connected.${host.error ? ` ${host.error}` : ''}`;
+/**
+ * The thread's Host isn't connected, or the Dispatcher every Host is reached through can't be
+ * reached: the transcript catches up once it is.
+ */
+function ConnectionNotice({ host, dispatcher }: { host: HostSummary; dispatcher?: DispatcherSummary }) {
+  const text = dispatcher && dispatcher.status !== 'connected'
+    ? `Can't reach the Dispatcher on ${dispatcher.name}, which ${host.name} is reached through.`
+    : host.status === 'connecting'
+      ? `Connecting to ${host.name}…`
+      : host.status === 'reconnecting'
+        ? `Reconnecting to ${host.name}…`
+        : `${host.name} isn't connected.${host.error ? ` ${host.error}` : ''}`;
   return (
     <p role='status' data-slot='connection-notice' className='shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground'>
       {text}
@@ -375,7 +380,7 @@ export function ThreadView({ controller, thread, leading, onSwipeBack, surface }
           agentListsServers={thread.transcript.availableCommands.some(({ name }) => name === 'mcp')}
           side={phone ? 'bottom' : 'right'}
         />
-        {host && host.status !== 'connected' && <ConnectionNotice host={host} />}
+        {host && host.status !== 'connected' && <ConnectionNotice host={host} dispatcher={model.dispatcher} />}
         {model.error && (
           <Alert variant='destructive' className='m-2 w-auto'>
             <AlertDescription>{model.error}</AlertDescription>

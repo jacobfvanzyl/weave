@@ -18,8 +18,8 @@ function MockApp() {
   return <AppShell controller={useMockController(mockScenarioFromLocation())} surfaceLink={surfaceLink} />;
 }
 
-// The app talks to its paired Hosts; `?mock=<scenario>` (or a debug build's `--mock`) runs it on
-// fixtures instead, for UI work. `?surface` is a Surface's page (WVE-183), which the native shell
+// The app talks to its Hosts through the Dispatcher it's paired with; `?mock=<scenario>` (or a
+// debug build's `--mock`) runs it on fixtures instead, for UI work. `?surface` is a Surface's page (WVE-183), which the native shell
 // opens on a connected display and a browser in another tab, beside a phone's at `?mock=…&idiom=phone`.
 export function App() {
   const search = new URLSearchParams(location.search);

@@ -190,7 +190,7 @@ export function useNativeTerminal(host: RefObject<HTMLElement | null>, { termina
     exited.current = false;
     setState({ kind: 'connecting' });
     void latest.current.attach(terminalId)
-      .then(({ url, ticket }) => stale ? undefined : nativeTerminal.attach({ surfaceId, url, ticket }))
+      .then((ticket) => stale ? undefined : nativeTerminal.attach({ surfaceId, ...ticket }))
       .catch((error) => {
         if (!stale) setState({ kind: 'failed', message: `Couldn't attach to the terminal: ${message(error)}` });
       });

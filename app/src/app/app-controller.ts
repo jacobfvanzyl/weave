@@ -2,20 +2,40 @@ import type { CreateElicitationResponse, McpServerStatus, ProgramStatus } from '
 import type { AcpTranscript } from '@/chat/acp-transcript';
 
 /**
- * A paired Host's connection. `disconnected` isn't tried again until the person asks, `revoked`
- * (the Host revoked this device, which forgot the pairing) has to pair again, and
- * `incompatible` shares no protocol version with this app.
+ * The connection to the Dispatcher's API, through which the app lists the person's Hosts and
+ * reaches each (ADR 0030). `reconnecting` can't reach it now and keeps trying; `refused` (it
+ * refused this device) and `revoked` (it revoked this device, which forgot the pairing) have to
+ * pair again; `incompatible` shares no version of its API with this app.
  */
-export type HostStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'revoked' | 'incompatible';
+export type DispatcherStatus = 'connecting' | 'connected' | 'reconnecting' | 'refused' | 'revoked' | 'incompatible';
 
-/** A Host this device has paired with. */
-export type PairedHost = {
-  /** The Host's own id (`host/hello` `host.id`). */
+/** The Dispatcher this device is paired with: its only pairing. */
+export type DispatcherSummary = {
+  /** Its own id (`dispatcher/hello` `id`). */
   id: string;
-  /** What this device calls it: the URL's host name, until the person renames it. */
+  /** What it calls itself: its computer's name. */
   name: string;
   url: string;
+  status: DispatcherStatus;
+  error?: string;
+};
+
+/**
+ * A Host's connection, which the Dispatcher carries. `unreachable` is a Host the Dispatcher
+ * can't reach now, its error saying why, which comes back once the Dispatcher lists it
+ * connected; `disconnected` isn't tried again until the person asks; `incompatible` shares no
+ * protocol version with this app.
+ */
+export type HostStatus = 'connecting' | 'connected' | 'reconnecting' | 'unreachable' | 'disconnected' | 'incompatible';
+
+/** One of the person's Hosts, as the Dispatcher lists it. */
+export type HostSummary = {
+  /** The Host's own id (`host/hello` `host.id`). */
+  id: string;
+  /** What the Dispatcher calls it: its computer's name, as it joined. */
+  name: string;
   status: HostStatus;
+  /** Why it isn't connected. */
   error?: string;
   /** Whether it lists its directories (`files/list`), for picking where a thread runs. */
   canBrowse?: boolean;
@@ -81,7 +101,7 @@ export type DirectoryListing = {
 
 export type ThreadActivity = 'idle' | 'running' | 'waiting';
 
-/** One row of the thread list: a thread on one of the paired Hosts. */
+/** One row of the thread list: a thread on one of the person's Hosts. */
 export type ThreadSummary = {
   /** Unique across Hosts: `${hostId}/${threadId}`. */
   key: string;
@@ -160,8 +180,18 @@ export type TerminalSummary = {
   startedAt: number;
 };
 
-/** Where a terminal's stream is, and a ticket for it, good once and for a little while. */
-export type TerminalTicket = { url: string; ticket: string };
+/**
+ * Where a terminal's stream is, and a ticket for it, good once and for a little while. The
+ * Dispatcher carries the stream as it carries the Host's connection (ADR 0030): the native
+ * terminal proves the device with the key `keyId` names and names the Host, then opens the stream
+ * with the ticket, which is this device's.
+ */
+export type TerminalTicket = {
+  /** The Dispatcher's WebSocket. */
+  url: string;
+  ticket: string;
+  carry: { dispatcherId: string; deviceId: string; keyId: string; host: string };
+};
 
 /** The thread on screen. */
 export type OpenThread = {
@@ -198,7 +228,12 @@ export type OpenThread = {
 };
 
 export type AppModel = {
-  hosts: PairedHost[];
+  /** Loading the pairing, before anything is known. */
+  starting?: boolean;
+  /** None until this device pairs with the Dispatcher, which the app asks for first. */
+  dispatcher?: DispatcherSummary;
+  /** In the Dispatcher's order; the last it listed while it can't be reached. */
+  hosts: HostSummary[];
   threads: ThreadSummary[];
   /** The agents each Host offers, by Host id. */
   agents: Record<string, AgentChoice[]>;
@@ -238,12 +273,16 @@ export type AppActions = {
   /** Gives an open thread a title of the Host's, for every client; rejects saying why not. */
   renameThread(key: string, title: string): Promise<void> | void;
   deleteThread(key: string): Promise<void> | void;
-  /** Pairs with the URL and code `weave pair` shows; `name` is what the Host calls this device. */
-  pairHost(input: { url: string; code: string; name?: string }): Promise<void> | void;
-  forgetHost(hostId: string): Promise<void> | void;
-  /** Gives a paired Host another name on this device only; rejects saying why not. */
-  renameHost(hostId: string, name: string): Promise<void> | void;
-  /** Lists the threads again, and reconnects at once to Hosts that dropped, as pulling the list down asks. */
+  /**
+   * Pairs with the Dispatcher at the URL and code `weave dispatcher pair` shows, in place of any
+   * pairing before; `name` is what the Dispatcher calls this device. Rejects saying why not.
+   */
+  pairDispatcher(input: { url: string; code: string; name?: string }): Promise<void> | void;
+  /** Forgets the pairing and deletes its key; the Dispatcher lists the device until it's revoked there. */
+  forgetDispatcher(): Promise<void> | void;
+  /** Tries the Dispatcher again at once. */
+  reconnectDispatcher(): Promise<void> | void;
+  /** Lists the Hosts and their threads again, and reconnects at once to what dropped, as pulling the list down asks. */
   refresh?(): Promise<void> | void;
   reconnectHost(hostId: string): Promise<void> | void;
   /** Starts a turn, steers the running one, or queues the message, as `OpenThread` allows. */

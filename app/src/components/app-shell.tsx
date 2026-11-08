@@ -5,6 +5,7 @@ import type { AppController } from '@/app/app-controller';
 import { waitingCount } from '@/app/thread-list';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { HostsDialog } from '@/components/hosts-dialog';
+import { PairingScreen } from '@/components/pair-dispatcher';
 import { ResizableSidebarProvider, SidebarResizeHandle } from '@/components/sidebar-resize';
 import { ThreadList } from '@/components/thread-list';
 import { ThreadHeader, ThreadView } from '@/components/thread-view';
@@ -98,11 +99,12 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
 /**
  * The app's layout. An iPhone stacks the list and a thread; an iPad, or anything wider, shows the
  * list as a sidebar beside one thread, as wide as its edge is dragged. Which follows the device,
- * not the window's width.
+ * not the window's width. Until the app is paired with the Dispatcher, or once the Dispatcher
+ * revoked it, it shows the pairing screen instead.
  */
 export function AppShell({ controller, pairingOffer, surfaceLink }: {
   controller: AppController;
-  /** A `weave pair` link the app was opened with, for the person to confirm. */
+  /** A `weave dispatcher pair` link the app was opened with, for the person to confirm. */
   pairingOffer?: { url: string; code: string };
   /** The iPhone's way to a Surface, a display it's connected to (WVE-183). */
   surfaceLink?: SurfaceLink;
@@ -110,9 +112,13 @@ export function AppShell({ controller, pairingOffer, surfaceLink }: {
   const phone = usePhoneLayout();
   const [hostsOpen, setHostsOpen] = useState(false);
   const openHosts = () => setHostsOpen(true);
+  const { model } = controller;
+  const unpaired = !model.starting && (!model.dispatcher || model.dispatcher.status === 'revoked');
   useEffect(() => {
-    if (pairingOffer) setHostsOpen(true);
+    if (pairingOffer && !unpaired) setHostsOpen(true);
+    // A link opened while paired asks in the Hosts dialog; unpaired, on the pairing screen.
   }, [pairingOffer]);
+  if (unpaired) return <PairingScreen controller={controller} offer={pairingOffer} />;
   return (
     <ResizableSidebarProvider className='h-dvh min-h-0' cookieName={false} data-layout={phone ? 'phone' : 'split'}>
       {phone ? <PhoneShell controller={controller} onOpenHosts={openHosts} surfaceLink={surfaceLink} /> : <SplitShell controller={controller} onOpenHosts={openHosts} />}

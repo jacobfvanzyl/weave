@@ -1,15 +1,15 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// The app's Host store against a real dev Host (`testing/dev-host.ts`): pairing, the thread list
-// and a thread's transcript, replayed and then live. Skipped unless the debug `weave` and fake
-// agent are built.
+// The app's Host store against a real dev Dispatcher and a dev Host that joined it
+// (`testing/dev-dispatcher.ts`, ADR 0030): pairing with the Dispatcher, the Hosts it lists, the
+// thread list and a thread's transcript, replayed and then live, all through the Dispatcher.
+// Skipped unless the debug `weave` and fake agent are built.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppModel } from '@/app/app-controller';
 import type { TranscriptEntry } from '@/chat/acp-transcript';
-import { HostConnection, type HostEvent, websocketConnector } from './connection';
-import { type DeviceKey, webCryptoDeviceKey } from './device-key';
-import { HostStore } from './host-store';
-import { memoryStorage } from './storage';
+import { HostConnection, type HostEvent } from './connection';
+import type { HostStore } from './host-store';
+import { devStore, startDevDispatcher, type DevDispatcher } from './testing/dev-dispatcher';
 import { devHostAvailable, startDevHost, unixConnector, type DevHost } from './testing/dev-host';
 
 const waitFor = async <T,>(find: () => T | undefined, what: string, ms = 15_000): Promise<T> => {
@@ -27,13 +27,16 @@ const text = (entry: TranscriptEntry) =>
     ? `${entry.role}: ${entry.chunks.flatMap((chunk) => chunk.content).map((block) => block.type === 'text' ? block.text : '').join('')}`
     : undefined;
 
-describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
+describe.skipIf(!devHostAvailable())('the Host store with a dev Dispatcher and Host', () => {
+  let dispatcher: DevDispatcher;
   let host: DevHost;
+  let hostId: string;
   let local: HostConnection;
   const localEvents: HostEvent[] = [];
   let store: HostStore;
+  let storage: ReturnType<typeof devStore>['storage'];
+  let forgotten: string[];
   let threadId: string;
-  const keys = new Map<string, DeviceKey>();
 
   const prompt = async (words: string) => {
     const before = localEvents.length;
@@ -43,7 +46,8 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
   };
 
   beforeAll(async () => {
-    host = await startDevHost();
+    [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+    hostId = await dispatcher.join(host, 'studio');
     local = await HostConnection.connect({
       connector: unixConnector(host.socket),
       client: { name: 'weave-app-test', version: '0' },
@@ -56,19 +60,7 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
     threadId = opened.thread.state.threadId;
     await prompt('first words');
 
-    store = new HostStore({
-      storage: memoryStorage(),
-      keyFor: (keyId) => keys.get(keyId)!,
-      async newKey() {
-        const keyId = crypto.randomUUID();
-        keys.set(keyId, await webCryptoDeviceKey());
-        return { keyId, key: keys.get(keyId)! };
-      },
-      connectorFor: (url) => websocketConnector(url),
-      client: { name: 'weave-app-test', version: '0' },
-      deviceName: 'Test iPhone',
-      backoff: [50],
-    });
+    ({ store, storage, forgotten } = devStore({ deviceName: 'Test iPhone' }));
     await store.start();
   }, 60_000);
 
@@ -76,17 +68,25 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
     store?.stop();
     local?.close();
     await host?.stop();
+    await dispatcher?.stop();
   });
 
-  it('pairs, then lists the Host\'s threads', async () => {
-    const { code } = await local.request('devices/offer', {});
-    await store.actions.pairHost({ url: host.url, code, name: 'Test iPhone' });
+  it("shows the pairing screen until it's paired", () => {
+    expect(store.snapshot()).toMatchObject({ hosts: [], threads: [] });
+    expect(store.snapshot().dispatcher).toBeUndefined();
+  });
+
+  it("pairs with the Dispatcher, then lists its Hosts and the Host's threads", async () => {
+    await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer(), name: 'Test iPhone' });
     const model = store.snapshot();
-    expect(model.hosts).toMatchObject([{ name: '127.0.0.1', status: 'connected' }]);
-    const { devices } = await local.request('devices/list', {});
-    expect(devices.map(({ name }) => name)).toContain('Test iPhone');
+    expect(model.dispatcher).toMatchObject({ url: dispatcher.url, status: 'connected' });
+    expect(model.hosts).toMatchObject([{ id: hostId, name: 'studio', status: 'connected' }]);
+    // The Dispatcher pairs the device, and the Host keeps no record of it.
+    const { devices } = await (await dispatcher.local()).request('devices/list', {});
+    expect(devices.map(({ name }) => name)).toEqual(['Test iPhone']);
+    expect((await local.request('devices/list', {})).devices).toEqual([]);
     const listed = await waitFor(() => store.snapshot().threads.find((thread) => thread.threadId === threadId), 'the thread in the list');
-    expect(listed).toMatchObject({ agentId: 'fake', cwd: host.cwd, state: 'open' });
+    expect(listed).toMatchObject({ hostId, agentId: 'fake', cwd: host.cwd, state: 'open' });
   });
 
   it('opens a thread with its history, then follows it live', async () => {
@@ -109,19 +109,22 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
     expect(store.snapshot().thread?.transcript.turn.status).toBe('stopped');
   });
 
-  it('keeps the name this device gave a Host when it pairs with it again', async () => {
-    const [paired] = store.snapshot().hosts;
-    await store.actions.renameHost(paired.id, 'Test Host');
-    const { code } = await local.request('devices/offer', {});
-    await store.actions.pairHost({ url: host.url, code, name: 'Test iPhone' });
-    expect(store.snapshot().hosts).toMatchObject([{ id: paired.id, name: 'Test Host', status: 'connected' }]);
+  it('pairs again in place of the pairing before', async () => {
+    const before = storage.current()!;
+    await store.actions.pairDispatcher({ url: dispatcher.url, code: await dispatcher.offer(), name: 'Test iPhone' });
+    expect(storage.current()?.deviceId).not.toBe(before.deviceId);
+    expect(forgotten).toEqual([before.keyId]);
+    expect(store.snapshot().hosts).toMatchObject([{ id: hostId, status: 'connected' }]);
   });
 
-  it('forgets a Host and its key', async () => {
-    const [paired] = store.snapshot().hosts;
-    await store.actions.forgetHost(paired.id);
+  it('forgets the Dispatcher and its key', async () => {
+    const { keyId } = storage.current()!;
+    await store.actions.forgetDispatcher();
+    expect(store.snapshot().dispatcher).toBeUndefined();
     expect(store.snapshot().hosts).toEqual([]);
     expect(store.snapshot().threads).toEqual([]);
     expect(store.snapshot().thread).toBeUndefined();
+    expect(storage.current()).toBeUndefined();
+    expect(forgotten.at(-1)).toBe(keyId);
   });
 });

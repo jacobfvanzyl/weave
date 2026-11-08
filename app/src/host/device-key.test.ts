@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fromBase64Url } from './base64url';
-import { authMessage, rawSignatureToDer, webCryptoDeviceKey } from './device-key';
+import { rawSignatureToDer, webCryptoDeviceKey } from './device-key';
+import { dispatcherAuthMessage } from './dispatcher';
 
 /** DER back to r || s, to check a signature with WebCrypto. */
 function derToRaw(der: Uint8Array): Uint8Array<ArrayBuffer> {
@@ -45,7 +46,7 @@ describe('webCryptoDeviceKey', () => {
     expect(fromBase64Url(jwk.x)).toHaveLength(32);
     expect(fromBase64Url(jwk.y)).toHaveLength(32);
 
-    const message = authMessage('host-1', 'device-1', 'nonce');
+    const message = dispatcherAuthMessage('dispatcher-1', 'device-1', 'nonce');
     const signature = fromBase64Url(await key.sign(message));
     const publicKey = await crypto.subtle.importKey('jwk', { ...jwk, ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify']);
     const valid = await crypto.subtle.verify(
@@ -58,6 +59,6 @@ describe('webCryptoDeviceKey', () => {
   });
 });
 
-it('spells the message a device signs as the Host checks it', () => {
-  expect(authMessage('h', 'd', 'n')).toBe('weave-host-auth/1 h d n');
+it('spells the message a device signs as the Dispatcher checks it', () => {
+  expect(dispatcherAuthMessage('d1', 'v1', 'n$&1')).toBe('weave-dispatcher-auth/1 d1 v1 n$&1');
 });
