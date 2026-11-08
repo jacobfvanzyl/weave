@@ -55,6 +55,10 @@ pub enum Credentials {
         key: DeviceKey,
         service: bool,
     },
+    /// The device the Dispatcher named, on a connection it carries to one of the person's Hosts
+    /// (ADR 0030, WVE-195): the device proved itself to the Dispatcher, and the Host takes the
+    /// Dispatcher's word for it ([`crate::carry`]).
+    Dispatcher,
 }
 
 /// A device's P-256 key: in memory, or in this Mac's Secure Enclave.
@@ -260,6 +264,17 @@ pub async fn connect_websocket_as<R: Role>(
     subprotocol: &'static str,
 ) -> io::Result<(impl ConnectTo<R> + 'static, CloseReason)> {
     let socket = open_websocket(url, subprotocol).await?;
+    Ok(messages(socket))
+}
+
+/// JSON-RPC over `socket`, one message per text frame, for a client of role `R`, and how the
+/// other end closed it once it has.
+pub fn messages<R: Role, S>(
+    socket: WebSocketStream<S>,
+) -> (impl ConnectTo<R> + 'static, CloseReason)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let (sink, stream) = socket.split();
     let outgoing = sink
         .sink_map_err(io::Error::other)
@@ -281,7 +296,7 @@ pub async fn connect_websocket_as<R: Role>(
             Err(error) => Some(Err(io::Error::other(error))),
         })
     });
-    Ok((Lines::new(Box::pin(outgoing), incoming), reason))
+    (Lines::new(Box::pin(outgoing), incoming), reason)
 }
 
 /// The HTTP status a server answered [`connect_websocket`] with instead of taking the

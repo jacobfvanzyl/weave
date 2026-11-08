@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use agent_client_protocol::Channel;
 use agent_client_protocol::Error;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tokio::net::UnixListener;
 use tokio::net::UnixStream;
 use tokio::task::AbortHandle;
@@ -41,6 +43,11 @@ use weave_host::Launch;
 use weave_host::Launcher;
 use weave_host::RemoteConfig;
 use weave_host::Withheld;
+use weave_host::terminals::Incoming;
+use weave_host::terminals::Outgoing;
+use weave_host::terminals::Owner;
+use weave_host::terminals::Start;
+use weave_host::terminals::Wire;
 use weave_host_client::HostConnection;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherHost;
@@ -79,30 +86,41 @@ pub struct World {
     pub daemon: Daemon,
     /// It keeps journals, so a restart finds the turns it cut off.
     journals: bool,
+    /// Its terminals' owner, if it has terminals.
+    terminals: Option<Arc<dyn Owner>>,
 }
 
 impl World {
     pub async fn new() -> Self {
-        Self::with(false).await
+        Self::with(false, None).await
     }
 
     /// A Host that keeps journals, whose restarts interrupt the turns it ran, and continue
     /// headless threads' (WVE-144).
     pub async fn with_journals() -> Self {
-        Self::with(true).await
+        Self::with(true, None).await
     }
 
-    async fn with(journals: bool) -> Self {
+    /// A Host with terminals, which a fake owner keeps: each echoes what's typed into it.
+    pub async fn with_terminals() -> Self {
+        Self::with(false, Some(Arc::new(EchoingOwner::default()))).await
+    }
+
+    async fn with(journals: bool, terminals: Option<Arc<dyn Owner>>) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("config.toml"), CONFIG).expect("config");
         std::fs::create_dir_all(dir.path().join("home")).expect("home");
         let relay = Relay::new(&dir.path().join("relay.sock")).await;
-        let daemon = Daemon::new(config_with(dir.path().to_path_buf(), journals));
+        let daemon = Daemon::new(DaemonConfig {
+            terminals: terminals.clone(),
+            ..config_with(dir.path().to_path_buf(), journals)
+        });
         Self {
             dir,
             relay,
             daemon,
             journals,
+            terminals,
         }
     }
 
@@ -170,7 +188,10 @@ impl World {
     pub async fn restart(&mut self) {
         self.relay.cut();
         self.daemon.shutdown().await;
-        self.daemon = Daemon::new(config_with(self.dir.path().to_path_buf(), self.journals));
+        self.daemon = Daemon::new(DaemonConfig {
+            terminals: self.terminals.clone(),
+            ..config_with(self.dir.path().to_path_buf(), self.journals)
+        });
         self.relay.resume();
         self.daemon.resume_dispatcher();
         self.daemon.resume_queues().await;
@@ -462,4 +483,72 @@ pub async fn threads(world: &World) -> Vec<ThreadListing> {
         .expect("threads/list");
     local.shutdown().await;
     listed.threads
+}
+
+/// Terminals in memory: each answers what the Host asks of its owner, sends `fake` as its restore
+/// when attached, and echoes what's typed into it as its output.
+#[derive(Default)]
+pub struct EchoingOwner {
+    terminals: Mutex<Vec<Start>>,
+}
+
+impl Owner for EchoingOwner {
+    fn find(&self) -> BoxFuture<'_, Vec<String>> {
+        let ids = self
+            .terminals
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|start| start.id.clone())
+            .collect();
+        Box::pin(async move { ids })
+    }
+
+    fn start(&self, start: Start) -> BoxFuture<'_, Result<String, Error>> {
+        let id = start.id.clone();
+        self.terminals.lock().expect("lock").push(start);
+        Box::pin(async move { Ok(id) })
+    }
+
+    fn connect<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Wire, Error>> {
+        Box::pin(async move {
+            let start = self
+                .terminals
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|start| start.id == id)
+                .cloned()
+                .ok_or_else(|| weave_host_protocol::errors::unknown_terminal(id))?;
+            let (outgoing, mut requests) = tokio::sync::mpsc::channel::<Outgoing>(64);
+            let (incoming_tx, incoming) = tokio::sync::mpsc::channel(64);
+            tokio::spawn(async move {
+                while let Some(message) = requests.recv().await {
+                    match message {
+                        Outgoing::Input(bytes) => {
+                            let _ = incoming_tx.send(Incoming::Output(bytes)).await;
+                        }
+                        Outgoing::Request { id, method, .. } => {
+                            let described = json!({
+                                "id": start.id,
+                                "scope": start.scope,
+                                "size": {"cols": start.size.cols, "rows": start.size.rows},
+                                "started_at": 1,
+                            });
+                            let result = match method.as_str() {
+                                "subscribe" | "describe" => Ok(described),
+                                "attach" => Ok(json!({"snapshot_bytes": 4})),
+                                _ => Ok(json!({})),
+                            };
+                            let _ = incoming_tx.send(Incoming::Answer { id, result }).await;
+                            if method == "attach" {
+                                let _ = incoming_tx.send(Incoming::Restore(b"fake".to_vec())).await;
+                            }
+                        }
+                    }
+                }
+            });
+            Ok(Wire { outgoing, incoming })
+        })
+    }
 }

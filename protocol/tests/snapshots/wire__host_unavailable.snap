@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&HostUnavailable\n{\n    status: Reachability::Unreachable, why:\n    \"its connection closed; it connects again when it can\".to_owned(),\n})"
+---
+{
+  "status": "unreachable",
+  "why": "its connection closed; it connects again when it can"
+}

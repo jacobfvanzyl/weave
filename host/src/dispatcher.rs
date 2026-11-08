@@ -7,6 +7,12 @@
 //! serves the Host protocol over the connection as it does a remote client's, the Dispatcher
 //! saying hello with its own key. A Host the Dispatcher removed is told so, by the connection
 //! closing with [`CLOSE_REVOKED`] or by its key being refused, and forgets the Dispatcher.
+//!
+//! The Dispatcher carries the person's devices' connections to the Host (WVE-195): over the
+//! Host's connection it asks `dispatcher/carry` with a token and the device, and the Host opens
+//! another connection to it where it joined it, presents the token, and serves that connection
+//! for the device as a remote client ([`carry`]). Leaving the Dispatcher, or its removing the
+//! Host, closes them.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,6 +21,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
+use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncRead;
@@ -24,11 +31,15 @@ use weave_host_client::remote::DeviceKey;
 use weave_host_client::remote::Opened;
 use weave_host_client::remote::open_dispatcher;
 use weave_host_protocol::Timestamp;
+use weave_host_protocol::devices::DeviceInfo;
+use weave_host_protocol::dispatcher::CarriedStream;
+use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::ConnectHostRequest;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
+use weave_host_protocol::dispatcher::HostCarryRequest;
 use weave_host_protocol::dispatcher::HostConnected;
 use weave_host_protocol::dispatcher::HostJoin;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
@@ -111,6 +122,15 @@ struct State {
     why: Option<String>,
     /// Stops the task that keeps the connection.
     stop: Option<CancellationToken>,
+    /// Closes the connections the Host opened for the Dispatcher to carry devices'.
+    carried: CancellationToken,
+}
+
+impl State {
+    /// Close the connections carried for the Dispatcher, as when the Host leaves it.
+    fn end_carried(&mut self) {
+        std::mem::take(&mut self.carried).cancel();
+    }
 }
 
 impl Joined {
@@ -202,14 +222,18 @@ pub(crate) async fn join(
         joined_at: now_ms(),
     };
     {
-        // Another Dispatcher than the one before is told that the Host left it.
-        let state = lock(&shared.dispatcher.state);
+        // Another Dispatcher than the one before is told that the Host left it, and what it
+        // carried closes.
+        let mut state = lock(&shared.dispatcher.state);
         let other = state
             .record
             .as_ref()
             .is_some_and(|before| before.id != record.id);
-        if other && let Some(link) = &state.link {
-            link.close(CLOSE_REVOKED);
+        if other {
+            if let Some(link) = &state.link {
+                link.close(CLOSE_REVOKED);
+            }
+            state.end_carried();
         }
     }
     shared.devices.join(
@@ -241,6 +265,7 @@ pub(crate) fn leave(shared: &Shared) -> Result<(), Error> {
             return Err(invalid("this Host hasn't joined a Dispatcher".to_owned()));
         }
         state.why = None;
+        state.end_carried();
         (state.link.take(), state.stop.take())
     };
     if let Some(link) = link {
@@ -257,7 +282,11 @@ pub(crate) fn leave(shared: &Shared) -> Result<(), Error> {
 /// The Host is stopping: close the connection to the Dispatcher, which it connects again on
 /// the next start.
 pub(crate) fn stop(shared: &Shared) {
-    let stop = lock(&shared.dispatcher.state).stop.take();
+    let stop = {
+        let mut state = lock(&shared.dispatcher.state);
+        state.end_carried();
+        state.stop.take()
+    };
     if let Some(stop) = stop {
         stop.cancel();
     }
@@ -503,6 +532,137 @@ where
     link.and_then(|link| link.peer_closed())
 }
 
+/// `dispatcher/carry`: connect to the Dispatcher the Host joined again, for the device it names,
+/// present `request.token`, and once the Dispatcher has taken it, serve that connection for the
+/// device: the Host protocol, whose hello takes the Dispatcher's word for the device, or a
+/// terminal's stream with a ticket of that device's.
+pub(crate) async fn carry(shared: &Arc<Shared>, request: CarryRequest) -> Result<(), Error> {
+    let settings = shared.dispatcher.settings.clone().ok_or_else(|| {
+        invalid("this Host runs inside a client, so it joins no Dispatcher".to_owned())
+    })?;
+    let (record, carried) = {
+        let state = lock(&shared.dispatcher.state);
+        (state.record.clone(), state.carried.clone())
+    };
+    let record =
+        record.ok_or_else(|| invalid("this Host hasn't joined a Dispatcher".to_owned()))?;
+    let mut opened = open(&record.address, settings.timeout)
+        .await
+        .map_err(unavailable)?;
+    let presenting = present(&mut opened, &record.id, request.token);
+    tokio::time::timeout(settings.timeout, presenting)
+        .await
+        .map_err(|_| {
+            unavailable(format!(
+                "the Dispatcher at {} didn't take the connection within {} seconds",
+                record.address,
+                settings.timeout.as_secs_f32()
+            ))
+        })??;
+    let device = DeviceInfo {
+        service: false,
+        ..request.device
+    };
+    tracing::info!(device = %device.id, name = %device.name, stream = ?request.stream, "the Dispatcher carries a device's connection");
+    let shared = Arc::clone(shared);
+    let config = settings.websocket;
+    let stream = request.stream;
+    tokio::spawn(async move {
+        match opened {
+            Opened::Tcp(socket) => {
+                serve_carried(shared, *socket, config, device, stream, carried).await;
+            }
+            Opened::Unix(socket) => {
+                serve_carried(shared, *socket, config, device, stream, carried).await;
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Ask for the Dispatcher's challenge, check it's `expected`, the one the Host joined, and
+/// present `token`.
+async fn present(opened: &mut Opened, expected: &str, token: String) -> Result<(), Error> {
+    match opened {
+        Opened::Tcp(socket) => present_on(&mut **socket, expected, token).await,
+        Opened::Unix(socket) => present_on(&mut **socket, expected, token).await,
+    }
+}
+
+async fn present_on<S: AsyncRead + AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    expected: &str,
+    token: String,
+) -> Result<(), Error> {
+    let challenge = preamble::ask(socket, 1, &DispatcherChallengeRequest {}).await?;
+    if challenge.dispatcher_id != expected {
+        return Err(unavailable(
+            "another Dispatcher answers there now: `weave hosts add` joins the one that should be"
+                .to_owned(),
+        ));
+    }
+    preamble::ask(socket, 2, &HostCarryRequest { token }).await?;
+    Ok(())
+}
+
+/// Serve `socket`, a connection the Dispatcher carries for `device`, as `stream` says, until
+/// either end closes it or `stop` is cancelled, as when the Host leaves the Dispatcher.
+///
+/// Its future is boxed and declared `Send`: the client it serves can ask for another carried
+/// connection, and the compiler can't infer `Send` around that cycle.
+fn serve_carried<S>(
+    shared: Arc<Shared>,
+    socket: WebSocketStream<S>,
+    config: RemoteConfig,
+    device: DeviceInfo,
+    stream: CarriedStream,
+    stop: CancellationToken,
+) -> BoxFuture<'static, ()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    Box::pin(serve_carried_now(
+        shared, socket, config, device, stream, stop,
+    ))
+}
+
+async fn serve_carried_now<S>(
+    shared: Arc<Shared>,
+    socket: WebSocketStream<S>,
+    config: RemoteConfig,
+    device: DeviceInfo,
+    stream: CarriedStream,
+    stop: CancellationToken,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    match stream {
+        CarriedStream::Host => {
+            websocket::serve_rpc(socket, &config, |transport, link| async move {
+                let serving =
+                    crate::client::serve_carried(shared, transport, Arc::clone(&link), device);
+                tokio::pin!(serving);
+                tokio::select! {
+                    served = &mut serving => served,
+                    () = stop.cancelled() => {
+                        link.close(CLOSE_NORMAL);
+                        serving.await
+                    }
+                }
+            })
+            .await;
+        }
+        CarriedStream::Terminal => {
+            let serving =
+                crate::terminals::stream::serve(shared, socket, Arc::new(config), Some(device.id));
+            tokio::select! {
+                () = serving => {}
+                () = stop.cancelled() => {}
+            }
+        }
+    }
+}
+
 /// The Dispatcher removed the Host, saying `why`: forget it.
 fn forget(shared: &Shared, why: &str) {
     tracing::warn!(%why, "the Dispatcher removed this Host; `weave hosts add` joins it again");
@@ -511,6 +671,7 @@ fn forget(shared: &Shared, why: &str) {
         state.record = None;
         state.link = None;
         state.stop = None;
+        state.end_carried();
     }
     forget_files(shared);
 }

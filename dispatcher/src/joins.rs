@@ -5,6 +5,10 @@
 //! link ([`crate::link`]) and says `host/hello` over it. Hosts on other computers connect to the
 //! Dispatcher's WebSocket with a subprotocol of their own; one on the Dispatcher's computer
 //! connects to the socket in its directory, over which the same WebSocket runs.
+//!
+//! A Host opens a connection the same way for the Dispatcher to carry a device's (WVE-195),
+//! presenting the token `dispatcher/carry` gave it in `hosts/carry` in place of `hosts/connect`,
+//! and the connection is handed to the device waiting for it ([`crate::carry`]).
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -19,6 +23,7 @@ use weave_host_protocol::dispatcher::ConnectHostRequest;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DispatcherChallenge;
+use weave_host_protocol::dispatcher::HostCarryRequest;
 use weave_host_protocol::dispatcher::HostConnected;
 use weave_host_protocol::dispatcher::host_connect_message;
 use weave_host_protocol::errors;
@@ -33,6 +38,7 @@ use weave_remote::websocket::RemoteConfig;
 use weave_remote::websocket::WebSocketStream;
 
 use crate::Shared;
+use crate::carry::Side;
 use crate::internal;
 use crate::link::Arrival;
 use crate::link::Link;
@@ -112,7 +118,13 @@ pub(crate) async fn connection<S>(
     let host = match tokio::time::timeout(config.hello_deadline, prove(&shared, &mut socket, here))
         .await
     {
-        Ok(Some(host)) => host,
+        Ok(Some(Proved::Host(host))) => *host,
+        Ok(Some(Proved::Carry(token))) => {
+            if !shared.carries.arrive(&token, Side::websocket(socket)) {
+                tracing::info!("a Host's carried connection came after its device stopped waiting");
+            }
+            return;
+        }
         Ok(None) => return,
         Err(_) => {
             tracing::info!("closed a Host's connection that proved nothing in time");
@@ -137,13 +149,22 @@ pub(crate) async fn connection<S>(
     let _ = gone.send(());
 }
 
-/// Answer the Host's `dispatcher/challenge` and `hosts/connect`: the Host, once it has proved
-/// itself. `None` once a refusal has been answered and the connection closed.
+/// What a Host's connection is, once it has said.
+enum Proved {
+    /// The Host's own connection.
+    Host(Box<StoredHost>),
+    /// Its end of a device's connection, which presented this token.
+    Carry(String),
+}
+
+/// Answer the Host's `dispatcher/challenge` and `hosts/connect`, or `hosts/carry`: the Host,
+/// once it has proved itself, or the token it presented. `None` once a refusal has been
+/// answered and the connection closed.
 async fn prove<S: AsyncRead + AsyncWrite + Unpin>(
     shared: &Shared,
     socket: &mut WebSocketStream<S>,
     here: bool,
-) -> Option<StoredHost> {
+) -> Option<Proved> {
     let asked = preamble::next_request(socket).await?;
     if asked.method != "dispatcher/challenge" {
         refuse(
@@ -165,6 +186,25 @@ async fn prove<S: AsyncRead + AsyncWrite + Unpin>(
         return None;
     }
     let asked = preamble::next_request(socket).await?;
+    if asked.method == "hosts/carry" {
+        let token = asked
+            .params::<HostCarryRequest>()
+            .map(|request| request.token)
+            .ok()
+            .filter(|token| shared.carries.expects(token));
+        let Some(token) = token else {
+            refuse(
+                socket,
+                asked.id,
+                "the token may have expired or been used".to_owned(),
+            )
+            .await;
+            return None;
+        };
+        return preamble::answer(socket, asked.id, Ok(weave_host_protocol::Empty {}))
+            .await
+            .then_some(Proved::Carry(token));
+    }
     if asked.method != "hosts/connect" {
         refuse(socket, asked.id, "say hosts/connect next".to_owned()).await;
         return None;
@@ -175,7 +215,7 @@ async fn prove<S: AsyncRead + AsyncWrite + Unpin>(
     match admitted {
         Ok((host, connected)) => preamble::answer(socket, asked.id, Ok(connected))
             .await
-            .then_some(host),
+            .then_some(Proved::Host(Box::new(host))),
         Err(error) => {
             tracing::info!(why = %error.message, "refused a Host's connection");
             preamble::answer::<_, ()>(socket, asked.id, Err(error)).await;

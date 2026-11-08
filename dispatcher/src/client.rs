@@ -144,6 +144,8 @@ async fn auth(
 ) -> Result<Option<Auth>, Error> {
     Ok(match credentials {
         Credentials::Local => None,
+        // Which the Dispatcher refuses: its word is for Hosts.
+        Credentials::Dispatcher => Some(Auth::Dispatcher),
         Credentials::Pair {
             code,
             name,

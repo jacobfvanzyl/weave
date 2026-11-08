@@ -83,7 +83,7 @@ async fn connection(shared: Arc<Shared>, stream: TcpStream, config: Arc<RemoteCo
         return;
     };
     if protocol == TERMINAL_SUBPROTOCOL {
-        crate::terminals::stream::serve(shared, socket, config).await;
+        crate::terminals::stream::serve(shared, socket, config, None).await;
         return;
     }
     weave_remote::websocket::serve_rpc(socket, &config, |transport, link| {

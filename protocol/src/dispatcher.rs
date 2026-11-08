@@ -8,7 +8,12 @@
 //! A Host's own connection begins with `dispatcher/challenge` and [`ConnectHostRequest`], after
 //! which the Dispatcher says `host/hello` to it on the same connection. The Host's side of
 //! joining is in the Host protocol: [`JoinDispatcherRequest`] and [`LeaveDispatcherRequest`],
-//! for clients on the Host's own computer. The specification is
+//! for clients on the Host's own computer.
+//!
+//! The person's devices reach their Hosts through the Dispatcher (WVE-195): a device asks for a
+//! Host with [`OpenHostRequest`], the Dispatcher asks that Host with [`CarryRequest`] to open a
+//! connection of its own, which the Host presents with [`HostCarryRequest`], and the Dispatcher
+//! joins the two and passes the Host protocol through unchanged. The specification is
 //! `docs/specs/wve-175-dispatcher.md`.
 
 use std::path::PathBuf;
@@ -62,8 +67,24 @@ pub const DISPATCHER_PROTOCOL: u32 = 2;
 pub const DISPATCHER_SUBPROTOCOL: &str = "weave-dispatcher";
 
 /// The subprotocol a Host asks for on the connection it opens to the Dispatcher it joined
-/// (ADR 0030), beside the devices' [`DISPATCHER_SUBPROTOCOL`].
+/// (ADR 0030), beside the devices' [`DISPATCHER_SUBPROTOCOL`], and on each connection it opens
+/// for the Dispatcher to carry a device's ([`HostCarryRequest`]).
 pub const DISPATCHER_HOST_SUBPROTOCOL: &str = "weave-dispatcher-host";
+
+/// The subprotocol a device asks for on a connection the Dispatcher carries to one of the
+/// person's Hosts (ADR 0030, WVE-195): its challenge, hello and [`OpenHostRequest`], then the
+/// Host protocol, or a terminal's stream, passed through unchanged.
+pub const DISPATCHER_CARRY_SUBPROTOCOL: &str = "weave-dispatcher-carry";
+
+/// The [`crate::hello::HelloResponse::features`] entry of a Host the Dispatcher can carry
+/// devices' connections to: it answers [`CarryRequest`] from the Dispatcher it joined, and takes
+/// [`Auth::Dispatcher`] on the connections it opens for that.
+pub const CARRY_FEATURE: &str = "carry";
+
+/// The device the Dispatcher's own computer is, on a connection carried from its socket: it
+/// proves nothing, as the socket's peer is the Dispatcher's own user, and is named after the
+/// computer.
+pub const LOCAL_DEVICE: &str = "local";
 
 /// What a device signs in `dispatcher/hello`: the UTF-8 bytes of this line, which no Host
 /// takes, as no Dispatcher takes a Host's ([`crate::devices::auth_message`]).
@@ -300,6 +321,82 @@ pub struct HostConnected {
 #[request(method = "hosts/remove", response = Empty)]
 pub struct RemoveHostRequest {
     pub host: String,
+}
+
+/// What a connection the Dispatcher carries to a Host carries (ADR 0030, WVE-195).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CarriedStream {
+    /// The Host protocol, from `host/hello` on, with `auth: {method: "dispatcher"}`.
+    #[default]
+    Host,
+    /// One terminal's stream, opened with the ticket `terminals/attach` gave on a carried
+    /// connection of the same device's ([`crate::terminals::stream`]).
+    Terminal,
+}
+
+/// `hosts/open`: the last request on a connection a device asks the Dispatcher to carry to one
+/// of the person's Hosts (ADR 0030, WVE-195), after its challenge and hello: on the WebSocket
+/// with [`DISPATCHER_CARRY_SUBPROTOCOL`], or on the Dispatcher's socket on its own computer. The
+/// Dispatcher answers once the Host has opened a connection of its own to be joined to this one,
+/// and from then on passes what either sends to the other unchanged. A Host it isn't connected
+/// to answers [`crate::errors::HOST_UNAVAILABLE`] at once, with [`HostUnavailable`] as its data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "hosts/open", response = OpenedHost)]
+pub struct OpenHostRequest {
+    /// By id or name, as `hosts/list` gives them.
+    pub host: String,
+    #[serde(default)]
+    pub stream: CarriedStream,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedHost {
+    pub host_id: String,
+    /// What the Dispatcher calls it.
+    pub name: String,
+}
+
+/// Why the Dispatcher can't carry a connection to a Host: the `data` of the
+/// [`crate::errors::HOST_UNAVAILABLE`] that `hosts/open` answers, as `hosts/list` says it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HostUnavailable {
+    pub status: Reachability,
+    pub why: String,
+}
+
+/// `hosts/carry`: on a connection a Host opens to the Dispatcher it joined with
+/// [`DISPATCHER_HOST_SUBPROTOCOL`], after `dispatcher/challenge`, in place of `hosts/connect`:
+/// the token a [`CarryRequest`] gave it. Once answered, the connection is the Host's end of the
+/// device's, and the Host serves it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "hosts/carry", response = Empty)]
+pub struct HostCarryRequest {
+    pub token: String,
+}
+
+/// `dispatcher/carry`, in the Host protocol: the Dispatcher the Host joined asks it, over the
+/// connection the Host keeps open to it, to open another for a device's (ADR 0030, WVE-195).
+/// The Host connects to the Dispatcher where it joined it, presents `token` in
+/// [`HostCarryRequest`], and answers once the Dispatcher has taken it; then it serves that
+/// connection for `device`, a paired device of the Dispatcher's, as a remote client of
+/// `stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host
+/// opened to it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "dispatcher/carry", response = Empty)]
+pub struct CarryRequest {
+    /// Random, and good once for a few seconds.
+    pub token: String,
+    pub device: DeviceInfo,
+    #[serde(default)]
+    pub stream: CarriedStream,
 }
 
 /// What a schedule does about an occurrence it missed, as while its computer slept.

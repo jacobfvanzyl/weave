@@ -569,6 +569,7 @@ fn again(error: &Error) -> bool {
 /// The Host refused the Dispatcher: say why until it's paired again, which a restart keeps.
 fn refused(shared: &Shared, host: &StoredHost, seen: &Mutex<Seen>, why: &str) {
     tracing::warn!(host = %host.host_id, %why, "a Host left the Dispatcher; it has to join again");
+    shared.carries.close_host(&host.host_id);
     if let Err(error) = shared.store.set_refused(&host.host_id, Some(why)) {
         tracing::warn!(host = %host.host_id, %error, "recording a refusal failed");
     }

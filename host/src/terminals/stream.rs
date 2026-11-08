@@ -2,6 +2,10 @@
 //! remote listener, with subprotocol `weave-terminal`, which the listener hands here, or the
 //! same WebSocket on the Host's terminal socket for local clients ([`serve_local`]).
 //!
+//! A stream the Dispatcher carries (WVE-195) comes over a connection the Host opened to it, for
+//! the device the Dispatcher named, whose ticket it must be; the Dispatcher closes it when it
+//! revokes the device.
+//!
 //! The client's first text frame names a ticket `terminals/attach` gave its device; the Host
 //! takes a connection of its own to the terminal's owner and attaches, with a snapshot for a
 //! client of the owner's codec and the formatter's VT for another. From then on the owner's
@@ -124,16 +128,18 @@ async fn local(shared: Arc<Shared>, stream: UnixStream, config: Arc<RemoteConfig
             Ok(response)
         };
     match tokio_tungstenite::accept_hdr_async(stream, callback).await {
-        Ok(socket) => serve(shared, socket, config).await,
+        Ok(socket) => serve(shared, socket, config, None).await,
         Err(error) => tracing::debug!(%error, "a local terminal stream's upgrade failed"),
     }
 }
 
-/// Serves one terminal stream until either end closes it.
+/// Serves one terminal stream until either end closes it. `carried` is the device a stream the
+/// Dispatcher carries is for, which its ticket must be.
 pub(crate) async fn serve<T: Transport>(
     shared: Arc<Shared>,
     mut socket: WebSocketStream<T>,
     config: Arc<RemoteConfig>,
+    carried: Option<String>,
 ) {
     let Some(terminals) = shared.terminals.clone() else {
         close(&mut socket, CLOSE_TICKET, "this Host has no terminals").await;
@@ -151,6 +157,14 @@ pub(crate) async fn serve<T: Transport>(
         close(&mut socket, CLOSE_TICKET, "the ticket isn't good").await;
         return;
     };
+    if let Some(carried) = &carried
+        && ticket.device.as_ref() != Some(carried)
+    {
+        close(&mut socket, CLOSE_TICKET, "the ticket is another device's").await;
+        return;
+    }
+    // A carried stream's device is the Dispatcher's, which closes its streams when it revokes it.
+    let device = ticket.device.filter(|_| carried.is_none());
     let id = ticket.terminal;
     let restore = if terminals.codec(&id).as_deref() == Some(open.codec.as_str()) {
         Restore::Snapshot
@@ -199,7 +213,7 @@ pub(crate) async fn serve<T: Transport>(
     };
 
     let (closer, closed) = mpsc::unbounded_channel();
-    if let Some(device) = &ticket.device {
+    if let Some(device) = &device {
         shared
             .devices
             .connected(device, stream, Arc::new(StreamCloser(closer.clone())));
@@ -222,7 +236,7 @@ pub(crate) async fn serve<T: Transport>(
         tracing::debug!(code, "a terminal stream closed");
     }
     terminals.leave(&id, stream);
-    if let Some(device) = &ticket.device {
+    if let Some(device) = &device {
         shared.devices.disconnected(device, stream);
     }
 }

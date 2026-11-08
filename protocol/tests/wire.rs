@@ -70,11 +70,18 @@ use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::CarriedStream;
+use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
+use weave_host_protocol::dispatcher::HostCarryRequest;
+use weave_host_protocol::dispatcher::HostUnavailable;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherResponse;
 use weave_host_protocol::dispatcher::JoinedDispatcher;
 use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
+use weave_host_protocol::dispatcher::OpenHostRequest;
+use weave_host_protocol::dispatcher::OpenedHost;
+use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::ThreadChangedNotification;
 use weave_host_protocol::events::ThreadEvent;
@@ -2038,6 +2045,61 @@ fn joining_the_dispatcher() {
         "leave_dispatcher_request",
         message(&LeaveDispatcherRequest {})
     );
+}
+
+/// A device's connection carried to one of the person's Hosts (WVE-195): what the device asks
+/// the Dispatcher, what the Dispatcher asks the Host, what the Host presents when it connects
+/// for it, and what the device says at hello there. `hosts/open` and `hosts/carry` are the
+/// Dispatcher's API, not the Host protocol, so their params stand alone.
+#[test]
+fn carrying_a_devices_connection() {
+    insta::assert_json_snapshot!(
+        "open_host_request",
+        round_trip(&OpenHostRequest {
+            host: "homelab".to_owned(),
+            stream: CarriedStream::Host,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "open_host_terminal_request",
+        round_trip(&OpenHostRequest {
+            host: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+            stream: CarriedStream::Terminal,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "opened_host",
+        round_trip(&OpenedHost {
+            host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+            name: "homelab".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "host_unavailable",
+        round_trip(&HostUnavailable {
+            status: Reachability::Unreachable,
+            why: "its connection closed; it connects again when it can".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "carry_request",
+        message(&CarryRequest {
+            token: "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE".to_owned(),
+            device: DeviceInfo {
+                id: "d-7KQ2M9XW4".to_owned(),
+                name: "Jaco's MacBook Air".to_owned(),
+                service: false,
+            },
+            stream: CarriedStream::Host,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "host_carry_request",
+        round_trip(&HostCarryRequest {
+            token: "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!("auth_dispatcher", round_trip(&Auth::Dispatcher));
 }
 
 #[test]

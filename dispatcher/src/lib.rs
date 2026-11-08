@@ -24,6 +24,7 @@
 
 mod api;
 mod calls;
+mod carry;
 pub mod client;
 mod devices;
 mod follows;
@@ -129,6 +130,8 @@ pub(crate) struct Shared {
     pub(crate) devices: devices::Devices,
     /// The codes Hosts join with.
     pub(crate) joins: joins::Joins,
+    /// The person's devices' connections carried to their Hosts (WVE-195).
+    pub(crate) carries: carry::Carries,
     /// The next number for a connection to its API.
     pub(crate) next_connection: std::sync::atomic::AtomicU64,
     started_at: u64,
@@ -161,6 +164,7 @@ impl Dispatcher {
             remote,
             devices: devices::Devices::default(),
             joins: joins::Joins::default(),
+            carries: carry::Carries::default(),
             next_connection: std::sync::atomic::AtomicU64::new(1),
             started_at: now_ms(),
             stop: CancellationToken::new(),
@@ -547,6 +551,7 @@ impl Shared {
         let found = self.resolve_host(host)?;
         self.store.remove_host(&found.host_id).map_err(internal)?;
         let link = lock(&self.links).remove(&found.host_id);
+        self.carries.close_host(&found.host_id);
         if let Some(link) = link {
             link.revoke();
             link.stopped().await;
@@ -566,7 +571,7 @@ fn client_info() -> ClientInfo {
 }
 
 /// The request was wrong, saying how: in the message, which clients show.
-fn invalid(why: impl Into<String>) -> Error {
+pub(crate) fn invalid(why: impl Into<String>) -> Error {
     let mut error = Error::invalid_params();
     error.message = why.into();
     error

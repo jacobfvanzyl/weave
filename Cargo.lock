@@ -4658,6 +4658,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "weave-acp-core",
@@ -4745,6 +4746,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "weave-host-protocol",
 ]

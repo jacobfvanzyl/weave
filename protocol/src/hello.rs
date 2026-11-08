@@ -58,6 +58,9 @@ pub enum Auth {
     /// A device pairing, on the WebSocket, with the code `weave pair` showed. The
     /// connection is that device's from then on.
     Pair { code: String, device: NewDevice },
+    /// The device the Dispatcher named in `dispatcher/carry` (ADR 0030, WVE-195), on a
+    /// connection the Host opened to the Dispatcher to carry that device's: only there.
+    Dispatcher,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

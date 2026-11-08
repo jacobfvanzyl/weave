@@ -72,6 +72,10 @@ expression: schema()
       "params": "LeaveDispatcherRequest",
       "result": "Empty"
     },
+    "dispatcher/carry": {
+      "params": "CarryRequest",
+      "result": "Empty"
+    },
     "files/list": {
       "params": "ListFilesRequest",
       "result": "ListFilesResponse"
@@ -318,7 +322,8 @@ expression: schema()
       "terminals": "terminals",
       "turnIds": "turnIds",
       "otherHosts": "otherHosts",
-      "mcpServers": "mcpServers"
+      "mcpServers": "mcpServers",
+      "carry": "carry"
     },
     "files": {
       "maxEntries": 2000
@@ -481,6 +486,19 @@ expression: schema()
             "device"
           ],
           "description": "A device pairing, on the WebSocket, with the code `weave pair` showed. The\nconnection is that device's from then on."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "dispatcher"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "The device the Dispatcher named in `dispatcher/carry` (ADR 0030, WVE-195), on a\nconnection the Host opened to the Dispatcher to carry that device's: only there."
         }
       ],
       "description": "How a connection authenticates."
@@ -2229,6 +2247,42 @@ expression: schema()
     "LeaveDispatcherRequest": {
       "type": "object",
       "description": "`dispatcher/leave`, in the Host protocol: forget the Dispatcher the Host joined and close the\nconnection to it, which tells the Dispatcher. Only clients on the Host's own computer may ask."
+    },
+    "CarryRequest": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Random, and good once for a few seconds."
+        },
+        "device": {
+          "$ref": "#/$defs/DeviceInfo"
+        },
+        "stream": {
+          "$ref": "#/$defs/CarriedStream",
+          "default": "host"
+        }
+      },
+      "required": [
+        "token",
+        "device"
+      ],
+      "description": "`dispatcher/carry`, in the Host protocol: the Dispatcher the Host joined asks it, over the\nconnection the Host keeps open to it, to open another for a device's (ADR 0030, WVE-195).\nThe Host connects to the Dispatcher where it joined it, presents `token` in\n[`HostCarryRequest`], and answers once the Dispatcher has taken it; then it serves that\nconnection for `device`, a paired device of the Dispatcher's, as a remote client of\n`stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host\nopened to it."
+    },
+    "CarriedStream": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "host",
+          "description": "The Host protocol, from `host/hello` on, with `auth: {method: \"dispatcher\"}`."
+        },
+        {
+          "type": "string",
+          "const": "terminal",
+          "description": "One terminal's stream, opened with the ticket `terminals/attach` gave on a carried\nconnection of the same device's ([`crate::terminals::stream`])."
+        }
+      ],
+      "description": "What a connection the Dispatcher carries to a Host carries (ADR 0030, WVE-195)."
     },
     "ListFilesRequest": {
       "type": "object",

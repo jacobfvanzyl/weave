@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&OpenHostRequest\n{ host: \"homelab\".to_owned(), stream: CarriedStream::Host, })"
+---
+{
+  "host": "homelab",
+  "stream": "host"
+}

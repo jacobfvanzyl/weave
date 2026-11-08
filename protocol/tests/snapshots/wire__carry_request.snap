@@ -1,0 +1,15 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&CarryRequest\n{\n    token: \"Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE\".to_owned(), device: DeviceInfo\n    {\n        id: \"d-7KQ2M9XW4\".to_owned(), name: \"Jaco's MacBook Air\".to_owned(),\n        service: false,\n    }, stream: CarriedStream::Host,\n})"
+---
+{
+  "method": "dispatcher/carry",
+  "params": {
+    "token": "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE",
+    "device": {
+      "id": "d-7KQ2M9XW4",
+      "name": "Jaco's MacBook Air"
+    },
+    "stream": "host"
+  }
+}

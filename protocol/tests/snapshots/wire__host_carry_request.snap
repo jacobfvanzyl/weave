@@ -1,0 +1,7 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&HostCarryRequest\n{ token: \"Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE\".to_owned(), })"
+---
+{
+  "token": "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE"
+}

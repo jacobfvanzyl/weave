@@ -27,6 +27,9 @@ export type Auth =
       code: string;
       device: NewDevice;
       method: "pair";
+    }
+  | {
+      method: "dispatcher";
     };
 /**
  * How the Host runs.
@@ -168,6 +171,13 @@ export type ProtocolVersion = number;
  * via the `definition` "AuthMethodId".
  */
 export type AuthMethodId = string;
+/**
+ * What a connection the Dispatcher carries to a Host carries (ADR 0030, WVE-195).
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CarriedStream".
+ */
+export type CarriedStream = "host" | "terminal";
 /**
  * What an entry is, following symlinks.
  *
@@ -2437,6 +2447,29 @@ export interface JoinDispatcherResponse {
  * via the `definition` "LeaveDispatcherRequest".
  */
 export interface LeaveDispatcherRequest {}
+/**
+ * `dispatcher/carry`, in the Host protocol: the Dispatcher the Host joined asks it, over the
+ * connection the Host keeps open to it, to open another for a device's (ADR 0030, WVE-195).
+ * The Host connects to the Dispatcher where it joined it, presents `token` in
+ * [`HostCarryRequest`], and answers once the Dispatcher has taken it; then it serves that
+ * connection for `device`, a paired device of the Dispatcher's, as a remote client of
+ * `stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host
+ * opened to it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "CarryRequest".
+ */
+export interface CarryRequest {
+  /**
+   * Random, and good once for a few seconds.
+   */
+  token: string;
+  device: DeviceInfo;
+  /**
+   * What a connection the Dispatcher carries to a Host carries (ADR 0030, WVE-195).
+   */
+  stream?: "host" | "terminal";
+}
 /**
  * `files/list`: what a directory on the Host's computer holds, by name and kind.
  *
@@ -6890,7 +6923,8 @@ export const HOST_PROTOCOL = {
     "terminals": "terminals",
     "turnIds": "turnIds",
     "otherHosts": "otherHosts",
-    "mcpServers": "mcpServers"
+    "mcpServers": "mcpServers",
+    "carry": "carry"
   },
   "files": {
     "maxEntries": 2000
@@ -6935,6 +6969,7 @@ export interface HostRequests {
   "devices/revoke": { params: RevokeDeviceRequest; result: Empty };
   "dispatcher/join": { params: JoinDispatcherRequest; result: JoinDispatcherResponse };
   "dispatcher/leave": { params: LeaveDispatcherRequest; result: Empty };
+  "dispatcher/carry": { params: CarryRequest; result: Empty };
   "files/list": { params: ListFilesRequest; result: ListFilesResponse };
   "threads/list": { params: ListThreadsRequest; result: ListThreadsResponse };
   "threads/get": { params: GetThreadRequest; result: GetThreadResponse };

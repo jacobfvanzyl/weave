@@ -7,8 +7,10 @@
 //! arrives.
 //!
 //! Local clients use the Unix socket; remote ones, the Host's WebSocket and a paired device
-//! ([`remote`]).
+//! ([`remote`]), or the Dispatcher, which carries their connections to any of the person's Hosts
+//! ([`carry`]).
 
+pub mod carry;
 #[cfg(target_os = "macos")]
 mod enclave;
 mod key_file;
@@ -352,6 +354,7 @@ async fn say_hello(
 ) -> Result<HelloResponse, ConnectError> {
     let auth = match credentials {
         Credentials::Local => Auth::Local,
+        Credentials::Dispatcher => Auth::Dispatcher,
         Credentials::Pair {
             code,
             name,

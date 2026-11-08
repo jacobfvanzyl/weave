@@ -66,6 +66,8 @@ use weave_host_protocol::devices::ListDevicesResponse;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::CARRY_FEATURE;
+use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherResponse;
 use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
@@ -236,6 +238,9 @@ enum Peer {
     /// The connection the Host opened to the Dispatcher it joined (ADR 0030), whose hello takes
     /// only that Dispatcher's key.
     Joined(Arc<Link>),
+    /// A connection the Host opened to the Dispatcher it joined to carry a device's (WVE-195),
+    /// whose hello takes only `auth: dispatcher`, for the device the Dispatcher named.
+    Carried { link: Arc<Link>, device: DeviceInfo },
 }
 
 struct Connection {
@@ -290,6 +295,18 @@ pub(crate) async fn serve_joined(
     link: Arc<Link>,
 ) -> Result<(), Error> {
     serve_as(shared, transport, Peer::Joined(link), true).await
+}
+
+/// Serve a device's connection that the Dispatcher the Host joined carries
+/// ([`crate::dispatcher::carry`]), the Host's end of which the Host opened itself: its hello
+/// takes the Dispatcher's word that it is `device`.
+pub(crate) async fn serve_carried(
+    shared: Arc<Shared>,
+    transport: impl ConnectTo<Host> + 'static,
+    link: Arc<Link>,
+    device: DeviceInfo,
+) -> Result<(), Error> {
+    serve_as(shared, transport, Peer::Carried { link, device }, true).await
 }
 
 /// `counted`: the client keeps an idle Host running while it's connected.
@@ -460,6 +477,10 @@ async fn handlers(
         )
         .on_receive_request(
             answer!(connection, leave_dispatcher),
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            answer!(connection, carry),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -743,8 +764,9 @@ async fn handlers(
 
 /// The methods a service may ask (ADR 0027): its hello, and what starting headless turns,
 /// following threads, naming the ones it starts, serving tools and reaching the person's other
-/// Hosts for this Host's agents (ADR 0029) need.
-const FOR_SERVICES: [&str; 20] = [
+/// Hosts for this Host's agents (ADR 0029) need; and carrying the person's devices'
+/// connections, which only the Dispatcher the Host joined may ask (ADR 0030).
+const FOR_SERVICES: [&str; 21] = [
     "host/hello",
     "host/challenge",
     "host/status",
@@ -765,6 +787,7 @@ const FOR_SERVICES: [&str; 20] = [
     "queue/add",
     "turn/steer",
     "turn/cancel",
+    "dispatcher/carry",
 ];
 
 /// What in `request` a client allowed only `methods` may not ask, if anything: another method,
@@ -862,7 +885,9 @@ impl Connection {
     fn backlog(&self) -> Option<Arc<dyn Backlog>> {
         match &self.peer {
             Peer::Local => None,
-            Peer::Remote(link) | Peer::Joined(link) => Some(Arc::clone(link) as Arc<dyn Backlog>),
+            Peer::Remote(link) | Peer::Joined(link) | Peer::Carried { link, .. } => {
+                Some(Arc::clone(link) as Arc<dyn Backlog>)
+            }
         }
     }
 
@@ -904,11 +929,26 @@ impl Connection {
         crate::dispatcher::leave(&self.shared).map(|()| Empty {})
     }
 
+    /// `dispatcher/carry`: open a connection to the Dispatcher for a device's, which only the
+    /// Dispatcher the Host joined may ask, over the connection the Host opened to it.
+    async fn carry(&self, request: CarryRequest) -> Result<Empty, Error> {
+        self.hello_info()?;
+        if !matches!(self.peer, Peer::Joined(_)) {
+            return Err(Error::new(
+                errors::FORBIDDEN,
+                "only the Dispatcher this Host joined carries devices' connections to it",
+            ));
+        }
+        crate::dispatcher::carry(&self.shared, request)
+            .await
+            .map(|()| Empty {})
+    }
+
     fn local_hello(&self) -> Result<Hello, Error> {
         let hello = self.hello_info()?;
         match self.peer {
             Peer::Local => Ok(hello),
-            Peer::Remote(_) | Peer::Joined(_) => Err(errors::forbidden()),
+            Peer::Remote(_) | Peer::Joined(_) | Peer::Carried { .. } => Err(errors::forbidden()),
         }
     }
 
@@ -996,17 +1036,27 @@ impl Connection {
             .ok_or_else(|| errors::incompatible_protocol(supported))?;
         let device = self.identify(request.auth)?;
         let mut capabilities = request.capabilities;
-        if let (Some(device), Peer::Remote(link) | Peer::Joined(link)) = (&device, &self.peer) {
-            // Only local clients may run a sign-in command on the Host's computer.
-            capabilities.terminal_sign_in = false;
-            let mut current = lock(&self.device);
-            if let Some(previous) = current.take() {
-                self.shared.devices.disconnected(&previous.id, self.id);
+        match (&device, &self.peer) {
+            (Some(device), Peer::Remote(link) | Peer::Joined(link)) => {
+                // Only local clients may run a sign-in command on the Host's computer.
+                capabilities.terminal_sign_in = false;
+                let mut current = lock(&self.device);
+                if let Some(previous) = current.take() {
+                    self.shared.devices.disconnected(&previous.id, self.id);
+                }
+                link.proved();
+                let closer: Arc<dyn Closer> = Arc::clone(link) as Arc<dyn Closer>;
+                self.shared.devices.connected(&device.id, self.id, closer);
+                *current = Some(device.clone());
             }
-            link.proved();
-            let closer: Arc<dyn Closer> = Arc::clone(link) as Arc<dyn Closer>;
-            self.shared.devices.connected(&device.id, self.id, closer);
-            *current = Some(device.clone());
+            // The Dispatcher's device, which the Dispatcher revokes: the Host keeps no record of
+            // it, and its connection closes when the Dispatcher closes the device's end.
+            (Some(device), Peer::Carried { link, .. }) => {
+                capabilities.terminal_sign_in = false;
+                link.proved();
+                *lock(&self.device) = Some(device.clone());
+            }
+            _ => {}
         }
         *lock(&self.hello) = Some(Hello {
             client: request.client,
@@ -1043,6 +1093,7 @@ impl Connection {
                 OBSERVE_FEATURE.to_owned(),
                 OTHER_HOSTS_FEATURE.to_owned(),
                 MCP_SERVERS_FEATURE.to_owned(),
+                CARRY_FEATURE.to_owned(),
             ]
             .into_iter()
             .chain(
@@ -1067,12 +1118,27 @@ impl Connection {
         let (link, joined) = match &self.peer {
             Peer::Remote(link) => (link, false),
             Peer::Joined(link) => (link, true),
+            Peer::Carried { link, device } => {
+                if matches!(auth, Auth::Dispatcher) {
+                    return Ok(Some(device.clone()));
+                }
+                tracing::info!("refused a carried connection's hello that wasn't the Dispatcher's");
+                link.close_after_next(CLOSE_UNAUTHENTICATED);
+                return Err(errors::unauthenticated(
+                    "a connection the Dispatcher carries says auth: dispatcher, for the device it \
+                     named",
+                ));
+            }
             Peer::Local => {
                 return match auth {
                     Auth::Local => Ok(None),
                     Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
                     Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
                         "devices connect over the Host's WebSocket",
+                    )),
+                    Auth::Dispatcher => Err(errors::unauthenticated(
+                        "only a connection the Host opened for the Dispatcher takes its word for \
+                         a device",
                     )),
                 };
             }
@@ -1088,7 +1154,9 @@ impl Connection {
             }),
             Auth::Pair { .. } if joined => None,
             Auth::Pair { code, device } => self.shared.devices.pair(&code, device),
-            Auth::Local | Auth::Token { .. } => None,
+            // The Dispatcher's word for a device counts only on a connection the Host opened for
+            // it: anyone can say it here.
+            Auth::Local | Auth::Token { .. } | Auth::Dispatcher => None,
         };
         if device.is_none() {
             tracing::info!("refused a remote client's hello");
@@ -1103,6 +1171,11 @@ impl Connection {
     /// `host/challenge`, for a remote client to sign at hello.
     fn challenge(&self) -> Result<ChallengeResponse, Error> {
         let (Peer::Remote(link) | Peer::Joined(link)) = &self.peer else {
+            if matches!(self.peer, Peer::Carried { .. }) {
+                return Err(errors::unauthenticated(
+                    "a carried connection signs nothing: it says auth: dispatcher",
+                ));
+            }
             return Err(errors::unauthenticated(
                 "challenges are for the Host's WebSocket",
             ));
@@ -1507,20 +1580,22 @@ impl Connection {
     async fn create(&self, request: CreateThreadRequest) -> Result<Ready, Error> {
         self.hello_info()?;
         check_labels(&request.labels)?;
+        let cwd = under_home(&self.shared, request.cwd);
+        directory_here(&cwd)?;
         let agent = self.shared.resolve(&request.agent_id).await?;
         let (instance, git) = tokio::join!(
             self.shared
-                .instance(&agent, &request.cwd, interactive(agent.options)),
-            self.shared.git.locate(&request.cwd),
+                .instance(&agent, &cwd, interactive(agent.options)),
+            self.shared.git.locate(&cwd),
         );
         let instance = instance?;
-        let (setup, mut notices, servers) = setup(
-            &self.shared,
-            &agent,
-            &instance,
-            request.cwd.clone(),
-            request.additional_directories,
-        );
+        let additional_directories = request
+            .additional_directories
+            .into_iter()
+            .map(|dir| under_home(&self.shared, dir))
+            .collect();
+        let (setup, mut notices, servers) =
+            setup(&self.shared, &agent, &instance, cwd, additional_directories);
         let response = match instance.connection.new_session(&setup).await {
             Ok(response) => response,
             Err(error) => {
@@ -1614,7 +1689,7 @@ impl Connection {
         let cwd = known
             .as_ref()
             .map(|recorded| recorded.cwd.clone())
-            .or_else(|| request.cwd.clone())
+            .or_else(|| request.cwd.clone().map(|cwd| under_home(&self.shared, cwd)))
             .ok_or_else(|| errors::unknown_thread(&thread_id.to_string()))?;
         let agent = self.shared.resolve(&agent_id).await?;
         let (instance, git) = tokio::join!(
@@ -2325,8 +2400,9 @@ pub(crate) fn live(shared: &Shared, thread_id: &ThreadId) -> Result<ThreadHandle
 /// `threads/list`, for a client or a Host tool.
 pub(crate) async fn list_threads(
     shared: &Arc<Shared>,
-    request: ListThreadsRequest,
+    mut request: ListThreadsRequest,
 ) -> Result<ListThreadsResponse, Error> {
+    request.cwd = request.cwd.map(|cwd| under_home(shared, cwd));
     match request.agent_id.clone() {
         None => {
             let repo = match &request.repo {
@@ -2816,14 +2892,33 @@ pub(crate) async fn run_as(
     .await
 }
 
+/// `cwd`, under the Host's home when it starts with `~`, as another Host's agent, or a client on
+/// another computer through the Dispatcher (WVE-195), names the directory it works in on its
+/// own.
+fn under_home(shared: &Shared, cwd: PathBuf) -> PathBuf {
+    match cwd.strip_prefix("~") {
+        Ok(rest) if rest.as_os_str().is_empty() => shared.home(),
+        Ok(rest) => shared.home().join(rest),
+        Err(_) => cwd,
+    }
+}
+
+/// A new thread's directory has to be one on this Host's computer, which a client on another
+/// computer may not know.
+fn directory_here(cwd: &Path) -> Result<(), Error> {
+    if cwd.is_dir() {
+        return Ok(());
+    }
+    let mut error = Error::invalid_params();
+    error.message = format!("{} isn't a directory on this Host", cwd.display());
+    Err(error)
+}
+
 /// Where `thread/run` runs: `cwd`, under the Host's home when it starts with `~`, and a
 /// checkout of `remote` when one is named, as another Host's agent asks for the directory it
 /// works in on its own Host.
 async fn place(shared: &Shared, cwd: PathBuf, remote: Option<&str>) -> Result<PathBuf, Error> {
-    let cwd = match cwd.strip_prefix("~") {
-        Ok(rest) => shared.home().join(rest),
-        Err(_) => cwd,
-    };
+    let cwd = under_home(shared, cwd);
     let Some(remote) = remote else {
         return Ok(cwd);
     };
@@ -2884,6 +2979,10 @@ async fn run_now(
     } = request;
     check_labels(&labels)?;
     let cwd = place(shared, cwd, remote.as_deref()).await?;
+    let additional_directories: Vec<PathBuf> = additional_directories
+        .into_iter()
+        .map(|dir| under_home(shared, dir))
+        .collect();
     let started_by_host = match &origin {
         TurnOrigin::Thread { host, .. } if started_by.is_some() => host.clone(),
         _ => None,
@@ -2912,6 +3011,7 @@ async fn run_now(
             thread
         }
         (None, None) => {
+            directory_here(&cwd)?;
             let (instance, git) = tokio::join!(
                 shared.instance(&agent, &cwd, options),
                 shared.git.locate(&cwd),

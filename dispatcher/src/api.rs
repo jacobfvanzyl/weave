@@ -5,21 +5,34 @@
 //! Host joined over it, every connection proves a paired device at hello, by signing its
 //! `dispatcher/challenge`, or pairs with a code. A device may ask everything but `devices/*`,
 //! which stay on the Dispatcher's own computer. A Host's own connection asks for a subprotocol
-//! of its own, and [`crate::joins`] takes it.
+//! of its own, and [`crate::joins`] takes it; so does a device's connection to one of the
+//! person's Hosts, which [`crate::carry`] takes, as it does one on the socket whose hello is
+//! followed by `hosts/open`.
 
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use agent_client_protocol::ByteStreams;
 use agent_client_protocol::ConnectTo;
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
 use agent_client_protocol::Responder;
 use agent_client_protocol::Role as _;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use serde_json::json;
+use tokio::io::AsyncBufReadExt as _;
+use tokio::io::AsyncReadExt as _;
+use tokio::io::AsyncWriteExt as _;
+use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::UnixListener;
+use tokio::net::UnixStream;
+use tokio_util::compat::TokioAsyncReadCompatExt as _;
+use tokio_util::compat::TokioAsyncWriteCompatExt as _;
 use tokio_util::sync::CancellationToken;
 use weave_host_protocol::Dispatcher;
 use weave_host_protocol::DispatcherClient;
@@ -31,6 +44,7 @@ use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
+use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
@@ -49,6 +63,7 @@ use weave_host_protocol::dispatcher::ListSchedulesResponse;
 use weave_host_protocol::dispatcher::OccurrenceResponse;
 use weave_host_protocol::dispatcher::OfferHostRequest;
 use weave_host_protocol::dispatcher::OfferHostResponse;
+use weave_host_protocol::dispatcher::OpenHostRequest;
 use weave_host_protocol::dispatcher::PauseScheduleRequest;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
 use weave_host_protocol::dispatcher::RemoveScheduleRequest;
@@ -82,9 +97,7 @@ pub(crate) async fn serve(shared: Arc<Shared>, listener: UnixListener) {
                 Some(true) => {
                     let shared = Arc::clone(&shared);
                     tokio::spawn(async move {
-                        if let Err(error) =
-                            answer(shared, socket::transport(stream), Peer::Local).await
-                        {
+                        if let Err(error) = local(shared, stream).await {
                             tracing::debug!(%error, "a CLI connection ended");
                         }
                     });
@@ -95,6 +108,104 @@ pub(crate) async fn serve(shared: Arc<Shared>, listener: UnixListener) {
             Err(error) => tracing::warn!(%error, "accepting a connection failed"),
         }
     }
+}
+
+/// A connection on the socket: the API, or, after a hello, one carried to a Host (`hosts/open`,
+/// WVE-195), one line per message either way. The Dispatcher answers the hello itself, to see
+/// what follows it, and hands anything else to the API with the hello said.
+async fn local(shared: Arc<Shared>, stream: UnixStream) -> Result<(), Error> {
+    let (read, mut write) = stream.into_split();
+    let mut reader = BufReader::new(read);
+    let mut line = String::new();
+    if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+        return Ok(());
+    }
+    let mut greeted = false;
+    if let Some((id, hello)) = request_of::<DispatcherHelloRequest>(&line, "dispatcher/hello") {
+        let said = local_hello(&shared, hello);
+        greeted = said.is_ok();
+        let answer = match said {
+            Ok(said) => json!({"jsonrpc": "2.0", "id": id, "result": said}),
+            Err(error) => json!({"jsonrpc": "2.0", "id": id, "error": error}),
+        };
+        if write
+            .write_all(format!("{answer}\n").as_bytes())
+            .await
+            .is_err()
+        {
+            return Ok(());
+        }
+        line.clear();
+        if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+            return Ok(());
+        }
+        if greeted && let Some(id) = id_of(&line, "hosts/open") {
+            let request = request_of::<OpenHostRequest>(&line, "hosts/open")
+                .map(|(_, request)| request)
+                .ok_or_else(|| crate::invalid("hosts/open takes the Host, by id or name"));
+            crate::carry::local(shared, id, request, reader, write).await;
+            return Ok(());
+        }
+    }
+    let replayed = std::io::Cursor::new(line.into_bytes()).chain(reader);
+    let transport = ByteStreams::new(write.compat_write(), replayed.compat());
+    answer(shared, transport, Peer::Local, greeted).await
+}
+
+/// The id of `line`, if it's a `method` request.
+fn id_of(line: &str, method: &str) -> Option<Value> {
+    let message: Value = serde_json::from_str(line).ok()?;
+    (message.get("method")?.as_str()? == method).then(|| message.get("id").cloned())?
+}
+
+/// `line`'s id and params, if it's a `method` request whose params are a `T`.
+fn request_of<T: DeserializeOwned>(line: &str, method: &str) -> Option<(Value, T)> {
+    let id = id_of(line, method)?;
+    let mut message: Value = serde_json::from_str(line).ok()?;
+    let params = message
+        .get_mut("params")
+        .map(Value::take)
+        .unwrap_or_else(|| json!({}));
+    Some((id, serde_json::from_value(params).ok()?))
+}
+
+/// `dispatcher/hello` on the socket, whose peer is the Dispatcher's own user.
+fn local_hello(shared: &Shared, request: DispatcherHelloRequest) -> Result<DispatcherHello, Error> {
+    if request.protocol != DISPATCHER_PROTOCOL {
+        return Err(incompatible(&request));
+    }
+    local_auth(request.auth.unwrap_or(Auth::Local))?;
+    Ok(DispatcherHello {
+        protocol: DISPATCHER_PROTOCOL,
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        id: shared.id.clone(),
+        device: None,
+    })
+}
+
+/// What a hello on the socket may say: nothing, which is the Dispatcher's own user.
+fn local_auth(auth: Auth) -> Result<(), Error> {
+    match auth {
+        Auth::Local => Ok(()),
+        Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
+        Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
+            "devices connect over the Dispatcher's WebSocket",
+        )),
+        Auth::Dispatcher => Err(errors::unauthenticated(
+            "the Dispatcher's word for a device is for Hosts",
+        )),
+    }
+}
+
+/// A hello of another version of the Dispatcher's API than this one's.
+pub(crate) fn incompatible(request: &DispatcherHelloRequest) -> Error {
+    Error::new(
+        errors::INCOMPATIBLE_PROTOCOL,
+        format!(
+            "this Dispatcher speaks version {DISPATCHER_PROTOCOL} of its API, and {} version {}",
+            request.client.name, request.protocol
+        ),
+    )
 }
 
 /// At startup, turn the WebSocket back on when a device is paired or a Host joined over it
@@ -178,7 +289,11 @@ async fn serve_websocket(shared: Arc<Shared>, listener: TcpListener, stop: Cance
 }
 
 async fn websocket(shared: Arc<Shared>, stream: TcpStream, config: Arc<RemoteConfig>) {
-    let protocols = [DISPATCHER_SUBPROTOCOL, DISPATCHER_HOST_SUBPROTOCOL];
+    let protocols = [
+        DISPATCHER_SUBPROTOCOL,
+        DISPATCHER_HOST_SUBPROTOCOL,
+        DISPATCHER_CARRY_SUBPROTOCOL,
+    ];
     let Some((protocol, socket)) =
         weave_remote::websocket::upgrade(stream, &config.origins, &protocols).await
     else {
@@ -188,8 +303,12 @@ async fn websocket(shared: Arc<Shared>, stream: TcpStream, config: Arc<RemoteCon
         crate::joins::connection(shared, socket, config, false).await;
         return;
     }
+    if protocol == DISPATCHER_CARRY_SUBPROTOCOL {
+        crate::carry::device(shared, socket, config).await;
+        return;
+    }
     weave_remote::websocket::serve_rpc(socket, &config, |transport, link| {
-        answer(shared, transport, Peer::Remote(link))
+        answer(shared, transport, Peer::Remote(link), false)
     })
     .await;
 }
@@ -249,14 +368,7 @@ impl Connection {
 
     fn hello(&self, request: DispatcherHelloRequest) -> Result<DispatcherHello, Error> {
         if request.protocol != DISPATCHER_PROTOCOL {
-            return Err(Error::new(
-                errors::INCOMPATIBLE_PROTOCOL,
-                format!(
-                    "this Dispatcher speaks version {DISPATCHER_PROTOCOL} of its API, and {} \
-                     version {}",
-                    request.client.name, request.protocol
-                ),
-            ));
+            return Err(incompatible(&request));
         }
         let device = self.identify(request.auth.unwrap_or(Auth::Local))?;
         if let (Some(device), Peer::Remote(link)) = (&device, &self.peer) {
@@ -282,13 +394,7 @@ impl Connection {
     /// the WebSocket. A remote client that proves none is closed after the error.
     fn identify(&self, auth: Auth) -> Result<Option<DeviceInfo>, Error> {
         let Peer::Remote(link) = &self.peer else {
-            return match auth {
-                Auth::Local => Ok(None),
-                Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
-                Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
-                    "devices connect over the Dispatcher's WebSocket",
-                )),
-            };
+            return local_auth(auth).map(|()| None);
         };
         let shared = &self.shared;
         let device = match auth {
@@ -306,7 +412,7 @@ impl Connection {
                 None => None,
             },
             Auth::Pair { code, device } => shared.devices.pair(&shared.store, &code, device)?,
-            Auth::Local | Auth::Token { .. } => None,
+            Auth::Local | Auth::Token { .. } | Auth::Dispatcher => None,
         };
         if device.is_none() {
             tracing::info!("refused a remote client's hello");
@@ -412,10 +518,12 @@ macro_rules! handle {
     };
 }
 
+/// Answer the API on `transport` until it closes; `greeted`, its hello was answered already.
 async fn answer(
     shared: Arc<Shared>,
     transport: impl ConnectTo<Dispatcher> + 'static,
     peer: Peer,
+    greeted: bool,
 ) -> Result<(), Error> {
     let connection = Arc::new(Connection {
         id: shared
@@ -423,7 +531,7 @@ async fn answer(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         shared: Arc::clone(&shared),
         peer,
-        greeted: AtomicBool::new(false),
+        greeted: AtomicBool::new(greeted),
         device: Mutex::new(None),
     });
     let result = handlers(&connection, transport).await;

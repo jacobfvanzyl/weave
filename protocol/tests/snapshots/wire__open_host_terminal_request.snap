@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&OpenHostRequest\n{\n    host: \"8ZpX3kqW1m0aLr9TQv2cYw\".to_owned(), stream:\n    CarriedStream::Terminal,\n})"
+---
+{
+  "host": "8ZpX3kqW1m0aLr9TQv2cYw",
+  "stream": "terminal"
+}
