@@ -1,7 +1,9 @@
 //! The Host protocol as one JSON Schema, for clients in other languages: every request, answer
 //! and notification, the ACP types they carry, which method takes and gives which, and the
-//! protocol's constants. The app generates its TypeScript from the snapshot
-//! (`app/scripts/protocol-types.ts`), so a change here shows up there as a stale file.
+//! protocol's constants; and beside it the Dispatcher's API (`dispatcher`), which the app pairs
+//! with and reaches every Host through (ADR 0030, WVE-196). The app generates its TypeScript from
+//! the snapshot (`app/scripts/protocol-types.ts`), so a change here shows up there as a stale
+//! file.
 
 #![allow(clippy::expect_used)]
 
@@ -163,6 +165,35 @@ fn schema() -> Value {
         "service/hostCall" => tools::HostCallNotification,
         "service/toolCallCancelled" => tools::ToolCallCancelledNotification,
     };
+    // The Dispatcher's API (`docs/specs/wve-175-dispatcher.md`): what a client asks it, on its
+    // socket or its WebSocket, and what a Host and a device carried to one ask it before the Host
+    // protocol takes over. Its devices are managed with the Host's own `devices/*` messages.
+    let dispatcher_requests = requests! { generator, inlined;
+        "dispatcher/challenge" => dispatcher::DispatcherChallengeRequest,
+        "dispatcher/hello" => dispatcher::DispatcherHelloRequest,
+        "dispatcher/status" => dispatcher::DispatcherStatusRequest,
+        "devices/offer" => devices::OfferDeviceRequest,
+        "devices/list" => devices::ListDevicesRequest,
+        "devices/revoke" => devices::RevokeDeviceRequest,
+        "hosts/list" => dispatcher::ListHostsRequest,
+        "hosts/offer" => dispatcher::OfferHostRequest,
+        "hosts/connect" => dispatcher::ConnectHostRequest,
+        "hosts/remove" => dispatcher::RemoveHostRequest,
+        "hosts/open" => dispatcher::OpenHostRequest,
+        "hosts/carry" => dispatcher::HostCarryRequest,
+        "schedules/list" => dispatcher::ListSchedulesRequest,
+        "schedules/add" => dispatcher::AddScheduleRequest,
+        "schedules/remove" => dispatcher::RemoveScheduleRequest,
+        "schedules/pause" => dispatcher::PauseScheduleRequest,
+        "schedules/resume" => dispatcher::ResumeScheduleRequest,
+        "schedules/run" => dispatcher::RunScheduleRequest,
+        "occurrences/list" => dispatcher::ListOccurrencesRequest,
+    };
+    let dispatcher_notifications = notifications! { generator, inlined;
+        "devices/paired" => devices::DevicePairedNotification,
+    };
+    // Why `hosts/open` answered `host_unavailable`, in its data.
+    define::<dispatcher::HostUnavailable>(&mut generator, &mut inlined);
     // A terminal's stream speaks frames of its own, not JSON-RPC (`terminals::stream`).
     let stream = json!({
         "open": define::<terminals::stream::Open>(&mut generator, &mut inlined),
@@ -189,6 +220,8 @@ fn schema() -> Value {
         "x-weave-requests": requests,
         "x-weave-notifications": notifications,
         "x-weave-terminal-stream": stream,
+        "x-weave-dispatcher-requests": dispatcher_requests,
+        "x-weave-dispatcher-notifications": dispatcher_notifications,
         "x-weave-constants": {
             "protocol": {"version": PROTOCOL_VERSION, "oldestSupported": OLDEST_SUPPORTED_VERSION},
             "websocket": {
@@ -198,6 +231,13 @@ fn schema() -> Value {
                 "closeRevoked": websocket::CLOSE_REVOKED,
                 "closeBehind": websocket::CLOSE_BEHIND,
                 "closeUnauthenticated": websocket::CLOSE_UNAUTHENTICATED,
+            },
+            "dispatcher": {
+                "protocol": dispatcher::DISPATCHER_PROTOCOL,
+                "subprotocol": dispatcher::DISPATCHER_SUBPROTOCOL,
+                "hostSubprotocol": dispatcher::DISPATCHER_HOST_SUBPROTOCOL,
+                "carrySubprotocol": dispatcher::DISPATCHER_CARRY_SUBPROTOCOL,
+                "authMessage": dispatcher::dispatcher_auth_message("{dispatcherId}", "{deviceId}", "{nonce}"),
             },
             "terminalStream": {
                 "subprotocol": terminals::stream::SUBPROTOCOL,

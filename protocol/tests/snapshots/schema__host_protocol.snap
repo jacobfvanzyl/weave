@@ -259,6 +259,87 @@ expression: schema()
     "message": "TerminalStreamMessage",
     "clientMessage": "TerminalStreamClientMessage"
   },
+  "x-weave-dispatcher-requests": {
+    "dispatcher/challenge": {
+      "params": "DispatcherChallengeRequest",
+      "result": "DispatcherChallenge"
+    },
+    "dispatcher/hello": {
+      "params": "DispatcherHelloRequest",
+      "result": "DispatcherHello"
+    },
+    "dispatcher/status": {
+      "params": "DispatcherStatusRequest",
+      "result": "DispatcherStatus"
+    },
+    "devices/offer": {
+      "params": "OfferDeviceRequest",
+      "result": "OfferDeviceResponse"
+    },
+    "devices/list": {
+      "params": "ListDevicesRequest",
+      "result": "ListDevicesResponse"
+    },
+    "devices/revoke": {
+      "params": "RevokeDeviceRequest",
+      "result": "Empty"
+    },
+    "hosts/list": {
+      "params": "ListHostsRequest",
+      "result": "ListHostsResponse"
+    },
+    "hosts/offer": {
+      "params": "OfferHostRequest",
+      "result": "OfferHostResponse"
+    },
+    "hosts/connect": {
+      "params": "ConnectHostRequest",
+      "result": "HostConnected"
+    },
+    "hosts/remove": {
+      "params": "RemoveHostRequest",
+      "result": "Empty"
+    },
+    "hosts/open": {
+      "params": "OpenHostRequest",
+      "result": "OpenedHost"
+    },
+    "hosts/carry": {
+      "params": "HostCarryRequest",
+      "result": "HostCarried"
+    },
+    "schedules/list": {
+      "params": "ListSchedulesRequest",
+      "result": "ListSchedulesResponse"
+    },
+    "schedules/add": {
+      "params": "AddScheduleRequest",
+      "result": "ScheduleResponse"
+    },
+    "schedules/remove": {
+      "params": "RemoveScheduleRequest",
+      "result": "Empty"
+    },
+    "schedules/pause": {
+      "params": "PauseScheduleRequest",
+      "result": "ScheduleResponse"
+    },
+    "schedules/resume": {
+      "params": "ResumeScheduleRequest",
+      "result": "ScheduleResponse"
+    },
+    "schedules/run": {
+      "params": "RunScheduleRequest",
+      "result": "OccurrenceResponse"
+    },
+    "occurrences/list": {
+      "params": "ListOccurrencesRequest",
+      "result": "ListOccurrencesResponse"
+    }
+  },
+  "x-weave-dispatcher-notifications": {
+    "devices/paired": "DevicePairedNotification"
+  },
   "x-weave-constants": {
     "protocol": {
       "version": 3,
@@ -271,6 +352,13 @@ expression: schema()
       "closeRevoked": 4000,
       "closeBehind": 4001,
       "closeUnauthenticated": 4002
+    },
+    "dispatcher": {
+      "protocol": 2,
+      "subprotocol": "weave-dispatcher",
+      "hostSubprotocol": "weave-dispatcher-host",
+      "carrySubprotocol": "weave-dispatcher-carry",
+      "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}"
     },
     "terminalStream": {
       "subprotocol": "weave-terminal",
@@ -9953,6 +10041,972 @@ expression: schema()
         "callId"
       ],
       "description": "`service/toolCallCancelled`: the agent stopped waiting for the call; answering it now does\nnothing."
+    },
+    "DispatcherChallengeRequest": {
+      "type": "object",
+      "description": "`dispatcher/challenge`: what a paired device signs in its `dispatcher/hello`. Only on the\nWebSocket, before hello."
+    },
+    "DispatcherChallenge": {
+      "type": "object",
+      "properties": {
+        "dispatcherId": {
+          "type": "string",
+          "description": "The Dispatcher's id, which the device checks is the Dispatcher it paired with."
+        },
+        "nonce": {
+          "type": "string",
+          "description": "32 random bytes, in unpadded base64url, good for one hello on this connection."
+        },
+        "expiresAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "dispatcherId",
+        "nonce",
+        "expiresAt"
+      ]
+    },
+    "DispatcherHelloRequest": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "[`DISPATCHER_PROTOCOL`] as the client speaks it."
+        },
+        "client": {
+          "$ref": "#/$defs/ClientInfo"
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Auth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the connection authenticates: none is [`Auth::Local`], on the Unix socket. On the\nWebSocket, a paired device's signature of its `dispatcher/challenge`, as\n[`dispatcher_auth_message`] spells it, or a pairing with a code."
+        }
+      },
+      "required": [
+        "protocol",
+        "client"
+      ],
+      "description": "`dispatcher/hello`: the first request on a connection. Until it succeeds, the Dispatcher\nanswers every other request with [`crate::errors::UNAUTHENTICATED`]."
+    },
+    "DispatcherHello": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "version": {
+          "type": "string",
+          "description": "The weave release the Dispatcher runs."
+        },
+        "id": {
+          "type": "string",
+          "description": "The Dispatcher's own id, which stays the same across restarts and which a device checks\nis the Dispatcher it paired with.",
+          "default": ""
+        },
+        "device": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeviceInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The paired device a remote client connected as; none for a local client."
+        }
+      },
+      "required": [
+        "protocol",
+        "version"
+      ]
+    },
+    "DispatcherStatusRequest": {
+      "type": "object",
+      "description": "`dispatcher/status`."
+    },
+    "DispatcherStatus": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "startedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string",
+          "description": "What it calls itself to the Hosts that join it."
+        },
+        "database": {
+          "type": "string",
+          "description": "Its database."
+        },
+        "pending": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Work written down for a Host that the Host hasn't taken yet."
+        },
+        "id": {
+          "type": "string",
+          "description": "Its id, which its paired devices know it by.",
+          "default": ""
+        },
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where its WebSocket listens, while a paired device or a Host that joined over it keeps\nremote access on."
+        },
+        "devices": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The devices paired with it.",
+          "default": 0
+        }
+      },
+      "required": [
+        "version",
+        "pid",
+        "startedAt",
+        "name",
+        "database",
+        "pending"
+      ]
+    },
+    "ListHostsRequest": {
+      "type": "object",
+      "description": "`hosts/list`."
+    },
+    "ListHostsResponse": {
+      "type": "object",
+      "properties": {
+        "hosts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DispatcherHost"
+          }
+        }
+      },
+      "required": [
+        "hosts"
+      ]
+    },
+    "DispatcherHost": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "description": "What the Dispatcher calls it."
+        },
+        "url": {
+          "type": "string",
+          "description": "Where the Dispatcher dialed it, for a Host paired before Hosts joined it\n([`Reachability::Unjoined`]); empty for one that joined.",
+          "default": ""
+        },
+        "deviceId": {
+          "type": "string",
+          "description": "The device the Host knows the Dispatcher as."
+        },
+        "pairedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it first paired or joined."
+        },
+        "joinedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it last joined; none for a Host paired before Hosts joined the Dispatcher."
+        },
+        "here": {
+          "type": "boolean",
+          "description": "It joined over the Dispatcher's socket, on the Dispatcher's own computer."
+        },
+        "connected": {
+          "type": "boolean",
+          "description": "Connected now."
+        },
+        "status": {
+          "$ref": "#/$defs/Reachability",
+          "description": "How the last attempt to connect went."
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why it failed, when it did."
+        },
+        "connectedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it last connected."
+        },
+        "pending": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Work written down for it that it hasn't taken yet."
+        }
+      },
+      "required": [
+        "hostId",
+        "name",
+        "deviceId",
+        "pairedAt",
+        "connected",
+        "status",
+        "pending"
+      ],
+      "description": "A Host that joined the Dispatcher, which is a client of it with the `service` role."
+    },
+    "Reachability": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "reachable",
+          "description": "It took the Dispatcher's key at hello; the Dispatcher may be connected to it now."
+        },
+        {
+          "type": "string",
+          "const": "unchecked",
+          "description": "It hasn't connected since the Dispatcher started."
+        },
+        {
+          "type": "string",
+          "const": "refused",
+          "description": "It left the Dispatcher, or refused its key: joining again is the way back."
+        },
+        {
+          "type": "string",
+          "const": "unjoined",
+          "description": "It was paired before Hosts joined the Dispatcher (ADR 0030), which no longer dials it:\n`weave hosts add` there joins it."
+        },
+        {
+          "type": "string",
+          "const": "down",
+          "description": "Its computer answered at the URL, but no weave Host did, as when the Host isn't running\nthere."
+        },
+        {
+          "type": "string",
+          "const": "unreachable",
+          "description": "Nothing answered at the URL, as when the computer is asleep or off the tailnet."
+        },
+        {
+          "type": "string",
+          "const": "otherHost",
+          "description": "Another weave Host answers at the URL."
+        }
+      ],
+      "description": "How the Dispatcher's last attempt to connect to a Host went."
+    },
+    "OfferHostRequest": {
+      "type": "object",
+      "properties": {
+        "here": {
+          "type": "boolean"
+        }
+      },
+      "description": "`hosts/offer`: a one-time code a Host joins the Dispatcher with, good for five minutes\n(ADR 0030). For a Host on another computer it turns the Dispatcher's WebSocket on, as\n`devices/offer` does, and gives its URL. For one on the Dispatcher's own computer (`here`),\nwhich only a client there may ask for, it gives the socket Hosts connect to instead."
+    },
+    "OfferHostResponse": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "128 random bits in Crockford base32."
+        },
+        "expiresAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "address": {
+          "$ref": "#/$defs/DispatcherAddress",
+          "description": "Where the Host connects to join."
+        }
+      },
+      "required": [
+        "code",
+        "expiresAt",
+        "address"
+      ]
+    },
+    "ConnectHostRequest": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "[`DISPATCHER_PROTOCOL`] as the Host speaks it."
+        },
+        "hostId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "description": "What the Host calls itself, which the Dispatcher calls it when it joins."
+        },
+        "version": {
+          "type": "string",
+          "description": "The weave release the Host runs."
+        },
+        "signature": {
+          "type": "string"
+        },
+        "join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostJoin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocol",
+        "hostId",
+        "name",
+        "version",
+        "signature"
+      ],
+      "description": "`hosts/connect`: the request a Host's own connection begins with, after\n`dispatcher/challenge`: who it is, and its signature of the challenge, as\n[`host_connect_message`] spells it. Joining, it gives the code `hosts/offer` showed and the\nkey it signs with. Once the Dispatcher answers, it says `host/hello` to the Host on the same\nconnection; a refusal answers [`crate::errors::UNAUTHENTICATED`] and closes it."
+    },
+    "HostJoin": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "publicKey": {
+          "$ref": "#/$defs/Jwk"
+        }
+      },
+      "required": [
+        "code",
+        "publicKey"
+      ],
+      "description": "A Host joining: the code `hosts/offer` gave, and the Host's P-256 public key."
+    },
+    "HostConnected": {
+      "type": "object",
+      "properties": {
+        "dispatcherId": {
+          "type": "string"
+        },
+        "dispatcherName": {
+          "type": "string",
+          "description": "What the Dispatcher calls itself."
+        },
+        "publicKey": {
+          "$ref": "#/$defs/Jwk",
+          "description": "The Dispatcher's P-256 public key. At `host/hello` it signs the Host's challenge with it,\nas [`crate::devices::auth_message`] spells it, with its id as the device's."
+        },
+        "name": {
+          "type": "string",
+          "description": "What the Dispatcher calls the Host."
+        }
+      },
+      "required": [
+        "dispatcherId",
+        "dispatcherName",
+        "publicKey",
+        "name"
+      ]
+    },
+    "RemoveHostRequest": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "description": "`hosts/remove`: forget a Host, by id or name, and the work still written down for it. A\nHost connected now is told, as its connection closes with\n[`crate::websocket::CLOSE_REVOKED`], and forgets that it joined."
+    },
+    "OpenHostRequest": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "By id or name, as `hosts/list` gives them."
+        },
+        "stream": {
+          "$ref": "#/$defs/CarriedStream",
+          "default": "host"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "description": "`hosts/open`: the last request on a connection a device asks the Dispatcher to carry to one\nof the person's Hosts (ADR 0030, WVE-195), after its challenge and hello: on the WebSocket\nwith [`DISPATCHER_CARRY_SUBPROTOCOL`], or on the Dispatcher's socket on its own computer. The\nDispatcher answers once the Host has opened a connection of its own to be joined to this one,\nand from then on passes what either sends to the other unchanged. A Host it isn't connected\nto answers [`crate::errors::HOST_UNAVAILABLE`] at once, with [`HostUnavailable`] as its data."
+    },
+    "OpenedHost": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "description": "What the Dispatcher calls it."
+        }
+      },
+      "required": [
+        "hostId",
+        "name"
+      ]
+    },
+    "HostCarryRequest": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string",
+          "description": "32 random bytes, in unpadded base64url, fresh for this connection."
+        }
+      },
+      "required": [
+        "token",
+        "nonce"
+      ],
+      "description": "`hosts/carry`: on a connection a Host opens to the Dispatcher it joined with\n[`DISPATCHER_HOST_SUBPROTOCOL`], after `dispatcher/challenge`, in place of `hosts/connect`:\nthe token a [`CarryRequest`] gave it, and a nonce of the Host's own, which the Dispatcher\nsigns ([`HostCarried`]). Once the Host has checked the signature with the key it learned when\nit joined, the connection is the Host's end of the device's, and the Host serves it; without\nthe signature, or with a wrong one, the Host closes it, serving nothing."
+    },
+    "HostCarried": {
+      "type": "object",
+      "properties": {
+        "signature": {
+          "type": "string",
+          "description": "The Dispatcher's signature of [`carry_message`] with its own key, as a device's in\n`host/hello`: DER, in unpadded base64url."
+        }
+      },
+      "required": [
+        "signature"
+      ]
+    },
+    "ListSchedulesRequest": {
+      "type": "object",
+      "description": "`schedules/list`."
+    },
+    "ListSchedulesResponse": {
+      "type": "object",
+      "properties": {
+        "schedules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Schedule"
+          }
+        }
+      },
+      "required": [
+        "schedules"
+      ]
+    },
+    "Schedule": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "cron": {
+          "type": "string",
+          "description": "Five fields, minute to weekday, or a name such as `@daily`."
+        },
+        "zone": {
+          "type": "string",
+          "description": "An IANA time zone, such as `Africa/Johannesburg`."
+        },
+        "hostId": {
+          "type": "string"
+        },
+        "hostName": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/PermissionPolicy"
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The mode a new thread starts in; the agent's configured one when absent."
+        },
+        "thread": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The thread each occurrence prompts; each starts a new one when absent."
+        },
+        "missed": {
+          "$ref": "#/$defs/Missed"
+        },
+        "overlap": {
+          "$ref": "#/$defs/Overlap"
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "paused": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why it's paused, when it is: by the person, or after failing."
+        },
+        "failures": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its occurrences that failed or were interrupted in a row."
+        },
+        "nextAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it next runs, unless it's paused."
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "That, in its time zone: \"Wed 4 Nov 09:00 SAST\"."
+        },
+        "last": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Occurrence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its latest occurrence."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "cron",
+        "zone",
+        "hostId",
+        "hostName",
+        "agentId",
+        "cwd",
+        "prompt",
+        "policy",
+        "missed",
+        "overlap",
+        "createdAt",
+        "failures"
+      ],
+      "description": "A schedule: a trigger whose occurrences start a headless turn on one of the person's Hosts\nat the times its cron expression gives, in its time zone."
+    },
+    "Missed": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "latest",
+          "description": "Run the latest missed occurrence once, late, within the look-back; skip the rest."
+        },
+        {
+          "type": "string",
+          "const": "skip",
+          "description": "Skip every missed occurrence."
+        }
+      ],
+      "description": "What a schedule does about an occurrence it missed, as while its computer slept."
+    },
+    "Overlap": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "skip",
+          "description": "Skip it."
+        },
+        {
+          "type": "string",
+          "const": "allow",
+          "description": "Start it anyway, in a thread of its own: only for a schedule that starts a new thread\neach time."
+        }
+      ],
+      "description": "What a schedule does when an occurrence comes while its previous one is still waiting or\nrunning."
+    },
+    "Occurrence": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "scheduleId": {
+          "type": "string"
+        },
+        "scheduledAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The time it was due: when it was run by hand, for one that was."
+        },
+        "late": {
+          "type": "boolean",
+          "description": "It started more than a minute after it was due, as a catch-up does."
+        },
+        "manual": {
+          "type": "boolean",
+          "description": "Run by hand (`schedules/run`)."
+        },
+        "state": {
+          "$ref": "#/$defs/OccurrenceState"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How its turn ended, once it's finished."
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why it was skipped or failed, or what its turn's error said."
+        },
+        "threadId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recordedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "endedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "scheduleId",
+        "scheduledAt",
+        "state",
+        "recordedAt"
+      ],
+      "description": "One time a schedule came due, or was run by hand."
+    },
+    "OccurrenceState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "skipped",
+          "description": "Not run, saying why."
+        },
+        {
+          "type": "string",
+          "const": "waiting",
+          "description": "Written down for its Host, which hasn't taken it yet, as while it's unreachable."
+        },
+        {
+          "type": "string",
+          "const": "started",
+          "description": "Its Host started its turn."
+        },
+        {
+          "type": "string",
+          "const": "finished",
+          "description": "Its turn is over, as `outcome` says."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "Its Host refused it, saying why."
+        }
+      ],
+      "description": "How one occurrence of a schedule went."
+    },
+    "AddScheduleRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique among the Dispatcher's schedules."
+        },
+        "cron": {
+          "type": "string"
+        },
+        "zone": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The Dispatcher's own time zone when absent."
+        },
+        "host": {
+          "type": "string",
+          "description": "The Host, by id or name."
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/PermissionPolicy"
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The mode a new thread starts in; the agent's configured one when absent."
+        },
+        "thread": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The thread each occurrence prompts; each starts a new one when absent."
+        },
+        "missed": {
+          "$ref": "#/$defs/Missed",
+          "default": "latest"
+        },
+        "overlap": {
+          "$ref": "#/$defs/Overlap",
+          "default": "skip"
+        }
+      },
+      "required": [
+        "name",
+        "cron",
+        "host",
+        "agentId",
+        "cwd",
+        "prompt",
+        "policy"
+      ],
+      "description": "`schedules/add`."
+    },
+    "ScheduleResponse": {
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "$ref": "#/$defs/Schedule"
+        }
+      },
+      "required": [
+        "schedule"
+      ]
+    },
+    "RemoveScheduleRequest": {
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schedule"
+      ],
+      "description": "`schedules/remove`: forget a schedule, by id or name, and its occurrences. One already\nstarted runs on."
+    },
+    "PauseScheduleRequest": {
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schedule"
+      ],
+      "description": "`schedules/pause`: run nothing until resumed."
+    },
+    "ResumeScheduleRequest": {
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schedule"
+      ],
+      "description": "`schedules/resume`: run again from now on, catching up nothing missed while paused, and\nforget its failures."
+    },
+    "RunScheduleRequest": {
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schedule"
+      ],
+      "description": "`schedules/run`: run it now, as an occurrence of its own, paused or not."
+    },
+    "OccurrenceResponse": {
+      "type": "object",
+      "properties": {
+        "occurrence": {
+          "$ref": "#/$defs/Occurrence"
+        }
+      },
+      "required": [
+        "occurrence"
+      ]
+    },
+    "ListOccurrencesRequest": {
+      "type": "object",
+      "properties": {
+        "schedule": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "By id or name."
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "50 when absent."
+        }
+      },
+      "description": "`occurrences/list`: the latest occurrences, of one schedule or all, newest first."
+    },
+    "ListOccurrencesResponse": {
+      "type": "object",
+      "properties": {
+        "occurrences": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Occurrence"
+          }
+        }
+      },
+      "required": [
+        "occurrences"
+      ]
+    },
+    "HostUnavailable": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/Reachability"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "why"
+      ],
+      "description": "Why the Dispatcher can't carry a connection to a Host: the `data` of the\n[`crate::errors::HOST_UNAVAILABLE`] that `hosts/open` answers, as `hosts/list` says it."
     },
     "TerminalStreamOpen": {
       "type": "object",

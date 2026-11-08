@@ -994,9 +994,15 @@ Options:
 $ weave dispatcher run --help
 Run the Dispatcher in the foreground until stopped (for launchd or systemd, or to watch its log)
 
-Usage: weave dispatcher run
+Usage: weave dispatcher run [OPTIONS]
 
 Options:
+      --listen <LISTEN>
+          The loopback address its WebSocket listens on for your devices and Hosts, once one pairs or joins (default 127.0.0.1:7342)
+
+      --url <URL>
+          What devices and Hosts connect to. With it, the Dispatcher makes and removes no Tailscale Serve entry: you route them to it yourself, as a development Dispatcher does
+
   -h, --help
           Print help
 

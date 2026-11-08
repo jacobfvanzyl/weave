@@ -14,6 +14,7 @@
 use std::io::BufRead as _;
 use std::io::IsTerminal as _;
 use std::io::Write as _;
+use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -72,7 +73,7 @@ pub struct DispatcherArgs {
 enum DispatcherCommand {
     /// Run the Dispatcher in the foreground until stopped (for launchd or systemd, or to watch
     /// its log).
-    Run,
+    Run(RunArgs),
     /// Start the Dispatcher in the background, if it isn't running.
     Start,
     /// Stop the Dispatcher. Nothing runs on schedule until it starts again; then each schedule
@@ -98,6 +99,18 @@ enum DispatcherCommand {
     Connect(ConnectArgs),
     /// Forget the Dispatcher this computer is paired with.
     Disconnect,
+}
+
+#[derive(Args, Default)]
+struct RunArgs {
+    /// The loopback address its WebSocket listens on for your devices and Hosts, once one pairs
+    /// or joins (default 127.0.0.1:7342).
+    #[arg(long)]
+    listen: Option<String>,
+    /// What devices and Hosts connect to. With it, the Dispatcher makes and removes no Tailscale
+    /// Serve entry: you route them to it yourself, as a development Dispatcher does.
+    #[arg(long)]
+    url: Option<String>,
 }
 
 #[derive(Args)]
@@ -170,7 +183,7 @@ pub async fn command(args: DispatcherArgs) -> anyhow::Result<ExitCode> {
         .command
         .unwrap_or_else(|| DispatcherCommand::Status(JsonArgs::default()));
     let elsewhere = match &command {
-        DispatcherCommand::Run => Some("run"),
+        DispatcherCommand::Run(_) => Some("run"),
         DispatcherCommand::Start => Some("start"),
         DispatcherCommand::Restart => Some("restart"),
         DispatcherCommand::Install => Some("install"),
@@ -184,7 +197,7 @@ pub async fn command(args: DispatcherArgs) -> anyhow::Result<ExitCode> {
         );
     }
     let done = match command {
-        DispatcherCommand::Run => run(paths).await,
+        DispatcherCommand::Run(args) => run(paths, args).await,
         DispatcherCommand::Start => start(&paths).await,
         DispatcherCommand::Stop => {
             if !stop(&paths).await? {
@@ -211,15 +224,12 @@ pub async fn command(args: DispatcherArgs) -> anyhow::Result<ExitCode> {
 /// `weave dispatcher run`: hold the directory's lock, answer on its socket, and keep the
 /// Hosts connected until SIGTERM or SIGINT. Its work is kept as it goes, so stopping it drains
 /// nothing.
-async fn run(paths: DispatcherPaths) -> anyhow::Result<()> {
+async fn run(paths: DispatcherPaths, args: RunArgs) -> anyhow::Result<()> {
+    let remote = remote_settings(&args)?;
     let listening = socket::listen(&paths)
         .with_context(|| format!("listening on {}", paths.socket().display()))?;
     let mut config = DispatcherConfig::new(paths.clone());
-    config.remote = Some(RemoteSettings {
-        #[allow(clippy::expect_used)]
-        listen: DEFAULT_LISTEN.parse().expect("the default address parses"),
-        ..RemoteSettings::new(Arc::new(TailscaleServe::DISPATCHER))
-    });
+    config.remote = Some(remote);
     let dispatcher = Dispatcher::open(config)
         .map_err(anyhow::Error::msg)
         .context("opening the Dispatcher's state")?;
@@ -231,6 +241,27 @@ async fn run(paths: DispatcherPaths) -> anyhow::Result<()> {
     dispatcher.stop().await;
     tracing::info!("the Dispatcher stopped");
     Ok(())
+}
+
+/// Where the WebSocket listens, and whether Tailscale Serve brings devices to it: loopback port
+/// 7342 and its own Serve entry, unless `--listen` and `--url` say otherwise, as the Host's
+/// `[remote] listen` and `url` do. A URL leaves Serve alone.
+fn remote_settings(args: &RunArgs) -> anyhow::Result<RemoteSettings> {
+    let text = args.listen.as_deref().unwrap_or(DEFAULT_LISTEN);
+    let listen: SocketAddr = text
+        .parse()
+        .with_context(|| format!("--listen {text:?} isn't an address and port"))?;
+    if !listen.ip().is_loopback() {
+        bail!(
+            "--listen {text:?} isn't a loopback address; the Dispatcher listens on loopback \
+             only, and Tailscale Serve or whatever --url names forwards to it"
+        );
+    }
+    Ok(RemoteSettings {
+        listen,
+        url: args.url.clone(),
+        ..RemoteSettings::new(Arc::new(TailscaleServe::DISPATCHER))
+    })
 }
 
 async fn install(paths: &DispatcherPaths) -> anyhow::Result<()> {
@@ -714,4 +745,44 @@ fn disconnect() -> anyhow::Result<()> {
         None => println!("This computer isn't paired with a Dispatcher."),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn a_url_leaves_tailscale_serve_alone_and_listen_must_be_loopback() {
+        let default = remote_settings(&RunArgs::default()).unwrap();
+        assert_eq!(default.listen.to_string(), DEFAULT_LISTEN);
+        assert_eq!(default.url, None);
+
+        let dev = remote_settings(&RunArgs {
+            listen: Some("127.0.0.1:47342".to_owned()),
+            url: Some("ws://127.0.0.1:47342".to_owned()),
+        })
+        .unwrap();
+        assert_eq!(dev.listen.to_string(), "127.0.0.1:47342");
+        assert_eq!(dev.url.as_deref(), Some("ws://127.0.0.1:47342"));
+
+        let open = remote_settings(&RunArgs {
+            listen: Some("0.0.0.0:7342".to_owned()),
+            url: None,
+        });
+        assert!(
+            open.err()
+                .unwrap()
+                .to_string()
+                .contains("isn't a loopback address")
+        );
+        assert!(
+            remote_settings(&RunArgs {
+                listen: Some("nowhere".to_owned()),
+                url: None,
+            })
+            .is_err()
+        );
+    }
 }
