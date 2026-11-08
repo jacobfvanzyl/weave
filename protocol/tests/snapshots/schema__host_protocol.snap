@@ -2267,7 +2267,7 @@ expression: schema()
         "token",
         "device"
       ],
-      "description": "`dispatcher/carry`, in the Host protocol: the Dispatcher the Host joined asks it, over the\nconnection the Host keeps open to it, to open another for a device's (ADR 0030, WVE-195).\nThe Host connects to the Dispatcher where it joined it, presents `token` in\n[`HostCarryRequest`], and answers once the Dispatcher has taken it; then it serves that\nconnection for `device`, a paired device of the Dispatcher's, as a remote client of\n`stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host\nopened to it."
+      "description": "`dispatcher/carry`, in the Host protocol: the Dispatcher the Host joined asks it, over the\nconnection the Host keeps open to it, to open another for a device's (ADR 0030, WVE-195).\nThe Host connects to the Dispatcher where it joined it, presents `token` in\n[`HostCarryRequest`] with a nonce the Dispatcher signs, and answers once it has checked the\nsignature; then it serves that connection for `device`, a paired device of the Dispatcher's,\nas a remote client of `stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host\nopened to it."
     },
     "CarriedStream": {
       "oneOf": [

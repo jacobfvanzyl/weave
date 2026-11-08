@@ -122,7 +122,12 @@ the Host needs no listener, Serve entry or pairing for it:
 - The device proves its key to the Dispatcher, and names the Host in `hosts/open`. Over the
   Host's own connection the Dispatcher asks `dispatcher/carry` with a one-time token and the
   device; the Host opens another connection where it joined the Dispatcher and presents the
-  token; the Dispatcher joins the two and passes the frames through unread.
+  token with a nonce of its own; the Dispatcher joins the two and passes the frames through
+  unread.
+- The Dispatcher proves its key on that connection too: it signs the Host's nonce, bound to the
+  token and both ids, and the Host checks the signature with the key it learned when it joined.
+  Until it has, the Host serves nothing there, and with no signature or a wrong one it closes the
+  connection (4002).
 - The device's `host/hello` says `auth: {method: "dispatcher"}`, which the Host takes on such a
   connection only, and refuses on its WebSocket, its socket and in-process. Its answer names the
   device the Dispatcher named in `device`.
@@ -306,11 +311,16 @@ It protects against:
 - web pages, through `Origin` and the subprotocol;
 - revoked devices, which are disconnected at once, from the Dispatcher too;
 - anyone saying they're the Dispatcher's device: the Host takes that only on a connection it
-  opened to the Dispatcher whose key it checked.
+  opened itself to the Dispatcher it joined, and only once the Dispatcher has signed a nonce of
+  the Host's there with the key the Host learned when it joined;
+- something else answering at the Dispatcher's address, as after a name or a Serve entry moves:
+  without the Dispatcher's key it can't sign the Host's nonce, so the Host serves it nothing,
+  neither a device's connection nor a terminal's stream.
 
 It doesn't protect against someone using the Host computer's account, who can read
 `devices.json`, run `weave pair` or use the Unix socket, or against someone holding an unlocked
-paired device. Other accounts on the Host's computer can reach the loopback port, which the
+paired device. Nor against the Dispatcher itself, which holds the keys to every Host (ADR 0030)
+and sees everything it carries. Other accounts on the Host's computer can reach the loopback port, which the
 socket's file mode keeps them away from, but they can't get past `host/hello` without a
 device's key. TLS ends at Tailscale on the Host's computer; the last hop is loopback.
 

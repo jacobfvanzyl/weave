@@ -2451,9 +2451,9 @@ export interface LeaveDispatcherRequest {}
  * `dispatcher/carry`, in the Host protocol: the Dispatcher the Host joined asks it, over the
  * connection the Host keeps open to it, to open another for a device's (ADR 0030, WVE-195).
  * The Host connects to the Dispatcher where it joined it, presents `token` in
- * [`HostCarryRequest`], and answers once the Dispatcher has taken it; then it serves that
- * connection for `device`, a paired device of the Dispatcher's, as a remote client of
- * `stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host
+ * [`HostCarryRequest`] with a nonce the Dispatcher signs, and answers once it has checked the
+ * signature; then it serves that connection for `device`, a paired device of the Dispatcher's,
+ * as a remote client of `stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host
  * opened to it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema

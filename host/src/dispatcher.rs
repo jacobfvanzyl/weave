@@ -10,8 +10,9 @@
 //!
 //! The Dispatcher carries the person's devices' connections to the Host (WVE-195): over the
 //! Host's connection it asks `dispatcher/carry` with a token and the device, and the Host opens
-//! another connection to it where it joined it, presents the token, and serves that connection
-//! for the device as a remote client ([`carry`]). Leaving the Dispatcher, or its removing the
+//! another connection to it where it joined it, presents the token with a nonce of its own,
+//! checks the Dispatcher's signature of it with the key it learned when it joined, and only then
+//! serves that connection for the device as a remote client ([`carry`]). Leaving the Dispatcher, or its removing the
 //! Host, closes them.
 
 use std::path::Path;
@@ -44,15 +45,18 @@ use weave_host_protocol::dispatcher::HostConnected;
 use weave_host_protocol::dispatcher::HostJoin;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinedDispatcher;
+use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::dispatcher::host_connect_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
+use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_remote::preamble;
 use weave_remote::websocket;
 use weave_remote::websocket::RemoteConfig;
 use weave_remote::websocket::WebSocketStream;
 
 use crate::Shared;
+use crate::devices::random_id;
 use crate::devices::write_private;
 use crate::journal::now_ms;
 use crate::paths::DaemonPaths;
@@ -533,9 +537,10 @@ where
 }
 
 /// `dispatcher/carry`: connect to the Dispatcher the Host joined again, for the device it names,
-/// present `request.token`, and once the Dispatcher has taken it, serve that connection for the
-/// device: the Host protocol, whose hello takes the Dispatcher's word for the device, or a
-/// terminal's stream with a ticket of that device's.
+/// present `request.token`, and once the Dispatcher has proved its key there, serve that
+/// connection for the device: the Host protocol, whose hello takes the Dispatcher's word for the
+/// device, or a terminal's stream with a ticket of that device's. A connection where it proves
+/// nothing is closed, serving nothing.
 pub(crate) async fn carry(shared: &Arc<Shared>, request: CarryRequest) -> Result<(), Error> {
     let settings = shared.dispatcher.settings.clone().ok_or_else(|| {
         invalid("this Host runs inside a client, so it joins no Dispatcher".to_owned())
@@ -549,16 +554,21 @@ pub(crate) async fn carry(shared: &Arc<Shared>, request: CarryRequest) -> Result
     let mut opened = open(&record.address, settings.timeout)
         .await
         .map_err(unavailable)?;
-    let presenting = present(&mut opened, &record.id, request.token);
-    tokio::time::timeout(settings.timeout, presenting)
+    let presenting = present(&mut opened, shared, &record, request.token);
+    let presented = tokio::time::timeout(settings.timeout, presenting)
         .await
-        .map_err(|_| {
-            unavailable(format!(
+        .unwrap_or_else(|_| {
+            Err(unavailable(format!(
                 "the Dispatcher at {} didn't take the connection within {} seconds",
                 record.address,
                 settings.timeout.as_secs_f32()
-            ))
-        })??;
+            )))
+        });
+    if let Err(error) = presented {
+        tracing::warn!(why = %error.message, "served nothing on a connection opened for the Dispatcher");
+        close(&mut opened, CLOSE_UNAUTHENTICATED).await;
+        return Err(error);
+    }
     let device = DeviceInfo {
         service: false,
         ..request.device
@@ -580,29 +590,66 @@ pub(crate) async fn carry(shared: &Arc<Shared>, request: CarryRequest) -> Result
     Ok(())
 }
 
-/// Ask for the Dispatcher's challenge, check it's `expected`, the one the Host joined, and
-/// present `token`.
-async fn present(opened: &mut Opened, expected: &str, token: String) -> Result<(), Error> {
+/// Ask for the Dispatcher's challenge, check it's the one the Host joined, `record`, and present
+/// `token` with a nonce of the Host's own, which that Dispatcher has to sign with the key the
+/// Host learned when it joined, or the Host serves nothing on the connection.
+async fn present(
+    opened: &mut Opened,
+    shared: &Shared,
+    record: &Record,
+    token: String,
+) -> Result<(), Error> {
     match opened {
-        Opened::Tcp(socket) => present_on(&mut **socket, expected, token).await,
-        Opened::Unix(socket) => present_on(&mut **socket, expected, token).await,
+        Opened::Tcp(socket) => present_on(&mut **socket, shared, record, token).await,
+        Opened::Unix(socket) => present_on(&mut **socket, shared, record, token).await,
     }
 }
 
 async fn present_on<S: AsyncRead + AsyncWrite + Unpin>(
     socket: &mut WebSocketStream<S>,
-    expected: &str,
+    shared: &Shared,
+    record: &Record,
     token: String,
 ) -> Result<(), Error> {
     let challenge = preamble::ask(socket, 1, &DispatcherChallengeRequest {}).await?;
-    if challenge.dispatcher_id != expected {
+    if challenge.dispatcher_id != record.id {
         return Err(unavailable(
             "another Dispatcher answers there now: `weave hosts add` joins the one that should be"
                 .to_owned(),
         ));
     }
-    preamble::ask(socket, 2, &HostCarryRequest { token }).await?;
+    let nonce = random_id(32);
+    let carried = preamble::ask(
+        socket,
+        2,
+        &HostCarryRequest {
+            token: token.clone(),
+            nonce: nonce.clone(),
+        },
+    )
+    .await?;
+    let message = carry_message(&record.id, &shared.devices.host_id(), &token, &nonce);
+    if !shared
+        .devices
+        .joined_signed(&record.id, &message, &carried.signature)
+    {
+        return Err(errors::unauthenticated(format!(
+            "what answers at {} didn't prove the key of the Dispatcher this Host joined",
+            record.address
+        )));
+    }
     Ok(())
+}
+
+/// Close `opened` with `code`, as after it proved nothing.
+async fn close(opened: &mut Opened, code: u16) {
+    let closing = async {
+        match opened {
+            Opened::Tcp(socket) => preamble::close(&mut **socket, code).await,
+            Opened::Unix(socket) => preamble::close(&mut **socket, code).await,
+        }
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), closing).await;
 }
 
 /// Serve `socket`, a connection the Dispatcher carries for `device`, as `stream` says, until

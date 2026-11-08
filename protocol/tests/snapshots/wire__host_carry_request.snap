@@ -1,7 +1,8 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&HostCarryRequest\n{ token: \"Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE\".to_owned(), })"
+expression: "round_trip(&HostCarryRequest\n{\n    token: \"Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE\".to_owned(), nonce:\n    \"q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c\".to_owned(),\n})"
 ---
 {
-  "token": "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE"
+  "token": "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE",
+  "nonce": "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c"
 }

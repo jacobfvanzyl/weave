@@ -12,8 +12,9 @@
 //!
 //! The person's devices reach their Hosts through the Dispatcher (WVE-195): a device asks for a
 //! Host with [`OpenHostRequest`], the Dispatcher asks that Host with [`CarryRequest`] to open a
-//! connection of its own, which the Host presents with [`HostCarryRequest`], and the Dispatcher
-//! joins the two and passes the Host protocol through unchanged. The specification is
+//! connection of its own, which the Host presents with [`HostCarryRequest`], the Dispatcher
+//! proving its key there by signing the Host's nonce, and the Dispatcher joins the two and passes
+//! the Host protocol through unchanged. The specification is
 //! `docs/specs/wve-175-dispatcher.md`.
 
 use std::path::PathBuf;
@@ -96,6 +97,13 @@ pub fn dispatcher_auth_message(dispatcher_id: &str, device_id: &str, nonce: &str
 /// hello to the Dispatcher nor a Host's hello takes.
 pub fn host_connect_message(dispatcher_id: &str, host_id: &str, nonce: &str) -> String {
     format!("weave-dispatcher-host-auth/1 {dispatcher_id} {host_id} {nonce}")
+}
+
+/// What the Dispatcher signs in answer to `hosts/carry` ([`HostCarried`]): the UTF-8 bytes of
+/// this line, binding the Host's own nonce to the token it presented, which no hello, Host's or
+/// device's, takes.
+pub fn carry_message(dispatcher_id: &str, host_id: &str, token: &str, nonce: &str) -> String {
+    format!("weave-dispatcher-carry/1 {dispatcher_id} {host_id} {token} {nonce}")
 }
 
 /// Where a Host reaches the Dispatcher: its WebSocket, through its Tailscale Serve entry, or on
@@ -372,21 +380,33 @@ pub struct HostUnavailable {
 
 /// `hosts/carry`: on a connection a Host opens to the Dispatcher it joined with
 /// [`DISPATCHER_HOST_SUBPROTOCOL`], after `dispatcher/challenge`, in place of `hosts/connect`:
-/// the token a [`CarryRequest`] gave it. Once answered, the connection is the Host's end of the
-/// device's, and the Host serves it.
+/// the token a [`CarryRequest`] gave it, and a nonce of the Host's own, which the Dispatcher
+/// signs ([`HostCarried`]). Once the Host has checked the signature with the key it learned when
+/// it joined, the connection is the Host's end of the device's, and the Host serves it; without
+/// the signature, or with a wrong one, the Host closes it, serving nothing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[request(method = "hosts/carry", response = Empty)]
+#[request(method = "hosts/carry", response = HostCarried)]
 pub struct HostCarryRequest {
     pub token: String,
+    /// 32 random bytes, in unpadded base64url, fresh for this connection.
+    pub nonce: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HostCarried {
+    /// The Dispatcher's signature of [`carry_message`] with its own key, as a device's in
+    /// `host/hello`: DER, in unpadded base64url.
+    pub signature: String,
 }
 
 /// `dispatcher/carry`, in the Host protocol: the Dispatcher the Host joined asks it, over the
 /// connection the Host keeps open to it, to open another for a device's (ADR 0030, WVE-195).
 /// The Host connects to the Dispatcher where it joined it, presents `token` in
-/// [`HostCarryRequest`], and answers once the Dispatcher has taken it; then it serves that
-/// connection for `device`, a paired device of the Dispatcher's, as a remote client of
-/// `stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host
+/// [`HostCarryRequest`] with a nonce the Dispatcher signs, and answers once it has checked the
+/// signature; then it serves that connection for `device`, a paired device of the Dispatcher's,
+/// as a remote client of `stream`'s kind. Only the Dispatcher the Host joined may ask, on the connection the Host
 /// opened to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

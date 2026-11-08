@@ -1,7 +1,8 @@
 //! The person's devices reaching their Hosts through the Dispatcher (ADR 0030, WVE-195): a
 //! paired device on the Dispatcher's loopback WebSocket asks for a Host, the Host opens a
 //! connection of its own for it, and the Dispatcher passes the Host protocol through. Two Hosts
-//! join over the Dispatcher's socket, each through its relay, as in the other tests.
+//! join over the Dispatcher's socket, each through its relay, as in the other tests; a relay
+//! pointed elsewhere stands in for something else answering at the Dispatcher's address.
 
 #![allow(clippy::expect_used)]
 
@@ -44,10 +45,15 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::CARRY_FEATURE;
 use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::CarryRequest;
+use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_SUBPROTOCOL;
+use weave_host_protocol::dispatcher::DispatcherChallenge;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
+use weave_host_protocol::dispatcher::HostCarried;
+use weave_host_protocol::dispatcher::HostCarryRequest;
 use weave_host_protocol::dispatcher::LOCAL_DEVICE;
 use weave_host_protocol::dispatcher::Reachability;
+use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::hello::ClientCapabilities;
@@ -70,8 +76,10 @@ use weave_host_protocol::threads::ThreadState;
 use weave_host_protocol::threads::TurnOrigin;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
+use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_remote::access::RemoteSettings;
 use weave_remote::access::Serve;
+use weave_remote::preamble;
 
 use crate::common::WAIT;
 use crate::common::World;
@@ -850,5 +858,138 @@ async fn a_terminals_stream_goes_through_the_dispatcher() {
     };
     assert_eq!(closed, Some(CLOSE_REVOKED));
     connection.shutdown().await;
+    hub.stop().await;
+}
+
+/// How something answering at the Dispatcher's address, without its key, answers `hosts/carry`.
+#[derive(Clone, Copy, Debug)]
+enum Impostor {
+    /// Signs as the Dispatcher would, with a key of its own.
+    OtherKey,
+    /// Takes the token without signing anything.
+    NoSignature,
+}
+
+/// What the Host did once an impostor answered `hosts/carry`: the answer to a hello sent then,
+/// if it served one, and the code it closed with.
+#[derive(Debug)]
+struct Served {
+    answer: Option<String>,
+    closed: Option<u16>,
+}
+
+/// Answer one connection a Host opens at the Dispatcher's address as the Dispatcher `id` would,
+/// but without its key: what the Host does then, and whether it answers a hello there after.
+async fn impostor(
+    stream: tokio::net::UnixStream,
+    id: String,
+    host_id: String,
+    how: Impostor,
+) -> Served {
+    let Some((_, mut socket)) =
+        weave_remote::websocket::upgrade(stream, &[], &[DISPATCHER_HOST_SUBPROTOCOL]).await
+    else {
+        panic!("the Host's upgrade");
+    };
+    let asked = preamble::next_request(&mut socket)
+        .await
+        .expect("its challenge");
+    assert_eq!(asked.method, "dispatcher/challenge");
+    let challenge = DispatcherChallenge {
+        dispatcher_id: id.clone(),
+        nonce: "n".to_owned(),
+        expires_at: u64::MAX,
+    };
+    assert!(preamble::answer(&mut socket, asked.id, Ok(challenge)).await);
+    let asked = preamble::next_request(&mut socket)
+        .await
+        .expect("its token");
+    assert_eq!(asked.method, "hosts/carry");
+    let carry: HostCarryRequest = asked.params().expect("a token and a nonce");
+    assert!(!carry.nonce.is_empty(), "a nonce of the Host's own");
+    match how {
+        Impostor::OtherKey => {
+            let message = carry_message(&id, &host_id, &carry.token, &carry.nonce);
+            let signature = DeviceKey::generate().sign(&message).expect("signed");
+            preamble::answer(&mut socket, asked.id, Ok(HostCarried { signature })).await;
+        }
+        Impostor::NoSignature => {
+            preamble::answer(&mut socket, asked.id, Ok(serde_json::json!({}))).await;
+        }
+    }
+    // The Host closes the connection on its own, sending nothing else first.
+    let mut served = Served {
+        answer: None,
+        closed: None,
+    };
+    loop {
+        match tokio::time::timeout(WAIT, socket.next()).await {
+            Ok(Some(Ok(Message::Close(frame)))) => {
+                served.closed = frame.map(|frame| u16::from(frame.code));
+                break;
+            }
+            Ok(Some(Ok(Message::Text(text)))) => served.answer = Some(text.to_string()),
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(_)) | None) | Err(_) => break,
+        }
+    }
+    // And a hello there now gets no answer.
+    let hello = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "host/hello",
+        "params": {
+            "protocol": {"min": 3, "max": 3},
+            "client": {"name": "impostor", "version": "0"},
+            "auth": {"method": "dispatcher"},
+        },
+    });
+    if socket.send(Message::text(hello.to_string())).await.is_ok() {
+        while let Ok(Some(Ok(frame))) =
+            tokio::time::timeout(Duration::from_millis(500), socket.next()).await
+        {
+            if let Message::Text(text) = frame {
+                served.answer = Some(text.to_string());
+            }
+        }
+    }
+    served
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_serves_nothing_where_the_dispatcher_proves_no_key() {
+    let hub = Hub::new().await;
+    let id = hub.dispatcher.status().expect("status").id;
+    let host_id = hub.studio.host_id().await;
+    // The Host's own connection stays the Dispatcher's; what it opens from now on reaches
+    // something else, which knows the Dispatcher's id and nothing more.
+    let elsewhere = hub.dir.path().join("impostor.sock");
+    let listener = tokio::net::UnixListener::bind(&elsewhere).expect("a socket");
+    hub.studio.relay.point(&elsewhere);
+    for how in [Impostor::OtherKey, Impostor::NoSignature] {
+        let answering = async {
+            let (stream, _) = tokio::time::timeout(WAIT, listener.accept())
+                .await
+                .expect("the Host connected there")
+                .expect("accepted");
+            impostor(stream, id.clone(), host_id.clone(), how).await
+        };
+        let (served, reached) = tokio::join!(answering, hub.try_reach("studio"));
+        assert_eq!(served.answer, None, "{how:?}: it served nothing");
+        assert_eq!(served.closed, Some(CLOSE_UNAUTHENTICATED), "{how:?}");
+        let error = reached.err().expect("nothing carried");
+        let CarryError::Unavailable(unavailable) = &error else {
+            panic!("{how:?}: {error}");
+        };
+        let why = match how {
+            Impostor::OtherKey => "didn't prove the key of the Dispatcher this Host joined",
+            Impostor::NoSignature => "signature",
+        };
+        assert!(unavailable.why.contains(why), "{how:?}: {unavailable:?}");
+    }
+
+    // Where the Dispatcher answers again, the Host serves the device.
+    hub.studio
+        .relay
+        .point(&dispatcher_config(hub.dir.path()).paths.hosts_socket());
+    hub.reach("studio").await.connection.shutdown().await;
     hub.stop().await;
 }

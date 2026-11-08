@@ -143,7 +143,8 @@ device                       Dispatcher                              Host
   dispatcher/hello (device) ►
   hosts/open {host} ───────► dispatcher/carry {token, device} ──────► (its own connection)
                              ◄── WebSocket, weave-dispatcher-host ─── dials back
-                             ◄── dispatcher/challenge, hosts/carry {token}
+                             ◄── dispatcher/challenge, hosts/carry {token, nonce}
+                             signs the nonce with its key ─────────► checks it, or serves nothing
   ◄── {hostId, name}         joins the two
   host/hello (dispatcher) ──────────────── passed through ─────────► the device's client
 ```
@@ -161,9 +162,15 @@ device                       Dispatcher                              Host
 - **The Host's end.** Over the Host's own connection the Dispatcher asks `dispatcher/carry`
   `{token, device: {id, name}, stream}`, the token random and good once within its reach timeout.
   The Host opens a connection of its own, as its own connection does, asks
-  `dispatcher/challenge`, and presents the token with `hosts/carry {token}` in place of
-  `hosts/connect`. Then the Dispatcher answers `hosts/open` with `{hostId, name}`, and joins the
-  two ([the Host protocol](wve-85-host-protocol.md#connections-the-dispatcher-carries)).
+  `dispatcher/challenge`, and presents the token with `hosts/carry {token, nonce}` in place of
+  `hosts/connect`, the nonce fresh and its own. The Dispatcher answers with its signature of
+  `weave-dispatcher-carry/1 <dispatcher id> <host id> <token> <nonce>`, made with its key, which
+  the Host checks against the key it learned when it joined before it serves anything there: a
+  connection where the signature is missing or wrong it closes (4002), serving nothing, and
+  answers `dispatcher/carry` with the error. So whatever answers at the Dispatcher's address
+  without its key gets nothing from the Host. Then the Dispatcher answers `hosts/open` with
+  `{hostId, name}`, and joins the two
+  ([the Host protocol](wve-85-host-protocol.md#connections-the-dispatcher-carries)).
 - **Passing it through.** From then on every data frame goes through unread, either way. Each
   side's pings stay with that side, and a side that stops answering ends the connection. Either
   side's close code reaches the other, as the Host's fallen-behind close (4001) does; one that
@@ -378,11 +385,14 @@ The last request on a connection a device asks the Dispatcher to carry to a Host
 `weave-dispatcher-carry`, after `dispatcher/challenge` and `dispatcher/hello`, or on the socket
 after a hello there. `host_unavailable`, with `{status, why}`, for a Host it isn't connected to.
 
-**`hosts/carry`** `{token}` → `{}`
+**`hosts/carry`** `{token, nonce}` → `{signature}`
 
 Only on a connection a Host opens with `weave-dispatcher-host`, after `dispatcher/challenge`, in
-place of `hosts/connect`: the token `dispatcher/carry` gave it. A token that isn't good answers
-`unauthenticated` and closes the connection (4002).
+place of `hosts/connect`: the token `dispatcher/carry` gave it, and a nonce of the Host's own, 32
+random bytes in base64url. `signature` is the Dispatcher's of `weave-dispatcher-carry/1
+<dispatcher id> <host id> <token> <nonce>` with its key, as a device signs at hello, which the
+Host checks before it serves the connection. A token that isn't good answers `unauthenticated`
+and closes the connection (4002).
 
 **`schedules/list`** `{}` → `{schedules: Schedule[]}`
 
@@ -503,7 +513,9 @@ directory if one answers, and otherwise the paired one, and says both when neith
 - `tests/carry.rs` (WVE-195), two Hosts and a paired device over a loopback WebSocket: the
   device lists, opens and prompts on each Host through the Dispatcher, catches up after a
   dropped connection with nothing missing or repeated, and answers a pending request there;
-  revoking it closes its carried connections with 4000 and refuses it after; a Host the
+  revoking it closes its carried connections with 4000 and refuses it after; a Host serves
+  nothing where whatever answers at the Dispatcher's address signs its nonce with another key,
+  or not at all, and serves again where the Dispatcher answers; a Host the
   Dispatcher isn't connected to answers at once with the status and why `hosts/list` gives, and
   one that never joined is refused; a Host refuses the Dispatcher's word for a device from a
   local client, on its own WebSocket, and anything else on a connection it opened for it;

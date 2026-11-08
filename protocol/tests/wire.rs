@@ -73,6 +73,7 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
+use weave_host_protocol::dispatcher::HostCarried;
 use weave_host_protocol::dispatcher::HostCarryRequest;
 use weave_host_protocol::dispatcher::HostUnavailable;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
@@ -82,6 +83,7 @@ use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
 use weave_host_protocol::dispatcher::OpenHostRequest;
 use weave_host_protocol::dispatcher::OpenedHost;
 use weave_host_protocol::dispatcher::Reachability;
+use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::ThreadChangedNotification;
 use weave_host_protocol::events::ThreadEvent;
@@ -2097,7 +2099,24 @@ fn carrying_a_devices_connection() {
         "host_carry_request",
         round_trip(&HostCarryRequest {
             token: "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE".to_owned(),
+            nonce: "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c".to_owned(),
         })
+    );
+    insta::assert_json_snapshot!(
+        "host_carried",
+        round_trip(&HostCarried {
+            signature: "MEUCIQDx7c2vKp3sYh8q0wLr5tNz1mBa6eJ9uGf4dXk2oRsVyAIgT3nWq8LhZ5c1PjK0vMe7xUa2bYr9sDf6gHt4iNo1QwE".to_owned(),
+        })
+    );
+    assert_eq!(
+        carry_message(
+            "D7qK2mN4pR8sT1vX",
+            "8ZpX3kqW1m0aLr9TQv2cYw",
+            "Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE",
+            "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c"
+        ),
+        "weave-dispatcher-carry/1 D7qK2mN4pR8sT1vX 8ZpX3kqW1m0aLr9TQv2cYw \
+         Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c"
     );
     insta::assert_json_snapshot!("auth_dispatcher", round_trip(&Auth::Dispatcher));
 }

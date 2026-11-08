@@ -240,6 +240,21 @@ impl Devices {
         Some(info)
     }
 
+    /// Whether `signature` is the Dispatcher `dispatcher_id`'s, which the Host joined, of
+    /// `message`: signed with the key the Host learned when it joined (WVE-195).
+    pub(crate) fn joined_signed(
+        &self,
+        dispatcher_id: &str,
+        message: &str,
+        signature: &str,
+    ) -> bool {
+        lock(&self.state)
+            .devices
+            .get(dispatcher_id)
+            .filter(|stored| stored.joined)
+            .is_some_and(|stored| signed(&stored.public_key, message, signature))
+    }
+
     /// Note a device's connection, for listing and revoking.
     pub(crate) fn connected(&self, device_id: &str, client: u64, closer: Arc<dyn Closer>) {
         lock(&self.state).live.connected(device_id, client, closer);

@@ -1,0 +1,7 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&HostCarried\n{\n    signature:\n    \"MEUCIQDx7c2vKp3sYh8q0wLr5tNz1mBa6eJ9uGf4dXk2oRsVyAIgT3nWq8LhZ5c1PjK0vMe7xUa2bYr9sDf6gHt4iNo1QwE\".to_owned(),\n})"
+---
+{
+  "signature": "MEUCIQDx7c2vKp3sYh8q0wLr5tNz1mBa6eJ9uGf4dXk2oRsVyAIgT3nWq8LhZ5c1PjK0vMe7xUa2bYr9sDf6gHt4iNo1QwE"
+}

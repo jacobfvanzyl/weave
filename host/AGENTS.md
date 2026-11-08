@@ -235,7 +235,10 @@ The Dispatcher carries the person's devices' connections to the Host (ADR 0030, 
 Host protocol's Connections the Dispatcher carries; feature `carry`). `dispatcher/carry`, which
 `Connection::carry` takes only on `Peer::Joined` (it's in `FOR_SERVICES`), has
 `dispatcher::carry` open another connection where the Host joined the Dispatcher, check its id at
-`dispatcher/challenge` and present the token with `hosts/carry`, then answer and serve it in a
+`dispatcher/challenge`, present the token with `hosts/carry` and a nonce of its own, and check the
+Dispatcher's signature of it (`carry_message`) against the key it kept when it joined
+(`Devices::joined_signed`), closing the connection with `CLOSE_UNAUTHENTICATED` and serving
+nothing when it's missing or wrong; then answer and serve it in a
 task of its own (`serve_carried`, boxed as `websocket::serve` is, for the same cycle): the Host
 protocol as `Peer::Carried { link, device }` (`client::serve_carried`), whose hello takes only
 `Auth::Dispatcher` and gives the device the Dispatcher named, or a terminal's stream

@@ -3,8 +3,10 @@
 //! `dispatcher/hello` and then naming the Host in `hosts/open`; on the Dispatcher's computer it
 //! asks the same on the Dispatcher's socket, after a hello there. Over the Host's own connection
 //! the Dispatcher asks `dispatcher/carry`, with a one-time token and the device; the Host opens
-//! another connection to the Dispatcher, presents the token ([`Carries::arrive`]), and the
-//! Dispatcher answers `hosts/open` and joins the two connections ([`splice`]).
+//! another connection to the Dispatcher and presents the token with a nonce of its own, which
+//! the Dispatcher signs with its key so the Host knows whom it serves ([`Carries::expected`]);
+//! then the Dispatcher answers `hosts/open` and joins the two connections ([`Carries::arrive`],
+//! [`splice`]).
 //!
 //! From then on it passes every data frame through without reading it: the Host protocol, or a
 //! terminal's stream. Each side's pings stay with that side, either side's close code is passed
@@ -89,6 +91,8 @@ pub(crate) struct Carries {
 
 /// A token given to a Host, until it presents it.
 struct Pending {
+    /// The Host it was given to.
+    host_id: String,
     expires_at: Timestamp,
     arrived: oneshot::Sender<Side>,
 }
@@ -110,12 +114,13 @@ impl Carries {
         }
     }
 
-    /// Whether `token` is waiting for its Host, which a Host presenting it checks before it's
-    /// answered.
-    pub(crate) fn expects(&self, token: &str) -> bool {
+    /// The Host `token` was given to, while it's waiting for that Host: checked before a Host
+    /// presenting it is answered, with the Dispatcher's signature for that Host.
+    pub(crate) fn expected(&self, token: &str) -> Option<String> {
         lock(&self.pending)
             .get(token)
-            .is_some_and(|pending| pending.expires_at > now_ms())
+            .filter(|pending| pending.expires_at > now_ms())
+            .map(|pending| pending.host_id.clone())
     }
 
     /// Close everything carried to `host_id`, as removing the Host does.
@@ -131,7 +136,7 @@ impl Carries {
     }
 
     /// A new token for `host_id`'s end, good for `lifetime`, and where its end arrives.
-    fn expect(&self, lifetime: Duration) -> (String, oneshot::Receiver<Side>) {
+    fn expect(&self, host_id: &str, lifetime: Duration) -> (String, oneshot::Receiver<Side>) {
         let token = random_id(32);
         let (arrived, end) = oneshot::channel();
         let now = now_ms();
@@ -141,6 +146,7 @@ impl Carries {
         pending.insert(
             token.clone(),
             Pending {
+                host_id: host_id.to_owned(),
                 expires_at: now.saturating_add(lifetime_ms),
                 arrived,
             },
@@ -439,7 +445,7 @@ async fn open(
         ));
     }
     let timeout = shared.config.reach_timeout;
-    let (token, arrived) = shared.carries.expect(timeout);
+    let (token, arrived) = shared.carries.expect(&host.host_id, timeout);
     let asked = handle.send(CarryRequest {
         token: token.clone(),
         device: device.clone(),

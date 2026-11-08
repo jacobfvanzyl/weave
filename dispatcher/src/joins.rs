@@ -7,8 +7,9 @@
 //! connects to the socket in its directory, over which the same WebSocket runs.
 //!
 //! A Host opens a connection the same way for the Dispatcher to carry a device's (WVE-195),
-//! presenting the token `dispatcher/carry` gave it in `hosts/carry` in place of `hosts/connect`,
-//! and the connection is handed to the device waiting for it ([`crate::carry`]).
+//! presenting the token `dispatcher/carry` gave it in `hosts/carry` in place of `hosts/connect`
+//! with a nonce of its own, which the Dispatcher signs with its key ([`carry_message`]); then the
+//! connection is handed to the device waiting for it ([`crate::carry`]).
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -23,8 +24,10 @@ use weave_host_protocol::dispatcher::ConnectHostRequest;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_PROTOCOL;
 use weave_host_protocol::dispatcher::DispatcherChallenge;
+use weave_host_protocol::dispatcher::HostCarried;
 use weave_host_protocol::dispatcher::HostCarryRequest;
 use weave_host_protocol::dispatcher::HostConnected;
+use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::dispatcher::host_connect_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
@@ -187,12 +190,12 @@ async fn prove<S: AsyncRead + AsyncWrite + Unpin>(
     }
     let asked = preamble::next_request(socket).await?;
     if asked.method == "hosts/carry" {
-        let token = asked
-            .params::<HostCarryRequest>()
-            .map(|request| request.token)
-            .ok()
-            .filter(|token| shared.carries.expects(token));
-        let Some(token) = token else {
+        let request = asked.params::<HostCarryRequest>().ok();
+        let presented = request.and_then(|request| {
+            let host_id = shared.carries.expected(&request.token)?;
+            Some((request, host_id))
+        });
+        let Some((request, host_id)) = presented else {
             refuse(
                 socket,
                 asked.id,
@@ -201,9 +204,17 @@ async fn prove<S: AsyncRead + AsyncWrite + Unpin>(
             .await;
             return None;
         };
-        return preamble::answer(socket, asked.id, Ok(weave_host_protocol::Empty {}))
-            .await
-            .then_some(Proved::Carry(token));
+        // The Host serves the device only once the Dispatcher has proved its key here too.
+        let message = carry_message(&shared.id, &host_id, &request.token, &request.nonce);
+        let signed = match shared.key.sign(&message) {
+            Ok(signature) => Ok(HostCarried { signature }),
+            Err(why) => Err(internal(format!(
+                "the Dispatcher couldn't sign with its key: {why}"
+            ))),
+        };
+        let failed = signed.is_err();
+        let answered = preamble::answer(socket, asked.id, signed).await;
+        return (answered && !failed).then_some(Proved::Carry(request.token));
     }
     if asked.method != "hosts/connect" {
         refuse(socket, asked.id, "say hosts/connect next".to_owned()).await;

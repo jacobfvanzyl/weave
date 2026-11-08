@@ -71,8 +71,9 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   `hosts/open`, read with `weave_remote::preamble`), or on the socket after a hello there, which
   `api::local` answers itself to see what follows it (`carry::local`, one line a message, the
   device `local` named after the computer). `open` asks the Host's link `dispatcher/carry` with a
-  token (`Carries::expect`) and waits for the Host's own connection, whose `hosts/carry`
-  `joins.rs` hands over (`Carries::arrive`); a Host the link isn't connected to answers
+  token (`Carries::expect`, which keeps the Host it's for) and waits for the Host's own
+  connection: `joins.rs` answers its `hosts/carry` with the Dispatcher's signature of the Host's
+  nonce (`carry_message`), which proves its key there, and hands it over (`Carries::arrive`); a Host the link isn't connected to answers
   `host_unavailable` with `hosts/list`'s status and why. `splice` passes frames between the two
   `Side`s unread: a writer per side with its own pings, a bounded channel each way so a side is
   read no faster than the other takes it, and either side's close passed on, after what it sent
@@ -105,7 +106,8 @@ relay that a restart cuts, as a Host process exiting closes its connections (`te
 what proves a device and what doesn't, what a device may ask, revoking, and the Serve entry.
 `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
 other, the relay deafened to lose an answer. `tests/carry.rs` has a paired device reach two
-Hosts through the Dispatcher, a terminal's stream through a fake owner that echoes
+Hosts through the Dispatcher, a Host serve nothing where something without the Dispatcher's key
+answers at its address, a terminal's stream through a fake owner that echoes
 (`EchoingOwner`), and a client on its socket. `tests/dispatcher.rs` drives the Dispatcher through
 its socket across Host and Dispatcher restarts. `tests/joins.rs` checks joining: a code once,
 keys both ways, removal, a Host paired before Hosts joined, and one joining over the WebSocket.

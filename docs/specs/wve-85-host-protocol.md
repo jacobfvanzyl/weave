@@ -198,8 +198,13 @@ Only the Dispatcher the Host joined asks it, over the connection the Host opened
 else gets `forbidden`. The Host opens another connection to the Dispatcher where it joined it
 (its WebSocket, or `hosts.sock` on its computer, with `weave-dispatcher-host`), asks
 `dispatcher/challenge` and checks the Dispatcher's id is the one it joined, as its own connection
-does, presents the token with `hosts/carry {token}`, and answers once the Dispatcher has taken
-it. The token is good once, for a few seconds. Then it serves that connection:
+does, and presents the token with `hosts/carry {token, nonce}`, the nonce fresh and its own. The
+Dispatcher answers with its signature of `weave-dispatcher-carry/1 <dispatcher id> <host id>
+<token> <nonce>`, which the Host checks against the Dispatcher's key, the one it learned when it
+joined and keeps among its devices, marked joined. Without that signature, or with a wrong one,
+the Host closes the connection (4002), serving nothing on it, and answers `dispatcher/carry`
+with the error; otherwise it answers `{}`. The token is good once, for a few seconds. Then it
+serves that connection:
 
 - **`host`:** the Host protocol, for `device`, a paired device of the Dispatcher's. Its
   `host/hello` says `auth: {method: "dispatcher"}`, and the answer's `device` is the device the
@@ -1763,9 +1768,10 @@ a paired device by signing a challenge; a paired device may do what a local clie
 except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answer
 `forbidden`. A service such as the Dispatcher (ADR 0027) is a paired device of this kind, and
 may do less (see [Services](wve-90-remote-clients.md#services)). The Host takes the
-Dispatcher's word for a device only on a connection it opened to the Dispatcher it joined, whose
-key it checked at that Dispatcher's hello on its own connection (ADR 0030). The Dispatcher, not
-the Host, reaches the person's other Hosts (ADR 0029).
+Dispatcher's word for a device only on a connection it opened to the Dispatcher it joined, and
+only once the Dispatcher has proved its key there, signing a nonce of the Host's (ADR 0030); its
+own connection it checks at the Dispatcher's hello. The Dispatcher, not the Host, reaches the
+person's other Hosts (ADR 0029).
 
 ## Clients
 
