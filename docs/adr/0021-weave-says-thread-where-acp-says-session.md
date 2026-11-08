@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0031: "session" now names a Session, so the code and the wire say thread too (WVE-200)
 date: 2026-10-24
 ---
 

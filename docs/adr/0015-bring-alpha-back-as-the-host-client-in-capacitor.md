@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; amended by ADR 0032: the app runs on the Mac in Tauri, and the iPad and iPhone keep Capacitor
 date: 2026-10-20
 ---
 

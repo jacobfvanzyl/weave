@@ -54,7 +54,7 @@ _Avoid_: remote tool, plugin
 
 **Thread**:
 A conversation with one agent in one directory on one Host, which it never leaves, identified by the id of the agent's ACP session.
-_Avoid_: session (ACP's word for the agent's side of it), chat, conversation
+_Avoid_: session (a Session is something else, and ACP's session is the agent's side of a thread), chat, conversation
 
 **Open thread**:
 A thread the Host holds with its agent running, which clients can attach to and prompt.
@@ -134,11 +134,25 @@ _Avoid_: resident, persona, dot, always-on agent, profile
 The thin service on the internet that holds webhook deliveries for the Dispatcher and sends its pushes, which the Dispatcher dials out to.
 _Avoid_: relay, gateway, proxy, cloud
 
+### Projects, Sessions and Blocks
+
+**Project**:
+A named piece of the person's work, kept by the Dispatcher, with at most one location on each of their Hosts: a repository there, or a directory outside one.
+_Avoid_: workspace, space, repo
+
+**Session**:
+One directory of a Project on one Host, for a repository one of its worktrees, holding a layout of Blocks that every device shares.
+_Avoid_: workspace, space, window
+
+**Block**:
+What one pane of a Session's layout shows, of a type: a thread, a terminal, or another thing on the Session's Host.
+_Avoid_: pane, panel, widget
+
 ### Repositories
 
 **Repository**:
-A git repository on the Host's computer that threads' directories can be in, known by its primary worktree.
-_Avoid_: project, workspace
+A git repository on the Host's computer that threads' directories can be in, known by its primary worktree. It can be a Project's location on its Host.
+_Avoid_: workspace
 
 **Worktree**:
 One of a repository's working trees, which threads can run in. It belongs to the person rather than to any thread, and outlives the threads in it.
@@ -148,7 +162,7 @@ _Avoid_: checkout, sandbox, workspace
 
 **Terminal**:
 A shell on the Host's computer that belongs to a worktree, or to a directory outside a repository, and outlives the threads and clients that show it.
-_Avoid_: pane, block, console, PTY
+_Avoid_: pane, console, PTY
 
 **Holder**:
 The process that keeps one terminal alive, apart from the Host, and is the authority on what its screen holds.

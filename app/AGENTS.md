@@ -6,13 +6,18 @@ It is Alpha, brought back from commit `e30f6e93`, chat-first. Work is tracked un
 the live issue and the spec, `docs/specs/wve-91-host-client.md`, before implementation, and use
 the repository's pinned Linear CLI and tracker conventions from `../docs/agents/issue-tracker.md`.
 
+WVE-199 reworks it. Projects, and Sessions laying out Blocks of threads and terminals, replace
+the session list (ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell
+(ADR 0032). Until those issues land, the layout below is current.
+
 ## Boundaries
 
 - The app is a remote client of the Host (ADR 0010). It speaks the Host protocol
   (`../docs/specs/wve-85-host-protocol.md`, `../docs/specs/wve-90-remote-clients.md`)
   and never ACP or MCP; ACP's content arrives as the Host protocol's payload.
-- Use the glossary's terms (`../CONTEXT.md`): sessions, Hosts, directories, turns, steers,
-  pending requests. Alpha's Threads, Connections, Workspaces and archiving are gone.
+- Use the glossary's terms (`../CONTEXT.md`): threads, Hosts, directories, turns, steers,
+  pending requests. A Session is ADR 0031's, not a thread; code still says session for threads
+  until WVE-200. Alpha's Threads, Connections, Workspaces and archiving are gone.
 - Portal, Workspaces, the Host Browser, the Client Browser and Electron stay in history. Bring
   something back only when an issue asks for it. Terminals came back in WVE-153 (ADR 0022): a
   worktree's terminals in a panel beside a thread, drawn natively.

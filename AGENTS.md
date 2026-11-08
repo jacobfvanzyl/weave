@@ -5,17 +5,17 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | Path | Ownership |
 | --- | --- |
 | `protocol/` | The Host protocol (`weave-host-protocol`): wire types, roles, error codes and versions, with golden snapshots, the JSON Schema the app's TypeScript comes from (`tests/schema.rs`, feature `schema`), and the permission policy. No I/O. Specs in `docs/specs/`. |
-| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open sessions and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and the tools services declare and the calls it passes them. No UI. Read `host/AGENTS.md`. |
+| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open threads and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and the tools services declare and the calls it passes them. No UI. Read `host/AGENTS.md`. |
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave agents update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
 | `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, as a service, that keeps triggers and Bots and starts their work there. Hosts join it and keep a connection open to it (ADR 0030); it never dials them. Its state is SQLite. Runs no agents. Read `dispatcher/AGENTS.md`. |
 | `remote/` | The server's end of remote access (`weave-remote`), which the Host and the Dispatcher share: the loopback WebSocket, turning it on with pairing and its Tailscale Serve entry, pairing offers and signature checks, and the first requests on a Host's connection to the Dispatcher it joined. Each program keeps its own devices. |
-| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening sessions; and a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them. |
+| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening threads; and a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them. |
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |
 | `holder/` | The holder (`weave-holder`, ADR 0022): keeps one terminal's PTY, shell and screen alive for the Host, with libghostty-vt, which it builds with Zig at the commit `ghostty.toml` pins. Read `holder/AGENTS.md`. |
-| `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. Read `app/AGENTS.md` before working in it. |
+| `app/` | The weave app: a React and Capacitor client of the weave Host for iPad and iPhone; WVE-91. WVE-199 takes it to Sessions of Blocks under Projects (ADR 0031) and to the Mac in Tauri (ADR 0032). Read `app/AGENTS.md` before working in it. |
 | `trackpad/` | Independent native iPhone/iPad trackpad and Mac companion; WVE-81. Read `trackpad/AGENTS.md` before working in it. |
 | `scripts/` | `update-hosts`: rebuild weave in release, install a copy in `~/.local/bin` and restart the Host, here and on the person's other computers over SSH. |
 | `docs/adr/` | Decisions, from ADR 0008 on. |
@@ -47,10 +47,10 @@ implementation. Each crate's own guide is the `AGENTS.md` in its directory.
   issue changes.
 - weave launches agents locally.
 - Agents run in the weave Host (WVE-83, WVE-85; `weave daemon`), a per-user process the CLI
-  starts on first use or launchd or systemd keeps running, so sessions outlive the TUI: quitting,
-  crashing or rebuilding it and reattaching (`--resume`, `--continue`) finds the session,
+  starts on first use or launchd or systemd keeps running, so threads outlive the TUI: quitting,
+  crashing or rebuilding it and reattaching (`--resume`, `--continue`) finds the thread,
   mid-turn if a turn is running. ACP runs only between the Host and its agents, one process
-  per open session. Clients speak the Host protocol (`docs/adr/0008-weave-daemon-is-the-host.md`,
+  per open thread. Clients speak the Host protocol (`docs/adr/0008-weave-daemon-is-the-host.md`,
   spec `docs/specs/wve-85-host-protocol.md`, types in `protocol/`), which carries ACP's
   content as its payload. `--no-daemon` (`[daemon] enabled = false`) runs the same Host
   in-process, so there is one code path. `weave agents smoke`, `login` and `logout` talk to
