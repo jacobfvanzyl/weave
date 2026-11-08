@@ -1,18 +1,19 @@
 # WVE-90: Remote clients of the weave Host
 
 Status: implemented, and checked live through Tailscale Serve from the Host's own Mac on
-2026-10-16. Since 2026-10-21 pairing turns remote access on, and the Host keeps its own Serve
-entry (WVE-100). From 2026-10-30 the person's other Hosts paired and connected as peer Hosts
+2026-10-16. From 2026-10-21 pairing turned the Host's remote access on, and the Host kept its own
+Serve entry (WVE-100). From 2026-10-30 the person's other Hosts paired and connected as peer Hosts
 (WVE-109), until 2026-11-04, when the Dispatcher took that over and peer Hosts were retired
 (WVE-185). Since 2026-11-06 the person's devices pair with the Dispatcher the same way, with the
 server's end shared in `weave-remote` ([WVE-175's Devices](wve-175-dispatcher.md#devices),
-WVE-176), since 2026-11-07 a Host joins the Dispatcher and connects to it itself, over the
-same WebSocket code ([WVE-175's Hosts](wve-175-dispatcher.md#hosts), WVE-194), and since
-2026-11-08 a device paired with the Dispatcher reaches every Host through it, which carries its
-connection to the Host ([WVE-175's Devices reaching Hosts](wve-175-dispatcher.md#devices-reaching-hosts),
-WVE-195). The app pairs with the Dispatcher alone and reaches every Host that way (WVE-196,
-[WVE-175's app](wve-175-dispatcher.md#the-app)), so it no longer uses the Host's own WebSocket,
-pairing or devices below, which stay until WVE-197 retires them. The decisions are recorded in
+WVE-176); since 2026-11-07 a Host joins the Dispatcher and connects to it itself, over the same
+WebSocket code ([WVE-175's Hosts](wve-175-dispatcher.md#hosts), WVE-194); and since 2026-11-08 a
+device paired with the Dispatcher reaches every Host through it, which carries its connection to
+the Host ([WVE-175's Devices reaching Hosts](wve-175-dispatcher.md#devices-reaching-hosts),
+WVE-195), the app among them (WVE-196, [WVE-175's app](wve-175-dispatcher.md#the-app)). On
+2026-11-08 Hosts stopped taking remote connections of their own (WVE-197): their WebSocket,
+Serve entry, pairing and devices are retired ([below](#the-hosts-own-remote-access-retired)). The
+decisions are recorded in
 [ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md),
 [ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md),
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
@@ -21,44 +22,51 @@ pairing or devices below, which stay until WVE-197 retires them. The decisions a
 
 ## Purpose
 
-Let a client on another of the person's devices, starting with the mobile client (WVE-91, which
-now goes through the Dispatcher), connect to the Host and use it as the TUI does: list, open and attach to threads, prompt and
-steer, and answer pending requests. They speak the Host protocol
-([`wve-85-host-protocol.md`](wve-85-host-protocol.md)). This adds a WebSocket transport,
-pairing and device authentication, and what a remote client may do.
+Let a client on another of the person's devices, starting with the app (WVE-91), connect to a
+Host and use it as the TUI does: list, open and attach to threads, prompt and steer, and answer
+pending requests. They speak the Host protocol ([`wve-85-host-protocol.md`](wve-85-host-protocol.md)),
+over a connection the Dispatcher carries to the Host. This covers that transport, pairing and
+proving a device, and what a remote client may do on a Host.
 
 ## Decisions
 
-- **The tailnet is the only way in.** A device must be in the tailnet of the Host's computer.
-  The Host listens on loopback, and Tailscale Serve, never Funnel, forwards to it, with TLS on
-  the tailnet's certificate.
-- **A device proves itself on every connection** by signing a Host challenge with a P-256 key
-  that never leaves it, in the Secure Enclave on Apple devices.
+- **The tailnet is the only way in, and only the Dispatcher listens there.** A device must be in
+  the tailnet of the Dispatcher's computer. The Dispatcher listens on loopback, and Tailscale
+  Serve, never Funnel, forwards to it, with TLS on the tailnet's certificate. A Host listens for
+  nothing but its own Unix socket: it opens its connections to the Dispatcher itself (ADR 0030).
+- **A device proves itself on every connection** by signing a challenge of the Dispatcher's with
+  a P-256 key that never leaves it, in the Secure Enclave on Apple devices. The Dispatcher proves
+  its own key to each Host, which takes its word for which device a connection is for.
 - **A paired device can do what a local client can,** except administer the Host.
 
 ## Topology
 
 ```text
-iPad · iPhone (WVE-91) · test client on another computer
-                 │  wss://<computer>.<tailnet>.ts.net:7341, tailnet devices only
+iPad · iPhone · the CLI on another computer
+                 │  wss://<computer>.<tailnet>.ts.net:7342, tailnet devices only
                  ▼
-Tailscale Serve on the Host's computer: TLS with the tailnet's certificate
-                 │  ws://127.0.0.1:7341
+Tailscale Serve on the Dispatcher's computer: TLS with the tailnet's certificate
+                 │  ws://127.0.0.1:7342
                  ▼
-     Host (`weave daemon run`) ── Unix socket ── TUI · weave run · weave threads
+Dispatcher (`weave dispatcher run`) ◄── connections each Host opened to it ── Host (`weave daemon run`)
+                                                                                │  Unix socket
+                                                                                ▼
+                                                                  TUI · weave run · weave threads
 ```
 
 ## Principles
 
-1. **Only the tailnet reaches the listener.** It binds loopback and nothing else. Serve, which
-   accepts only the tailnet's devices, is the way in. The Host keeps one Serve entry of its own,
-   on its own HTTPS port, touches no other, and refuses while Funnel would put the listener on
-   the internet.
-2. **Every WebSocket connection proves a paired device.** Serve's connections and any local
-   process's arrive the same way, from loopback, so where a connection comes from counts for
-   nothing. `local` is never accepted on the WebSocket.
-3. **The Host keeps no device secrets.** It stores each device's public key. Pairing codes live
-   in its memory for minutes.
+1. **Only the tailnet reaches a listener.** The Dispatcher binds loopback and nothing else, and
+   Serve, which accepts only the tailnet's devices, is the way in. It keeps one Serve entry of
+   its own, on HTTPS port 7342, touches no other, and refuses while Funnel would put it on the
+   internet. A Host binds nothing reachable from another computer.
+2. **Every connection proves who it is.** Serve's connections and any local process's arrive at
+   the Dispatcher the same way, from loopback, so where a connection comes from counts for
+   nothing there: each proves a paired device, or a Host its key. On a Host, only a connection
+   the Host opened to the Dispatcher it joined, after the Dispatcher has proved its key there,
+   takes the Dispatcher's word for a device.
+3. **No program keeps a device's secret.** The Dispatcher stores each device's public key, and a
+   Host the Dispatcher's. Pairing codes live in the Dispatcher's memory for minutes.
 4. **A paired device acts for the person.** An agent's shell isn't confined to its thread's
    directory, so a list of allowed directories wouldn't be a boundary. Revoking the device is
    the control.
@@ -66,60 +74,47 @@ Tailscale Serve on the Host's computer: TLS with the tailnet's certificate
    Unix socket. After a network drop or a backgrounded app, a client reconnects and attaches
    after its position, as the TUI does.
 
-## Remote access
+## The Dispatcher's WebSocket
 
-Nothing needs configuring. Pairing turns remote access on (ADR 0016):
-
-- **On.** A `devices/offer`, as `weave pair` makes, has the Host listen on `127.0.0.1:7341` and
-  make its Serve entry, which forwards HTTPS port 7341 on the Host's tailnet name to that
-  listener (`tailscale serve --bg --https=7341 http://127.0.0.1:7341`). The offer answers with
-  the URL devices connect to, `wss://<computer>.<tailnet>.ts.net:7341`. Only an entry under the
-  computer's tailnet name now counts (`tailscale status`): one under a name it had before being
-  renamed no longer resolves, so the Host makes another under the new one.
-- **Staying on.** While any device is paired, remote access stays on, across restarts: a Host
-  starting with paired devices listens and makes the entry again. One whose entry can't be made
-  yet, as when Tailscale starts after it, listens anyway and tries again every minute.
-- **Off.** Revoking the last device, or an offer expiring with no device paired, stops the
-  listener and removes the entry.
-- **Serve's way of saying no.** When Serve can't reach the Host the offer fails with
-  `remote_unavailable` saying why: Tailscale isn't installed, running or signed in, Serve or
-  HTTPS is off for the tailnet (with Tailscale's link that turns it on), Tailscale lets only root
-  change Serve (on Linux, until the person is made its operator with `sudo tailscale set
-  --operator=$USER`), or only root while Serve's config has another program's entry for a path or
-  Unix socket (then it gives the `sudo tailscale serve …` to run once, and the Host uses the entry
-  that makes), port 7341 already serves something else, or Funnel would expose the entry.
-  The Host finds `tailscale` on `PATH`, or on macOS where Homebrew or the Mac app put it.
-- **Idle.** A Host with remote access on doesn't exit when idle, because a remote device can't
-  start one. `weave daemon install` keeps it running across restarts; `weave pair` says so when
-  the Host isn't installed, or on Linux when lingering is off, so it stops at logout.
-
-`[remote]` is optional, to change the defaults:
-
-```toml
-[remote]
-listen = "127.0.0.1:7341"                           # loopback only
-url = "https://mac.example-tailnet.ts.net:7341"     # what devices connect to; the Host then leaves Serve alone
-origins = []                                        # Origin values allowed besides none and the app's
-```
-
-- `listen` must be a loopback address (`127.0.0.1` or `[::1]`); any other is ignored, logged.
-- With `url`, the person routes devices to the Host themselves, and the Host makes and removes
-  no Serve entry.
-- The Host reads `[remote]` when it starts; clients ignore it.
-
-## Transport
+Turning it on, its Serve entry and pairing are [WVE-175's Devices](wve-175-dispatcher.md#devices).
+The connection itself is `weave-remote`'s, which a Host also serves the Host protocol with over
+the connections it opens to the Dispatcher:
 
 | Transport | Framing | Authentication |
 | --- | --- | --- |
-| WebSocket on `listen` | One JSON-RPC message per text frame | `device`, or `pair` once |
-| WebSocket on `listen`, subprotocol `weave-terminal` (proposed, WVE-148) | One terminal's stream ([Terminals](wve-85-host-protocol.md#the-terminal-stream)) | A ticket from `terminals/attach` |
-| A connection the Host opened to the Dispatcher it joined, carrying a device's (WVE-195) | One JSON-RPC message per text frame, or a terminal's stream | `dispatcher`, the device the Dispatcher named |
+| The Dispatcher's WebSocket, `weave-dispatcher` | One JSON-RPC message per text frame: its API | `device`, or `pair` once, at `dispatcher/hello` |
+| The Dispatcher's WebSocket, `weave-dispatcher-carry` | Its preamble, then one Host's protocol, or a terminal's stream, passed through | `device` at `dispatcher/hello`, then `dispatcher` at the Host's `host/hello` |
+| A connection a Host opened to the Dispatcher it joined, `weave-dispatcher-host` | Its preamble, then the Host protocol with the Dispatcher as client | the Dispatcher's key, `device`, at `host/hello` |
+| A connection a Host opened to the Dispatcher to carry a device's | Its preamble, then the Host protocol or a terminal's stream | `dispatcher`, the device the Dispatcher named |
 
-### Through the Dispatcher
+- The upgrade must offer one of the subprotocols the program takes. Others are refused before
+  any message.
+- `Origin`: none is accepted, since native clients send none, and so is the app's,
+  `capacitor://localhost`, which its web view sends (WVE-91; seen from the iOS simulator on
+  2026-10-20) and no web page can. Any other value must be one the program is configured with.
+  Both are checked at the upgrade, which stops web pages, DNS rebinding included.
+- A message is at most 32 MiB; a larger one closes the connection.
+- Each end pings every 20 seconds and closes a connection that hasn't answered 20 seconds later.
+- A connection that hasn't proved itself within 30 seconds is closed (4002).
+- **Falling behind.** A connection whose unsent messages pass 8 MiB, beyond the replays it asked
+  for, is closed (4001). Attaching gives the connection room for its replay, which shrinks as the
+  replay is sent, so a long journal reaches a slow client whole. The Dispatcher reads from a Host
+  only as fast as the device takes it, so this is the Host's limit on its end of a carried
+  connection. The client reconnects and attaches after its position, so it misses nothing. The
+  Unix socket keeps buffering, as before.
 
-A device paired with the Dispatcher reaches the Host through it, on a connection the Host opens
-itself ([the Host protocol](wve-85-host-protocol.md#connections-the-dispatcher-carries)), so
-the Host needs no listener, Serve entry or pairing for it:
+Close codes:
+
+| Code | Meaning |
+| --- | --- |
+| 4000 | The device was revoked |
+| 4001 | The client fell behind |
+| 4002 | The connection failed its hello, after its error |
+
+## Through the Dispatcher
+
+A device paired with the Dispatcher reaches a Host through it, on a connection the Host opens
+itself ([the Host protocol](wve-85-host-protocol.md#connections-the-dispatcher-carries)):
 
 - The device proves its key to the Dispatcher, and names the Host in `hosts/open`. Over the
   Host's own connection the Dispatcher asks `dispatcher/carry` with a one-time token and the
@@ -131,64 +126,48 @@ the Host needs no listener, Serve entry or pairing for it:
   Until it has, the Host serves nothing there, and with no signature or a wrong one it closes the
   connection (4002).
 - The device's `host/hello` says `auth: {method: "dispatcher"}`, which the Host takes on such a
-  connection only, and refuses on its WebSocket, its socket and in-process. Its answer names the
-  device the Dispatcher named in `device`.
+  connection only, and refuses on its socket and in-process. Its answer names the device the
+  Dispatcher named in `device`.
 - Pings stay with each side. The Host's fallen-behind close (4001) and the rest pass through to
   the device, which reconnects and attaches after its position, as here.
 - A terminal's stream is carried the same way, with `stream: "terminal"`, and a ticket the
   Host gave the same device.
 
-- The upgrade must offer the subprotocol `weave-host`, or `weave-terminal` for a terminal's
-  stream. Others are refused before any message.
-- `Origin`: none is accepted, since native clients send none, and so is the app's,
-  `capacitor://localhost`, which its web view sends (WVE-91; seen from the iOS simulator on
-  2026-10-20) and no web page can. Any other value must equal one in `[remote] origins`
-  exactly. Both are checked at the upgrade, which stops web pages, DNS rebinding included.
-- A message is at most 32 MiB; a larger one closes the connection.
-- The Host pings every 20 seconds and closes a connection that hasn't answered 20 seconds later.
-- A connection that hasn't proved a paired device within 30 seconds is closed (4002).
-- **Falling behind.** A WebSocket connection whose unsent messages pass 8 MiB, beyond the replays
-  it asked for, is closed. Attaching gives the connection room for its replay, which shrinks as
-  the replay is sent, so a long journal reaches a slow client whole. The client reconnects and
-  attaches after its position, so it misses nothing. The Unix socket keeps buffering, as now.
-
-Close codes:
-
-| Code | Meaning |
-| --- | --- |
-| 4000 | The device was revoked |
-| 4001 | The client fell behind |
-| 4002 | The connection failed `host/hello`, after its error |
-
 ## Host identity
 
 The Host has a random id, made when it first starts and kept in `devices.json`. `host/hello`
-gives it as `host.id`, so a client tells Hosts apart, and challenges are bound to it.
+gives it as `host.id`, so a client tells Hosts apart, and the Dispatcher's challenge to it at
+hello is bound to it.
 
 ## Pairing
 
-1. On the Host's computer, `weave pair [--name <device>]` asks the Host for an offer
-   (`devices/offer`), which turns remote access on and answers with the URL, and shows it as a
-   QR code and as text: the URL and a code. The QR code
-   encodes `weave://pair?url=<url>&code=<code>`, a link the mobile client opened until it paired
-   with the Dispatcher alone (WVE-196); it opens `weave://pair-dispatcher` now. An offer is
-   good for one pairing within five minutes, lives only in the Host's memory, and at most three
-   are live. `weave pair` waits and says which device paired.
+A device pairs with the Dispatcher, once ([WVE-175's Devices](wve-175-dispatcher.md#devices)):
+
+1. On the Dispatcher's computer, `weave pair [--name <device>]` asks it for an offer
+   (`devices/offer`), which turns its WebSocket on and answers with the URL, and shows it as a QR
+   code and as text: the URL and a code. The QR code encodes
+   `weave://pair-dispatcher?url=<url>&code=<code>`, which the app opens. An offer is good for one
+   pairing within five minutes, lives only in the Dispatcher's memory, and at most three are
+   live. `weave pair` waits and says which device paired; `--json` prints the URL and code for
+   `weave dispatcher connect`, which pairs another computer's CLI over SSH.
 2. The device shows the URL's host name and has the person confirm it before it connects.
 3. The device makes its key: P-256, in the Secure Enclave where there is one, otherwise a key
    that can't be exported or leave the device (Keychain, `ThisDeviceOnly`).
-4. It connects and says hello with `auth: {method: "pair", code, device: {name, publicKey}}`.
-   `publicKey` is a JWK (`{"kty": "EC", "crv": "P-256", "x": …, "y": …}`); an offer made with
-   `--name` uses that name instead. The Host takes the offer, so a second use fails, records the
-   device, and answers as any hello does, plus `device: {id, name}`. The connection is that
-   device's from then on. A service adds `device.service: true`, which the Host records and
-   gives back in `device` and `Device` (see [Services](#services)).
+4. It connects and says `dispatcher/hello` with `auth: {method: "pair", code, device: {name,
+   publicKey}}`. `publicKey` is a JWK (`{"kty": "EC", "crv": "P-256", "x": …, "y": …}`); an
+   offer made with `--name` uses that name instead. The Dispatcher takes the offer, so a second
+   use fails, records the device, and answers with `device: {id, name}`.
 
 The code is 128 random bits in Crockford base32.
 
 ## Authenticating
 
-Every other connection from a paired device:
+To the Dispatcher, on every connection from a paired device: `dispatcher/challenge`, then
+`dispatcher/hello` with `auth: {method: "device", deviceId, signature}`, signing
+`weave-dispatcher-auth/1 <dispatcherId> <deviceId> <nonce>`
+([WVE-175's Devices](wve-175-dispatcher.md#devices)).
+
+To a Host, the Dispatcher it joined, on the connection the Host opened to it:
 
 ```json
 {"jsonrpc": "2.0", "id": 1, "method": "host/challenge", "params": {}}
@@ -201,91 +180,71 @@ Every other connection from a paired device:
 ```json
 {"jsonrpc": "2.0", "id": 2, "method": "host/hello", "params": {
   "protocol": {"min": 3, "max": 3},
-  "client": {"name": "weave-ios", "version": "0.1.0"},
-  "auth": {"method": "device", "deviceId": "…", "signature": "…"},
+  "client": {"name": "weave-dispatcher", "version": "0.1.0"},
+  "auth": {"method": "device", "deviceId": "<the Dispatcher's id>", "signature": "…"},
   "capabilities": {}
 }}
 ```
 
-- `host/challenge` is answered before hello, and only on the WebSocket. Its nonce is 32 random
-  bytes, base64url, good for one hello on this connection within 30 seconds.
-- The device checks that `hostId` is the Host it paired with, then signs the UTF-8 bytes of
-  `weave-host-auth/1 <hostId> <deviceId> <nonce>` with ECDSA P-256 and SHA-256. `signature` is
-  the DER signature in base64url, which is what Apple's `SecKeyCreateSignature` gives with
-  `ecdsaSignatureMessageX962SHA256`.
-- Every failure (an unknown or revoked device, a wrong signature, a missing, used or expired
-  nonce) answers `unauthenticated` with the same message, and the Host closes the connection
-  (4002).
-- `local` and `token` are refused on the WebSocket. `device`, `pair` and `host/challenge` are
-  refused on the Unix socket. `dispatcher` is refused everywhere but a connection the Host
-  opened for the Dispatcher it joined, which takes nothing else, and no `host/challenge`.
-  `token` stays reserved and refused; a later major version removes it.
+- `host/challenge` is answered before hello, and only there. Its nonce is 32 random bytes,
+  base64url, good for one hello on this connection within 30 seconds.
+- The Dispatcher checks that `hostId` is the Host that joined it, then signs the UTF-8 bytes of
+  `weave-host-auth/1 <hostId> <dispatcherId> <nonce>` with ECDSA P-256 and SHA-256, with the key
+  the Host learned when it joined. `signature` is the DER signature in base64url, which is what
+  Apple's `SecKeyCreateSignature` gives with `ecdsaSignatureMessageX962SHA256`.
+- Every failure (another key, a wrong signature, a missing, used or expired nonce) answers
+  `unauthenticated` with the same message, and the Host closes the connection (4002).
+- A Host takes `local` only on its Unix socket and in-process, where `device`, `pair` and
+  `host/challenge` are refused. It refuses `pair` everywhere: it pairs with nothing. `dispatcher`
+  is refused everywhere but a connection the Host opened to carry a device's for the Dispatcher
+  it joined, which takes nothing else, and no `host/challenge`. `token` stays reserved and
+  refused; a later major version removes it.
 
 ## What a remote client may do
 
 Everything a local client may, except administer the Host; a service may do less
 ([Services](#services)). These answer `forbidden`:
 
-- `host/shutdown`;
-- `devices/*`;
+- `host/shutdown`, `host/drain`, `dispatcher/join` and `dispatcher/leave`;
 - `agents/authenticate`, `agents/logout` and `agents/terminalSignIn`, since an agent's sign-in
-  belongs to the Host's computer. As now, only local clients may claim
+  belongs to the Host's computer. As before, only local clients may claim
   `capabilities.terminalSignIn`.
 
 `agents/update` (WVE-93) isn't administering the Host: it can only take an agent to its newest
 version, which the Host checks starts, as `weave agents update` does. So remote clients may update an
 agent and then `thread/reopen` their thread onto it, as the TUI's `/update` does.
 
-A remote client's turn origin names its device, so transcripts can say where a prompt came
-from: `{"client": {"name": "weave-ios", "id": "c9", "device": "Jaco's iPad"}}`.
-
-A device the Dispatcher carries may do the same, and its origins name it the same way, by the
-name the Dispatcher knows it by; a client on the Dispatcher's own computer is named after that
-computer. The Host keeps no record of such a device: revoking it on the Dispatcher closes its
-connections.
+A remote client's turn origin names its device, by the name the Dispatcher knows it by, so
+transcripts can say where a prompt came from:
+`{"client": {"name": "weave-ios", "id": "c9", "device": "Jaco's iPad"}}`. A client on the
+Dispatcher's own computer is named after that computer. The Host keeps no record of such a
+device: revoking it on the Dispatcher closes its connections.
 
 ## Devices
 
-All local only.
-
-**`devices/offer`** `{name?}` → `{code, expiresAt}`
-
-`weave pair` adds the URL and draws the QR code. The connection that made the offer gets
-**`devices/paired`** `{device: Device}` when a device takes it.
-
-**`devices/list`** `{}` → `{devices: Device[]}`
+The person's devices are the Dispatcher's: `devices/offer`, `devices/list` and `devices/revoke`
+are its API's, on its own computer only, and `weave pair` and `weave devices` ask them there
+([WVE-175's CLI](wve-175-dispatcher.md#the-cli)). A Host answers none of them, and its hello no
+longer lists `devices` in `features`.
 
 ```ts
 type Device = { id: string; name: string; pairedAt: number; lastSeenAt?: number; connections: number; service?: boolean };
 ```
 
-`service` is true for a service. A pairing a peer Host made (ADR 0017) named its Host id as
-`host`; a Host revokes such a pairing when it starts (ADR 0029).
-
-**`devices/revoke`** `{deviceId}` → `{}`
-
-Forgets the device and closes its connections (4000). The device has to pair again.
-
-`features` lists `devices`. The CLI adds `weave pair`, `weave devices` and
-`weave devices revoke <id>`.
-
-`devices.json` in the Host's directory (mode 0600, written atomically) holds the Host's id and
-each device's id, name, public key and pairing and last-seen times. It holds no secrets; losing
-it unpairs every device. `daemon.log` records pairings, refused hellos and revocations, never
-codes, nonces or signatures.
+Revoking a device closes its connections (4000), those the Dispatcher carries to Hosts too. The
+device has to pair again.
 
 ## Services
 
-A service is a client that does work for the person rather than showing them anything, such as
-the Dispatcher (ADR 0027). A Host joins the Dispatcher (ADR 0030), with a code `hosts/offer`
-gives there, and keeps its key as a joined service: it takes the key at hello only on the
-connection the Host opened to the Dispatcher, doesn't list it among its devices or keep remote
-access on for it, and forgets it with `dispatcher/leave` or when the Dispatcher removes the Host
-([WVE-175's Hosts](wve-175-dispatcher.md#hosts)). Before that, a service paired as a device
-does, saying `device.service: true`, and such a pairing is listed and revoked as a device;
-joining revokes the Dispatcher's. Being a service only takes from what it may do, which is what starting headless turns, following threads,
-naming and labelling the ones it starts, serving its tools and reaching the person's other
-Hosts for this Host's agents (ADR 0029) need:
+A service is a client that does work for the person rather than showing them anything: the
+Dispatcher (ADR 0027), the only one now. A Host joins it (ADR 0030), with a code `hosts/offer`
+gives there, and keeps its key in `devices.json` as the service it joined: it takes the key at
+hello only on the connection the Host opened to the Dispatcher, and forgets it with
+`dispatcher/leave` or when the Dispatcher removes the Host
+([WVE-175's Hosts](wve-175-dispatcher.md#hosts)). Being a service only takes from what it may do,
+which is what starting headless turns, following threads, naming and labelling the ones it
+starts, serving its tools and reaching the person's other Hosts for this Host's agents
+(ADR 0029) need:
 
 - `host/hello`, `host/challenge`, `host/status`, `agents/list`;
 - `threads/list`, `threads/get`, `threads/watch`, `threads/unwatch`;
@@ -298,34 +257,68 @@ Hosts for this Host's agents (ADR 0029) need:
 
 Everything else answers `forbidden`, before any handler sees it: the computer's files,
 terminals and worktrees, opening or attaching to a thread as a client of it, answering a
-thread's pending requests, devices, and agents' sign-in and updates. Its turns' origin names
-its device, as any remote client's does, unless it says what started a turn (`origin` on
-`thread/run`, `queue/add` and `turn/steer`; see
-[Service origins](wve-85-host-protocol.md#service-origins)) or which thread on another Host
-asks (`caller`; see [Other Hosts](wve-85-host-protocol.md#other-hosts)).
+thread's pending requests, and agents' sign-in and updates. Its turns' origin names it, as any
+remote client's does, unless it says what started a turn (`origin` on `thread/run`, `queue/add`
+and `turn/steer`; see [Service origins](wve-85-host-protocol.md#service-origins)) or which thread
+on another Host asks (`caller`; see [Other Hosts](wve-85-host-protocol.md#other-hosts)).
+
+## The Host's own remote access, retired
+
+Until WVE-197 each Host listened for remote clients itself (ADR 0010, ADR 0016): a WebSocket on
+`127.0.0.1:7341` behind a Tailscale Serve entry of its own on HTTPS port 7341, which a pairing
+offer turned on and the last device's revoke turned off; devices and services paired with it,
+kept in its `devices.json`; `devices/*` and the `devices` feature; `weave pair` and `weave
+devices` on the Host's computer; and `[remote]` in the config to move it. Once the app reached
+every Host through the Dispatcher (WVE-196), all of it went (ADR 0030). The Host protocol's
+version stayed 3: nothing off the Host's computer can reach what's gone, and the missing feature
+tells any client.
+
+When a Host of this version first starts:
+
+- **Paired devices go.** `devices.json` keeps the Host's id and the Dispatcher it joined, and
+  drops the devices and services that paired with it, peer Hosts' pairings among them, logging
+  each. The file then notes `serveEntryLeft`: the Host served remote clients, and may have the
+  Serve entry it made for them.
+- **Its Serve entry goes.** Only while `serveEntryLeft` is noted does the Host touch Tailscale
+  Serve, so a Host in a new directory, as every dev Host and test starts, never runs
+  `tailscale`. It removes the entry that forwards to where it listened, `127.0.0.1:7341` or
+  `[remote] listen` (none, with `[remote] url`, which meant it made none), under the computer's
+  tailnet name, touching no other, and forgets the note once that entry is gone. Where it can't,
+  as where only root may change Serve because another program's entry serves a Unix socket, it
+  logs why, and `host/status` gives `serveEntry: {port, command, why}`, which `weave daemon
+  status` prints with the command for the person to run once:
+  `sudo tailscale serve --https=7341 off`. It tries again each time it starts, and whenever a
+  local client asks for its status, so the note goes once the person has run it.
+- **`[remote]` does nothing.** `weave daemon run` logs that it should go, and `weave daemon
+  status` says so; it's read only for where the old entry forwarded.
+- **`weave pair` and `weave devices` are the Dispatcher's** (WVE-188's rule: top-level commands
+  are named for what the person manages); `weave dispatcher pair` and `weave dispatcher devices`
+  went with no alias.
 
 ## Security
 
 It protects against:
 
-- devices outside the tailnet, which have no route to the listener;
+- devices outside the tailnet, which have no route to the Dispatcher's listener, and anything
+  that isn't the Host's own user on its computer, which has no way into the Host at all;
 - tailnet devices that aren't paired;
 - a captured proof, since a nonce is good once and keys never leave devices;
 - web pages, through `Origin` and the subprotocol;
-- revoked devices, which are disconnected at once, from the Dispatcher too;
-- anyone saying they're the Dispatcher's device: the Host takes that only on a connection it
+- revoked devices, which are disconnected at once, from every Host too;
+- anyone saying they're the Dispatcher's device: a Host takes that only on a connection it
   opened itself to the Dispatcher it joined, and only once the Dispatcher has signed a nonce of
   the Host's there with the key the Host learned when it joined;
 - something else answering at the Dispatcher's address, as after a name or a Serve entry moves:
   without the Dispatcher's key it can't sign the Host's nonce, so the Host serves it nothing,
   neither a device's connection nor a terminal's stream.
 
-It doesn't protect against someone using the Host computer's account, who can read
-`devices.json`, run `weave pair` or use the Unix socket, or against someone holding an unlocked
-paired device. Nor against the Dispatcher itself, which holds the keys to every Host (ADR 0030)
-and sees everything it carries. Other accounts on the Host's computer can reach the loopback port, which the
-socket's file mode keeps them away from, but they can't get past `host/hello` without a
-device's key. TLS ends at Tailscale on the Host's computer; the last hop is loopback.
+It doesn't protect against someone using the Dispatcher computer's account, who can run `weave
+pair` or use its socket, or someone using a Host computer's account, who can use the Host's
+socket; or against someone holding an unlocked paired device. Nor against the Dispatcher
+itself, which holds the keys to every Host (ADR 0030) and sees everything it carries. TLS ends at
+Tailscale on the Dispatcher's computer; the last hop to it is loopback, and the hop from it to a
+Host is whatever the Host dialed, `wss://` through the Dispatcher's Serve entry or its socket on
+the same computer.
 
 Removing the Serve entry stops new connections but leaves connected clients connected, so
 revoking a device, not turning Serve off, is what cuts one off.
@@ -334,42 +327,36 @@ revoking a device, not turning Serve off, is what cuts one off.
 
 | Crate | Adds |
 | --- | --- |
-| `protocol` | `device` and `pair` auth, `host/challenge`, `devices/*`, `host.id`, the hello's `device`, the turn origin's `device`, `forbidden`, the close codes; golden fixtures for each |
-| `remote` | The server's end, which the Host and the Dispatcher share (WVE-176): the WebSocket listener (`tokio-tungstenite`, as Codex uses), pings and the 8 MiB limit (`websocket.rs`); turning remote access on and off with pairing (`access.rs`) and its Serve entry (`tailscale.rs`); offers, codes and signature checks (RustCrypto `p256`, `pairing.rs`) |
-| `daemon` | `devices.json`, `host/challenge` and `host/hello`'s check, what remote clients may call, and the terminal stream's upgrade |
-| `host-client` | A WebSocket transport (`remote::connect_websocket`), device credentials and a software key (`remote::DeviceKey`), for tests and the live check's client (`examples/remote.rs`); and opening a connection the Dispatcher carries to a Host (`carry`, WVE-195), which the CLI's `--host` uses |
-| `cli` | `[remote]` as overrides, `weave pair` with a QR code in the terminal, and `weave devices` |
-
-`host/status` says where the WebSocket listens (`remote`) while remote access is on. The ping
-interval and the 8 MiB limit are the Host's defaults; tests shorten them through
-`RemoteConfig`, and use a fake Serve through `RemoteSettings`.
+| `protocol` | `device` and `pair` auth, which the Dispatcher's hello shares, `dispatcher` auth, `host/challenge`, `devices/*` for the Dispatcher, `host.id`, the hello's `device`, the turn origin's `device`, `forbidden`, the close codes, `HostStatus.serveEntry`; golden fixtures for each |
+| `remote` | The server's end, which the Host and the Dispatcher share (WVE-176): the WebSocket (`tokio-tungstenite`, as Codex uses), pings and the 8 MiB limit (`websocket.rs`), for connections accepted and those a Host opens; the Dispatcher's remote access with pairing (`access.rs`) and its Serve entry (`tailscale.rs`), whose `Serve` a Host uses only to remove its old one; offers, codes and signature checks (RustCrypto `p256`, `pairing.rs`); the preamble (`preamble.rs`) |
+| `host` | `devices.json`'s Host id and joined Dispatcher, `host/challenge` and `host/hello`'s check on its connections to the Dispatcher, what remote clients and services may call, and removing its old Serve entry (`serve_entry.rs`) |
+| `host-client` | A WebSocket transport, device credentials and a software key (`remote`), for the CLI's pairing with the Dispatcher and a Host's connections to it; and opening a connection the Dispatcher carries to a Host (`carry`, WVE-195), which the CLI's `--host` uses |
+| `cli` | `weave pair` with a QR code in the terminal, and `weave devices`, on the Dispatcher's computer; `weave daemon status`'s note of a Serve entry left |
 
 ## Acceptance
 
-- **Remote access:** nothing listens before pairing; an offer turns it on and makes the Serve
-  entry once; revoking the last device, or an offer expiring untaken, turns it off and removes
-  the entry; a Serve that can't reach the Host fails the offer with `remote_unavailable`; a
-  Host starting with paired devices listens again and retries the entry until it's there.
-- **Listener:** loopback only; upgrades without `weave-host`, or with an `Origin` other than the
-  app's or one in `origins`, are refused; a Host with remote access on doesn't exit when idle.
-- **Pairing:** an offer pairs once, expires after five minutes, and is gone after a Host
-  restart; pairing records the device and `devices/paired` reaches the offering connection.
-- **Authenticating:** a right signature attaches; a wrong key, a used or expired nonce, an
-  unknown or a revoked device each get the same `unauthenticated` and a close; `local` and
-  `token` are refused on the WebSocket, and `device`, `pair` and `host/challenge` on the socket.
-- **Authority:** a device's `host/shutdown`, `devices/*`, `agents/authenticate`,
-  `agents/logout` and `agents/terminalSignIn` answer `forbidden`; everything else works as for
-  a local client.
-- **Revoking** closes the device's connections with 4000 and refuses it afterwards.
-- **Connections:** a silent peer is closed by the pings; a client past 8 MiB is closed with 4001,
-  reconnects and catches up with nothing missing or repeated.
-- **CLI:** `weave pair` shows the Host's URL as a QR code and text, or the Host's reason it
-  can't; `weave devices` lists and revokes.
-- **Live:** from another computer on the tailnet, the test client pairs through Serve, attaches
-  to a thread the TUI started, prompts, and survives a dropped network. This also confirms that
-  Serve passes WebSockets through.
+- **The Dispatcher's WebSocket** (`dispatcher/tests/devices.rs`): loopback only; upgrades without
+  its subprotocol, or with an `Origin` other than the app's or one configured, are refused; a
+  client that proves nothing in 30 seconds, or stops answering pings, is closed; pairing,
+  authenticating and revoking as [WVE-175's acceptance](wve-175-dispatcher.md#acceptance) has
+  them.
+- **Through the Dispatcher** (`dispatcher/tests/carry.rs`): a device works on each Host, a
+  carried device may do everything but administer the Host, a replay many times the Host's
+  backlog limit arrives whole, revoking closes what's carried, and a Host serves nothing where
+  the Dispatcher proves no key.
+- **The Host** (`host/tests/joined.rs`, against a fake Dispatcher it joins): the Dispatcher may only
+  start and follow threads, names what started its turns and declares tools agents call; the
+  socket takes no `pair`, `device` or `dispatcher` auth and gives no challenge, and `devices/*`
+  aren't the Host's; a Host in a new directory never touches Serve, one that served remote
+  clients drops their devices and removes its entry once, and one that can't says how and looks
+  again when asked.
+- **CLI:** `weave pair` shows the Dispatcher's URL as a QR code and text, or its reason it can't;
+  `weave devices` lists and revokes; from a paired computer both say where it runs; `weave
+  daemon status` prints the command for a Serve entry left.
+- **Live:** neither the Mac's nor homelab-1's Host has a weave Serve entry, and the iPad reaches
+  both through the Dispatcher.
 
 ## Later
 
 - Replacing a device's key, and renaming devices.
-- TLS in the Host, for networks without Tailscale.
+- TLS in the Dispatcher, for networks without Tailscale.

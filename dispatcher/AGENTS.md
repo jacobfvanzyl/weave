@@ -80,15 +80,17 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   before it. Each carried connection is in `Carries::live` by Host, which `remove_host` and a
   Host leaving close (`close_host`), and among its device's connections in `Devices`, so revoking
   closes it with `CLOSE_REVOKED`.
-- `devices.rs`, `store/devices.rs` (WVE-176): the person's devices paired with it, as with a
-  Host: offers and live connections in memory (`weave_remote::pairing`), the devices and the
+- `devices.rs`, `store/devices.rs` (WVE-176): the person's devices paired with it, the only
+  program they pair with since Hosts stopped taking them (WVE-197), which `weave pair` and `weave
+  devices` manage on its computer: offers and live connections in memory
+  (`weave_remote::pairing`), the devices and the
   Dispatcher's own id (`identity`) in SQLite. The WebSocket is `weave-remote`'s, turned on by
   `devices/offer` and `hosts/offer` and kept on while a device is paired or a Host joined over
   it (`DispatcherConfig::remote`, loopback 7342 with its own Tailscale Serve entry as `weave
   dispatcher run` sets it, or where its `--listen` and `--url` say, a URL leaving Serve alone,
   as the app's dev Dispatcher has it; none in tests unless they give a fake Serve), and off with
   the last revoke or removal (`api::stop_if_unused`). It asks for `weave-dispatcher`, so a
-  client pointed at a Host fails at the upgrade.
+  client asking for anything else fails at the upgrade.
 
 Work reaches a Host through a **delivery** only: written to SQLite first, under a request key
 (its own, or `dispatcher/<delivery id>`), then sent, and sent again on each connection until
@@ -104,11 +106,14 @@ they learn it when they join.
 Tests: in-process Hosts join the Dispatcher over its `hosts.sock`, each through a Unix-socket
 relay that a restart cuts, as a Host process exiting closes its connections (`tests/common`).
 `tests/devices.rs` pairs devices over a loopback WebSocket with a fake Serve, and checks
-what proves a device and what doesn't, what a device may ask, revoking, and the Serve entry.
+what proves a device and what doesn't, what a device may ask, revoking, the Serve entry, and the
+WebSocket's subprotocol and `Origin` checks, hello deadline and pings, which moved here from the
+Host's tests when the Host stopped listening (WVE-197).
 `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
 other, the relay deafened to lose an answer. `tests/carry.rs` has a paired device reach two
 Hosts through the Dispatcher, a Host serve nothing where something without the Dispatcher's key
 answers at its address, a terminal's stream through a fake owner that echoes
-(`EchoingOwner`), and a client on its socket. `tests/dispatcher.rs` drives the Dispatcher through
+(`EchoingOwner`), a client on its socket, what a carried device may not ask a Host, and a replay
+many times a Host's backlog limit (`World::with_websocket`) reaching a device whole. `tests/dispatcher.rs` drives the Dispatcher through
 its socket across Host and Dispatcher restarts. `tests/joins.rs` checks joining: a code once,
 keys both ways, removal, a Host paired before Hosts joined, and one joining over the WebSocket.

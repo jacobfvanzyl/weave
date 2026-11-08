@@ -6,8 +6,9 @@ Schedules (WVE-145) since 2026-11-04, calls from Hosts' agents to the person's o
 (WVE-185) since 2026-11-04, the person's devices pairing with it and reaching it over the
 tailnet (WVE-176) since 2026-11-06, Hosts joining it and keeping a connection open to it
 (WVE-194) since 2026-11-07, the person's devices reaching every Host through it (WVE-195)
-since 2026-11-08, and the app pairing with it alone and reaching every Host through it (WVE-196),
-built 2026-11-08 and not yet on the person's devices. The decisions are in
+since 2026-11-08, the app pairing with it alone and reaching every Host through it (WVE-196)
+since 2026-11-08, on the person's iPad and iPhone, and Hosts taking no remote connections of
+their own (WVE-197), built 2026-11-08. The decisions are in
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
 [ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md) and
 [ADR 0030](../adr/0030-the-dispatcher-is-the-hub-hosts-dial-out-to-it-and-devices-reach-every-host-through-it.md);
@@ -56,24 +57,26 @@ transaction, and none changes once released.
 
 ## Devices
 
-The person's other computers reach its API as paired devices (WVE-176), as their devices reach
-a Host ([remote clients](wve-90-remote-clients.md)); the server's end is the Host's, in
-`weave-remote`. It runs on a computer that's always on, such as the person's homelab, and the
-CLI on every other computer asks it there.
+The person's devices and other computers reach its API as paired devices (WVE-176), and every
+Host through it ([remote clients](wve-90-remote-clients.md)). It is the only program they pair
+with: Hosts take no remote connections of their own (WVE-197). The server's end is in
+`weave-remote`, which the Host shares for the connections it opens to the Dispatcher. It runs on
+a computer that's always on, such as the person's homelab, and the CLI on every other computer
+asks it there.
 
-- **A WebSocket of its own,** on loopback port 7342 beside the Host's 7341, with its own
-  Tailscale Serve entry on HTTPS port 7342. `weave dispatcher run --listen <loopback address>
-  --url <url>` puts it elsewhere, and with a URL makes and removes no Serve entry, as the Host's
-  `[remote] listen` and `url` do: the app's tests run a dev Dispatcher so. `devices/offer` and
-  `hosts/offer` turn both on;
+- **A WebSocket of its own,** on loopback port 7342 (Hosts listened on 7341 until WVE-197),
+  with its own Tailscale Serve entry on HTTPS port 7342. `weave dispatcher run --listen
+  <loopback address> --url <url>` puts it elsewhere, and with a URL makes and removes no Serve
+  entry: the app's tests run a dev Dispatcher so. `devices/offer` and `hosts/offer` turn both on;
   they stay on while a device is paired or a Host joined over them, across restarts, and go
   when the last is revoked or removed, or an offer expires with neither. The upgrade asks for
-  the `weave-dispatcher` subprotocol, so a client pointed at a Host's URL fails there, and the
-  other way round; a Host's own connection asks for `weave-dispatcher-host`, and a device's
-  connection to one of the Hosts `weave-dispatcher-carry` ([Devices reaching
-  Hosts](#devices-reaching-hosts)).
-- **Pairing:** a one-time code good for five minutes, from `weave dispatcher pair` on its
-  computer, taken at `dispatcher/hello` with `auth: {method: "pair", code, device}`. The device
+  the `weave-dispatcher` subprotocol, so a client asking for anything else fails there; a Host's
+  own connection asks for `weave-dispatcher-host`, and a device's connection to one of the Hosts
+  `weave-dispatcher-carry` ([Devices reaching Hosts](#devices-reaching-hosts)). The rest of the
+  WebSocket's rules, `Origin`, sizes, pings and close codes, are the [remote clients
+  spec's](wve-90-remote-clients.md#the-dispatchers-websocket).
+- **Pairing:** a one-time code good for five minutes, from `weave pair` on its computer, taken
+  at `dispatcher/hello` with `auth: {method: "pair", code, device}`. The device
   makes a P-256 key that never leaves it, and the Dispatcher keeps its public key.
 - **Proving a device:** every WebSocket connection asks `dispatcher/challenge` and signs
   `weave-dispatcher-auth/1 <dispatcher id> <device id> <nonce>`, the nonce good for one hello
@@ -115,11 +118,11 @@ Dispatcher is the Host's client, so only the Dispatcher needs an address.
   Then the roles turn: the Dispatcher says `host/hello` with its key, as a device with its own
   id, and the Host takes it only on a connection it opened itself, as a service.
 - **The Host's side.** It keeps where the Dispatcher is in `dispatcher.json`, and the
-  Dispatcher's key among its devices, marked joined, so the tools the Dispatcher declares outlive
-  its connections; that entry keeps no remote access on and isn't listed with its devices. It
-  dials again when the connection drops, after 1 second, doubling to a minute, and a joined Host
-  doesn't exit when idle. Joining revokes a service pairing with the Dispatcher's key from
-  before Hosts joined. Joining another Dispatcher leaves the first.
+  Dispatcher's key in `devices.json`, marked joined, so the tools the Dispatcher declares outlive
+  its connections. It dials again when the connection drops, after 1 second, doubling to a
+  minute, and a joined Host doesn't exit when idle. Joining another Dispatcher leaves the first.
+  A pairing with the Dispatcher from before Hosts joined it went with the Host's other paired
+  devices ([remote clients](wve-90-remote-clients.md#the-hosts-own-remote-access-retired)).
 - **Over the connection** the Dispatcher says it reaches the person's Hosts
   (`service/declareTools` with `hosts`), watches the Host's threads (`threads/watch`) and sends
   it the work waiting for it. A newer connection from the same Host replaces the older.
@@ -194,7 +197,7 @@ The app on the iPad and iPhone (WVE-196) pairs only with the Dispatcher and reac
 through it; it never connects to a Host directly, and has no fallback while the Dispatcher is away
 (ADR 0030).
 
-- **One pairing.** It scans the QR code `weave dispatcher pair` shows
+- **One pairing.** It scans the QR code `weave pair` shows
   (`weave://pair-dispatcher?url=…&code=…`), shows the address's host name for the person to
   confirm, makes a key in the Secure Enclave and pairs at `dispatcher/hello`. It keeps the
   Dispatcher's id, name (`dispatcher/status`) and URL, its device id there, its key's name, and
@@ -480,9 +483,9 @@ Newest first, 50 by default.
 | `weave dispatcher install` | has launchd (`local.weave.dispatcher`) or systemd (`weave-dispatcher.service`) run `weave dispatcher run` from login or boot and restart it, then waits for it to answer; on Linux it turns lingering on as `weave daemon install` does. A Dispatcher directory of its own (`WEAVE_DISPATCHER_DIR`, which the service is given) gets a service of its own, named after it. launchd won't start a weave in `~/Documents`, `~/Desktop` or `~/Downloads`, and a process it starts can't use a removable volume without the person's leave, so install from a copy elsewhere, such as `~/.local/bin/weave`. |
 | `weave dispatcher uninstall` | stops the service and removes it |
 | `weave dispatcher [status] [--json]` | its version, pid, uptime, name and waiting work, and its Hosts; from a paired computer, where it runs too |
-| `weave dispatcher pair [--name] [--json]` | on its computer, a code and a QR code (`weave://pair-dispatcher?url=…&code=…`) another computer pairs with, waiting for it; `--json` prints the URL and code and doesn't wait |
-| `weave dispatcher devices [list [--json] \| revoke <id>]` | on its computer, the computers paired with it, and revoking one |
-| `weave dispatcher connect <computer \| url code> [--name] [--host \| --no-host]` | on another computer, pairs it: over SSH runs `weave dispatcher pair --json` there; keeps the pairing in `$XDG_STATE_HOME/weave/client` (`dispatcher.json` and the device's `key.json`, 0600), the key in the Secure Enclave on a Mac that has one; then offers to have this computer's Host join the Dispatcher |
+| `weave pair [--name] [--json]` | on its computer, a code and a QR code (`weave://pair-dispatcher?url=…&code=…`) a device or another computer pairs with, waiting for it; `--json` prints the URL and code and doesn't wait. It was `weave dispatcher pair` until WVE-197, which gave the name the Host's pairing had to the Dispatcher's, as WVE-188 names top-level commands for what the person manages, leaving no alias |
+| `weave devices [list [--json] \| revoke <id>]` | on its computer, the devices and computers paired with it, and revoking one, which closes what it carries for it; `weave dispatcher devices` until WVE-197 |
+| `weave dispatcher connect <computer \| url code> [--name] [--host \| --no-host]` | on another computer, pairs it: over SSH runs `weave pair --json` there; keeps the pairing in `$XDG_STATE_HOME/weave/client` (`dispatcher.json` and the device's `key.json`, 0600), the key in the Secure Enclave on a Mac that has one; then offers to have this computer's Host join the Dispatcher |
 | `weave dispatcher disconnect` | forgets the pairing and the key; the Dispatcher lists the computer until it's revoked there |
 | `weave --host <host>`, `weave threads --host <host>`, `weave run --host <host>` | the TUI, `threads` and `run` on another of the person's Hosts, by id or name, through the Dispatcher running here or the one this computer is paired with ([Devices reaching Hosts](#devices-reaching-hosts)); this computer's own Host, by either, over its socket. A new thread works in this directory's counterpart under the home there, `~/…`, unless `--cwd` names one there; the Host says so when there's none. With neither Dispatcher, it says to run `weave dispatcher connect` |
 | `weave hosts add [computer \| url code] [--name] [--json]` | has a Host join it: this computer's, given neither, over the Dispatcher's socket when it runs here; another's over SSH, which runs `weave hosts add <url> <code>` there; or, on the Host's computer, with a URL and code; `--json` prints what the Host joined |
@@ -497,13 +500,13 @@ Newest first, 50 by default.
 
 A command that asks the Dispatcher asks the one running from this computer's Dispatcher
 directory if one answers, and otherwise the paired one, and says both when neither does. With
-`$WEAVE_DISPATCHER_DIR` set it asks only that one. On a paired computer, `run`, `start`,
-`restart` and `install` refuse, and `pair` and `devices` say where it runs.
+`$WEAVE_DISPATCHER_DIR` set it asks only that one. On a paired computer, `weave dispatcher run`,
+`start`, `restart` and `install` refuse, and `weave pair` and `weave devices` say where it runs.
 
 ## Acceptance
 
 - `tests/dispatcher.rs`: two in-process Hosts join with codes its socket gave, each through a
-  relay to `hosts.sock`, and neither lists it among its devices; it starts a headless turn on
+  relay to `hosts.sock`; it starts a headless turn on
   each; one Host restarts and connects again, and the Dispatcher delivers there; the Dispatcher
   stops between a Host taking a delivery and recording it, and started again the Hosts connect
   again, it sends it again, and the Host starts nothing twice. A Host that leaves is refused
@@ -533,9 +536,12 @@ directory if one answers, and otherwise the paired one, and says both when neith
   device, a Host's message, a reused challenge and a hello without one are refused and closed;
   `devices/*` answer `forbidden` to a device; devices and remote access outlive a restart;
   revoking closes the device's connections, and the last one gone, or an offer nobody took,
-  removes the Serve entry; a device may ask `hosts/offer` but not for the socket. CLI
-  `tests/dispatcher.rs`: `weave dispatcher connect` with a code and over SSH, `weave hosts` and
-  `weave schedules` through the pairing, and `disconnect`; with a Host on the computer, `connect`
+  removes the Serve entry; a device may ask `hosts/offer` but not for the socket; the WebSocket
+  refuses an upgrade without its subprotocol or with an `Origin` that isn't allowed, and closes a
+  client that proves nothing within its deadline or stops answering pings (moved from the Host's
+  own WebSocket's tests, WVE-197). CLI `tests/dispatcher.rs`: `weave pair` and `weave devices` on
+  its computer, and where it runs from a paired one; `weave dispatcher connect` with a code and
+  over SSH, `weave hosts` and `weave schedules` through the pairing, and `disconnect`; with a Host on the computer, `connect`
   has it join too when told to, says how when there's no terminal to ask in, and leaves it when
   it has joined already; `weave hosts add` alone has it join, and so do `weave hosts add --code`
   and `weave hosts add <url> <code>`, once per code, and `weave hosts add <computer>` over SSH.
@@ -547,10 +553,12 @@ directory if one answers, and otherwise the paired one, and says both when neith
   or not at all, and serves again where the Dispatcher answers; a Host the
   Dispatcher isn't connected to answers at once with the status and why `hosts/list` gives, and
   one that never joined is refused; a Host refuses the Dispatcher's word for a device from a
-  local client, on its own WebSocket, and anything else on a connection it opened for it;
-  removing a Host closes what's carried to it and nothing else; a client on the Dispatcher's
-  computer goes through its socket as its computer; a terminal's stream goes through, refused
-  with another device's ticket and closed when the device is revoked. CLI `tests/dispatcher.rs`:
+  local client, and anything else on a connection it opened for it; removing a Host closes
+  what's carried to it and nothing else; a client on the Dispatcher's computer goes through its
+  socket as its computer; a terminal's stream goes through, refused with another device's ticket
+  and closed when the device is revoked; a carried device may do everything but administer the
+  Host; a replay many times the Host's backlog limit reaches a device whole (the last two moved
+  from the Host's own WebSocket's tests, WVE-197). CLI `tests/dispatcher.rs`:
   `weave run --host` and `weave threads --host` reach a Host as on another computer, in the
   directory's counterpart under the home there.
 - The app (WVE-196), `app/src/host/*.host.test.ts` against a dev Dispatcher whose WebSocket has a
@@ -570,8 +578,6 @@ directory if one answers, and otherwise the paired one, and says both when neith
 
 - Webhooks (WVE-146) make deliveries as schedules do; the edge (WVE-117) holds webhook
   deliveries and pushes for it.
-- The app pairs with the Dispatcher alone and reaches every Host through it (WVE-196), on the
-  person's iPad and iPhone; then Hosts stop taking remote connections of their own (WVE-197).
 - The Dispatcher's own tools, declared with `service/declareTools` (WVE-171), and Bots
   (WVE-118).
 - Choosing the Host a piece of work runs on, which a delivery's Host can become a rule for.

@@ -50,10 +50,10 @@ Out of scope, each for a later issue:
 ## Topology
 
 ```text
-TUI · weave run · weave threads · weave daemon         (later) iPad app
+TUI · weave run · weave threads · weave daemon         iPad app, through the Dispatcher
                  │                                            │
-   Host protocol over the Unix socket              Host protocol over
-   (in-process with --no-daemon)                   a WebSocket
+   Host protocol over the Unix socket              Host protocol over a WebSocket
+   (in-process with --no-daemon)                   the Host opened to the Dispatcher
                  └──────────────────┬─────────────────────────┘
                                     ▼
                         Host (`weave daemon run`)
@@ -89,13 +89,15 @@ Messages are JSON-RPC 2.0, UTF-8. Batches aren't used.
 | --- | --- | --- |
 | Unix socket | One message per line (newline-delimited JSON) | `local` |
 | In-process channel (`--no-daemon`, tests) | One message per item | `local` |
-| WebSocket, on loopback behind Tailscale Serve | One message per text frame | `device`, or `pair` once |
+| WebSocket the Host opens to the Dispatcher it joined ([the Dispatcher's Hosts](wve-175-dispatcher.md#hosts)) | One message per text frame | `device`: the Dispatcher's key |
 | WebSocket the Host opens to the Dispatcher it joined, for a device's connection ([carried](#connections-the-dispatcher-carries)) | One message per text frame | `dispatcher` |
 
 The socket and its directory stay where they are (`DaemonPaths`): mode 0600, in a 0700
-directory, with one Host per directory guarded by `daemon.lock`. The WebSocket is for remote
-clients on the person's other devices and has a spec of its own,
-[`wve-90-remote-clients.md`](wve-90-remote-clients.md) (ADR 0010).
+directory, with one Host per directory guarded by `daemon.lock`. A Host listens for nothing
+else: the person's devices reach it through the Dispatcher, over connections the Host opens to
+it, as their own spec has it, [`wve-90-remote-clients.md`](wve-90-remote-clients.md) (ADR 0010,
+ADR 0030). Until WVE-197 a Host also listened on a loopback WebSocket of its own, behind a
+Tailscale Serve entry, for devices that paired with it.
 
 ## Connections
 
@@ -128,9 +130,10 @@ request with `unauthenticated`.
   the Host's own range. See [Versioning](#versioning).
 - `auth` is checked against the transport. `local` succeeds only on the Unix socket or
   in-process, and only when the socket's peer has the Host's own user id (`getpeereid`,
-  checked when it connects), on top of the socket's file mode. On the WebSocket, `device`
-  (after `host/challenge`) and `pair` prove a paired device, as WVE-90 specifies; the
-  answer then names it in `device`. `dispatcher` succeeds only on a connection the Host
+  checked when it connects), on top of the socket's file mode. On the connection the Host
+  opened to the Dispatcher it joined, `device` (after `host/challenge`) proves the Dispatcher's
+  key, as WVE-90 specifies, and the answer then names it in `device`. `pair` is refused
+  everywhere: a Host pairs with nothing (WVE-197). `dispatcher` succeeds only on a connection the Host
   opened to the Dispatcher it joined to carry a device's, and names the device the Dispatcher
   named ([Connections the Dispatcher carries](#connections-the-dispatcher-carries)); anywhere
   else it's refused, and it's all such a connection takes. `token` stays reserved and refused
@@ -146,7 +149,8 @@ request with `unauthenticated`.
 - `features` lists optional parts of the protocol this Host supports. Version 3 defines
   `turn/steer` ([WVE-86](https://linear.app/jacobfvanzyl/issue/WVE-86/steer-a-running-turn-from-the-tui-through-the-weave-host)),
   which brings the `turnSteered` event with it, `devices` (WVE-90), the `devices/*`
-  methods, and `agents/updates` (WVE-93): `agents/updateAvailable`, `ThreadState.update`,
+  methods, which no Host advertises since WVE-197 retired them (the Dispatcher's API keeps the
+  methods), and `agents/updates` (WVE-93): `agents/updateAvailable`, `ThreadState.update`,
   `agents/update`, `thread/reopen` and the `agentReopened` event (see
   [Updates](#updates)), `clientTools` (WVE-89): `capabilities.clientTools`, the
   `clientTool` pending request and its answer (see [Client tools](#client-tools)), and
@@ -201,7 +205,7 @@ else gets `forbidden`. The Host opens another connection to the Dispatcher where
 does, and presents the token with `hosts/carry {token, nonce}`, the nonce fresh and its own. The
 Dispatcher answers with its signature of `weave-dispatcher-carry/1 <dispatcher id> <host id>
 <token> <nonce>`, which the Host checks against the Dispatcher's key, the one it learned when it
-joined and keeps among its devices, marked joined. Without that signature, or with a wrong one,
+joined and keeps in `devices.json`, marked joined. Without that signature, or with a wrong one,
 the Host closes the connection (4002), serving nothing on it, and answers `dispatcher/carry`
 with the error; otherwise it answers `{}`. The token is good once, for a few seconds. Then it
 serves that connection:
@@ -213,8 +217,8 @@ serves that connection:
   ([What a remote client may do](wve-90-remote-clients.md#what-a-remote-client-may-do)): its
   turns' origin names the device, its pings, backlog and fallen-behind close (4001) are a
   WebSocket client's, and `terminals/attach` gives tickets in the device's name. The Host keeps
-  no record of the device: it isn't in `devices.json` or `devices/list`, as it's the
-  Dispatcher's, which revokes it.
+  no record of the device: it isn't in `devices.json`, as it's the Dispatcher's, which revokes
+  it.
 - **`terminal`:** a terminal's stream ([The terminal stream](#the-terminal-stream)), whose
   ticket has to be one `terminals/attach` gave `device`; another's closes it with 4010.
 
@@ -247,7 +251,8 @@ say once that it should be renamed. The file is owned by section:
 | --- | --- |
 | `default_agent`, `[agents.*]`, `[[mcp_servers]]`, `client_tools`, `host_tools`, `[delegation]` | the Host |
 | `[tui]`, `[daemon]` | clients on the same computer |
-| `[remote]`, `[rex]` | `weave daemon run`, the CLI that runs the Host |
+| `[rex]` | `weave daemon run`, the CLI that runs the Host |
+| `[remote]` | nothing since WVE-197, but where the Host's old Serve entry forwarded: `weave daemon run` and `status` say to remove it ([remote clients](wve-90-remote-clients.md#the-hosts-own-remote-access-retired)) |
 
 The Host reads its sections whenever it resolves an agent, so edits apply to the next
 thread without a restart. `weave daemon run --config <file>` points the Host at another
@@ -716,8 +721,9 @@ These aren't journaled. They go to the thread's attached clients.
 ### Slow clients
 
 A local client that falls behind is buffered for: the ACP SDK's channels are unbounded. A
-WebSocket client whose unsent messages pass 8 MiB is closed instead, and reconnects and
-catches up from its position (WVE-90).
+client on a WebSocket, which a remote client's connection through the Dispatcher is, is closed
+instead once its unsent messages pass 8 MiB, and reconnects and catches up from its position
+(WVE-90).
 
 ## Turns
 
@@ -1068,27 +1074,26 @@ other client runs it. The agent cancelling the call withdraws it.
 
 Feature `serviceTools`, WVE-171, ADR 0027. A service declares tools of its own, which the Host
 offers every thread's agent through `weave` beside the client and Host tools, and answers their
-calls over its own connection. That is how agents reach the Dispatcher though the Host never
-connects to it.
+calls over its own connection. The only service is the Dispatcher the Host joined, over the
+connection the Host keeps open to it, which is how agents reach the Dispatcher.
 
 **`service/declareTools`** `{tools: Tool[], hosts?}` → `{names: string[]}`
 
 A `Tool` is `{name, title, description, inputSchema}`. The tools replace those the service
 declared before, so a service declares them on every connection, and the connection that
-declared them last serves them. Only a paired service may declare tools (`forbidden`).
+declared them last serves them. Only a service may declare tools (`forbidden`).
 
-- **Names.** Agents see `<service>__<tool>`: the service's paired name lowercased, with
-  anything but letters and digits made `_`, then the tool's name, of letters, digits, `_` and
-  `-`. The whole name, with Claude Code's `mcp__weave__` before it, fits in 128 characters. A
-  service declares at most 64 tools. A service paired under the same name as another, as one
-  paired again without the first revoked is, takes over the other's tools. The answer gives the
-  names agents see.
-- **Kept.** The Host keeps them with the service's paired device, across the service's
-  reconnects and its own restarts, and forgets them when the service is revoked.
+- **Names.** Agents see `<service>__<tool>`: the name the Host knows the service by, the name
+  the Dispatcher gave when the Host joined it, lowercased, with anything but letters and digits
+  made `_`, then the tool's name, of letters, digits, `_` and `-`. The whole name, with Claude
+  Code's `mcp__weave__` before it, fits in 128 characters. A service declares at most 64 tools.
+  The answer gives the names agents see.
+- **Kept.** The Host keeps them in `devices.json` with the Dispatcher it joined, across the
+  Dispatcher's reconnects and the Host's own restarts, and forgets them when it leaves the
+  Dispatcher or the Dispatcher removes it.
 - **Reaching the Hosts.** `hosts: true` (feature `otherHosts`) says the service reaches the
   person's other Hosts: the Host sends it the Host tool calls that name another Host, as
-  `service/hostCall`, kept with the tools, until another service says so too (see
-  [Other Hosts](#other-hosts)).
+  `service/hostCall`, kept with the tools (see [Other Hosts](#other-hosts)).
 - **Offered from setup.** A thread set up after a declaration lists the tools; a thread already
   open keeps the tools it started with, since an agent's tools are fixed at setup and changing
   them costs its prompt cache. An agent's `host_tools` setting leaves them out as it does Host
@@ -1192,7 +1197,8 @@ may say what started a turn it sends with `thread/run`, `queue/add` or `turn/ste
 `origin: {label, id}`, where `label` is what started it in the service's own words ("schedule
 daily-review", "your message from iPhone") and `id` its own id for that, such as a trigger's
 occurrence. The turn's origin is `{"service": {"name", "label", "id"}}`, with `name` the name
-the service paired with, which the Host takes from the paired device, never from the request,
+the Host knows the service by, which it takes from the Dispatcher it joined, never from the
+request,
 as `turnStarted`, `turnSteered`, `queued`, `threads/get` and a new thread's `openedBy` carry
 it. Only a service may send `origin`, and not with `caller` (invalid params). The Host gives it
 no other meaning. Clients show it as "schedule daily-review, via Dispatcher"; the TUI says
@@ -1203,8 +1209,9 @@ device sent it.
 
 Feature `otherHosts` (WVE-185, [ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md)).
 A Host's agents reach threads on the person's other Hosts through the Host tools' `host`, by way
-of the Dispatcher ([the Dispatcher spec](wve-175-dispatcher.md#calls-from-hosts-agents)), which is
-paired with each of them as a service. Hosts don't pair with or connect to each other, and none
+of the Dispatcher ([the Dispatcher spec](wve-175-dispatcher.md#calls-from-hosts-agents)), which
+each of them joined, and which is a service to each. Hosts don't pair with or connect to each
+other, and none
 coordinates the others: the Host a thread runs on stays its only authority. It replaced peer Hosts
 (ADR 0017, ADR 0024, WVE-109), which paired with each other.
 
@@ -1220,9 +1227,9 @@ Host A (mini)                     Dispatcher                         Host B (stu
 
 - **Saying it reaches the Hosts.** A service declares that it reaches the person's Hosts with
   `service/declareTools` `{tools, hosts: true}` (see [Service tools](#service-tools)). The Host
-  keeps that with the service's paired device, across the service's reconnects and its own
-  restarts, until another service says so too or it's revoked, and passes the calls naming
-  another Host to it while its connection serves it (it declared on that connection).
+  keeps that with the Dispatcher it joined, across the Dispatcher's reconnects and its own
+  restarts, until it leaves the Dispatcher, and passes the calls naming another Host to it while
+  its connection serves it (it declared on that connection).
 - **A call naming another Host.** A Host tool given `host` other than this Host's own id goes to
   that service as a `service/hostCall` notification: `{callId, host, call: {method, params},
   caller, room?}`, where `call` is the Host protocol method the tool is and its request as this
@@ -1266,9 +1273,9 @@ Host A (mini)                     Dispatcher                         Host B (stu
   and a turn's origin its `hostName`: the TUI says "A thread on mini", and the app, which reaches
   every Host the Dispatcher lists, names the thread that started it and that thread's Host when it
   lists both.
-- **Peer Hosts retired.** A Host that paired with peers revokes those pairings (paired devices
-  that named a Host id) and removes `peers.json` and `host-key.json` when it starts: a Host
-  keeps no secret of its own again (ADR 0010).
+- **Peer Hosts retired.** A Host that paired with peers drops those pairings, with every other
+  device that paired with it (WVE-197), and removes `peers.json` and `host-key.json` when it
+  starts. It keeps one secret of its own since ADR 0030: its key for the Dispatcher it joins.
 
 ## Files
 
@@ -1477,17 +1484,18 @@ could be started.
 
 **`terminals/attach`** `{id}` → `{ticket, expiresAt}`
 
-A ticket for the terminal's stream, good once, within 30 seconds. The stream then counts as the
-device that asked, so revoking the device closes it too (4000). A local client's ticket opens a
-stream on the Host's loopback WebSocket while it serves one, or on its terminal socket,
-`terminals.sock` beside its own socket, which it always serves when it has terminals: the same
-WebSocket over the Unix socket, from peers of the Host's user only (WVE-167).
+A ticket for the terminal's stream, good once, within 30 seconds. A device's ticket opens a
+stream only on a connection the Dispatcher carries for that device, so revoking the device closes
+it too (4000). A local client's ticket opens a stream on the Host's terminal socket,
+`terminals.sock` beside its own socket, which it always serves when it has terminals: a WebSocket
+over the Unix socket, from peers of the Host's user only (WVE-167).
 
 ### The terminal stream
 
-Each attached terminal streams over a WebSocket of its own, beside the client's connection, on
-the Host's remote listener. It uses subprotocol `weave-terminal` and the same `Origin` rules
-([WVE-90](wve-90-remote-clients.md#transport)).
+Each attached terminal streams over a WebSocket of its own, beside the client's connection: on
+the Host's terminal socket for a local client, or carried by the Dispatcher for a device
+([Connections the Dispatcher carries](#connections-the-dispatcher-carries)). It uses subprotocol
+`weave-terminal`.
 
 Opening the stream:
 
@@ -1618,10 +1626,14 @@ otherwise close its terminals along with its threads.
 ## Host management
 
 **`host/status`** `{}` →
-`{protocol, version, pid, startedAt, service: "launchd" | "systemd" | "onDemand" | "inProcess", environment: "loginShell" | "process", threads: ThreadListing[], remote?: string}`
+`{protocol, version, pid, startedAt, service: "launchd" | "systemd" | "onDemand" | "inProcess", environment: "loginShell" | "process", threads: ThreadListing[], dispatcher?: JoinedDispatcher, serveEntry?: {port, command, why}}`
 
-`threads` lists the open threads. `remote` is the WebSocket's loopback address while the
-Host serves one.
+`threads` lists the open threads. `dispatcher` is the Dispatcher the Host joined and how its
+connection stands. `serveEntry` is the Tailscale Serve entry the Host made for remote clients
+before WVE-197, while it's there and the Host couldn't remove it: its port, the command that
+removes it for the person to run, and why the Host couldn't. Asked by a local client, the Host
+looks again first ([remote clients](wve-90-remote-clients.md#the-hosts-own-remote-access-retired)).
+Until WVE-197 it gave `remote`, its WebSocket's loopback address, which no Host gives now.
 
 **`host/shutdown`** `{}` → `{}`
 
@@ -1675,9 +1687,7 @@ The Host is the `weave daemon run` process; the CLI keeps the `weave daemon` com
     suspending every thread (30 seconds). `weave daemon status` says when lingering is off,
     and when systemd gives the user manager less than the 30 seconds to stop at shutdown
     (`user@<uid>.service`'s `TimeoutStopUSec`, five seconds on Ubuntu 24.04), with the
-    drop-in that raises it; a shutdown cuts a drain short, as it would the turn.
-    Tailscale runs as root there, and changes Serve only for root and its operator, so
-    pairing asks for `sudo tailscale set --operator=$USER` once. The socket is in the user's
+    drop-in that raises it; a shutdown cuts a drain short, as it would the turn. The socket is in the user's
     runtime directory, `/run/user/<uid>/weave`, which the CLI finds also from a session that
     sets no `XDG_RUNTIME_DIR`, as Tailscale SSH doesn't.
 - **In-process.** `--no-daemon` runs a Host inside the client over an in-process channel,
@@ -1765,12 +1775,13 @@ as it does now.
   clients that claimed `terminalSignIn` get it.
 - Journals and traces stay 0600. The agent environment is never written or sent.
 
-Remote clients follow ADR 0010 and [`wve-90-remote-clients.md`](wve-90-remote-clients.md):
-the WebSocket binds loopback only and Tailscale Serve is the way in; every connection proves
-a paired device by signing a challenge; a paired device may do what a local client can,
-except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answer
-`forbidden`. A service such as the Dispatcher (ADR 0027) is a paired device of this kind, and
-may do less (see [Services](wve-90-remote-clients.md#services)). The Host takes the
+Remote clients follow ADR 0010, ADR 0030 and
+[`wve-90-remote-clients.md`](wve-90-remote-clients.md): a Host listens for nothing but its
+socket, and the person's devices reach it through the Dispatcher, to which each proves its key;
+a paired device may do what a local client can, except administer the Host (`host/shutdown`,
+`host/drain`, `dispatcher/join` and `dispatcher/leave`) and sign agents in and out, which answer
+`forbidden`. The Dispatcher is a service (ADR 0027), which may do less (see
+[Services](wve-90-remote-clients.md#services)). The Host takes the
 Dispatcher's word for a device only on a connection it opened to the Dispatcher it joined, and
 only once the Dispatcher has proved its key there, signing a nonce of the Host's (ADR 0030); its
 own connection it checks at the Dispatcher's hello. The Dispatcher, not the Host, reaches the
@@ -1867,13 +1878,14 @@ person's other Hosts (ADR 0029).
   Host (never starting one) for `worktrees/release`, failing while a thread in the worktree is
   busy, for worktrunk's `pre-remove` hooks; `weave worktrees install-hook` adds it to
   worktrunk's user config when asked.
-- `weave hosts add <computer>` pairs the Dispatcher with another of the person's
-  Hosts over SSH (`weave pair --json` there), and `weave hosts add <url> <code>`, or
-  the `weave://pair` link `weave pair`'s QR code holds, with the code `weave pair` showed. `weave
-  pair` says how, and `weave devices` marks the services among the devices.
+- `weave hosts add <computer>` has another of the person's Hosts join the Dispatcher over SSH
+  (`weave hosts add <url> <code>` there), and `weave hosts add <url> <code>` on the Host's
+  computer joins it with a code `weave hosts add --code` showed ([the Dispatcher's
+  CLI](wve-175-dispatcher.md#the-cli)). `weave pair` and `weave devices` are the Dispatcher's,
+  on its computer: they pair the person's devices with it, list and revoke them (WVE-197).
 - With `--json`, what a command reports is the protocol's own types (WVE-108): `daemon status`
   prints `host/status`'s answer, `threads list` its threads, `threads read` `threads/get`'s,
-  `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the paired devices, `run
+  `threads prompt` `queue/add`'s and `steer` `turn/steer`'s, `devices` the Dispatcher's paired devices, `run
   --detach` `thread/run`'s, and `run` and `threads prompt --wait` their thread's
   `thread/event` notifications as JSON lines.
 - With no terminal, as over SSH, nothing prompts: `weave agents login` needs `--method`, and a sign-in

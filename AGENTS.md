@@ -5,12 +5,12 @@ This repository holds the weave Host, its clients (the `weave` CLI and TUI, and 
 | Path | Ownership |
 | --- | --- |
 | `protocol/` | The Host protocol (`weave-host-protocol`): wire types, roles, error codes and versions, with golden snapshots, the JSON Schema the app's TypeScript comes from (`tests/schema.rs`, feature `schema`), and the permission policy. No I/O. Specs in `docs/specs/`. |
-| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open threads and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, the WebSocket and paired devices of remote clients, and the tools services declare and the calls it passes them. No UI. Read `host/AGENTS.md`. |
+| `host/` | The weave Host (`weave-host`, run as `weave daemon`): client connections, open threads and their agents, journals, permission policies, headless runs, the Host MCP server and its bridge, its connections to the Dispatcher it joined, which carries remote clients' to it (it listens for none itself, WVE-197), and the tools services declare and the calls it passes them. No UI. Read `host/AGENTS.md`. |
 | `agents/` | Which agents there are and how to launch them (`weave-agents`): config, presets, the ACP registry, the login shell's environment, `weave agents update`. Read `agents/AGENTS.md`. |
 | `acp-core/` | ACP (`weave-acp-core`): agent launch, the ACP connection, client-side handlers, protocol trace. No UI. Read `acp-core/AGENTS.md`. |
 | `dispatcher/` | The Dispatcher (`weave-dispatcher`, run as `weave dispatcher`, ADR 0027): a client of the person's Hosts, as a service, that keeps triggers and Bots and starts their work there. Hosts join it and keep a connection open to it (ADR 0030); it never dials them, and carries the person's devices' connections to them (WVE-195). Its state is SQLite. Runs no agents. Read `dispatcher/AGENTS.md`. |
-| `remote/` | The server's end of remote access (`weave-remote`), which the Host and the Dispatcher share: the loopback WebSocket, turning it on with pairing and its Tailscale Serve entry, pairing offers and signature checks, and the first requests on a Host's connection to the Dispatcher it joined. Each program keeps its own devices. |
-| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening threads; a remote client's WebSocket and device credentials, a Host's Secure Enclave key among them; and connections the Dispatcher carries to the person's Hosts (`carry`). |
+| `remote/` | The server's end of remote access (`weave-remote`), which the Host and the Dispatcher share: the WebSocket, which the Dispatcher listens on and a Host serves over the connections it opens to it; the Dispatcher's turning it on with pairing and its Tailscale Serve entry, whose `Serve` a Host uses only to remove the one it made before WVE-197; pairing offers and signature checks; and the first requests on a Host's connection to the Dispatcher it joined. Each program keeps its own devices, and only the Dispatcher pairs any. |
+| `host-client/` | A Rust client of the Host (`weave-host-client`): hello, typed requests, the Host's messages in order, opening threads; a WebSocket to the Dispatcher and device credentials, a Host's Secure Enclave key among them; and connections the Dispatcher carries to the person's Hosts (`carry`), the only way a client off a Host's computer reaches it. |
 | `cli/` | The `weave` binary and its subcommands (`weave-cli`), Host autostart and its launchd and systemd services included. Read `cli/AGENTS.md`. |
 | `tui/` | The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat state, composer. Read `tui/AGENTS.md`. |
 | `fake-agent/` | A scripted ACP agent (`weave-fake-agent`) for tests and live runs. Read `fake-agent/AGENTS.md`. |
@@ -130,7 +130,8 @@ git ls-files -z -co --exclude-standard -- . ':!app' ':!trackpad' \
         && cargo test && cargo clippy --all-targets'
 ```
 
-Under that emulation two `host/tests/remote.rs` tests with 100–200 ms deadlines time out; for
+Under that emulation two WebSocket tests with 100–200 ms deadlines, `dispatcher/tests/devices.rs`'s
+since WVE-197 moved them from the Host's, time out; for
 aarch64 proper, a lima VM on Apple silicon runs natively (`limactl start --vm-type=vz
 template:debian-13`, `LIMA_HOME` on the External disk and `.mounts=[]`, then the same commands
 with `cargo test -j 3` in 6 GiB, and `limactl delete` after).

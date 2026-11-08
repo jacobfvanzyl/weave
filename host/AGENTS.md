@@ -2,7 +2,8 @@
 
 The weave Host (`weave-host`), which `weave daemon` runs: client connections, open threads and
 their agents, journals, permission policies, headless runs, the Host MCP server and its bridge,
-and the WebSocket and paired devices of remote clients. No UI. Read the root `AGENTS.md` first;
+and the connections it opens to the Dispatcher it joined, which carries the person's devices'
+connections to it. No UI. Read the root `AGENTS.md` first;
 the Host protocol is `../docs/specs/wve-85-host-protocol.md`.
 
 In the Host, `client` is one client's connection (`host/hello` first, then requests across
@@ -110,8 +111,8 @@ signal's, which skips a drain a client already waited out. Host tests
 (`tests/daemon.rs`) run in-process with fake agents sharing one state file,
 named in a test config.
 
-Service tools (WVE-171, ADR 0027) are `service_tools.rs`: a service's declared tools are kept
-with its device in `devices.json` (`Devices::declare_tools`, `service_tools`), offered in every
+Service tools (WVE-171, ADR 0027) are `service_tools.rs`: the Dispatcher's declared tools are
+kept with it in `devices.json` (`Devices::declare_tools`, `service_tools`), offered in every
 thread set up after (`client::service_tools`, `Mcp::declare`), and a call to one is a
 `service/toolCall` to the connection that declared them last (`ServiceTools::serve`), which
 answers with `service/answerTool`; the connection ending fails its calls. Client tools (WVE-89, ADR 0009) run on a client's device for an agent: `clipboard_write`,
@@ -178,9 +179,10 @@ reader holds its owner back rather than the Host buffering.
   terminal's scope is the deepest worktree its directory is in, else the directory, symlinks
   resolved. `Shared::release` refuses a worktree while one of its terminals runs a command
   (OSC 133), and otherwise closes them with its threads.
-- **The stream:** `terminals::stream` serves a `weave-terminal` upgrade on the remote listener,
-  and the same WebSocket to local clients on `terminals.sock` beside the Host's socket
-  (`serve_local`, `Daemon::serve_terminal_streams`, WVE-167), generic over its transport. It
+- **The stream:** `terminals::stream` serves a terminal's stream (`weave-terminal`) to local
+  clients on `terminals.sock` beside the Host's socket (`serve_local`,
+  `Daemon::serve_terminal_streams`, WVE-167), and on connections the Dispatcher carries for a
+  device (`serve`, with the device), generic over its transport. It
   checks the ticket, connects to the owner afresh, attaches with a snapshot for the owner's codec
   or VT for another, with the history when the client asks, and relays frames, reading the owner
   only as fast as the client takes them, so the holder's 4 MiB resync handles a slow device; a
@@ -189,47 +191,50 @@ reader holds its owner back rather than the Host buffering.
 - **Tests:** `tests/terminals.rs` drives it all through a real client, against a fake owner that
   leaves out `command` and `opened_from`, and against real holders it builds with cargo.
 
-Remote clients (WVE-90, ADRs 0010 and 0016, spec `../docs/specs/wve-90-remote-clients.md`) reach
-the Host over a WebSocket that listens on loopback only, with Tailscale Serve the way in from the
-tailnet. The server's end is `weave-remote` (`../remote/`), which the Dispatcher shares
-(WVE-176): the WebSocket, its pings and limits (`websocket.rs`), turning it on with pairing
-(`access.rs`), the Serve entry (`tailscale.rs`, through the `tailscale` command on `PATH`, or
-on macOS where Homebrew or the Mac app put it; on Linux it needs root or the person as
-Tailscale's operator, which the refusal asks for), and offers, codes and signature checks
-(`pairing.rs`). The Host's own `websocket.rs` takes the upgrade for `weave-host` or a
-terminal's stream and hands the connection to `client.rs`. A `devices/offer` has the Host
-listen and make its own Serve entry, and both stay on while any device is paired, across
-restarts, until the last is revoked. Loopback counts for nothing: every WebSocket connection
-proves a paired device at hello, signing its `host/challenge` with a P-256 key, or pairs with a
-code `weave pair` offered (`devices.rs`, which keeps the Host's id and the devices' public keys
-in `devices.json`, 0600, and offers in
-memory). A remote client can do what a local one can,
-except `host/shutdown`, `devices/*`, agent sign-in and sign-out, and `agents/update`
-(`forbidden`), and a service less: the first request handler (`Connection::refusal`) answers
-`forbidden` for any method outside `FOR_SERVICES` (ADR 0027), attaching without `observe` or
-running with `attach`. A service, such as the Dispatcher, is a device whose `NewDevice.service`
-said so at pairing; `Connection::origin_for` lets only a service name what started a turn
-(`TurnOrigin::Service`, its name taken from the paired device) or a thread on another Host that
-asks (`caller`). The Host
-pings every 20 seconds and closes a WebSocket client with 8 MiB waiting to be sent beyond the
-replays it asked for (a `Backlog`, which an attach tells its replay's size), which attaches again
-after its position. Remote tests (`tests/remote.rs`) use a real
-loopback WebSocket, and fake agents that take MCP over ACP; `../host-client/examples/remote.rs` is the client for trying it by
-hand.
+Remote clients (WVE-90, spec `../docs/specs/wve-90-remote-clients.md`) reach the Host only through
+the Dispatcher it joined (ADR 0030): the Host listens for nothing but its Unix socket, and opens
+every connection to the Dispatcher itself (below). Until WVE-197 it listened on a loopback
+WebSocket behind a Tailscale Serve entry of its own, for devices and services that paired with
+it; that went. The server's end of those connections is `weave-remote` (`../remote/`), which the
+Dispatcher shares: the WebSocket, its pings, deadline and limits (`websocket::serve_rpc`, for a
+connection the Host opened as well as one accepted) and the preamble (`preamble.rs`). A remote
+client can do what a local one can, except `host/shutdown`, `host/drain`, `dispatcher/join` and
+`dispatcher/leave`, agent sign-in and sign-out (`forbidden`, `Connection::local_hello`), and a
+service less: the first request handler (`Connection::refusal`) answers `forbidden` for any
+method outside `FOR_SERVICES` (ADR 0027), attaching without `observe` or running with `attach`.
+The only service is the Dispatcher the Host joined; `Connection::origin_for` lets only it name
+what started a turn (`TurnOrigin::Service`, its name the one the Host keeps for it) or a thread on
+another Host that asks (`caller`). The Host pings every 20 seconds and closes a connection with
+8 MiB waiting to be sent beyond the replays it asked for (a `Backlog`, which an attach tells its
+replay's size, `dispatcher.rs`), which attaches again after its position. The Host's socket and
+in-process clients say `local`, and nothing else is taken there: a Host pairs with nothing, so
+`pair` is refused everywhere and there are no `devices/*` methods or `devices` feature.
+
+The Host's id and the Dispatcher it joined are `devices.json` (`devices.rs`, 0600). A Host whose
+file still holds devices that paired with it before WVE-197 drops them when it loads it, and
+notes `serveEntryLeft`; only then does `serve_entry.rs` touch Tailscale Serve, at startup
+(`Daemon::remove_serve_entry`, which `weave daemon run` spawns) through `DaemonConfig::former_serve`
+(`FormerServe`: the loopback address its entry forwarded to, and `weave_remote::access::Serve`,
+the `tailscale` command or a test's), removing only the entry that forwards there, under the
+computer's tailnet name, and forgetting the note once it's gone. One it can't remove, as where
+only root may change Serve, it logs, and gives in `host/status` as `serveEntry` with the command
+for the person (`sudo tailscale serve --https=<port> off`), looking again when a local client
+asks for the status (`ServeEntry::recheck`). A Host in a new directory, as every test's and dev
+Host's, never runs `tailscale`; tests give a fake `Serve` (`tests/joined.rs`).
 
 The Dispatcher the Host joined (ADR 0030, WVE-194, spec `../docs/specs/wve-175-dispatcher.md`'s
 Hosts) is `dispatcher.rs`: `dispatcher/join`, local only, takes a code `hosts/offer` gave there and
 the Dispatcher's URL or, on its computer, its `hosts.sock` (`weave_host_client::remote::Opened`).
 The Host proves a key of its own (`key.json`, `DeviceKey::kept`) in the first two requests
-(`weave_remote::preamble`), keeps the Dispatcher's key among its devices as a joined service
-(`Devices::join`, `leave`; taken at hello only on `Peer::Joined`, the connection the Host opened,
-kept out of `devices/list` and `any_paired`) and where it is in `dispatcher.json`, then serves the
-connection with `client::serve_joined` through `weave_remote::websocket::serve_rpc`, as an
-accepted one. `keep` dials again with backoff (`DispatcherSettings`), and forgets the Dispatcher
+(`weave_remote::preamble`), keeps the Dispatcher's key in `devices.json` as the service it
+joined (`Devices::join`, `leave`; taken at hello only on `Peer::Joined`, the connection the Host
+opened, after `host/challenge` there) and where it is in `dispatcher.json`, then serves the
+connection with `client::serve_joined` through `weave_remote::websocket::serve_rpc`. `keep` dials again with backoff (`DispatcherSettings`), and forgets the Dispatcher
 when it closes with `CLOSE_REVOKED` or refuses the Host's key; `dispatcher/leave` closes with
 `CLOSE_REVOKED` itself. A joined Host doesn't exit when idle, `host/status` names the Dispatcher,
 and `Daemon::shutdown` closes the connection (`dispatcher::stop`); `resume_dispatcher` connects
-again at startup. The tests are the Dispatcher's (`dispatcher/tests/joins.rs`).
+again at startup. The tests are the Dispatcher's (`dispatcher/tests/joins.rs`), and what the Host
+lets the Dispatcher do over the connection, against a fake one, `tests/joined.rs`.
 
 The Dispatcher carries the person's devices' connections to the Host (ADR 0030, WVE-195; the
 Host protocol's Connections the Dispatcher carries; feature `carry`). `dispatcher/carry`, which
@@ -243,8 +248,8 @@ task of its own (`serve_carried`, boxed as `websocket::serve` is, for the same c
 protocol as `Peer::Carried { link, device }` (`client::serve_carried`), whose hello takes only
 `Auth::Dispatcher` and gives the device the Dispatcher named, or a terminal's stream
 (`terminals::stream::serve` with the device, whose ticket it must be). A carried device is the
-Dispatcher's: it isn't in `devices.json`, nor in `Devices::connected`, so revoking it is the
-Dispatcher's to do, by closing its end. `Auth::Dispatcher` anywhere else is refused. The
+Dispatcher's: it isn't in `devices.json`, so revoking it is the Dispatcher's to do, by closing
+its end. `Auth::Dispatcher` anywhere else is refused. The
 connections carried for a Dispatcher close with `State::carried`, a token `leave`, `forget`,
 joining another and `stop` cancel. `thread/create`, `thread/attach`, `threads/list` and
 `thread/run` expand a leading `~` under the Host's home (`under_home`), as a client on another
@@ -267,6 +272,6 @@ expands `~` and checks the checkout's remote, and `Actor::caller` ignores origin
 Host. `Summary::turn_from_host` and `startedByHost` up the starting chain keep turns another
 Host's agent began from reaching further (`host_tools::from_other_host`). Reports that take up a
 closed caller do so one at a time (`Shared::taking_up_for_reports`), or two at once would take it
-up twice. Peer Hosts (ADR 0017, WVE-109) are retired: `Devices::load` revokes a pairing that
-names a Host id, and `Daemon::new` removes `DaemonConfig::retired` (`peers.json`,
-`host-key.json`). The tests are the Dispatcher's (`dispatcher/tests/hosts.rs`).
+up twice. Peer Hosts (ADR 0017, WVE-109) are retired: `Devices::load` drops their pairings with the
+other devices that paired before WVE-197, and `Daemon::new` removes `DaemonConfig::retired`
+(`peers.json`, `host-key.json`). The tests are the Dispatcher's (`dispatcher/tests/hosts.rs`).

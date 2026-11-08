@@ -9,10 +9,10 @@ to stderr at by default; `main.rs` holds the TUI's command line and one line per
 several commands use stays in `src/`: reaching the Host (`host.rs`) and the Dispatcher
 (`dispatcher.rs`), the argument groups (`args.rs`), waiting for a turn (`turn.rs`), exit statuses
 (`exit.rs`), services (`service.rs`), starting a server in the background (`background.rs`) and
-SSH (`ssh.rs`). A command uses another's module only for what's that command's own, as `hosts`
-reads what `pair --json` prints. `src/snapshots/` holds every command's `--help` (`main.rs`'s
-`every_command_says_what_it_does`), so a change to the command line shows in review: run
-`INSTA_UPDATE=always cargo test -p weave-cli --bin weave` and read the diff.
+SSH (`ssh.rs`). A command uses another's module only for what's that command's own, as
+`dispatcher connect` reads what `pair --json` prints. `src/snapshots/` holds every command's
+`--help` (`main.rs`'s `every_command_says_what_it_does`), so a change to the command line shows in
+review: run `INSTA_UPDATE=always cargo test -p weave-cli --bin weave` and read the diff.
 
 A command that manages a kind of thing (`threads`, `agents`, `schedules`, `hosts`, `devices`)
 lists them when given no subcommand, as `list` does; `daemon` and `dispatcher` say how they are,
@@ -20,7 +20,9 @@ as `status` does. Commands keep the names they had before WVE-188 as hidden ones
 in what other programs say and run: `weave login` and `logout` (`agents login` and `logout`),
 which Hosts' sign-in errors and the app's messages gave; and `weave terminal` (`terminals`),
 which panes the TUI opened in Rex run. `weave sessions` no longer runs `threads`: "session" names
-ADR 0031's Sessions (WVE-200). `main.rs`'s
+ADR 0031's Sessions (WVE-200). Nor do `weave dispatcher pair` and `weave dispatcher devices` run
+anything: `weave pair` and `weave devices`, which paired devices with the Host until it stopped
+taking them, are the Dispatcher's (WVE-197). `main.rs`'s
 `commands_answer_to_their_earlier_names` keeps them parsing; a rename adds one there.
 
 Clients name agents by id, so `-- <command>` works only with `--no-daemon` (the in-process
@@ -36,8 +38,10 @@ signs in through the Host (`agents/authenticate`, or `agents/terminalSignIn` and
 run in this terminal), then retries.
 Agents and MCP servers come from `~/.config/weave/config.toml` (read from `tui.toml` while only
 that exists; see `../agents/src/config.rs`), whose `[tui]` and `[daemon]` are the CLI's
-(`src/config.rs`), as are `[remote]`, optional overrides for remote access (port, URL,
-other origins) that `weave daemon run` reads (a restart picks up a change), and `[rex]`.
+(`src/config.rs`), as is `[rex]`. A `[remote]` left from when the Host took remote clients
+itself does nothing (WVE-197): `weave daemon run` logs, and `weave daemon status` says, that it
+should go, and it's read only for where the Host's old Tailscale Serve entry forwarded
+(`daemon::former_serve`), so the Host removes that one.
 
 `weave terminals attach <id>` (`src/commands/terminals.rs`, WVE-167) shows one of the Host's
 terminals in the terminal it runs in, as the TUI's Rex panes do: the stream on the Host's `terminals.sock`,
@@ -62,8 +66,8 @@ journals.
 ./target/debug/weave threads follow <id> --turn <turn>   # wait for that turn, as prompt or run --detach named it
 ./target/debug/weave threads watch        # every thread as it changes, as JSON lines
 ./target/debug/weave daemon               # its status; also start, stop, restart, run (foreground), install, uninstall
-./target/debug/weave pair                 # a QR code and code another device pairs with
-./target/debug/weave devices              # paired devices; also revoke <id>
+./target/debug/weave pair                 # where the Dispatcher runs: a QR code and code a device pairs with it with
+./target/debug/weave devices              # the Dispatcher's paired devices; also revoke <id>
 ./target/debug/weave agents update --dry-run   # newer agent adapters; without --dry-run, check and use them
 ./target/debug/weave worktrees install-hook    # have worktrunk ask the Host before removing a worktree
 ./target/debug/weave dispatcher           # its status; also start, stop, restart, run, install, uninstall
@@ -123,9 +127,9 @@ follow the protocol's versioning rather than a shape kept for the CLI: `daemon s
 (`host/status`'s `HostStatus`; nothing on stdout when the Host isn't running, and the service's
 notes on stderr), `threads list` (`ThreadListing`s), `threads read` (`threads/get`), `threads
 prompt` (`queue/add`, whose `queuedId` is the turn's id) and `steer` (`turn/steer`), `devices`
-(`Device`s), `run --detach` (`thread/run`), and `run` and `prompt --wait`, whose thread's
-journal events (`thread/event`) stream as JSON lines. CLI tests check each parses as the type it claims
-(`tests/json.rs`).
+(the Dispatcher's `Device`s), `run --detach` (`thread/run`), and `run` and `prompt --wait`, whose
+thread's journal events (`thread/event`) stream as JSON lines. CLI tests check each parses as the
+type it claims (`tests/json.rs`; `devices` in `tests/dispatcher.rs`).
 
 The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
 the turn ended (`end_turn`); 1, any other error; 2, arguments clap refused; 3, the weave Host
@@ -180,10 +184,15 @@ or Ctrl+C; run by an agent, they leave its own turn out (`WEAVE_AGENT_PROCESS`),
 the drain's connection open until the Host has stopped. `weave daemon run` drains on its first
 SIGTERM or SIGINT and stops at once on a second; the systemd unit gives it 330 seconds.
 `weave daemon status` adds what may stop a systemd service running when expected
-(`service::notes`: lingering off, a user manager given less time to stop than the unit). A Linux
+(`service::notes`: lingering off, a user manager given less time to stop than the unit), a
+`[remote]` left in the config, and the Tailscale Serve entry the Host made for remote clients
+before WVE-197 while it couldn't remove it (`HostStatus::serve_entry`), with the command that
+does, `sudo tailscale serve --https=7341 off`. A Linux
 Host is set up over SSH, with no terminal needed but for an agent's own sign-in (`ssh -t host
-weave agents login --agent claude`, which prints a code to paste); `weave pair` there needs
-`sudo tailscale set --operator=$USER` once, and says so. A command run over SSH without a
+weave agents login --agent claude`, which prints a code to paste). A Host there needs no
+Tailscale Serve entry, as it dials out to the Dispatcher; `weave pair` where the Dispatcher runs
+on Linux needs `sudo tailscale set --operator=$USER` once for the Dispatcher's entry, or root
+while another program's entry serves a Unix socket, and says so. A command run over SSH without a
 terminal doesn't read `~/.profile` on Debian or Ubuntu, so `ssh host weave …` finds weave only on
 the system's `PATH`: link it into `/usr/local/bin`, or name it by path. On macOS, zsh reads only
 `~/.zshenv` for it, so put `~/.local/bin` on `PATH` there. `daemon install`, and `daemon status`
@@ -210,7 +219,7 @@ WebSocket elsewhere and leaves Tailscale Serve alone, for a development Dispatch
 app's tests run (`app/src/host/testing/dev-dispatcher.ts`). `weave hosts` and `weave schedules`
 ask it over its socket (`src/dispatcher.rs`), or, when none runs here, the one this computer is
 paired with, over its WebSocket (WVE-176): `weave dispatcher connect <computer>` runs `weave
-dispatcher pair --json` there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests),
+pair --json` there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests),
 or takes the URL and code, pairs with a new device key (`DeviceKey::kept`, in the Secure Enclave on
 a Mac that has one) and keeps the pairing in `$XDG_STATE_HOME/weave/client` (`src/paired.rs`, 0600;
 `disconnect` removes it). Then it offers to have this computer's Host join the Dispatcher
@@ -220,8 +229,8 @@ asking at a terminal unless `--host` or `--no-host` answers. `weave hosts add st
 and runs `weave hosts add <url> <code> --json` there over SSH; `weave hosts add --code` prints a
 URL and code for that on a computer SSH doesn't reach (ADR 0030, WVE-194). `$WEAVE_DISPATCHER_DIR` set means only that Dispatcher, so a dev one
 never reaches the person's own. On a paired computer `run`, `start`, `restart` and `install`
-refuse, and `pair` and `devices`, which only the Dispatcher's computer may ask, say where it
-runs. `tests/dispatcher.rs` pairs `weave` with a Dispatcher in the test, over a fake Serve, and
+refuse, and `weave pair` and `weave devices` (`src/commands/devices.rs`), which only the
+Dispatcher's computer may ask, say where it runs. `tests/dispatcher.rs` pairs `weave` with a Dispatcher in the test, over a fake Serve, and
 has a Host in the test join it each of those ways.
 
 Both run against a real agent and its existing login. `--log-file <file>` captures the
