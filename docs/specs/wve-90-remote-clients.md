@@ -18,7 +18,7 @@ recorded in
 ## Purpose
 
 Let a client on another of the person's devices, starting with the mobile client (WVE-91),
-connect to the Host and use it as the TUI does: list, open and attach to sessions, prompt and
+connect to the Host and use it as the TUI does: list, open and attach to threads, prompt and
 steer, and answer pending requests. They speak the Host protocol
 ([`wve-85-host-protocol.md`](wve-85-host-protocol.md)). This adds a WebSocket transport,
 pairing and device authentication, and what a remote client may do.
@@ -41,7 +41,7 @@ iPad · iPhone (WVE-91) · test client on another computer
 Tailscale Serve on the Host's computer: TLS with the tailnet's certificate
                  │  ws://127.0.0.1:7341
                  ▼
-     Host (`weave daemon run`) ── Unix socket ── TUI · weave run · weave sessions
+     Host (`weave daemon run`) ── Unix socket ── TUI · weave run · weave threads
 ```
 
 ## Principles
@@ -55,10 +55,10 @@ Tailscale Serve on the Host's computer: TLS with the tailnet's certificate
    nothing. `local` is never accepted on the WebSocket.
 3. **The Host keeps no device secrets.** It stores each device's public key. Pairing codes live
    in its memory for minutes.
-4. **A paired device acts for the person.** An agent's shell isn't confined to its session's
+4. **A paired device acts for the person.** An agent's shell isn't confined to its thread's
    directory, so a list of allowed directories wouldn't be a boundary. Revoking the device is
    the control.
-5. **Nothing else changes.** Sessions, turns, the journal and pending requests work as on the
+5. **Nothing else changes.** Threads, turns, the journal and pending requests work as on the
    Unix socket. After a network drop or a backgrounded app, a client reconnects and attaches
    after its position, as the TUI does.
 
@@ -171,7 +171,7 @@ Every other connection from a paired device:
 
 ```json
 {"jsonrpc": "2.0", "id": 2, "method": "host/hello", "params": {
-  "protocol": {"min": 2, "max": 2},
+  "protocol": {"min": 3, "max": 3},
   "client": {"name": "weave-ios", "version": "0.1.0"},
   "auth": {"method": "device", "deviceId": "…", "signature": "…"},
   "capabilities": {}
@@ -188,7 +188,7 @@ Every other connection from a paired device:
   nonce) answers `unauthenticated` with the same message, and the Host closes the connection
   (4002).
 - `local` and `token` are refused on the WebSocket. `device`, `pair` and `host/challenge` are
-  refused on the Unix socket. `token` stays reserved and refused; the next major version
+  refused on the Unix socket. `token` stays reserved and refused; a later major version
   removes it.
 
 ## What a remote client may do
@@ -204,7 +204,7 @@ Everything a local client may, except administer the Host; a service may do less
 
 `agents/update` (WVE-93) isn't administering the Host: it can only take an agent to its newest
 version, which the Host checks starts, as `weave agents update` does. So remote clients may update an
-agent and then `session/reopen` their session onto it, as the TUI's `/update` does.
+agent and then `thread/reopen` their thread onto it, as the TUI's `/update` does.
 
 A remote client's turn origin names its device, so transcripts can say where a prompt came
 from: `{"client": {"name": "weave-ios", "id": "c9", "device": "Jaco's iPad"}}`.
@@ -253,17 +253,17 @@ naming and labelling the ones it starts, serving its tools and reaching the pers
 Hosts for this Host's agents (ADR 0029) need:
 
 - `host/hello`, `host/challenge`, `host/status`, `agents/list`;
-- `sessions/list`, `sessions/get`, `sessions/watch`, `sessions/unwatch`;
-- `session/run` without `attach`, `session/attach` with `observe`, `session/detach`,
-  `session/rename`, `session/setSuccessor`, `session/label`, `session/report`;
+- `threads/list`, `threads/get`, `threads/watch`, `threads/unwatch`;
+- `thread/run` without `attach`, `thread/attach` with `observe`, `thread/detach`,
+  `thread/rename`, `thread/setSuccessor`, `thread/label`, `thread/report`;
 - `service/declareTools`, `service/answerTool`;
 - `queue/add`, `turn/steer`, `turn/cancel`.
 
 Everything else answers `forbidden`, before any handler sees it: the computer's files,
-terminals and worktrees, opening or attaching to a session as a client of it, answering a
+terminals and worktrees, opening or attaching to a thread as a client of it, answering a
 thread's pending requests, devices, and agents' sign-in and updates. Its turns' origin names
 its device, as any remote client's does, unless it says what started a turn (`origin` on
-`session/run`, `queue/add` and `turn/steer`; see
+`thread/run`, `queue/add` and `turn/steer`; see
 [Service origins](wve-85-host-protocol.md#service-origins)) or which thread on another Host
 asks (`caller`; see [Other Hosts](wve-85-host-protocol.md#other-hosts)).
 
@@ -322,7 +322,7 @@ interval and the 8 MiB limit are the Host's defaults; tests shorten them through
 - **CLI:** `weave pair` shows the Host's URL as a QR code and text, or the Host's reason it
   can't; `weave devices` lists and revokes.
 - **Live:** from another computer on the tailnet, the test client pairs through Serve, attaches
-  to a session the TUI started, prompts, and survives a dropped network. This also confirms that
+  to a thread the TUI started, prompts, and survives a dropped network. This also confirms that
   Serve passes WebSockets through.
 
 ## Later

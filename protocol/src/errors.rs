@@ -4,7 +4,8 @@
 use std::path::Path;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::SessionId;
+
+use crate::threads::ThreadId;
 
 /// No successful `host/hello`, or authentication failed.
 pub const UNAUTHENTICATED: i32 = -32060;
@@ -12,15 +13,15 @@ pub const UNAUTHENTICATED: i32 = -32060;
 pub const INCOMPATIBLE_PROTOCOL: i32 = -32061;
 /// The agent id doesn't resolve.
 pub const UNKNOWN_AGENT: i32 = -32062;
-/// The Host doesn't know the session and wasn't told its agent and directory.
-pub const UNKNOWN_SESSION: i32 = -32063;
-/// The request needs an open session.
-pub const SESSION_NOT_OPEN: i32 = -32064;
-/// A turn already runs in the session.
+/// The Host doesn't know the thread and wasn't told its agent and directory.
+pub const UNKNOWN_THREAD: i32 = -32063;
+/// The request needs an open thread.
+pub const THREAD_NOT_OPEN: i32 = -32064;
+/// A turn already runs in the thread.
 pub const TURN_RUNNING: i32 = -32065;
 /// The pending request was answered, cancelled or withdrawn already.
 pub const ALREADY_RESOLVED: i32 = -32066;
-/// The session belongs to another agent.
+/// The thread belongs to another agent.
 pub const WRONG_AGENT: i32 = -32067;
 /// The sign-in method needs a terminal on the Host's computer.
 pub const REQUIRES_TERMINAL: i32 = -32068;
@@ -31,7 +32,7 @@ pub const FORBIDDEN: i32 = -32069;
 pub const NOT_TARGET: i32 = -32070;
 /// Remote access couldn't be turned on, as when Tailscale Serve can't reach the Host.
 pub const REMOTE_UNAVAILABLE: i32 = -32071;
-/// A session in the worktree runs a turn or waits on a request; `data.sessions` says which.
+/// A thread in the worktree runs a turn or waits on a request; `data.threads` says which.
 pub const WORKTREE_BUSY: i32 = -32072;
 /// The path isn't in a git repository.
 pub const NOT_A_REPOSITORY: i32 = -32073;
@@ -47,12 +48,12 @@ pub const HOST_STOPPING: i32 = -32077;
 pub const UNKNOWN_TERMINAL: i32 = -32078;
 /// The terminal's holder couldn't be started or reached; the message says why.
 pub const TERMINAL_UNAVAILABLE: i32 = -32079;
-/// The session's journal has no turn with that id.
+/// The thread's journal has no turn with that id.
 pub const UNKNOWN_TURN: i32 = -32080;
 /// The Dispatcher couldn't reach a Host, or the Host refused it; the message says why.
 pub const HOST_UNAVAILABLE: i32 = -32081;
 /// A turn's end, not a request's: the Host stopped or crashed while the turn ran, so it was cut
-/// off. A headless session's turn is continued once the Host takes it up again (WVE-144).
+/// off. A headless thread's turn is continued once the Host takes it up again (WVE-144).
 pub const INTERRUPTED: i32 = -32082;
 
 pub fn unauthenticated(why: impl Into<String>) -> Error {
@@ -74,17 +75,17 @@ pub fn unknown_agent(agent_id: &str) -> Error {
     Error::new(UNKNOWN_AGENT, format!("no agent {agent_id:?}"))
 }
 
-pub fn unknown_session(session_id: &str) -> Error {
+pub fn unknown_thread(thread_id: &str) -> Error {
     Error::new(
-        UNKNOWN_SESSION,
-        format!("the Host has no record of thread {session_id}; name its agent and directory"),
+        UNKNOWN_THREAD,
+        format!("the Host has no record of thread {thread_id}; name its agent and directory"),
     )
 }
 
-pub fn session_not_open(session_id: &str) -> Error {
+pub fn thread_not_open(thread_id: &str) -> Error {
     Error::new(
-        SESSION_NOT_OPEN,
-        format!("thread {session_id} isn't open; attach to it first"),
+        THREAD_NOT_OPEN,
+        format!("thread {thread_id} isn't open; attach to it first"),
     )
 }
 
@@ -99,10 +100,10 @@ pub fn already_resolved() -> Error {
     )
 }
 
-pub fn wrong_agent(session_id: &str, agent: &str) -> Error {
+pub fn wrong_agent(thread_id: &str, agent: &str) -> Error {
     Error::new(
         WRONG_AGENT,
-        format!("thread {session_id} runs with {agent}, not this agent"),
+        format!("thread {thread_id} runs with {agent}, not this agent"),
     )
 }
 
@@ -140,10 +141,10 @@ pub fn not_target() -> Error {
     )
 }
 
-/// A session in the worktree runs a turn or waits on a request, or a terminal in it runs a
+/// A thread in the worktree runs a turn or waits on a request, or a terminal in it runs a
 /// command; `data` names them.
-pub fn worktree_busy(sessions: &[SessionId], terminals: &[String]) -> Error {
-    let ids: Vec<String> = sessions.iter().map(ToString::to_string).collect();
+pub fn worktree_busy(threads: &[ThreadId], terminals: &[String]) -> Error {
+    let ids: Vec<String> = threads.iter().map(ToString::to_string).collect();
     let mut busy = Vec::new();
     if !ids.is_empty() {
         busy.push(format!(
@@ -158,7 +159,7 @@ pub fn worktree_busy(sessions: &[SessionId], terminals: &[String]) -> Error {
         ));
     }
     Error::new(WORKTREE_BUSY, busy.join("; "))
-        .data(serde_json::json!({"sessions": ids, "terminals": terminals}))
+        .data(serde_json::json!({"threads": ids, "terminals": terminals}))
 }
 
 pub fn unknown_terminal(id: &str) -> Error {
@@ -173,10 +174,10 @@ pub fn host_unavailable(why: impl Into<String>) -> Error {
     Error::new(HOST_UNAVAILABLE, why.into())
 }
 
-pub fn unknown_turn(session_id: &str, turn_id: &str) -> Error {
+pub fn unknown_turn(thread_id: &str, turn_id: &str) -> Error {
     Error::new(
         UNKNOWN_TURN,
-        format!("thread {session_id} has no turn {turn_id}"),
+        format!("thread {thread_id} has no turn {turn_id}"),
     )
 }
 

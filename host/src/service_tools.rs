@@ -33,9 +33,9 @@ use weave_host_protocol::tools::ToolCallCancelledNotification;
 use weave_host_protocol::tools::ToolCallNotification;
 use weave_host_protocol::tools::ToolCaller;
 
-use crate::session::ClientId;
-use crate::session::Summary;
-use crate::session::lock;
+use crate::thread::ClientId;
+use crate::thread::Summary;
+use crate::thread::lock;
 
 /// A service's tool as a thread offers it: the name agents see, the service's own name for it,
 /// and the service that answers it.
@@ -208,10 +208,10 @@ impl ServiceTools {
     }
 }
 
-/// The session `summary` lists as a service hears of it calling.
+/// The thread `summary` lists as a service hears of it calling.
 pub(crate) fn caller(summary: &Summary) -> ToolCaller {
     ToolCaller {
-        session_id: summary.session_id.clone(),
+        thread_id: summary.thread_id.clone(),
         agent_id: summary.agent_id.clone(),
         cwd: summary.cwd.clone(),
         policy: summary.policy.clone(),

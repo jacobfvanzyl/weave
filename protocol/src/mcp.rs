@@ -1,18 +1,18 @@
-//! The MCP servers a session's agent was given, and how each one is (WVE-160): the Host MCP
+//! The MCP servers a thread's agent was given, and how each one is (WVE-160): the Host MCP
 //! server, `weave`, and the servers the Host's config names (`[[mcp_servers]]`). The Host keeps
-//! them with the session, so every attached client sees the same: in
-//! [`crate::sessions::SessionState::mcp_servers`] when it attaches, and in `session/changed`
+//! them with the thread, so every attached client sees the same: in
+//! [`crate::threads::ThreadState::mcp_servers`] when it attaches, and in `thread/changed`
 //! whenever they change. Servers from the agent's own configuration are the agent's alone, and
 //! aren't listed.
 
 use serde::Deserialize;
 use serde::Serialize;
 
-/// The [`crate::hello::HelloResponse::features`] entry of a Host that reports its sessions' MCP
+/// The [`crate::hello::HelloResponse::features`] entry of a Host that reports its threads' MCP
 /// servers.
 pub const FEATURE: &str = "mcpServers";
 
-/// One MCP server a session's agent was given, or left without.
+/// One MCP server a thread's agent was given, or left without.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +67,7 @@ pub enum McpServerState {
     Connected,
     /// A configured server passed on to the agent, which alone knows whether it connected.
     Passed,
-    /// A configured server left out of the session, `reason` saying why.
+    /// A configured server left out of the thread, `reason` saying why.
     Skipped,
     /// The Host's own server can't serve this agent, `reason` saying why.
     Unavailable,

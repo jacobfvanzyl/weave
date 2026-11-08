@@ -1,16 +1,16 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(49, SessionEvent::TurnStarted\n{\n    session_id: \"s-1\".into(), prompt: vec![text(\"then update the docs\")],\n    origin: tui(), queued_id: Some(\"q-3\".to_owned()), turn_id:\n    Some(\"q-3\".to_owned()),\n},))"
+expression: "message(&event(49, ThreadEvent::TurnStarted\n{\n    thread_id: \"s-1\".into(), prompt: vec![text(\"then update the docs\")],\n    origin: tui(), queued_id: Some(\"q-3\".to_owned()), turn_id:\n    Some(\"q-3\".to_owned()), continues: None,\n},))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 49,
     "at": 1760180001234,
     "event": {
       "kind": "turnStarted",
-      "sessionId": "s-1",
+      "threadId": "s-1",
       "prompt": [
         {
           "type": "text",

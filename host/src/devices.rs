@@ -47,7 +47,7 @@ use weave_remote::pairing::verifying_key;
 
 use crate::journal::now_ms;
 use crate::service_tools;
-use crate::session::lock;
+use crate::thread::lock;
 
 pub(crate) struct Devices {
     /// `devices.json`; none for a Host whose devices live in memory.

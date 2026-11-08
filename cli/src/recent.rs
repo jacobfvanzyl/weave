@@ -1,4 +1,4 @@
-//! The agent last used in each directory, so `weave --continue` reopens its session without
+//! The agent last used in each directory, so `weave --continue` reopens its thread without
 //! being told which agent: `$XDG_STATE_HOME/weave/recent.json`
 //! (`~/.local/state/weave/recent.json`).
 

@@ -1,0 +1,30 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ThreadChangedNotification\n{\n    thread_id: \"s-1\".into(), activity: None, clients: None, title: None,\n    blank: None, git: None, mcp_servers: Some(mcp_servers()),\n})"
+---
+{
+  "method": "thread/changed",
+  "params": {
+    "threadId": "s-1",
+    "mcpServers": [
+      {
+        "name": "weave",
+        "source": "host",
+        "transport": "acp",
+        "state": "connected"
+      },
+      {
+        "name": "github",
+        "source": "config",
+        "transport": "stdio",
+        "state": "passed"
+      },
+      {
+        "name": "docs",
+        "source": "config",
+        "state": "skipped",
+        "reason": "the agent does not support the sse transport"
+      }
+    ]
+  }
+}

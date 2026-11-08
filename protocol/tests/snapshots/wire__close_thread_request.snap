@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&CloseThreadRequest { thread_id: \"s-1\".into(), })"
+---
+{
+  "method": "thread/close",
+  "params": {
+    "threadId": "s-1"
+  }
+}

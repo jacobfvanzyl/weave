@@ -13,32 +13,32 @@ use clap::Args;
 use clap::Subcommand;
 use tokio::sync::mpsc::UnboundedReceiver;
 use weave_acp_core::schema::ContentBlock;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::StopReason;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::queue::AddQueuedResponse;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::AttachSessionResponse;
-use weave_host_protocol::sessions::CloseSessionRequest;
-use weave_host_protocol::sessions::CloseWhen;
-use weave_host_protocol::sessions::DetachSessionRequest;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::LABELS_FEATURE;
-use weave_host_protocol::sessions::LabelSessionRequest;
-use weave_host_protocol::sessions::LatestTurn;
-use weave_host_protocol::sessions::OBSERVE_FEATURE;
-use weave_host_protocol::sessions::SUCCESSORS_FEATURE;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionUpdatedNotification;
-use weave_host_protocol::sessions::SetSuccessorRequest;
-use weave_host_protocol::sessions::TurnOrigin;
-use weave_host_protocol::sessions::TurnState;
-use weave_host_protocol::sessions::WATCH_FEATURE;
-use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::AttachThreadResponse;
+use weave_host_protocol::threads::CloseThreadRequest;
+use weave_host_protocol::threads::CloseWhen;
+use weave_host_protocol::threads::DetachThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::LABELS_FEATURE;
+use weave_host_protocol::threads::LabelThreadRequest;
+use weave_host_protocol::threads::LatestTurn;
+use weave_host_protocol::threads::OBSERVE_FEATURE;
+use weave_host_protocol::threads::SUCCESSORS_FEATURE;
+use weave_host_protocol::threads::SetSuccessorRequest;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadUpdatedNotification;
+use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::TurnState;
+use weave_host_protocol::threads::WATCH_FEATURE;
+use weave_host_protocol::threads::WatchThreadsRequest;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnRequest;
@@ -83,15 +83,15 @@ enum ThreadsCommand {
     /// turn runs.
     Steer(MessageArgs),
     /// Stop the turn a thread is running, as Esc does in the TUI.
-    Cancel(SessionArg),
+    Cancel(ThreadArg),
     /// Close a thread for every client: its turn ends and its agent stops. `weave --resume`
     /// can still reopen it from the agent's history.
-    Close(SessionArg),
+    Close(ThreadArg),
     /// Print the Host's threads as they open, change and close, as JSON lines: a
-    /// `sessions/updated` for each at first, then one for every change, until stopped.
+    /// `threads/updated` for each at first, then one for every change, until stopped.
     Watch,
     /// Follow an open thread as it goes, without being one of its clients: the agent's reply
-    /// as text, or with --json its journal events (`session/event`) as JSON lines.
+    /// as text, or with --json its journal events (`thread/event`) as JSON lines.
     Follow(FollowArgs),
     /// Name the thread an open thread's work goes on in, its successor: clients following it
     /// may follow that, and reports to it go there. Named once.
@@ -105,7 +105,7 @@ enum ThreadsCommand {
 #[derive(Args)]
 struct LabelArgs {
     #[arg(value_name = "THREAD_ID")]
-    session_id: String,
+    thread_id: String,
     /// A label to add: letters, digits and - _ . : / only.
     #[arg(long, value_name = "LABEL")]
     add: Vec<String>,
@@ -117,7 +117,7 @@ struct LabelArgs {
 #[derive(Args)]
 struct SuccessorArgs {
     #[arg(value_name = "THREAD_ID")]
-    session_id: String,
+    thread_id: String,
     /// The thread its work goes on in.
     #[arg(value_name = "SUCCESSOR_ID")]
     successor: String,
@@ -139,21 +139,21 @@ struct ListArgs {
 }
 
 #[derive(Args)]
-struct SessionArg {
+struct ThreadArg {
     #[arg(value_name = "THREAD_ID")]
-    session_id: String,
+    thread_id: String,
 }
 
 #[derive(Args)]
 struct ReadArgs {
     #[arg(value_name = "THREAD_ID")]
-    session_id: String,
+    thread_id: String,
 
     /// Read this turn rather than the latest, as `threads prompt` named it.
     #[arg(long, value_name = "TURN_ID")]
     turn: Option<String>,
 
-    /// Print the Host's answer (`sessions/get`) as JSON.
+    /// Print the Host's answer (`threads/get`) as JSON.
     #[arg(long)]
     json: bool,
 }
@@ -161,7 +161,7 @@ struct ReadArgs {
 #[derive(Args)]
 struct MessageArgs {
     #[arg(value_name = "THREAD_ID")]
-    session_id: String,
+    thread_id: String,
 
     /// The prompt; read from stdin when omitted or `-`.
     prompt: Vec<String>,
@@ -193,7 +193,7 @@ struct PromptArgs {
 #[derive(Args)]
 struct FollowArgs {
     #[arg(value_name = "THREAD_ID")]
-    session_id: String,
+    thread_id: String,
 
     /// Follow this turn, as `threads prompt` or `run --detach` named it, from its start to its
     /// end, exiting as `weave run` does for it; one that has ended prints at once.
@@ -276,19 +276,19 @@ async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Re
             labels,
             json,
         }) => {
-            let mut sessions = open(connection).await?;
+            let mut threads = open(connection).await?;
             if let Some(activity) = activity {
-                sessions.retain(|session| session.activity.is_some_and(|is| name(is) == activity));
+                threads.retain(|thread| thread.activity.is_some_and(|is| name(is) == activity));
             }
-            sessions.retain(|session| labels.iter().all(|label| session.labels.contains(label)));
+            threads.retain(|thread| labels.iter().all(|label| thread.labels.contains(label)));
             if json {
-                println!("{}", serde_json::to_string_pretty(&sessions)?);
+                println!("{}", serde_json::to_string_pretty(&threads)?);
             } else {
-                print!("{}", describe(&sessions, now_ms()));
+                print!("{}", describe(&threads, now_ms()));
             }
         }
         ThreadsCommand::Read(ReadArgs {
-            session_id,
+            thread_id,
             turn,
             json,
         }) => {
@@ -297,8 +297,8 @@ async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Re
             }
             let asked = turn.is_some();
             let got = connection
-                .send(GetSessionRequest {
-                    session_id: SessionId::new(session_id),
+                .send(GetThreadRequest {
+                    thread_id: ThreadId::new(thread_id),
                     turn_id: turn,
                 })
                 .await
@@ -307,7 +307,7 @@ async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Re
                 println!("{}", serde_json::to_string_pretty(&got)?);
                 return Ok(());
             }
-            eprint!("{}", describe(std::slice::from_ref(&got.session), now_ms()));
+            eprint!("{}", describe(std::slice::from_ref(&got.thread), now_ms()));
             match &got.latest_turn {
                 Some(latest) => {
                     eprint!("{}", describe_turn(latest, asked));
@@ -319,28 +319,28 @@ async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Re
             }
         }
         ThreadsCommand::Prompt(args) => {
-            let session_id = args.message.session_id.clone();
+            let thread_id = args.message.thread_id.clone();
             let json = args.message.json;
             let queued = add_prompt(connection, args).await?;
             let turn = &queued.queued_id;
             if json {
                 println!("{}", serde_json::to_string_pretty(&queued)?);
             } else if queued.started {
-                eprintln!("Started turn {turn} in {session_id}.");
+                eprintln!("Started turn {turn} in {thread_id}.");
             } else {
-                eprintln!("Queued turn {turn} for {session_id}, after the turn it's running.");
+                eprintln!("Queued turn {turn} for {thread_id}, after the turn it's running.");
             }
         }
         ThreadsCommand::Steer(MessageArgs {
-            session_id,
+            thread_id,
             prompt,
             json,
         }) => {
             let prompt = prompt_text(&prompt)?;
-            find(&open(connection).await?, &session_id)?;
+            find(&open(connection).await?, &thread_id)?;
             let steered = connection
                 .send(SteerTurnRequest {
-                    session_id: SessionId::new(session_id.clone()),
+                    thread_id: ThreadId::new(thread_id.clone()),
                     prompt: vec![ContentBlock::from(prompt)],
                     caller: None,
                     origin: None,
@@ -352,67 +352,67 @@ async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Re
             }
             match steered.outcome {
                 SteerOutcome::Steered if json => {}
-                SteerOutcome::Steered => eprintln!("Steered the turn in {session_id}."),
+                SteerOutcome::Steered => eprintln!("Steered the turn in {thread_id}."),
                 SteerOutcome::NotRunning => bail!(
-                    "no turn is running in {session_id}, so nothing was sent; `weave threads \
-                     prompt {session_id}` starts one"
+                    "no turn is running in {thread_id}, so nothing was sent; `weave threads \
+                     prompt {thread_id}` starts one"
                 ),
             }
         }
-        ThreadsCommand::Cancel(SessionArg { session_id }) => {
-            let sessions = open(connection).await?;
-            let session = find(&sessions, &session_id)?;
-            if session.activity == Some(Activity::Idle) {
-                eprintln!("No turn is running in {session_id}.");
+        ThreadsCommand::Cancel(ThreadArg { thread_id }) => {
+            let threads = open(connection).await?;
+            let thread = find(&threads, &thread_id)?;
+            if thread.activity == Some(Activity::Idle) {
+                eprintln!("No turn is running in {thread_id}.");
                 return Ok(());
             }
             connection
                 .send(CancelTurnRequest {
-                    session_id: SessionId::new(session_id.clone()),
+                    thread_id: ThreadId::new(thread_id.clone()),
                 })
                 .await?;
-            eprintln!("Asked the agent to stop the turn in {session_id}.");
+            eprintln!("Asked the agent to stop the turn in {thread_id}.");
         }
-        ThreadsCommand::Close(SessionArg { session_id }) => {
-            find(&open(connection).await?, &session_id)?;
+        ThreadsCommand::Close(ThreadArg { thread_id }) => {
+            find(&open(connection).await?, &thread_id)?;
             connection
-                .send(CloseSessionRequest {
-                    session_id: SessionId::new(session_id.clone()),
+                .send(CloseThreadRequest {
+                    thread_id: ThreadId::new(thread_id.clone()),
                 })
                 .await
                 .context("closing the thread")?;
-            eprintln!("Closed {session_id}; weave --resume {session_id} reopens it.");
+            eprintln!("Closed {thread_id}; weave --resume {thread_id} reopens it.");
         }
         ThreadsCommand::SetSuccessor(SuccessorArgs {
-            session_id,
+            thread_id,
             successor,
         }) => {
             offers(connection, SUCCESSORS_FEATURE)?;
             connection
                 .send(SetSuccessorRequest {
-                    session_id: SessionId::new(session_id.clone()),
-                    successor: SessionId::new(successor.clone()),
+                    thread_id: ThreadId::new(thread_id.clone()),
+                    successor: ThreadId::new(successor.clone()),
                 })
                 .await
                 .context("naming the thread's successor")?;
-            eprintln!("Thread {session_id} continues in thread {successor}.");
+            eprintln!("Thread {thread_id} continues in thread {successor}.");
         }
         ThreadsCommand::Label(LabelArgs {
-            session_id,
+            thread_id,
             add,
             remove,
         }) => {
             offers(connection, LABELS_FEATURE)?;
             let labelled = connection
-                .send(LabelSessionRequest {
-                    session_id: SessionId::new(session_id.clone()),
+                .send(LabelThreadRequest {
+                    thread_id: ThreadId::new(thread_id.clone()),
                     add,
                     remove,
                 })
                 .await
                 .context("labelling the thread")?;
             match labelled.labels.as_slice() {
-                [] => eprintln!("Thread {session_id} carries no labels."),
+                [] => eprintln!("Thread {thread_id} carries no labels."),
                 labels => println!("{}", labels.join("\n")),
             }
         }
@@ -421,7 +421,7 @@ async fn run(connection: &HostConnection, command: ThreadsCommand) -> anyhow::Re
     Ok(())
 }
 
-/// `weave threads watch`: `sessions/watch`, a line a notification, until the Host goes or
+/// `weave threads watch`: `threads/watch`, a line a notification, until the Host goes or
 /// whatever reads the lines does.
 async fn watch(
     connection: &HostConnection,
@@ -429,18 +429,18 @@ async fn watch(
 ) -> anyhow::Result<Status> {
     offers(connection, WATCH_FEATURE)?;
     let watched = connection
-        .send(WatchSessionsRequest::default())
+        .send(WatchThreadsRequest::default())
         .await
         .context("watching the threads")?;
-    for session in watched.sessions {
-        if !line(&SessionUpdatedNotification { session })? {
+    for thread in watched.threads {
+        if !line(&ThreadUpdatedNotification { thread })? {
             return Ok(Status::Success);
         }
     }
     loop {
         let printed = match events.recv().await {
-            Some(HostEvent::SessionUpdated(updated)) => line(&*updated)?,
-            Some(HostEvent::SessionRemoved(removed)) => line(&removed)?,
+            Some(HostEvent::ThreadUpdated(updated)) => line(&*updated)?,
+            Some(HostEvent::ThreadRemoved(removed)) => line(&removed)?,
             Some(HostEvent::Disconnected(_)) | None => {
                 return Err(exit::unreachable(anyhow!("lost the weave Host")));
             }
@@ -452,20 +452,20 @@ async fn watch(
     }
 }
 
-/// `weave threads follow`: observe the thread (`session/attach` with `observe`), printing what
+/// `weave threads follow`: observe the thread (`thread/attach` with `observe`), printing what
 /// happens in it after `--after`, or from now, or the turn `--turn` names.
 async fn follow(link: &mut Link, args: FollowArgs) -> anyhow::Result<Status> {
     if args.turn.is_some() {
         offers(&link.connection, TURN_IDS_FEATURE)?;
     }
-    let session_id = SessionId::new(args.session_id);
-    let observed = observe(&link.connection, &session_id).await?;
+    let thread_id = ThreadId::new(args.thread_id);
+    let observed = observe(&link.connection, &thread_id).await?;
     let head = observed.state.journal.head;
     let running = observed
         .state
         .turns
         .iter()
-        .find(|turn| turn.session_id == session_id)
+        .find(|turn| turn.thread_id == thread_id)
         .and_then(|turn| turn.turn_id.clone());
     let (pick, print) = match (args.turn.clone(), args.after) {
         (Some(turn), _) => (Pick::Turn(turn), Print::Turn),
@@ -483,33 +483,27 @@ async fn follow(link: &mut Link, args: FollowArgs) -> anyhow::Result<Status> {
     }
     let mut out = Output::new(args.json);
     let deadline = args.waiting.deadline();
-    let mut session_id = session_id;
+    let mut thread_id = thread_id;
     let mut outcome = follower.follow(link, &mut out, deadline).await?;
     // Its work goes on in a successor: follow that, from its start (WVE-168).
     while let Outcome::Succeeded(successor) = outcome {
         if !args.json {
-            eprintln!("weave: thread {session_id} continues in thread {successor}; following it");
+            eprintln!("weave: thread {thread_id} continues in thread {successor}; following it");
         }
         let _ = link
             .connection
-            .send(DetachSessionRequest {
-                session_id: session_id.clone(),
+            .send(DetachThreadRequest {
+                thread_id: thread_id.clone(),
                 close: CloseWhen::Never,
             })
             .await;
-        session_id = successor;
-        let observed = observe(&link.connection, &session_id).await?;
+        thread_id = successor;
+        let observed = observe(&link.connection, &thread_id).await?;
         follower = Follower::new(&observed.state, Pick::After(0), Print::After(0));
         outcome = follower.follow(link, &mut out, deadline).await?;
     }
     out.finish()?;
-    report(
-        outcome,
-        &session_id,
-        follower.turn(),
-        args.json,
-        !until_ends,
-    )
+    report(outcome, &thread_id, follower.turn(), args.json, !until_ends)
 }
 
 /// `weave threads prompt --wait`: follow the thread, so nothing of its turn is missed, then
@@ -517,11 +511,11 @@ async fn follow(link: &mut Link, args: FollowArgs) -> anyhow::Result<Status> {
 async fn prompt_and_wait(link: &mut Link, args: PromptArgs) -> anyhow::Result<Status> {
     let connection = &link.connection;
     offers(connection, TURN_IDS_FEATURE)?;
-    let session_id = SessionId::new(args.message.session_id.clone());
+    let thread_id = ThreadId::new(args.message.thread_id.clone());
     let json = args.message.json;
     let deadline = args.waiting.deadline();
     let keep_waiting = args.waiting.keep_waiting;
-    let observed = observe(connection, &session_id).await?;
+    let observed = observe(connection, &thread_id).await?;
     let queued = add_prompt(connection, args).await?;
     let mut follower = Follower::new(
         &observed.state,
@@ -532,7 +526,7 @@ async fn prompt_and_wait(link: &mut Link, args: PromptArgs) -> anyhow::Result<St
     let mut out = Output::new(json);
     let outcome = follower.follow(link, &mut out, deadline).await?;
     out.finish()?;
-    report(outcome, &session_id, Some(&queued.queued_id), json, false)
+    report(outcome, &thread_id, Some(&queued.queued_id), json, false)
 }
 
 /// `queue/add` for `weave threads prompt`, to a thread that's open.
@@ -541,11 +535,11 @@ async fn add_prompt(
     args: PromptArgs,
 ) -> anyhow::Result<AddQueuedResponse> {
     let prompt = prompt_text(&args.message.prompt)?;
-    let session_id = args.message.session_id;
-    find(&open(connection).await?, &session_id)?;
+    let thread_id = args.message.thread_id;
+    find(&open(connection).await?, &thread_id)?;
     connection
         .send(AddQueuedRequest {
-            session_id: SessionId::new(session_id),
+            thread_id: ThreadId::new(thread_id),
             prompt: vec![ContentBlock::from(prompt)],
             key: args.key,
             caller: None,
@@ -559,12 +553,12 @@ async fn add_prompt(
 /// of its clients.
 async fn observe(
     connection: &HostConnection,
-    session_id: &SessionId,
-) -> anyhow::Result<AttachSessionResponse> {
+    thread_id: &ThreadId,
+) -> anyhow::Result<AttachThreadResponse> {
     offers(connection, OBSERVE_FEATURE)?;
     connection
-        .send(AttachSessionRequest {
-            session_id: session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: thread_id.clone(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -602,47 +596,44 @@ fn line(notification: &impl JsonRpcMessage) -> anyhow::Result<bool> {
 }
 
 /// The threads open in the Host.
-async fn open(connection: &HostConnection) -> anyhow::Result<Vec<SessionListing>> {
-    Ok(connection.send(StatusRequest {}).await?.sessions)
+async fn open(connection: &HostConnection) -> anyhow::Result<Vec<ThreadListing>> {
+    Ok(connection.send(StatusRequest {}).await?.threads)
 }
 
-fn find<'a>(
-    sessions: &'a [SessionListing],
-    session_id: &str,
-) -> anyhow::Result<&'a SessionListing> {
-    sessions
+fn find<'a>(threads: &'a [ThreadListing], thread_id: &str) -> anyhow::Result<&'a ThreadListing> {
+    threads
         .iter()
-        .find(|session| session.info.session_id.to_string() == session_id)
+        .find(|thread| thread.info.session_id.to_string() == thread_id)
         .with_context(|| {
             format!(
-                "{session_id} isn't open in the weave Host (`weave threads` lists those that are)"
+                "{thread_id} isn't open in the weave Host (`weave threads` lists those that are)"
             )
         })
 }
 
-fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
-    if sessions.is_empty() {
+fn describe(threads: &[ThreadListing], now_ms: u64) -> String {
+    if threads.is_empty() {
         return "No threads open.\n".to_owned();
     }
     let mut out = String::new();
-    for session in sessions {
-        let activity = match session.activity {
+    for thread in threads {
+        let activity = match thread.activity {
             Some(Activity::Running) => "running",
             Some(Activity::Waiting) => "waiting on you",
             Some(Activity::Idle) | None => "idle",
         };
-        let clients = match session.clients {
+        let clients = match thread.clients {
             0 => "no clients".to_owned(),
             1 => "1 client".to_owned(),
             count => format!("{count} clients"),
         };
-        let headless = if session.headless { ", headless" } else { "" };
-        let agent = &session.agent_id;
-        let about = match &session.info.title {
+        let headless = if thread.headless { ", headless" } else { "" };
+        let agent = &thread.agent_id;
+        let about = match &thread.info.title {
             Some(title) => format!("{title} · {agent}"),
             None => agent.clone(),
         };
-        let branch = session
+        let branch = thread
             .git
             .as_ref()
             .and_then(|git| git.branch.as_ref())
@@ -650,21 +641,21 @@ fn describe(sessions: &[SessionListing], now_ms: u64) -> String {
             .unwrap_or_default();
         out.push_str(&format!(
             "{}  {activity}, {clients}{headless}, active {} ago\n  {about}\n  in {}{branch}\n",
-            session.info.session_id,
-            ago(now_ms, session.last_activity_at.unwrap_or(now_ms)),
-            session.info.cwd.display(),
+            thread.info.session_id,
+            ago(now_ms, thread.last_activity_at.unwrap_or(now_ms)),
+            thread.info.cwd.display(),
         ));
-        if let Some(starter) = &session.started_by {
+        if let Some(starter) = &thread.started_by {
             out.push_str(&format!("  started by thread {starter}\n"));
         }
-        if !session.labels.is_empty() {
-            out.push_str(&format!("  labelled {}\n", session.labels.join(", ")));
+        if !thread.labels.is_empty() {
+            out.push_str(&format!("  labelled {}\n", thread.labels.join(", ")));
         }
-        if let Some(context) = session.context {
+        if let Some(context) = thread.context {
             let percent = (context.used * 100)
                 .checked_div(context.size)
                 .map_or_else(String::new, |percent| format!(" ({percent}%)"));
-            let compacted = session
+            let compacted = thread
                 .last_compaction
                 .map(|last| format!(", compacted {} ago", ago(now_ms, last.at)))
                 .unwrap_or_default();
@@ -707,8 +698,8 @@ fn describe_turn(latest: &LatestTurn, asked: bool) -> String {
         TurnOrigin::Client { name, device, .. } => device.clone().unwrap_or_else(|| name.clone()),
         TurnOrigin::Run {} => "a headless run".to_owned(),
         TurnOrigin::Service { name, label, .. } => format!("{label}, via {name}"),
-        TurnOrigin::Session {
-            session_id,
+        TurnOrigin::Thread {
+            thread_id,
             host,
             host_name,
             report,
@@ -719,9 +710,9 @@ fn describe_turn(latest: &LatestTurn, asked: bool) -> String {
                 (None, None) => String::new(),
             };
             if *report {
-                format!("the Host's report on thread {session_id}{on}")
+                format!("the Host's report on thread {thread_id}{on}")
             } else {
-                format!("thread {session_id}{on}")
+                format!("thread {thread_id}{on}")
             }
         }
     };
@@ -769,20 +760,20 @@ mod tests {
     use pretty_assertions::assert_eq;
     use weave_acp_core::schema::PromptResponse;
     use weave_acp_core::schema::SessionInfo;
-    use weave_host_protocol::sessions::ContextUsage;
-    use weave_host_protocol::sessions::LastCompaction;
-    use weave_host_protocol::sessions::SessionStatus;
+    use weave_host_protocol::threads::ContextUsage;
+    use weave_host_protocol::threads::LastCompaction;
+    use weave_host_protocol::threads::ThreadStatus;
     use weave_host_protocol::worktrees::GitLocation;
 
     use super::*;
 
     #[test]
-    fn each_session_says_what_its_doing() {
+    fn each_thread_says_what_its_doing() {
         assert_eq!(describe(&[], 0), "No threads open.\n");
-        let session = SessionListing {
+        let thread = ThreadListing {
             info: SessionInfo::new("s1", "/repo").title("Fix the build".to_owned()),
             agent_id: "claude".into(),
-            state: SessionStatus::Open,
+            state: ThreadStatus::Open,
             activity: Some(Activity::Waiting),
             clients: 0,
             headless: true,
@@ -798,26 +789,26 @@ mod tests {
             last_compaction: None,
         };
         assert_eq!(
-            describe(std::slice::from_ref(&session), 7_230_000),
+            describe(std::slice::from_ref(&thread), 7_230_000),
             "s1  waiting on you, no clients, headless, active 2h ago\n  Fix the build · claude\n  in \
              /repo\n"
         );
-        let on_a_branch = SessionListing {
+        let on_a_branch = ThreadListing {
             git: Some(GitLocation {
                 repo: "/repo".into(),
                 worktree: "/repo".into(),
                 branch: Some("main".to_owned()),
                 remote: None,
             }),
-            ..session.clone()
+            ..thread.clone()
         };
         assert!(describe(&[on_a_branch], 7_230_000).ends_with("  in /repo on main\n"));
-        let delegated = SessionListing {
+        let delegated = ThreadListing {
             started_by: Some("s0".into()),
-            ..session.clone()
+            ..thread.clone()
         };
         assert!(describe(&[delegated], 7_230_000).ends_with("  started by thread s0\n"));
-        let using = SessionListing {
+        let using = ThreadListing {
             context: Some(ContextUsage {
                 used: 68_000,
                 size: 200_000,
@@ -826,7 +817,7 @@ mod tests {
                 at: 3_630_000,
                 used: Some(40_000),
             }),
-            ..session.clone()
+            ..thread.clone()
         };
         assert!(
             describe(&[using], 7_230_000)
@@ -834,7 +825,7 @@ mod tests {
         );
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1_234_567), "1,234,567");
-        assert!(find(&[session], "s2").is_err());
+        assert!(find(&[thread], "s2").is_err());
     }
 
     #[test]
@@ -847,8 +838,8 @@ mod tests {
             prompt: vec![ContentBlock::from(
                 "address the review\non the PR".to_owned(),
             )],
-            origin: TurnOrigin::Session {
-                session_id: "s0".into(),
+            origin: TurnOrigin::Thread {
+                thread_id: "s0".into(),
                 report: false,
                 host: None,
                 host_name: None,
@@ -886,8 +877,8 @@ mod tests {
         );
         let cancelled = LatestTurn {
             state: TurnState::Cancelled,
-            origin: TurnOrigin::Session {
-                session_id: "s2".into(),
+            origin: TurnOrigin::Thread {
+                thread_id: "s2".into(),
                 report: true,
                 host: None,
                 host_name: None,

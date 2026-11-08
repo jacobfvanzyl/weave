@@ -19,22 +19,22 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::Instant;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::PromptResponse;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_host::DaemonPaths;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_protocol::errors;
-use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::events::ThreadEvent;
+use weave_host_protocol::events::ThreadEventNotification;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::PendingKind;
 use weave_host_protocol::pending::PendingRequest;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::JournalPosition;
-use weave_host_protocol::sessions::SessionState;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::JournalPosition;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadState;
 use weave_host_protocol::turns::TurnId;
 
 use crate::exit;
@@ -97,7 +97,7 @@ pub(crate) enum Outcome {
     Lost(Option<String>),
     /// The thread's work goes on in this one, its successor, which following moves on to
     /// unless it waits for a turn's end.
-    Succeeded(SessionId),
+    Succeeded(ThreadId),
 }
 
 /// How long a Host that went away has to come back, and to take the thread up again.
@@ -155,7 +155,7 @@ impl Link {
 
 /// Following a thread for one of its turns.
 pub(crate) struct Follower {
-    session_id: SessionId,
+    thread_id: ThreadId,
     pick: Pick,
     print: Print,
     /// Stop when the turn ends, or waits on a person.
@@ -181,14 +181,14 @@ pub(crate) struct Follower {
 
 impl Follower {
     /// Following the thread that `state` describes, as this client attached to it.
-    pub(crate) fn new(state: &SessionState, pick: Pick, print: Print) -> Self {
+    pub(crate) fn new(state: &ThreadState, pick: Pick, print: Print) -> Self {
         let turn = match &pick {
             Pick::Turn(turn) => Some(turn.clone()),
             Pick::After(_) => None,
         };
         let head = state.journal.head;
         Self {
-            session_id: state.session_id.clone(),
+            thread_id: state.thread_id.clone(),
             pick,
             print,
             until_ends: false,
@@ -264,8 +264,8 @@ impl Follower {
         loop {
             let attached = link
                 .connection
-                .send(AttachSessionRequest {
-                    session_id: self.session_id.clone(),
+                .send(AttachThreadRequest {
+                    thread_id: self.thread_id.clone(),
                     after: Some(self.position.clone()),
                     agent_id: None,
                     cwd: None,
@@ -278,7 +278,7 @@ impl Follower {
                     self.reattached(&attached.state);
                     return Ok(None);
                 }
-                Err(error) if errors::is(&error, errors::SESSION_NOT_OPEN) => {
+                Err(error) if errors::is(&error, errors::THREAD_NOT_OPEN) => {
                     if let Some(outcome) = self.read_over(&link.connection, out).await? {
                         return Ok(Some(outcome));
                     }
@@ -314,8 +314,8 @@ impl Follower {
         };
         loop {
             let got = connection
-                .send(GetSessionRequest {
-                    session_id: self.session_id.clone(),
+                .send(GetThreadRequest {
+                    thread_id: self.thread_id.clone(),
                     turn_id: Some(turn.clone()),
                 })
                 .await
@@ -344,7 +344,7 @@ impl Follower {
     }
 
     /// Following the thread again, as `state` describes it, after the last event seen.
-    fn reattached(&mut self, state: &SessionState) {
+    fn reattached(&mut self, state: &ThreadState) {
         self.head = state.journal.head;
         self.caught_up = self.head <= self.position.seq;
         if state.journal.id != self.position.journal {
@@ -367,7 +367,7 @@ impl Follower {
         out: &mut Output,
     ) -> anyhow::Result<Option<Outcome>> {
         match event {
-            Some(HostEvent::Event(notification)) if notification.session_id == self.session_id => {
+            Some(HostEvent::Event(notification)) if notification.thread_id == self.thread_id => {
                 let seq = notification.seq;
                 self.position.seq = seq;
                 if let Some(outcome) = self.continues(&notification.event, seq, out) {
@@ -379,21 +379,21 @@ impl Follower {
                     Print::Turn => self.in_turn || starts,
                 };
                 if printed {
-                    out.event(&self.session_id, &notification)?;
+                    out.event(&self.thread_id, &notification)?;
                 }
                 if seq >= self.head {
                     self.caught_up = true;
                 }
                 match notification.event {
-                    SessionEvent::TurnStarted { .. } if starts => {
+                    ThreadEvent::TurnStarted { .. } if starts => {
                         self.started = true;
                         self.in_turn = true;
                     }
-                    SessionEvent::TurnEnded {
-                        session_id,
+                    ThreadEvent::TurnEnded {
+                        thread_id,
                         response,
                         error,
-                    } if session_id == self.session_id && self.in_turn => {
+                    } if thread_id == self.thread_id && self.in_turn => {
                         self.in_turn = false;
                         // A continuation starts with an interrupted turn's end, journaled
                         // before anyone could attach: one comes next if any does.
@@ -411,22 +411,22 @@ impl Follower {
                             _ => {}
                         }
                     }
-                    SessionEvent::Unqueued { queued_id, .. }
+                    ThreadEvent::Unqueued { queued_id, .. }
                         if !self.started && self.turn.as_ref() == Some(&queued_id) =>
                     {
                         return Ok(Some(Outcome::Removed));
                     }
-                    SessionEvent::ContinuedIn { successor, .. } if !self.until_ends => {
+                    ThreadEvent::ContinuedIn { successor, .. } if !self.until_ends => {
                         return Ok(Some(Outcome::Succeeded(successor)));
                     }
-                    SessionEvent::Closed { reason, .. } => {
+                    ThreadEvent::Closed { reason, .. } => {
                         return Ok(Some(Outcome::Closed(reason)));
                     }
                     _ => {}
                 }
                 Ok(self.waiting())
             }
-            Some(HostEvent::PendingAdded(added)) if added.session_id == self.session_id => {
+            Some(HostEvent::PendingAdded(added)) if added.thread_id == self.thread_id => {
                 if let Some(what) = asks(&added.pending) {
                     if (!self.until_ends || self.keep_waiting) && !out.is_json() {
                         eprintln!("weave: the thread is waiting on a person: it {what}");
@@ -435,9 +435,7 @@ impl Follower {
                 }
                 Ok(self.waiting())
             }
-            Some(HostEvent::PendingResolved(resolved))
-                if resolved.session_id == self.session_id =>
-            {
+            Some(HostEvent::PendingResolved(resolved)) if resolved.thread_id == self.thread_id => {
                 self.asks.remove(&resolved.pending_id);
                 Ok(None)
             }
@@ -452,7 +450,7 @@ impl Follower {
     /// After the turn waited for ended interrupted: follow `event`, at `seq`, into its
     /// continuation, or stop when another turn of the thread's starts first, it closes, or the
     /// journal as it was on attaching holds no continuation.
-    fn continues(&mut self, event: &SessionEvent, seq: u64, out: &Output) -> Option<Outcome> {
+    fn continues(&mut self, event: &ThreadEvent, seq: u64, out: &Output) -> Option<Outcome> {
         let error = self.interrupted.take()?;
         let ended = || {
             Some(Outcome::Ended {
@@ -461,12 +459,12 @@ impl Follower {
             })
         };
         match event {
-            SessionEvent::TurnStarted {
-                session_id,
+            ThreadEvent::TurnStarted {
+                thread_id,
                 turn_id: Some(next),
                 continues: Some(continues),
                 ..
-            } if *session_id == self.session_id && self.turn.as_ref() == Some(continues) => {
+            } if *thread_id == self.thread_id && self.turn.as_ref() == Some(continues) => {
                 if let Some(turn) = &self.turn {
                     continued(turn, next, out);
                 }
@@ -475,10 +473,8 @@ impl Follower {
                 self.in_turn = true;
                 None
             }
-            SessionEvent::TurnStarted { session_id, .. } if *session_id == self.session_id => {
-                ended()
-            }
-            SessionEvent::Closed { .. } => ended(),
+            ThreadEvent::TurnStarted { thread_id, .. } if *thread_id == self.thread_id => ended(),
+            ThreadEvent::Closed { .. } => ended(),
             _ if seq >= self.head => ended(),
             _ => {
                 self.interrupted = Some(error);
@@ -489,9 +485,9 @@ impl Follower {
 
     /// Whether `event`, at `seq`, starts the turn waited for: its own id's, or the first after
     /// the position.
-    fn starts(&mut self, event: &SessionEvent, seq: u64) -> bool {
-        let SessionEvent::TurnStarted {
-            session_id,
+    fn starts(&mut self, event: &ThreadEvent, seq: u64) -> bool {
+        let ThreadEvent::TurnStarted {
+            thread_id,
             turn_id,
             queued_id,
             ..
@@ -499,7 +495,7 @@ impl Follower {
         else {
             return false;
         };
-        if *session_id != self.session_id || self.started {
+        if *thread_id != self.thread_id || self.started {
             return false;
         }
         let id = turn_id.as_ref().or(queued_id.as_ref());
@@ -558,14 +554,14 @@ pub(crate) async fn sleep_until(deadline: Option<Instant>) {
 /// for a turn's end is how following it ends.
 pub(crate) fn report(
     outcome: Outcome,
-    session_id: &SessionId,
+    thread_id: &ThreadId,
     turn: Option<&TurnId>,
     json: bool,
     closed_ok: bool,
 ) -> anyhow::Result<Status> {
     let again = match turn {
-        Some(turn) => format!("weave threads follow {session_id} --turn {turn}"),
-        None => format!("weave threads follow {session_id} --until-turn-ends"),
+        Some(turn) => format!("weave threads follow {thread_id} --turn {turn}"),
+        None => format!("weave threads follow {thread_id} --until-turn-ends"),
     };
     Ok(match outcome {
         Outcome::Ended {
@@ -593,8 +589,8 @@ pub(crate) fn report(
         }
         Outcome::Waiting(what) => {
             eprintln!(
-                "weave: thread {session_id} is waiting on a person: it {what}. Answer it with \
-                 `weave --resume {session_id}` or in the app; `{again}` waits on."
+                "weave: thread {thread_id} is waiting on a person: it {what}. Answer it with \
+                 `weave --resume {thread_id}` or in the app; `{again}` waits on."
             );
             Status::Waiting
         }
@@ -612,7 +608,7 @@ pub(crate) fn report(
         }
         Outcome::Removed => {
             return Err(anyhow!(
-                "the prompt was taken out of {session_id}'s queue before its turn started"
+                "the prompt was taken out of {thread_id}'s queue before its turn started"
             ));
         }
         Outcome::Succeeded(_) => Status::Success,
@@ -674,8 +670,8 @@ impl Output {
 
     pub(crate) fn event(
         &mut self,
-        session_id: &SessionId,
-        notification: &SessionEventNotification,
+        thread_id: &ThreadId,
+        notification: &ThreadEventNotification,
     ) -> anyhow::Result<()> {
         if self.json {
             let mut stdout = std::io::stdout().lock();
@@ -683,10 +679,10 @@ impl Output {
             return Ok(stdout.flush()?);
         }
         match &notification.event {
-            SessionEvent::Update { notification } if notification.session_id == *session_id => {
+            ThreadEvent::Update { notification } if notification.session_id == *thread_id => {
                 self.update(&notification.update)
             }
-            SessionEvent::Notice { text } => {
+            ThreadEvent::Notice { text } => {
                 self.break_line()?;
                 eprintln!("weave: {text}");
                 Ok(())

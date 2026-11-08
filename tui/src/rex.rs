@@ -181,7 +181,7 @@ impl Rex {
         command
     }
 
-    /// The session's blocks, by id.
+    /// The thread's blocks, by id.
     fn blocks(&self) -> Result<Vec<String>, String> {
         let output = self.rex(&["block", "ls", "-s", &self.session, "--json"])?;
         let listed: Blocks = serde_json::from_str(&output).map_err(|error| error.to_string())?;
@@ -260,7 +260,7 @@ struct Block {
     window_id: Option<String>,
 }
 
-/// Each TUI pane's terminal panes, by `<session>/<block>`.
+/// Each TUI pane's terminal panes, by `<thread>/<block>`.
 type Record = BTreeMap<String, Vec<Pane>>;
 
 fn read_record(path: &Path) -> Record {

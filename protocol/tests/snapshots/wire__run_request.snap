@@ -1,9 +1,9 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&RunRequest\n{\n    agent_id: \"codex\".to_owned(), cwd: \"/repo\".into(), session_id: None,\n    additional_directories: Vec::new(), prompt: vec![text(\"fix the tests\")],\n    policy: PermissionPolicy::headless(vec![ToolKind::Read, ToolKind::Edit]),\n    attach: false, trace: false,\n})"
+expression: "message(&RunRequest\n{\n    agent_id: \"codex\".to_owned(), cwd: \"/repo\".into(), remote: None,\n    thread_id: None, additional_directories: Vec::new(), mode: None, prompt:\n    vec![text(\"fix the tests\")], policy:\n    PermissionPolicy::headless(vec![ToolKind::Read, ToolKind::Edit]), attach:\n    false, trace: false, key: None, caller: None, origin: None, labels:\n    Vec::new(),\n})"
 ---
 {
-  "method": "session/run",
+  "method": "thread/run",
   "params": {
     "agentId": "codex",
     "cwd": "/repo",

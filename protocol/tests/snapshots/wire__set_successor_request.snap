@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&SetSuccessorRequest\n{ session_id: \"s-1\".into(), successor: \"s-2\".into(), })"
+expression: "message(&SetSuccessorRequest\n{ thread_id: \"s-1\".into(), successor: \"s-2\".into(), })"
 ---
 {
-  "method": "session/setSuccessor",
+  "method": "thread/setSuccessor",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "successor": "s-2"
   }
 }

@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&SetConfigOptionRequest\n{\n    session_id: \"s-1\".into(), config_id: \"thinking\".into(), value:\n    SessionConfigOptionValue::Boolean { value: true },\n})"
+expression: "message(&SetConfigOptionRequest\n{\n    thread_id: \"s-1\".into(), config_id: \"thinking\".into(), value:\n    SessionConfigOptionValue::Boolean { value: true },\n})"
 ---
 {
-  "method": "session/setConfigOption",
+  "method": "thread/setConfigOption",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "configId": "thinking",
     "type": "boolean",
     "value": true

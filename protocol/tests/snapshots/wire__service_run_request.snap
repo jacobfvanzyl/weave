@@ -1,9 +1,9 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&RunRequest\n{\n    agent_id: \"claude\".to_owned(), cwd: \"/Users/jaco/src/app\".into(), remote:\n    None, session_id: None, additional_directories: Vec::new(), mode: None,\n    prompt:\n    vec![ContentBlock::from(\"Review yesterday's merged pull requests\")],\n    policy: PermissionPolicy::ask(), attach: false, trace: false, key:\n    Some(\"daily-review@1760180000000\".to_owned()), caller: None, origin:\n    Some(ServiceOrigin\n    { label: \"schedule daily-review\".to_owned(), id: \"o-01J9Z\".to_owned(), }),\n})"
+expression: "message(&RunRequest\n{\n    agent_id: \"claude\".to_owned(), cwd: \"/Users/jaco/src/app\".into(), remote:\n    None, thread_id: None, additional_directories: Vec::new(), mode: None,\n    prompt:\n    vec![ContentBlock::from(\"Review yesterday's merged pull requests\")],\n    policy: PermissionPolicy::ask(), attach: false, trace: false, key:\n    Some(\"daily-review@1760180000000\".to_owned()), caller: None, origin:\n    Some(ServiceOrigin\n    { label: \"schedule daily-review\".to_owned(), id: \"o-01J9Z\".to_owned(), }),\n    labels: Vec::new(),\n})"
 ---
 {
-  "method": "session/run",
+  "method": "thread/run",
   "params": {
     "agentId": "claude",
     "cwd": "/Users/jaco/src/app",

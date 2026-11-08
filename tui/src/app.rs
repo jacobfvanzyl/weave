@@ -1,8 +1,8 @@
 //! The event loop: terminal input and the Host's messages in, frames and Host requests out.
 //!
-//! Requests whose answers the UI waits on (settings, session lists) run on their own tasks
-//! and report back as [`AppEvent`]s, so the loop never blocks on the Host. Opening a session
-//! answers on the Host connection's own channel instead, in order with the session's events,
+//! Requests whose answers the UI waits on (settings, thread lists) run on their own tasks
+//! and report back as [`AppEvent`]s, so the loop never blocks on the Host. Opening a thread
+//! answers on the Host connection's own channel instead, in order with the thread's events,
 //! so the transcript is ready for the replay that follows.
 
 use std::collections::HashMap;
@@ -27,7 +27,6 @@ use weave_acp_core::schema::Error;
 use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::PromptCapabilities;
 use weave_acp_core::schema::SessionConfigOption;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::TerminalExitStatus;
 use weave_acp_core::supports_steering;
 use weave_host_client::HostConnection;
@@ -37,7 +36,7 @@ use weave_host_client::Open;
 use weave_host_protocol::agents::UPDATES_FEATURE;
 use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::errors;
-use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::mcp::FEATURE as MCP_SERVERS_FEATURE;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::pending::PendingKind;
@@ -47,22 +46,6 @@ use weave_host_protocol::queue::FEATURE as QUEUE_FEATURE;
 use weave_host_protocol::queue::QueuedPrompt;
 use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::ResumeQueueRequest;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CloseWhen;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::DeleteSessionRequest;
-use weave_host_protocol::sessions::DetachSessionRequest;
-use weave_host_protocol::sessions::JournalPosition;
-use weave_host_protocol::sessions::ListSessionsRequest;
-use weave_host_protocol::sessions::ListSessionsResponse;
-use weave_host_protocol::sessions::RENAME_FEATURE;
-use weave_host_protocol::sessions::RenameSessionRequest;
-use weave_host_protocol::sessions::ReopenSessionRequest;
-use weave_host_protocol::sessions::SessionAgent;
-use weave_host_protocol::sessions::SessionState;
-use weave_host_protocol::sessions::SetConfigOptionRequest;
-use weave_host_protocol::sessions::SetModeRequest;
-use weave_host_protocol::sessions::TurnOrigin;
 use weave_host_protocol::terminals::CloseTerminalRequest;
 use weave_host_protocol::terminals::FEATURE as TERMINALS_FEATURE;
 use weave_host_protocol::terminals::FormatTerminalRequest;
@@ -73,6 +56,23 @@ use weave_host_protocol::terminals::TerminalFormat;
 use weave_host_protocol::terminals::UnwatchTerminalsRequest;
 use weave_host_protocol::terminals::WatchTerminalsRequest;
 use weave_host_protocol::terminals::WriteTerminalRequest;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CloseWhen;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::DeleteThreadRequest;
+use weave_host_protocol::threads::DetachThreadRequest;
+use weave_host_protocol::threads::JournalPosition;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::ListThreadsResponse;
+use weave_host_protocol::threads::RENAME_FEATURE;
+use weave_host_protocol::threads::RenameThreadRequest;
+use weave_host_protocol::threads::ReopenThreadRequest;
+use weave_host_protocol::threads::SetConfigOptionRequest;
+use weave_host_protocol::threads::SetModeRequest;
+use weave_host_protocol::threads::ThreadAgent;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadState;
+use weave_host_protocol::threads::TurnOrigin;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::CancelTurnRequest;
@@ -85,7 +85,7 @@ use crate::attachments::prompt_blocks;
 use crate::chat::AppCommand;
 use crate::chat::ChatWidget;
 use crate::chat::Queued;
-use crate::chat::SessionAbilities;
+use crate::chat::ThreadAbilities;
 use crate::clipboard;
 use crate::events::ChatEvent;
 use crate::events::ElicitationAsk;
@@ -98,9 +98,9 @@ use crate::markdown::Rendering;
 use crate::rex::Pane;
 use crate::rex::Rex;
 use crate::runs;
-use crate::session::OpenedSession;
-use crate::session::SessionTarget;
 use crate::settings::SettingChange;
+use crate::thread::OpenedThread;
+use crate::thread::ThreadTarget;
 use crate::thumbnails;
 use crate::thumbnails::Thumbnail;
 use crate::tui::ScreenMode;
@@ -111,7 +111,7 @@ use crate::updates::Dismissed;
 const RECONNECT_WINDOW: Duration = Duration::from_secs(15);
 /// How often to look for it meanwhile.
 const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
-/// How long quitting waits for a blank session to close; the Host closes it later anyway.
+/// How long quitting waits for a blank thread to close; the Host closes it later anyway.
 const CLOSE_ON_QUIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Connects to the weave Host again after it went away, without starting one, so a restarted
@@ -133,22 +133,22 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(80);
 const EVENTS_PER_FRAME: usize = 256;
 
 /// A connection to the Host, ready for the interactive client.
-pub struct Session {
+pub struct Connected {
     pub connection: HostConnection,
     pub events: UnboundedReceiver<HostEvent>,
-    /// The agent this client's sessions run with, by id.
+    /// The agent this client's threads run with, by id.
     pub agent_id: String,
     pub agent_name: String,
     pub agent_version: Option<String>,
-    /// What the agent said about itself: what prompts may carry, which session methods it has.
+    /// What the agent said about itself: what prompts may carry, which thread methods it has.
     pub agent: InitializeResponse,
-    /// Where new sessions work, until an opened session says otherwise.
+    /// Where new threads work, until an opened thread says otherwise.
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
-    /// Have the Host trace sessions opened from here.
+    /// Have the Host trace threads opened from here.
     pub trace: bool,
-    /// The session to start in, opened already, or `None` to start in the session picker.
-    pub opened: Option<weave_host_client::OpenedSession>,
+    /// The thread to start in, opened already, or `None` to start in the thread picker.
+    pub opened: Option<weave_host_client::OpenedThread>,
     /// Things worth telling the user at startup.
     pub notices: Vec<String>,
 }
@@ -160,7 +160,7 @@ pub struct UiOptions {
     pub status_line: Vec<StatusItem>,
     /// Desktop notifications when a turn ends or the agent needs you, while unfocused.
     pub notifications: bool,
-    /// Keep the window title on the session and what the agent is doing.
+    /// Keep the window title on the thread and what the agent is doing.
     pub terminal_title: bool,
     /// The Vim composer, for new blank threads and multi-line drafts.
     pub vim: bool,
@@ -168,7 +168,7 @@ pub struct UiOptions {
     pub images: bool,
     /// What agent Markdown is drawn as: Mermaid diagrams and math, or their source.
     pub rendering: Rendering,
-    /// Sessions outlive the TUI, in the weave Host: leaving with Ctrl+D keeps a turn running.
+    /// Threads outlive the TUI, in the weave Host: leaving with Ctrl+D keeps a turn running.
     pub detachable: bool,
     /// How to reach the weave Host again when it goes away; none for one in this process.
     pub reconnect: Option<Reconnector>,
@@ -179,14 +179,14 @@ pub struct UiOptions {
 
 /// How the client ended.
 pub struct Exit {
-    /// The session to offer reopening: the active one, if it had a conversation.
-    pub resumable_session: Option<SessionId>,
+    /// The thread to offer reopening: the active one, if it had a conversation.
+    pub resumable_thread: Option<ThreadId>,
     /// Whether its turn was still running, to carry on in the weave Host.
     pub turn_running: bool,
-    /// `/reload`: start again in place, reattaching to `active_session`.
+    /// `/reload`: start again in place, reattaching to `active_thread`.
     pub reload: bool,
-    /// The session shown when it ended, conversation or not.
-    pub active_session: Option<SessionId>,
+    /// The thread shown when it ended, conversation or not.
+    pub active_thread: Option<ThreadId>,
 }
 
 /// Results of requests the loop made off the UI thread.
@@ -195,12 +195,12 @@ enum AppEvent {
         SettingChange,
         Result<Option<Vec<SessionConfigOption>>, Error>,
     ),
-    SessionsListed(Result<ListSessionsResponse, Error>, bool),
-    SessionDeleted(SessionId, Result<(), Error>),
+    ThreadsListed(Result<ListThreadsResponse, Error>, bool),
+    ThreadDeleted(ThreadId, Result<(), Error>),
     PromptFailed(Error),
-    /// The Host's answer to a message steered into a session's turn.
+    /// The Host's answer to a message steered into a thread's turn.
     Steered {
-        session_id: SessionId,
+        thread_id: ThreadId,
         text: String,
         result: Result<SteerTurnResponse, Error>,
     },
@@ -217,10 +217,10 @@ enum AppEvent {
     HostIncompatible(String),
     /// No Host came back in time.
     ReconnectGaveUp,
-    /// The Host's answer to `/update`'s `agents/update`: the version new sessions get.
+    /// The Host's answer to `/update`'s `agents/update`: the version new threads get.
     AgentUpdated(Result<String, Error>),
-    /// The Host's answer to `session/reopen`.
-    SessionReopened(SessionId, Result<(), Error>),
+    /// The Host's answer to `thread/reopen`.
+    ThreadReopened(ThreadId, Result<(), Error>),
     /// `/rename` failed; a rename that worked shows as its `renamed` event.
     RenameFailed(Error),
     /// The Host couldn't queue a message, which goes back to the draft.
@@ -241,16 +241,16 @@ enum AppEvent {
     TerminalFailed(String),
 }
 
-/// Why a session is being opened, for when the Host answers.
+/// Why a thread is being opened, for when the Host answers.
 enum OpenKind {
     /// Switching to it (or starting in it), leaving `previous`.
-    Open { previous: Option<SessionId> },
-    /// Back to the session shown, after reconnecting.
+    Open { previous: Option<ThreadId> },
+    /// Back to the thread shown, after reconnecting.
     Reattach,
 }
 
 /// Run the interactive client until the user quits, then close the connection.
-pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
+pub async fn run(connected: Connected, ui: UiOptions) -> anyhow::Result<Exit> {
     let UiOptions {
         screen,
         status_line,
@@ -268,7 +268,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         |name| std::env::var(name).ok(),
         std::io::stdout().is_terminal(),
     ));
-    let Session {
+    let Connected {
         connection,
         events,
         agent_id,
@@ -280,9 +280,9 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         trace,
         opened,
         notices,
-    } = session;
-    let abilities = SessionAbilities {
-        // The Host lists sessions whatever the agent offers.
+    } = connected;
+    let abilities = ThreadAbilities {
+        // The Host lists threads whatever the agent offers.
         list: true,
         delete: agent
             .agent_capabilities
@@ -320,7 +320,7 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     let rex = (has_terminals && detachable).then(Rex::detect).flatten();
     let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
-    // The session works where the Host says, and so does this client.
+    // The thread works where the Host says, and so does this client.
     let cwd = opened
         .as_ref()
         .map_or(cwd, |opened| opened.state.cwd.clone());
@@ -370,29 +370,29 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
     };
     let startup = match opened {
         Some(opened) => {
-            chat.begin_session(opened.state.session_id.clone(), None);
-            app.session_opened(&mut chat, &opened)
+            chat.begin_thread(opened.state.thread_id.clone(), None);
+            app.thread_opened(&mut chat, &opened)
         }
-        None => chat.open_session_picker(true),
+        None => chat.open_thread_picker(true),
     };
     chat.push_header(agent_version.as_deref(), &notices);
     let result = app.run(&mut tui, &mut chat, events, startup).await;
     tui.exit();
-    // A blank session has nothing to come back to, and one the person is done with
+    // A blank thread has nothing to come back to, and one the person is done with
     // (`/exit`, Ctrl+C) opens again from the agent's history, so either closes once nothing
     // else needs it and its agent stops, rather than when the Host's grace for it ends. A
     // reload reattaches instead, and Ctrl+D leaves it open.
     let closing = chat
-        .session_to_close(app.closing, app.reopenable)
+        .thread_to_close(app.closing, app.reopenable)
         .filter(|_| !app.reload)
         .cloned();
-    if let Some(session_id) = closing {
-        let close = app.handle.send(DetachSessionRequest {
-            session_id,
+    if let Some(thread_id) = closing {
+        let close = app.handle.send(DetachThreadRequest {
+            thread_id,
             close: CloseWhen::IfUnused,
         });
         if let Ok(Err(error)) = tokio::time::timeout(CLOSE_ON_QUIT_TIMEOUT, close).await {
-            tracing::debug!(%error, "couldn't close the session");
+            tracing::debug!(%error, "couldn't close the thread");
         }
     }
     app.connection.shutdown().await;
@@ -411,10 +411,10 @@ pub async fn run(session: Session, ui: UiOptions) -> anyhow::Result<Exit> {
         .await;
     }
     result.map(|()| Exit {
-        resumable_session: chat.resumable_session().cloned(),
+        resumable_thread: chat.resumable_thread().cloned(),
         turn_running: chat.turn_running(),
         reload: app.reload,
-        active_session: chat.active_session().cloned(),
+        active_thread: chat.active_thread().cloned(),
     })
 }
 
@@ -424,7 +424,7 @@ struct App {
     connection: HostConnection,
     reconnect: Option<Reconnector>,
     agent_id: String,
-    /// Where the active session works.
+    /// Where the active thread works.
     cwd: PathBuf,
     additional_directories: Vec<PathBuf>,
     trace: bool,
@@ -438,16 +438,16 @@ struct App {
     shells: HashMap<String, oneshot::Sender<()>>,
     /// Quitting to start again in place (`/reload`).
     reload: bool,
-    /// Quitting done with the session: `/exit` or Ctrl+C rather than Ctrl+D.
+    /// Quitting done with the thread: `/exit` or Ctrl+C rather than Ctrl+D.
     closing: bool,
-    /// The session's agent can open it again once it's closed, by loading or resuming it.
+    /// The thread's agent can open it again once it's closed, by loading or resuming it.
     reopenable: bool,
-    /// Sessions being opened, by the tag their answer comes back with.
+    /// Threads being opened, by the tag their answer comes back with.
     opens: HashMap<u64, OpenKind>,
     next_tag: u64,
-    /// The last event of the active session's journal this client has, to catch up from.
+    /// The last event of the active thread's journal this client has, to catch up from.
     position: Option<JournalPosition>,
-    /// The last position the active session's replay covers, while it arrives.
+    /// The last position the active thread's replay covers, while it arrives.
     replay_until: Option<u64>,
     /// Thumbnails of images messages carry are decoded one at a time.
     decoding: Arc<Semaphore>,
@@ -457,7 +457,7 @@ struct App {
     has_terminals: bool,
     /// The worktree whose terminals this client watches.
     watched: Option<PathBuf>,
-    /// Watch them once the app runs: a session opened before it did.
+    /// Watch them once the app runs: a thread opened before it did.
     watch_pending: bool,
     /// The Rex pane this TUI runs in, which shows terminals in panes beside it.
     rex: Option<Rex>,
@@ -493,7 +493,7 @@ impl App {
                 tui.set_title(&chat.terminal_title(Instant::now()));
             }
             tui.set_program_status(chat.program_status());
-            if chat.active_session().is_some() {
+            if chat.active_thread().is_some() {
                 tui.set_directory(&self.cwd);
             }
             draw(tui, chat)?;
@@ -545,8 +545,8 @@ impl App {
     fn host_event(&mut self, chat: &mut ChatWidget, event: HostEvent) -> Vec<AppCommand> {
         match event {
             HostEvent::Event(notification) => {
-                // Another session's, as one just left.
-                if chat.active_session() != Some(&notification.session_id) {
+                // Another thread's, as one just left.
+                if chat.active_thread() != Some(&notification.thread_id) {
                     return Vec::new();
                 }
                 if let Some(position) = &mut self.position {
@@ -556,9 +556,9 @@ impl App {
                     .replay_until
                     .is_some_and(|until| notification.seq <= until);
                 let notification = *notification;
-                let mut commands = self.session_event(
+                let mut commands = self.thread_event(
                     chat,
-                    notification.session_id,
+                    notification.thread_id,
                     notification.event,
                     notification.at,
                     replayed,
@@ -574,7 +574,7 @@ impl App {
                 commands
             }
             HostEvent::Changed(changed) => {
-                if chat.active_session() == Some(&changed.session_id)
+                if chat.active_thread() == Some(&changed.thread_id)
                     && let Some(servers) = changed.mcp_servers
                 {
                     chat.set_mcp_servers(servers);
@@ -595,25 +595,25 @@ impl App {
                 self.panes.retain(|pane| pane.terminal != removed.id);
                 Vec::new()
             }
-            // The TUI makes no pairing offers, and watches no sessions.
+            // The TUI makes no pairing offers, and watches no threads.
             // What the TUI doesn't ask for: watching, offers, and calls to a service.
             HostEvent::DevicePaired(_)
-            | HostEvent::SessionUpdated(_)
-            | HostEvent::SessionRemoved(_)
+            | HostEvent::ThreadUpdated(_)
+            | HostEvent::ThreadRemoved(_)
             | HostEvent::ToolCall(_)
             | HostEvent::HostCall(_)
             | HostEvent::ToolCallCancelled(_) => Vec::new(),
             HostEvent::UpdateAvailable(notification) => {
-                if chat.active_session() == Some(&notification.session_id) {
+                if chat.active_thread() == Some(&notification.thread_id) {
                     chat.update_available(notification.update);
                 }
                 Vec::new()
             }
             HostEvent::PendingAdded(added) => {
-                if chat.active_session() != Some(&added.session_id) {
+                if chat.active_thread() != Some(&added.thread_id) {
                     return Vec::new();
                 }
-                self.pending(chat, &added.session_id, added.pending.clone())
+                self.pending(chat, &added.thread_id, added.pending.clone())
             }
             HostEvent::PendingResolved(resolved) => {
                 let elsewhere = resolved
@@ -639,25 +639,25 @@ impl App {
         }
     }
 
-    /// A journaled event of the active session.
-    fn session_event(
+    /// A journaled event of the active thread.
+    fn thread_event(
         &mut self,
         chat: &mut ChatWidget,
-        root: SessionId,
-        event: SessionEvent,
+        root: ThreadId,
+        event: ThreadEvent,
         at: u64,
         replayed: bool,
     ) -> Vec<AppCommand> {
         let event = match event {
-            SessionEvent::Update { notification } => ChatEvent::SessionUpdate(*notification),
-            SessionEvent::TurnStarted {
-                session_id,
+            ThreadEvent::Update { notification } => ChatEvent::SessionUpdate(*notification),
+            ThreadEvent::TurnStarted {
+                thread_id,
                 prompt,
                 origin,
                 queued_id,
                 ..
             } => {
-                // The queue a session's state gave covers the replay.
+                // The queue a thread's state gave covers the replay.
                 let mut commands = Vec::new();
                 if let Some(id) = queued_id.clone().filter(|_| !replayed) {
                     commands = chat.handle_agent_event(ChatEvent::Unqueued { id });
@@ -669,7 +669,7 @@ impl App {
                 }
                 commands.extend(chat.handle_journal_event(
                     ChatEvent::TurnStarted {
-                        session_id,
+                        thread_id,
                         prompt,
                         elapsed: since(at),
                         replayed,
@@ -684,16 +684,16 @@ impl App {
                 ));
                 return commands;
             }
-            // The queue a session's state gave covers the replay.
-            SessionEvent::Queued { .. }
-            | SessionEvent::Unqueued { .. }
-            | SessionEvent::QueuePaused { .. }
-            | SessionEvent::QueueResumed { .. }
+            // The queue a thread's state gave covers the replay.
+            ThreadEvent::Queued { .. }
+            | ThreadEvent::Unqueued { .. }
+            | ThreadEvent::QueuePaused { .. }
+            | ThreadEvent::QueueResumed { .. }
                 if replayed =>
             {
                 return Vec::new();
             }
-            SessionEvent::Queued {
+            ThreadEvent::Queued {
                 queued_id,
                 prompt,
                 origin,
@@ -702,19 +702,19 @@ impl App {
                 text: prompt_text(&prompt),
                 mine: self.is_mine(&origin),
             },
-            SessionEvent::Unqueued { queued_id, .. } => ChatEvent::Unqueued { id: queued_id },
-            SessionEvent::QueuePaused { .. } => ChatEvent::QueuePaused(true),
-            SessionEvent::QueueResumed { .. } => ChatEvent::QueuePaused(false),
+            ThreadEvent::Unqueued { queued_id, .. } => ChatEvent::Unqueued { id: queued_id },
+            ThreadEvent::QueuePaused { .. } => ChatEvent::QueuePaused(true),
+            ThreadEvent::QueueResumed { .. } => ChatEvent::QueuePaused(false),
             // Shown as it joins the turn, this client's own messages too.
-            SessionEvent::TurnSteered {
-                session_id, prompt, ..
-            } => ChatEvent::TurnSteered { session_id, prompt },
-            SessionEvent::TurnEnded {
-                session_id,
+            ThreadEvent::TurnSteered {
+                thread_id, prompt, ..
+            } => ChatEvent::TurnSteered { thread_id, prompt },
+            ThreadEvent::TurnEnded {
+                thread_id,
                 response,
                 error,
             } => ChatEvent::TurnEnded {
-                session_id,
+                thread_id,
                 result: match (response, error) {
                     (Some(response), _) => Ok(response),
                     (None, Some(error)) => Err(error),
@@ -722,18 +722,18 @@ impl App {
                 },
                 replayed,
             },
-            SessionEvent::TerminalOutput { terminal_id, data } => ChatEvent::TerminalOutput {
+            ThreadEvent::TerminalOutput { terminal_id, data } => ChatEvent::TerminalOutput {
                 terminal_id,
                 text: data,
             },
-            SessionEvent::TerminalExit {
+            ThreadEvent::TerminalExit {
                 terminal_id,
                 status,
             } => ChatEvent::TerminalExited {
                 terminal_id,
                 status,
             },
-            SessionEvent::AgentReopened {
+            ThreadEvent::AgentReopened {
                 agent,
                 previous,
                 modes,
@@ -741,7 +741,7 @@ impl App {
                 failed,
             } => {
                 // The new process says what prompts may carry now, and whether it steers. A
-                // replay's is history: the session's state said what runs now.
+                // replay's is history: the thread's state said what runs now.
                 if !replayed {
                     self.agent_changed(chat, &agent);
                 }
@@ -754,19 +754,19 @@ impl App {
                     replayed,
                 }
             }
-            SessionEvent::Closed { reason, by } if !replayed => {
+            ThreadEvent::Closed { reason, by } if !replayed => {
                 // Another client closed it for everyone: this TUI is done with it (WVE-167).
                 if closed_by_another(by.as_ref(), self.handle.client_id()) {
                     self.closed_elsewhere = true;
                     return vec![AppCommand::Quit];
                 }
-                ChatEvent::SessionEnded {
-                    session_id: root,
+                ChatEvent::ThreadEnded {
+                    thread_id: root,
                     reason,
                 }
             }
-            SessionEvent::Notice { text } => ChatEvent::Notice(text),
-            SessionEvent::Renamed { title, by } => ChatEvent::Renamed {
+            ThreadEvent::Notice { text } => ChatEvent::Notice(text),
+            ThreadEvent::Renamed { title, by } => ChatEvent::Renamed {
                 title,
                 by: match by {
                     None => "The agent".to_owned(),
@@ -775,65 +775,65 @@ impl App {
                     }
                     Some(TurnOrigin::Client { name, device, .. }) => device.unwrap_or(name),
                     Some(TurnOrigin::Run {}) => "A headless run".to_owned(),
-                    Some(TurnOrigin::Session {
+                    Some(TurnOrigin::Thread {
                         host_name: Some(name),
                         ..
                     }) => format!("A thread on {name}"),
-                    Some(TurnOrigin::Session { host: None, .. }) => "Another thread".to_owned(),
-                    Some(TurnOrigin::Session { host: Some(_), .. }) => {
+                    Some(TurnOrigin::Thread { host: None, .. }) => "Another thread".to_owned(),
+                    Some(TurnOrigin::Thread { host: Some(_), .. }) => {
                         "A thread on another Host".to_owned()
                     }
                     Some(TurnOrigin::Service { name, .. }) => name,
                 },
             },
-            SessionEvent::ContinuedIn { successor, .. } => ChatEvent::ContinuedIn { successor },
+            ThreadEvent::ContinuedIn { successor, .. } => ChatEvent::ContinuedIn { successor },
             // Labels are for clients that group threads by them, which this one doesn't yet.
-            SessionEvent::Closed { .. } | SessionEvent::Labelled { .. } | SessionEvent::Unknown => {
+            ThreadEvent::Closed { .. } | ThreadEvent::Labelled { .. } | ThreadEvent::Unknown => {
                 return Vec::new();
             }
         };
         chat.handle_journal_event(event, at)
     }
 
-    /// The Host answered an open: show the session, then what's running and waiting in it.
+    /// The Host answered an open: show the thread, then what's running and waiting in it.
     fn opened(
         &mut self,
         chat: &mut ChatWidget,
         kind: OpenKind,
-        result: Result<Box<weave_host_client::OpenedSession>, Error>,
+        result: Result<Box<weave_host_client::OpenedThread>, Error>,
     ) -> Vec<AppCommand> {
         match (kind, result) {
             (OpenKind::Open { previous }, Ok(opened)) => {
-                // Let go of the session left, which closes if nothing else needs it.
+                // Let go of the thread left, which closes if nothing else needs it.
                 if let Some(previous) =
-                    previous.filter(|previous| *previous != opened.state.session_id)
+                    previous.filter(|previous| *previous != opened.state.thread_id)
                 {
                     let handle = self.handle.clone();
                     tokio::spawn(async move {
                         handle
-                            .send(DetachSessionRequest {
-                                session_id: previous,
+                            .send(DetachThreadRequest {
+                                thread_id: previous,
                                 close: CloseWhen::IfUnused,
                             })
                             .await
                     });
                 }
-                self.session_opened(chat, &opened)
+                self.thread_opened(chat, &opened)
             }
-            (OpenKind::Open { previous }, Err(error)) => chat.session_failed(&error, previous),
+            (OpenKind::Open { previous }, Err(error)) => chat.thread_failed(&error, previous),
             (OpenKind::Reattach, Ok(opened)) => {
                 let reset = opened.replay.as_ref().is_some_and(|replay| replay.reset);
                 if reset {
                     // The transcript here isn't the journal's any more: it starts over.
-                    chat.begin_session(opened.state.session_id.clone(), None);
-                    return self.session_opened(chat, &opened);
+                    chat.begin_thread(opened.state.thread_id.clone(), None);
+                    return self.thread_opened(chat, &opened);
                 }
                 self.track(chat, &opened);
                 // A restarted Host has no watchers.
                 self.watched = None;
                 self.watch_terminals();
                 self.agent_changed(chat, &opened.state.agent);
-                chat.reattached(OpenedSession::from_state(
+                chat.reattached(OpenedThread::from_state(
                     &opened.state,
                     opened.replay.as_ref(),
                 ));
@@ -850,16 +850,16 @@ impl App {
         }
     }
 
-    /// Show a session opened for this client, before its replay arrives.
-    fn session_opened(
+    /// Show a thread opened for this client, before its replay arrives.
+    fn thread_opened(
         &mut self,
         chat: &mut ChatWidget,
-        opened: &weave_host_client::OpenedSession,
+        opened: &weave_host_client::OpenedThread,
     ) -> Vec<AppCommand> {
         self.cwd.clone_from(&opened.state.cwd);
         chat.set_cwd(opened.state.cwd.clone());
         self.agent_changed(chat, &opened.state.agent);
-        chat.session_ready(OpenedSession::from_state(
+        chat.thread_ready(OpenedThread::from_state(
             &opened.state,
             opened.replay.as_ref(),
         ));
@@ -921,10 +921,10 @@ impl App {
         });
     }
 
-    /// Follow what the session's agent says about itself: what prompts may carry, and
+    /// Follow what the thread's agent says about itself: what prompts may carry, and
     /// whether its turns can be steered (the Host takes `turn/steer`, and the agent takes
     /// steering).
-    fn agent_changed(&mut self, chat: &mut ChatWidget, agent: &SessionAgent) {
+    fn agent_changed(&mut self, chat: &mut ChatWidget, agent: &ThreadAgent) {
         self.reopenable = reopenable(&agent.initialize.agent_capabilities);
         self.prompt_capabilities = agent
             .initialize
@@ -941,9 +941,9 @@ impl App {
         chat.set_steerable(steerable);
     }
 
-    /// Follow the session's journal from where `opened`'s replay starts.
-    fn track(&mut self, chat: &mut ChatWidget, opened: &weave_host_client::OpenedSession) {
-        // A new session's first events follow its answer too.
+    /// Follow the thread's journal from where `opened`'s replay starts.
+    fn track(&mut self, chat: &mut ChatWidget, opened: &weave_host_client::OpenedThread) {
+        // A new thread's first events follow its answer too.
         let from = opened.replay.as_ref().map_or(1, |replay| replay.from);
         let head = opened.state.journal.head;
         self.position = Some(JournalPosition {
@@ -956,17 +956,17 @@ impl App {
         }
     }
 
-    /// What's running and waiting in a session just opened.
-    fn show_state(&self, chat: &mut ChatWidget, state: &SessionState) -> Vec<AppCommand> {
+    /// What's running and waiting in a thread just opened.
+    fn show_state(&self, chat: &mut ChatWidget, state: &ThreadState) -> Vec<AppCommand> {
         let mut commands = Vec::new();
         for turn in &state.turns {
             commands.extend(chat.handle_agent_event(ChatEvent::TurnRunning {
-                session_id: turn.session_id.clone(),
+                thread_id: turn.thread_id.clone(),
                 elapsed: since(turn.started_at),
             }));
         }
         for pending in &state.pending {
-            commands.extend(self.pending(chat, &state.session_id, pending.clone()));
+            commands.extend(self.pending(chat, &state.thread_id, pending.clone()));
         }
         let queued = state
             .queue
@@ -1016,7 +1016,7 @@ impl App {
         Vec::new()
     }
 
-    /// Carry on over the new connection, and reattach to the session shown.
+    /// Carry on over the new connection, and reattach to the thread shown.
     fn reconnected(
         &mut self,
         chat: &mut ChatWidget,
@@ -1045,12 +1045,12 @@ impl App {
                 chat.setting_changed(change, result);
                 Vec::new()
             }
-            AppEvent::SessionsListed(result, append) => {
-                chat.sessions_listed(result, append);
+            AppEvent::ThreadsListed(result, append) => {
+                chat.threads_listed(result, append);
                 Vec::new()
             }
-            AppEvent::SessionDeleted(session_id, result) => {
-                chat.session_deleted(&session_id, result);
+            AppEvent::ThreadDeleted(thread_id, result) => {
+                chat.thread_deleted(&thread_id, result);
                 Vec::new()
             }
             AppEvent::TerminalsWatched(Ok((scope, terminals))) => {
@@ -1110,10 +1110,10 @@ impl App {
                 Vec::new()
             }
             AppEvent::Steered {
-                session_id,
+                thread_id,
                 text,
                 result,
-            } => chat.steer_answered(&session_id, text, result),
+            } => chat.steer_answered(&thread_id, text, result),
             AppEvent::ImagePasted(Ok(path)) => chat.attach_image(path),
             AppEvent::ImagePasted(Err(reason)) => {
                 chat.report_info(&format!("Couldn't paste an image: {reason}"));
@@ -1139,8 +1139,8 @@ impl App {
                 Vec::new()
             }
             AppEvent::AgentUpdated(result) => chat.agent_updated(result),
-            AppEvent::SessionReopened(session_id, result) => {
-                chat.session_reopened(&session_id, result);
+            AppEvent::ThreadReopened(thread_id, result) => {
+                chat.thread_reopened(&thread_id, result);
                 Vec::new()
             }
             AppEvent::RenameFailed(error) => {
@@ -1161,7 +1161,7 @@ impl App {
         while let Some(command) = queue.pop_front() {
             match command {
                 AppCommand::Prompt(text) => {
-                    let Some(session_id) = chat.active_session().cloned() else {
+                    let Some(thread_id) = chat.active_thread().cloned() else {
                         continue;
                     };
                     let images = chat.prompt_images(&text);
@@ -1172,7 +1172,7 @@ impl App {
                     self.spawn_unless_ok(async move {
                         handle
                             .send(StartTurnRequest {
-                                session_id,
+                                thread_id,
                                 prompt,
                                 key: None,
                             })
@@ -1182,7 +1182,7 @@ impl App {
                     });
                 }
                 AppCommand::Enqueue(text) => {
-                    let Some(session_id) = chat.active_session().cloned() else {
+                    let Some(thread_id) = chat.active_thread().cloned() else {
                         continue;
                     };
                     // What it attaches shows in the message once its turn starts.
@@ -1193,7 +1193,7 @@ impl App {
                     self.spawn_unless_ok(async move {
                         handle
                             .send(AddQueuedRequest {
-                                session_id,
+                                thread_id,
                                 prompt,
                                 key: None,
                                 caller: None,
@@ -1205,7 +1205,7 @@ impl App {
                     });
                 }
                 AppCommand::Unqueue(ids) => {
-                    let Some(session_id) = chat.active_session().cloned() else {
+                    let Some(thread_id) = chat.active_thread().cloned() else {
                         continue;
                     };
                     let handle = self.handle.clone();
@@ -1215,7 +1215,7 @@ impl App {
                         for queued_id in ids {
                             let removed = handle
                                 .send(RemoveQueuedRequest {
-                                    session_id: session_id.clone(),
+                                    thread_id: thread_id.clone(),
                                     queued_id,
                                 })
                                 .await;
@@ -1227,20 +1227,20 @@ impl App {
                     });
                 }
                 AppCommand::ResumeQueue => {
-                    let Some(session_id) = chat.active_session().cloned() else {
+                    let Some(thread_id) = chat.active_thread().cloned() else {
                         continue;
                     };
                     let handle = self.handle.clone();
                     self.spawn_unless_ok(async move {
                         handle
-                            .send(ResumeQueueRequest { session_id })
+                            .send(ResumeQueueRequest { thread_id })
                             .await
                             .err()
                             .map(AppEvent::ResumeFailed)
                     });
                 }
                 AppCommand::Steer(text) => {
-                    let Some(session_id) = chat.active_session().cloned() else {
+                    let Some(thread_id) = chat.active_thread().cloned() else {
                         continue;
                     };
                     // What it attaches shows in the message once it joins the turn.
@@ -1251,36 +1251,36 @@ impl App {
                     self.spawn(async move {
                         let result = handle
                             .send(SteerTurnRequest {
-                                session_id: session_id.clone(),
+                                thread_id: thread_id.clone(),
                                 prompt,
                                 caller: None,
                                 origin: None,
                             })
                             .await;
                         AppEvent::Steered {
-                            session_id,
+                            thread_id,
                             text,
                             result,
                         }
                     });
                 }
                 AppCommand::Cancel => {
-                    if let Some(session_id) = chat.active_session().cloned() {
-                        self.cancel(session_id);
+                    if let Some(thread_id) = chat.active_thread().cloned() {
+                        self.cancel(thread_id);
                     }
                 }
-                // A subagent's cancel is the ordinary one, for its session.
-                AppCommand::CancelSubagent(session_id) => self.cancel(session_id),
+                // A subagent's cancel is the ordinary one, for its thread.
+                AppCommand::CancelSubagent(thread_id) => self.cancel(thread_id),
                 AppCommand::ChangeSetting(change) => {
-                    if let Some(session_id) = chat.active_session().cloned() {
-                        self.spawn_setting_change(session_id, change);
+                    if let Some(thread_id) = chat.active_thread().cloned() {
+                        self.spawn_setting_change(thread_id, change);
                     }
                 }
-                AppCommand::ListSessions {
+                AppCommand::ListThreads {
                     all_directories,
                     cursor,
                 } => {
-                    let request = ListSessionsRequest {
+                    let request = ListThreadsRequest {
                         agent_id: Some(self.agent_id.clone()),
                         cwd: (!all_directories).then(|| self.cwd.clone()),
                         repo: None,
@@ -1291,11 +1291,11 @@ impl App {
                     let append = cursor.is_some();
                     let handle = self.handle.clone();
                     self.spawn(async move {
-                        AppEvent::SessionsListed(handle.send(request).await, append)
+                        AppEvent::ThreadsListed(handle.send(request).await, append)
                     });
                 }
-                AppCommand::OpenSession { target, title, cwd } => {
-                    queue.extend(self.open_session(chat, target, title, cwd));
+                AppCommand::OpenThread { target, title, cwd } => {
+                    queue.extend(self.open_thread(chat, target, title, cwd));
                 }
                 AppCommand::ShowTerminal { id, label } => {
                     self.on_panes(move |rex, panes| rex.show(panes, &id, &label));
@@ -1308,7 +1308,7 @@ impl App {
                     let request = NewTerminalRequest {
                         directory: self.cwd.clone(),
                         label: None,
-                        opened_from: chat.active_session().cloned(),
+                        opened_from: chat.active_thread().cloned(),
                         command: None,
                         size: None,
                     };
@@ -1371,15 +1371,15 @@ impl App {
                             })
                     });
                 }
-                AppCommand::DeleteSession(session_id) => {
+                AppCommand::DeleteThread(thread_id) => {
                     let handle = self.handle.clone();
-                    let request = DeleteSessionRequest {
-                        session_id: session_id.clone(),
+                    let request = DeleteThreadRequest {
+                        thread_id: thread_id.clone(),
                         agent_id: Some(self.agent_id.clone()),
                     };
                     self.spawn(async move {
                         let result = handle.send(request).await.map(drop);
-                        AppEvent::SessionDeleted(session_id, result)
+                        AppEvent::ThreadDeleted(thread_id, result)
                     });
                 }
                 AppCommand::AnswerPermission { id, response } => {
@@ -1440,13 +1440,13 @@ impl App {
                 }
                 AppCommand::Copy(text) => tui.copy(&text),
                 AppCommand::RunClientTool {
-                    session_id,
+                    thread_id,
                     pending_id,
                     tool,
                     arguments,
                 } => {
                     let result = run_client_tool(tui, &tool, &arguments);
-                    self.answer_client_tool(session_id, pending_id, result);
+                    self.answer_client_tool(thread_id, pending_id, result);
                 }
                 // As Codex, only while the terminal isn't in front of the user.
                 AppCommand::Notify(message) => {
@@ -1473,31 +1473,31 @@ impl App {
                         AppEvent::AgentUpdated(result.map(|response| response.version))
                     });
                 }
-                AppCommand::ReopenSession(session_id) => {
+                AppCommand::ReopenThread(thread_id) => {
                     let handle = self.handle.clone();
                     self.spawn(async move {
                         let result = handle
-                            .send(ReopenSessionRequest {
-                                session_id: session_id.clone(),
+                            .send(ReopenThreadRequest {
+                                thread_id: thread_id.clone(),
                             })
                             .await
                             .map(drop);
-                        AppEvent::SessionReopened(session_id, result)
+                        AppEvent::ThreadReopened(thread_id, result)
                     });
                 }
-                AppCommand::Rename { session_id, title } => {
+                AppCommand::Rename { thread_id, title } => {
                     let handle = self.handle.clone();
                     self.spawn_unless_ok(async move {
-                        let request = RenameSessionRequest { session_id, title };
+                        let request = RenameThreadRequest { thread_id, title };
                         handle.send(request).await.err().map(AppEvent::RenameFailed)
                     });
                 }
                 AppCommand::DismissUpdate { agent_id, version } => {
                     self.dismissed.dismiss(&agent_id, &version);
                 }
-                AppCommand::Reattach(session_id) => {
-                    let request = AttachSessionRequest {
-                        session_id,
+                AppCommand::Reattach(thread_id) => {
+                    let request = AttachThreadRequest {
+                        thread_id,
                         after: self.position.clone(),
                         agent_id: Some(self.agent_id.clone()),
                         cwd: Some(self.cwd.clone()),
@@ -1514,17 +1514,17 @@ impl App {
         false
     }
 
-    /// Open `target`: a new session, or an existing one, whose events show from now on.
-    fn open_session(
+    /// Open `target`: a new thread, or an existing one, whose events show from now on.
+    fn open_thread(
         &mut self,
         chat: &mut ChatWidget,
-        target: SessionTarget,
+        target: ThreadTarget,
         title: Option<String>,
         cwd: Option<PathBuf>,
     ) -> Vec<AppCommand> {
-        let previous = chat.active_session().cloned();
+        let previous = chat.active_thread().cloned();
         let open = match target {
-            SessionTarget::New => Open::Create(CreateSessionRequest {
+            ThreadTarget::New => Open::Create(CreateThreadRequest {
                 agent_id: self.agent_id.clone(),
                 cwd: self.cwd.clone(),
                 additional_directories: self.additional_directories.clone(),
@@ -1533,12 +1533,12 @@ impl App {
                 trace: self.trace,
                 labels: Vec::new(),
             }),
-            SessionTarget::Existing(session_id) => {
-                let title = title.unwrap_or_else(|| session_id.to_string());
-                chat.begin_session(session_id.clone(), Some(&title));
-                // A session from another directory reopens in its own.
-                Open::Attach(AttachSessionRequest {
-                    session_id,
+            ThreadTarget::Existing(thread_id) => {
+                let title = title.unwrap_or_else(|| thread_id.to_string());
+                chat.begin_thread(thread_id.clone(), Some(&title));
+                // A thread from another directory reopens in its own.
+                Open::Attach(AttachThreadRequest {
+                    thread_id,
                     after: None,
                     agent_id: Some(self.agent_id.clone()),
                     cwd: Some(cwd.unwrap_or_else(|| self.cwd.clone())),
@@ -1556,7 +1556,7 @@ impl App {
             },
         ) {
             Ok(()) => Vec::new(),
-            Err(error) => chat.session_failed(&error, previous),
+            Err(error) => chat.thread_failed(&error, previous),
         }
     }
 
@@ -1571,21 +1571,21 @@ impl App {
         sent
     }
 
-    fn cancel(&self, session_id: SessionId) {
+    fn cancel(&self, thread_id: ThreadId) {
         let handle = self.handle.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle.send(CancelTurnRequest { session_id }).await {
+            if let Err(error) = handle.send(CancelTurnRequest { thread_id }).await {
                 tracing::warn!(%error, "failed to cancel the turn");
             }
         });
     }
 
-    /// A pending request of the active session: one to show, or a client tool call to run
+    /// A pending request of the active thread: one to show, or a client tool call to run
     /// when it's for this client. Other clients' calls are theirs to run.
     fn pending(
         &self,
         chat: &mut ChatWidget,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
         pending: PendingRequest,
     ) -> Vec<AppCommand> {
         if let PendingKind::ClientTool {
@@ -1598,7 +1598,7 @@ impl App {
                 return Vec::new();
             }
             return vec![AppCommand::RunClientTool {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 pending_id: pending.id,
                 tool,
                 arguments,
@@ -1610,14 +1610,14 @@ impl App {
     /// Answer a client tool call with what running it here gave.
     fn answer_client_tool(
         &self,
-        session_id: SessionId,
+        thread_id: ThreadId,
         pending_id: String,
         result: ClientToolResult,
     ) {
         let handle = self.handle.clone();
         tokio::spawn(async move {
             let request = AnswerPendingRequest {
-                session_id,
+                thread_id,
                 pending_id,
                 permission: None,
                 elicitation: None,
@@ -1631,7 +1631,7 @@ impl App {
         });
     }
 
-    /// Answer a pending request of the active session. Another client may have answered it
+    /// Answer a pending request of the active thread. Another client may have answered it
     /// first, which is no failure.
     fn answer(
         &self,
@@ -1639,11 +1639,11 @@ impl App {
         pending_id: String,
         fill: impl FnOnce(AnswerPendingRequest) -> AnswerPendingRequest,
     ) {
-        let Some(session_id) = chat.active_session().cloned() else {
+        let Some(thread_id) = chat.active_thread().cloned() else {
             return;
         };
         let request = fill(AnswerPendingRequest {
-            session_id,
+            thread_id,
             pending_id,
             permission: None,
             elicitation: None,
@@ -1660,13 +1660,13 @@ impl App {
         });
     }
 
-    fn spawn_setting_change(&self, session_id: SessionId, change: SettingChange) {
+    fn spawn_setting_change(&self, thread_id: ThreadId, change: SettingChange) {
         let handle = self.handle.clone();
         self.spawn(async move {
             let result = match &change {
                 SettingChange::ConfigOption(config_id, value) => handle
                     .send(SetConfigOptionRequest {
-                        session_id,
+                        thread_id,
                         config_id: config_id.clone(),
                         value: value.clone(),
                     })
@@ -1674,7 +1674,7 @@ impl App {
                     .map(|response| Some(response.config_options)),
                 SettingChange::Mode(mode_id) => handle
                     .send(SetModeRequest {
-                        session_id,
+                        thread_id,
                         mode_id: mode_id.clone(),
                     })
                     .await
@@ -1710,7 +1710,7 @@ fn closed_by_another(by: Option<&TurnOrigin>, me: &str) -> bool {
     matches!(by, Some(TurnOrigin::Client { id, .. }) if id != me)
 }
 
-/// Whether an agent can open a closed session again: by loading it, or resuming it.
+/// Whether an agent can open a closed thread again: by loading it, or resuming it.
 fn reopenable(capabilities: &AgentCapabilities) -> bool {
     capabilities.load_session || capabilities.session_capabilities.resume.is_some()
 }

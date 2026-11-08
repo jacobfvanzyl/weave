@@ -1,6 +1,6 @@
 //! Following the turns calls from other Hosts began (ADR 0029, WVE-185): on the named Host's
-//! link, through the `sessions/watch` it keeps anyway. When a followed thread goes idle, or
-//! the link connects, the Dispatcher reads the turn with `sessions/get`, following one the Host
+//! link, through the `threads/watch` it keeps anyway. When a followed thread goes idle, or
+//! the link connects, the Dispatcher reads the turn with `threads/get`, following one the Host
 //! stopped under into its continuation (WVE-168), or waiting for that in a headless thread,
 //! and once it's over reports how it ended to
 //! the calling thread, as the calling Host reports on its own threads (ADR 0023). When one
@@ -8,20 +8,20 @@
 //! each request once. Reports are deliveries to the calling Host, so they land however long it
 //! is away.
 
-use agent_client_protocol::schema::v1::SessionId;
 use weave_host_client::HostHandle;
 use weave_host_protocol::errors;
 use weave_host_protocol::reports::Asks;
 use weave_host_protocol::reports::Named;
 use weave_host_protocol::reports::ended_text;
 use weave_host_protocol::reports::waiting_text;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CloseWhen;
-use weave_host_protocol::sessions::DetachSessionRequest;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::OtherThread;
-use weave_host_protocol::sessions::SessionStatus;
-use weave_host_protocol::sessions::TurnState;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CloseWhen;
+use weave_host_protocol::threads::DetachThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::OtherThread;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadStatus;
+use weave_host_protocol::threads::TurnState;
 use weave_host_protocol::turns::TurnId;
 
 use crate::Shared;
@@ -37,7 +37,7 @@ pub(crate) async fn check(
     shared: &Shared,
     host: &StoredHost,
     handle: &HostHandle,
-    only: Option<&SessionId>,
+    only: Option<&ThreadId>,
 ) {
     let follows = match shared.store.follows(&host.host_id) {
         Ok(follows) => follows,
@@ -47,15 +47,15 @@ pub(crate) async fn check(
         }
     };
     for mut follow in follows {
-        if only.is_some_and(|only| *only.0 != *follow.session_id) {
+        if only.is_some_and(|only| *only.0 != *follow.thread_id) {
             continue;
         }
-        let session_id = SessionId::new(follow.session_id.clone());
+        let thread_id = ThreadId::new(follow.thread_id.clone());
         let mut got = None;
         for _ in 0..MOST_CONTINUATIONS {
             let read = handle
-                .send(GetSessionRequest {
-                    session_id: session_id.clone(),
+                .send(GetThreadRequest {
+                    thread_id: thread_id.clone(),
                     turn_id: Some(TurnId::from(follow.turn_id.clone())),
                 })
                 .await;
@@ -84,20 +84,18 @@ pub(crate) async fn check(
                 Some(latest)
                     if latest.state == TurnState::Interrupted
                         && latest.continued_in.is_none()
-                        && got.session.headless =>
+                        && got.thread.headless =>
                 {
                     continue;
                 }
                 Some(latest) if latest.state.is_over() => {
-                    ended_text(&Named::of(&got.session, Some(&host.name)), Some(&latest))
+                    ended_text(&Named::of(&got.thread, Some(&host.name)), Some(&latest))
                 }
                 // A thread that isn't open runs nothing: it closed before the turn ran, or its
                 // Host stopped under the turn and, the thread not being headless, didn't take
                 // it up again.
-                Some(latest)
-                    if got.session.state != SessionStatus::Open && !got.session.headless =>
-                {
-                    let named = Named::of(&got.session, Some(&host.name));
+                Some(latest) if got.thread.state != ThreadStatus::Open && !got.thread.headless => {
+                    let named = Named::of(&got.thread, Some(&host.name));
                     if latest.state == TurnState::Queued {
                         format!(
                             "[weave] Thread {named} closed before the turn {} your thread \
@@ -108,7 +106,7 @@ pub(crate) async fn check(
                         format!(
                             "[weave] Thread {named} stopped with its Host during the turn {} \
                              your thread began there, and isn't open now, so the turn won't go \
-                             on. read_session with host {} says how the thread stands.",
+                             on. read_thread with host {} says how the thread stands.",
                             follow.turn_id, host.name
                         )
                     }
@@ -118,7 +116,7 @@ pub(crate) async fn check(
             },
             Err(error)
                 if errors::is(&error, errors::UNKNOWN_TURN)
-                    || errors::is(&error, errors::UNKNOWN_SESSION) =>
+                    || errors::is(&error, errors::UNKNOWN_THREAD) =>
             {
                 no_turn(host, &follow)
             }
@@ -137,18 +135,18 @@ pub(crate) async fn check(
     }
 }
 
-/// Tell the callers of the followed turn running in `session_id` on `host`, which waits on a
+/// Tell the callers of the followed turn running in `thread_id` on `host`, which waits on a
 /// person, what it asks that they haven't been told.
 pub(crate) async fn waiting(
     shared: &Shared,
     host: &StoredHost,
     handle: &HostHandle,
-    session_id: &SessionId,
+    thread_id: &ThreadId,
 ) {
     let follows: Vec<Follow> = match shared.store.follows(&host.host_id) {
         Ok(follows) => follows
             .into_iter()
-            .filter(|follow| *follow.session_id == *session_id.0)
+            .filter(|follow| *follow.thread_id == *thread_id.0)
             .collect(),
         Err(why) => {
             tracing::warn!(host = %host.host_id, %why, "reading the turns followed failed");
@@ -159,8 +157,8 @@ pub(crate) async fn waiting(
         return;
     }
     let attached = handle
-        .send(AttachSessionRequest {
-            session_id: session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: thread_id.clone(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -169,26 +167,26 @@ pub(crate) async fn waiting(
         })
         .await;
     let _ = handle
-        .send(DetachSessionRequest {
-            session_id: session_id.clone(),
+        .send(DetachThreadRequest {
+            thread_id: thread_id.clone(),
             close: CloseWhen::Never,
         })
         .await;
     let state = match attached {
         Ok(attached) => attached.state,
         Err(error) => {
-            tracing::debug!(host = %host.host_id, %session_id, %error, "observing a followed thread failed");
+            tracing::debug!(host = %host.host_id, %thread_id, %error, "observing a followed thread failed");
             return;
         }
     };
     let running = state
         .turns
         .iter()
-        .find(|turn| turn.session_id == *session_id)
+        .find(|turn| turn.thread_id == *thread_id)
         .and_then(|turn| turn.turn_id.clone());
     let Some(running) = running else { return };
     let named = Named {
-        session_id,
+        thread_id,
         title: state.title.as_deref(),
         agent_id: &state.agent.id,
         host: Some(&host.name),
@@ -226,7 +224,7 @@ pub(crate) async fn waiting(
 /// The thread a report on `follow` is about.
 fn about(host: &StoredHost, follow: &Follow) -> OtherThread {
     OtherThread {
-        session_id: SessionId::new(follow.session_id.clone()),
+        thread_id: ThreadId::new(follow.thread_id.clone()),
         host: host.host_id.clone(),
         host_name: Some(host.name.clone()),
     }
@@ -236,8 +234,8 @@ fn about(host: &StoredHost, follow: &Follow) -> OtherThread {
 fn no_turn(host: &StoredHost, follow: &Follow) -> String {
     format!(
         "[weave] Thread {} on {} no longer has the turn {} your thread began there, as when \
-         its prompt was taken out of the queue. read_session with host {} says how the thread \
+         its prompt was taken out of the queue. read_thread with host {} says how the thread \
          stands.",
-        follow.session_id, host.name, follow.turn_id, host.name
+        follow.thread_id, host.name, follow.turn_id, host.name
     )
 }

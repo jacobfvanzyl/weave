@@ -383,13 +383,13 @@ impl TranscriptCell {
         settings: Option<String>,
     ) -> Self {
         Self::new(move |width| {
-            let header = history_cell::SessionHeader {
+            let header = history_cell::ThreadHeader {
                 agent: &agent,
                 agent_version: agent_version.as_deref(),
                 directory: &directory,
                 settings: settings.as_deref(),
             };
-            history_cell::session_header(&header, width)
+            history_cell::thread_header(&header, width)
         })
     }
 }
@@ -656,7 +656,7 @@ pub struct TranscriptView {
     detailed: bool,
     /// Where the other view was, to return to when switching back.
     other_position: Option<ViewPosition>,
-    /// Cells kept when the transcript is cleared for another session: the startup header.
+    /// Cells kept when the transcript is cleared for another thread: the startup header.
     pinned: usize,
     position: ViewPosition,
     unseen: bool,
@@ -725,15 +725,15 @@ impl TranscriptView {
     }
 
     /// Clear everything after the pinned cells, returning what was removed.
-    pub fn take_session(&mut self) -> Vec<TranscriptCell> {
+    pub fn take_thread(&mut self) -> Vec<TranscriptCell> {
         self.drop_find();
         self.follow();
         self.selection = None;
         self.cells.split_off(self.pinned.min(self.cells.len()))
     }
 
-    /// Put back cells removed by [`Self::take_session`], replacing any added since.
-    pub fn restore_session(&mut self, cells: Vec<TranscriptCell>) {
+    /// Put back cells removed by [`Self::take_thread`], replacing any added since.
+    pub fn restore_thread(&mut self, cells: Vec<TranscriptCell>) {
         self.drop_find();
         self.cells.truncate(self.pinned);
         self.cells.extend(cells);

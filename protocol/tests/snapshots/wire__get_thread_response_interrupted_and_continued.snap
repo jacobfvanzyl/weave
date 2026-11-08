@@ -1,0 +1,67 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&GetThreadResponse\n{\n    thread: ThreadListing\n    {\n        continued_in: Some(\"s-3\".into()), labels:\n        vec![\"dispatcher\".to_owned(), \"bot:daily\".to_owned()], context:\n        Some(ContextUsage { used: 41_200, size: 200_000, }), last_compaction:\n        Some(LastCompaction { at: 1_760_179_000_000, used: Some(38_000), }),\n        ..delegated.clone()\n    }, latest_turn:\n    Some(LatestTurn\n    {\n        turn_id: Some(\"t-1\".to_owned()), continues: None, continued_in:\n        Some(\"t-2\".to_owned()), state: TurnState::Interrupted, prompt:\n        vec![text(\"port the parser's tests to the new runner\")], origin:\n        TurnOrigin::Run {}, started_at: 1_760_180_000_000, running: false,\n        response: None, error:\n        Some(weave_host_protocol::errors::interrupted()), message: None,\n    }),\n})"
+---
+{
+  "thread": {
+    "info": {
+      "sessionId": "s-2",
+      "cwd": "/repo",
+      "title": "Port the tests"
+    },
+    "agentId": "codex",
+    "state": "open",
+    "activity": "running",
+    "clients": 1,
+    "headless": false,
+    "lastActivityAt": 1760180001234,
+    "git": {
+      "repo": "/repo",
+      "worktree": "/repo",
+      "branch": "main",
+      "remote": "github.com/jacobfvanzyl/weave"
+    },
+    "startedBy": "s-1",
+    "continuedIn": "s-3",
+    "labels": [
+      "dispatcher",
+      "bot:daily"
+    ],
+    "context": {
+      "used": 41200,
+      "size": 200000
+    },
+    "lastCompaction": {
+      "at": 1760179000000,
+      "used": 38000
+    },
+    "openedBy": {
+      "client": {
+        "name": "weave-app",
+        "id": "c9",
+        "device": "Jaco's iPad"
+      }
+    },
+    "openedAt": 1760180000500
+  },
+  "latestTurn": {
+    "turnId": "t-1",
+    "state": "interrupted",
+    "continuedIn": "t-2",
+    "prompt": [
+      {
+        "type": "text",
+        "text": "port the parser's tests to the new runner"
+      }
+    ],
+    "origin": {
+      "run": {}
+    },
+    "startedAt": 1760180000000,
+    "running": false,
+    "error": {
+      "code": -32082,
+      "message": "the weave Host stopped while this turn ran"
+    }
+  }
+}

@@ -41,6 +41,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use serde_json::json;
 use weave_host_protocol::Empty;
+use weave_host_protocol::PROTOCOL_VERSION;
 use weave_host_protocol::VersionRange;
 use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentSource;
@@ -75,9 +76,9 @@ use weave_host_protocol::dispatcher::JoinDispatcherResponse;
 use weave_host_protocol::dispatcher::JoinedDispatcher;
 use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
 use weave_host_protocol::events::ElicitationCompletedNotification;
-use weave_host_protocol::events::SessionChangedNotification;
-use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::events::ThreadChangedNotification;
+use weave_host_protocol::events::ThreadEvent;
+use weave_host_protocol::events::ThreadEventNotification;
 use weave_host_protocol::files::FileEntry;
 use weave_host_protocol::files::FileKind;
 use weave_host_protocol::files::ListFilesRequest;
@@ -116,49 +117,49 @@ use weave_host_protocol::queue::QueuedPrompt;
 use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::queue::ResumeQueueRequest;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::AttachSessionResponse;
-use weave_host_protocol::sessions::CloseSessionRequest;
-use weave_host_protocol::sessions::CloseWhen;
-use weave_host_protocol::sessions::ContextUsage;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::DeleteSessionRequest;
-use weave_host_protocol::sessions::DetachSessionRequest;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::GetSessionResponse;
-use weave_host_protocol::sessions::JournalHead;
-use weave_host_protocol::sessions::JournalPosition;
-use weave_host_protocol::sessions::LabelSessionRequest;
-use weave_host_protocol::sessions::LabelSessionResponse;
-use weave_host_protocol::sessions::LastCompaction;
-use weave_host_protocol::sessions::LatestTurn;
-use weave_host_protocol::sessions::ListSessionsRequest;
-use weave_host_protocol::sessions::ListSessionsResponse;
-use weave_host_protocol::sessions::OtherThread;
-use weave_host_protocol::sessions::RenameSessionRequest;
-use weave_host_protocol::sessions::ReopenSessionRequest;
-use weave_host_protocol::sessions::ReopenSessionResponse;
-use weave_host_protocol::sessions::Replay;
-use weave_host_protocol::sessions::ReportSessionRequest;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::RunningTurn;
-use weave_host_protocol::sessions::ServiceOrigin;
-use weave_host_protocol::sessions::SessionAgent;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionRemovedNotification;
-use weave_host_protocol::sessions::SessionState;
-use weave_host_protocol::sessions::SessionStatus;
-use weave_host_protocol::sessions::SessionUpdatedNotification;
-use weave_host_protocol::sessions::SetConfigOptionRequest;
-use weave_host_protocol::sessions::SetModeRequest;
-use weave_host_protocol::sessions::SetSuccessorRequest;
-use weave_host_protocol::sessions::TurnOrigin;
-use weave_host_protocol::sessions::TurnState;
-use weave_host_protocol::sessions::UnwatchSessionsRequest;
-use weave_host_protocol::sessions::WatchSessionsRequest;
-use weave_host_protocol::sessions::WatchSessionsResponse;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::AttachThreadResponse;
+use weave_host_protocol::threads::CloseThreadRequest;
+use weave_host_protocol::threads::CloseWhen;
+use weave_host_protocol::threads::ContextUsage;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::DeleteThreadRequest;
+use weave_host_protocol::threads::DetachThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::GetThreadResponse;
+use weave_host_protocol::threads::JournalHead;
+use weave_host_protocol::threads::JournalPosition;
+use weave_host_protocol::threads::LabelThreadRequest;
+use weave_host_protocol::threads::LabelThreadResponse;
+use weave_host_protocol::threads::LastCompaction;
+use weave_host_protocol::threads::LatestTurn;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::ListThreadsResponse;
+use weave_host_protocol::threads::OtherThread;
+use weave_host_protocol::threads::RenameThreadRequest;
+use weave_host_protocol::threads::ReopenThreadRequest;
+use weave_host_protocol::threads::ReopenThreadResponse;
+use weave_host_protocol::threads::Replay;
+use weave_host_protocol::threads::ReportThreadRequest;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::RunningTurn;
+use weave_host_protocol::threads::ServiceOrigin;
+use weave_host_protocol::threads::SetConfigOptionRequest;
+use weave_host_protocol::threads::SetModeRequest;
+use weave_host_protocol::threads::SetSuccessorRequest;
+use weave_host_protocol::threads::ThreadAgent;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadRemovedNotification;
+use weave_host_protocol::threads::ThreadState;
+use weave_host_protocol::threads::ThreadStatus;
+use weave_host_protocol::threads::ThreadUpdatedNotification;
+use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::TurnState;
+use weave_host_protocol::threads::UnwatchThreadsRequest;
+use weave_host_protocol::threads::WatchThreadsRequest;
+use weave_host_protocol::threads::WatchThreadsResponse;
 use weave_host_protocol::tools::AnswerToolRequest;
 use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
@@ -249,7 +250,7 @@ fn permission() -> RequestPermissionRequest {
 fn pending() -> PendingRequest {
     PendingRequest {
         id: "p-1".to_owned(),
-        session_id: Some("s-1".into()),
+        thread_id: Some("s-1".into()),
         created_at: 1_760_180_001_000,
         request: PendingKind::Permission {
             request: permission(),
@@ -273,8 +274,8 @@ fn update() -> AgentUpdate {
     }
 }
 
-fn session_agent(version: &str) -> SessionAgent {
-    SessionAgent {
+fn thread_agent(version: &str) -> ThreadAgent {
+    ThreadAgent {
         id: "claude".to_owned(),
         name: "Claude".to_owned(),
         initialize: initialize(),
@@ -309,15 +310,15 @@ fn mcp_servers() -> Vec<McpServerStatus> {
     ]
 }
 
-fn state() -> SessionState {
-    SessionState {
-        session_id: "s-1".into(),
-        agent: session_agent("0.31.0"),
+fn state() -> ThreadState {
+    ThreadState {
+        thread_id: "s-1".into(),
+        agent: thread_agent("0.31.0"),
         cwd: "/repo".into(),
         additional_directories: vec!["/docs".into()],
         git: Some(git()),
         title: Some("Fix the parser".to_owned()),
-        state: SessionStatus::Open,
+        state: ThreadStatus::Open,
         activity: Activity::Waiting,
         clients: 2,
         blank: false,
@@ -331,7 +332,7 @@ fn state() -> SessionState {
         )),
         config_options: Vec::new(),
         turns: vec![RunningTurn {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             started_at: 1_760_180_000_000,
             origin: TurnOrigin::Client {
                 name: "weave-tui".to_owned(),
@@ -412,11 +413,11 @@ fn device() -> Device {
     }
 }
 
-fn listing() -> SessionListing {
-    SessionListing {
+fn listing() -> ThreadListing {
+    ThreadListing {
         info: SessionInfo::new("s-1", "/repo").title("Fix the parser".to_owned()),
         agent_id: "claude".to_owned(),
-        state: SessionStatus::Open,
+        state: ThreadStatus::Open,
         activity: Some(Activity::Running),
         clients: 1,
         headless: false,
@@ -481,7 +482,7 @@ fn hello() {
     insta::assert_json_snapshot!(
         "hello_response_client_tools",
         round_trip(&HelloResponse {
-            protocol: 2,
+            protocol: PROTOCOL_VERSION,
             client_id: "c7".to_owned(),
             host: host_info(),
             features: vec![CLIENT_TOOLS_FEATURE.to_owned()],
@@ -492,7 +493,7 @@ fn hello() {
     insta::assert_json_snapshot!(
         "hello_response",
         round_trip(&HelloResponse {
-            protocol: 2,
+            protocol: PROTOCOL_VERSION,
             client_id: "c7".to_owned(),
             host: host_info(),
             features: Vec::new(),
@@ -503,7 +504,7 @@ fn hello() {
     insta::assert_json_snapshot!(
         "hello_response_remote",
         round_trip(&HelloResponse {
-            protocol: 2,
+            protocol: PROTOCOL_VERSION,
             client_id: "c9".to_owned(),
             host: host_info(),
             features: vec![DEVICES_FEATURE.to_owned()],
@@ -634,7 +635,7 @@ fn services_and_other_hosts() {
         })
     );
     let caller = OtherThread {
-        session_id: "sess-a".into(),
+        thread_id: "sess-a".into(),
         host: "h-2Lm9".to_owned(),
         host_name: Some("mini".to_owned()),
     };
@@ -642,7 +643,7 @@ fn services_and_other_hosts() {
         agent_id: "codex".to_owned(),
         cwd: "~/src/app".into(),
         remote: Some("github.com/jaco/app".to_owned()),
-        session_id: None,
+        thread_id: None,
         additional_directories: Vec::new(),
         mode: None,
         prompt: vec![ContentBlock::from("Review the auth change")],
@@ -661,7 +662,7 @@ fn services_and_other_hosts() {
             agent_id: "claude".to_owned(),
             cwd: "/Users/jaco/src/app".into(),
             remote: None,
-            session_id: None,
+            thread_id: None,
             additional_directories: Vec::new(),
             mode: None,
             prompt: vec![ContentBlock::from(
@@ -689,8 +690,8 @@ fn services_and_other_hosts() {
     );
     insta::assert_json_snapshot!(
         "other_host_turn_origin",
-        round_trip(&TurnOrigin::Session {
-            session_id: "sess-a".into(),
+        round_trip(&TurnOrigin::Thread {
+            thread_id: "sess-a".into(),
             host: Some("h-2Lm9".to_owned()),
             host_name: Some("mini".to_owned()),
             report: false,
@@ -704,7 +705,7 @@ fn services_and_other_hosts() {
         })
     );
     let tool_caller = ToolCaller {
-        session_id: "sess-a".into(),
+        thread_id: "sess-a".into(),
         agent_id: "claude".to_owned(),
         cwd: "/Users/jaco/src/app".into(),
         policy: PermissionPolicy::ask(),
@@ -735,11 +736,11 @@ fn services_and_other_hosts() {
         })
     );
     insta::assert_json_snapshot!(
-        "report_session_request",
-        message(&ReportSessionRequest {
-            session_id: "sess-a".into(),
+        "report_thread_request",
+        message(&ReportThreadRequest {
+            thread_id: "sess-a".into(),
             about: OtherThread {
-                session_id: "sess-b".into(),
+                thread_id: "sess-b".into(),
                 host: "h-7Rk2".to_owned(),
                 host_name: Some("studio".to_owned()),
             },
@@ -810,10 +811,10 @@ fn agents() {
 }
 
 #[test]
-fn sessions() {
+fn threads() {
     insta::assert_json_snapshot!(
-        "list_sessions_request",
-        message(&ListSessionsRequest {
+        "list_threads_request",
+        message(&ListThreadsRequest {
             agent_id: Some("claude".to_owned()),
             cwd: Some("/repo".into()),
             repo: None,
@@ -823,59 +824,59 @@ fn sessions() {
         })
     );
     insta::assert_json_snapshot!(
-        "list_sessions_request_in_a_repository",
-        message(&ListSessionsRequest {
+        "list_threads_request_in_a_repository",
+        message(&ListThreadsRequest {
             repo: Some("/repo/src".into()),
-            ..ListSessionsRequest::default()
+            ..ListThreadsRequest::default()
         })
     );
     insta::assert_json_snapshot!(
-        "list_sessions_response",
-        round_trip(&ListSessionsResponse {
-            sessions: vec![listing()],
+        "list_threads_response",
+        round_trip(&ListThreadsResponse {
+            threads: vec![listing()],
             next_cursor: Some("page-2".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
-        "list_sessions_request_by_labels",
-        message(&ListSessionsRequest {
+        "list_threads_request_by_labels",
+        message(&ListThreadsRequest {
             labels: vec!["bot:daily".to_owned()],
-            ..ListSessionsRequest::default()
+            ..ListThreadsRequest::default()
         })
     );
     insta::assert_json_snapshot!(
-        "watch_sessions_request",
-        message(&WatchSessionsRequest::default())
+        "watch_threads_request",
+        message(&WatchThreadsRequest::default())
     );
     insta::assert_json_snapshot!(
-        "watch_sessions_request_by_labels",
-        message(&WatchSessionsRequest {
+        "watch_threads_request_by_labels",
+        message(&WatchThreadsRequest {
             labels: vec!["dispatcher".to_owned()],
         })
     );
     insta::assert_json_snapshot!(
-        "watch_sessions_response",
-        round_trip(&WatchSessionsResponse {
-            sessions: vec![listing()],
+        "watch_threads_response",
+        round_trip(&WatchThreadsResponse {
+            threads: vec![listing()],
         })
     );
     insta::assert_json_snapshot!(
-        "unwatch_sessions_request",
-        message(&UnwatchSessionsRequest {})
+        "unwatch_threads_request",
+        message(&UnwatchThreadsRequest {})
     );
     insta::assert_json_snapshot!(
-        "session_updated_notification",
-        message(&SessionUpdatedNotification { session: listing() })
+        "thread_updated_notification",
+        message(&ThreadUpdatedNotification { thread: listing() })
     );
     insta::assert_json_snapshot!(
-        "session_removed_notification",
-        message(&SessionRemovedNotification {
-            session_id: "s-1".into(),
+        "thread_removed_notification",
+        message(&ThreadRemovedNotification {
+            thread_id: "s-1".into(),
         })
     );
     insta::assert_json_snapshot!(
-        "create_session_request",
-        message(&CreateSessionRequest {
+        "create_thread_request",
+        message(&CreateThreadRequest {
             agent_id: "claude".to_owned(),
             cwd: "/repo".into(),
             additional_directories: Vec::new(),
@@ -885,11 +886,11 @@ fn sessions() {
             labels: Vec::new(),
         })
     );
-    insta::assert_json_snapshot!("session_state", round_trip(&state()));
+    insta::assert_json_snapshot!("thread_state", round_trip(&state()));
     insta::assert_json_snapshot!(
-        "attach_session_request",
-        message(&AttachSessionRequest {
-            session_id: "s-1".into(),
+        "attach_thread_request",
+        message(&AttachThreadRequest {
+            thread_id: "s-1".into(),
             after: Some(JournalPosition {
                 journal: "j-1760180000000".to_owned(),
                 seq: 40,
@@ -900,11 +901,11 @@ fn sessions() {
             observe: false,
         })
     );
-    // A script following a session observes it.
+    // A script following a thread observes it.
     insta::assert_json_snapshot!(
-        "attach_session_request_observing",
-        message(&AttachSessionRequest {
-            session_id: "s-1".into(),
+        "attach_thread_request_observing",
+        message(&AttachThreadRequest {
+            thread_id: "s-1".into(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -913,8 +914,8 @@ fn sessions() {
         })
     );
     insta::assert_json_snapshot!(
-        "attach_session_response",
-        round_trip(&AttachSessionResponse {
+        "attach_thread_response",
+        round_trip(&AttachThreadResponse {
             state: state(),
             replay: Replay {
                 from: 41,
@@ -923,64 +924,64 @@ fn sessions() {
         })
     );
     insta::assert_json_snapshot!(
-        "detach_session_request",
-        message(&DetachSessionRequest {
-            session_id: "s-1".into(),
+        "detach_thread_request",
+        message(&DetachThreadRequest {
+            thread_id: "s-1".into(),
             close: CloseWhen::IfUnused,
         })
     );
     insta::assert_json_snapshot!(
-        "close_session_request",
-        message(&CloseSessionRequest {
-            session_id: "s-1".into(),
+        "close_thread_request",
+        message(&CloseThreadRequest {
+            thread_id: "s-1".into(),
         })
     );
     insta::assert_json_snapshot!(
-        "delete_session_request",
-        message(&DeleteSessionRequest {
-            session_id: "s-1".into(),
+        "delete_thread_request",
+        message(&DeleteThreadRequest {
+            thread_id: "s-1".into(),
             agent_id: Some("claude".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
-        "rename_session_request",
-        message(&RenameSessionRequest {
-            session_id: "s-1".into(),
+        "rename_thread_request",
+        message(&RenameThreadRequest {
+            thread_id: "s-1".into(),
             title: "Parser fixes".to_owned(),
         })
     );
     insta::assert_json_snapshot!(
-        "label_session_request",
-        message(&LabelSessionRequest {
-            session_id: "s-1".into(),
+        "label_thread_request",
+        message(&LabelThreadRequest {
+            thread_id: "s-1".into(),
             add: vec!["bot:daily".to_owned()],
             remove: vec!["draft".to_owned()],
         })
     );
     insta::assert_json_snapshot!(
-        "label_session_response",
-        round_trip(&LabelSessionResponse {
+        "label_thread_response",
+        round_trip(&LabelThreadResponse {
             labels: vec!["dispatcher".to_owned(), "bot:daily".to_owned()],
         })
     );
     insta::assert_json_snapshot!(
         "set_successor_request",
         message(&SetSuccessorRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             successor: "s-2".into(),
         })
     );
     insta::assert_json_snapshot!(
         "set_mode_request",
         message(&SetModeRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             mode_id: "plan".into(),
         })
     );
     insta::assert_json_snapshot!(
         "set_config_option_request",
         message(&SetConfigOptionRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             config_id: "thinking".into(),
             value: SessionConfigOptionValue::Boolean { value: true },
         })
@@ -991,7 +992,7 @@ fn sessions() {
             agent_id: "codex".to_owned(),
             cwd: "/repo".into(),
             remote: None,
-            session_id: None,
+            thread_id: None,
             additional_directories: Vec::new(),
             mode: None,
             prompt: vec![text("fix the tests")],
@@ -1010,7 +1011,7 @@ fn sessions() {
             agent_id: "codex".to_owned(),
             cwd: "/repo".into(),
             remote: None,
-            session_id: None,
+            thread_id: None,
             additional_directories: Vec::new(),
             mode: None,
             prompt: vec![text("fix the tests")],
@@ -1026,7 +1027,7 @@ fn sessions() {
     insta::assert_json_snapshot!(
         "run_response",
         round_trip(&RunResponse {
-            session_id: "s-2".into(),
+            thread_id: "s-2".into(),
             turn_id: Some("t-1".to_owned()),
             state: None,
             policy: None,
@@ -1097,7 +1098,7 @@ fn worktrees() {
                             behind: 2,
                         },
                     }),
-                    sessions: vec!["s-1".into()],
+                    threads: vec!["s-1".into()],
                 },
                 Worktree {
                     path: "/Users/jaco/Projects/weave.feature-auth".into(),
@@ -1110,7 +1111,7 @@ fn worktrees() {
                         behind: 1,
                     }),
                     upstream: None,
-                    sessions: Vec::new(),
+                    threads: Vec::new(),
                 },
                 Worktree {
                     path: "/Users/jaco/Projects/weave.review".into(),
@@ -1120,7 +1121,7 @@ fn worktrees() {
                     changes: false,
                     divergence: None,
                     upstream: None,
-                    sessions: Vec::new(),
+                    threads: Vec::new(),
                 },
             ],
         })
@@ -1176,7 +1177,7 @@ fn turns() {
     insta::assert_json_snapshot!(
         "start_turn_request",
         message(&StartTurnRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             prompt: vec![text("hello")],
             key: None,
         })
@@ -1184,7 +1185,7 @@ fn turns() {
     insta::assert_json_snapshot!(
         "start_turn_request_keyed",
         message(&StartTurnRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             prompt: vec![text("hello")],
             key: Some("0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c11".to_owned()),
         })
@@ -1199,13 +1200,13 @@ fn turns() {
     insta::assert_json_snapshot!(
         "cancel_turn_request",
         message(&CancelTurnRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
         })
     );
     insta::assert_json_snapshot!(
         "steer_turn_request",
         message(&SteerTurnRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             prompt: vec![text("use the other branch")],
             caller: None,
             origin: None,
@@ -1230,39 +1231,39 @@ fn turns() {
 }
 
 #[test]
-fn delegated_sessions() {
-    let delegated = SessionListing {
+fn delegated_threads() {
+    let delegated = ThreadListing {
         info: SessionInfo::new("s-2", "/repo").title("Port the tests".to_owned()),
         agent_id: "codex".to_owned(),
         started_by: Some("s-1".into()),
         ..listing()
     };
     insta::assert_json_snapshot!(
-        "get_session_request",
-        message(&GetSessionRequest {
-            session_id: "s-2".into(),
+        "get_thread_request",
+        message(&GetThreadRequest {
+            thread_id: "s-2".into(),
             turn_id: None,
         })
     );
     insta::assert_json_snapshot!(
-        "get_session_request_for_a_turn",
-        message(&GetSessionRequest {
-            session_id: "s-2".into(),
+        "get_thread_request_for_a_turn",
+        message(&GetThreadRequest {
+            thread_id: "s-2".into(),
             turn_id: Some("q-3".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
-        "get_session_response",
-        round_trip(&GetSessionResponse {
-            session: delegated.clone(),
+        "get_thread_response",
+        round_trip(&GetThreadResponse {
+            thread: delegated.clone(),
             latest_turn: Some(LatestTurn {
                 turn_id: Some("t-1".to_owned()),
                 continues: None,
                 continued_in: None,
                 state: TurnState::Ended,
                 prompt: vec![text("port the parser's tests to the new runner")],
-                origin: TurnOrigin::Session {
-                    session_id: "s-1".into(),
+                origin: TurnOrigin::Thread {
+                    thread_id: "s-1".into(),
                     report: false,
                     host: None,
                     host_name: None,
@@ -1276,9 +1277,9 @@ fn delegated_sessions() {
         })
     );
     insta::assert_json_snapshot!(
-        "get_session_response_interrupted_and_continued",
-        round_trip(&GetSessionResponse {
-            session: SessionListing {
+        "get_thread_response_interrupted_and_continued",
+        round_trip(&GetThreadResponse {
+            thread: ThreadListing {
                 continued_in: Some("s-3".into()),
                 labels: vec!["dispatcher".to_owned(), "bot:daily".to_owned()],
                 context: Some(ContextUsage {
@@ -1307,17 +1308,17 @@ fn delegated_sessions() {
         })
     );
     insta::assert_json_snapshot!(
-        "get_session_response_running",
-        round_trip(&GetSessionResponse {
-            session: delegated,
+        "get_thread_response_running",
+        round_trip(&GetThreadResponse {
+            thread: delegated,
             latest_turn: Some(LatestTurn {
                 turn_id: Some("t-1".to_owned()),
                 continues: None,
                 continued_in: None,
                 state: TurnState::Waiting,
                 prompt: vec![text("port the parser's tests to the new runner")],
-                origin: TurnOrigin::Session {
-                    session_id: "s-1".into(),
+                origin: TurnOrigin::Thread {
+                    thread_id: "s-1".into(),
                     report: false,
                     host: None,
                     host_name: None,
@@ -1337,7 +1338,7 @@ fn queue() {
     insta::assert_json_snapshot!(
         "add_queued_request",
         message(&AddQueuedRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             prompt: vec![text("then update the docs")],
             key: Some("0b6f8f9e-6d1c-4d55-9a53-2d0f6f7f1c12".to_owned()),
             caller: None,
@@ -1363,7 +1364,7 @@ fn queue() {
     insta::assert_json_snapshot!(
         "remove_queued_request",
         message(&RemoveQueuedRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             queued_id: "q-3".to_owned(),
         })
     );
@@ -1380,13 +1381,13 @@ fn queue() {
     insta::assert_json_snapshot!(
         "resume_queue_request",
         message(&ResumeQueueRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
         })
     );
     insta::assert_json_snapshot!(
-        "attach_session_response_queue_paused",
-        round_trip(&AttachSessionResponse {
-            state: SessionState {
+        "attach_thread_response_queue_paused",
+        round_trip(&AttachThreadResponse {
+            state: ThreadState {
                 activity: Activity::Idle,
                 turns: Vec::new(),
                 pending: Vec::new(),
@@ -1403,8 +1404,8 @@ fn queue() {
 
 #[test]
 fn events() {
-    let event = |seq, event| SessionEventNotification {
-        session_id: "s-1".into(),
+    let event = |seq, event| ThreadEventNotification {
+        thread_id: "s-1".into(),
         seq,
         at: 1_760_180_001_234,
         event,
@@ -1413,8 +1414,8 @@ fn events() {
         "event_turn_started",
         message(&event(
             41,
-            SessionEvent::TurnStarted {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnStarted {
+                thread_id: "s-1".into(),
                 prompt: vec![text("hello")],
                 origin: TurnOrigin::Client {
                     name: "weave-tui".to_owned(),
@@ -1431,8 +1432,8 @@ fn events() {
         "event_turn_started_remote",
         message(&event(
             41,
-            SessionEvent::TurnStarted {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnStarted {
+                thread_id: "s-1".into(),
                 prompt: vec![text("hello")],
                 origin: TurnOrigin::Client {
                     name: "weave-ios".to_owned(),
@@ -1449,8 +1450,8 @@ fn events() {
         "event_turn_started_from_the_queue",
         message(&event(
             49,
-            SessionEvent::TurnStarted {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnStarted {
+                thread_id: "s-1".into(),
                 prompt: vec![text("then update the docs")],
                 origin: tui(),
                 queued_id: Some("q-3".to_owned()),
@@ -1460,14 +1461,14 @@ fn events() {
         ))
     );
     insta::assert_json_snapshot!(
-        "event_turn_started_by_another_session",
+        "event_turn_started_by_another_thread",
         message(&event(
             41,
-            SessionEvent::TurnStarted {
-                session_id: "s-2".into(),
+            ThreadEvent::TurnStarted {
+                thread_id: "s-2".into(),
                 prompt: vec![text("port the parser's tests to the new runner")],
-                origin: TurnOrigin::Session {
-                    session_id: "s-1".into(),
+                origin: TurnOrigin::Thread {
+                    thread_id: "s-1".into(),
                     report: false,
                     host: None,
                     host_name: None,
@@ -1482,14 +1483,14 @@ fn events() {
         "event_turn_started_by_a_report",
         message(&event(
             47,
-            SessionEvent::TurnStarted {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnStarted {
+                thread_id: "s-1".into(),
                 prompt: vec![text(
                     "[weave] Thread s-2 (codex) finished its turn. Its agent's last message:\n\n\
                      Ported 14 tests; all pass."
                 )],
-                origin: TurnOrigin::Session {
-                    session_id: "s-2".into(),
+                origin: TurnOrigin::Thread {
+                    thread_id: "s-2".into(),
                     report: true,
                     host: None,
                     host_name: None,
@@ -1504,7 +1505,7 @@ fn events() {
         "event_queued",
         message(&event(
             44,
-            SessionEvent::Queued {
+            ThreadEvent::Queued {
                 queued_id: "q-3".to_owned(),
                 prompt: vec![text("then update the docs")],
                 origin: tui(),
@@ -1515,7 +1516,7 @@ fn events() {
         "event_unqueued",
         message(&event(
             50,
-            SessionEvent::Unqueued {
+            ThreadEvent::Unqueued {
                 queued_id: "q-5".to_owned(),
                 by: Some(TurnOrigin::Client {
                     name: "weave-app".to_owned(),
@@ -1529,20 +1530,20 @@ fn events() {
         "event_queue_paused",
         message(&event(
             51,
-            SessionEvent::QueuePaused {
+            ThreadEvent::QueuePaused {
                 reason: QueuePause::Cancelled,
             },
         ))
     );
     insta::assert_json_snapshot!(
         "event_queue_resumed",
-        message(&event(52, SessionEvent::QueueResumed { by: Some(tui()) }))
+        message(&event(52, ThreadEvent::QueueResumed { by: Some(tui()) }))
     );
     insta::assert_json_snapshot!(
         "event_renamed",
         message(&event(
             39,
-            SessionEvent::Renamed {
+            ThreadEvent::Renamed {
                 title: "Parser fixes".to_owned(),
                 by: Some(TurnOrigin::Client {
                     name: "weave-app".to_owned(),
@@ -1556,7 +1557,7 @@ fn events() {
         "event_renamed_by_its_agent",
         message(&event(
             39,
-            SessionEvent::Renamed {
+            ThreadEvent::Renamed {
                 title: "Parser fixes".to_owned(),
                 by: None,
             },
@@ -1566,7 +1567,7 @@ fn events() {
         "event_labelled",
         message(&event(
             39,
-            SessionEvent::Labelled {
+            ThreadEvent::Labelled {
                 labels: vec!["dispatcher".to_owned(), "bot:daily".to_owned()],
                 by: None,
             },
@@ -1576,7 +1577,7 @@ fn events() {
         "event_continued_in",
         message(&event(
             39,
-            SessionEvent::ContinuedIn {
+            ThreadEvent::ContinuedIn {
                 successor: "s-2".into(),
                 by: Some(TurnOrigin::Service {
                     name: "Dispatcher".to_owned(),
@@ -1590,7 +1591,7 @@ fn events() {
         "event_notice",
         message(&event(
             40,
-            SessionEvent::Notice {
+            ThreadEvent::Notice {
                 text: "This agent can't use client tools.".to_owned(),
             },
         ))
@@ -1599,7 +1600,7 @@ fn events() {
         "event_update",
         message(&event(
             42,
-            SessionEvent::Update {
+            ThreadEvent::Update {
                 notification: Box::new(SessionNotification::new(
                     "s-1",
                     SessionUpdate::AgentMessageChunk(ContentChunk::new(text("Done."))),
@@ -1611,7 +1612,7 @@ fn events() {
         "event_terminal_output",
         message(&event(
             43,
-            SessionEvent::TerminalOutput {
+            ThreadEvent::TerminalOutput {
                 terminal_id: "term-1".into(),
                 data: "ok\n".to_owned(),
             },
@@ -1621,7 +1622,7 @@ fn events() {
         "event_terminal_exit",
         message(&event(
             44,
-            SessionEvent::TerminalExit {
+            ThreadEvent::TerminalExit {
                 terminal_id: "term-1".into(),
                 status: TerminalExitStatus::new().exit_code(0),
             },
@@ -1631,8 +1632,8 @@ fn events() {
         "event_turn_ended",
         message(&event(
             45,
-            SessionEvent::TurnEnded {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnEnded {
+                thread_id: "s-1".into(),
                 response: Some(PromptResponse::new(StopReason::EndTurn)),
                 error: None,
             },
@@ -1642,8 +1643,8 @@ fn events() {
         "event_turn_interrupted",
         message(&event(
             45,
-            SessionEvent::TurnEnded {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnEnded {
+                thread_id: "s-1".into(),
                 response: None,
                 error: Some(weave_host_protocol::errors::interrupted()),
             },
@@ -1653,8 +1654,8 @@ fn events() {
         "event_turn_continued",
         message(&event(
             46,
-            SessionEvent::TurnStarted {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnStarted {
+                thread_id: "s-1".into(),
                 prompt: vec![text(
                     "[weave] The weave Host stopped while your last turn ran…"
                 )],
@@ -1669,8 +1670,8 @@ fn events() {
         "event_run_started",
         message(&event(
             46,
-            SessionEvent::TurnStarted {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnStarted {
+                thread_id: "s-1".into(),
                 prompt: vec![text("fix the tests")],
                 origin: TurnOrigin::Run {},
                 queued_id: None,
@@ -1683,7 +1684,7 @@ fn events() {
         "event_closed",
         message(&event(
             47,
-            SessionEvent::Closed {
+            ThreadEvent::Closed {
                 reason: "idle".to_owned(),
                 by: None,
             },
@@ -1693,7 +1694,7 @@ fn events() {
         "event_closed_by_a_client",
         message(&event(
             48,
-            SessionEvent::Closed {
+            ThreadEvent::Closed {
                 reason: "closed by a client".to_owned(),
                 by: Some(TurnOrigin::Client {
                     name: "weave-app".to_owned(),
@@ -1707,8 +1708,8 @@ fn events() {
         "event_turn_steered",
         message(&event(
             48,
-            SessionEvent::TurnSteered {
-                session_id: "s-1".into(),
+            ThreadEvent::TurnSteered {
+                thread_id: "s-1".into(),
                 prompt: vec![text("use the other branch")],
                 origin: TurnOrigin::Client {
                     name: "weave-tui".to_owned(),
@@ -1719,9 +1720,9 @@ fn events() {
         ))
     );
     insta::assert_json_snapshot!(
-        "session_changed_notification",
-        message(&SessionChangedNotification {
-            session_id: "s-1".into(),
+        "thread_changed_notification",
+        message(&ThreadChangedNotification {
+            thread_id: "s-1".into(),
             activity: Some(Activity::Idle),
             clients: Some(1),
             title: None,
@@ -1731,9 +1732,9 @@ fn events() {
         })
     );
     insta::assert_json_snapshot!(
-        "session_changed_notification_branch",
-        message(&SessionChangedNotification {
-            session_id: "s-1".into(),
+        "thread_changed_notification_branch",
+        message(&ThreadChangedNotification {
+            thread_id: "s-1".into(),
             activity: None,
             clients: None,
             title: None,
@@ -1747,9 +1748,9 @@ fn events() {
         })
     );
     insta::assert_json_snapshot!(
-        "session_changed_notification_mcp_servers",
-        message(&SessionChangedNotification {
-            session_id: "s-1".into(),
+        "thread_changed_notification_mcp_servers",
+        message(&ThreadChangedNotification {
+            thread_id: "s-1".into(),
             activity: None,
             clients: None,
             title: None,
@@ -1761,7 +1762,7 @@ fn events() {
     insta::assert_json_snapshot!(
         "elicitation_completed_notification",
         message(&ElicitationCompletedNotification {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             notification: CompleteElicitationNotification::new("connect-1"),
         })
     );
@@ -1773,7 +1774,7 @@ fn updates() {
     insta::assert_json_snapshot!(
         "update_available_notification",
         message(&UpdateAvailableNotification {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             update: update(),
         })
     );
@@ -1790,25 +1791,25 @@ fn updates() {
         })
     );
     insta::assert_json_snapshot!(
-        "reopen_session_request",
-        message(&ReopenSessionRequest {
-            session_id: "s-1".into(),
+        "reopen_thread_request",
+        message(&ReopenThreadRequest {
+            thread_id: "s-1".into(),
         })
     );
     insta::assert_json_snapshot!(
-        "reopen_session_response",
-        round_trip(&ReopenSessionResponse {
+        "reopen_thread_response",
+        round_trip(&ReopenThreadResponse {
             version: Some("0.32.0".to_owned()),
         })
     );
     insta::assert_json_snapshot!(
         "event_agent_reopened",
-        message(&SessionEventNotification {
-            session_id: "s-1".into(),
+        message(&ThreadEventNotification {
+            thread_id: "s-1".into(),
             seq: 49,
             at: 1_760_180_009_000,
-            event: SessionEvent::AgentReopened {
-                agent: Box::new(session_agent("0.32.0")),
+            event: ThreadEvent::AgentReopened {
+                agent: Box::new(thread_agent("0.32.0")),
                 previous: Some(release("0.31.0")),
                 modes: None,
                 config_options: Vec::new(),
@@ -1818,12 +1819,12 @@ fn updates() {
     );
     insta::assert_json_snapshot!(
         "event_agent_reopened_on_the_old_version",
-        message(&SessionEventNotification {
-            session_id: "s-1".into(),
+        message(&ThreadEventNotification {
+            thread_id: "s-1".into(),
             seq: 49,
             at: 1_760_180_009_000,
-            event: SessionEvent::AgentReopened {
-                agent: Box::new(session_agent("0.31.0")),
+            event: ThreadEvent::AgentReopened {
+                agent: Box::new(thread_agent("0.31.0")),
                 previous: Some(release("0.31.0")),
                 modes: None,
                 config_options: Vec::new(),
@@ -1838,7 +1839,7 @@ fn pending_requests() {
     insta::assert_json_snapshot!(
         "pending_added_notification",
         message(&PendingAddedNotification {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             pending: pending(),
         })
     );
@@ -1846,7 +1847,7 @@ fn pending_requests() {
         "pending_request",
         round_trip(&PendingRequest {
             id: "p-2".to_owned(),
-            session_id: Some("s-1".into()),
+            thread_id: Some("s-1".into()),
             created_at: 1_760_180_001_000,
             request: PendingKind::Elicitation {
                 request: CreateElicitationRequest::new(
@@ -1863,7 +1864,7 @@ fn pending_requests() {
     insta::assert_json_snapshot!(
         "pending_resolved_notification",
         message(&PendingResolvedNotification {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             pending_id: "p-1".to_owned(),
             outcome: Resolution::Answered,
             by: Some("c7".to_owned()),
@@ -1872,7 +1873,7 @@ fn pending_requests() {
     insta::assert_json_snapshot!(
         "answer_pending_request",
         message(&AnswerPendingRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             pending_id: "p-1".to_owned(),
             permission: Some(RequestPermissionResponse::new(
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("once")),
@@ -1884,7 +1885,7 @@ fn pending_requests() {
     insta::assert_json_snapshot!(
         "answer_pending_request_2",
         message(&AnswerPendingRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             pending_id: "p-2".to_owned(),
             permission: None,
             elicitation: Some(CreateElicitationResponse::new(ElicitationAction::Decline)),
@@ -1895,7 +1896,7 @@ fn pending_requests() {
         "pending_request_client_tool",
         round_trip(&PendingRequest {
             id: "p-3".to_owned(),
-            session_id: Some("s-1".into()),
+            thread_id: Some("s-1".into()),
             created_at: 1_760_180_001_000,
             request: PendingKind::ClientTool {
                 tool: CLIPBOARD_WRITE.to_owned(),
@@ -1910,7 +1911,7 @@ fn pending_requests() {
     insta::assert_json_snapshot!(
         "answer_pending_request_client_tool",
         message(&AnswerPendingRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             pending_id: "p-3".to_owned(),
             permission: None,
             elicitation: None,
@@ -1965,7 +1966,7 @@ fn service_tools() {
             tool: "add_schedule".to_owned(),
             arguments,
             caller: ToolCaller {
-                session_id: "s-1".into(),
+                thread_id: "s-1".into(),
                 agent_id: "claude".to_owned(),
                 cwd: "/repo".into(),
                 policy: PermissionPolicy::headless(Vec::new()),
@@ -2045,13 +2046,13 @@ fn host() {
     insta::assert_json_snapshot!(
         "host_status",
         round_trip(&HostStatus {
-            protocol: 2,
+            protocol: PROTOCOL_VERSION,
             version: "0.1.0".to_owned(),
             pid: 4242,
             started_at: 1_760_180_000_000,
             service: Service::OnDemand,
             environment: EnvironmentSource::LoginShell,
-            sessions: vec![listing()],
+            threads: vec![listing()],
             remote: Some("127.0.0.1:7341".to_owned()),
             dispatcher: Some(joined()),
         })
@@ -2070,13 +2071,13 @@ fn host() {
 /// What a newer Host may send, an older client must still read.
 #[test]
 fn unknown_event_kinds_and_fields_are_tolerated() {
-    let notification: SessionEventNotification = serde_json::from_value(json!({
-        "sessionId": "s-1", "seq": 7, "at": 1, "later": true,
+    let notification: ThreadEventNotification = serde_json::from_value(json!({
+        "threadId": "s-1", "seq": 7, "at": 1, "later": true,
         "event": {"kind": "somethingNew", "detail": [1, 2]}
     }))
     .expect("an unknown kind still parses");
     assert_eq!(notification.seq, 7);
-    assert!(matches!(notification.event, SessionEvent::Unknown));
+    assert!(matches!(notification.event, ThreadEvent::Unknown));
 
     let hello: HelloRequest = serde_json::from_value(json!({
         "protocol": {"min": 2, "max": 3},
@@ -2105,7 +2106,7 @@ fn terminal() -> weave_host_protocol::terminals::Terminal {
         id: "t-5f3a".to_owned(),
         scope: "/Users/jaco/Projects/weave".into(),
         label: Some("dev server".to_owned()),
-        opened_from: Some(agent_client_protocol::schema::v1::SessionId::new("s-1")),
+        opened_from: Some(weave_host_protocol::threads::ThreadId::new("s-1")),
         title: Some("npm run dev".to_owned()),
         pwd: Some("/Users/jaco/Projects/weave/app".into()),
         process: Some(TerminalProcesses {
@@ -2168,7 +2169,7 @@ fn terminals() {
         message(&NewTerminalRequest {
             directory: "/Users/jaco/Projects/weave/app".into(),
             label: Some("dev server".to_owned()),
-            opened_from: Some(agent_client_protocol::schema::v1::SessionId::new("s-1")),
+            opened_from: Some(weave_host_protocol::threads::ThreadId::new("s-1")),
             command: Some(vec!["npm".to_owned(), "run".to_owned(), "dev".to_owned()]),
             size: Some(TerminalSize {
                 cols: 100,

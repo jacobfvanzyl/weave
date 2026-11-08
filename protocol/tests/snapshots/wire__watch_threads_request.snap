@@ -1,0 +1,8 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&WatchThreadsRequest::default())"
+---
+{
+  "method": "threads/watch",
+  "params": {}
+}

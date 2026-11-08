@@ -45,7 +45,6 @@ use weave_acp_core::schema::RequestPermissionResponse;
 use weave_acp_core::schema::SelectedPermissionOutcome;
 use weave_acp_core::schema::SessionConfigOption;
 use weave_acp_core::schema::SessionConfigOptionCategory;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionMessage;
 use weave_acp_core::schema::SessionMessageChunk;
 use weave_acp_core::schema::SessionModeState;
@@ -65,6 +64,7 @@ use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
 use weave_host_protocol::terminals::Terminal;
+use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnResponse;
 
@@ -106,11 +106,6 @@ use crate::runs::Part;
 use crate::runs::Summary;
 use crate::runs::Times;
 use crate::runs::WorkRun;
-use crate::session::OpenedSession;
-use crate::session::Reopened;
-use crate::session::SessionTarget;
-use crate::session_picker::PickerAction;
-use crate::session_picker::SessionPicker;
 use crate::settings;
 use crate::settings::PickerOutcome;
 use crate::settings::SettingChange;
@@ -123,10 +118,15 @@ use crate::streaming::render_compact;
 use crate::style;
 use crate::subagents;
 use crate::subagents::Subagent;
+use crate::thread::OpenedThread;
+use crate::thread::Reopened;
+use crate::thread::ThreadTarget;
 use crate::thread_panel;
 use crate::thread_panel::PanelAction;
 use crate::thread_panel::PanelView;
 use crate::thread_panel::ThreadPanel;
+use crate::thread_picker::PickerAction;
+use crate::thread_picker::ThreadPicker;
 use crate::thumbnails;
 use crate::thumbnails::Slot;
 use crate::thumbnails::Strip;
@@ -149,14 +149,14 @@ use crate::wrapping::plain_lines;
 
 /// How long a first Ctrl-C keeps the second one armed to quit.
 const QUIT_WINDOW: Duration = Duration::from_secs(2);
-/// The slash command that starts a new session, handled here rather than by the agent.
+/// The slash command that starts a new thread, handled here rather than by the agent.
 const NEW_COMMAND: &str = "new";
 /// The slash command that restarts the TUI in place, handled here too.
 const RELOAD_COMMAND: &str = "reload";
-/// The slash commands that quit, closing the session if nothing else needs it.
+/// The slash commands that quit, closing the thread if nothing else needs it.
 const EXIT_COMMAND: &str = "exit";
 const QUIT_COMMAND: &str = "quit";
-/// The slash command that renames the session through the Host, in place of any the agent has.
+/// The slash command that renames the thread through the Host, in place of any the agent has.
 const RENAME_COMMAND: &str = "rename";
 /// Starts the Host's paused queue again.
 const QUEUE_COMMAND: &str = "queue";
@@ -188,39 +188,39 @@ pub enum AppCommand {
     Steer(String),
     Cancel,
     /// `session/cancel` for a subagent's current work, which it lets the client stop.
-    CancelSubagent(SessionId),
-    /// `session/rename`; it shows as the session's `renamed` event.
+    CancelSubagent(ThreadId),
+    /// `thread/rename`; it shows as the thread's `renamed` event.
     Rename {
-        session_id: SessionId,
+        thread_id: ThreadId,
         title: String,
     },
-    /// Change a session setting; the result comes back through [`ChatWidget::setting_changed`].
+    /// Change a thread setting; the result comes back through [`ChatWidget::setting_changed`].
     ChangeSetting(SettingChange),
-    /// `session/list`; the result comes back through [`ChatWidget::sessions_listed`].
-    ListSessions {
+    /// `threads/list`; the result comes back through [`ChatWidget::threads_listed`].
+    ListThreads {
         all_directories: bool,
         cursor: Option<String>,
     },
-    /// Switch to another session (or a new one); see [`ChatWidget::begin_session`].
-    OpenSession {
-        target: SessionTarget,
+    /// Switch to another thread (or a new one); see [`ChatWidget::begin_thread`].
+    OpenThread {
+        target: ThreadTarget,
         title: Option<String>,
-        /// The directory an existing session works in, when the list said.
+        /// The directory an existing thread works in, when the list said.
         cwd: Option<PathBuf>,
     },
-    DeleteSession(SessionId),
+    DeleteThread(ThreadId),
     /// Open a URL the user consented to in their browser.
     OpenUrl(String),
     /// Put text the user selected on the clipboard.
     Copy(String),
     /// Run a client tool the agent called on this device, and answer it.
     RunClientTool {
-        session_id: SessionId,
+        thread_id: ThreadId,
         pending_id: String,
         tool: String,
         arguments: serde_json::Map<String, serde_json::Value>,
     },
-    /// Run a command from shell mode in the session directory; its output comes back
+    /// Run a command from shell mode in the thread directory; its output comes back
     /// through [`ChatWidget::shell_output`] and [`ChatWidget::shell_exited`].
     RunShell {
         id: String,
@@ -269,15 +269,15 @@ pub enum AppCommand {
         id: String,
         text: String,
     },
-    /// Quit, leaving the session open in the weave Host: Ctrl+D.
+    /// Quit, leaving the thread open in the weave Host: Ctrl+D.
     Quit,
-    /// Quit, closing the session if nothing else needs it: `/exit`, `/quit`, Ctrl+C twice.
+    /// Quit, closing the thread if nothing else needs it: `/exit`, `/quit`, Ctrl+C twice.
     Exit,
-    /// Quit and start this TUI again in place, reattaching to the session: `/reload`.
+    /// Quit and start this TUI again in place, reattaching to the thread: `/reload`.
     Reload,
-    /// Reattach to the session shown, after reconnecting to the weave Host, catching up from
+    /// Reattach to the thread shown, after reconnecting to the weave Host, catching up from
     /// where the transcript is; see [`ChatWidget::reattached`].
-    Reattach(SessionId),
+    Reattach(ThreadId),
     /// Answer a pending permission request.
     AnswerPermission {
         id: PendingId,
@@ -288,12 +288,12 @@ pub enum AppCommand {
         id: PendingId,
         response: CreateElicitationResponse,
     },
-    /// `agents/update` for the session's agent: `/update`. The answer comes back through
+    /// `agents/update` for the thread's agent: `/update`. The answer comes back through
     /// [`ChatWidget::agent_updated`].
     UpdateAgent,
-    /// `session/reopen`, moving the session to the version just updated to; the answer comes
-    /// back through [`ChatWidget::session_reopened`].
-    ReopenSession(SessionId),
+    /// `thread/reopen`, moving the thread to the version just updated to; the answer comes
+    /// back through [`ChatWidget::thread_reopened`].
+    ReopenThread(ThreadId),
     /// Keep the notice of `version` hidden from now on.
     DismissUpdate {
         agent_id: String,
@@ -301,9 +301,9 @@ pub enum AppCommand {
     },
 }
 
-/// Which optional session methods the agent offers.
+/// Which optional thread methods the agent offers.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct SessionAbilities {
+pub struct ThreadAbilities {
     pub list: bool,
     pub delete: bool,
 }
@@ -339,7 +339,7 @@ struct Turn {
 }
 
 struct Stashed {
-    session_id: SessionId,
+    thread_id: ThreadId,
     /// Its fullscreen transcript, and the images it shows.
     cells: Vec<TranscriptCell>,
     images: Vec<Arc<Slot>>,
@@ -367,12 +367,12 @@ struct PendingElicitation {
 pub struct ChatWidget {
     agent_name: String,
     cwd: PathBuf,
-    abilities: SessionAbilities,
-    /// The session prompts go to and whose events are shown; others' events are ignored.
-    active_session: Option<SessionId>,
-    /// Waiting for a session to finish loading; prompts wait until it has.
+    abilities: ThreadAbilities,
+    /// The thread prompts go to and whose events are shown; others' events are ignored.
+    active_thread: Option<ThreadId>,
+    /// Waiting for a thread to finish loading; prompts wait until it has.
     opening: bool,
-    session_picker: Option<SessionPicker>,
+    thread_picker: Option<ThreadPicker>,
     elicitations: VecDeque<PendingElicitation>,
     /// URL elicitations the user accepted, awaiting their optional completion notice.
     accepted_urls: HashSet<ElicitationId>,
@@ -384,7 +384,7 @@ pub struct ChatWidget {
     /// transcript overlay); `pager_open` while it shows.
     pager: Option<TranscriptView>,
     pager_open: bool,
-    /// The session being left, kept until the next one opens so a failed switch can go back.
+    /// The thread being left, kept until the next one opens so a failed switch can go back.
     stashed: Option<Stashed>,
     pending_history: Vec<DisplayLine>,
     has_history: bool,
@@ -413,9 +413,9 @@ pub struct ChatWidget {
     permissions: VecDeque<PendingPermission>,
     composer: Composer,
     /// Messages waiting for the turns after the running one: the Host's queue when it holds
-    /// one, and messages kept here otherwise, as while a session opens.
+    /// one, and messages kept here otherwise, as while a thread opens.
     queued: VecDeque<Queued>,
-    /// The Host holds the session's queue (`queue`).
+    /// The Host holds the thread's queue (`queue`).
     host_queue: bool,
     /// The Host's queue waits for someone to start it again.
     queue_paused: bool,
@@ -429,20 +429,20 @@ pub struct ChatWidget {
     popup: CommandPopup,
     terminals: TerminalTranscripts,
     context: Option<(u64, u64)>,
-    /// The session's cumulative cost and its currency, when the agent reports one.
+    /// The thread's cumulative cost and its currency, when the agent reports one.
     cost: Option<(f64, String)>,
-    /// The session's title, as the agent last reported it.
+    /// The thread's title, as the agent last reported it.
     title: Option<String>,
-    /// Why the session can't go on: its agent exited, or the connection to the Host closed.
+    /// Why the thread can't go on: its agent exited, or the connection to the Host closed.
     disconnected: Option<String>,
     /// How the latest turn ended, until the person types here or comes back to the terminal.
     ended: Option<Ended>,
     /// Waiting for the weave Host to come back.
     reconnecting: bool,
-    /// Said once the next session opens, as when a new one took the place of one left.
+    /// Said once the next thread opens, as when a new one took the place of one left.
     opened_note: Option<String>,
     quit_armed_until: Option<Instant>,
-    /// The active session has a conversation worth reopening later.
+    /// The active thread has a conversation worth reopening later.
     resumable: bool,
     /// Confirmation that a selection was copied, until it expires.
     copied: Option<(String, Instant)>,
@@ -460,7 +460,7 @@ pub struct ChatWidget {
     transcript_images: Vec<Arc<Slot>>,
     /// Thumbnails to make for images messages carry, for the app.
     decodes: Vec<AppCommand>,
-    /// The session directory's files, for the `@` picker.
+    /// The thread directory's files, for the `@` picker.
     files: FileIndex,
     file_popup: FilePopup,
     /// The `?` shortcuts panel is open.
@@ -469,19 +469,19 @@ pub struct ChatWidget {
     status_items: Vec<StatusItem>,
     /// Whether the Vim composer is enabled (`[tui] vim = true`).
     vim: bool,
-    /// Whether sessions outlive the TUI, in the weave Host: Ctrl+D then leaves even while
+    /// Whether threads outlive the TUI, in the weave Host: Ctrl+D then leaves even while
     /// a turn runs, and the turn carries on.
     detachable: bool,
-    /// Subagents this session created, in the order they appeared, each with its own chat.
+    /// Subagents this thread created, in the order they appeared, each with its own chat.
     subagents: Vec<Subagent>,
-    /// The subagent whose transcript is shown instead of this session's.
-    watching: Option<SessionId>,
+    /// The subagent whose transcript is shown instead of this thread's.
+    watching: Option<ThreadId>,
     subagent_picker: Option<subagents::Picker>,
     /// The thread's status panel, while `/thread` shows it.
     thread_panel: Option<ThreadPanel>,
     /// The thread's MCP servers as the Host reports them; `None` from a Host that doesn't.
     mcp_servers: Option<Vec<McpServerStatus>>,
-    /// The Host reports its sessions' MCP servers (feature `mcpServers`).
+    /// The Host reports its threads' MCP servers (feature `mcpServers`).
     reports_mcp_servers: bool,
     /// The worktree's terminals, oldest first, once the Host lists them (feature `terminals`).
     worktree_terminals: Option<Vec<Terminal>>,
@@ -489,17 +489,17 @@ pub struct ChatWidget {
     shown_terminals: BTreeSet<String>,
     /// The TUI runs in Rex, which shows terminals in panes.
     in_rex: bool,
-    /// Messages between this session and another, while they stream.
+    /// Messages between this thread and another, while they stream.
     messages: Vec<SessionMessageEntry>,
     /// In a subagent's own chat: what its parent is called.
     parent_label: Option<String>,
     /// Whether the Host updates agents (`agents/updates`), so `/update` is offered.
     updatable: bool,
-    /// The Host renames sessions (`session/rename`), so `/rename` is this client's.
+    /// The Host renames threads (`thread/rename`), so `/rename` is this client's.
     renamable: bool,
-    /// The thread the active session's work goes on in, which `/follow` opens (WVE-168).
-    successor: Option<SessionId>,
-    /// The version of the agent the active session runs.
+    /// The thread the active thread's work goes on in, which `/follow` opens (WVE-168).
+    successor: Option<ThreadId>,
+    /// The version of the agent the active thread runs.
     release: Option<AgentRelease>,
     /// A newer one, once the Host has found it.
     available: Option<AgentUpdate>,
@@ -544,12 +544,12 @@ enum Toggle {
     Calls(Vec<ToolCallId>),
 }
 
-/// A message between sessions as this chat shows it.
+/// A message between threads as this chat shows it.
 struct MessageShape {
-    /// The other session's name.
+    /// The other thread's name.
     label: String,
     outgoing: bool,
-    /// Whether the other session is one of this one's subagents.
+    /// Whether the other thread is one of this one's subagents.
     to_subagent: bool,
     text: String,
 }
@@ -584,24 +584,24 @@ fn subagent_event_lines(
     }
 }
 
-/// A message between sessions, as it streams in.
+/// A message between threads, as it streams in.
 struct SessionMessageEntry {
     id: MessageId,
-    sender: Option<SessionId>,
-    recipient: Option<SessionId>,
+    sender: Option<ThreadId>,
+    recipient: Option<ThreadId>,
     text: String,
 }
 
 impl ChatWidget {
-    pub fn new(agent_name: String, cwd: PathBuf, abilities: SessionAbilities, width: u16) -> Self {
+    pub fn new(agent_name: String, cwd: PathBuf, abilities: ThreadAbilities, width: u16) -> Self {
         let files = FileIndex::new(cwd.clone());
         Self {
             agent_name,
             cwd,
             abilities,
-            active_session: None,
+            active_thread: None,
             opening: false,
-            session_picker: None,
+            thread_picker: None,
             elicitations: VecDeque::new(),
             accepted_urls: HashSet::new(),
             width,
@@ -679,14 +679,14 @@ impl ChatWidget {
 
     /// The Host updates agents, so offer `/update`; `dismissed` are the versions whose notice
     /// the user hid, by agent id.
-    /// Take `/rename` here, through the Host, when it renames sessions.
+    /// Take `/rename` here, through the Host, when it renames threads.
     pub fn with_rename(mut self, renamable: bool) -> Self {
         self.renamable = renamable;
         self.offer_own_commands();
         self
     }
 
-    /// The Host reports each session's MCP servers (feature `mcpServers`), which `/thread`
+    /// The Host reports each thread's MCP servers (feature `mcpServers`), which `/thread`
     /// shows.
     pub fn with_mcp_servers(mut self, reports: bool) -> Self {
         self.reports_mcp_servers = reports;
@@ -749,14 +749,14 @@ impl ChatWidget {
         }
     }
 
-    /// Queue messages in the Host, which holds each session's queue (feature `queue`).
+    /// Queue messages in the Host, which holds each thread's queue (feature `queue`).
     pub fn with_host_queue(mut self, host_queue: bool) -> Self {
         self.host_queue = host_queue;
         self.offer_own_commands();
         self
     }
 
-    /// The Host's queue as a session's state gives it, replacing what this chat showed of it.
+    /// The Host's queue as a thread's state gives it, replacing what this chat showed of it.
     /// Messages kept here stay, after it.
     pub fn set_queue(&mut self, queued: Vec<Queued>, paused: bool) {
         self.queued.retain(|queued| queued.id.is_none());
@@ -766,7 +766,7 @@ impl ChatWidget {
         self.queue_paused = paused;
     }
 
-    /// Send the messages kept here while the session opened to the Host's queue.
+    /// Send the messages kept here while the thread opened to the Host's queue.
     pub fn send_kept_messages(&mut self) -> Vec<AppCommand> {
         if !self.host_queue {
             return Vec::new();
@@ -824,7 +824,7 @@ impl ChatWidget {
         self
     }
 
-    /// Work in `cwd` from now on: the directory a session opened from another one works in.
+    /// Work in `cwd` from now on: the directory a thread opened from another one works in.
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         if cwd != self.cwd {
             self.files = FileIndex::new(cwd.clone());
@@ -839,13 +839,13 @@ impl ChatWidget {
         self
     }
 
-    /// Sessions outlive the TUI, in the weave Host, so leaving needn't stop a turn.
+    /// Threads outlive the TUI, in the weave Host, so leaving needn't stop a turn.
     pub fn with_detach(mut self, detachable: bool) -> Self {
         self.detachable = detachable;
         self
     }
 
-    /// Whether the active session's turns can be steered; see [`AppCommand::Steer`].
+    /// Whether the active thread's turns can be steered; see [`AppCommand::Steer`].
     pub fn set_steerable(&mut self, steerable: bool) {
         self.steerable = steerable;
     }
@@ -881,36 +881,36 @@ impl ChatWidget {
         for notice in notices {
             self.push_cell(TranscriptCell::error(notice));
         }
-        // The header stays when the transcript is cleared for another session.
+        // The header stays when the transcript is cleared for another thread.
         if let Some(view) = &mut self.transcript {
             view.pin();
         }
     }
 
-    /// Switch to `session_id`. Its events show from now on; a replay follows for loads.
-    pub fn begin_session(&mut self, session_id: SessionId, title: Option<&str>) {
+    /// Switch to `thread_id`. Its events show from now on; a replay follows for loads.
+    pub fn begin_thread(&mut self, thread_id: ThreadId, title: Option<&str>) {
         self.finish_live_cells();
         self.drop_pending_requests();
-        // Like Codex, a fullscreen transcript shows one session at a time.
+        // Like Codex, a fullscreen transcript shows one thread at a time.
         let cells = self
             .transcript
             .as_mut()
-            .map(TranscriptView::take_session)
+            .map(TranscriptView::take_thread)
             .unwrap_or_default();
         let images = std::mem::take(&mut self.transcript_images);
-        self.stashed = self.active_session.take().map(|session_id| Stashed {
-            session_id,
+        self.stashed = self.active_thread.take().map(|thread_id| Stashed {
+            thread_id,
             cells,
             images,
             resumable: self.resumable,
         });
         self.resumable = false;
-        // Tool call ids are only unique within a session, and a reload replays its own.
+        // Tool call ids are only unique within a thread, and a reload replays its own.
         self.committed_tool_calls.clear();
         self.open_calls.clear();
         self.compactions.clear();
         self.committed_compactions.clear();
-        // Subagents belong to the session that created them.
+        // Subagents belong to the thread that created them.
         self.subagents.clear();
         self.watching = None;
         self.subagent_picker = None;
@@ -930,30 +930,30 @@ impl ChatWidget {
         self.context = None;
         self.cost = None;
         self.title = title.map(str::to_owned);
-        self.session_picker = None;
+        self.thread_picker = None;
         self.settings = None;
         self.release = None;
         self.available = None;
         self.update_task = None;
-        self.active_session = Some(session_id);
+        self.active_thread = Some(thread_id);
         self.opening = true;
         if let Some(title) = title {
             self.push_cell(TranscriptCell::info(&format!("Thread: {title}")));
         }
     }
 
-    /// The session opened by [`Self::begin_session`] is ready for prompts.
-    pub fn session_ready(&mut self, opened: OpenedSession) {
-        // A new session has no title until the agent names it, so the footer and window title
+    /// The thread opened by [`Self::begin_thread`] is ready for prompts.
+    pub fn thread_ready(&mut self, opened: OpenedThread) {
+        // A new thread has no title until the agent names it, so the footer and window title
         // show none; the transcript still marks where it begins.
-        if self.active_session.as_ref() != Some(&opened.session_id) {
+        if self.active_thread.as_ref() != Some(&opened.thread_id) {
             let marked = self.has_history;
-            self.begin_session(opened.session_id.clone(), None);
+            self.begin_thread(opened.thread_id.clone(), None);
             if marked {
                 self.push_cell(TranscriptCell::info("Thread: new thread"));
             }
         }
-        // The Host's title is current as the session opens; titles in the replay that follows
+        // The Host's title is current as the thread opens; titles in the replay that follows
         // apply over it in order.
         if opened.title.is_some() {
             self.title = opened.title;
@@ -999,71 +999,67 @@ impl ChatWidget {
         }
     }
 
-    /// Opening a session failed; go back to `previous` (or the picker, at startup).
-    pub fn session_failed(
-        &mut self,
-        error: &Error,
-        previous: Option<SessionId>,
-    ) -> Vec<AppCommand> {
+    /// Opening a thread failed; go back to `previous` (or the picker, at startup).
+    pub fn thread_failed(&mut self, error: &Error, previous: Option<ThreadId>) -> Vec<AppCommand> {
         self.opening = false;
         self.opened_note = None;
         if let Some(stashed) = self.stashed.take()
-            && previous.as_ref() == Some(&stashed.session_id)
+            && previous.as_ref() == Some(&stashed.thread_id)
         {
             self.resumable = stashed.resumable;
             self.transcript_images = stashed.images;
             if let Some(view) = &mut self.transcript {
-                view.restore_session(stashed.cells);
+                view.restore_thread(stashed.cells);
             }
         }
         self.push_error(&format!("Couldn't open the thread: {error}"));
-        self.active_session = previous;
-        if self.active_session.is_none() && self.abilities.list {
-            return self.open_session_picker(true);
+        self.active_thread = previous;
+        if self.active_thread.is_none() && self.abilities.list {
+            return self.open_thread_picker(true);
         }
         Vec::new()
     }
 
-    /// Show the session picker; `startup` means there is no session to return to.
-    pub fn open_session_picker(&mut self, startup: bool) -> Vec<AppCommand> {
-        self.session_picker = Some(SessionPicker::new(self.abilities.delete, startup));
-        vec![AppCommand::ListSessions {
+    /// Show the thread picker; `startup` means there is no thread to return to.
+    pub fn open_thread_picker(&mut self, startup: bool) -> Vec<AppCommand> {
+        self.thread_picker = Some(ThreadPicker::new(self.abilities.delete, startup));
+        vec![AppCommand::ListThreads {
             all_directories: false,
             cursor: None,
         }]
     }
 
-    pub fn sessions_listed(
+    pub fn threads_listed(
         &mut self,
-        result: Result<weave_host_protocol::sessions::ListSessionsResponse, Error>,
+        result: Result<weave_host_protocol::threads::ListThreadsResponse, Error>,
         append: bool,
     ) {
-        let Some(picker) = &mut self.session_picker else {
+        let Some(picker) = &mut self.thread_picker else {
             return;
         };
         match result {
-            Ok(response) => picker.listed(response.sessions, response.next_cursor, append),
+            Ok(response) => picker.listed(response.threads, response.next_cursor, append),
             Err(error) => picker.failed(format!("Couldn't list threads: {error}")),
         }
     }
 
-    pub fn session_deleted(&mut self, session_id: &SessionId, result: Result<(), Error>) {
-        match (result, &mut self.session_picker) {
-            (Ok(()), Some(picker)) => picker.deleted(session_id),
+    pub fn thread_deleted(&mut self, thread_id: &ThreadId, result: Result<(), Error>) {
+        match (result, &mut self.thread_picker) {
+            (Ok(()), Some(picker)) => picker.deleted(thread_id),
             (Ok(()), None) => {}
             (Err(error), _) => self.push_error(&format!("Couldn't delete the thread: {error}")),
         }
     }
 
-    pub fn active_session(&self) -> Option<&SessionId> {
-        self.active_session.as_ref()
+    pub fn active_thread(&self) -> Option<&ThreadId> {
+        self.active_thread.as_ref()
     }
 
-    /// Whether `session_id` is the active session, or no session is tracked yet.
-    fn is_active(&self, session_id: &SessionId) -> bool {
-        self.active_session
+    /// Whether `thread_id` is the active thread, or no thread is tracked yet.
+    fn is_active(&self, thread_id: &ThreadId) -> bool {
+        self.active_thread
             .as_ref()
-            .is_none_or(|active| active == session_id)
+            .is_none_or(|active| active == thread_id)
     }
 
     pub fn set_size(&mut self, width: u16, height: u16) {
@@ -1091,29 +1087,29 @@ impl ChatWidget {
         self.composer.cursor_shape()
     }
 
-    /// The session to offer reopening on exit: the active one, once it has a conversation.
-    pub fn resumable_session(&self) -> Option<&SessionId> {
-        self.active_session.as_ref().filter(|_| self.resumable)
+    /// The thread to offer reopening on exit: the active one, once it has a conversation.
+    pub fn resumable_thread(&self) -> Option<&ThreadId> {
+        self.active_thread.as_ref().filter(|_| self.resumable)
     }
 
-    /// The active session while it's blank: new, with nothing sent in it yet. There's nothing
+    /// The active thread while it's blank: new, with nothing sent in it yet. There's nothing
     /// in it to come back to, so the weave Host doesn't keep it.
-    pub fn blank_session(&self) -> Option<&SessionId> {
-        self.active_session
+    pub fn blank_thread(&self) -> Option<&ThreadId> {
+        self.active_thread
             .as_ref()
             .filter(|_| !self.resumable && !self.opening)
     }
 
-    /// The session to close as the TUI quits, once nothing else needs it: a blank one, which
+    /// The thread to close as the TUI quits, once nothing else needs it: a blank one, which
     /// has nothing to come back to, or the active one when the person is `done` with it and its
     /// agent can open it again (`reopenable`).
-    pub fn session_to_close(&self, done: bool, reopenable: bool) -> Option<&SessionId> {
-        self.blank_session()
-            .or_else(|| self.active_session.as_ref().filter(|_| done && reopenable))
+    pub fn thread_to_close(&self, done: bool, reopenable: bool) -> Option<&ThreadId> {
+        self.blank_thread()
+            .or_else(|| self.active_thread.as_ref().filter(|_| done && reopenable))
     }
 
     /// The weave Host went away, and the client waits for it to come back: like a
-    /// disconnection, but the draft and the session are kept for when it does.
+    /// disconnection, but the draft and the thread are kept for when it does.
     pub fn daemon_lost(&mut self) {
         self.finish_live_cells();
         self.drop_pending_requests();
@@ -1124,22 +1120,22 @@ impl ChatWidget {
         self.push_cell(TranscriptCell::info(note));
     }
 
-    /// Connected to the weave Host again: reattach to the session shown, catching up from
-    /// where the transcript is. A blank session didn't outlast the Host it was in, so a new
+    /// Connected to the weave Host again: reattach to the thread shown, catching up from
+    /// where the transcript is. A blank thread didn't outlast the Host it was in, so a new
     /// one takes its place.
     pub fn reconnected(&mut self) -> Vec<AppCommand> {
         self.disconnected = None;
         self.reconnecting = false;
-        if self.blank_session().is_some() {
+        if self.blank_thread().is_some() {
             self.opened_note = Some("Reconnected to the weave Host".to_owned());
-            return vec![AppCommand::OpenSession {
-                target: SessionTarget::New,
+            return vec![AppCommand::OpenThread {
+                target: ThreadTarget::New,
                 title: None,
                 cwd: None,
             }];
         }
-        match self.active_session.clone() {
-            Some(session_id) => vec![AppCommand::Reattach(session_id)],
+        match self.active_thread.clone() {
+            Some(thread_id) => vec![AppCommand::Reattach(thread_id)],
             None => {
                 self.push_cell(TranscriptCell::info("Reconnected to the weave Host"));
                 Vec::new()
@@ -1148,8 +1144,8 @@ impl ChatWidget {
     }
 
     /// Reattached after reconnecting, the transcript as it was; what it missed follows.
-    pub fn reattached(&mut self, opened: OpenedSession) {
-        if self.active_session.as_ref() != Some(&opened.session_id) {
+    pub fn reattached(&mut self, opened: OpenedThread) {
+        if self.active_thread.as_ref() != Some(&opened.thread_id) {
             return;
         }
         self.modes = opened.modes;
@@ -1158,8 +1154,8 @@ impl ChatWidget {
         self.push_cell(TranscriptCell::info("Reconnected to the weave Host"));
     }
 
-    /// The thread the active session's work goes on in, if it names one: offer `/follow`.
-    fn follows(&mut self, successor: Option<SessionId>) {
+    /// The thread the active thread's work goes on in, if it names one: offer `/follow`.
+    fn follows(&mut self, successor: Option<ThreadId>) {
         if self.successor != successor {
             self.successor = successor;
             self.offer_own_commands();
@@ -1172,12 +1168,12 @@ impl ChatWidget {
         self.push_error("The weave Host didn't come back; /reload starts it again");
     }
 
-    /// The version of the agent the active session runs, as the Host says.
+    /// The version of the agent the active thread runs, as the Host says.
     pub fn set_release(&mut self, release: Option<AgentRelease>) {
         self.release = release;
     }
 
-    /// The Host found a newer version of the active session's agent: say so, once a
+    /// The Host found a newer version of the active thread's agent: say so, once a
     /// version, unless the user dismissed it.
     pub fn update_available(&mut self, update: AgentUpdate) {
         let dismissed = self.dismissed.get(&update.agent_id) == Some(&update.latest);
@@ -1201,9 +1197,9 @@ impl ChatWidget {
     }
 
     /// `/update`, or `/update dismiss`.
-    /// `/rename <title>`: the session's title for every client, through the Host.
+    /// `/rename <title>`: the thread's title for every client, through the Host.
     fn slash_rename(&mut self, title: &str) -> Vec<AppCommand> {
-        let Some(session_id) = self.active_session.clone() else {
+        let Some(thread_id) = self.active_thread.clone() else {
             return Vec::new();
         };
         if title.is_empty() {
@@ -1211,7 +1207,7 @@ impl ChatWidget {
             return Vec::new();
         }
         vec![AppCommand::Rename {
-            session_id,
+            thread_id,
             title: title.to_owned(),
         }]
     }
@@ -1242,8 +1238,8 @@ impl ChatWidget {
             self.report_info("/update is already running");
             return Vec::new();
         }
-        let Some(session_id) = self
-            .active_session
+        let Some(thread_id) = self
+            .active_thread
             .clone()
             .filter(|_| self.disconnected.is_none())
         else {
@@ -1256,7 +1252,7 @@ impl ChatWidget {
             .or_else(|| self.release.as_ref().map(|release| release.name.clone()))
             .unwrap_or_else(|| self.agent_name.clone());
         self.update_task = Some(updates::Task {
-            session_id,
+            thread_id,
             stage: Stage::Checking,
             started: Instant::now(),
             name: updates::short_name(&name).to_owned(),
@@ -1264,7 +1260,7 @@ impl ChatWidget {
         vec![AppCommand::UpdateAgent]
     }
 
-    /// The Host answered `/update`'s `agents/update`: move the session over if it runs
+    /// The Host answered `/update`'s `agents/update`: move the thread over if it runs
     /// another version.
     pub fn agent_updated(&mut self, result: Result<String, Error>) -> Vec<AppCommand> {
         let Some(task) = self.update_task.take() else {
@@ -1288,16 +1284,16 @@ impl ChatWidget {
             ));
             return Vec::new();
         }
-        // The agent may have kept nothing of a session nothing was sent in, so there's nothing
-        // to move: a new session on the new version takes its place, and it closes.
-        if self.blank_session().is_some() {
+        // The agent may have kept nothing of a thread nothing was sent in, so there's nothing
+        // to move: a new thread on the new version takes its place, and it closes.
+        if self.blank_thread().is_some() {
             self.opened_note = Some(format!(
                 "Started a new thread on {} {version}: nothing had been sent in the last one, \
                  so there was nothing to move",
                 task.name
             ));
-            return vec![AppCommand::OpenSession {
-                target: SessionTarget::New,
+            return vec![AppCommand::OpenThread {
+                target: ThreadTarget::New,
                 title: None,
                 cwd: None,
             }];
@@ -1313,33 +1309,33 @@ impl ChatWidget {
              restores",
             task.name
         ));
-        let session_id = task.session_id.clone();
+        let thread_id = task.thread_id.clone();
         self.update_task = Some(updates::Task {
             stage: Stage::Moving(version),
             started: Instant::now(),
             ..task
         });
-        vec![AppCommand::ReopenSession(session_id)]
+        vec![AppCommand::ReopenThread(thread_id)]
     }
 
-    /// The Host answered `session/reopen`. The journal's `agentReopened` says how it went;
+    /// The Host answered `thread/reopen`. The journal's `agentReopened` says how it went;
     /// only a failure that changed nothing is said here.
-    pub fn session_reopened(&mut self, session_id: &SessionId, result: Result<(), Error>) {
+    pub fn thread_reopened(&mut self, thread_id: &ThreadId, result: Result<(), Error>) {
         if self
             .update_task
             .as_ref()
-            .is_some_and(|task| task.session_id == *session_id)
+            .is_some_and(|task| task.thread_id == *thread_id)
         {
             self.update_task = None;
         }
         if let Err(error) = result
-            && self.is_active(session_id)
+            && self.is_active(thread_id)
         {
             self.push_error(&format!("Couldn't move the thread: {error}"));
         }
     }
 
-    /// The session's agent was started again, on a new version or, when that failed, its old
+    /// The thread's agent was started again, on a new version or, when that failed, its old
     /// one.
     fn agent_reopened(
         &mut self,
@@ -1372,7 +1368,7 @@ impl ChatWidget {
         self.config_options = config_options;
     }
 
-    /// Whether a turn is running in the active session.
+    /// Whether a turn is running in the active thread.
     pub fn turn_running(&self) -> bool {
         self.turn.is_some()
     }
@@ -1389,7 +1385,7 @@ impl ChatWidget {
         self.turn.is_some() || self.copied.is_some() || indexing || self.update_task.is_some()
     }
 
-    /// The window title, as Codex sets it: activity, the session's title, and the project.
+    /// The window title, as Codex sets it: activity, the thread's title, and the project.
     /// A spinner while the agent works; a blinking dot while it waits for the user.
     pub fn terminal_title(&self, now: Instant) -> String {
         const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -1422,10 +1418,10 @@ impl ChatWidget {
         }
     }
 
-    /// What the terminal's program status (OSC 7501) says about the active session: waiting on
+    /// What the terminal's program status (OSC 7501) says about the active thread: waiting on
     /// the person ahead of working, and how the latest turn ended until they've seen it.
     pub fn program_status(&self) -> Option<program_status::Status> {
-        self.active_session.as_ref()?;
+        self.active_thread.as_ref()?;
         let (state, msg) = if let Some(reason) = &self.disconnected {
             (program_status::State::Error, Some(reason.clone()))
         } else if let Some(pending) = self.permissions.front() {
@@ -1509,7 +1505,7 @@ impl ChatWidget {
         }
     }
 
-    /// An event from the session's journal, which dated it `at` (milliseconds since the Unix
+    /// An event from the thread's journal, which dated it `at` (milliseconds since the Unix
     /// epoch): the runs of work it makes are timed by it, replayed or not.
     pub fn handle_journal_event(&mut self, event: ChatEvent, at: u64) -> Vec<AppCommand> {
         self.event_at = Some(at);
@@ -1551,7 +1547,7 @@ impl ChatWidget {
                         .into_iter()
                         .collect()
                 } else {
-                    // Another session's: a client showing it answers.
+                    // Another thread's: a client showing it answers.
                     Vec::new()
                 }
             }
@@ -1596,13 +1592,13 @@ impl ChatWidget {
                 Vec::new()
             }
             ChatEvent::TurnStarted {
-                session_id,
+                thread_id,
                 prompt,
                 elapsed,
                 replayed,
                 started_by,
             } => {
-                if !self.is_active(&session_id) {
+                if !self.is_active(&thread_id) {
                     return Vec::new();
                 }
                 // Anything still live belongs to what came before.
@@ -1619,8 +1615,8 @@ impl ChatWidget {
                 }
                 self.take_decodes()
             }
-            ChatEvent::TurnSteered { session_id, prompt } => {
-                if !self.is_active(&session_id) {
+            ChatEvent::TurnSteered { thread_id, prompt } => {
+                if !self.is_active(&thread_id) {
                     return Vec::new();
                 }
                 // It joins the turn here, after what the agent said before taking it.
@@ -1631,11 +1627,11 @@ impl ChatWidget {
                 self.take_decodes()
             }
             ChatEvent::TurnEnded {
-                session_id,
+                thread_id,
                 result,
                 replayed,
             } => {
-                if !self.is_active(&session_id) {
+                if !self.is_active(&thread_id) {
                     Vec::new()
                 } else if replayed {
                     // History: what it finished settles, and nobody needs telling; but a turn
@@ -1649,11 +1645,8 @@ impl ChatWidget {
                     self.end_turn(result)
                 }
             }
-            ChatEvent::TurnRunning {
-                session_id,
-                elapsed,
-            } => {
-                if self.is_active(&session_id) {
+            ChatEvent::TurnRunning { thread_id, elapsed } => {
+                if self.is_active(&thread_id) {
                     self.turn_running_elsewhere(elapsed);
                 }
                 Vec::new()
@@ -1676,8 +1669,8 @@ impl ChatWidget {
                 );
                 Vec::new()
             }
-            ChatEvent::SessionEnded { session_id, reason } => {
-                if self.active_session.as_ref() == Some(&session_id) {
+            ChatEvent::ThreadEnded { thread_id, reason } => {
+                if self.active_thread.as_ref() == Some(&thread_id) {
                     self.finish_live_cells();
                     self.drop_pending_requests();
                     self.turn = None;
@@ -1761,7 +1754,7 @@ impl ChatWidget {
     }
 
     /// The way down to a subagent's chat, as indices from this one, if it is a descendant.
-    fn path_to(&self, id: &SessionId) -> Option<Vec<usize>> {
+    fn path_to(&self, id: &ThreadId) -> Option<Vec<usize>> {
         for (index, subagent) in self.subagents.iter().enumerate() {
             if &subagent.id == id {
                 return Some(vec![index]);
@@ -1805,8 +1798,8 @@ impl ChatWidget {
             .map_or_else(|| "A subagent".to_owned(), Subagent::label)
     }
 
-    /// What another session is called, from this chat: one of its subagents, or its parent.
-    fn session_label(&self, id: &SessionId) -> String {
+    /// What another thread is called, from this chat: one of its subagents, or its parent.
+    fn thread_label(&self, id: &ThreadId) -> String {
         if let Some(path) = self.path_to(id) {
             return self.label_at(&path);
         }
@@ -1836,10 +1829,10 @@ impl ChatWidget {
         self.subagent_at(&path)
     }
 
-    /// Every agent in the order Alt+Right visits them: this session, then each subagent
+    /// Every agent in the order Alt+Right visits them: this thread, then each subagent
     /// before its own, in the order they appeared.
-    fn agent_order(&self) -> Vec<Option<SessionId>> {
-        fn walk(chat: &ChatWidget, order: &mut Vec<Option<SessionId>>) {
+    fn agent_order(&self) -> Vec<Option<ThreadId>> {
+        fn walk(chat: &ChatWidget, order: &mut Vec<Option<ThreadId>>) {
             for subagent in &chat.subagents {
                 order.push(Some(subagent.id.clone()));
                 walk(&subagent.chat, order);
@@ -1865,14 +1858,14 @@ impl ChatWidget {
         self.watch(order.get(next).cloned().flatten());
     }
 
-    fn watch(&mut self, id: Option<SessionId>) {
+    fn watch(&mut self, id: Option<ThreadId>) {
         self.watching = id.filter(|id| self.path_to(id).is_some());
         if let Some(view) = &mut self.shown_mut().transcript {
             view.follow();
         }
     }
 
-    /// The picker's rows: this session, then every subagent, nested under its parent.
+    /// The picker's rows: this thread, then every subagent, nested under its parent.
     fn picker_entries(&self) -> Vec<subagents::PickerEntry> {
         fn walk(
             chat: &ChatWidget,
@@ -1972,17 +1965,17 @@ impl ChatWidget {
         }
     }
 
-    /// A new subagent's own chat, which shows its updates as this chat shows the session's.
-    fn subagent_chat(&self, id: &SessionId, label: &str) -> ChatWidget {
-        let abilities = SessionAbilities {
+    /// A new subagent's own chat, which shows its updates as this chat shows the thread's.
+    fn subagent_chat(&self, id: &ThreadId, label: &str) -> ChatWidget {
+        let abilities = ThreadAbilities {
             list: false,
             delete: false,
         };
         let mut chat =
             ChatWidget::new(label.to_owned(), self.cwd.clone(), abilities, self.width).fullscreen();
-        chat.begin_session(id.clone(), None);
-        chat.session_ready(OpenedSession {
-            session_id: id.clone(),
+        chat.begin_thread(id.clone(), None);
+        chat.thread_ready(OpenedThread {
+            thread_id: id.clone(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
@@ -2072,7 +2065,7 @@ impl ChatWidget {
 
     /// A cancelled subagent's pending requests resolve as cancelled, as the RFD asks: the
     /// Host does that when the subagent's turn is cancelled, so they stop showing here.
-    fn cancel_requests_from(&mut self, id: &SessionId) {
+    fn cancel_requests_from(&mut self, id: &ThreadId) {
         self.permissions
             .retain(|pending| &pending.request.request.session_id != id);
     }
@@ -2080,8 +2073,8 @@ impl ChatWidget {
     fn message_entry(
         &mut self,
         id: &MessageId,
-        sender: Option<SessionId>,
-        recipient: Option<SessionId>,
+        sender: Option<ThreadId>,
+        recipient: Option<ThreadId>,
     ) -> &mut SessionMessageEntry {
         let index = match self.messages.iter().position(|entry| &entry.id == id) {
             Some(index) => index,
@@ -2133,10 +2126,10 @@ impl ChatWidget {
         self.note_activity();
     }
 
-    /// How a message between sessions shows here: to or from one of this session's
+    /// How a message between threads shows here: to or from one of this thread's
     /// subagents, as Codex shows those, or to or from this one's parent.
     fn message_shape(&self, entry: &SessionMessageEntry) -> MessageShape {
-        let own = self.active_session.as_ref();
+        let own = self.active_thread.as_ref();
         let outgoing = entry
             .sender
             .as_ref()
@@ -2151,7 +2144,7 @@ impl ChatWidget {
             entry.sender.as_ref()
         };
         MessageShape {
-            label: other.map_or_else(|| "another agent".to_owned(), |id| self.session_label(id)),
+            label: other.map_or_else(|| "another agent".to_owned(), |id| self.thread_label(id)),
             outgoing,
             to_subagent: other.is_some_and(|id| self.path_to(id).is_some()),
             text: entry.text.clone(),
@@ -2251,7 +2244,7 @@ impl ChatWidget {
     /// waits for it, as does one the agent couldn't take.
     pub fn steer_answered(
         &mut self,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
         text: String,
         result: Result<SteerTurnResponse, Error>,
     ) -> Vec<AppCommand> {
@@ -2260,8 +2253,8 @@ impl ChatWidget {
             Ok(_) => {}
             Err(error) => self.push_error(&format!("Couldn't steer the turn: {error}")),
         }
-        // Meant for a session left meanwhile: back to the draft rather than into this one.
-        if !self.is_active(session_id) {
+        // Meant for a thread left meanwhile: back to the draft rather than into this one.
+        if !self.is_active(thread_id) {
             self.composer.insert_str(&text);
             return Vec::new();
         }
@@ -2269,7 +2262,7 @@ impl ChatWidget {
     }
 
     fn handle_update(&mut self, update: SessionUpdate) {
-        // A message between sessions ends when something else arrives.
+        // A message between threads ends when something else arrives.
         if !matches!(
             update,
             SessionUpdate::SessionMessage(_) | SessionUpdate::SessionMessageChunk(_)
@@ -2283,7 +2276,7 @@ impl ChatWidget {
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 self.stream_content(StreamKind::Thought, &chunk)
             }
-            // Sent when an agent replays a session's history.
+            // Sent when an agent replays a thread's history.
             SessionUpdate::UserMessageChunk(chunk) => self.stream_content(StreamKind::User, &chunk),
             SessionUpdate::ToolCall(call) => {
                 self.end_stream();
@@ -2481,7 +2474,7 @@ impl ChatWidget {
 
     /// Show an elicitation, with a notification about it.
     fn handle_elicitation(&mut self, request: ElicitationAsk) -> Vec<AppCommand> {
-        // A session-scoped request for a session not shown here is for a client showing it.
+        // A session-scoped request for a thread not shown here is for a client showing it.
         let scope = match &request.request.mode {
             ElicitationMode::Form(form) => Some(&form.scope),
             ElicitationMode::Url(url) => Some(&url.scope),
@@ -2595,7 +2588,7 @@ impl ChatWidget {
             pending.view.handle_paste(text);
             return Vec::new();
         }
-        if self.permissions.is_empty() && self.settings.is_none() && self.session_picker.is_none() {
+        if self.permissions.is_empty() && self.settings.is_none() && self.thread_picker.is_none() {
             // A dragged-in image file pastes as its path; attach it instead, as Codex does.
             if !self.composer.is_shell()
                 && let Some(path) = clipboard::pasted_image_path(text, &self.cwd)
@@ -2640,7 +2633,7 @@ impl ChatWidget {
             .iter()
             .map(|image| &image.slot)
             .chain(&self.transcript_images)
-            // A session left for another comes back if opening that one fails.
+            // A thread left for another comes back if opening that one fails.
             .chain(self.stashed.iter().flat_map(|stashed| &stashed.images))
             .find(|slot| slot.id() == id)
         {
@@ -2924,31 +2917,31 @@ impl ChatWidget {
             return Vec::new();
         }
 
-        if let Some(picker) = &mut self.session_picker {
+        if let Some(picker) = &mut self.thread_picker {
             let Some(action) = picker.handle_key(key) else {
                 return Vec::new();
             };
             return match action {
-                PickerAction::Open(session) => vec![AppCommand::OpenSession {
-                    target: SessionTarget::Existing(session.info.session_id),
-                    title: session.info.title,
-                    cwd: Some(session.info.cwd),
+                PickerAction::Open(thread) => vec![AppCommand::OpenThread {
+                    target: ThreadTarget::Existing(thread.info.session_id),
+                    title: thread.info.title,
+                    cwd: Some(thread.info.cwd),
                 }],
-                PickerAction::New => vec![AppCommand::OpenSession {
-                    target: SessionTarget::New,
+                PickerAction::New => vec![AppCommand::OpenThread {
+                    target: ThreadTarget::New,
                     title: None,
                     cwd: None,
                 }],
                 PickerAction::Close => {
-                    self.session_picker = None;
+                    self.thread_picker = None;
                     Vec::new()
                 }
-                PickerAction::Delete(session_id) => vec![AppCommand::DeleteSession(session_id)],
+                PickerAction::Delete(thread_id) => vec![AppCommand::DeleteThread(thread_id)],
                 PickerAction::List {
                     all_directories,
                     cursor,
                 } => {
-                    vec![AppCommand::ListSessions {
+                    vec![AppCommand::ListThreads {
                         all_directories,
                         cursor,
                     }]
@@ -2967,7 +2960,7 @@ impl ChatWidget {
                 self.push_cell(TranscriptCell::info("This agent can't list its threads"));
                 return Vec::new();
             }
-            return self.open_session_picker(false);
+            return self.open_thread_picker(false);
         }
 
         if let Some(picker) = &mut self.settings {
@@ -3027,7 +3020,7 @@ impl ChatWidget {
             self.composer.leave_shell();
             return Vec::new();
         }
-        // Watching a subagent, Esc goes back to this session, after popups have had it and
+        // Watching a subagent, Esc goes back to this thread, after popups have had it and
         // unless a Vim draft is being edited.
         if key.code == KeyCode::Esc
             && self.watching.is_some()
@@ -3091,7 +3084,7 @@ impl ChatWidget {
             terminals: self.worktree_terminals.as_deref(),
             shown: &self.shown_terminals,
             in_rex: self.in_rex,
-            session: self.active_session.as_ref(),
+            thread: self.active_thread.as_ref(),
         }
     }
 
@@ -3162,7 +3155,7 @@ impl ChatWidget {
     }
 
     /// The transcript being looked at, with the live rows drawn under it: a watched
-    /// subagent's, the inline pager, or this session's.
+    /// subagent's, the inline pager, or this thread's.
     fn viewed_mut(&mut self) -> Option<(&mut TranscriptView, Vec<DisplayLine>)> {
         let width = self.content_width();
         if self.watching.is_some() {
@@ -3407,7 +3400,7 @@ impl ChatWidget {
                 self.thread_panel = Some(ThreadPanel::default());
                 return Vec::new();
             }
-            // Restart the TUI alone; the daemon keeps the session, even mid-turn. After the
+            // Restart the TUI alone; the daemon keeps the thread, even mid-turn. After the
             // daemon restarted, this reconnects.
             if text.trim() == format!("/{RELOAD_COMMAND}") {
                 if self.turn.is_some() && !self.detachable {
@@ -3430,7 +3423,7 @@ impl ChatWidget {
                     ));
                     return Vec::new();
                 }
-                // A turn still running carries on in the weave Host, which closes the session
+                // A turn still running carries on in the weave Host, which closes the thread
                 // once it ends.
                 return vec![AppCommand::Exit];
             }
@@ -3448,8 +3441,8 @@ impl ChatWidget {
                 .clone()
                 .filter(|_| text.trim() == format!("/{FOLLOW_COMMAND}"))
             {
-                return vec![AppCommand::OpenSession {
-                    target: SessionTarget::Existing(successor),
+                return vec![AppCommand::OpenThread {
+                    target: ThreadTarget::Existing(successor),
                     title: None,
                     cwd: None,
                 }];
@@ -3470,21 +3463,21 @@ impl ChatWidget {
             {
                 return self.slash_rename(title.trim());
             }
-            // A new session here, as the picker's `n` opens; a turn still running in the one
+            // A new thread here, as the picker's `n` opens; a turn still running in the one
             // left carries on in the weave Host.
             if text.trim() == format!("/{NEW_COMMAND}") && self.disconnected.is_none() {
-                return vec![AppCommand::OpenSession {
-                    target: SessionTarget::New,
+                return vec![AppCommand::OpenThread {
+                    target: ThreadTarget::New,
                     title: None,
                     cwd: None,
                 }];
             }
-            // A message goes to this session, so it is what to watch.
+            // A message goes to this thread, so it is what to watch.
             self.watching = None;
         }
         match action {
             ComposerAction::Submit(text)
-                if self.disconnected.is_some() || self.active_session.is_none() =>
+                if self.disconnected.is_some() || self.active_thread.is_none() =>
             {
                 self.composer.insert_str(&text);
                 Vec::new()
@@ -3493,7 +3486,7 @@ impl ChatWidget {
                 if steer && self.can_steer(&text) {
                     return vec![AppCommand::Steer(text)];
                 }
-                // The Host holds the queue, once the session is open there.
+                // The Host holds the queue, once the thread is open there.
                 if self.host_queue && !self.opening {
                     return vec![AppCommand::Enqueue(text)];
                 }
@@ -4224,7 +4217,7 @@ impl ChatWidget {
             },
             mode: current(SessionConfigOptionCategory::Mode),
             directory: home_relative(&self.cwd),
-            session: self.title.clone(),
+            thread: self.title.clone(),
             context_used: self
                 .context
                 .filter(|(_, size)| *size > 0)
@@ -4238,7 +4231,7 @@ impl ChatWidget {
     fn has_overlay(&self) -> bool {
         !self.permissions.is_empty()
             || !self.elicitations.is_empty()
-            || self.session_picker.is_some()
+            || self.thread_picker.is_some()
             || self.settings.is_some()
             || self.subagent_picker.is_some()
             || self.thread_panel.is_some()
@@ -4267,7 +4260,7 @@ impl ChatWidget {
             let rows = picker.lines(&self.picker_entries()).len();
             return u16::try_from(rows).unwrap_or(u16::MAX);
         }
-        if let Some(picker) = &self.session_picker {
+        if let Some(picker) = &self.thread_picker {
             return picker.desired_height();
         }
         if let Some(picker) = &self.settings {
@@ -4483,7 +4476,7 @@ impl ChatWidget {
         let bottom_height = u16::try_from(wanted).unwrap_or(u16::MAX).min(cap);
         let transcript_area = Rect::new(area.x, area.y, area.width, area.height - bottom_height);
         let width = usize::from(area.width.max(10));
-        // A watched subagent's transcript takes this session's place, as in Codex.
+        // A watched subagent's transcript takes this thread's place, as in Codex.
         let shown = self.shown();
         let view = shown.transcript.as_ref().unwrap_or(view);
         view.render(transcript_area, buf, width, &shown.live_lines(width));
@@ -4531,7 +4524,7 @@ impl ChatWidget {
         } else if let Some(picker) = &self.subagent_picker {
             picker.render(&self.picker_entries(), input_area, buf);
             None
-        } else if let Some(picker) = &self.session_picker {
+        } else if let Some(picker) = &self.thread_picker {
             picker.render(input_area, buf);
             None
         } else if let Some(picker) = &self.settings {
@@ -4711,15 +4704,15 @@ mod tests {
         chat_with(Vec::new())
     }
 
-    /// A widget with session `s1` open and `options` as its settings.
+    /// A widget with thread `s1` open and `options` as its settings.
     fn chat_with(options: Vec<SessionConfigOption>) -> ChatWidget {
-        let abilities = SessionAbilities {
+        let abilities = ThreadAbilities {
             list: true,
             delete: true,
         };
         let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, 60);
-        chat.session_ready(OpenedSession {
-            session_id: "s1".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s1".into(),
             modes: None,
             config_options: options,
             reopened: None,
@@ -4743,7 +4736,7 @@ mod tests {
 
     fn turn_ended(stop_reason: StopReason) -> ChatEvent {
         ChatEvent::TurnEnded {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             result: Ok(PromptResponse::new(stop_reason)),
             replayed: false,
         }
@@ -4769,16 +4762,16 @@ mod tests {
         chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
     }
 
-    /// A chat with the Vim composer enabled, on a new blank session.
+    /// A chat with the Vim composer enabled, on a new blank thread.
     fn vim_chat(reopened: Option<Reopened>) -> ChatWidget {
-        let abilities = SessionAbilities {
+        let abilities = ThreadAbilities {
             list: true,
             delete: true,
         };
         let mut chat =
             ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, 60).with_vim(true);
-        chat.session_ready(OpenedSession {
-            session_id: "s1".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s1".into(),
             modes: None,
             config_options: Vec::new(),
             reopened,
@@ -4817,7 +4810,7 @@ mod tests {
         );
         assert!(!chat.composer.is_vim());
 
-        // A reopened session continues a conversation.
+        // A reopened thread continues a conversation.
         let chat = vim_chat(Some(Reopened::Loaded));
         assert!(!chat.composer.is_vim());
     }
@@ -4937,7 +4930,7 @@ mod tests {
             "from the other window".into(),
         ))));
         chat.handle_agent_event(ChatEvent::TurnRunning {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             elapsed: Duration::from_secs(90),
         });
         assert!(chat.is_animating());
@@ -4963,7 +4956,7 @@ mod tests {
     #[test]
     fn attaching_mid_turn_keeps_the_reply_in_one_message() {
         let mut chat = chat();
-        chat.begin_session("s2".into(), None);
+        chat.begin_thread("s2".into(), None);
         let s2 = |update| ChatEvent::SessionUpdate(SessionNotification::new("s2", update));
         chat.handle_agent_event(s2(SessionUpdate::UserMessageChunk(ContentChunk::new(
             "go".into(),
@@ -4972,11 +4965,11 @@ mod tests {
             "Half ".into(),
         ))));
         chat.handle_agent_event(ChatEvent::TurnRunning {
-            session_id: "s2".into(),
+            thread_id: "s2".into(),
             elapsed: Duration::ZERO,
         });
-        chat.session_ready(OpenedSession {
-            session_id: "s2".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s2".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
@@ -4989,7 +4982,7 @@ mod tests {
             "and the rest.".into(),
         ))));
         chat.handle_agent_event(ChatEvent::TurnEnded {
-            session_id: "s2".into(),
+            thread_id: "s2".into(),
             result: Ok(PromptResponse::new(StopReason::EndTurn)),
             replayed: false,
         });
@@ -5013,7 +5006,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_from_another_directory_moves_the_client_there() {
+    fn a_thread_from_another_directory_moves_the_client_there() {
         let mut chat = chat();
         chat.set_cwd(PathBuf::from("/elsewhere/repo"));
         assert_eq!(chat.status_values().directory, "/elsewhere/repo");
@@ -5041,13 +5034,13 @@ mod tests {
         assert_eq!(chat.panel_view().mcp_servers, Some(&[connected][..]));
         chat.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(chat.thread_panel.is_none());
-        // Another session's servers are its own.
-        chat.begin_session("s2".into(), None);
+        // Another thread's servers are its own.
+        chat.begin_thread("s2".into(), None);
         assert_eq!(chat.panel_view().mcp_servers, None);
     }
 
     #[test]
-    fn slash_new_starts_a_new_session_here_whatever_the_agent_offers() {
+    fn slash_new_starts_a_new_thread_here_whatever_the_agent_offers() {
         let mut chat = chat();
         // The agent's commands, one of them also called `new`.
         chat.handle_agent_event(update(SessionUpdate::AvailableCommandsUpdate(
@@ -5066,12 +5059,12 @@ mod tests {
             chat.commands[0].description,
             "Start a new thread in this directory"
         );
-        // Typed and sent, it opens a new session instead of reaching the agent, mid-turn too.
+        // Typed and sent, it opens a new thread instead of reaching the agent, mid-turn too.
         submit(&mut chat, "do it");
         assert_eq!(
             submit(&mut chat, "/new"),
-            [AppCommand::OpenSession {
-                target: SessionTarget::New,
+            [AppCommand::OpenThread {
+                target: ThreadTarget::New,
                 title: None,
                 cwd: None,
             }]
@@ -5094,14 +5087,14 @@ mod tests {
         assert!(offered(&chat));
         assert_eq!(
             submit(&mut chat, "/follow"),
-            [AppCommand::OpenSession {
-                target: SessionTarget::Existing("s2".into()),
+            [AppCommand::OpenThread {
+                target: ThreadTarget::Existing("s2".into()),
                 title: None,
                 cwd: None,
             }]
         );
         // Another thread names none.
-        chat.begin_session("s3".into(), None);
+        chat.begin_thread("s3".into(), None);
         assert!(!offered(&chat));
     }
 
@@ -5129,7 +5122,7 @@ mod tests {
     }
 
     #[test]
-    fn losing_the_daemon_keeps_the_draft_and_reopens_the_session_once_its_back() {
+    fn losing_the_daemon_keeps_the_draft_and_reopens_the_thread_once_its_back() {
         let mut chat = chat();
         submit(&mut chat, "do it");
         chat.daemon_lost();
@@ -5144,8 +5137,8 @@ mod tests {
         );
 
         assert_eq!(chat.reconnected(), [AppCommand::Reattach("s1".into())]);
-        chat.reattached(OpenedSession {
-            session_id: "s1".into(),
+        chat.reattached(OpenedThread {
+            thread_id: "s1".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Resumed),
@@ -5164,17 +5157,17 @@ mod tests {
     }
 
     #[test]
-    fn a_session_is_blank_until_something_is_sent_in_it() {
+    fn a_thread_is_blank_until_something_is_sent_in_it() {
         let mut chat = chat();
-        assert_eq!(chat.blank_session(), Some(&SessionId::from("s1")));
+        assert_eq!(chat.blank_thread(), Some(&ThreadId::from("s1")));
         submit(&mut chat, "do it");
-        assert_eq!(chat.blank_session(), None);
-        // A reopened session isn't blank: the agent kept its conversation.
+        assert_eq!(chat.blank_thread(), None);
+        // A reopened thread isn't blank: the agent kept its conversation.
         let mut reopened = chat_with(Vec::new());
-        reopened.begin_session("s2".into(), Some("Earlier work"));
-        assert_eq!(reopened.blank_session(), None, "still opening");
-        reopened.session_ready(OpenedSession {
-            session_id: "s2".into(),
+        reopened.begin_thread("s2".into(), Some("Earlier work"));
+        assert_eq!(reopened.blank_thread(), None, "still opening");
+        reopened.thread_ready(OpenedThread {
+            thread_id: "s2".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
@@ -5183,18 +5176,18 @@ mod tests {
             title: None,
             successor: None,
         });
-        assert_eq!(reopened.blank_session(), None);
+        assert_eq!(reopened.blank_thread(), None);
     }
 
     #[test]
-    fn reconnecting_from_a_blank_session_starts_a_new_one() {
-        // The daemon closes blank sessions when it stops, so there's nothing to reattach to.
+    fn reconnecting_from_a_blank_thread_starts_a_new_one() {
+        // The daemon closes blank threads when it stops, so there's nothing to reattach to.
         let mut chat = chat();
         chat.daemon_lost();
         assert_eq!(
             chat.reconnected(),
-            [AppCommand::OpenSession {
-                target: SessionTarget::New,
+            [AppCommand::OpenThread {
+                target: ThreadTarget::New,
                 title: None,
                 cwd: None,
             }]
@@ -5212,17 +5205,17 @@ mod tests {
     }
 
     #[test]
-    fn a_session_the_daemon_ends_takes_no_more_prompts() {
+    fn a_thread_the_daemon_ends_takes_no_more_prompts() {
         let mut chat = chat();
         submit(&mut chat, "do it");
-        // Another session ending changes nothing here.
-        chat.handle_agent_event(ChatEvent::SessionEnded {
-            session_id: "other".into(),
+        // Another thread ending changes nothing here.
+        chat.handle_agent_event(ChatEvent::ThreadEnded {
+            thread_id: "other".into(),
             reason: "idle".into(),
         });
         assert!(chat.is_animating());
-        chat.handle_agent_event(ChatEvent::SessionEnded {
-            session_id: "s1".into(),
+        chat.handle_agent_event(ChatEvent::ThreadEnded {
+            thread_id: "s1".into(),
             reason: "the agent exited".into(),
         });
         assert!(!chat.is_animating());
@@ -5288,7 +5281,7 @@ mod tests {
         // The steered message shows where it joins the turn; the queued one waits for its end.
         chat.handle_agent_event(text_chunk("Looking."));
         chat.handle_agent_event(ChatEvent::TurnSteered {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             prompt: vec!["use main instead".into()],
         });
         chat.handle_agent_event(text_chunk("Switching to main."));
@@ -5440,9 +5433,9 @@ mod tests {
     }
 
     #[test]
-    fn messages_kept_while_a_session_opens_go_to_the_hosts_queue_once_it_has() {
+    fn messages_kept_while_a_thread_opens_go_to_the_hosts_queue_once_it_has() {
         let mut chat = chat().with_host_queue(true);
-        chat.begin_session("s2".into(), None);
+        chat.begin_thread("s2".into(), None);
         assert!(submit(&mut chat, "too soon").is_empty());
         assert_eq!(queued_texts(&chat), ["too soon"]);
         assert_eq!(
@@ -5491,14 +5484,14 @@ mod tests {
     #[test]
     fn quitting_closes_a_blank_thread_or_one_done_with_that_can_open_again() {
         let mut chat = chat();
-        let s1 = SessionId::from("s1");
-        assert_eq!(chat.session_to_close(false, false), Some(&s1));
+        let s1 = ThreadId::from("s1");
+        assert_eq!(chat.thread_to_close(false, false), Some(&s1));
         submit(&mut chat, "hello");
         // Ctrl+D leaves it open.
-        assert_eq!(chat.session_to_close(false, true), None);
-        assert_eq!(chat.session_to_close(true, true), Some(&s1));
+        assert_eq!(chat.thread_to_close(false, true), None);
+        assert_eq!(chat.thread_to_close(true, true), Some(&s1));
         // An agent that can neither load nor resume it couldn't open it again.
-        assert_eq!(chat.session_to_close(true, false), None);
+        assert_eq!(chat.thread_to_close(true, false), None);
     }
 
     fn rows(chat: &ChatWidget, width: u16) -> Vec<String> {
@@ -5581,7 +5574,7 @@ mod tests {
     }
 
     fn status_of(chat: &ChatWidget) -> (program_status::State, Option<String>) {
-        let status = chat.program_status().expect("a session is open");
+        let status = chat.program_status().expect("a thread is open");
         (status.state, status.msg)
     }
 
@@ -5599,7 +5592,7 @@ mod tests {
         let unopened = ChatWidget::new(
             "Agent".into(),
             PathBuf::from("/repo"),
-            SessionAbilities {
+            ThreadAbilities {
                 list: true,
                 delete: true,
             },
@@ -5668,7 +5661,7 @@ mod tests {
                 submit(&mut chat, "write it");
             }
             chat.handle_agent_event(ChatEvent::TurnEnded {
-                session_id: "s1".into(),
+                thread_id: "s1".into(),
                 result: Err(errors::interrupted()),
                 replayed,
             });
@@ -5691,7 +5684,7 @@ mod tests {
         assert_eq!(status_of(&chat), (State::Idle, None));
         submit(&mut chat, "write it");
         chat.handle_agent_event(ChatEvent::TurnEnded {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             result: Err(Error::internal_error()),
             replayed: false,
         });
@@ -5702,13 +5695,13 @@ mod tests {
         assert_eq!(status_of(&chat), (State::Idle, None));
         // A turn the replay ends is history.
         chat.handle_agent_event(ChatEvent::TurnEnded {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             result: Ok(PromptResponse::new(StopReason::EndTurn)),
             replayed: true,
         });
         assert_eq!(status_of(&chat), (State::Idle, None));
-        chat.handle_agent_event(ChatEvent::SessionEnded {
-            session_id: "s1".into(),
+        chat.handle_agent_event(ChatEvent::ThreadEnded {
+            thread_id: "s1".into(),
             reason: "the agent exited".into(),
         });
         assert_eq!(
@@ -5738,14 +5731,14 @@ mod tests {
     fn a_replayed_turn_is_history_and_a_live_one_from_elsewhere_runs_here() {
         let mut chat = chat();
         let started = |replayed| ChatEvent::TurnStarted {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             prompt: vec![ContentBlock::from("from the journal".to_owned())],
             elapsed: Duration::from_secs(1),
             replayed,
             started_by: None,
         };
         let ended = |replayed| ChatEvent::TurnEnded {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             result: Ok(PromptResponse::new(StopReason::EndTurn)),
             replayed,
         };
@@ -6007,7 +6000,7 @@ mod tests {
     }
 
     #[test]
-    fn events_from_other_sessions_are_ignored() {
+    fn events_from_other_threads_are_ignored() {
         let mut chat = chat();
         chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
             "elsewhere",
@@ -6017,10 +6010,10 @@ mod tests {
     }
 
     #[test]
-    fn loading_a_session_replays_its_history_under_a_heading() {
+    fn loading_a_thread_replays_its_history_under_a_heading() {
         let mut chat = chat();
         chat.take_history();
-        chat.begin_session("s2".into(), Some("Fix the build"));
+        chat.begin_thread("s2".into(), Some("Fix the build"));
         for update in [
             SessionUpdate::UserMessageChunk(ContentChunk::new("fix it".into())),
             SessionUpdate::AgentMessageChunk(ContentChunk::new("Done.".into())),
@@ -6029,8 +6022,8 @@ mod tests {
                 "s2", update,
             )));
         }
-        chat.session_ready(OpenedSession {
-            session_id: "s2".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s2".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
@@ -6058,13 +6051,13 @@ mod tests {
     }
 
     #[test]
-    fn a_new_session_is_marked_in_the_transcript_but_left_untitled() {
+    fn a_new_thread_is_marked_in_the_transcript_but_left_untitled() {
         let mut chat = chat();
         chat.handle_agent_event(text_chunk("Done."));
         chat.handle_agent_event(turn_ended(StopReason::EndTurn));
         chat.take_history();
-        chat.session_ready(OpenedSession {
-            session_id: "s2".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s2".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: None,
@@ -6080,7 +6073,7 @@ mod tests {
     }
 
     #[test]
-    fn replays_show_tool_calls_whose_ids_were_seen_in_another_session() {
+    fn replays_show_tool_calls_whose_ids_were_seen_in_another_thread() {
         let mut chat = chat();
         let finished = || {
             SessionUpdate::ToolCall(
@@ -6090,15 +6083,15 @@ mod tests {
             )
         };
         chat.handle_agent_event(update(finished()));
-        chat.begin_session("s2".into(), None);
+        chat.begin_thread("s2".into(), None);
         assert_eq!(history(&mut chat), ["• Run it"]);
 
         chat.handle_agent_event(ChatEvent::SessionUpdate(SessionNotification::new(
             "s2",
             finished(),
         )));
-        chat.session_ready(OpenedSession {
-            session_id: "s2".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s2".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
@@ -6127,27 +6120,27 @@ mod tests {
     }
 
     #[test]
-    fn prompts_wait_while_a_session_loads() {
+    fn prompts_wait_while_a_thread_loads() {
         let mut chat = chat();
-        chat.begin_session("s2".into(), None);
+        chat.begin_thread("s2".into(), None);
         assert!(submit(&mut chat, "too soon").is_empty());
         assert_eq!(chat.queued.len(), 1);
     }
 
     #[test]
-    fn ctrl_r_opens_the_picker_and_choosing_opens_that_session() {
+    fn ctrl_r_opens_the_picker_and_choosing_opens_that_thread() {
         let mut chat = chat();
         let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(
             chat.handle_key(ctrl_r),
-            [AppCommand::ListSessions {
+            [AppCommand::ListThreads {
                 all_directories: false,
                 cursor: None
             }]
         );
-        chat.sessions_listed(
-            Ok(weave_host_protocol::sessions::ListSessionsResponse {
-                sessions: vec![crate::session_picker::listing(
+        chat.threads_listed(
+            Ok(weave_host_protocol::threads::ListThreadsResponse {
+                threads: vec![crate::thread_picker::listing(
                     SessionInfo::new("s9", "/repo").title("Earlier work".to_owned()),
                 )],
                 next_cursor: None,
@@ -6161,8 +6154,8 @@ mod tests {
         );
         assert_eq!(
             chat.handle_key(key(KeyCode::Enter)),
-            [AppCommand::OpenSession {
-                target: SessionTarget::Existing("s9".into()),
+            [AppCommand::OpenThread {
+                target: ThreadTarget::Existing("s9".into()),
                 title: Some("Earlier work".into()),
                 cwd: Some(PathBuf::from("/repo")),
             }]
@@ -6170,11 +6163,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_open_returns_to_the_previous_session() {
+    fn a_failed_open_returns_to_the_previous_thread() {
         let mut chat = chat();
-        chat.begin_session("s2".into(), Some("Broken"));
-        chat.session_failed(&Error::internal_error(), Some("s1".into()));
-        assert_eq!(chat.active_session(), Some(&SessionId::from("s1")));
+        chat.begin_thread("s2".into(), Some("Broken"));
+        chat.thread_failed(&Error::internal_error(), Some("s1".into()));
+        assert_eq!(chat.active_thread(), Some(&ThreadId::from("s1")));
     }
 
     #[test]
@@ -6210,14 +6203,14 @@ mod tests {
     }
 
     fn fullscreen_chat() -> ChatWidget {
-        let abilities = SessionAbilities {
+        let abilities = ThreadAbilities {
             list: true,
             delete: true,
         };
         let mut chat =
             ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, 40).fullscreen();
-        chat.session_ready(OpenedSession {
-            session_id: "s1".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s1".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: None,
@@ -6308,26 +6301,26 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_shows_one_session_and_a_failed_switch_restores_the_last() {
+    fn fullscreen_shows_one_thread_and_a_failed_switch_restores_the_last() {
         let mut chat = fullscreen_chat();
         chat.push_header(None, &[]);
-        submit(&mut chat, "first session");
+        submit(&mut chat, "first thread");
         chat.handle_agent_event(turn_ended(StopReason::EndTurn));
 
-        chat.begin_session("s2".into(), Some("Other"));
+        chat.begin_thread("s2".into(), Some("Other"));
         let rows = screen_rows(&chat, 40, 24);
         assert!(
             rows.iter().any(|row| row.starts_with("  >_ weave")),
             "{rows:?}"
         );
         assert!(rows.contains(&"• Thread: Other".to_owned()));
-        assert!(!rows.contains(&"› first session".to_owned()));
+        assert!(!rows.contains(&"› first thread".to_owned()));
 
-        chat.session_failed(&Error::internal_error(), Some("s1".into()));
+        chat.thread_failed(&Error::internal_error(), Some("s1".into()));
         let rows = screen_rows(&chat, 40, 24);
-        assert!(rows.contains(&"› first session".to_owned()), "{rows:?}");
-        assert!(!rows.contains(&"• Session: Other".to_owned()));
-        assert_eq!(chat.resumable_session(), Some(&SessionId::from("s1")));
+        assert!(rows.contains(&"› first thread".to_owned()), "{rows:?}");
+        assert!(!rows.contains(&"• Thread: Other".to_owned()));
+        assert_eq!(chat.resumable_thread(), Some(&ThreadId::from("s1")));
     }
 
     /// A finished command that printed ten lines.
@@ -6655,7 +6648,7 @@ mod tests {
 
         let mut chat = fullscreen_chat();
         submit(&mut chat, "go");
-        let robie = SessionId::new("s1:robie");
+        let robie = ThreadId::new("s1:robie");
         chat.handle_agent_event(update(SessionUpdate::SubagentUpdate(
             SubagentUpdate::new(robie.clone())
                 .title("Robie".to_owned())
@@ -6667,7 +6660,7 @@ mod tests {
         )));
         chat.handle_agent_event(update(SessionUpdate::SessionMessage(
             SessionMessage::new("m1")
-                .sender_session_id(SessionId::new("s1"))
+                .sender_session_id(ThreadId::new("s1"))
                 .recipient_session_id(robie.clone())
                 .content(MaybeUndefined::Value(vec!["Count them".into()])),
         )));
@@ -6713,7 +6706,7 @@ mod tests {
             chat.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             [AppCommand::CancelSubagent(robie.clone())]
         );
-        // Esc goes back to this session without touching its turn.
+        // Esc goes back to this thread without touching its turn.
         assert!(chat.handle_key(key(KeyCode::Esc)).is_empty());
         assert!(chat.turn.as_ref().is_some_and(|turn| !turn.cancelling));
 
@@ -6863,7 +6856,7 @@ mod tests {
     fn a_late_replay_ends_before_the_next_prompt() {
         let mut chat = chat();
         chat.take_history();
-        // Replayed after the session opened, with no turn running.
+        // Replayed after the thread opened, with no turn running.
         chat.handle_agent_event(text_chunk("Earlier answer."));
         submit(&mut chat, "next");
         chat.handle_agent_event(text_chunk("New answer."));
@@ -6894,7 +6887,7 @@ mod tests {
     }
 
     #[test]
-    fn the_title_shows_activity_session_and_project() {
+    fn the_title_shows_activity_thread_and_project() {
         let mut chat = chat();
         chat.title = Some("Fix the build".into());
         let now = Instant::now();
@@ -6909,12 +6902,12 @@ mod tests {
     }
 
     #[test]
-    fn a_reopened_session_takes_its_title_from_the_host_when_its_replay_has_none() {
-        // A closed session's new journal keeps its title in no event, as `--continue` finds it.
+    fn a_reopened_thread_takes_its_title_from_the_host_when_its_replay_has_none() {
+        // A closed thread's new journal keeps its title in no event, as `--continue` finds it.
         let mut chat = chat_with(Vec::new());
-        chat.begin_session("s2".into(), None);
-        chat.session_ready(OpenedSession {
-            session_id: "s2".into(),
+        chat.begin_thread("s2".into(), None);
+        chat.thread_ready(OpenedThread {
+            thread_id: "s2".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
@@ -7081,7 +7074,7 @@ mod tests {
     /// `prompt` turned into a replayed turn's start.
     fn replayed_turn(prompt: Vec<ContentBlock>) -> ChatEvent {
         ChatEvent::TurnStarted {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             prompt,
             elapsed: Duration::ZERO,
             replayed: true,
@@ -7177,7 +7170,7 @@ mod tests {
         let uri = url::Url::from_file_path(&path).expect("uri").to_string();
         let image = ImageContent::new("aW1hZ2U=", "image/png").uri(uri);
         let commands = chat.handle_agent_event(ChatEvent::TurnSteered {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             prompt: vec![
                 ContentBlock::Text(TextContent::new("and [image 1]")),
                 ContentBlock::Image(image),
@@ -7191,7 +7184,7 @@ mod tests {
     }
 
     #[test]
-    fn the_transcript_holds_its_newest_images_and_only_its_sessions() {
+    fn the_transcript_holds_its_newest_images_and_only_its_threads() {
         let mut chat = fullscreen_chat().with_thumbnails(true);
         for _ in 0..=MAX_TRANSCRIPT_IMAGES {
             chat.handle_agent_event(replayed_turn(vec![image_block("aW1hZ2U=")]));
@@ -7207,8 +7200,8 @@ mod tests {
         assert_eq!(held.len(), MAX_TRANSCRIPT_IMAGES);
         assert!(!held.contains(&graphics::image_id(1)), "the oldest went");
 
-        // Another session's transcript lets go of these.
-        chat.begin_session("s2".into(), None);
+        // Another thread's transcript lets go of these.
+        chat.begin_thread("s2".into(), None);
         assert!(chat.terminal_images(40).is_empty());
     }
 
@@ -7237,7 +7230,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("src")).expect("src");
         std::fs::write(dir.path().join("src/parser.rs"), "x").expect("file");
         std::fs::write(dir.path().join("README.md"), "x").expect("file");
-        let abilities = SessionAbilities {
+        let abilities = ThreadAbilities {
             list: true,
             delete: true,
         };
@@ -7288,7 +7281,7 @@ mod tests {
         }
     }
 
-    /// A chat on a Host that updates agents, its session on 0.86.0.
+    /// A chat on a Host that updates agents, its thread on 0.86.0.
     fn updatable(dismissed: &[(&str, &str)]) -> ChatWidget {
         let dismissed = dismissed
             .iter()
@@ -7296,9 +7289,9 @@ mod tests {
             .collect();
         let mut chat = chat().with_updates(true, dismissed);
         chat.set_release(Some(release("0.86.0")));
-        // A session with a conversation, which the agent can take up again.
-        chat.session_ready(OpenedSession {
-            session_id: "s1".into(),
+        // A thread with a conversation, which the agent can take up again.
+        chat.thread_ready(OpenedThread {
+            thread_id: "s1".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: Some(Reopened::Loaded),
@@ -7312,7 +7305,7 @@ mod tests {
 
     fn reopened(version: &str, failed: Option<&str>, replayed: bool) -> ChatEvent {
         ChatEvent::AgentReopened {
-            agent: Box::new(weave_host_protocol::sessions::SessionAgent {
+            agent: Box::new(weave_host_protocol::threads::ThreadAgent {
                 id: "claude".into(),
                 name: "Claude".into(),
                 initialize: weave_acp_core::schema::InitializeResponse::new(
@@ -7329,10 +7322,10 @@ mod tests {
     }
 
     #[test]
-    fn rename_goes_through_the_host_and_the_renamed_event_titles_the_session() {
+    fn rename_goes_through_the_host_and_the_renamed_event_titles_the_thread() {
         let mut chat = chat().with_rename(true);
-        chat.session_ready(OpenedSession {
-            session_id: "s1".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s1".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: None,
@@ -7358,7 +7351,7 @@ mod tests {
         assert_eq!(
             submit(&mut chat, "/rename  Parser fixes "),
             [AppCommand::Rename {
-                session_id: "s1".into(),
+                thread_id: "s1".into(),
                 title: "Parser fixes".into(),
             }]
         );
@@ -7376,8 +7369,8 @@ mod tests {
     #[test]
     fn without_the_hosts_rename_the_agents_rename_goes_to_the_agent() {
         let mut chat = chat();
-        chat.session_ready(OpenedSession {
-            session_id: "s1".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s1".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: None,
@@ -7414,7 +7407,7 @@ mod tests {
                 version: "0.93.0".into(),
             }]
         );
-        // Next session: 0.93.0 stays quiet, and the next version doesn't.
+        // Next thread: 0.93.0 stays quiet, and the next version doesn't.
         let mut chat = updatable(&[("claude", "0.93.0")]);
         chat.update_available(agent_update("0.86.0", "0.93.0"));
         assert!(!said(&mut chat).contains("is out"));
@@ -7430,7 +7423,7 @@ mod tests {
     }
 
     #[test]
-    fn slash_update_checks_the_newest_then_moves_the_session_to_it() {
+    fn slash_update_checks_the_newest_then_moves_the_thread_to_it() {
         let mut chat = updatable(&[]);
         chat.update_available(agent_update("0.86.0", "0.93.0"));
         assert_eq!(submit(&mut chat, "/update"), [AppCommand::UpdateAgent]);
@@ -7440,7 +7433,7 @@ mod tests {
         assert!(submit(&mut chat, "/update").is_empty(), "one at a time");
         assert_eq!(
             chat.agent_updated(Ok("0.93.0".into())),
-            [AppCommand::ReopenSession("s1".into())]
+            [AppCommand::ReopenThread("s1".into())]
         );
         let status = rows(&chat, 60).join("\n");
         assert!(status.contains("Moving this thread to 0.93.0"), "{status}");
@@ -7448,7 +7441,7 @@ mod tests {
             said(&mut chat)
                 .contains("background commands and running subagents end with the old process"),
         );
-        chat.session_reopened(&"s1".into(), Ok(()));
+        chat.thread_reopened(&"s1".into(), Ok(()));
         chat.handle_agent_event(reopened("0.93.0", None, false));
         assert!(!chat.is_animating());
         let shown = said(&mut chat);
@@ -7475,7 +7468,7 @@ mod tests {
         assert!(said(&mut chat).contains("Couldn't update"));
         submit(&mut chat, "/update");
         chat.agent_updated(Ok("0.93.0".into()));
-        chat.session_reopened(
+        chat.thread_reopened(
             &"s1".into(),
             Err(Error::method_not_found().data("the agent can't resume or load sessions")),
         );
@@ -7484,21 +7477,21 @@ mod tests {
     }
 
     #[test]
-    fn slash_update_starts_a_new_session_in_place_of_a_blank_one() {
+    fn slash_update_starts_a_new_thread_in_place_of_a_blank_one() {
         let mut chat = chat().with_updates(true, BTreeMap::new());
         chat.set_release(Some(release("0.86.0")));
         submit(&mut chat, "/update");
         assert_eq!(
             chat.agent_updated(Ok("0.93.0".into())),
-            [AppCommand::OpenSession {
-                target: SessionTarget::New,
+            [AppCommand::OpenThread {
+                target: ThreadTarget::New,
                 title: None,
                 cwd: None,
             }]
         );
         assert!(!chat.is_animating());
-        chat.session_ready(OpenedSession {
-            session_id: "s2".into(),
+        chat.thread_ready(OpenedThread {
+            thread_id: "s2".into(),
             modes: None,
             config_options: Vec::new(),
             reopened: None,

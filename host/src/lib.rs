@@ -1,27 +1,27 @@
-//! The weave Host: agent sessions that outlive the clients using them.
+//! The weave Host: agent threads that outlive the clients using them.
 //!
 //! Clients (the TUI, `weave run`, later others) speak the Host protocol
 //! ([`weave_host_protocol`]) to it; it speaks ACP to the agents it launches, through
 //! `weave-acp-core`. A client names an agent by id and a directory; the Host resolves the agent
 //! from its configuration ([`weave_agents`]) and starts it with the agent environment it
-//! captured. One connection reaches every session on the Host.
+//! captured. One connection reaches every thread on the Host.
 //!
-//! Each open session has its own agent process, started in the session's directory. A session
+//! Each open thread has its own agent process, started in the thread's directory. A thread
 //! stays open while a client is attached, while a turn runs or waits on a person, and for an
 //! idle grace period after that; a client leaving doesn't stop its turn. Everything a
-//! session's clients are sent goes into its numbered journal, so a client that attaches later
-//! catches up from the last position it saw, and a Host that restarts can take the session up
+//! thread's clients are sent goes into its numbered journal, so a client that attaches later
+//! catches up from the last position it saw, and a Host that restarts can take the thread up
 //! again. Requests that wait on a person are pending requests every attached client sees, and
-//! clients that attach later; the first answer counts. A session's
+//! clients that attach later; the first answer counts. A thread's
 //! [`PermissionPolicy`](weave_host_protocol::policy::PermissionPolicy) answers what it can
 //! without anyone.
 //!
-//! The Host is git-aware (ADR 0019, [`git`]): it records where in a repository each session's
+//! The Host is git-aware (ADR 0019, [`git`]): it records where in a repository each thread's
 //! directory is, and lists, makes and removes a repository's worktrees for clients.
 //!
-//! When a session opens, the Host looks for a newer version of its agent in the background
-//! and tells the session's clients of one; `agents/update` moves the agent's new sessions to
-//! it, and `session/reopen` an open session, which keeps its id and journal (`updates`).
+//! When a thread opens, the Host looks for a newer version of its agent in the background
+//! and tells the thread's clients of one; `agents/update` moves the agent's new threads to
+//! it, and `thread/reopen` an open thread, which keeps its id and journal (`updates`).
 //!
 //! A Host serves a Unix socket ([`socket`]), or, without one, a single client in the same
 //! process ([`Daemon::connect_in_process`]). Remote clients, on the person's other devices,
@@ -44,9 +44,9 @@ mod modes;
 pub mod paths;
 mod queue;
 mod service_tools;
-mod session;
 pub mod socket;
 pub mod terminals;
+mod thread;
 mod updates;
 mod websocket;
 
@@ -72,7 +72,6 @@ use weave_acp_core::AgentHandle;
 use weave_acp_core::AgentSpec;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::schema::InitializeResponse;
-use weave_acp_core::schema::SessionId;
 use weave_agents::environment::Environment;
 use weave_agents::update::Upstream;
 use weave_host_protocol::Host;
@@ -84,12 +83,13 @@ use weave_host_protocol::errors;
 use weave_host_protocol::host::EnvironmentSource;
 use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::SessionAgent;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionRemovedNotification;
-use weave_host_protocol::sessions::SessionUpdatedNotification;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::ThreadAgent;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadRemovedNotification;
+use weave_host_protocol::threads::ThreadUpdatedNotification;
 use weave_host_protocol::worktrees::GitLocation;
 pub use weave_remote::access::RemoteSettings;
 pub use weave_remote::access::Serve;
@@ -107,25 +107,25 @@ pub use crate::journal::Recorded;
 pub use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 pub use crate::paths::DaemonPaths;
-use crate::session::Command;
-use crate::session::SessionHandle;
-use crate::session::Summary;
-use crate::session::lock;
+use crate::thread::Command;
+use crate::thread::Summary;
+use crate::thread::ThreadHandle;
+use crate::thread::lock;
 
-/// How long a session nothing needs stays open: no client attached, no turn running.
+/// How long a thread nothing needs stays open: no client attached, no turn running.
 pub const DEFAULT_IDLE_GRACE: Duration = Duration::from_secs(30 * 60);
-/// How long a blank session (new, never prompted) nothing needs stays open: long enough for
+/// How long a blank thread (new, never prompted) nothing needs stays open: long enough for
 /// a client's `/reload` or reconnect to reattach.
 pub const DEFAULT_BLANK_GRACE: Duration = Duration::from_secs(60);
-/// How long an agent process started for no session waits to be taken by one.
+/// How long an agent process started for no thread waits to be taken by one.
 const SPARE_GRACE: Duration = Duration::from_secs(60);
 /// Journals untouched for this long are removed when a Host starts, and while it runs.
 const JOURNAL_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
-/// Why a session a stopped Host left suspended was closed.
+/// Why a thread a stopped Host left suspended was closed.
 const UNCLAIMED: &str = "nobody took it up after the Host restarted";
 /// How often a running Host prunes journals.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
-/// How long stopping waits for each session's agent.
+/// How long stopping waits for each thread's agent.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a Host about to stop waits for its running turns to end (WVE-143).
 pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -133,13 +133,13 @@ pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DRAIN_POLL: Duration = Duration::from_millis(200);
 
 pub struct DaemonConfig {
-    /// Where session journals are written; `None` keeps them in memory only.
+    /// Where thread journals are written; `None` keeps them in memory only.
     pub journals: Option<PathBuf>,
-    /// How long a session nothing needs stays open.
+    /// How long a thread nothing needs stays open.
     pub idle_grace: Duration,
     /// How long stopping waits for running turns to end.
     pub drain_timeout: Duration,
-    /// How long a blank session nothing needs stays open.
+    /// How long a blank thread nothing needs stays open.
     pub blank_grace: Duration,
     pub launcher: Launcher,
     /// The config file agents and MCP servers come from; the default one when absent.
@@ -253,7 +253,7 @@ pub(crate) struct Agent {
     pub(crate) package: Option<String>,
     pub(crate) spec: AgentSpec,
     pub(crate) options: ClientOptions,
-    /// The mode its new sessions start in.
+    /// The mode its new threads start in.
     pub(crate) mode: Option<String>,
     /// The configuration it came from, for its MCP servers.
     pub(crate) config: Arc<weave_agents::Config>,
@@ -280,13 +280,13 @@ impl Agent {
         updates::Feed::of(self.source, &self.id, self.package.as_deref())
     }
 
-    /// The agent as a session's clients see it, once it answered `initialize`.
-    pub(crate) fn session_agent(&self, initialize: InitializeResponse) -> SessionAgent {
+    /// The agent as a thread's clients see it, once it answered `initialize`.
+    pub(crate) fn thread_agent(&self, initialize: InitializeResponse) -> ThreadAgent {
         let name = initialize.agent_info.as_ref().map_or_else(
             || self.name.clone(),
             |info| info.title.clone().unwrap_or_else(|| info.name.clone()),
         );
-        SessionAgent {
+        ThreadAgent {
             id: self.id.clone(),
             name,
             initialize,
@@ -315,14 +315,14 @@ pub(crate) struct Shared {
     started_ms: u64,
     pub(crate) next_client: AtomicU64,
     pub(crate) stop: watch::Sender<bool>,
-    /// Clients watching the Host's sessions (`sessions/watch`), by connection. Taken before
+    /// Clients watching the Host's threads (`threads/watch`), by connection. Taken before
     /// the registry, never while holding it.
     watchers: Mutex<BTreeMap<u64, Watcher>>,
     /// The drain before the Host stops, while one is on: no new turns start.
     drain: Mutex<Option<Drain>>,
     /// Terminals, when the Host has an owner for them.
     pub(crate) terminals: Option<Arc<terminals::Terminals>>,
-    /// Held while a report takes up the session it's for, so that two reports at once don't
+    /// Held while a report takes up the thread it's for, so that two reports at once don't
     /// take it up twice (`host_tools::tell`).
     pub(crate) taking_up_for_reports: tokio::sync::Mutex<()>,
 }
@@ -390,9 +390,9 @@ impl Shared {
             .as_ref()
             .and_then(|drain| drain.except.clone());
         self.registry()
-            .sessions
+            .threads
             .values()
-            .map(SessionHandle::summary)
+            .map(ThreadHandle::summary)
             .filter(|summary| {
                 summary.activity != Activity::Idle
                     && except.as_deref() != Some(summary.agent_process.as_str())
@@ -415,13 +415,13 @@ impl Shared {
         };
         if lapsed {
             tracing::info!("the client that asked for a drain went; turns start again");
-            for session in self.registry().sessions.values() {
-                let _ = session.send(Command::Advance);
+            for thread in self.registry().threads.values() {
+                let _ = thread.send(Command::Advance);
             }
         }
     }
 
-    /// The configuration, read afresh, so edits apply to the next session.
+    /// The configuration, read afresh, so edits apply to the next thread.
     /// The home directory `~/…` paths between Hosts are under.
     pub(crate) fn home(&self) -> PathBuf {
         self.config.home.clone().unwrap_or_else(client::home)
@@ -510,7 +510,7 @@ impl Shared {
         }
     }
 
-    /// An initialized agent for a new or reopened session: a spare one, or a new one.
+    /// An initialized agent for a new or reopened thread: a spare one, or a new one.
     pub(crate) async fn instance(
         &self,
         agent: &Agent,
@@ -538,7 +538,7 @@ impl Shared {
             .provide_mcp(self.mcp.provider());
     }
 
-    /// Keep an agent no session took, as after `auth_required`, for the next request; it
+    /// Keep an agent no thread took, as after `auth_required`, for the next request; it
     /// stops if nothing takes it for a while.
     pub(crate) fn keep_spare(self: &Arc<Self>, instance: Instance) {
         let key = instance.key.clone();
@@ -576,8 +576,8 @@ impl Shared {
         });
     }
 
-    /// An agent to ask something of outside any session (list, delete, sign in): an open
-    /// session's of the same agent, or a spare.
+    /// An agent to ask something of outside any thread (list, delete, sign in): an open
+    /// thread's of the same agent, or a spare.
     pub(crate) async fn agent_handle(
         self: &Arc<Self>,
         agent: &Agent,
@@ -591,10 +591,10 @@ impl Shared {
                 return Ok(spare.instance.connection.handle());
             }
             let live = registry
-                .sessions
+                .threads
                 .values()
-                .find(|session| session.key == key)
-                .map(|session| session.agent.clone());
+                .find(|thread| thread.key == key)
+                .map(|thread| thread.agent.clone());
             if let Some(agent) = live {
                 return Ok(agent);
             }
@@ -605,7 +605,7 @@ impl Shared {
         Ok(handle)
     }
 
-    /// The spare agents of `agent_id`, which the next sessions for it take.
+    /// The spare agents of `agent_id`, which the next threads for it take.
     pub(crate) fn spare_handles(&self, agent_id: &str) -> Vec<AgentHandle> {
         self.registry()
             .spares
@@ -635,38 +635,38 @@ impl Shared {
         }
     }
 
-    /// Where `session_id`'s protocol trace goes.
-    pub(crate) fn trace_path(&self, session_id: &SessionId) -> Result<PathBuf, Error> {
+    /// Where `thread_id`'s protocol trace goes.
+    pub(crate) fn trace_path(&self, thread_id: &ThreadId) -> Result<PathBuf, Error> {
         journal::create_private_dir(&self.config.traces).map_err(|error| {
             Error::internal_error().data(format!(
                 "creating {}: {error}",
                 self.config.traces.display()
             ))
         })?;
-        let file = journal::path_for(&self.config.traces, session_id);
+        let file = journal::path_for(&self.config.traces, thread_id);
         Ok(file.with_extension("jsons"))
     }
 
-    /// The sessions the Host has a journal for, across agents, most recently active first:
-    /// what `sessions/list` gives without an agent, and `sessions/watch` starts from. Blank
-    /// sessions aren't listed. With `cwd`, only those there; with `repo`, a primary worktree,
+    /// The threads the Host has a journal for, across agents, most recently active first:
+    /// what `threads/list` gives without an agent, and `threads/watch` starts from. Blank
+    /// threads aren't listed. With `cwd`, only those there; with `repo`, a primary worktree,
     /// only those in its repository.
-    pub(crate) fn listings(&self, cwd: Option<&Path>, repo: Option<&Path>) -> Vec<SessionListing> {
+    pub(crate) fn listings(&self, cwd: Option<&Path>, repo: Option<&Path>) -> Vec<ThreadListing> {
         let registry = self.registry();
         let in_scope = |dir: &Path, git: Option<&GitLocation>| {
             cwd.is_none_or(|cwd| cwd == dir)
                 && repo.is_none_or(|repo| git.is_some_and(|git| git.repo == repo))
         };
-        let mut sessions: Vec<SessionListing> = registry
-            .sessions
+        let mut threads: Vec<ThreadListing> = registry
+            .threads
             .values()
-            .filter(|session| !session.is_blank())
-            .map(SessionHandle::summary)
+            .filter(|thread| !thread.is_blank())
+            .map(ThreadHandle::summary)
             .filter(|summary| in_scope(&summary.cwd, summary.git.as_ref()))
             .map(|summary| summary.listing())
             .collect();
-        for (session_id, recorded) in &registry.known {
-            if registry.sessions.contains_key(session_id)
+        for (thread_id, recorded) in &registry.known {
+            if registry.threads.contains_key(thread_id)
                 || !in_scope(&recorded.cwd, recorded.git.as_ref())
             {
                 continue;
@@ -674,60 +674,58 @@ impl Shared {
             let Some(agent_id) = recorded.agent_id() else {
                 continue;
             };
-            sessions.push(client::dormant(session_id, agent_id, recorded));
+            threads.push(client::dormant(thread_id, agent_id, recorded));
         }
-        sessions.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
-        sessions
+        threads.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
+        threads
     }
 
-    /// Each session the Host has a record of, open or not, blank ones aside: its directory with
+    /// Each thread the Host has a record of, open or not, blank ones aside: its directory with
     /// symlinks resolved, and when it was last active.
-    pub(crate) fn session_directories(&self) -> Vec<(SessionId, PathBuf, u64)> {
-        let sessions: Vec<(SessionId, PathBuf, u64)> = {
+    pub(crate) fn thread_directories(&self) -> Vec<(ThreadId, PathBuf, u64)> {
+        let threads: Vec<(ThreadId, PathBuf, u64)> = {
             let registry = self.registry();
             let open = registry
-                .sessions
+                .threads
                 .values()
-                .filter(|session| !session.is_blank())
-                .map(SessionHandle::summary)
-                .map(|summary| (summary.session_id, summary.cwd, summary.last_activity_ms));
+                .filter(|thread| !thread.is_blank())
+                .map(ThreadHandle::summary)
+                .map(|summary| (summary.thread_id, summary.cwd, summary.last_activity_ms));
             let dormant = registry
                 .known
                 .iter()
-                .filter(|(session_id, _)| !registry.sessions.contains_key(*session_id))
-                .map(|(session_id, recorded)| {
+                .filter(|(thread_id, _)| !registry.threads.contains_key(*thread_id))
+                .map(|(thread_id, recorded)| {
                     (
-                        session_id.clone(),
+                        thread_id.clone(),
                         recorded.cwd.clone(),
                         recorded.last_activity_ms,
                     )
                 });
             open.chain(dormant).collect()
         };
-        sessions
+        threads
             .into_iter()
-            .map(|(session_id, cwd, last_activity)| {
-                (session_id, git::canonical(&cwd), last_activity)
-            })
+            .map(|(thread_id, cwd, last_activity)| (thread_id, git::canonical(&cwd), last_activity))
             .collect()
     }
 
     /// Let the worktree at `path` (symlinks resolved) go before it's removed: refused while a
-    /// session in it runs a turn or waits on a request, otherwise closing the sessions open in
+    /// thread in it runs a turn or waits on a request, otherwise closing the threads open in
     /// it, blank ones included. Those it closed.
-    pub(crate) async fn release(&self, path: &Path) -> Result<Vec<SessionId>, Error> {
+    pub(crate) async fn release(&self, path: &Path) -> Result<Vec<ThreadId>, Error> {
         // Taken from the registry first, so it isn't held while directories are resolved.
-        let mut inside: Vec<(SessionHandle, Summary)> = self
+        let mut inside: Vec<(ThreadHandle, Summary)> = self
             .registry()
-            .sessions
+            .threads
             .values()
-            .map(|session| (session.clone(), session.summary()))
+            .map(|thread| (thread.clone(), thread.summary()))
             .collect();
         inside.retain(|(_, summary)| git::canonical(&summary.cwd).starts_with(path));
-        let busy: Vec<SessionId> = inside
+        let busy: Vec<ThreadId> = inside
             .iter()
             .filter(|(_, summary)| summary.activity != Activity::Idle)
-            .map(|(_, summary)| summary.session_id.clone())
+            .map(|(_, summary)| summary.thread_id.clone())
             .collect();
         let (terminals, busy_terminals) = match &self.terminals {
             Some(terminals) => {
@@ -746,40 +744,40 @@ impl Shared {
             }
         }
         let mut closed = Vec::new();
-        for (session, summary) in inside {
+        for (thread, summary) in inside {
             // One that ended meanwhile is closed already.
-            let _ = session
+            let _ = thread
                 .finish(|done| Command::End {
                     reason: "its worktree was removed".to_owned(),
                     by: None,
                     done,
                 })
                 .await;
-            closed.push(summary.session_id);
+            closed.push(summary.thread_id);
         }
         Ok(closed)
     }
 
-    /// `sessions/watch`: `respond` with the Host's sessions as they are, then tell `client` of
+    /// `threads/watch`: `respond` with the Host's threads as they are, then tell `client` of
     /// every change from there on. Nothing reaches watchers between the two, so the client
     /// misses nothing and hears nothing older than its listing.
     ///
-    /// With `labels`, only the sessions that carry every one of them (WVE-173).
+    /// With `labels`, only the threads that carry every one of them (WVE-173).
     pub(crate) fn watch(
         &self,
         client: u64,
         cx: ConnectionTo<HostClient>,
         labels: Vec<String>,
-        respond: impl FnOnce(Vec<SessionListing>) -> Result<(), Error>,
+        respond: impl FnOnce(Vec<ThreadListing>) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let mut watchers = lock(&self.watchers);
-        let mut sessions = self.listings(None, None);
-        sessions.retain(|listing| client::labelled(listing, &labels));
-        let matched = sessions
+        let mut threads = self.listings(None, None);
+        threads.retain(|listing| client::labelled(listing, &labels));
+        let matched = threads
             .iter()
             .map(|listing| listing.info.session_id.clone())
             .collect();
-        respond(sessions)?;
+        respond(threads)?;
         watchers.insert(
             client,
             Watcher {
@@ -795,44 +793,43 @@ impl Shared {
         lock(&self.watchers).remove(&client);
     }
 
-    /// Tell the clients watching the Host's sessions how `session` lists now, dropping those
+    /// Tell the clients watching the Host's threads how `thread` lists now, dropping those
     /// that have gone. A watcher for labels hears of it while it carries them, and once more
     /// when a change takes it out of what it watches.
-    pub(crate) fn tell_updated(&self, session: SessionListing) {
-        let session_id = session.info.session_id.clone();
-        let notification = SessionUpdatedNotification { session };
+    pub(crate) fn tell_updated(&self, thread: ThreadListing) {
+        let thread_id = thread.info.session_id.clone();
+        let notification = ThreadUpdatedNotification { thread };
         lock(&self.watchers).retain(|_, watcher| {
             let told = if watcher.labels.is_empty() {
                 true
-            } else if client::labelled(&notification.session, &watcher.labels) {
-                watcher.matched.insert(session_id.clone());
+            } else if client::labelled(&notification.thread, &watcher.labels) {
+                watcher.matched.insert(thread_id.clone());
                 true
             } else {
-                watcher.matched.remove(&session_id)
+                watcher.matched.remove(&thread_id)
             };
             !told || watcher.cx.send_notification(notification.clone()).is_ok()
         });
     }
 
-    /// Tell the clients watching the Host's sessions that `session_id` is gone: those that
+    /// Tell the clients watching the Host's threads that `thread_id` is gone: those that
     /// watch it.
-    pub(crate) fn tell_removed(&self, session_id: SessionId) {
-        let notification = SessionRemovedNotification { session_id };
+    pub(crate) fn tell_removed(&self, thread_id: ThreadId) {
+        let notification = ThreadRemovedNotification { thread_id };
         lock(&self.watchers).retain(|_, watcher| {
-            let told =
-                watcher.labels.is_empty() || watcher.matched.remove(&notification.session_id);
+            let told = watcher.labels.is_empty() || watcher.matched.remove(&notification.thread_id);
             !told || watcher.cx.send_notification(notification.clone()).is_ok()
         });
     }
 
     pub(crate) fn status(&self) -> HostStatus {
-        let mut sessions: Vec<_> = self
+        let mut threads: Vec<_> = self
             .registry()
-            .sessions
+            .threads
             .values()
-            .map(SessionHandle::summary)
+            .map(ThreadHandle::summary)
             .collect();
-        sessions.sort_by_key(|session| session.last_activity_ms);
+        threads.sort_by_key(|thread| thread.last_activity_ms);
         HostStatus {
             protocol: PROTOCOL_VERSION,
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -843,65 +840,65 @@ impl Shared {
                 weave_agents::environment::Source::LoginShell => EnvironmentSource::LoginShell,
                 weave_agents::environment::Source::Process => EnvironmentSource::Process,
             },
-            sessions: sessions.iter().map(session::Summary::listing).collect(),
+            threads: threads.iter().map(thread::Summary::listing).collect(),
             remote: self.remote.address(),
             dispatcher: self.dispatcher.status(),
         }
     }
 }
 
-/// An agent started for no session yet.
+/// An agent started for no thread yet.
 pub(crate) struct Spare {
     instance: Instance,
     /// Which keeping of it this is, so an old expiry leaves a newer one alone.
     generation: u64,
 }
 
-/// A client watching the Host's sessions, for the labels it asked for, if any.
+/// A client watching the Host's threads, for the labels it asked for, if any.
 struct Watcher {
     cx: ConnectionTo<HostClient>,
     labels: Vec<String>,
-    /// The sessions that carried them when it last heard of each, with `labels`.
-    matched: HashSet<SessionId>,
+    /// The threads that carried them when it last heard of each, with `labels`.
+    matched: HashSet<ThreadId>,
 }
 
 #[derive(Default)]
 pub(crate) struct Registry {
-    /// Open sessions, by id.
-    pub(crate) sessions: HashMap<SessionId, SessionHandle>,
-    /// Subagent sessions, and the open session they belong to.
-    pub(crate) children: HashMap<SessionId, SessionId>,
+    /// Open threads, by id.
+    pub(crate) threads: HashMap<ThreadId, ThreadHandle>,
+    /// Subagent threads, and the open thread they belong to.
+    pub(crate) children: HashMap<ThreadId, ThreadId>,
     /// Each agent's `initialize` answer, so asking again starts nothing.
     pub(crate) initialized: HashMap<LaunchKey, InitializeResponse>,
-    /// Every session the journals record, open or not: which agent, where, under which
+    /// Every thread the journals record, open or not: which agent, where, under which
     /// policy, and whether it was closed or left open by a Host that stopped.
-    pub(crate) known: HashMap<SessionId, Recorded>,
-    /// Agents started for no session yet.
+    pub(crate) known: HashMap<ThreadId, Recorded>,
+    /// Agents started for no thread yet.
     spares: HashMap<LaunchKey, Spare>,
     next_spare: u64,
     /// Clients connected now.
     pub(crate) clients: usize,
-    /// Sessions being taken up from their journals now. Nothing else writes those journals
+    /// Threads being taken up from their journals now. Nothing else writes those journals
     /// meanwhile.
-    pub(crate) taking_up: HashSet<SessionId>,
+    pub(crate) taking_up: HashSet<ThreadId>,
 }
 
 impl Registry {
-    /// The open session `session_id` is, or belongs to as a subagent.
-    pub(crate) fn live(&self, session_id: &SessionId) -> Option<SessionHandle> {
-        self.sessions.get(&self.root(session_id)).cloned()
+    /// The open thread `thread_id` is, or belongs to as a subagent.
+    pub(crate) fn live(&self, thread_id: &ThreadId) -> Option<ThreadHandle> {
+        self.threads.get(&self.root(thread_id)).cloned()
     }
 
-    /// The session `session_id` is, or belongs to as an open subagent session, whose journal
+    /// The thread `thread_id` is, or belongs to as an open subagent thread, whose journal
     /// holds its events.
-    pub(crate) fn root(&self, session_id: &SessionId) -> SessionId {
-        self.children.get(session_id).unwrap_or(session_id).clone()
+    pub(crate) fn root(&self, thread_id: &ThreadId) -> ThreadId {
+        self.children.get(thread_id).unwrap_or(thread_id).clone()
     }
 
-    /// Where `session_id`'s work goes on now (WVE-168): the last of its successors, or itself
+    /// Where `thread_id`'s work goes on now (WVE-168): the last of its successors, or itself
     /// when it names none.
-    pub(crate) fn latest_successor(&self, session_id: &SessionId) -> SessionId {
-        let mut latest = session_id.clone();
+    pub(crate) fn latest_successor(&self, thread_id: &ThreadId) -> ThreadId {
+        let mut latest = thread_id.clone();
         for _ in 0..MAX_SUCCESSORS {
             match self
                 .known
@@ -916,16 +913,16 @@ impl Registry {
     }
 }
 
-/// The sessions `known` that carry labels, whose journals pruning keeps (WVE-173).
-fn labelled(known: &HashMap<SessionId, Recorded>) -> Vec<SessionId> {
+/// The threads `known` that carry labels, whose journals pruning keeps (WVE-173).
+fn labelled(known: &HashMap<ThreadId, Recorded>) -> Vec<ThreadId> {
     known
         .iter()
         .filter(|(_, recorded)| !recorded.labels.is_empty())
-        .map(|(session_id, _)| session_id.clone())
+        .map(|(thread_id, _)| thread_id.clone())
         .collect()
 }
 
-/// How many successors of a session are followed, at most.
+/// How many successors of a thread are followed, at most.
 pub(crate) const MAX_SUCCESSORS: usize = 64;
 
 #[derive(Clone)]
@@ -937,10 +934,22 @@ impl Daemon {
     pub fn new(config: DaemonConfig) -> Self {
         let known = match &config.journals {
             Some(journals) => {
-                // Read first, so labelled sessions' journals are kept.
+                match journal::move_from_version_2(journals) {
+                    Ok(true) => tracing::info!(
+                        to = %journals.display(),
+                        "moved the journals from where version 2 of the Host protocol kept them"
+                    ),
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(
+                        %error,
+                        to = %journals.display(),
+                        "couldn't move the journals from where version 2 of the Host protocol kept them"
+                    ),
+                }
+                // Read first, so labelled threads' journals are kept.
                 let mut known = journal::index(journals);
                 journal::prune(journals, JOURNAL_RETENTION, &labelled(&known));
-                known.retain(|session_id, _| journal::path_for(journals, session_id).exists());
+                known.retain(|thread_id, _| journal::path_for(journals, thread_id).exists());
                 known
             }
             None => HashMap::new(),
@@ -1025,7 +1034,7 @@ impl Daemon {
     }
 
     /// Accept clients on `listener` until asked to stop, or until nothing has been open or
-    /// connected for `idle_exit`. Then stop every session, leaving them recoverable. Only
+    /// connected for `idle_exit`. Then stop every thread, leaving them recoverable. Only
     /// peers with the socket owner's user id are served.
     pub async fn serve(&self, listener: UnixListener, idle_exit: Option<Duration>) {
         let owner = socket::owner(&listener);
@@ -1034,7 +1043,7 @@ impl Daemon {
         // Starting pruned already.
         let mut prunes =
             tokio::time::interval_at(tokio::time::Instant::now() + PRUNE_INTERVAL, PRUNE_INTERVAL);
-        // Sessions a stopped Host left suspended have the idle grace to be taken up.
+        // Threads a stopped Host left suspended have the idle grace to be taken up.
         let unclaimed = tokio::time::sleep(self.shared.config.idle_grace);
         tokio::pin!(unclaimed);
         let mut unclaimed_closed = false;
@@ -1076,7 +1085,7 @@ impl Daemon {
                 _ = checks.tick(), if idle_exit.is_some() => {
                     let quiet = {
                         let registry = self.shared.registry();
-                        registry.sessions.is_empty() && registry.clients == 0
+                        registry.threads.is_empty() && registry.clients == 0
                     } && !self.shared.remote.is_on()
                         && !self.shared.dispatcher.is_joined();
                     if !quiet {
@@ -1148,34 +1157,34 @@ impl Daemon {
             .await;
     }
 
-    /// Remove journals untouched for the retention period, except open and labelled sessions',
-    /// and forget the sessions they recorded.
+    /// Remove journals untouched for the retention period, except open and labelled threads',
+    /// and forget the threads they recorded.
     fn prune(&self) {
         let Some(journals) = &self.shared.config.journals else {
             return;
         };
-        let kept: Vec<SessionId> = {
+        let kept: Vec<ThreadId> = {
             let registry = self.shared.registry();
             let mut kept = labelled(&registry.known);
-            kept.extend(registry.sessions.keys().cloned());
+            kept.extend(registry.threads.keys().cloned());
             kept
         };
         journal::prune(journals, JOURNAL_RETENTION, &kept);
         self.shared.admissions.prune(JOURNAL_RETENTION);
         let mut pruned = Vec::new();
-        self.shared.registry().known.retain(|session_id, _| {
-            let kept = journal::path_for(journals, session_id).exists();
+        self.shared.registry().known.retain(|thread_id, _| {
+            let kept = journal::path_for(journals, thread_id).exists();
             if !kept {
-                pruned.push(session_id.clone());
+                pruned.push(thread_id.clone());
             }
             kept
         });
-        for session_id in pruned {
-            self.shared.tell_removed(session_id);
+        for thread_id in pruned {
+            self.shared.tell_removed(thread_id);
         }
     }
 
-    /// Close the sessions a stopped Host left suspended that nobody has taken up since this
+    /// Close the threads a stopped Host left suspended that nobody has taken up since this
     /// one started: [`Self::serve`] does so once the idle grace has passed, as it would have
     /// closed them had it kept running. Their journals end closed, keeping their age, and
     /// watchers hear of it. They can still be opened again from their agents' histories.
@@ -1186,76 +1195,76 @@ impl Daemon {
         let mut closed = Vec::new();
         {
             let mut registry = self.shared.registry();
-            let unclaimed: Vec<SessionId> = registry
+            let unclaimed: Vec<ThreadId> = registry
                 .known
                 .iter()
-                .filter(|(session_id, recorded)| {
+                .filter(|(thread_id, recorded)| {
                     !recorded.closed
-                        && !registry.sessions.contains_key(*session_id)
-                        && !registry.taking_up.contains(*session_id)
+                        && !registry.threads.contains_key(*thread_id)
+                        && !registry.taking_up.contains(*thread_id)
                 })
-                .map(|(session_id, _)| session_id.clone())
+                .map(|(thread_id, _)| thread_id.clone())
                 .collect();
-            for session_id in unclaimed {
-                if let Err(error) = journal::close(journals, &session_id, UNCLAIMED) {
-                    tracing::warn!(%error, %session_id, "couldn't close a suspended session");
+            for thread_id in unclaimed {
+                if let Err(error) = journal::close(journals, &thread_id, UNCLAIMED) {
+                    tracing::warn!(%error, %thread_id, "couldn't close a suspended thread");
                     continue;
                 }
-                if let Some(recorded) = registry.known.get_mut(&session_id) {
+                if let Some(recorded) = registry.known.get_mut(&thread_id) {
                     recorded.closed = true;
                     if let Some(agent_id) = recorded.agent_id() {
-                        closed.push(client::dormant(&session_id, agent_id, recorded));
+                        closed.push(client::dormant(&thread_id, agent_id, recorded));
                     }
                 }
             }
         }
-        for session in closed {
-            tracing::info!(session_id = %session.info.session_id, "closed a suspended session nobody took up");
-            self.shared.tell_updated(session);
+        for thread in closed {
+            tracing::info!(thread_id = %thread.info.session_id, "closed a suspended session nobody took up");
+            self.shared.tell_updated(thread);
         }
     }
 
-    /// At startup, take up the suspended headless sessions whose queue holds prompts and isn't
+    /// At startup, take up the suspended headless threads whose queue holds prompts and isn't
     /// paused, so their queue runs with nobody attached (WVE-107), and those a stopped Host was
-    /// running a turn in, which they continue (WVE-144). Interactive sessions wait for a client.
+    /// running a turn in, which they continue (WVE-144). Interactive threads wait for a client.
     pub async fn resume_queues(&self) {
         let Some(journals) = &self.shared.config.journals else {
             return;
         };
-        let waiting: Vec<(SessionId, Recorded)> = self
+        let waiting: Vec<(ThreadId, Recorded)> = self
             .shared
             .registry()
             .known
             .iter()
             .filter(|(_, recorded)| !recorded.closed && recorded.policy.is_headless())
-            .map(|(session_id, recorded)| (session_id.clone(), recorded.clone()))
+            .map(|(thread_id, recorded)| (thread_id.clone(), recorded.clone()))
             .collect();
-        for (session_id, recorded) in waiting {
+        for (thread_id, recorded) in waiting {
             let Some(agent_id) = recorded.agent_id() else {
                 continue;
             };
             // Its queue waits, or a turn the stopped Host ran in it is to be continued.
             let ready =
-                journal::read(&journal::path_for(journals, &session_id)).is_ok_and(|records| {
+                journal::read(&journal::path_for(journals, &thread_id)).is_ok_and(|records| {
                     queue::Queue::from_records(&records).is_ready()
                         || journal::open_turns(&records)
                             .iter()
-                            .any(|open| open.session_id == session_id)
+                            .any(|open| open.thread_id == thread_id)
                 });
             if !ready {
                 continue;
             }
-            tracing::info!(%session_id, "taking up a headless session whose queue waits or whose turn was cut off");
+            tracing::info!(%thread_id, "taking up a headless thread whose queue waits or whose turn was cut off");
             if let Err(error) = client::take_up(
                 &self.shared,
                 agent_id,
                 recorded.cwd.clone(),
-                session_id.clone(),
+                thread_id.clone(),
                 recorded.policy.clone(),
             )
             .await
             {
-                tracing::warn!(%error, %session_id, "couldn't take up a session whose queue waits");
+                tracing::warn!(%error, %thread_id, "couldn't take up a thread whose queue waits");
             }
         }
     }
@@ -1285,16 +1294,15 @@ impl Daemon {
         left
     }
 
-    /// Stop every session's agent, and the spare ones. Their journals stay open, so a later
+    /// Stop every thread's agent, and the spare ones. Their journals stay open, so a later
     /// Host can take them up again.
     pub async fn shutdown(&self) {
         dispatcher::stop(&self.shared);
-        let sessions: Vec<SessionHandle> =
-            self.shared.registry().sessions.values().cloned().collect();
-        let stops = sessions.iter().map(|session| {
+        let threads: Vec<ThreadHandle> = self.shared.registry().threads.values().cloned().collect();
+        let stops = threads.iter().map(|thread| {
             tokio::time::timeout(
                 SUSPEND_TIMEOUT,
-                session.finish(|done| Command::Suspend { done }),
+                thread.finish(|done| Command::Suspend { done }),
             )
         });
         futures::future::join_all(stops).await;
@@ -1315,18 +1323,18 @@ impl Daemon {
         self.shared.status()
     }
 
-    /// Open a session (`request.session_id`, or a new one), start a turn in it and leave it
-    /// running under the request's policy, with no client attached: what `session/run` does,
+    /// Open a thread (`request.thread_id`, or a new one), start a turn in it and leave it
+    /// running under the request's policy, with no client attached: what `thread/run` does,
     /// and what a trigger calls directly.
-    pub async fn run(&self, request: RunRequest) -> Result<SessionId, Error> {
+    pub async fn run(&self, request: RunRequest) -> Result<ThreadId, Error> {
         client::run(&self.shared, request, None)
             .await
-            .map(|answer| answer.session_id)
+            .map(|answer| answer.thread_id)
     }
 }
 
-/// What the per-user Host's journal in `paths` records about `session_id`: the agent and
+/// What the per-user Host's journal in `paths` records about `thread_id`: the agent and
 /// directory to reopen it with. Read from disk, so the Host needn't be running.
-pub fn recorded_session(paths: &DaemonPaths, session_id: &SessionId) -> Option<Recorded> {
-    journal::recorded(&paths.journals(), session_id)
+pub fn recorded_thread(paths: &DaemonPaths, thread_id: &ThreadId) -> Option<Recorded> {
+    journal::recorded(&paths.journals(), thread_id)
 }

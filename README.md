@@ -94,7 +94,7 @@ attached (`--json` for scripts); `weave threads cancel <id>` stops a thread's tu
 `weave threads close <id>` closes it for everyone. `weave daemon status` describes the
 daemon, `stop` stops it (its threads resume when you next attach), and `restart` picks up a
 rebuilt weave. It keeps each
-thread's transcript in `~/.local/state/weave/daemon/sessions`, readable only by you, for
+thread's transcript in `~/.local/state/weave/daemon/threads`, readable only by you, for
 14 days. `--no-daemon` (or `[daemon] enabled = false`) runs agents inside `weave` instead,
 ending them when it exits.
 
@@ -186,7 +186,7 @@ default_agent = "claude"
 # server: all of them when absent, [] for none; an agent's `client_tools` overrides it.
 client_tools = ["clipboard_write"]
 # Tools the weave Host answers for the agent's own thread, such as renaming it; the same rules.
-host_tools = ["rename_session"]
+host_tools = ["rename_thread"]
 
 [tui]
 alternate_screen = "never"  # always run inline; "auto" (default) and "always" run fullscreen

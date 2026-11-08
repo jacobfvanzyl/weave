@@ -1,8 +1,8 @@
 //! Files on the Host's computer, for clients that aren't on it.
 //!
-//! [`ListFilesRequest`] lists a directory, so a client can pick where a session runs. Later
+//! [`ListFilesRequest`] lists a directory, so a client can pick where a thread runs. Later
 //! methods join the family under the same rules: `files/search` for `@` mentions, over a
-//! session directory's files as the TUI's picker matches them, and `files/read` for
+//! thread directory's files as the TUI's picker matches them, and `files/read` for
 //! attachments, a file as the content block the TUI's `@` mentions attach. Paths are absolute
 //! on the Host's computer; each method is a `features` entry of its own; nothing writes; and a
 //! listing gives names and kinds, never sizes, times or contents.
@@ -38,7 +38,7 @@ pub struct ListFilesRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ListFilesResponse {
-    /// The directory listed, without `.` or `..`. Symlinks stay as named, so a session's
+    /// The directory listed, without `.` or `..`. Symlinks stay as named, so a thread's
     /// directory reads as the person chose it.
     pub path: PathBuf,
     /// Its parent; none at the root.

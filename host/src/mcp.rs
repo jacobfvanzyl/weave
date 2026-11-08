@@ -1,6 +1,6 @@
-//! The Host MCP server, `weave`, which every session's agent gets (ADR 0009). Its tools are
+//! The Host MCP server, `weave`, which every thread's agent gets (ADR 0009). Its tools are
 //! client tools, which the client that sent the running turn runs on its device, as a pending
-//! request the session owns, and Host tools, which the Host answers itself (`host_tools`). Agents reach the server one of two ways, both MCP 2026-07-28 and
+//! request the thread owns, and Host tools, which the Host answers itself (`host_tools`). Agents reach the server one of two ways, both MCP 2026-07-28 and
 //! both answered by [`Mcp::handle`]:
 //!
 //! - over ACP itself (`"type": "acp"`), for agents that advertise `mcpCapabilities.acp`: their
@@ -8,10 +8,10 @@
 //! - otherwise as a stdio server, `weave mcp-bridge`, which relays bytes between the agent and
 //!   the Host's MCP socket ([`relay`]), after a token that names the declaration.
 //!
-//! Every session setup declares the server afresh, under a new `serverId` or token: a
-//! [`Binding`]. It learns its session's id once the agent has given it, since calls may come
+//! Every thread setup declares the server afresh, under a new `serverId` or token: a
+//! [`Binding`]. It learns its thread's id once the agent has given it, since calls may come
 //! before then, and its declaration goes when it's dropped. With the configured servers, it
-//! makes up the session's [`Servers`], whose statuses its clients are shown (WVE-160): the
+//! makes up the thread's [`Servers`], whose statuses its clients are shown (WVE-160): the
 //! Host's own server is connected once the agent has spoken to it.
 
 use std::collections::HashMap;
@@ -51,20 +51,20 @@ use weave_acp_core::schema::McpError;
 use weave_acp_core::schema::McpServer;
 use weave_acp_core::schema::McpServerAcp;
 use weave_acp_core::schema::McpServerStdio;
-use weave_acp_core::schema::SessionId;
 use weave_agents::config::ConfiguredMcpServer;
 use weave_host_protocol::mcp::McpServerSource;
 use weave_host_protocol::mcp::McpServerState;
 use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::mcp::McpTransport;
+use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::Tool;
 
 use crate::Shared;
 use crate::service_tools::Offered;
-use crate::session::ClientToolCall;
-use crate::session::Command;
 use crate::socket::Peer;
+use crate::thread::ClientToolCall;
+use crate::thread::Command;
 
 /// The bridge's environment: where the Host's MCP socket is.
 pub const SOCKET_VARIABLE: &str = "WEAVE_MCP_SOCKET";
@@ -75,11 +75,11 @@ pub const SERVER_NAME: &str = "weave";
 /// Codex's opt-in, per stdio server, to MCP 2026-07-28. Set for every agent, since the Host
 /// doesn't branch on which agent it runs.
 const CODEX_VERSION_VARIABLE: &str = "CODEX_MCP_PROTOCOL_VERSION";
-/// How long a tool call waits for the agent to name the session it's for.
+/// How long a tool call waits for the agent to name the thread it's for.
 const BIND_WAIT: Duration = Duration::from_secs(30);
 /// How long the bridge has to send its token.
 const TOKEN_WAIT: Duration = Duration::from_secs(5);
-/// How long agents may keep a list: a session's tools don't change.
+/// How long agents may keep a list: a thread's tools don't change.
 const TTL_MS: u64 = 60 * 60 * 1000;
 const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
 const PARSE_ERROR: i32 = -32700;
@@ -88,16 +88,16 @@ const INVALID_PARAMS: i32 = -32602;
 const INSTRUCTIONS: &str = "Tools of the weave Host this thread runs in. Client tools, such \
                             as clipboard_write, run on the device of the person who sent the \
                             current turn, and fail when nobody is connected, as in a headless \
-                            run. Host tools, such as rename_session, act on this thread in the \
+                            run. Host tools, such as rename_thread, act on this thread in the \
                             Host and need nobody connected. Pairing the person's Hosts and \
                             devices with each other (weave hosts, weave pair, weave devices) \
                             is the person's to do: run those commands only when they ask.";
 
-/// What a client is told when its session's agent can't use the server.
+/// What a client is told when its thread's agent can't use the server.
 pub(crate) const REFUSED: &str = "This agent's MCP client predates MCP 2026-07-28, so it can't \
                                   use weave's tools.";
 
-/// One session setup's declaration of the server.
+/// One thread setup's declaration of the server.
 struct Declared {
     /// What `tools/list` gives: the client tools, then the Host tools, then the services'.
     tools: Vec<Tool>,
@@ -105,15 +105,15 @@ struct Declared {
     host_tools: Vec<String>,
     /// The services' tools among them, which the services that declared them answer.
     service_tools: Vec<Offered>,
-    /// The session's id, once the agent has given it.
-    session: watch::Sender<Option<SessionId>>,
+    /// The thread's id, once the agent has given it.
+    thread: watch::Sender<Option<ThreadId>>,
     /// How the agent reaches it.
     transport: McpTransport,
     /// The agent has spoken to it in 2026-07-28.
     connected: AtomicBool,
     /// The agent spoke an MCP revision before 2026-07-28.
     refused: AtomicBool,
-    /// Its session was told so.
+    /// Its thread was told so.
     told: AtomicBool,
 }
 
@@ -128,7 +128,7 @@ pub(crate) struct Mcp {
     next_call: AtomicU64,
 }
 
-/// A session setup's declaration of the server, removed when dropped.
+/// A thread setup's declaration of the server, removed when dropped.
 pub(crate) struct Binding {
     key: String,
     declared: Arc<Declared>,
@@ -136,9 +136,9 @@ pub(crate) struct Binding {
 }
 
 impl Binding {
-    /// The agent named the session this declaration serves.
-    pub(crate) fn bind(&self, session_id: &SessionId) {
-        self.declared.session.send_replace(Some(session_id.clone()));
+    /// The agent named the thread this declaration serves.
+    pub(crate) fn bind(&self, thread_id: &ThreadId) {
+        self.declared.thread.send_replace(Some(thread_id.clone()));
         if let Some(mcp) = self.mcp.upgrade() {
             mcp.tell_if_refused(&self.declared);
             if self.declared.connected.load(Ordering::Relaxed) {
@@ -166,7 +166,7 @@ impl Binding {
     }
 }
 
-/// The MCP servers one session setup gives its agent: the Host's own, declared or not, and the
+/// The MCP servers one thread setup gives its agent: the Host's own, declared or not, and the
 /// configured ones, passed on or skipped.
 pub(crate) struct Servers {
     /// The Host's own server's declaration, which goes with the agent's process.
@@ -211,10 +211,10 @@ impl Servers {
         }
     }
 
-    /// The agent named the session these servers serve.
-    pub(crate) fn bind(&self, session_id: &SessionId) {
+    /// The agent named the thread these servers serve.
+    pub(crate) fn bind(&self, thread_id: &ThreadId) {
         if let Some(binding) = &self.binding {
-            binding.bind(session_id);
+            binding.bind(thread_id);
         }
     }
 
@@ -251,14 +251,14 @@ fn transport(server: &McpServer) -> McpTransport {
 impl Drop for Binding {
     fn drop(&mut self) {
         if let Some(mcp) = self.mcp.upgrade() {
-            crate::session::lock(&mcp.declared).remove(&self.key);
+            crate::thread::lock(&mcp.declared).remove(&self.key);
         }
     }
 }
 
 impl Drop for Mcp {
     fn drop(&mut self) {
-        if let Some(dir) = crate::session::lock(&self.made).take() {
+        if let Some(dir) = crate::thread::lock(&self.made).take() {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
@@ -280,7 +280,7 @@ impl Mcp {
         Arc::new(Provider(Arc::downgrade(self)))
     }
 
-    /// Declare the server for one session setup, with `client_tools`, `host_tools` and
+    /// Declare the server for one thread setup, with `client_tools`, `host_tools` and
     /// `service_tools`: over ACP when the agent takes that, otherwise as the stdio bridge. `Err`
     /// says why it can't be declared.
     pub(crate) fn declare(
@@ -317,13 +317,13 @@ impl Mcp {
                 .chain(service_tools.iter().map(|offered| offered.tool.clone()))
                 .collect(),
             service_tools,
-            session: watch::Sender::new(None),
+            thread: watch::Sender::new(None),
             transport: transport(&server),
             connected: AtomicBool::new(false),
             refused: AtomicBool::new(false),
             told: AtomicBool::new(false),
         });
-        crate::session::lock(&self.declared).insert(key.clone(), Arc::clone(&declared));
+        crate::thread::lock(&self.declared).insert(key.clone(), Arc::clone(&declared));
         Ok((
             server,
             Binding {
@@ -335,7 +335,7 @@ impl Mcp {
     }
 
     fn declared(&self, key: &str) -> Option<Arc<Declared>> {
-        crate::session::lock(&self.declared).get(key).cloned()
+        crate::thread::lock(&self.declared).get(key).cloned()
     }
 
     /// The socket the bridge connects to, listened on from the first time it's needed.
@@ -358,7 +358,7 @@ impl Mcp {
                 ));
                 crate::journal::create_private_dir(&dir)
                     .map_err(|error| format!("creating {}: {error}", dir.display()))?;
-                *crate::session::lock(&self.made) = Some(dir.clone());
+                *crate::thread::lock(&self.made) = Some(dir.clone());
                 dir.join("mcp.sock")
             }
         };
@@ -372,7 +372,7 @@ impl Mcp {
         Ok(path)
     }
 
-    /// The agent behind `declared` can't speak 2026-07-28: tell its session, once.
+    /// The agent behind `declared` can't speak 2026-07-28: tell its thread, once.
     fn refused(&self, declared: &Declared) {
         if !declared.refused.swap(true, Ordering::Relaxed) {
             self.tell_changed(declared);
@@ -387,17 +387,17 @@ impl Mcp {
         }
     }
 
-    /// Tell `declared`'s session, once it's known, that its servers' statuses changed.
+    /// Tell `declared`'s thread, once it's known, that its servers' statuses changed.
     fn tell_changed(&self, declared: &Declared) {
-        let Some(session_id) = declared.session.borrow().clone() else {
+        let Some(thread_id) = declared.thread.borrow().clone() else {
             return;
         };
-        let session = self
+        let thread = self
             .shared
             .upgrade()
-            .and_then(|shared| shared.registry().live(&session_id));
-        if let Some(session) = session {
-            let _ = session.send(Command::SummaryChanged);
+            .and_then(|shared| shared.registry().live(&thread_id));
+        if let Some(thread) = thread {
+            let _ = thread.send(Command::SummaryChanged);
         }
     }
 
@@ -405,18 +405,18 @@ impl Mcp {
         if !declared.refused.load(Ordering::Relaxed) {
             return;
         }
-        let Some(session_id) = declared.session.borrow().clone() else {
+        let Some(thread_id) = declared.thread.borrow().clone() else {
             return;
         };
         if declared.told.swap(true, Ordering::Relaxed) {
             return;
         }
-        let session = self
+        let thread = self
             .shared
             .upgrade()
-            .and_then(|shared| shared.registry().live(&session_id));
-        if let Some(session) = session {
-            let _ = session.send(Command::Notice {
+            .and_then(|shared| shared.registry().live(&thread_id));
+        if let Some(thread) = thread {
+            let _ = thread.send(Command::Notice {
                 text: REFUSED.to_owned(),
             });
         }
@@ -518,26 +518,26 @@ impl Mcp {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let mut named = declared.session.subscribe();
-        let session_id = tokio::select! {
+        let mut named = declared.thread.subscribe();
+        let thread_id = tokio::select! {
             named = tokio::time::timeout(BIND_WAIT, named.wait_for(Option::is_some)) => {
                 named.ok().and_then(|named| named.ok().and_then(|id| id.clone()))
             }
             () = &mut cancelled => return McpOutcome::Cancelled,
         };
-        let session = session_id.and_then(|session_id| {
+        let thread = thread_id.and_then(|thread_id| {
             self.shared
                 .upgrade()
-                .and_then(|shared| shared.registry().live(&session_id))
+                .and_then(|shared| shared.registry().live(&thread_id))
         });
-        let Some(session) = session else {
+        let Some(thread) = thread else {
             return tool_result(ClientToolResult::error("The thread isn't open."));
         };
         if declared.host_tools.iter().any(|known| known == tool) {
             let Some(shared) = self.shared.upgrade() else {
                 return tool_result(ClientToolResult::error("The Host is stopping."));
             };
-            return match crate::host_tools::call(&shared, &session, tool, &arguments, cancelled)
+            return match crate::host_tools::call(&shared, &thread, tool, &arguments, cancelled)
                 .await
             {
                 Some(result) => tool_result(result),
@@ -552,7 +552,7 @@ impl Mcp {
             let Some(shared) = self.shared.upgrade() else {
                 return tool_result(ClientToolResult::error("The Host is stopping."));
             };
-            let caller = crate::service_tools::caller(&session.summary());
+            let caller = crate::service_tools::caller(&thread.summary());
             return match shared
                 .service_tools
                 .call(offered, arguments, caller, cancelled)
@@ -564,7 +564,7 @@ impl Mcp {
         }
         let call = self.next_call.fetch_add(1, Ordering::Relaxed);
         let (reply, answered) = oneshot::channel();
-        let sent = session.send(Command::ClientTool(ClientToolCall {
+        let sent = thread.send(Command::ClientTool(ClientToolCall {
             call,
             tool: tool.to_owned(),
             arguments,
@@ -578,7 +578,7 @@ impl Mcp {
                 ClientToolResult::error("The thread ended before the tool ran.")
             })),
             () = cancelled => {
-                let _ = session.send(Command::WithdrawClientTool { call });
+                let _ = thread.send(Command::WithdrawClientTool { call });
                 McpOutcome::Cancelled
             }
         }

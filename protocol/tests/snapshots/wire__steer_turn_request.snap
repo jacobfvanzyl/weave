@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&SteerTurnRequest\n{ session_id: \"s-1\".into(), prompt: vec![text(\"use the other branch\")], })"
+expression: "message(&SteerTurnRequest\n{\n    thread_id: \"s-1\".into(), prompt: vec![text(\"use the other branch\")],\n    caller: None, origin: None,\n})"
 ---
 {
   "method": "turn/steer",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "prompt": [
       {
         "type": "text",

@@ -1,9 +1,9 @@
-//! Request keys (WVE-107): `session/run`, `turn/start` and `queue/add` take a key the caller
+//! Request keys (WVE-107): `thread/run`, `turn/start` and `queue/add` take a key the caller
 //! chooses, and a repeat answers as the first did, starting nothing. Each key is admitted here
 //! before its request acts: a line in `admissions.jsonl` beside the journals, written through
 //! to disk, then the answer once there is one, or a refusal that frees the key when the request
 //! failed. The work a key started is journaled with it, so when a Host stopped between
-//! admitting a key and answering, a repeat finds out from the session's journal whether the
+//! admitting a key and answering, a repeat finds out from the thread's journal whether the
 //! work happened. Keys are forgotten after the journals' retention. Triggers (WVE-145,
 //! WVE-146) are to admit their occurrences the same way.
 
@@ -26,13 +26,13 @@ use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use tokio::sync::watch;
-use weave_acp_core::schema::SessionId;
 use weave_host_protocol::errors;
+use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::turns::MAX_KEY;
 
 use crate::journal;
 use crate::journal::now_ms;
-use crate::session::lock;
+use crate::thread::lock;
 
 /// One line of the record.
 #[derive(Debug, Serialize, Deserialize)]
@@ -388,15 +388,15 @@ pub(crate) fn digest(params: &impl Serialize) -> String {
     hash.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The session a request key's work happened in and what it was, found in the journals in
-/// `dir`: `session_id`'s, or every one's when the request didn't name a session.
+/// The thread a request key's work happened in and what it was, found in the journals in
+/// `dir`: `thread_id`'s, or every one's when the request didn't name a thread.
 pub(crate) fn find_work(
     dir: &Path,
-    session_id: Option<&SessionId>,
+    thread_id: Option<&ThreadId>,
     key: &str,
 ) -> Option<journal::KeyedWork> {
-    let paths: Vec<PathBuf> = match session_id {
-        Some(session_id) => vec![journal::path_for(dir, session_id)],
+    let paths: Vec<PathBuf> = match thread_id {
+        Some(thread_id) => vec![journal::path_for(dir, thread_id)],
         None => std::fs::read_dir(dir)
             .ok()?
             .flatten()
@@ -432,7 +432,7 @@ mod tests {
     #[tokio::test]
     async fn a_repeat_gets_the_first_answer_across_restarts() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journals = dir.path().join("sessions");
+        let journals = dir.path().join("threads");
         let admissions = Arc::new(Admissions::load(Some(&journals), RETENTION));
         let Admitted::Act(ticket) = admit(&admissions, "k1", "d1").await else {
             panic!("a new key acts");
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn keys_are_forgotten_after_the_retention() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journals = dir.path().join("sessions");
+        let journals = dir.path().join("threads");
         let path = journals.with_file_name("admissions.jsonl");
         let old = now_ms() - 20 * 24 * 60 * 60 * 1000;
         std::fs::write(

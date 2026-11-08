@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListThreadsRequest\n{ labels: vec![\"bot:daily\".to_owned()], ..ListThreadsRequest::default() })"
+---
+{
+  "method": "threads/list",
+  "params": {
+    "labels": [
+      "bot:daily"
+    ]
+  }
+}

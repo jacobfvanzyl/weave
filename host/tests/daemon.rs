@@ -26,7 +26,6 @@ use weave_acp_core::schema::RequestPermissionResponse;
 use weave_acp_core::schema::SelectedPermissionOutcome;
 use weave_acp_core::schema::SessionConfigKind;
 use weave_acp_core::schema::SessionConfigOptionCategory;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::ToolKind;
@@ -46,7 +45,7 @@ use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::VersionRange;
 use weave_host_protocol::errors;
-use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::files::FileEntry;
 use weave_host_protocol::files::FileKind;
 use weave_host_protocol::files::LIST_FEATURE as LIST_FILES_FEATURE;
@@ -75,32 +74,33 @@ use weave_host_protocol::queue::FEATURE as QUEUE_FEATURE;
 use weave_host_protocol::queue::QueuePause;
 use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::ResumeQueueRequest;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::AttachSessionResponse;
-use weave_host_protocol::sessions::CloseSessionRequest;
-use weave_host_protocol::sessions::CloseWhen;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::DeleteSessionRequest;
-use weave_host_protocol::sessions::DetachSessionRequest;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::GetSessionResponse;
-use weave_host_protocol::sessions::JournalPosition;
-use weave_host_protocol::sessions::LabelSessionRequest;
-use weave_host_protocol::sessions::ListSessionsRequest;
-use weave_host_protocol::sessions::MAX_LABELS;
-use weave_host_protocol::sessions::OBSERVE_FEATURE;
-use weave_host_protocol::sessions::RenameSessionRequest;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionState;
-use weave_host_protocol::sessions::SessionStatus;
-use weave_host_protocol::sessions::SetSuccessorRequest;
-use weave_host_protocol::sessions::TurnOrigin;
-use weave_host_protocol::sessions::TurnState;
-use weave_host_protocol::sessions::UnwatchSessionsRequest;
-use weave_host_protocol::sessions::WATCH_FEATURE;
-use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::AttachThreadResponse;
+use weave_host_protocol::threads::CloseThreadRequest;
+use weave_host_protocol::threads::CloseWhen;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::DeleteThreadRequest;
+use weave_host_protocol::threads::DetachThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::GetThreadResponse;
+use weave_host_protocol::threads::JournalPosition;
+use weave_host_protocol::threads::LabelThreadRequest;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::MAX_LABELS;
+use weave_host_protocol::threads::OBSERVE_FEATURE;
+use weave_host_protocol::threads::RenameThreadRequest;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::SetSuccessorRequest;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadState;
+use weave_host_protocol::threads::ThreadStatus;
+use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::TurnState;
+use weave_host_protocol::threads::UnwatchThreadsRequest;
+use weave_host_protocol::threads::WATCH_FEATURE;
+use weave_host_protocol::threads::WatchThreadsRequest;
 use weave_host_protocol::tools::CLIPBOARD_WRITE;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::turns::CancelTurnRequest;
@@ -124,7 +124,7 @@ use weave_host_protocol::worktrees::Worktree;
 
 const WAIT: Duration = Duration::from_secs(10);
 
-/// Fake agents in-process, sharing `state` so sessions outlive any one of them. The stdio
+/// Fake agents in-process, sharing `state` so threads outlive any one of them. The stdio
 /// MCP servers they're given are the Host's bridge, which they run in-process too: the same
 /// relay `weave mcp-bridge` runs, to the Host's MCP socket.
 fn fake_agents(state: PathBuf, require_auth: bool) -> Launcher {
@@ -213,7 +213,7 @@ impl World {
         self.daemon_with(journals, idle_grace, Duration::from_secs(60), false)
     }
 
-    /// A Host whose blank sessions close `blank_grace` after nothing needs them.
+    /// A Host whose blank threads close `blank_grace` after nothing needs them.
     fn daemon_with(
         &self,
         journals: bool,
@@ -259,7 +259,7 @@ impl World {
         Daemon::new(config)
     }
 
-    /// A Host with journals whose agents advertise nothing optional, deleting sessions included.
+    /// A Host with journals whose agents advertise nothing optional, deleting threads included.
     fn daemon_minimal(&self) -> Daemon {
         let mut config = self.config(
             true,
@@ -273,7 +273,7 @@ impl World {
         Daemon::new(config)
     }
 
-    /// A Host whose agents list their sessions in every directory whatever `cwd` asks, as
+    /// A Host whose agents list their threads in every directory whatever `cwd` asks, as
     /// Claude's lists a repository's other worktrees.
     fn daemon_listing_every_directory(&self) -> Daemon {
         let mut config = self.config(
@@ -327,13 +327,13 @@ impl World {
     }
 
     fn journals(&self) -> PathBuf {
-        self.dir.path().join("sessions")
+        self.dir.path().join("threads")
     }
 
-    /// Whether the Host keeps a journal of `session_id`. The fake agent's ids need no
+    /// Whether the Host keeps a journal of `thread_id`. The fake agent's ids need no
     /// escaping in a file name.
-    fn has_journal(&self, session_id: &SessionId) -> bool {
-        self.journals().join(format!("{session_id}.jsonl")).exists()
+    fn has_journal(&self, thread_id: &ThreadId) -> bool {
+        self.journals().join(format!("{thread_id}.jsonl")).exists()
     }
 
     fn cwd(&self) -> PathBuf {
@@ -407,10 +407,10 @@ struct Seen {
     /// Why it closed, and who closed it.
     closed: Option<(String, Option<TurnOrigin>)>,
     notices: Vec<String>,
-    /// Titles the session was renamed to through the Host, and by whom.
+    /// Titles the thread was renamed to through the Host, and by whom.
     renamed: Vec<(String, Option<TurnOrigin>)>,
     /// The successors clients named for it.
-    continued_in: Vec<SessionId>,
+    continued_in: Vec<ThreadId>,
     /// Its labels each time they changed.
     labelled: Vec<Vec<String>>,
     /// Each turn's origin, and the queued prompt it started from.
@@ -433,8 +433,8 @@ fn text(block: &ContentBlock) -> String {
 }
 
 impl TestClient {
-    fn create_request(world: &World, agent: &str) -> CreateSessionRequest {
-        CreateSessionRequest {
+    fn create_request(world: &World, agent: &str) -> CreateThreadRequest {
+        CreateThreadRequest {
             agent_id: agent.to_owned(),
             cwd: world.cwd(),
             additional_directories: Vec::new(),
@@ -445,43 +445,43 @@ impl TestClient {
         }
     }
 
-    async fn create(&mut self, world: &World) -> SessionId {
-        self.create_with(world, "fake").await.session_id
+    async fn create(&mut self, world: &World) -> ThreadId {
+        self.create_with(world, "fake").await.thread_id
     }
 
-    /// A session in `dir`, prompted once so it isn't blank.
-    async fn session_in(&mut self, world: &World, dir: &Path) -> SessionState {
+    /// A thread in `dir`, prompted once so it isn't blank.
+    async fn thread_in(&mut self, world: &World, dir: &Path) -> ThreadState {
         let state = self
             .connection
-            .send(CreateSessionRequest {
+            .send(CreateThreadRequest {
                 cwd: dir.to_path_buf(),
                 ..Self::create_request(world, "fake")
             })
             .await
-            .expect("session/create");
-        self.prompt(&state.session_id, "hello").await;
+            .expect("thread/create");
+        self.prompt(&state.thread_id, "hello").await;
         self.until_turn_ends(&mut Seen::default(), None).await;
         state
     }
 
-    /// The Host's own listing, across agents, of the sessions in `repo`'s repository.
-    async fn in_repository(&self, repo: &Path) -> Vec<SessionListing> {
+    /// The Host's own listing, across agents, of the threads in `repo`'s repository.
+    async fn in_repository(&self, repo: &Path) -> Vec<ThreadListing> {
         self.connection
-            .send(ListSessionsRequest {
+            .send(ListThreadsRequest {
                 repo: Some(repo.to_path_buf()),
-                ..ListSessionsRequest::default()
+                ..ListThreadsRequest::default()
             })
             .await
-            .expect("sessions/list")
-            .sessions
+            .expect("threads/list")
+            .threads
     }
 
-    async fn create_with(&mut self, world: &World, agent: &str) -> SessionState {
+    async fn create_with(&mut self, world: &World, agent: &str) -> ThreadState {
         let state = self
             .connection
             .send(Self::create_request(world, agent))
             .await
-            .expect("session/create");
+            .expect("thread/create");
         self.position = Some(JournalPosition {
             journal: state.journal.id.clone(),
             seq: state.journal.head,
@@ -489,21 +489,21 @@ impl TestClient {
         state
     }
 
-    async fn attach(&mut self, session_id: &SessionId) -> AttachSessionResponse {
-        self.attach_after(session_id, None)
+    async fn attach(&mut self, thread_id: &ThreadId) -> AttachThreadResponse {
+        self.attach_after(thread_id, None)
             .await
-            .expect("session/attach")
+            .expect("thread/attach")
     }
 
     async fn attach_after(
         &mut self,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
         after: Option<JournalPosition>,
-    ) -> Result<AttachSessionResponse, Error> {
+    ) -> Result<AttachThreadResponse, Error> {
         let attached = self
             .connection
-            .send(AttachSessionRequest {
-                session_id: session_id.clone(),
+            .send(AttachThreadRequest {
+                thread_id: thread_id.clone(),
                 after,
                 agent_id: None,
                 cwd: None,
@@ -518,8 +518,8 @@ impl TestClient {
         Ok(attached)
     }
 
-    /// The sessions the fake agent's listing gives for the world's directory, in order.
-    async fn list(&self, world: &World) -> Vec<SessionId> {
+    /// The threads the fake agent's listing gives for the world's directory, in order.
+    async fn list(&self, world: &World) -> Vec<ThreadId> {
         self.listing(world)
             .await
             .into_iter()
@@ -527,9 +527,9 @@ impl TestClient {
             .collect()
     }
 
-    async fn listing(&self, world: &World) -> Vec<SessionListing> {
+    async fn listing(&self, world: &World) -> Vec<ThreadListing> {
         self.connection
-            .send(ListSessionsRequest {
+            .send(ListThreadsRequest {
                 agent_id: Some("fake".to_owned()),
                 cwd: Some(world.cwd()),
                 repo: None,
@@ -538,14 +538,14 @@ impl TestClient {
                 labels: Vec::new(),
             })
             .await
-            .expect("sessions/list")
-            .sessions
+            .expect("threads/list")
+            .threads
     }
 
-    async fn prompt(&self, session_id: &SessionId, text: &str) -> u64 {
+    async fn prompt(&self, thread_id: &ThreadId, text: &str) -> u64 {
         self.connection
             .send(StartTurnRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
                 key: None,
             })
@@ -554,21 +554,21 @@ impl TestClient {
             .seq
     }
 
-    async fn queue(&self, session_id: &SessionId, text: &str) -> AddQueuedResponse {
-        self.queue_keyed(session_id, text, None)
+    async fn queue(&self, thread_id: &ThreadId, text: &str) -> AddQueuedResponse {
+        self.queue_keyed(thread_id, text, None)
             .await
             .expect("queue/add")
     }
 
     async fn queue_keyed(
         &self,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
         text: &str,
         key: Option<&str>,
     ) -> Result<AddQueuedResponse, Error> {
         self.connection
             .send(AddQueuedRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
                 key: key.map(str::to_owned),
                 caller: None,
@@ -577,10 +577,10 @@ impl TestClient {
             .await
     }
 
-    async fn steer(&self, session_id: &SessionId, text: &str) -> SteerTurnResponse {
+    async fn steer(&self, thread_id: &ThreadId, text: &str) -> SteerTurnResponse {
         self.connection
             .send(SteerTurnRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
                 caller: None,
                 origin: None,
@@ -618,14 +618,14 @@ impl TestClient {
                         .unwrap_or_default(),
                     seq: event.seq,
                 });
-                if matches!(event.event, SessionEvent::TurnSteered { .. }) {
+                if matches!(event.event, ThreadEvent::TurnSteered { .. }) {
                     seen.steered_seqs.push(event.seq);
                 }
                 return seen.note(event.event);
             }
             HostEvent::PendingAdded(added) => {
                 if let Some(option) = allow {
-                    self.allow(&added.session_id, &added.pending, option)
+                    self.allow(&added.thread_id, &added.pending, option)
                         .await
                         .expect("answer");
                 }
@@ -637,13 +637,13 @@ impl TestClient {
 
     async fn allow(
         &self,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
         pending: &PendingRequest,
         option: &str,
     ) -> Result<(), Error> {
         self.connection
             .send(AnswerPendingRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 pending_id: pending.id.clone(),
                 permission: Some(RequestPermissionResponse::new(
                     RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
@@ -658,13 +658,13 @@ impl TestClient {
     }
 
     /// Wait for a pending client tool call.
-    async fn tool_call(&mut self, seen: &mut Seen) -> (SessionId, PendingRequest) {
+    async fn tool_call(&mut self, seen: &mut Seen) -> (ThreadId, PendingRequest) {
         loop {
             match self.next().await {
                 HostEvent::PendingAdded(added)
                     if matches!(added.pending.request, PendingKind::ClientTool { .. }) =>
                 {
-                    return (added.session_id, added.pending);
+                    return (added.thread_id, added.pending);
                 }
                 event => {
                     self.note(event, seen, None).await;
@@ -676,13 +676,13 @@ impl TestClient {
     /// Answer a client tool call with `result`.
     async fn run_tool(
         &self,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
         call: &PendingRequest,
         result: ClientToolResult,
     ) -> Result<(), Error> {
         self.connection
             .send(AnswerPendingRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 pending_id: call.id.clone(),
                 permission: None,
                 elicitation: None,
@@ -692,29 +692,29 @@ impl TestClient {
             .map(drop)
     }
 
-    /// Watch the Host's sessions: how they list now.
-    async fn watch(&self) -> Vec<SessionListing> {
+    /// Watch the Host's threads: how they list now.
+    async fn watch(&self) -> Vec<ThreadListing> {
         self.connection
-            .send(WatchSessionsRequest::default())
+            .send(WatchThreadsRequest::default())
             .await
-            .expect("sessions/watch")
-            .sessions
+            .expect("threads/watch")
+            .threads
     }
 
-    /// The next change to the Host's sessions this client hears of, passing over the rest.
+    /// The next change to the Host's threads this client hears of, passing over the rest.
     async fn change(&mut self) -> Change {
         loop {
             match self.next().await {
-                HostEvent::SessionUpdated(updated) => {
-                    return Change::Updated(Box::new(updated.session));
+                HostEvent::ThreadUpdated(updated) => {
+                    return Change::Updated(Box::new(updated.thread));
                 }
-                HostEvent::SessionRemoved(removed) => return Change::Removed(removed.session_id),
+                HostEvent::ThreadRemoved(removed) => return Change::Removed(removed.thread_id),
                 _ => {}
             }
         }
     }
 
-    /// Whether a change to the Host's sessions comes within a moment.
+    /// Whether a change to the Host's threads comes within a moment.
     async fn hears_a_change(&mut self) -> bool {
         tokio::time::timeout(Duration::from_millis(300), self.change())
             .await
@@ -735,10 +735,10 @@ impl TestClient {
     }
 
     /// Wait for a pending permission request.
-    async fn asked(&mut self, seen: &mut Seen) -> (SessionId, PendingRequest) {
+    async fn asked(&mut self, seen: &mut Seen) -> (ThreadId, PendingRequest) {
         loop {
             match self.next().await {
-                HostEvent::PendingAdded(added) => return (added.session_id, added.pending),
+                HostEvent::PendingAdded(added) => return (added.thread_id, added.pending),
                 event => {
                     self.note(event, seen, None).await;
                 }
@@ -749,16 +749,16 @@ impl TestClient {
 
 impl Seen {
     /// Record an event; returns whether it ended a turn.
-    fn note(&mut self, event: SessionEvent) -> bool {
+    fn note(&mut self, event: ThreadEvent) -> bool {
         match event {
-            SessionEvent::Update { notification } => match notification.update {
+            ThreadEvent::Update { notification } => match notification.update {
                 SessionUpdate::UserMessageChunk(chunk) => self.user.push_str(&text(&chunk.content)),
                 SessionUpdate::AgentMessageChunk(chunk) => {
                     self.agent.push_str(&text(&chunk.content));
                 }
                 _ => {}
             },
-            SessionEvent::TurnStarted {
+            ThreadEvent::TurnStarted {
                 prompt,
                 origin,
                 queued_id,
@@ -772,12 +772,12 @@ impl Seen {
                     self.user.push_str(&text(block));
                 }
             }
-            SessionEvent::TurnSteered { prompt, .. } => {
+            ThreadEvent::TurnSteered { prompt, .. } => {
                 let text = prompt.iter().map(text).collect();
                 self.steered.push((text, self.agent.len()));
             }
-            SessionEvent::TerminalOutput { data, .. } => self.terminal.push_str(&data),
-            SessionEvent::TurnEnded {
+            ThreadEvent::TerminalOutput { data, .. } => self.terminal.push_str(&data),
+            ThreadEvent::TurnEnded {
                 response, error, ..
             } => {
                 self.ended = match (response, error) {
@@ -789,30 +789,30 @@ impl Seen {
                 };
                 return true;
             }
-            SessionEvent::Closed { reason, by } => self.closed = Some((reason, by)),
-            SessionEvent::Notice { text } => self.notices.push(text),
-            SessionEvent::Renamed { title, by } => self.renamed.push((title, by)),
-            SessionEvent::ContinuedIn { successor, .. } => self.continued_in.push(successor),
-            SessionEvent::Labelled { labels, .. } => self.labelled.push(labels),
-            SessionEvent::Queued { queued_id, .. } => self.queued.push(queued_id),
-            SessionEvent::Unqueued { queued_id, .. } => self.unqueued.push(queued_id),
-            SessionEvent::QueuePaused { reason } => self.paused.push(reason),
-            SessionEvent::QueueResumed { .. } => self.resumed += 1,
+            ThreadEvent::Closed { reason, by } => self.closed = Some((reason, by)),
+            ThreadEvent::Notice { text } => self.notices.push(text),
+            ThreadEvent::Renamed { title, by } => self.renamed.push((title, by)),
+            ThreadEvent::ContinuedIn { successor, .. } => self.continued_in.push(successor),
+            ThreadEvent::Labelled { labels, .. } => self.labelled.push(labels),
+            ThreadEvent::Queued { queued_id, .. } => self.queued.push(queued_id),
+            ThreadEvent::Unqueued { queued_id, .. } => self.unqueued.push(queued_id),
+            ThreadEvent::QueuePaused { reason } => self.paused.push(reason),
+            ThreadEvent::QueueResumed { .. } => self.resumed += 1,
             _ => {}
         }
         false
     }
 }
 
-/// A change to the Host's sessions, as a watching client hears it.
+/// A change to the Host's threads, as a watching client hears it.
 #[derive(Debug, PartialEq)]
 enum Change {
-    Updated(Box<SessionListing>),
-    Removed(SessionId),
+    Updated(Box<ThreadListing>),
+    Removed(ThreadId),
 }
 
 impl Change {
-    fn state(&self) -> Option<(SessionStatus, Option<Activity>)> {
+    fn state(&self) -> Option<(ThreadStatus, Option<Activity>)> {
         match self {
             Change::Updated(listing) => Some((listing.state, listing.activity)),
             Change::Removed(_) => None,
@@ -862,7 +862,7 @@ fn run_request(world: &World, path: &Path, approve: Vec<ToolKind>) -> RunRequest
         agent_id: "fake".to_owned(),
         cwd: world.cwd(),
         remote: None,
-        session_id: None,
+        thread_id: None,
         additional_directories: Vec::new(),
         mode: None,
         prompt: vec![ContentBlock::from(format!("write {} ok", path.display()))],
@@ -884,8 +884,8 @@ async fn a_client_reattaches_mid_turn_and_sees_the_whole_transcript() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.create(&world).await;
-    first.prompt(&session_id, "slow 4").await;
+    let thread_id = first.create(&world).await;
+    first.prompt(&thread_id, "slow 4").await;
     // Two chunks in, the first client goes away.
     let mut seen = Seen::default();
     while seen.agent.matches("Chunk").count() < 2 {
@@ -895,7 +895,7 @@ async fn a_client_reattaches_mid_turn_and_sees_the_whole_transcript() {
     first.connection.shutdown().await;
 
     let mut second = world.client(&daemon).await;
-    let attached = second.attach(&session_id).await;
+    let attached = second.attach(&thread_id).await;
     assert_eq!(attached.state.turns.len(), 1, "told the turn is running");
     assert!(
         attached.replay.reset,
@@ -924,17 +924,17 @@ async fn a_steered_message_joins_the_running_turn_for_every_client() {
             .iter()
             .any(|feature| feature == STEER_FEATURE)
     );
-    let session_id = first.create(&world).await;
+    let thread_id = first.create(&world).await;
     let mut second = world.client(&daemon).await;
-    second.attach(&session_id).await;
-    first.prompt(&session_id, "slow 50").await;
+    second.attach(&thread_id).await;
+    first.prompt(&thread_id, "slow 50").await;
     let mut seen = Seen::default();
     while !seen.agent.contains("Chunk 1 of 50") {
         let event = first.next().await;
         first.note(event, &mut seen, None).await;
     }
 
-    let answer = first.steer(&session_id, "say hi instead").await;
+    let answer = first.steer(&thread_id, "say hi instead").await;
     assert_eq!(answer.outcome, SteerOutcome::Steered);
     first.until_turn_ends(&mut seen, None).await;
     let mut other = Seen::default();
@@ -955,7 +955,7 @@ async fn a_steered_message_joins_the_running_turn_for_every_client() {
 
     // A client attaching later replays it in place.
     let mut later = world.client(&daemon).await;
-    later.attach(&session_id).await;
+    later.attach(&thread_id).await;
     let mut replayed = Seen::default();
     later.until_turn_ends(&mut replayed, None).await;
     assert_eq!(replayed.steered, other.steered);
@@ -970,18 +970,18 @@ async fn steering_with_no_turn_running_sends_nothing() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
     let not_running = SteerTurnResponse {
         outcome: SteerOutcome::NotRunning,
         seq: None,
         turn_id: None,
     };
-    assert_eq!(client.steer(&session_id, "hi").await, not_running);
+    assert_eq!(client.steer(&thread_id, "hi").await, not_running);
 
-    client.prompt(&session_id, "hello").await;
+    client.prompt(&thread_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
-    assert_eq!(client.steer(&session_id, "too late").await, not_running);
-    let attached = client.attach(&session_id).await;
+    assert_eq!(client.steer(&thread_id, "too late").await, not_running);
+    let attached = client.attach(&thread_id).await;
     assert!(attached.state.turns.is_empty());
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
@@ -993,21 +993,21 @@ async fn a_client_catches_up_from_its_position_without_the_rest() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.create(&world).await;
-    first.prompt(&session_id, "hello").await;
+    let thread_id = first.create(&world).await;
+    first.prompt(&thread_id, "hello").await;
     first.until_turn_ends(&mut Seen::default(), None).await;
     let position = first.position.clone();
     first.connection.shutdown().await;
 
     // While it's away, another turn runs.
     let mut other = world.client(&daemon).await;
-    other.attach(&session_id).await;
-    other.prompt(&session_id, "again").await;
+    other.attach(&thread_id).await;
+    other.prompt(&thread_id, "again").await;
     other.until_turn_ends(&mut Seen::default(), None).await;
 
     let mut back = world.client(&daemon).await;
     let attached = back
-        .attach_after(&session_id, position)
+        .attach_after(&thread_id, position)
         .await
         .expect("attach");
     assert!(!attached.replay.reset);
@@ -1023,7 +1023,7 @@ async fn a_client_catches_up_from_its_position_without_the_rest() {
         seq: 2,
     };
     let attached = stranger
-        .attach_after(&session_id, Some(elsewhere))
+        .attach_after(&thread_id, Some(elsewhere))
         .await
         .expect("attach");
     assert!(attached.replay.reset);
@@ -1035,13 +1035,13 @@ async fn attached_clients_share_turns_and_the_first_answer_wins() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.create(&world).await;
+    let thread_id = first.create(&world).await;
     let mut second = world.client(&daemon).await;
-    second.attach(&session_id).await;
+    second.attach(&thread_id).await;
 
     let target = world.cwd().join("out.txt");
     first
-        .prompt(&session_id, &format!("write {} hello", target.display()))
+        .prompt(&thread_id, &format!("write {} hello", target.display()))
         .await;
     // Both are asked; the second answers, and the first hears it was.
     let (_, asked_first) = first.asked(&mut Seen::default()).await;
@@ -1049,7 +1049,7 @@ async fn attached_clients_share_turns_and_the_first_answer_wins() {
     let (_, asked_second) = second.asked(&mut seen).await;
     assert_eq!(asked_first.id, asked_second.id);
     second
-        .allow(&session_id, &asked_second, "allow")
+        .allow(&thread_id, &asked_second, "allow")
         .await
         .expect("the first answer");
     loop {
@@ -1062,14 +1062,14 @@ async fn attached_clients_share_turns_and_the_first_answer_wins() {
             }
             HostEvent::Event(event) => {
                 assert!(
-                    !matches!(event.event, SessionEvent::TurnEnded { .. }),
+                    !matches!(event.event, ThreadEvent::TurnEnded { .. }),
                     "the turn ended before the answer was told"
                 );
             }
             _ => {}
         }
     }
-    let late = first.allow(&session_id, &asked_first, "allow").await;
+    let late = first.allow(&thread_id, &asked_first, "allow").await;
     assert!(
         late.as_ref()
             .is_err_and(|error| errors::is(error, errors::ALREADY_RESOLVED)),
@@ -1094,17 +1094,17 @@ async fn a_client_leaving_doesnt_answer_for_the_others() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.create(&world).await;
+    let thread_id = first.create(&world).await;
     let target = world.cwd().join("later.txt");
     first
-        .prompt(&session_id, &format!("write {} later", target.display()))
+        .prompt(&thread_id, &format!("write {} later", target.display()))
         .await;
     first.asked(&mut Seen::default()).await;
     first.connection.shutdown().await;
 
     // A client attaching later finds the request still waiting, and answers it.
     let mut second = world.client(&daemon).await;
-    let attached = second.attach(&session_id).await;
+    let attached = second.attach(&thread_id).await;
     let pending = attached
         .state
         .pending
@@ -1114,7 +1114,7 @@ async fn a_client_leaving_doesnt_answer_for_the_others() {
     assert!(matches!(pending.request, PendingKind::Permission { .. }));
     assert_eq!(attached.state.activity, Activity::Waiting);
     second
-        .allow(&session_id, &pending, "allow")
+        .allow(&thread_id, &pending, "allow")
         .await
         .expect("answer");
     second.until_turn_ends(&mut Seen::default(), None).await;
@@ -1129,10 +1129,10 @@ async fn cancelling_cancels_pending_requests_for_every_client() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
     client
         .prompt(
-            &session_id,
+            &thread_id,
             &format!("write {} never", world.cwd().join("never.txt").display()),
         )
         .await;
@@ -1140,7 +1140,7 @@ async fn cancelling_cancels_pending_requests_for_every_client() {
     client
         .connection
         .send(CancelTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
         })
         .await
         .expect("turn/cancel");
@@ -1171,23 +1171,23 @@ async fn headless_runs_follow_their_policy() {
     let rejected = world.cwd().join("rejected.txt");
 
     // In-process, as a trigger would: nobody attached.
-    let session_id = daemon
+    let thread_id = daemon
         .run(run_request(&world, &approved, vec![ToolKind::Edit]))
         .await
         .expect("run");
     wait_for(|| approved.exists()).await;
     wait_for(|| {
-        daemon.status().sessions.iter().any(|session| {
-            session.info.session_id == session_id && session.activity == Some(Activity::Idle)
+        daemon.status().threads.iter().any(|thread| {
+            thread.info.session_id == thread_id && thread.activity == Some(Activity::Idle)
         })
     })
     .await;
 
-    // Through `session/run`, attached for the whole turn, as `weave run` is.
+    // Through `thread/run`, attached for the whole turn, as `weave run` is.
     let mut client = world.client(&daemon).await;
     let mut request = run_request(&world, &rejected, Vec::new());
     request.attach = true;
-    let response = client.connection.send(request).await.expect("session/run");
+    let response = client.connection.send(request).await.expect("thread/run");
     assert!(response.state.is_some(), "attached");
     let mut seen = Seen::default();
     let mut origin = None;
@@ -1196,10 +1196,10 @@ async fn headless_runs_follow_their_policy() {
         let event = client.next().await;
         if let HostEvent::Event(event) = &event {
             match &event.event {
-                SessionEvent::TurnStarted {
+                ThreadEvent::TurnStarted {
                     origin: started, ..
                 } => origin = Some(started.clone()),
-                SessionEvent::Notice { text } => notices.push(text.clone()),
+                ThreadEvent::Notice { text } => notices.push(text.clone()),
                 _ => {}
             }
         }
@@ -1225,46 +1225,140 @@ async fn headless_runs_follow_their_policy() {
         .expect("host/status");
     assert!(
         status
-            .sessions
+            .threads
             .iter()
-            .any(|session| session.info.session_id == response.session_id && session.headless)
+            .any(|thread| thread.info.session_id == response.thread_id && thread.headless)
     );
 }
 
 #[tokio::test]
-async fn a_restarted_host_takes_sessions_up_from_their_journals() {
+async fn a_restarted_host_takes_threads_up_from_their_journals() {
     let world = World::new();
-    let session_id = {
+    let thread_id = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
-        let session_id = client.create(&world).await;
-        client.prompt(&session_id, "hello there").await;
+        let thread_id = client.create(&world).await;
+        client.prompt(&thread_id, "hello there").await;
         client.until_turn_ends(&mut Seen::default(), None).await;
         daemon.shutdown().await;
-        session_id
+        thread_id
     };
 
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    client.attach(&session_id).await;
+    client.attach(&thread_id).await;
     // The history comes once, from the journal, not again from the agent.
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.user, "hello there");
-    client.prompt(&session_id, "again").await;
+    client.prompt(&thread_id, "again").await;
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.agent, "You said: hello thereYou said: again");
 }
 
+/// A journal as a Host of the Host protocol's version 2 left it (WVE-200): in `sessions`, naming
+/// its thread `sessionId`, and a thread on another Host as `{"session": …}`. A Host of version 3
+/// moves the journals to `threads` once, lists the thread with its title and labels, and takes it
+/// up from its journal, which keeps what version 2 wrote as it was.
 #[tokio::test]
-async fn a_restarted_host_keeps_its_sessions_order_and_titles_and_taking_one_up_changes_neither() {
+async fn a_version_2_journal_opens_in_a_version_3_host() {
+    let world = World::new();
+    let thread_id = {
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let thread_id = client.create(&world).await;
+        client.prompt(&thread_id, "hello there").await;
+        client.until_turn_ends(&mut Seen::default(), None).await;
+        daemon.shutdown().await;
+        thread_id
+    };
+    let file = format!("{thread_id}.jsonl");
+    let mut lines: Vec<String> = std::fs::read_to_string(world.journals().join(&file))
+        .expect("the journal")
+        .lines()
+        .map(|line| {
+            let mut record: serde_json::Value = serde_json::from_str(line).expect("a record");
+            if let Some(id) = record
+                .as_object_mut()
+                .and_then(|record| record.remove("threadId"))
+            {
+                record["sessionId"] = id;
+            }
+            if record["type"] == "turnStarted" {
+                record["origin"] = serde_json::json!({"session": {
+                    "sessionId": "s-other", "host": "h-2", "hostName": "homelab"
+                }});
+            }
+            record.to_string()
+        })
+        .collect();
+    lines.insert(
+        1,
+        r#"{"type":"renamed","title":"Named in version 2"}"#.to_owned(),
+    );
+    lines.insert(2, r#"{"type":"labelled","labels":["kept"]}"#.to_owned());
+    let sessions = world.dir.path().join("sessions");
+    std::fs::rename(world.journals(), &sessions).expect("where version 2 kept them");
+    std::fs::write(sessions.join(&file), lines.join("\n") + "\n").expect("as version 2 wrote it");
+
+    let daemon = world.daemon(true, Duration::from_secs(60));
+    assert!(!sessions.exists());
+    assert!(world.journals().join(&file).exists());
+    let mut client = world.client(&daemon).await;
+    let listed = client.listing(&world).await;
+    let listing = listed
+        .iter()
+        .find(|listing| listing.info.session_id == thread_id)
+        .expect("listed");
+    assert_eq!(listing.state, ThreadStatus::Suspended);
+    assert_eq!(listing.info.title.as_deref(), Some("Named in version 2"));
+    assert_eq!(listing.labels, ["kept"]);
+
+    client.attach(&thread_id).await;
+    let mut seen = Seen::default();
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.user, "hello there");
+    assert_eq!(seen.renamed, [("Named in version 2".to_owned(), None)]);
+    assert!(
+        matches!(
+            &seen.origins[..],
+            [(TurnOrigin::Thread { thread_id, host, .. }, None)]
+                if thread_id.0.as_ref() == "s-other" && host.as_deref() == Some("h-2")
+        ),
+        "{:?}",
+        seen.origins
+    );
+    client.prompt(&thread_id, "again").await;
+    client.until_turn_ends(&mut seen, None).await;
+    assert_eq!(seen.agent, "You said: hello thereYou said: again");
+    daemon.shutdown().await;
+
+    // What version 2 wrote stays as it was; what the Host wrote since says thread.
+    let text = std::fs::read_to_string(world.journals().join(&file)).expect("the journal");
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a record"))
+        .collect();
+    assert_eq!(records[0]["sessionId"], thread_id.0.as_ref());
+    let started: Vec<&serde_json::Value> = records
+        .iter()
+        .filter(|record| record["type"] == "turnStarted")
+        .collect();
+    assert_eq!(started.len(), 2);
+    assert_eq!(started[0]["sessionId"], thread_id.0.as_ref());
+    assert_eq!(started[1]["threadId"], thread_id.0.as_ref());
+    assert!(started[1].get("sessionId").is_none());
+}
+
+#[tokio::test]
+async fn a_restarted_host_keeps_its_threads_order_and_titles_and_taking_one_up_changes_neither() {
     let world = World::new();
     let before = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
         for prompt in ["the older one", "the newer one"] {
-            let session_id = client.create(&world).await;
-            client.prompt(&session_id, prompt).await;
+            let thread_id = client.create(&world).await;
+            client.prompt(&thread_id, prompt).await;
             client.until_turn_ends(&mut Seen::default(), None).await;
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -1272,7 +1366,7 @@ async fn a_restarted_host_keeps_its_sessions_order_and_titles_and_taking_one_up_
         daemon.shutdown().await;
         listed
     };
-    let shown = |listed: &[SessionListing]| -> Vec<(SessionId, Option<String>, Option<u64>)> {
+    let shown = |listed: &[ThreadListing]| -> Vec<(ThreadId, Option<String>, Option<u64>)> {
         listed
             .iter()
             .map(|listing| {
@@ -1302,64 +1396,64 @@ async fn a_restarted_host_keeps_its_sessions_order_and_titles_and_taking_one_up_
     let older = before[1].info.session_id.clone();
     client.attach(&older).await;
     client.until_turn_ends(&mut Seen::default(), None).await;
-    wait_for(|| daemon.status().sessions.len() == 1).await;
+    wait_for(|| daemon.status().threads.len() == 1).await;
     assert_eq!(shown(&client.watch().await), shown(&before));
 }
 
 #[tokio::test]
-async fn idle_sessions_close_after_their_grace_and_reopen_in_the_agent() {
+async fn idle_threads_close_after_their_grace_and_reopen_in_the_agent() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_millis(100));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "first").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "first").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     client.connection.shutdown().await;
-    wait_for(|| daemon.status().sessions.is_empty()).await;
+    wait_for(|| daemon.status().threads.is_empty()).await;
 
     // Closed, it's loaded from the agent, whose replay fills a new journal.
     let mut client = world.client(&daemon).await;
-    let attached = client.attach(&session_id).await;
+    let attached = client.attach(&thread_id).await;
     assert!(attached.replay.reset);
     let mut seen = Seen::default();
-    client.prompt(&session_id, "back").await;
+    client.prompt(&thread_id, "back").await;
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.agent, "You said: firstYou said: back");
 }
 
 #[tokio::test]
-async fn blank_sessions_are_left_out_of_the_list_until_prompted() {
+async fn blank_threads_are_left_out_of_the_list_until_prompted() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    // A blank session offers nothing a new one doesn't, so it isn't listed even by an agent
+    let thread_id = client.create(&world).await;
+    // A blank thread offers nothing a new one doesn't, so it isn't listed even by an agent
     // that saved it, as the fake agent does.
-    assert_eq!(client.list(&world).await, Vec::<SessionId>::new());
-    client.prompt(&session_id, "hello").await;
+    assert_eq!(client.list(&world).await, Vec::<ThreadId>::new());
+    client.prompt(&thread_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
-    assert_eq!(client.list(&world).await, [session_id]);
+    assert_eq!(client.list(&world).await, [thread_id]);
 }
 
 #[tokio::test]
-async fn a_client_reattaching_to_a_blank_session_is_told_it_is_blank() {
+async fn a_client_reattaching_to_a_blank_thread_is_told_it_is_blank() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
     let state = client.create_with(&world, "fake").await;
     assert!(state.blank);
-    let session_id = state.session_id;
+    let thread_id = state.thread_id;
     // As after a reload, which reattaches by id.
     let mut again = world.client(&daemon).await;
-    assert!(again.attach(&session_id).await.state.blank);
-    client.prompt(&session_id, "hello").await;
+    assert!(again.attach(&thread_id).await.state.blank);
+    client.prompt(&thread_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     let mut later = world.client(&daemon).await;
-    assert!(!later.attach(&session_id).await.state.blank);
+    assert!(!later.attach(&thread_id).await.state.blank);
 }
 
 #[tokio::test]
-async fn a_blank_session_closes_soon_after_it_is_left_and_keeps_no_journal() {
+async fn a_blank_thread_closes_soon_after_it_is_left_and_keeps_no_journal() {
     let world = World::new();
     let daemon = world.daemon_with(
         true,
@@ -1377,15 +1471,15 @@ async fn a_blank_session_closes_soon_after_it_is_left_and_keeps_no_journal() {
     assert!(world.has_journal(&blank));
     left.connection.shutdown().await;
 
-    wait_for(|| daemon.status().sessions.len() == 1).await;
-    // The prompted session waits out the idle grace and keeps its journal.
-    assert_eq!(daemon.status().sessions[0].info.session_id, prompted);
+    wait_for(|| daemon.status().threads.len() == 1).await;
+    // The prompted thread waits out the idle grace and keeps its journal.
+    assert_eq!(daemon.status().threads[0].info.session_id, prompted);
     assert!(world.has_journal(&prompted));
     assert!(!world.has_journal(&blank));
 }
 
 #[tokio::test]
-async fn a_stopping_host_closes_blank_sessions_instead_of_leaving_them_open() {
+async fn a_stopping_host_closes_blank_threads_instead_of_leaving_them_open() {
     let world = World::new();
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
@@ -1394,13 +1488,13 @@ async fn a_stopping_host_closes_blank_sessions_instead_of_leaving_them_open() {
     client.until_turn_ends(&mut Seen::default(), None).await;
     let blank = client.create(&world).await;
     daemon.shutdown().await;
-    // The prompted session is left for a later Host to take up; the blank one is gone.
+    // The prompted thread is left for a later Host to take up; the blank one is gone.
     assert!(world.has_journal(&prompted));
     assert!(!world.has_journal(&blank));
 }
 
 #[tokio::test]
-async fn sessions_a_stopped_host_left_open_stop_leading_the_list_after_the_idle_grace() {
+async fn threads_a_stopped_host_left_open_stop_leading_the_list_after_the_idle_grace() {
     let world = World::new();
     let (left_open, closed) = {
         let daemon = world.daemon(true, Duration::from_secs(60));
@@ -1414,15 +1508,15 @@ async fn sessions_a_stopped_host_left_open_stop_leading_the_list_after_the_idle_
         client.until_turn_ends(&mut Seen::default(), None).await;
         client
             .connection
-            .send(CloseSessionRequest {
-                session_id: closed.clone(),
+            .send(CloseThreadRequest {
+                thread_id: closed.clone(),
             })
             .await
-            .expect("session/close");
+            .expect("thread/close");
         daemon.shutdown().await;
         (left_open, closed)
     };
-    // Within the grace, it leads the list, as an open session would.
+    // Within the grace, it leads the list, as an open thread would.
     let daemon = world.daemon(true, Duration::from_secs(60));
     let client = world.client(&daemon).await;
     assert_eq!(
@@ -1436,12 +1530,12 @@ async fn sessions_a_stopped_host_left_open_stop_leading_the_list_after_the_idle_
     let daemon = world.daemon(true, grace);
     let mut client = world.client(&daemon).await;
     let listing = client.listing(&world).await;
-    let order: Vec<&SessionId> = listing
+    let order: Vec<&ThreadId> = listing
         .iter()
         .map(|listing| &listing.info.session_id)
         .collect();
     assert_eq!(order, [&closed, &left_open]);
-    assert_eq!(listing[1].state, SessionStatus::Suspended);
+    assert_eq!(listing[1].state, ThreadStatus::Suspended);
     // ...but it still reopens from its journal.
     client.attach(&left_open).await;
     let mut seen = Seen::default();
@@ -1450,7 +1544,7 @@ async fn sessions_a_stopped_host_left_open_stop_leading_the_list_after_the_idle_
 }
 
 #[tokio::test]
-async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_the_grace() {
+async fn threads_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_the_grace() {
     let world = World::new();
     let (unclaimed, claimed) = {
         let daemon = world.daemon(true, Duration::from_secs(60));
@@ -1474,7 +1568,7 @@ async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_
     let host_wide = async |client: &TestClient| {
         client
             .connection
-            .send(ListSessionsRequest {
+            .send(ListThreadsRequest {
                 agent_id: None,
                 cwd: None,
                 repo: None,
@@ -1483,8 +1577,8 @@ async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_
                 labels: Vec::new(),
             })
             .await
-            .expect("sessions/list")
-            .sessions
+            .expect("threads/list")
+            .threads
             .into_iter()
             .map(|listing| (listing.info.session_id, listing.state))
             .collect::<HashMap<_, _>>()
@@ -1496,7 +1590,7 @@ async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_
     assert!(
         listed
             .iter()
-            .all(|listing| listing.state == SessionStatus::Suspended)
+            .all(|listing| listing.state == ThreadStatus::Suspended)
     );
     // A client takes one up within the grace, as the TUI does after a restart...
     let mut client = world.client(&daemon).await;
@@ -1508,88 +1602,88 @@ async fn sessions_a_stopped_host_left_open_close_if_nobody_takes_them_up_within_
     watcher
         .changes_until(|change| {
             matches!(change, Change::Updated(listing)
-                if listing.info.session_id == unclaimed && listing.state == SessionStatus::Closed)
+                if listing.info.session_id == unclaimed && listing.state == ThreadStatus::Closed)
         })
         .await;
     let states = host_wide(&client).await;
-    assert_eq!(states[&unclaimed], SessionStatus::Closed);
-    assert_eq!(states[&claimed], SessionStatus::Open);
+    assert_eq!(states[&unclaimed], ThreadStatus::Closed);
+    assert_eq!(states[&claimed], ThreadStatus::Open);
     assert_eq!(age(), left);
 
     // A later Host finds it closed, and it still opens again, in a new journal.
     daemon.shutdown().await;
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    assert_eq!(host_wide(&client).await[&unclaimed], SessionStatus::Closed);
+    assert_eq!(host_wide(&client).await[&unclaimed], ThreadStatus::Closed);
     assert!(client.attach(&unclaimed).await.replay.reset);
 }
 
 #[tokio::test]
-async fn deleting_a_session_its_agent_cant_delete_still_forgets_it_in_the_host() {
+async fn deleting_a_thread_its_agent_cant_delete_still_forgets_it_in_the_host() {
     let world = World::new();
     let daemon = world.daemon_minimal();
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "hello").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     let mut watcher = world.client(&daemon).await;
     watcher.watch().await;
-    assert!(world.has_journal(&session_id));
+    assert!(world.has_journal(&thread_id));
 
     client
         .connection
-        .send(DeleteSessionRequest {
-            session_id: session_id.clone(),
+        .send(DeleteThreadRequest {
+            thread_id: thread_id.clone(),
             agent_id: None,
         })
         .await
-        .expect("session/delete");
-    assert!(!world.has_journal(&session_id));
+        .expect("thread/delete");
+    assert!(!world.has_journal(&thread_id));
     watcher
-        .changes_until(|change| *change == Change::Removed(session_id.clone()))
+        .changes_until(|change| *change == Change::Removed(thread_id.clone()))
         .await;
 }
 
 #[tokio::test]
-async fn deleting_a_session_whose_directory_is_gone_forgets_it_in_the_host() {
+async fn deleting_a_thread_whose_directory_is_gone_forgets_it_in_the_host() {
     let world = World::new();
     let worktree = world.cwd().join("worktree");
     std::fs::create_dir(&worktree).expect("the worktree");
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client
+    let thread_id = client
         .connection
-        .send(CreateSessionRequest {
+        .send(CreateThreadRequest {
             cwd: worktree.clone(),
             ..TestClient::create_request(&world, "fake")
         })
         .await
-        .expect("session/create")
-        .session_id;
-    client.prompt(&session_id, "hello").await;
+        .expect("thread/create")
+        .thread_id;
+    client.prompt(&thread_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     std::fs::remove_dir_all(&worktree).expect("the worktree removed");
 
     client
         .connection
-        .send(DeleteSessionRequest {
-            session_id: session_id.clone(),
+        .send(DeleteThreadRequest {
+            thread_id: thread_id.clone(),
             agent_id: None,
         })
         .await
-        .expect("session/delete");
-    assert!(!world.has_journal(&session_id));
+        .expect("thread/delete");
+    assert!(!world.has_journal(&thread_id));
     // The agent, which would have had to run there, keeps its own history of it.
     let agents_own = client
         .connection
-        .send(ListSessionsRequest {
+        .send(ListThreadsRequest {
             agent_id: Some("fake".to_owned()),
             cwd: Some(worktree),
             repo: None,
@@ -1598,14 +1692,11 @@ async fn deleting_a_session_whose_directory_is_gone_forgets_it_in_the_host() {
             labels: Vec::new(),
         })
         .await
-        .expect("sessions/list")
-        .sessions;
-    assert!(
-        agents_own
-            .iter()
-            .any(|listing| listing.info.session_id == session_id
-                && listing.state == SessionStatus::Closed)
-    );
+        .expect("threads/list")
+        .threads;
+    assert!(agents_own.iter().any(
+        |listing| listing.info.session_id == thread_id && listing.state == ThreadStatus::Closed
+    ));
 }
 
 #[tokio::test]
@@ -1613,14 +1704,14 @@ async fn command_output_reaches_clients_and_is_replayed() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "run echo from-the-host").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "run echo from-the-host").await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.terminal, "from-the-host\n");
 
     let mut late = world.client(&daemon).await;
-    late.attach(&session_id).await;
+    late.attach(&thread_id).await;
     let mut seen = Seen::default();
     late.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.terminal, "from-the-host\n");
@@ -1651,8 +1742,8 @@ async fn host_run_terminals_start_in_the_agents_environment() {
     );
     let daemon = Daemon::new(config);
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "run weave-login-tool").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "run weave-login-tool").await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     // Its agent's process name too, so a `weave daemon restart` there knows its own turn.
@@ -1664,63 +1755,63 @@ async fn host_run_terminals_start_in_the_agents_environment() {
 }
 
 #[tokio::test]
-async fn sessions_list_with_their_activity_and_close_when_left() {
+async fn threads_list_with_their_activity_and_close_when_left() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "hello").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     let listing = client.listing(&world).await;
     let entry = listing
         .iter()
-        .find(|listing| listing.info.session_id == session_id)
-        .expect("the open session is listed");
+        .find(|listing| listing.info.session_id == thread_id)
+        .expect("the open thread is listed");
     assert_eq!(
         (entry.state, entry.clients, entry.activity),
-        (SessionStatus::Open, 1, Some(Activity::Idle))
+        (ThreadStatus::Open, 1, Some(Activity::Idle))
     );
     // Across agents too.
     let everything = client
         .connection
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
-        .expect("sessions/list");
+        .expect("threads/list");
     assert!(
         everything
-            .sessions
+            .threads
             .iter()
-            .any(|listing| listing.info.session_id == session_id && listing.agent_id == "fake")
+            .any(|listing| listing.info.session_id == thread_id && listing.agent_id == "fake")
     );
 
     client
         .connection
-        .send(DetachSessionRequest {
-            session_id,
+        .send(DetachThreadRequest {
+            thread_id,
             close: CloseWhen::IfUnused,
         })
         .await
-        .expect("session/detach");
-    wait_for(|| daemon.status().sessions.is_empty()).await;
+        .expect("thread/detach");
+    wait_for(|| daemon.status().threads.is_empty()).await;
 }
 
-/// Left with `ifUnused` while its turn runs, a session closes when the turn ends rather than
+/// Left with `ifUnused` while its turn runs, a thread closes when the turn ends rather than
 /// after the idle grace, unless a client attaches before then (WVE-159).
 #[tokio::test]
-async fn a_session_left_mid_turn_closes_when_its_turn_ends_unless_one_attaches() {
+async fn a_thread_left_mid_turn_closes_when_its_turn_ends_unless_one_attaches() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let leave = |session_id: &SessionId| DetachSessionRequest {
-        session_id: session_id.clone(),
+    let leave = |thread_id: &ThreadId| DetachThreadRequest {
+        thread_id: thread_id.clone(),
         close: CloseWhen::IfUnused,
     };
-    let open = |session_id: &SessionId| {
+    let open = |thread_id: &ThreadId| {
         daemon
             .status()
-            .sessions
+            .threads
             .iter()
-            .any(|session| &session.info.session_id == session_id)
+            .any(|thread| &thread.info.session_id == thread_id)
     };
 
     let left = client.create(&world).await;
@@ -1744,31 +1835,31 @@ async fn a_session_left_mid_turn_closes_when_its_turn_ends_unless_one_attaches()
     assert!(open(&taken_back));
 }
 
-/// An observer is sent what clients are without being one: it isn't counted, keeps no session
+/// An observer is sent what clients are without being one: it isn't counted, keeps no thread
 /// open, closes none by leaving, and never opens one that's closed (WVE-108).
 #[tokio::test]
-async fn an_observer_follows_a_session_without_holding_it() {
+async fn an_observer_follows_a_thread_without_holding_it() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
     let open = || {
         daemon
             .status()
-            .sessions
+            .threads
             .iter()
-            .any(|session| session.info.session_id == session_id)
+            .any(|thread| thread.info.session_id == thread_id)
     };
-    let observe = AttachSessionRequest {
-        session_id: session_id.clone(),
+    let observe = AttachThreadRequest {
+        thread_id: thread_id.clone(),
         after: None,
         agent_id: None,
         cwd: None,
         trace: false,
         observe: true,
     };
-    let leave = DetachSessionRequest {
-        session_id: session_id.clone(),
+    let leave = DetachThreadRequest {
+        thread_id: thread_id.clone(),
         close: CloseWhen::IfUnused,
     };
 
@@ -1787,7 +1878,7 @@ async fn an_observer_follows_a_session_without_holding_it() {
         .await
         .expect("observe");
     assert_eq!(observed.state.clients, 1);
-    client.prompt(&session_id, "slow 2").await;
+    client.prompt(&thread_id, "slow 2").await;
     let mut seen = Seen::default();
     observer.until_turn_ends(&mut seen, None).await;
     assert_eq!((seen.started, seen.ended), (1, Some(StopReason::EndTurn)));
@@ -1802,7 +1893,7 @@ async fn an_observer_follows_a_session_without_holding_it() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(open());
 
-    // Observing again, it doesn't keep the session open once the client leaves.
+    // Observing again, it doesn't keep the thread open once the client leaves.
     observer
         .connection
         .send(observe.clone())
@@ -1816,8 +1907,8 @@ async fn an_observer_follows_a_session_without_holding_it() {
         .connection
         .send(observe)
         .await
-        .expect_err("a closed session");
-    assert!(errors::is(&error, errors::SESSION_NOT_OPEN), "{error}");
+        .expect_err("a closed thread");
+    assert!(errors::is(&error, errors::THREAD_NOT_OPEN), "{error}");
     assert!(!open());
 }
 
@@ -1845,18 +1936,18 @@ async fn a_client_signs_in_through_the_host_and_retries() {
         })
         .await
         .expect("agents/authenticate");
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
     assert!(
         daemon
             .status()
-            .sessions
+            .threads
             .iter()
-            .any(|session| session.info.session_id == session_id)
+            .any(|thread| thread.info.session_id == thread_id)
     );
 }
 
 #[tokio::test]
-async fn open_sessions_lead_the_list_so_continue_finds_them() {
+async fn open_threads_lead_the_list_so_continue_finds_them() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut left = world.client(&daemon).await;
@@ -1864,78 +1955,78 @@ async fn open_sessions_lead_the_list_so_continue_finds_them() {
     left.prompt(&open, "first").await;
     left.until_turn_ends(&mut Seen::default(), None).await;
     left.connection.shutdown().await;
-    // A session used more recently, but closed, so the agent lists it first.
+    // A thread used more recently, but closed, so the agent lists it first.
     let mut other = world.client(&daemon).await;
     let closed = other.create(&world).await;
     other.prompt(&closed, "later").await;
     other.until_turn_ends(&mut Seen::default(), None).await;
     other
         .connection
-        .send(CloseSessionRequest {
-            session_id: closed.clone(),
+        .send(CloseThreadRequest {
+            thread_id: closed.clone(),
         })
         .await
-        .expect("session/close");
-    wait_for(|| daemon.status().sessions.len() == 1).await;
+        .expect("thread/close");
+    wait_for(|| daemon.status().threads.len() == 1).await;
     assert_eq!(other.list(&world).await, [open, closed]);
 }
 
 #[tokio::test]
-async fn continue_finds_no_session_in_another_directory_though_the_agent_lists_it() {
+async fn continue_finds_no_thread_in_another_directory_though_the_agent_lists_it() {
     let world = World::new();
     let daemon = world.daemon_listing_every_directory();
     let mut client = world.client(&daemon).await;
-    // A session open in another worktree, which the agent lists here too.
+    // A thread open in another worktree, which the agent lists here too.
     let worktree = world.cwd().join("worktree");
     std::fs::create_dir(&worktree).expect("another directory");
-    client.session_in(&world, &worktree).await;
-    assert_eq!(client.list(&world).await, Vec::<SessionId>::new());
-    let here = client.session_in(&world, &world.cwd()).await.session_id;
+    client.thread_in(&world, &worktree).await;
+    assert_eq!(client.list(&world).await, Vec::<ThreadId>::new());
+    let here = client.thread_in(&world, &world.cwd()).await.thread_id;
     assert_eq!(client.list(&world).await, [here]);
 }
 
 #[tokio::test]
-async fn closing_a_session_closes_it_for_every_client() {
+async fn closing_a_thread_closes_it_for_every_client() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "slow 20").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "slow 20").await;
     let control = world.client(&daemon).await;
     control
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     let mut failed = false;
     let reason = loop {
         if let HostEvent::Event(event) = client.next().await {
             match event.event {
-                SessionEvent::Closed { reason, .. } => break reason,
-                SessionEvent::TurnEnded { error, .. } => failed = error.is_some(),
+                ThreadEvent::Closed { reason, .. } => break reason,
+                ThreadEvent::TurnEnded { error, .. } => failed = error.is_some(),
                 _ => {}
             }
         }
     };
-    assert!(failed, "the turn ends with the session");
+    assert!(failed, "the turn ends with the thread");
     assert_eq!(reason, "closed by a client");
-    assert!(daemon.status().sessions.is_empty());
+    assert!(daemon.status().threads.is_empty());
     let again = control
         .connection
-        .send(CloseSessionRequest { session_id })
+        .send(CloseThreadRequest { thread_id })
         .await;
     assert!(
         again
             .as_ref()
-            .is_err_and(|error| errors::is(error, errors::SESSION_NOT_OPEN)),
+            .is_err_and(|error| errors::is(error, errors::THREAD_NOT_OPEN)),
         "{again:?}"
     );
 }
 
 #[tokio::test]
-async fn sessions_a_stopped_host_left_open_lead_the_list_with_headless_ones_marked() {
+async fn threads_a_stopped_host_left_open_lead_the_list_with_headless_ones_marked() {
     let world = World::new();
     let (interactive, headless, closed) = {
         let daemon = world.daemon(true, Duration::from_secs(60));
@@ -1951,9 +2042,9 @@ async fn sessions_a_stopped_host_left_open_lead_the_list_with_headless_ones_mark
         wait_for(|| {
             daemon
                 .status()
-                .sessions
+                .threads
                 .iter()
-                .all(|session| session.activity == Some(Activity::Idle))
+                .all(|thread| thread.activity == Some(Activity::Idle))
         })
         .await;
         // Used last but closed, so the agent lists it first.
@@ -1963,8 +2054,8 @@ async fn sessions_a_stopped_host_left_open_lead_the_list_with_headless_ones_mark
         other.until_turn_ends(&mut Seen::default(), None).await;
         other
             .connection
-            .send(CloseSessionRequest {
-                session_id: closed.clone(),
+            .send(CloseThreadRequest {
+                thread_id: closed.clone(),
             })
             .await
             .expect("close");
@@ -1975,7 +2066,7 @@ async fn sessions_a_stopped_host_left_open_lead_the_list_with_headless_ones_mark
     let daemon = world.daemon(true, Duration::from_secs(60));
     let client = world.client(&daemon).await;
     let listing = client.listing(&world).await;
-    let order: Vec<&SessionId> = listing
+    let order: Vec<&ThreadId> = listing
         .iter()
         .map(|listing| &listing.info.session_id)
         .collect();
@@ -1985,17 +2076,17 @@ async fn sessions_a_stopped_host_left_open_lead_the_list_with_headless_ones_mark
 }
 
 #[tokio::test]
-async fn a_session_opens_only_with_its_own_agent_and_says_where_it_works() {
+async fn a_thread_opens_only_with_its_own_agent_and_says_where_it_works() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
 
     let other = world.client(&daemon).await;
     let refused = other
         .connection
-        .send(AttachSessionRequest {
-            session_id: session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: thread_id.clone(),
             after: None,
             agent_id: Some("other".to_owned()),
             cwd: None,
@@ -2003,18 +2094,18 @@ async fn a_session_opens_only_with_its_own_agent_and_says_where_it_works() {
             observe: false,
         })
         .await
-        .expect_err("another agent's session");
+        .expect_err("another agent's thread");
     assert!(errors::is(&refused, errors::WRONG_AGENT), "{refused}");
 
-    // Attached from anywhere, the session still works in its own directory.
+    // Attached from anywhere, the thread still works in its own directory.
     let mut second = world.client(&daemon).await;
-    let attached = second.attach(&session_id).await;
+    let attached = second.attach(&thread_id).await;
     assert_eq!(attached.state.cwd, world.cwd());
     assert_eq!(attached.state.agent.id, "fake");
 }
 
 #[tokio::test]
-async fn one_connection_reaches_sessions_of_two_agents() {
+async fn one_connection_reaches_threads_of_two_agents() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
@@ -2024,23 +2115,23 @@ async fn one_connection_reaches_sessions_of_two_agents() {
         (fake.agent.id.as_str(), other.agent.id.as_str()),
         ("fake", "other")
     );
-    client.prompt(&fake.session_id, "one").await;
+    client.prompt(&fake.thread_id, "one").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
-    client.prompt(&other.session_id, "two").await;
+    client.prompt(&other.thread_id, "two").await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.agent, "You said: two");
     let status = daemon.status();
-    assert_eq!(status.sessions.len(), 2);
+    assert_eq!(status.threads.len(), 2);
 }
 
 #[tokio::test]
-async fn new_sessions_start_in_the_configured_mode_unless_asked_for_another() {
+async fn new_threads_start_in_the_configured_mode_unless_asked_for_another() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
     // The fake agent offers its modes as a config option, which takes precedence.
-    let current_mode = |state: &SessionState| {
+    let current_mode = |state: &ThreadState| {
         state
             .config_options
             .iter()
@@ -2171,11 +2262,18 @@ async fn hello_comes_first_and_settles_the_version() {
         capabilities: ClientCapabilities::default(),
     };
     let newer = cx
-        .send_request(hello(VersionRange { min: 3, max: 4 }))
+        .send_request(hello(VersionRange { min: 4, max: 5 }))
         .block_task()
         .await
         .expect_err("no common version");
     assert!(errors::is(&newer, errors::INCOMPATIBLE_PROTOCOL), "{newer}");
+    // Version 3 renamed version 2's session to thread, keeping none of its names (WVE-200).
+    let older = cx
+        .send_request(hello(VersionRange { min: 2, max: 2 }))
+        .block_task()
+        .await
+        .expect_err("no common version");
+    assert!(errors::is(&older, errors::INCOMPATIBLE_PROTOCOL), "{older}");
     let mut token = hello(VersionRange::supported());
     token.auth = Auth::Token {
         token: "x".to_owned(),
@@ -2191,7 +2289,7 @@ async fn hello_comes_first_and_settles_the_version() {
         .block_task()
         .await
         .expect("hello");
-    assert_eq!(accepted.protocol, 2);
+    assert_eq!(accepted.protocol, 3);
     driver.abort();
 }
 
@@ -2212,7 +2310,7 @@ async fn a_client_from_before_this_protocol_is_told_the_version() {
         .and_then(|meta| meta.get("weave"))
         .and_then(|weave| weave.get("protocol"))
         .and_then(serde_json::Value::as_u64);
-    assert_eq!(protocol, Some(2));
+    assert_eq!(protocol, Some(3));
     driver.abort();
 }
 
@@ -2239,11 +2337,11 @@ async fn client_tools_reach_the_turns_client(over_acp: bool) {
         world.daemon(false, Duration::from_secs(60))
     };
     let mut runner = world.tool_client(&daemon).await;
-    let session_id = runner.create(&world).await;
+    let thread_id = runner.create(&world).await;
     let mut other = world.tool_client(&daemon).await;
-    other.attach(&session_id).await;
+    other.attach(&thread_id).await;
 
-    runner.prompt(&session_id, COPY).await;
+    runner.prompt(&thread_id, COPY).await;
     let mut seen = Seen::default();
     let (_, call) = runner.tool_call(&mut seen).await;
     assert_eq!(
@@ -2260,7 +2358,7 @@ async fn client_tools_reach_the_turns_client(over_acp: bool) {
     let (_, seen_by_other) = other.tool_call(&mut Seen::default()).await;
     assert_eq!(seen_by_other.id, call.id);
     let refused = other
-        .run_tool(&session_id, &call, ClientToolResult::text("not mine"))
+        .run_tool(&thread_id, &call, ClientToolResult::text("not mine"))
         .await;
     assert!(
         refused
@@ -2270,7 +2368,7 @@ async fn client_tools_reach_the_turns_client(over_acp: bool) {
     );
 
     runner
-        .run_tool(&session_id, &call, ClientToolResult::text("Copied."))
+        .run_tool(&thread_id, &call, ClientToolResult::text("Copied."))
         .await
         .expect("the target answers");
     runner.until_turn_ends(&mut seen, None).await;
@@ -2286,8 +2384,8 @@ async fn a_client_tool_call_fails_at_once_without_a_client_that_runs_it() {
     let daemon = world.daemon(false, Duration::from_secs(60));
     // This client runs no client tools.
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, COPY).await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, COPY).await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert!(
@@ -2302,7 +2400,7 @@ async fn a_client_tool_call_fails_at_once_without_a_client_that_runs_it() {
     let mut request = run_request(&world, &world.cwd().join("unused"), Vec::new());
     request.prompt = vec![ContentBlock::from(COPY.to_owned())];
     request.attach = true;
-    client.connection.send(request).await.expect("session/run");
+    client.connection.send(request).await.expect("thread/run");
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert!(seen.agent.contains("came from a headless run"), "{seen:?}");
@@ -2313,11 +2411,11 @@ async fn a_client_tool_call_fails_as_one_that_may_have_run_when_its_client_leave
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut runner = world.tool_client(&daemon).await;
-    let session_id = runner.create(&world).await;
+    let thread_id = runner.create(&world).await;
     let mut watcher = world.client(&daemon).await;
-    watcher.attach(&session_id).await;
+    watcher.attach(&thread_id).await;
 
-    runner.prompt(&session_id, COPY).await;
+    runner.prompt(&thread_id, COPY).await;
     let (_, call) = runner.tool_call(&mut Seen::default()).await;
     runner.connection.shutdown().await;
 
@@ -2341,13 +2439,13 @@ async fn cancelling_the_turn_cancels_its_client_tool_call() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut runner = world.tool_client(&daemon).await;
-    let session_id = runner.create(&world).await;
-    runner.prompt(&session_id, COPY).await;
+    let thread_id = runner.create(&world).await;
+    runner.prompt(&thread_id, COPY).await;
     let (_, call) = runner.tool_call(&mut Seen::default()).await;
     runner
         .connection
         .send(CancelTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
         })
         .await
         .expect("turn/cancel");
@@ -2359,7 +2457,7 @@ async fn cancelling_the_turn_cancels_its_client_tool_call() {
         }
     }
     let late = runner
-        .run_tool(&session_id, &call, ClientToolResult::text("too late"))
+        .run_tool(&thread_id, &call, ClientToolResult::text("too late"))
         .await;
     assert!(
         late.as_ref()
@@ -2378,8 +2476,8 @@ async fn the_configuration_decides_which_client_tools_agents_are_offered() {
     .expect("config");
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut runner = world.tool_client(&daemon).await;
-    let session_id = runner.create(&world).await;
-    runner.prompt(&session_id, COPY).await;
+    let thread_id = runner.create(&world).await;
+    runner.prompt(&thread_id, COPY).await;
     let mut seen = Seen::default();
     runner.until_turn_ends(&mut seen, None).await;
     assert!(
@@ -2436,22 +2534,22 @@ async fn a_client_beside_the_host_doesnt_keep_an_idle_one_running() {
 }
 
 #[tokio::test]
-async fn listings_say_who_opened_a_session_and_its_clients_hear_who_closed_it() {
+async fn listings_say_who_opened_a_thread_and_its_clients_hear_who_closed_it() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut opener = world.client(&daemon).await;
-    let session_id = opener.create(&world).await;
-    opener.prompt(&session_id, "hello").await;
+    let thread_id = opener.create(&world).await;
+    opener.prompt(&thread_id, "hello").await;
     opener.until_turn_ends(&mut Seen::default(), None).await;
     let listed = opener
         .connection
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
-        .expect("sessions/list")
-        .sessions;
+        .expect("threads/list")
+        .threads;
     let listing = listed
         .iter()
-        .find(|listing| listing.info.session_id == session_id)
+        .find(|listing| listing.info.session_id == thread_id)
         .expect("listed");
     assert!(
         matches!(
@@ -2464,14 +2562,14 @@ async fn listings_say_who_opened_a_session_and_its_clients_hear_who_closed_it() 
 
     // Another client closes it for everyone, and the first hears who did.
     let mut closer = world.client(&daemon).await;
-    closer.attach(&session_id).await;
+    closer.attach(&thread_id).await;
     closer
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     let mut seen = Seen::default();
     while seen.closed.is_none() {
         let event = opener.next().await;
@@ -2486,7 +2584,7 @@ async fn listings_say_who_opened_a_session_and_its_clients_hear_who_closed_it() 
 }
 
 #[tokio::test]
-async fn a_sessions_mcp_servers_say_how_each_one_is() {
+async fn a_threads_mcp_servers_say_how_each_one_is() {
     let world = World::new();
     std::fs::write(
         world.dir.path().join("config.toml"),
@@ -2533,7 +2631,7 @@ async fn a_sessions_mcp_servers_say_how_each_one_is() {
     );
 
     // Its own server is connected once the agent speaks to it, and attached clients hear so.
-    client.prompt(&state.session_id, COPY).await;
+    client.prompt(&state.thread_id, COPY).await;
     let servers = tokio::time::timeout(WAIT, async {
         loop {
             if let HostEvent::Changed(changed) = client.next().await
@@ -2550,7 +2648,7 @@ async fn a_sessions_mcp_servers_say_how_each_one_is() {
 
     // A client attaching later sees it as it is now.
     let mut later = world.client(&daemon).await;
-    let attached = later.attach(&state.session_id).await;
+    let attached = later.attach(&state.thread_id).await;
     assert_eq!(attached.state.mcp_servers, servers);
 }
 
@@ -2570,8 +2668,8 @@ async fn an_agent_on_an_older_mcp_is_refused_and_its_clients_told() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "mcp-legacy").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "mcp-legacy").await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert!(seen.agent.contains("weave refused initialize"), "{seen:?}");
@@ -2589,7 +2687,7 @@ async fn an_agent_on_an_older_mcp_is_refused_and_its_clients_told() {
 
     // Later clients see it in the journal, and in the server's status.
     let mut later = world.client(&daemon).await;
-    let attached = later.attach_after(&session_id, None).await.expect("attach");
+    let attached = later.attach_after(&thread_id, None).await.expect("attach");
     let own = &attached.state.mcp_servers[0];
     assert_eq!(own.state, McpServerState::Unavailable);
     assert!(
@@ -2621,7 +2719,7 @@ async fn the_mcp_socket_is_private_and_refuses_an_unknown_token() {
     config.mcp_socket = Some(socket.clone());
     let daemon = Daemon::new(config);
     let mut client = world.client(&daemon).await;
-    // Declaring the server for a session starts the socket.
+    // Declaring the server for a thread starts the socket.
     client.create(&world).await;
     #[cfg(unix)]
     {
@@ -2654,7 +2752,7 @@ async fn the_mcp_socket_is_private_and_refuses_an_unknown_token() {
 }
 
 #[tokio::test]
-async fn a_watcher_hears_of_sessions_it_isnt_attached_to_from_first_prompt_to_deletion() {
+async fn a_watcher_hears_of_threads_it_isnt_attached_to_from_first_prompt_to_deletion() {
     let world = World::new();
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut watcher = world.client(&daemon).await;
@@ -2670,13 +2768,13 @@ async fn a_watcher_hears_of_sessions_it_isnt_attached_to_from_first_prompt_to_de
 
     // Blank, it isn't listed, so there's nothing to hear.
     let mut driver = world.client(&daemon).await;
-    let session_id = driver.create(&world).await;
+    let thread_id = driver.create(&world).await;
     assert!(!watcher.hears_a_change().await);
 
     // Prompted, it appears, then runs, waits on a person, runs again and goes idle, titled.
     let path = world.cwd().join("watched.txt");
     driver
-        .prompt(&session_id, &format!("write {} hello", path.display()))
+        .prompt(&thread_id, &format!("write {} hello", path.display()))
         .await;
     let (asked_in, pending) = driver.asked(&mut Seen::default()).await;
     driver
@@ -2685,7 +2783,7 @@ async fn a_watcher_hears_of_sessions_it_isnt_attached_to_from_first_prompt_to_de
         .expect("answer");
     driver.until_turn_ends(&mut Seen::default(), None).await;
     let changes = watcher
-        .changes_until(|change| change.state() == Some((SessionStatus::Open, Some(Activity::Idle))))
+        .changes_until(|change| change.state() == Some((ThreadStatus::Open, Some(Activity::Idle))))
         .await;
     let mut activities: Vec<Activity> = changes
         .iter()
@@ -2704,7 +2802,7 @@ async fn a_watcher_hears_of_sessions_it_isnt_attached_to_from_first_prompt_to_de
     let Some(Change::Updated(last)) = changes.last() else {
         panic!("no update: {changes:?}");
     };
-    assert_eq!(last.info.session_id, session_id);
+    assert_eq!(last.info.session_id, thread_id);
     assert_eq!(last.info.cwd, world.cwd());
     assert_eq!(last.agent_id, "fake");
     assert_eq!(last.clients, 1);
@@ -2713,47 +2811,47 @@ async fn a_watcher_hears_of_sessions_it_isnt_attached_to_from_first_prompt_to_de
     // Closed, opened again by attaching, then deleted.
     driver
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     let closed = watcher
         .changes_until(|change| {
             change
                 .state()
-                .is_some_and(|(state, _)| state == SessionStatus::Closed)
+                .is_some_and(|(state, _)| state == ThreadStatus::Closed)
         })
         .await;
     assert_eq!(
         closed.last().and_then(Change::state),
-        Some((SessionStatus::Closed, None))
+        Some((ThreadStatus::Closed, None))
     );
     let mut other = world.client(&daemon).await;
-    other.attach(&session_id).await;
+    other.attach(&thread_id).await;
     watcher
         .changes_until(|change| {
             change
                 .state()
-                .is_some_and(|(state, _)| state == SessionStatus::Open)
+                .is_some_and(|(state, _)| state == ThreadStatus::Open)
         })
         .await;
     driver
         .connection
-        .send(DeleteSessionRequest {
-            session_id: session_id.clone(),
+        .send(DeleteThreadRequest {
+            thread_id: thread_id.clone(),
             agent_id: None,
         })
         .await
-        .expect("session/delete");
+        .expect("thread/delete");
     let gone = watcher
         .changes_until(|change| matches!(change, Change::Removed(_)))
         .await;
-    assert_eq!(gone.last(), Some(&Change::Removed(session_id)));
+    assert_eq!(gone.last(), Some(&Change::Removed(thread_id)));
 }
 
 #[tokio::test]
-async fn a_watcher_hears_of_sessions_suspended_when_the_host_stops_and_blank_ones_closed() {
+async fn a_watcher_hears_of_threads_suspended_when_the_host_stops_and_blank_ones_closed() {
     let world = World::new();
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut driver = world.client(&daemon).await;
@@ -2771,18 +2869,18 @@ async fn a_watcher_hears_of_sessions_suspended_when_the_host_stops_and_blank_one
                 listing.activity
             ))
             .collect::<Vec<_>>(),
-        [(kept.clone(), SessionStatus::Open, Some(Activity::Idle))]
+        [(kept.clone(), ThreadStatus::Open, Some(Activity::Idle))]
     );
 
     // One nobody prompted goes, closed, with nothing left of it.
     let blank = driver.create(&world).await;
     driver
         .connection
-        .send(CloseSessionRequest {
-            session_id: blank.clone(),
+        .send(CloseThreadRequest {
+            thread_id: blank.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     assert_eq!(watcher.change().await, Change::Removed(blank));
 
     daemon.shutdown().await;
@@ -2790,7 +2888,7 @@ async fn a_watcher_hears_of_sessions_suspended_when_the_host_stops_and_blank_one
         .changes_until(|change| {
             change
                 .state()
-                .is_some_and(|(state, _)| state == SessionStatus::Suspended)
+                .is_some_and(|(state, _)| state == ThreadStatus::Suspended)
         })
         .await;
     let Some(Change::Updated(listing)) = suspended.last() else {
@@ -2808,12 +2906,12 @@ async fn a_watcher_that_unwatches_hears_no_more() {
     watcher.watch().await;
     watcher
         .connection
-        .send(UnwatchSessionsRequest {})
+        .send(UnwatchThreadsRequest {})
         .await
-        .expect("sessions/unwatch");
+        .expect("threads/unwatch");
     let mut driver = world.client(&daemon).await;
-    let session_id = driver.create(&world).await;
-    driver.prompt(&session_id, "hello").await;
+    let thread_id = driver.create(&world).await;
+    driver.prompt(&thread_id, "hello").await;
     driver.until_turn_ends(&mut Seen::default(), None).await;
     assert!(!watcher.hears_a_change().await);
 }
@@ -2898,7 +2996,7 @@ async fn a_client_lists_directories_on_the_hosts_computer() {
 }
 
 #[tokio::test]
-async fn a_tool_call_sent_before_the_session_is_set_up_waits_for_it() {
+async fn a_tool_call_sent_before_the_thread_is_set_up_waits_for_it() {
     let world = World::new();
     let mut config = world.config(
         false,
@@ -2914,7 +3012,7 @@ async fn a_tool_call_sent_before_the_session_is_set_up_waits_for_it() {
     let mut client = world.tool_client(&daemon).await;
     client.create(&world).await;
     // The call reached the Host before `session/new` was answered. It waited for the session
-    // rather than failing as one for no session, then found no turn to send it to.
+    // rather than failing as one for no thread, then found no turn to send it to.
     let mut seen = Seen::default();
     while !seen.agent.starts_with("Early ") {
         let event = client.next().await;
@@ -2927,11 +3025,11 @@ async fn a_tool_call_sent_before_the_session_is_set_up_waits_for_it() {
 }
 
 #[tokio::test]
-async fn a_session_opened_again_declares_the_host_mcp_server_anew() {
+async fn a_thread_opened_again_declares_the_host_mcp_server_anew() {
     let world = World::new();
     let daemon = world.daemon_over_acp();
     let mut client = world.tool_client(&daemon).await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
     let declared = |seen: &Seen| {
         seen.agent
             .rsplit("MCP servers: ")
@@ -2939,20 +3037,20 @@ async fn a_session_opened_again_declares_the_host_mcp_server_anew() {
             .unwrap_or_default()
             .to_owned()
     };
-    client.prompt(&session_id, "mcp").await;
+    client.prompt(&thread_id, "mcp").await;
     let mut before = Seen::default();
     client.until_turn_ends(&mut before, None).await;
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
 
     let mut again = world.tool_client(&daemon).await;
-    again.attach(&session_id).await;
-    again.prompt(&session_id, "mcp").await;
+    again.attach(&thread_id).await;
+    again.prompt(&thread_id, "mcp").await;
     let mut after = Seen::default();
     while !after.agent.contains("MCP servers: ") || after.ended.is_none() {
         let event = again.next().await;
@@ -2963,11 +3061,11 @@ async fn a_session_opened_again_declares_the_host_mcp_server_anew() {
     assert_ne!(declared(&before), declared(&after));
 
     // The new declaration is the one that works.
-    again.prompt(&session_id, COPY).await;
+    again.prompt(&thread_id, COPY).await;
     let mut seen = Seen::default();
     let (_, call) = again.tool_call(&mut seen).await;
     again
-        .run_tool(&session_id, &call, ClientToolResult::text("Copied."))
+        .run_tool(&thread_id, &call, ClientToolResult::text("Copied."))
         .await
         .expect("the target answers");
     again.until_turn_ends(&mut seen, None).await;
@@ -2977,21 +3075,21 @@ async fn a_session_opened_again_declares_the_host_mcp_server_anew() {
     );
 }
 
-fn rename(session_id: &SessionId, title: &str) -> RenameSessionRequest {
-    RenameSessionRequest {
-        session_id: session_id.clone(),
+fn rename(thread_id: &ThreadId, title: &str) -> RenameThreadRequest {
+    RenameThreadRequest {
+        thread_id: thread_id.clone(),
         title: title.to_owned(),
     }
 }
 
 #[tokio::test]
-async fn a_session_renamed_through_the_host_keeps_its_title() {
+async fn a_thread_renamed_through_the_host_keeps_its_title() {
     let world = World::new();
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
     let mut watcher = world.client(&daemon).await;
     watcher.watch().await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
 
     for (title, why) in [
         ("   ".to_owned(), "a title can't be empty"),
@@ -2999,7 +3097,7 @@ async fn a_session_renamed_through_the_host_keeps_its_title() {
     ] {
         let error = client
             .connection
-            .send(rename(&session_id, &title))
+            .send(rename(&thread_id, &title))
             .await
             .expect_err("refused");
         assert_eq!(
@@ -3009,12 +3107,12 @@ async fn a_session_renamed_through_the_host_keeps_its_title() {
     }
     client
         .connection
-        .send(rename(&session_id, "  Parser fixes "))
+        .send(rename(&thread_id, "  Parser fixes "))
         .await
-        .expect("session/rename");
+        .expect("thread/rename");
 
-    // The agent titles a session after its first prompt; that doesn't replace the rename.
-    client.prompt(&session_id, "hello").await;
+    // The agent titles a thread after its first prompt; that doesn't replace the rename.
+    client.prompt(&thread_id, "hello").await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(
@@ -3029,7 +3127,7 @@ async fn a_session_renamed_through_the_host_keeps_its_title() {
         )]
     );
     let changes = watcher
-        .changes_until(|change| change.state() == Some((SessionStatus::Open, Some(Activity::Idle))))
+        .changes_until(|change| change.state() == Some((ThreadStatus::Open, Some(Activity::Idle))))
         .await;
     for change in &changes {
         let Change::Updated(listing) = change else {
@@ -3037,7 +3135,7 @@ async fn a_session_renamed_through_the_host_keeps_its_title() {
         };
         assert_eq!(listing.info.title.as_deref(), Some("Parser fixes"));
     }
-    let titles = |listings: Vec<SessionListing>| {
+    let titles = |listings: Vec<ThreadListing>| {
         listings
             .into_iter()
             .map(|listing| listing.info.title)
@@ -3045,10 +3143,10 @@ async fn a_session_renamed_through_the_host_keeps_its_title() {
     };
     let host = client
         .connection
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
-        .expect("sessions/list");
-    assert_eq!(titles(host.sessions), [Some("Parser fixes".to_owned())]);
+        .expect("threads/list");
+    assert_eq!(titles(host.threads), [Some("Parser fixes".to_owned())]);
     assert_eq!(
         titles(client.listing(&world).await),
         [Some("Parser fixes".to_owned())]
@@ -3058,31 +3156,31 @@ async fn a_session_renamed_through_the_host_keeps_its_title() {
     daemon.shutdown().await;
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut later = world.client(&daemon).await;
-    let resumed = later.attach(&session_id).await;
+    let resumed = later.attach(&thread_id).await;
     assert_eq!(resumed.state.title.as_deref(), Some("Parser fixes"));
 
-    // So does a session closed and opened again, in a new journal.
+    // So does a thread closed and opened again, in a new journal.
     later
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     let error = later
         .connection
-        .send(rename(&session_id, "Closed"))
+        .send(rename(&thread_id, "Closed"))
         .await
         .expect_err("refused");
-    assert!(errors::is(&error, errors::SESSION_NOT_OPEN), "{error}");
+    assert!(errors::is(&error, errors::THREAD_NOT_OPEN), "{error}");
     let mut again = world.client(&daemon).await;
-    let reopened = again.attach(&session_id).await;
+    let reopened = again.attach(&thread_id).await;
     assert!(reopened.replay.reset);
     assert_eq!(reopened.state.title.as_deref(), Some("Parser fixes"));
 }
 
 #[tokio::test]
-async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
+async fn an_agent_renames_its_own_thread_with_a_host_tool_even_headless() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
@@ -3092,11 +3190,11 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
             agent_id: "fake".to_owned(),
             cwd: world.cwd(),
             remote: None,
-            session_id: None,
+            thread_id: None,
             additional_directories: Vec::new(),
             mode: None,
             prompt: vec![ContentBlock::from(
-                r#"tool rename_session {"title": "Named by its agent"}"#.to_owned(),
+                r#"tool rename_thread {"title": "Named by its agent"}"#.to_owned(),
             )],
             policy: PermissionPolicy {
                 approve: Vec::new(),
@@ -3110,30 +3208,30 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
             labels: Vec::new(),
         })
         .await
-        .expect("session/run");
+        .expect("thread/run");
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.renamed, [("Named by its agent".to_owned(), None)]);
     assert!(
         seen.agent
-            .contains("rename_session answered: Renamed this thread to “Named by its agent”."),
+            .contains("rename_thread answered: Renamed this thread to “Named by its agent”."),
         "{seen:?}"
     );
     assert_eq!(
-        run.state.map(|state| state.session_id),
-        Some(run.session_id.clone())
+        run.state.map(|state| state.thread_id),
+        Some(run.thread_id.clone())
     );
 
     // An empty title is the agent's mistake, told it as a tool error.
-    let session_id = run.session_id;
+    let thread_id = run.thread_id;
     client
-        .prompt(&session_id, r#"tool rename_session {"title": " "}"#)
+        .prompt(&thread_id, r#"tool rename_thread {"title": " "}"#)
         .await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert!(
         seen.agent
-            .contains("rename_session failed: Not renamed: a title can't be empty."),
+            .contains("rename_thread failed: Not renamed: a title can't be empty."),
         "{seen:?}"
     );
 
@@ -3143,13 +3241,13 @@ async fn an_agent_renames_its_own_session_with_a_host_tool_even_headless() {
     std::fs::write(&config, format!("host_tools = []\n{text}")).expect("config");
     let other = client.create(&world).await;
     client
-        .prompt(&other, r#"tool rename_session {"title": "Not offered"}"#)
+        .prompt(&other, r#"tool rename_thread {"title": "Not offered"}"#)
         .await;
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     assert!(
-        seen.agent.starts_with("rename_session couldn't be called")
-            && seen.agent.contains("unknown tool: rename_session"),
+        seen.agent.starts_with("rename_thread couldn't be called")
+            && seen.agent.contains("unknown tool: rename_thread"),
         "{seen:?}"
     );
     assert!(seen.renamed.is_empty());
@@ -3160,7 +3258,7 @@ fn path_text(path: &Path) -> &str {
 }
 
 #[tokio::test]
-async fn a_session_in_a_worktree_says_its_repository_and_branch_and_lists_by_repository() {
+async fn a_thread_in_a_worktree_says_its_repository_and_branch_and_lists_by_repository() {
     let world = World::new();
     let repo = world.repository();
     git(
@@ -3192,12 +3290,12 @@ async fn a_session_in_a_worktree_says_its_repository_and_branch_and_lists_by_rep
         // Without the credentials in its URL.
         remote: Some("github.com/jacobfvanzyl/weave".to_owned()),
     };
-    let session_id = {
+    let thread_id = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
-        let state = client.session_in(&world, &worktree.join("src")).await;
+        let state = client.thread_in(&world, &worktree.join("src")).await;
         assert_eq!(state.git.as_ref(), Some(&expected));
-        let elsewhere = client.session_in(&world, &world.cwd()).await;
+        let elsewhere = client.thread_in(&world, &world.cwd()).await;
         assert_eq!(elsewhere.git, None);
 
         // Any directory in the repository names it, another worktree included.
@@ -3207,23 +3305,23 @@ async fn a_session_in_a_worktree_says_its_repository_and_branch_and_lists_by_rep
                 .iter()
                 .map(|listing| (&listing.info.session_id, listing.git.as_ref()))
                 .collect::<Vec<_>>(),
-            [(&state.session_id, Some(&expected))]
+            [(&state.thread_id, Some(&expected))]
         );
         // Only the Host's own listing goes by repository.
         let refused = client
             .connection
-            .send(ListSessionsRequest {
+            .send(ListThreadsRequest {
                 agent_id: Some("fake".to_owned()),
                 repo: Some(repo.clone()),
-                ..ListSessionsRequest::default()
+                ..ListThreadsRequest::default()
             })
             .await;
         assert!(refused.is_err(), "{refused:?}");
         let outside = client
             .connection
-            .send(ListSessionsRequest {
+            .send(ListThreadsRequest {
                 repo: Some(world.cwd()),
-                ..ListSessionsRequest::default()
+                ..ListThreadsRequest::default()
             })
             .await;
         assert!(
@@ -3233,7 +3331,7 @@ async fn a_session_in_a_worktree_says_its_repository_and_branch_and_lists_by_rep
             "{outside:?}"
         );
         daemon.shutdown().await;
-        state.session_id
+        state.thread_id
     };
 
     // A later Host has it from the journal.
@@ -3241,24 +3339,24 @@ async fn a_session_in_a_worktree_says_its_repository_and_branch_and_lists_by_rep
     let client = world.client(&daemon).await;
     let listed = client.in_repository(&repo).await;
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].info.session_id, session_id);
+    assert_eq!(listed[0].info.session_id, thread_id);
     assert_eq!(listed[0].git.as_ref(), Some(&expected));
 }
 
 #[tokio::test]
-async fn a_session_says_the_branch_its_worktree_switched_to_once_a_turn_ends() {
+async fn a_thread_says_the_branch_its_worktree_switched_to_once_a_turn_ends() {
     let world = World::new();
     let repo = world.repository();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let state = client.session_in(&world, &repo).await;
+    let state = client.thread_in(&world, &repo).await;
     assert_eq!(
         state.git.as_ref().and_then(|git| git.branch.as_deref()),
         Some("main")
     );
 
     git(&repo, &["switch", "-q", "-c", "feature/next"]);
-    client.prompt(&state.session_id, "hello again").await;
+    client.prompt(&state.thread_id, "hello again").await;
     // Attached clients hear of it, and listings say it.
     let changed = tokio::time::timeout(WAIT, async {
         loop {
@@ -3270,7 +3368,7 @@ async fn a_session_says_the_branch_its_worktree_switched_to_once_a_turn_ends() {
         }
     })
     .await
-    .expect("the session's new branch in time");
+    .expect("the thread's new branch in time");
     assert_eq!(changed.branch.as_deref(), Some("feature/next"));
     let listed = client.in_repository(&repo).await;
     assert_eq!(
@@ -3280,7 +3378,7 @@ async fn a_session_says_the_branch_its_worktree_switched_to_once_a_turn_ends() {
 }
 
 #[tokio::test]
-async fn a_client_makes_a_worktree_beside_the_repository_and_starts_a_session_in_it() {
+async fn a_client_makes_a_worktree_beside_the_repository_and_starts_a_thread_in_it() {
     let world = World::new();
     let repo = world.repository();
     let daemon = world.daemon(false, Duration::from_secs(60));
@@ -3318,7 +3416,7 @@ async fn a_client_makes_a_worktree_beside_the_repository_and_starts_a_session_in
         git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]),
         "feature/auth"
     );
-    let state = client.session_in(&world, &created.path).await;
+    let state = client.thread_in(&world, &created.path).await;
     assert_eq!(
         state.git,
         Some(GitLocation {
@@ -3369,7 +3467,7 @@ async fn a_client_makes_a_worktree_beside_the_repository_and_starts_a_session_in
 }
 
 #[tokio::test]
-async fn worktrees_list_with_their_status_and_the_sessions_in_each() {
+async fn worktrees_list_with_their_status_and_the_threads_in_each() {
     let world = World::new();
     let repo = world.repository();
     let daemon = world.daemon(false, Duration::from_secs(60));
@@ -3384,8 +3482,8 @@ async fn worktrees_list_with_their_status_and_the_sessions_in_each() {
         .await
         .expect("worktrees/create")
         .path;
-    let in_primary = client.session_in(&world, &repo).await.session_id;
-    let in_worktree = client.session_in(&world, &worktree).await.session_id;
+    let in_primary = client.thread_in(&world, &repo).await.thread_id;
+    let in_worktree = client.thread_in(&world, &worktree).await.thread_id;
     // A commit only it has, and a file git doesn't track yet.
     std::fs::write(worktree.join("auth.rs"), "fn login() {}\n").expect("a file");
     git(&worktree, &["add", "auth.rs"]);
@@ -3413,7 +3511,7 @@ async fn worktrees_list_with_their_status_and_the_sessions_in_each() {
                 changes: false,
                 divergence: Some(Divergence::default()),
                 upstream: None,
-                sessions: vec![in_primary],
+                threads: vec![in_primary],
             },
             Worktree {
                 path: worktree.clone(),
@@ -3426,14 +3524,14 @@ async fn worktrees_list_with_their_status_and_the_sessions_in_each() {
                     behind: 0,
                 }),
                 upstream: None,
-                sessions: vec![in_worktree],
+                threads: vec![in_worktree],
             },
         ]
     );
 }
 
 #[tokio::test]
-async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged() {
+async fn removing_a_worktree_waits_for_its_threads_and_keeps_what_isnt_merged() {
     let world = World::new();
     let repo = world.repository();
     let daemon = world.daemon(true, Duration::from_secs(60));
@@ -3454,12 +3552,12 @@ async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged()
         .await
         .expect("worktrees/create")
         .path;
-    let session_id = client.session_in(&world, &worktree).await.session_id;
+    let thread_id = client.thread_in(&world, &worktree).await.thread_id;
 
-    // Neither removing nor releasing it goes ahead while a request in its session waits.
+    // Neither removing nor releasing it goes ahead while a request in its thread waits.
     let target = worktree.join("out.txt");
     client
-        .prompt(&session_id, &format!("write {} hello", target.display()))
+        .prompt(&thread_id, &format!("write {} hello", target.display()))
         .await;
     let (_, asked) = client.asked(&mut Seen::default()).await;
     let busy = client.connection.send(remove(&worktree, true)).await;
@@ -3480,12 +3578,12 @@ async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged()
         "{busy:?}"
     );
     client
-        .allow(&session_id, &asked, "allow")
+        .allow(&thread_id, &asked, "allow")
         .await
         .expect("answered");
     client.until_turn_ends(&mut Seen::default(), None).await;
 
-    // What the turn wrote isn't committed, so it goes only by force, leaving the session open.
+    // What the turn wrote isn't committed, so it goes only by force, leaving the thread open.
     let changed = client.connection.send(remove(&worktree, false)).await;
     assert!(
         changed
@@ -3495,7 +3593,7 @@ async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged()
     );
     assert_eq!(
         client.in_repository(&repo).await[0].state,
-        SessionStatus::Open
+        ThreadStatus::Open
     );
     let removed = client
         .connection
@@ -3505,7 +3603,7 @@ async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged()
     assert_eq!(
         removed,
         RemoveWorktreeResponse {
-            closed: vec![session_id.clone()],
+            closed: vec![thread_id.clone()],
             branch: Some("merged".to_owned()),
             // Its branch adds nothing to main, so it goes too.
             branch_deleted: true,
@@ -3513,12 +3611,12 @@ async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged()
     );
     assert!(!worktree.exists());
     assert_eq!(git(&repo, &["branch", "--list", "merged"]), "");
-    // The session is closed, not forgotten.
+    // The thread is closed, not forgotten.
     assert_eq!(
         client.in_repository(&repo).await[0].state,
-        SessionStatus::Closed
+        ThreadStatus::Closed
     );
-    assert!(world.has_journal(&session_id));
+    assert!(world.has_journal(&thread_id));
 
     // A branch with commits main doesn't have stays.
     let unmerged = client
@@ -3530,7 +3628,7 @@ async fn removing_a_worktree_waits_for_its_sessions_and_keeps_what_isnt_merged()
     std::fs::write(unmerged.join("idea.md"), "maybe\n").expect("a file");
     git(&unmerged, &["add", "idea.md"]);
     git(&unmerged, &["commit", "-q", "-m", "An idea"]);
-    let idle = client.session_in(&world, &unmerged).await.session_id;
+    let idle = client.thread_in(&world, &unmerged).await.thread_id;
     let released = client
         .connection
         .send(ReleaseWorktreeRequest {
@@ -3593,14 +3691,14 @@ async fn a_prompt_queued_during_a_turn_starts_the_next_one_with_its_own_origin()
             .iter()
             .any(|f| f == QUEUE_FEATURE)
     );
-    let session_id = first.create(&world).await;
+    let thread_id = first.create(&world).await;
     let second = world.client(&daemon).await;
 
-    // Adding to an idle session starts a turn at once.
-    let started = first.queue(&session_id, "slow 3").await;
+    // Adding to an idle thread starts a turn at once.
+    let started = first.queue(&thread_id, "slow 3").await;
     assert!(started.started);
     // Added while that turn runs, by another client that isn't attached, it waits.
-    let queued = second.queue(&session_id, "and then this").await;
+    let queued = second.queue(&thread_id, "and then this").await;
     assert!(!queued.started);
     assert!(queued.seq > started.seq);
 
@@ -3615,7 +3713,7 @@ async fn a_prompt_queued_during_a_turn_starts_the_next_one_with_its_own_origin()
         ]
     );
     assert!(seen.agent.ends_with("You said: and then this"), "{seen:?}");
-    let attached = first.attach(&session_id).await;
+    let attached = first.attach(&thread_id).await;
     assert!(attached.state.queue.is_empty());
 }
 
@@ -3624,11 +3722,11 @@ async fn attached_clients_share_one_queue_and_removing_a_prompt_removes_it_for_b
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut first = world.client(&daemon).await;
-    let session_id = first.create(&world).await;
-    first.queue(&session_id, "slow 4").await;
-    let kept = first.queue(&session_id, "kept").await;
+    let thread_id = first.create(&world).await;
+    first.queue(&thread_id, "slow 4").await;
+    let kept = first.queue(&thread_id, "kept").await;
     let mut second = world.client(&daemon).await;
-    let attached = second.attach(&session_id).await;
+    let attached = second.attach(&thread_id).await;
     let ids: Vec<&str> = attached.state.queue.iter().map(|q| q.id.as_str()).collect();
     assert_eq!(
         ids,
@@ -3637,11 +3735,11 @@ async fn attached_clients_share_one_queue_and_removing_a_prompt_removes_it_for_b
     );
     assert_eq!(attached.state.queue[0].origin, own_origin(&first));
 
-    let dropped = second.queue(&session_id, "dropped").await;
+    let dropped = second.queue(&thread_id, "dropped").await;
     let removed = first
         .connection
         .send(RemoveQueuedRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             queued_id: dropped.queued_id.clone(),
         })
         .await
@@ -3653,7 +3751,7 @@ async fn attached_clients_share_one_queue_and_removing_a_prompt_removes_it_for_b
     let again = second
         .connection
         .send(RemoveQueuedRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             queued_id: dropped.queued_id.clone(),
         })
         .await
@@ -3676,13 +3774,13 @@ async fn cancelling_a_turn_pauses_the_queue_until_a_client_resumes_it() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.queue(&session_id, "slow 20").await;
-    let waiting = client.queue(&session_id, "after the cancel").await;
+    let thread_id = client.create(&world).await;
+    client.queue(&thread_id, "slow 20").await;
+    let waiting = client.queue(&thread_id, "after the cancel").await;
     client
         .connection
         .send(CancelTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
         })
         .await
         .expect("turn/cancel");
@@ -3691,7 +3789,7 @@ async fn cancelling_a_turn_pauses_the_queue_until_a_client_resumes_it() {
     client.until_paused(&mut seen).await;
     assert_eq!(seen.ended, Some(StopReason::Cancelled));
     assert_eq!(seen.paused, [QueuePause::Cancelled]);
-    let attached = world.client(&daemon).await.attach(&session_id).await;
+    let attached = world.client(&daemon).await.attach(&thread_id).await;
     assert_eq!(attached.state.queue_paused, Some(QueuePause::Cancelled));
     assert_eq!(attached.state.queue.len(), 1);
     assert_eq!(attached.state.activity, Activity::Idle, "nothing started");
@@ -3699,7 +3797,7 @@ async fn cancelling_a_turn_pauses_the_queue_until_a_client_resumes_it() {
     client
         .connection
         .send(ResumeQueueRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
         })
         .await
         .expect("queue/resume");
@@ -3711,20 +3809,20 @@ async fn cancelling_a_turn_pauses_the_queue_until_a_client_resumes_it() {
         Some(waiting.queued_id.as_str())
     );
 
-    // Adding to a paused queue resumes it, oldest first; so does prompting the session.
-    client.queue(&session_id, "slow 20").await;
-    let older = client.queue(&session_id, "older").await;
+    // Adding to a paused queue resumes it, oldest first; so does prompting the thread.
+    client.queue(&thread_id, "slow 20").await;
+    let older = client.queue(&thread_id, "older").await;
     client
         .connection
         .send(CancelTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
         })
         .await
         .expect("turn/cancel");
     let mut seen = Seen::default();
     client.until_turn_ends(&mut seen, None).await;
     client.until_paused(&mut seen).await;
-    let newer = client.queue(&session_id, "newer").await;
+    let newer = client.queue(&thread_id, "newer").await;
     assert!(!newer.started);
     client.until_turns_end(&mut seen, 2).await;
     let from_queue: Vec<Option<String>> = seen.origins.iter().map(|o| o.1.clone()).collect();
@@ -3752,8 +3850,8 @@ async fn a_queue_outlasts_a_host_restart_paused_for_a_person_or_running_headless
                 ..run_request(&world, &world.cwd().join("unused"), Vec::new())
             })
             .await
-            .expect("session/run");
-        let headless = run.session_id;
+            .expect("thread/run");
+        let headless = run.thread_id;
         client.queue(&headless, "headless next").await;
         daemon.shutdown().await;
         (interactive, (headless, waiting.queued_id))
@@ -3763,7 +3861,7 @@ async fn a_queue_outlasts_a_host_restart_paused_for_a_person_or_running_headless
     let daemon = world.daemon(true, Duration::from_secs(60));
     daemon.resume_queues().await;
     let mut client = world.client(&daemon).await;
-    // The headless session's queue ran without anyone.
+    // The headless thread's queue ran without anyone.
     let mut watcher = world.client(&daemon).await;
     watcher.attach(&headless).await;
     let mut seen = Seen::default();
@@ -3781,7 +3879,7 @@ async fn a_queue_outlasts_a_host_restart_paused_for_a_person_or_running_headless
     client
         .connection
         .send(ResumeQueueRequest {
-            session_id: interactive.clone(),
+            thread_id: interactive.clone(),
         })
         .await
         .expect("queue/resume");
@@ -3806,29 +3904,29 @@ async fn a_turn_the_host_stopped_under_is_interrupted_and_a_headless_one_continu
                 ..run_request(&world, &world.cwd().join("unused"), Vec::new())
             })
             .await
-            .expect("session/run");
+            .expect("thread/run");
         daemon.shutdown().await;
         (
             interactive,
-            run.session_id,
+            run.thread_id,
             run.turn_id.expect("the run's turn"),
         )
     };
-    let latest = async |daemon: &Daemon, session_id: &SessionId, turn_id: Option<&str>| {
+    let latest = async |daemon: &Daemon, thread_id: &ThreadId, turn_id: Option<&str>| {
         let client = world.client(daemon).await;
         client
             .connection
-            .send(GetSessionRequest {
-                session_id: session_id.clone(),
+            .send(GetThreadRequest {
+                thread_id: thread_id.clone(),
                 turn_id: turn_id.map(str::to_owned),
             })
             .await
-            .expect("sessions/get")
+            .expect("threads/get")
             .latest_turn
             .expect("a turn")
     };
 
-    // The headless session's turn was interrupted, and a turn from its origin continues it.
+    // The headless thread's turn was interrupted, and a turn from its origin continues it.
     let daemon = world.daemon(true, Duration::from_secs(60));
     daemon.resume_queues().await;
     let interrupted = latest(&daemon, &headless, Some(&cut)).await;
@@ -3889,7 +3987,7 @@ async fn a_turn_the_host_stopped_under_is_interrupted_and_a_headless_one_continu
                     .is_some_and(|header| header.contains(&id))
             })
         })
-        .expect("the headless session's journal");
+        .expect("the headless thread's journal");
     let text = std::fs::read_to_string(&journal).expect("the journal");
     let lines: Vec<&str> = text.lines().collect();
     let cut_off = lines
@@ -3918,21 +4016,21 @@ async fn a_turn_the_host_stopped_under_is_interrupted_and_a_headless_one_continu
 }
 
 #[tokio::test]
-async fn a_closed_sessions_queue_carries_on_into_its_new_journal() {
+async fn a_closed_threads_queue_carries_on_into_its_new_journal() {
     let world = World::new();
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.queue(&session_id, "slow 50").await;
-    let waiting = client.queue(&session_id, "carried").await;
+    let thread_id = client.create(&world).await;
+    client.queue(&thread_id, "slow 50").await;
+    let waiting = client.queue(&thread_id, "carried").await;
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
-    let attached = client.attach(&session_id).await;
+        .expect("thread/close");
+    let attached = client.attach(&thread_id).await;
     assert!(attached.replay.reset, "a new journal");
     assert_eq!(attached.state.queue_paused, Some(QueuePause::Interrupted));
     let ids: Vec<&str> = attached.state.queue.iter().map(|q| q.id.as_str()).collect();
@@ -3942,7 +4040,7 @@ async fn a_closed_sessions_queue_carries_on_into_its_new_journal() {
 #[tokio::test]
 async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_after_a_restart() {
     let world = World::new();
-    let (session_id, first_turn, first_queued, first_run) = {
+    let (thread_id, first_turn, first_queued, first_run) = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
         assert!(
@@ -3953,9 +4051,9 @@ async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_a
                 .iter()
                 .any(|f| f == REQUEST_KEYS_FEATURE)
         );
-        let session_id = client.create(&world).await;
+        let thread_id = client.create(&world).await;
         let turn = StartTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             prompt: vec![ContentBlock::from("slow 3".to_owned())],
             key: Some("turn-1".to_owned()),
         };
@@ -3968,17 +4066,17 @@ async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_a
         let again = client.connection.send(turn.clone()).await.expect("repeat");
         assert_eq!(again, first);
         let queued = client
-            .queue_keyed(&session_id, "queued once", Some("queue-1"))
+            .queue_keyed(&thread_id, "queued once", Some("queue-1"))
             .await
             .expect("queue/add");
         let repeat = client
-            .queue_keyed(&session_id, "queued once", Some("queue-1"))
+            .queue_keyed(&thread_id, "queued once", Some("queue-1"))
             .await
             .expect("repeat");
         assert_eq!(repeat, queued);
         // The same key for another request is refused.
         let reused = client
-            .queue_keyed(&session_id, "something else", Some("queue-1"))
+            .queue_keyed(&thread_id, "something else", Some("queue-1"))
             .await
             .expect_err("another request");
         assert!(errors::is(&reused, errors::KEY_REUSED));
@@ -3994,23 +4092,23 @@ async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_a
             .connection
             .send(run.clone())
             .await
-            .expect("session/run");
+            .expect("thread/run");
         let rerun = client.connection.send(run).await.expect("repeat");
-        assert_eq!(rerun.session_id, ran.session_id);
+        assert_eq!(rerun.thread_id, ran.thread_id);
         // A repeat names the turn the first started, so its caller can follow it.
         assert!(first.turn_id.is_some() && ran.turn_id.is_some());
         assert_eq!(rerun.turn_id, ran.turn_id);
         daemon.shutdown().await;
-        (session_id, first, queued, ran.session_id)
+        (thread_id, first, queued, ran.thread_id)
     };
 
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    client.attach_caught_up(&session_id).await;
+    client.attach_caught_up(&thread_id).await;
     let again = client
         .connection
         .send(StartTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             prompt: vec![ContentBlock::from("slow 3".to_owned())],
             key: Some("turn-1".to_owned()),
         })
@@ -4018,7 +4116,7 @@ async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_a
         .expect("repeat after a restart");
     assert_eq!(again, first_turn);
     let queued = client
-        .queue_keyed(&session_id, "queued once", Some("queue-1"))
+        .queue_keyed(&thread_id, "queued once", Some("queue-1"))
         .await
         .expect("repeat after a restart");
     assert_eq!(queued, first_queued);
@@ -4030,19 +4128,19 @@ async fn a_repeated_keyed_request_answers_as_the_first_and_starts_nothing_even_a
         })
         .await
         .expect("repeat after a restart");
-    assert_eq!(rerun.session_id, first_run);
-    // Nothing started: the session is idle, and its journal has the two turns it had.
+    assert_eq!(rerun.thread_id, first_run);
+    // Nothing started: the thread is idle, and its journal has the two turns it had.
     let listing = client
         .connection
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
         .expect("list");
-    let session = listing
-        .sessions
+    let thread = listing
+        .threads
         .iter()
-        .find(|listing| listing.info.session_id == session_id)
+        .find(|listing| listing.info.session_id == thread_id)
         .expect("listed");
-    assert_eq!(session.activity, Some(Activity::Idle));
+    assert_eq!(thread.activity, Some(Activity::Idle));
     assert!(
         !client.hears_a_turn_start().await,
         "a repeat started a turn"
@@ -4062,14 +4160,14 @@ async fn a_turn_goes_by_its_prompts_id_and_reads_as_queued_running_or_how_it_end
             .iter()
             .any(|f| f == TURN_IDS_FEATURE)
     );
-    let session_id = client.create(&world).await;
-    let first = client.queue(&session_id, "slow 3").await;
-    let second = client.queue(&session_id, "and then this").await;
+    let thread_id = client.create(&world).await;
+    let first = client.queue(&thread_id, "slow 3").await;
+    let second = client.queue(&thread_id, "and then this").await;
     let read = async |client: &TestClient, turn_id: &str| {
         client
             .connection
-            .send(GetSessionRequest {
-                session_id: session_id.clone(),
+            .send(GetThreadRequest {
+                thread_id: thread_id.clone(),
                 turn_id: Some(turn_id.to_owned()),
             })
             .await
@@ -4081,9 +4179,9 @@ async fn a_turn_goes_by_its_prompts_id_and_reads_as_queued_running_or_how_it_end
     let queued = read(&client, &second.queued_id).await.expect("queued");
     assert_eq!(queued.state, TurnState::Queued);
     assert!(!queued.running);
-    // A running turn is named in the session's state, and only open sessions running one list
+    // A running turn is named in the thread's state, and only open threads running one list
     // as running.
-    let attached = client.attach(&session_id).await;
+    let attached = client.attach(&thread_id).await;
     assert_eq!(
         attached
             .state
@@ -4095,28 +4193,28 @@ async fn a_turn_goes_by_its_prompts_id_and_reads_as_queued_running_or_how_it_end
     let doing = async |client: &TestClient, activity| {
         client
             .connection
-            .send(ListSessionsRequest {
+            .send(ListThreadsRequest {
                 activity: Some(activity),
-                ..ListSessionsRequest::default()
+                ..ListThreadsRequest::default()
             })
             .await
-            .expect("sessions/list")
-            .sessions
+            .expect("threads/list")
+            .threads
             .into_iter()
             .map(|listing| listing.info.session_id)
             .collect::<Vec<_>>()
     };
     assert_eq!(
         doing(&client, Activity::Running).await,
-        std::slice::from_ref(&session_id)
+        std::slice::from_ref(&thread_id)
     );
     assert!(doing(&client, Activity::Idle).await.is_empty());
     let refused = client
         .connection
-        .send(ListSessionsRequest {
+        .send(ListThreadsRequest {
             agent_id: Some("fake".to_owned()),
             activity: Some(Activity::Idle),
-            ..ListSessionsRequest::default()
+            ..ListThreadsRequest::default()
         })
         .await
         .expect_err("an activity with an agent");
@@ -4142,14 +4240,14 @@ async fn a_turn_goes_by_its_prompts_id_and_reads_as_queued_running_or_how_it_end
     );
     assert_eq!(
         doing(&client, Activity::Idle).await,
-        std::slice::from_ref(&session_id)
+        std::slice::from_ref(&thread_id)
     );
 
     // turn/start gives its turn an id of the Host's.
     let started = client
         .connection
         .send(StartTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             prompt: vec![ContentBlock::from("hello".to_owned())],
             key: None,
         })
@@ -4160,7 +4258,7 @@ async fn a_turn_goes_by_its_prompts_id_and_reads_as_queued_running_or_how_it_end
     assert_eq!(seen.turn_ids.last(), Some(&Some(turn_id.clone())));
     assert_eq!(
         client
-            .get(&session_id)
+            .get(&thread_id)
             .await
             .latest_turn
             .and_then(|latest| latest.turn_id),
@@ -4169,14 +4267,14 @@ async fn a_turn_goes_by_its_prompts_id_and_reads_as_queued_running_or_how_it_end
     let unknown = read(&client, "q-none").await.expect_err("no such turn");
     assert!(errors::is(&unknown, errors::UNKNOWN_TURN));
 
-    // A closed session's turns read from its journal.
+    // A closed thread's turns read from its journal.
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     assert_eq!(
         read(&client, &second.queued_id).await.expect("ended").state,
         TurnState::Ended
@@ -4188,15 +4286,15 @@ async fn a_turn_asking_a_person_reads_as_waiting() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
     client
         .prompt(
-            &session_id,
+            &thread_id,
             &format!("write {} never", world.cwd().join("never.txt").display()),
         )
         .await;
     client.asked(&mut Seen::default()).await;
-    let latest = client.get(&session_id).await.latest_turn.expect("a turn");
+    let latest = client.get(&thread_id).await.latest_turn.expect("a turn");
     assert_eq!(latest.state, TurnState::Waiting);
     assert!(latest.running);
 }
@@ -4219,14 +4317,14 @@ async fn an_agent_lists_the_agents_it_can_hand_work_to() {
 #[tokio::test]
 async fn a_key_a_stopped_host_never_answered_is_found_in_the_journal() {
     let world = World::new();
-    let (session_id, first) = {
+    let (thread_id, first) = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
-        let session_id = client.create(&world).await;
+        let thread_id = client.create(&world).await;
         let first = client
             .connection
             .send(StartTurnRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 prompt: vec![ContentBlock::from("hello".to_owned())],
                 key: Some("lost-answer".to_owned()),
             })
@@ -4234,7 +4332,7 @@ async fn a_key_a_stopped_host_never_answered_is_found_in_the_journal() {
             .expect("turn/start");
         client.until_turn_ends(&mut Seen::default(), None).await;
         daemon.shutdown().await;
-        (session_id, first)
+        (thread_id, first)
     };
     // As if the Host stopped after the turn started but before it recorded the answer.
     let record = world.dir.path().join("admissions.jsonl");
@@ -4247,11 +4345,11 @@ async fn a_key_a_stopped_host_never_answered_is_found_in_the_journal() {
 
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    client.attach_caught_up(&session_id).await;
+    client.attach_caught_up(&thread_id).await;
     let again = client
         .connection
         .send(StartTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             prompt: vec![ContentBlock::from("hello".to_owned())],
             key: Some("lost-answer".to_owned()),
         })
@@ -4262,9 +4360,9 @@ async fn a_key_a_stopped_host_never_answered_is_found_in_the_journal() {
 }
 
 impl TestClient {
-    /// Attach to `session_id` and read its replay through, so what comes next is new.
-    async fn attach_caught_up(&mut self, session_id: &SessionId) {
-        let head = self.attach(session_id).await.state.journal.head;
+    /// Attach to `thread_id` and read its replay through, so what comes next is new.
+    async fn attach_caught_up(&mut self, thread_id: &ThreadId) {
+        let head = self.attach(thread_id).await.state.journal.head;
         if head == 0 {
             return;
         }
@@ -4277,12 +4375,12 @@ impl TestClient {
         }
     }
 
-    /// Whether a turn starts in an attached session within a moment.
+    /// Whether a turn starts in an attached thread within a moment.
     async fn hears_a_turn_start(&mut self) -> bool {
         tokio::time::timeout(Duration::from_millis(400), async {
             loop {
                 if let HostEvent::Event(event) = self.next().await
-                    && matches!(event.event, SessionEvent::TurnStarted { .. })
+                    && matches!(event.event, ThreadEvent::TurnStarted { .. })
                 {
                     return;
                 }
@@ -4306,36 +4404,36 @@ fn tool_answer(agent: &str, tool: &str) -> serde_json::Value {
         .unwrap_or_else(|| panic!("JSON after {marker:?} in {agent:?}"))
 }
 
-/// A session's id in a tool's JSON answer.
-fn answered_session(agent: &str, tool: &str) -> SessionId {
+/// A thread's id in a tool's JSON answer.
+fn answered_thread(agent: &str, tool: &str) -> ThreadId {
     let answer = tool_answer(agent, tool);
-    SessionId::new(
-        answer["sessionId"]
+    ThreadId::new(
+        answer["threadId"]
             .as_str()
-            .unwrap_or_else(|| panic!("a sessionId in {answer}"))
+            .unwrap_or_else(|| panic!("a threadId in {answer}"))
             .to_owned(),
     )
 }
 
 impl TestClient {
-    /// Run `tool` with `arguments` in `session_id`'s agent, through the fake agent's `tool`
+    /// Run `tool` with `arguments` in `thread_id`'s agent, through the fake agent's `tool`
     /// script; what this client saw of that turn.
-    async fn call_tool(&mut self, session_id: &SessionId, tool: &str, arguments: &str) -> Seen {
-        self.prompt(session_id, &format!("tool {tool} {arguments}"))
+    async fn call_tool(&mut self, thread_id: &ThreadId, tool: &str, arguments: &str) -> Seen {
+        self.prompt(thread_id, &format!("tool {tool} {arguments}"))
             .await;
         let mut seen = Seen::default();
         self.until_turn_ends(&mut seen, None).await;
         seen
     }
 
-    /// Events until a message from the Host about another session reaches this one: as a turn
+    /// Events until a message from the Host about another thread reaches this one: as a turn
     /// it starts or a steer into its turn. Its text.
     async fn told(&mut self, seen: &mut Seen) -> String {
         loop {
             let said = seen
                 .origins
                 .iter()
-                .any(|(origin, _)| matches!(origin, TurnOrigin::Session { .. }));
+                .any(|(origin, _)| matches!(origin, TurnOrigin::Thread { .. }));
             if said
                 || seen
                     .steered
@@ -4358,19 +4456,19 @@ impl TestClient {
         }
     }
 
-    async fn get(&self, session_id: &SessionId) -> GetSessionResponse {
+    async fn get(&self, thread_id: &ThreadId) -> GetThreadResponse {
         self.connection
-            .send(GetSessionRequest {
-                session_id: session_id.clone(),
+            .send(GetThreadRequest {
+                thread_id: thread_id.clone(),
                 turn_id: None,
             })
             .await
-            .expect("sessions/get")
+            .expect("threads/get")
     }
 }
 
 #[tokio::test]
-async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_ended() {
+async fn an_agent_starts_a_thread_with_another_agent_and_hears_how_its_turn_ended() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
@@ -4378,28 +4476,28 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
     let mut started = client
         .call_tool(
             &caller,
-            "start_session",
+            "start_thread",
             r#"{"agentId": "other", "prompt": "slow 3"}"#,
         )
         .await;
     let said = started.agent.clone();
-    let delegated = answered_session(&said, "start_session");
+    let delegated = answered_thread(&said, "start_thread");
     assert_ne!(delegated, caller);
     // Without a policy asked for, it runs under the caller's.
     assert_eq!(
-        tool_answer(&said, "start_session")["policy"],
+        tool_answer(&said, "start_thread")["policy"],
         serde_json::to_value(PermissionPolicy::ask()).expect("json")
     );
 
-    // It's a session of its own, which says who started it.
+    // It's a thread of its own, which says who started it.
     let got = client.get(&delegated).await;
-    assert_eq!(got.session.agent_id, "other");
-    assert_eq!(got.session.started_by.as_ref(), Some(&caller));
+    assert_eq!(got.thread.agent_id, "other");
+    assert_eq!(got.thread.started_by.as_ref(), Some(&caller));
     let latest = got.latest_turn.expect("a turn");
     assert_eq!(
         latest.origin,
-        TurnOrigin::Session {
-            session_id: caller.clone(),
+        TurnOrigin::Thread {
+            thread_id: caller.clone(),
             report: false,
             host: None,
             host_name: None,
@@ -4407,22 +4505,22 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
     );
     let listed = client
         .connection
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
-        .expect("sessions/list");
+        .expect("threads/list");
     let listing = listed
-        .sessions
+        .threads
         .iter()
         .find(|listing| listing.info.session_id == delegated)
         .expect("listed");
     assert_eq!(listing.started_by.as_ref(), Some(&caller));
 
-    // Its turn's end reaches the caller, from the delegated session, with what its agent said.
+    // Its turn's end reaches the caller, from the delegated thread, with what its agent said.
     let told = client.told(&mut started).await;
     assert!(told.contains("finished its turn"), "{told}");
     assert!(told.contains("Chunk 3 of 3."), "{told}");
     assert!(told.contains(&delegated.to_string()), "{told}");
-    // The message's own turn tells the delegated session nothing back: no turns go to and fro.
+    // The message's own turn tells the delegated thread nothing back: no turns go to and fro.
     tokio::time::sleep(Duration::from_millis(500)).await;
     let latest = client.get(&delegated).await.latest_turn.expect("a turn");
     assert_eq!(
@@ -4438,8 +4536,8 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
     watcher.until_turn_ends(&mut seen, None).await;
     assert_eq!(
         seen.origins.first().map(|(origin, _)| origin.clone()),
-        Some(TurnOrigin::Session {
-            session_id: caller.clone(),
+        Some(TurnOrigin::Thread {
+            thread_id: caller.clone(),
             report: false,
             host: None,
             host_name: None,
@@ -4449,13 +4547,13 @@ async fn an_agent_starts_a_session_with_another_agent_and_hears_how_its_turn_end
 }
 
 #[tokio::test]
-async fn a_delegated_session_approves_no_more_than_the_session_that_started_it() {
+async fn a_delegated_thread_approves_no_more_than_the_thread_that_started_it() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
     let caller = client
         .connection
-        .send(CreateSessionRequest {
+        .send(CreateThreadRequest {
             policy: Some(PermissionPolicy {
                 approve: vec![ToolKind::Read],
                 otherwise: Unapproved::Ask,
@@ -4463,20 +4561,20 @@ async fn a_delegated_session_approves_no_more_than_the_session_that_started_it()
             ..TestClient::create_request(&world, "fake")
         })
         .await
-        .expect("session/create")
-        .session_id;
+        .expect("thread/create")
+        .thread_id;
     let said = client
         .call_tool(
             &caller,
-            "start_session",
+            "start_thread",
             r#"{"agentId": "other", "prompt": "hello", "approve": ["read", "edit", "execute"], "otherwise": "reject"}"#,
         )
         .await
         .agent;
-    let delegated = answered_session(&said, "start_session");
+    let delegated = answered_thread(&said, "start_thread");
     let narrowed = PermissionPolicy::headless(vec![ToolKind::Read]);
     assert_eq!(
-        tool_answer(&said, "start_session")["policy"],
+        tool_answer(&said, "start_thread")["policy"],
         serde_json::to_value(&narrowed).expect("json")
     );
     let attached = world.client(&daemon).await.attach(&delegated).await;
@@ -4485,26 +4583,26 @@ async fn a_delegated_session_approves_no_more_than_the_session_that_started_it()
 }
 
 #[tokio::test]
-async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_ended() {
+async fn an_agent_reads_and_acts_on_any_thread_and_hears_how_its_turn_there_ended() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
     let caller = client.create(&world).await;
     let mut person = world.client(&daemon).await;
-    let persons = person.session_in(&world, &world.cwd()).await.session_id;
+    let persons = person.thread_in(&world, &world.cwd()).await.thread_id;
 
-    // Reading answers as sessions/get does.
+    // Reading answers as threads/get does.
     let said = client
         .call_tool(
             &caller,
-            "read_session",
-            &format!(r#"{{"sessionId": "{persons}"}}"#),
+            "read_thread",
+            &format!(r#"{{"threadId": "{persons}"}}"#),
         )
         .await
         .agent;
     let got = client.get(&persons).await;
     assert_eq!(
-        tool_answer(&said, "read_session"),
+        tool_answer(&said, "read_thread"),
         serde_json::to_value(&got).expect("json")
     );
     assert_eq!(
@@ -4512,16 +4610,14 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
         Some("You said: hello")
     );
     let said = client
-        .call_tool(&caller, "list_sessions", r#"{}"#)
+        .call_tool(&caller, "list_threads", r#"{}"#)
         .await
         .agent;
-    let listed = tool_answer(&said, "list_sessions");
+    let listed = tool_answer(&said, "list_threads");
     assert!(
-        listed["sessions"]
-            .as_array()
-            .is_some_and(|sessions| sessions
-                .iter()
-                .any(|session| session["info"]["sessionId"] == persons.to_string())),
+        listed["threads"].as_array().is_some_and(|threads| threads
+            .iter()
+            .any(|thread| thread["info"]["sessionId"] == persons.to_string())),
         "{listed}"
     );
 
@@ -4531,12 +4627,12 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
     let said = client
         .call_tool(
             &caller,
-            "steer_session",
-            &format!(r#"{{"sessionId": "{persons}", "prompt": "and the docs"}}"#),
+            "steer_thread",
+            &format!(r#"{{"threadId": "{persons}", "prompt": "and the docs"}}"#),
         )
         .await
         .agent;
-    assert!(said.contains("steer_session answered:"), "{said}");
+    assert!(said.contains("steer_thread answered:"), "{said}");
     let mut seen = Seen::default();
     person.until_turn_ends(&mut seen, None).await;
     assert!(seen.agent.contains("You steered: and the docs"), "{seen:?}");
@@ -4546,12 +4642,12 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
     let said = client
         .call_tool(
             &caller,
-            "cancel_session_turn",
-            &format!(r#"{{"sessionId": "{persons}"}}"#),
+            "cancel_thread_turn",
+            &format!(r#"{{"threadId": "{persons}"}}"#),
         )
         .await
         .agent;
-    assert!(said.contains("cancel_session_turn answered: {}"), "{said}");
+    assert!(said.contains("cancel_thread_turn answered: {}"), "{said}");
     let mut seen = Seen::default();
     person.until_turn_ends(&mut seen, None).await;
     assert_eq!(seen.ended, Some(StopReason::Cancelled));
@@ -4560,20 +4656,20 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
     let mut seen = client
         .call_tool(
             &caller,
-            "prompt_session",
-            &format!(r#"{{"sessionId": "{persons}", "prompt": "slow 3"}}"#),
+            "prompt_thread",
+            &format!(r#"{{"threadId": "{persons}", "prompt": "slow 3"}}"#),
         )
         .await;
     assert!(
-        seen.agent.contains("prompt_session answered:"),
+        seen.agent.contains("prompt_thread answered:"),
         "{}",
         seen.agent
     );
     let latest = client.get(&persons).await.latest_turn.expect("a turn");
     assert_eq!(
         latest.origin,
-        TurnOrigin::Session {
-            session_id: caller.clone(),
+        TurnOrigin::Thread {
+            thread_id: caller.clone(),
             report: false,
             host: None,
             host_name: None,
@@ -4594,8 +4690,8 @@ async fn an_agent_reads_and_acts_on_any_session_and_hears_how_its_turn_there_end
     let reported = client.get(&caller).await.latest_turn.expect("a turn");
     assert_eq!(
         reported.origin,
-        TurnOrigin::Session {
-            session_id: persons.clone(),
+        TurnOrigin::Thread {
+            thread_id: persons.clone(),
             report: true,
             host: None,
             host_name: None,
@@ -4615,26 +4711,26 @@ async fn delegation_stops_at_its_depth_and_its_running_limit() {
     let mut seen = client
         .call_tool(
             &caller,
-            "start_session",
+            "start_thread",
             r#"{"agentId": "other", "prompt": "hello"}"#,
         )
         .await;
-    let delegated = answered_session(&seen.agent, "start_session");
+    let delegated = answered_thread(&seen.agent, "start_thread");
     client.told(&mut seen).await;
 
-    // The delegated session can't start one of its own.
+    // The delegated thread can't start one of its own.
     let mut other = world.client(&daemon).await;
     other.attach_caught_up(&delegated).await;
     let said = other
         .call_tool(
             &delegated,
-            "start_session",
+            "start_thread",
             r#"{"agentId": "fake", "prompt": "hello"}"#,
         )
         .await
         .agent;
     assert!(
-        said.contains("start_session failed:") && said.contains("can't start threads"),
+        said.contains("start_thread failed:") && said.contains("can't start threads"),
         "{said}"
     );
 
@@ -4642,22 +4738,22 @@ async fn delegation_stops_at_its_depth_and_its_running_limit() {
     let said = client
         .call_tool(
             &caller,
-            "prompt_session",
-            &format!(r#"{{"sessionId": "{delegated}", "prompt": "slow 30"}}"#),
+            "prompt_thread",
+            &format!(r#"{{"threadId": "{delegated}", "prompt": "slow 30"}}"#),
         )
         .await
         .agent;
-    assert!(said.contains("prompt_session answered:"), "{said}");
+    assert!(said.contains("prompt_thread answered:"), "{said}");
     let said = client
         .call_tool(
             &caller,
-            "start_session",
+            "start_thread",
             r#"{"agentId": "other", "prompt": "hello"}"#,
         )
         .await
         .agent;
     assert!(
-        said.contains("start_session failed:") && said.contains("already has 1 delegated thread"),
+        said.contains("start_thread failed:") && said.contains("already has 1 delegated thread"),
         "{said}"
     );
 
@@ -4665,12 +4761,12 @@ async fn delegation_stops_at_its_depth_and_its_running_limit() {
     let mut seen = client
         .call_tool(
             &caller,
-            "cancel_session_turn",
-            &format!(r#"{{"sessionId": "{delegated}"}}"#),
+            "cancel_thread_turn",
+            &format!(r#"{{"threadId": "{delegated}"}}"#),
         )
         .await;
     assert!(
-        seen.agent.contains("cancel_session_turn answered: {}"),
+        seen.agent.contains("cancel_thread_turn answered: {}"),
         "{}",
         seen.agent
     );
@@ -4685,21 +4781,21 @@ async fn a_thread_names_its_successor_once_and_listings_and_its_clients_carry_it
     let mut client = world.client(&daemon).await;
     let mut ids = Vec::new();
     for _ in 0..3 {
-        let session_id = client.create(&world).await;
-        client.queue(&session_id, "hello").await;
+        let thread_id = client.create(&world).await;
+        client.queue(&thread_id, "hello").await;
         client.until_turn_ends(&mut Seen::default(), None).await;
-        ids.push(session_id);
+        ids.push(thread_id);
     }
     let [old, new, other] = [ids[0].clone(), ids[1].clone(), ids[2].clone()];
     let mut watcher = world.client(&daemon).await;
     watcher.attach(&old).await;
     let mut watching = world.client(&daemon).await;
     watching.watch().await;
-    let set = async |session_id: &SessionId, successor: &SessionId| {
+    let set = async |thread_id: &ThreadId, successor: &ThreadId| {
         client
             .connection
             .send(SetSuccessorRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 successor: successor.clone(),
             })
             .await
@@ -4708,13 +4804,13 @@ async fn a_thread_names_its_successor_once_and_listings_and_its_clients_carry_it
     // Not itself, nor a thread the Host has no record of.
     let itself = set(&old, &old).await.expect_err("not itself");
     assert_eq!(itself.code, Error::invalid_params().code, "{itself:?}");
-    let unknown = set(&old, &SessionId::new("nowhere"))
+    let unknown = set(&old, &ThreadId::new("nowhere"))
         .await
         .expect_err("not an unknown thread");
-    assert!(errors::is(&unknown, errors::UNKNOWN_SESSION), "{unknown:?}");
+    assert!(errors::is(&unknown, errors::UNKNOWN_THREAD), "{unknown:?}");
 
     // Named once: the same again does nothing, another is refused, and none leads back.
-    set(&old, &new).await.expect("session/setSuccessor");
+    set(&old, &new).await.expect("thread/setSuccessor");
     set(&old, &new).await.expect("the same again");
     let another = set(&old, &other).await.expect_err("named once");
     assert!(another.to_string().contains("named once"), "{another:?}");
@@ -4742,10 +4838,10 @@ async fn a_thread_names_its_successor_once_and_listings_and_its_clients_carry_it
         }
     }
     assert_eq!(
-        client.get(&old).await.session.continued_in,
+        client.get(&old).await.thread.continued_in,
         Some(new.clone())
     );
-    assert_eq!(client.get(&new).await.session.continued_in, None);
+    assert_eq!(client.get(&new).await.thread.continued_in, None);
     watcher.connection.shutdown().await;
     client.connection.shutdown().await;
     daemon.shutdown().await;
@@ -4754,18 +4850,18 @@ async fn a_thread_names_its_successor_once_and_listings_and_its_clients_carry_it
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
     assert_eq!(
-        client.get(&old).await.session.continued_in,
+        client.get(&old).await.thread.continued_in,
         Some(new.clone())
     );
     let attached = client.attach(&old).await;
     assert_eq!(attached.state.continued_in, Some(new.clone()));
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: old.clone(),
+        .send(CloseThreadRequest {
+            thread_id: old.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     let attached = client.attach(&old).await;
     assert_eq!(attached.state.continued_in, Some(new));
 }
@@ -4777,10 +4873,10 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     let mut client = world.client(&daemon).await;
     let labels = |labels: &[&str]| labels.iter().map(|label| (*label).to_owned()).collect();
 
-    // Labels a session starts with are checked.
+    // Labels a thread starts with are checked.
     let bad = client
         .connection
-        .send(CreateSessionRequest {
+        .send(CreateThreadRequest {
             labels: labels(&["has space"]),
             ..TestClient::create_request(&world, "fake")
         })
@@ -4789,14 +4885,14 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     assert_eq!(bad.code, Error::invalid_params().code, "{bad:?}");
     let bot = client
         .connection
-        .send(CreateSessionRequest {
+        .send(CreateThreadRequest {
             labels: labels(&["bot:daily"]),
             ..TestClient::create_request(&world, "fake")
         })
         .await
-        .expect("session/create");
+        .expect("thread/create");
     assert_eq!(bot.labels, labels(&["bot:daily"]));
-    let bot = bot.session_id;
+    let bot = bot.thread_id;
     client.queue(&bot, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
     let run = client
@@ -4806,23 +4902,23 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
             ..run_request(&world, &world.cwd().join("unused"), Vec::new())
         })
         .await
-        .expect("session/run")
-        .session_id;
+        .expect("thread/run")
+        .thread_id;
     let plain = client.create(&world).await;
     client.queue(&plain, "hello").await;
     client.until_turn_ends(&mut Seen::default(), None).await;
 
     // Listings carry them, and filter by every label asked for.
     let listed = async |client: &TestClient, wanted: &[&str]| {
-        let mut ids: Vec<SessionId> = client
+        let mut ids: Vec<ThreadId> = client
             .connection
-            .send(ListSessionsRequest {
+            .send(ListThreadsRequest {
                 labels: labels(wanted),
-                ..ListSessionsRequest::default()
+                ..ListThreadsRequest::default()
             })
             .await
-            .expect("sessions/list")
-            .sessions
+            .expect("threads/list")
+            .threads
             .into_iter()
             .map(|listing| listing.info.session_id)
             .collect();
@@ -4845,10 +4941,10 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     assert_eq!(listed(&client, &[]).await.len(), 3);
     let with_agent = client
         .connection
-        .send(ListSessionsRequest {
+        .send(ListThreadsRequest {
             agent_id: Some("fake".to_owned()),
             labels: labels(&["bot:daily"]),
-            ..ListSessionsRequest::default()
+            ..ListThreadsRequest::default()
         })
         .await
         .expect_err("labels only without an agent");
@@ -4859,20 +4955,20 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     let mut watching = world.client(&daemon).await;
     let watched = watching
         .connection
-        .send(WatchSessionsRequest {
+        .send(WatchThreadsRequest {
             labels: labels(&["bot:daily"]),
         })
         .await
-        .expect("sessions/watch")
-        .sessions;
+        .expect("threads/watch")
+        .threads;
     assert_eq!(watched.len(), 1);
     let mut attached = world.client(&daemon).await;
     attached.attach(&plain).await;
-    let label = async |session_id: &SessionId, add: &[&str], remove: &[&str]| {
+    let label = async |thread_id: &ThreadId, add: &[&str], remove: &[&str]| {
         client
             .connection
-            .send(LabelSessionRequest {
-                session_id: session_id.clone(),
+            .send(LabelThreadRequest {
+                thread_id: thread_id.clone(),
                 add: labels(add),
                 remove: labels(remove),
             })
@@ -4880,7 +4976,7 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     };
     let after = label(&plain, &["bot:daily", "keep"], &[])
         .await
-        .expect("session/label");
+        .expect("thread/label");
     assert_eq!(after.labels, labels(&["bot:daily", "keep"]));
     let updated = loop {
         if let Change::Updated(listing) = watching.change().await {
@@ -4890,7 +4986,7 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     assert_eq!(updated.info.session_id, plain);
     let after = label(&plain, &[], &["bot:daily"])
         .await
-        .expect("session/label");
+        .expect("thread/label");
     assert_eq!(after.labels, labels(&["keep"]));
     let last = loop {
         if let Change::Updated(listing) = watching.change().await {
@@ -4904,13 +5000,13 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     // Past that, it hears nothing of the thread: the next it hears is of one it watches.
     client
         .connection
-        .send(RenameSessionRequest {
-            session_id: plain.clone(),
+        .send(RenameThreadRequest {
+            thread_id: plain.clone(),
             title: "Not watched".to_owned(),
         })
         .await
-        .expect("session/rename");
-    label(&bot, &["more"], &[]).await.expect("session/label");
+        .expect("thread/rename");
+    label(&bot, &["more"], &[]).await.expect("thread/label");
     let next = loop {
         if let Change::Updated(listing) = watching.change().await {
             break listing;
@@ -4935,8 +5031,8 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     let many: Vec<String> = (0..MAX_LABELS).map(|n| format!("l{n}")).collect();
     let too_many = client
         .connection
-        .send(LabelSessionRequest {
-            session_id: plain.clone(),
+        .send(LabelThreadRequest {
+            thread_id: plain.clone(),
             add: many,
             remove: Vec::new(),
         })
@@ -4951,15 +5047,15 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
     // They outlast the Host, and a closed thread's new journal.
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    assert_eq!(client.get(&plain).await.session.labels, labels(&["keep"]));
+    assert_eq!(client.get(&plain).await.thread.labels, labels(&["keep"]));
     client.attach(&bot).await;
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: bot.clone(),
+        .send(CloseThreadRequest {
+            thread_id: bot.clone(),
         })
         .await
-        .expect("session/close");
+        .expect("thread/close");
     let attached = client.attach(&bot).await;
     assert_eq!(attached.state.labels, labels(&["bot:daily", "more"]));
 }
@@ -4967,13 +5063,13 @@ async fn threads_carry_labels_from_their_start_and_listings_filter_by_them() {
 #[tokio::test]
 async fn listings_carry_context_usage_and_the_last_compaction() {
     let world = World::new();
-    let session_id = {
+    let thread_id = {
         let daemon = world.daemon(true, Duration::from_secs(60));
         let mut client = world.client(&daemon).await;
-        let session_id = client.create(&world).await;
-        client.queue(&session_id, "hello").await;
+        let thread_id = client.create(&world).await;
+        client.queue(&thread_id, "hello").await;
         client.until_turn_ends(&mut Seen::default(), None).await;
-        let listed = client.get(&session_id).await.session;
+        let listed = client.get(&thread_id).await.thread;
         let context = listed.context.expect("its usage");
         assert_eq!(context.size, 200_000);
         assert!(context.used > 0, "{context:?}");
@@ -4982,7 +5078,7 @@ async fn listings_carry_context_usage_and_the_last_compaction() {
         // A watcher hears of a compaction, and then of what it left.
         let mut watching = world.client(&daemon).await;
         watching.watch().await;
-        client.queue(&session_id, "compact").await;
+        client.queue(&thread_id, "compact").await;
         let compacted = loop {
             if let Change::Updated(listing) = watching.change().await
                 && let Some(last) = listing.last_compaction
@@ -4991,36 +5087,36 @@ async fn listings_carry_context_usage_and_the_last_compaction() {
                 break last;
             }
         };
-        let listed = client.get(&session_id).await.session;
+        let listed = client.get(&thread_id).await.thread;
         assert_eq!(listed.last_compaction, Some(compacted));
         watching.connection.shutdown().await;
         client.connection.shutdown().await;
         daemon.shutdown().await;
-        session_id
+        thread_id
     };
 
     // They outlast the Host, suspended and taken up again.
     let daemon = world.daemon(true, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
-    let suspended = client.get(&session_id).await.session;
+    let suspended = client.get(&thread_id).await.thread;
     assert!(suspended.context.is_some());
     assert!(suspended.last_compaction.is_some());
-    client.attach(&session_id).await;
-    let open = client.get(&session_id).await.session;
-    assert_eq!(open.state, SessionStatus::Open);
+    client.attach(&thread_id).await;
+    let open = client.get(&thread_id).await.thread;
+    assert_eq!(open.state, ThreadStatus::Open);
     assert_eq!(open.last_compaction, suspended.last_compaction);
     assert_eq!(open.context, suspended.context);
 
     // And a closed thread's new journal.
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: session_id.clone(),
+        .send(CloseThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/close");
-    client.attach(&session_id).await;
-    let reopened = client.get(&session_id).await.session;
+        .expect("thread/close");
+    client.attach(&thread_id).await;
+    let reopened = client.get(&thread_id).await.thread;
     assert_eq!(reopened.last_compaction, suspended.last_compaction);
 }
 
@@ -5034,22 +5130,22 @@ async fn a_labelled_threads_journal_outlasts_pruning() {
         for labels in [vec!["bot:daily".to_owned()], Vec::new()] {
             let state = client
                 .connection
-                .send(CreateSessionRequest {
+                .send(CreateThreadRequest {
                     labels,
                     ..TestClient::create_request(&world, "fake")
                 })
                 .await
-                .expect("session/create");
-            client.queue(&state.session_id, "hello").await;
+                .expect("thread/create");
+            client.queue(&state.thread_id, "hello").await;
             client.until_turn_ends(&mut Seen::default(), None).await;
             client
                 .connection
-                .send(CloseSessionRequest {
-                    session_id: state.session_id.clone(),
+                .send(CloseThreadRequest {
+                    thread_id: state.thread_id.clone(),
                 })
                 .await
-                .expect("session/close");
-            ids.push(state.session_id);
+                .expect("thread/close");
+            ids.push(state.thread_id);
         }
         client.connection.shutdown().await;
         daemon.shutdown().await;
@@ -5071,18 +5167,18 @@ async fn a_labelled_threads_journal_outlasts_pruning() {
     let daemon = world.daemon(true, Duration::from_secs(60));
     let client = world.client(&daemon).await;
     assert_eq!(
-        client.get(&labelled).await.session.labels,
+        client.get(&labelled).await.thread.labels,
         ["bot:daily".to_owned()]
     );
     let gone = client
         .connection
-        .send(GetSessionRequest {
-            session_id: plain,
+        .send(GetThreadRequest {
+            thread_id: plain,
             turn_id: None,
         })
         .await
         .expect_err("pruned");
-    assert!(errors::is(&gone, errors::UNKNOWN_SESSION), "{gone:?}");
+    assert!(errors::is(&gone, errors::UNKNOWN_THREAD), "{gone:?}");
 }
 
 #[tokio::test]
@@ -5095,19 +5191,19 @@ async fn a_report_to_a_thread_goes_to_its_successor() {
     let started = client
         .call_tool(
             &caller,
-            "start_session",
+            "start_thread",
             r#"{"agentId": "other", "prompt": "slow 5"}"#,
         )
         .await;
-    let delegated = answered_session(&started.agent, "start_session");
+    let delegated = answered_thread(&started.agent, "start_thread");
     client
         .connection
         .send(SetSuccessorRequest {
-            session_id: caller.clone(),
+            thread_id: caller.clone(),
             successor: successor.clone(),
         })
         .await
-        .expect("session/setSuccessor");
+        .expect("thread/setSuccessor");
 
     // The delegated turn's end reaches the successor, where the caller's work goes on.
     let mut watcher = world.client(&daemon).await;
@@ -5118,13 +5214,13 @@ async fn a_report_to_a_thread_goes_to_its_successor() {
     assert!(told.contains(&delegated.to_string()), "{told}");
     let latest = client.get(&caller).await.latest_turn.expect("a turn");
     assert!(
-        !matches!(latest.origin, TurnOrigin::Session { report: true, .. }),
+        !matches!(latest.origin, TurnOrigin::Thread { report: true, .. }),
         "{latest:?}"
     );
 }
 
 #[tokio::test]
-async fn the_caller_is_told_when_a_delegated_session_waits_on_a_person() {
+async fn the_caller_is_told_when_a_delegated_thread_waits_on_a_person() {
     let world = World::new();
     let daemon = world.daemon(false, Duration::from_secs(60));
     let mut client = world.client(&daemon).await;
@@ -5134,14 +5230,14 @@ async fn the_caller_is_told_when_a_delegated_session_waits_on_a_person() {
     let mut seen = client
         .call_tool(
             &caller,
-            "start_session",
+            "start_thread",
             &format!(
                 r#"{{"agentId": "other", "prompt": "write {} written"}}"#,
                 path.display()
             ),
         )
         .await;
-    let delegated = answered_session(&seen.agent, "start_session");
+    let delegated = answered_thread(&seen.agent, "start_thread");
     let told = client.told(&mut seen).await;
     assert!(told.contains("is waiting on a person"), "{told}");
     assert!(told.contains("asks permission"), "{told}");
@@ -5176,21 +5272,21 @@ async fn a_caller_closed_meanwhile_is_taken_up_again_to_hear_how_its_delegated_t
     let said = client
         .call_tool(
             &caller,
-            "start_session",
+            "start_thread",
             r#"{"agentId": "other", "prompt": "slow 5"}"#,
         )
         .await
         .agent;
-    let delegated = answered_session(&said, "start_session");
+    let delegated = answered_thread(&said, "start_thread");
     client
         .connection
-        .send(CloseSessionRequest {
-            session_id: caller.clone(),
+        .send(CloseThreadRequest {
+            thread_id: caller.clone(),
         })
         .await
-        .expect("session/close");
-    let from_delegated = TurnOrigin::Session {
-        session_id: delegated.clone(),
+        .expect("thread/close");
+    let from_delegated = TurnOrigin::Thread {
+        thread_id: delegated.clone(),
         report: true,
         host: None,
         host_name: None,
@@ -5244,7 +5340,7 @@ async fn a_drain_waits_for_running_turns_and_starts_no_new_ones() {
     let refused = client
         .connection
         .send(StartTurnRequest {
-            session_id: idle.clone(),
+            thread_id: idle.clone(),
             prompt: vec![ContentBlock::from("hello".to_owned())],
             key: None,
         })
@@ -5255,7 +5351,7 @@ async fn a_drain_waits_for_running_turns_and_starts_no_new_ones() {
         .connection
         .send(run_request(&world, &world.cwd().join("file"), Vec::new()))
         .await
-        .expect_err("session/run is refused");
+        .expect_err("thread/run is refused");
     assert!(errors::is(&refused, errors::HOST_STOPPING), "{refused:?}");
     assert!(!client.queue(&idle, "later").await.started);
 
@@ -5271,9 +5367,9 @@ async fn a_drain_waits_for_running_turns_and_starts_no_new_ones() {
     let status = daemon.status();
     assert!(
         status
-            .sessions
+            .threads
             .iter()
-            .all(|session| session.activity == Some(Activity::Idle)),
+            .all(|thread| thread.activity == Some(Activity::Idle)),
         "{status:?}"
     );
     assert_eq!(client.attach(&idle).await.state.queue.len(), 1);
@@ -5286,7 +5382,7 @@ async fn a_drain_gives_up_at_its_timeout_and_leaves_out_the_turn_that_asked() {
     let mut client = world.client(&daemon).await;
     let dir = world.cwd().join("asking");
     std::fs::create_dir_all(&dir).expect("a directory");
-    let asking = client.session_in(&world, &dir).await.session_id;
+    let asking = client.thread_in(&world, &dir).await.thread_id;
     let other = client.create(&world).await;
     client.prompt(&asking, "slow 50").await;
     client.prompt(&other, "slow 50").await;
@@ -5296,7 +5392,7 @@ async fn a_drain_gives_up_at_its_timeout_and_leaves_out_the_turn_that_asked() {
         .iter()
         .find(|(cwd, _)| cwd.ends_with("asking"))
         .map(|(_, process)| process.clone())
-        .expect("the asking session's agent");
+        .expect("the asking thread's agent");
 
     // The other turn holds the drain until its timeout and is left running; the asking one
     // isn't counted.
@@ -5318,7 +5414,7 @@ async fn a_drain_ends_when_the_client_that_asked_goes_and_queued_prompts_start()
     let world = World::new();
     let (daemon, _) = world.daemon_draining(WAIT);
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
+    let thread_id = client.create(&world).await;
     let asking = world.client(&daemon).await;
     asking
         .connection
@@ -5328,7 +5424,7 @@ async fn a_drain_ends_when_the_client_that_asked_goes_and_queued_prompts_start()
         })
         .await
         .expect("host/drain");
-    assert!(!client.queue(&session_id, "later").await.started);
+    assert!(!client.queue(&thread_id, "later").await.started);
 
     asking.connection.shutdown().await;
     let mut seen = Seen::default();
@@ -5341,16 +5437,16 @@ async fn a_signal_waits_for_running_turns_unless_a_client_drained_first() {
     let world = World::new();
     let (daemon, _) = world.daemon_draining(WAIT);
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "slow 5").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "slow 5").await;
     assert_eq!(daemon.drain().await, 0);
-    assert_eq!(daemon.status().sessions[0].activity, Some(Activity::Idle));
+    assert_eq!(daemon.status().threads[0].activity, Some(Activity::Idle));
 
     let world = World::new();
     let (daemon, _) = world.daemon_draining(WAIT);
     let mut client = world.client(&daemon).await;
-    let session_id = client.create(&world).await;
-    client.prompt(&session_id, "slow 50").await;
+    let thread_id = client.create(&world).await;
+    client.prompt(&thread_id, "slow 50").await;
     let ready = client
         .connection
         .send(DrainRequest {

@@ -1,6 +1,6 @@
-//! Newer versions of the session's agent (WVE-93): the Host's notice of one, `/update`, which
-//! moves the agent's new sessions to it (`agents/update`) and then this one
-//! (`session/reopen`), and the versions the user dismissed. A dismissed version stays quiet
+//! Newer versions of the thread's agent (WVE-93): the Host's notice of one, `/update`, which
+//! moves the agent's new threads to it (`agents/update`) and then this one
+//! (`thread/reopen`), and the versions the user dismissed. A dismissed version stays quiet
 //! until a newer one is out, as Codex's update notice does: after openai/codex
 //! `codex-rs/tui/src/updates.rs` (Apache-2.0), which keeps its dismissed version in a file
 //! the same way. Here it's `$XDG_STATE_HOME/weave/updates.json`.
@@ -15,9 +15,9 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use serde::Deserialize;
 use serde::Serialize;
-use weave_acp_core::schema::SessionId;
 use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::agents::AgentUpdate;
+use weave_host_protocol::threads::ThreadId;
 
 use crate::style::dim;
 use crate::wrapping::DisplayLine;
@@ -33,8 +33,8 @@ pub const DISMISS: &str = "dismiss";
 /// `/update` while it runs, for the status line.
 #[derive(Clone, Debug)]
 pub struct Task {
-    /// The session it moves.
-    pub session_id: SessionId,
+    /// The thread it moves.
+    pub thread_id: ThreadId,
     pub stage: Stage,
     pub started: Instant,
     /// What the agent is called, as the notice names it.
@@ -45,7 +45,7 @@ pub struct Task {
 pub enum Stage {
     /// `agents/update`: checking that the newest version starts.
     Checking,
-    /// `session/reopen` to this version, once any turn ends.
+    /// `thread/reopen` to this version, once any turn ends.
     Moving(String),
 }
 
@@ -74,7 +74,7 @@ pub fn short_name(name: &str) -> &str {
     }
 }
 
-/// The notice: which version is out, which one this session runs, and what to do.
+/// The notice: which version is out, which one this thread runs, and what to do.
 pub fn notice_lines(update: &AgentUpdate, width: usize) -> Vec<DisplayLine> {
     let first = Line::from(vec![
         Span::from(format!("{} {}", short_name(&update.name), update.latest)).bold(),
@@ -101,7 +101,7 @@ pub fn notice_lines(update: &AgentUpdate, width: usize) -> Vec<DisplayLine> {
     lines
 }
 
-/// What the transcript says when the session's agent was started again.
+/// What the transcript says when the thread's agent was started again.
 pub fn reopened_text(
     release: Option<&AgentRelease>,
     previous: Option<&AgentRelease>,

@@ -8,7 +8,6 @@ use agent_client_protocol::schema::v1::CreateElicitationRequest;
 use agent_client_protocol::schema::v1::CreateElicitationResponse;
 use agent_client_protocol::schema::v1::RequestPermissionRequest;
 use agent_client_protocol::schema::v1::RequestPermissionResponse;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -17,6 +16,7 @@ use serde_json::Value;
 use crate::Empty;
 use crate::Timestamp;
 use crate::hello::ClientId;
+use crate::threads::ThreadId;
 use crate::tools::ClientToolResult;
 
 pub type PendingId = String;
@@ -26,9 +26,9 @@ pub type PendingId = String;
 #[serde(rename_all = "camelCase")]
 pub struct PendingRequest {
     pub id: PendingId,
-    /// The session it's for, the root or a subagent session, when it's for one.
+    /// The thread it's for, the root or a subagent thread, when it's for one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<SessionId>,
+    pub thread_id: Option<ThreadId>,
     pub created_at: Timestamp,
     #[serde(flatten)]
     pub request: PendingKind,
@@ -53,13 +53,13 @@ pub enum PendingKind {
     },
 }
 
-/// `pending/added`: a request now waits in an attached session.
+/// `pending/added`: a request now waits in an attached thread.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonRpcNotification)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "pending/added")]
 #[serde(rename_all = "camelCase")]
 pub struct PendingAddedNotification {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     pub pending: PendingRequest,
 }
 
@@ -69,7 +69,7 @@ pub struct PendingAddedNotification {
 #[serde(rename_all = "camelCase")]
 pub enum Resolution {
     Answered,
-    /// Its turn was cancelled or ended, or its session closed.
+    /// Its turn was cancelled or ended, or its thread closed.
     Cancelled,
     /// The agent withdrew it.
     Withdrawn,
@@ -81,7 +81,7 @@ pub enum Resolution {
 #[notification(method = "pending/resolved")]
 #[serde(rename_all = "camelCase")]
 pub struct PendingResolvedNotification {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     pub pending_id: PendingId,
     pub outcome: Resolution,
     /// The client that answered.
@@ -96,7 +96,7 @@ pub struct PendingResolvedNotification {
 #[request(method = "pending/answer", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct AnswerPendingRequest {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     pub pending_id: PendingId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission: Option<RequestPermissionResponse>,

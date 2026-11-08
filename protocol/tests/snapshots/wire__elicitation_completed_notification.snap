@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&ElicitationCompletedNotification\n{\n    session_id: \"s-1\".into(), notification:\n    CompleteElicitationNotification::new(\"connect-1\"),\n})"
+expression: "message(&ElicitationCompletedNotification\n{\n    thread_id: \"s-1\".into(), notification:\n    CompleteElicitationNotification::new(\"connect-1\"),\n})"
 ---
 {
-  "method": "session/elicitationCompleted",
+  "method": "thread/elicitationCompleted",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "notification": {
       "elicitationId": "connect-1"
     }

@@ -1,7 +1,7 @@
 //! `weave agents update`: move the presets' adapters to their newest releases and refresh the ACP
 //! registry's catalog for the registry agents in use, after checking that each new version
 //! starts. Newer preset versions go in `agents.lock` beside the config, which every launch
-//! reads, so the next session uses them (WVE-92). The work is `weave_agents::update`'s, which
+//! reads, so the next thread uses them (WVE-92). The work is `weave_agents::update`'s, which
 //! the Host's `agents/update` shares; this is its command line and report.
 //!
 //! It's made for update scripts: it never prompts, `--dry-run` writes nothing, `--json` prints

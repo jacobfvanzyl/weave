@@ -6,8 +6,8 @@ expression: "message(&HelloRequest\n{\n    protocol: VersionRange::supported(), 
   "method": "host/hello",
   "params": {
     "protocol": {
-      "min": 2,
-      "max": 2
+      "min": 3,
+      "max": 3
     },
     "client": {
       "name": "weave-tui",

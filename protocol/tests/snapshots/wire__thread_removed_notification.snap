@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ThreadRemovedNotification { thread_id: \"s-1\".into(), })"
+---
+{
+  "method": "threads/removed",
+  "params": {
+    "threadId": "s-1"
+  }
+}

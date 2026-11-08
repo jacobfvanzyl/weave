@@ -18,11 +18,11 @@ use std::path::PathBuf;
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Timestamp;
+use crate::threads::ThreadId;
 
 /// The Host offers the `terminals/*` methods and the terminal stream, in `features`.
 pub const FEATURE: &str = "terminals";
@@ -41,9 +41,9 @@ pub struct Terminal {
     /// The person's name for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// The session it was opened from, whose clients put it in front by default.
+    /// The thread it was opened from, whose clients put it in front by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opened_from: Option<SessionId>,
+    pub opened_from: Option<ThreadId>,
     /// What the program titled it (OSC 0 and 2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -215,7 +215,7 @@ pub struct NewTerminalRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opened_from: Option<SessionId>,
+    pub opened_from: Option<ThreadId>,
     /// A command and its arguments, run under a login shell instead of an interactive one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,

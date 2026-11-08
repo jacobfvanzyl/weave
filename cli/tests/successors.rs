@@ -16,11 +16,11 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::events::SessionEventNotification;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::GetSessionResponse;
-use weave_host_protocol::sessions::RunResponse;
+use weave_host_protocol::events::ThreadEvent;
+use weave_host_protocol::events::ThreadEventNotification;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::GetThreadResponse;
+use weave_host_protocol::threads::RunResponse;
 
 use crate::support::TestHost;
 
@@ -82,12 +82,12 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 /// A headless thread, idle after one turn.
 fn idle_thread(host: &TestHost) -> String {
     let output = host.weave(&["run", "--agent", "fake", "--detach", "--json", "hello"]);
-    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("session/run's answer");
-    let id = run.session_id.to_string();
+    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("thread/run's answer");
+    let id = run.thread_id.to_string();
     wait_until(|| {
         let read = host.weave(&["threads", "read", &id, "--json"]);
-        let read: GetSessionResponse = serde_json::from_slice(&read.stdout).expect("sessions/get");
-        read.session.activity == Some(Activity::Idle)
+        let read: GetThreadResponse = serde_json::from_slice(&read.stdout).expect("threads/get");
+        read.thread.activity == Some(Activity::Idle)
             && read.latest_turn.is_some_and(|turn| !turn.running)
     });
     id
@@ -121,8 +121,8 @@ fn a_run_the_host_stops_under_ends_as_its_continuation_does() {
 fn following_a_turn_the_host_stops_under_ends_as_its_continuation_does() {
     let mut host = TestHost::start();
     let output = host.weave(&["run", "--agent", "fake", "--detach", "--json", "slow 20"]);
-    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("session/run's answer");
-    let id = run.session_id.to_string();
+    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("thread/run's answer");
+    let id = run.thread_id.to_string();
     let turn = run.turn_id.expect("the run's turn");
     let mut follower = host
         .command(&["threads", "follow", &id, "--turn", &turn])
@@ -163,15 +163,15 @@ fn following_a_thread_moves_on_to_its_successor() {
         let line = lines
             .recv_timeout(Duration::from_secs(20))
             .unwrap_or_else(|_| panic!("nothing of the successor in {seen:?}"));
-        let event: SessionEventNotification = serde_json::from_str(&line).expect("a session/event");
-        if event.session_id.to_string() == new {
+        let event: ThreadEventNotification = serde_json::from_str(&line).expect("a thread/event");
+        if event.thread_id.to_string() == new {
             break event;
         }
         seen.push(line);
     };
     // From its start: its first turn's.
     assert!(
-        matches!(event.event, SessionEvent::TurnStarted { .. }),
+        matches!(event.event, ThreadEvent::TurnStarted { .. }),
         "{event:?}"
     );
     let _ = follower.kill();

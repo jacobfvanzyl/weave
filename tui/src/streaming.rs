@@ -30,7 +30,7 @@ use crate::wrapping::plain_lines;
 pub enum StreamKind {
     Agent,
     Thought,
-    /// The user's own messages, as an agent replays them when loading a session.
+    /// The user's own messages, as an agent replays them when loading a thread.
     User,
 }
 

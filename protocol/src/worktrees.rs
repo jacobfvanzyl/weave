@@ -1,10 +1,10 @@
 //! Git repositories on the Host's computer and their worktrees (ADR 0019).
 //!
-//! The Host is git-aware: a session whose directory is in a repository says which one, which
-//! worktree and which branch ([`GitLocation`]). Worktrees are the person's, beside sessions
+//! The Host is git-aware: a thread whose directory is in a repository says which one, which
+//! worktree and which branch ([`GitLocation`]). Worktrees are the person's, beside threads
 //! rather than parts of them, and a client lists, creates and removes them here: it makes a
-//! worktree and then starts a session there with `session/create`, or removes one along with
-//! its sessions. New worktrees go where worktrunk puts them by default, beside the repository
+//! worktree and then starts a thread there with `thread/create`, or removes one along with
+//! its threads. New worktrees go where worktrunk puts them by default, beside the repository
 //! as `<repo>.<branch>`, so worktrunk in a terminal manages the same ones. The Host never
 //! removes a worktree on its own. Paths are absolute on the Host's computer and compared with
 //! symlinks resolved.
@@ -13,15 +13,16 @@ use std::path::PathBuf;
 
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::threads::ThreadId;
 
 /// The Host offers the `worktrees/*` methods, in `features`.
 pub const FEATURE: &str = "worktrees";
 
-/// Where in a git repository a session's directory is, as the Host last read it: when the
-/// session opened, and again after each of its turns.
+/// Where in a git repository a thread's directory is, as the Host last read it: when the
+/// thread opened, and again after each of its turns.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +41,7 @@ pub struct GitLocation {
     pub remote: Option<String>,
 }
 
-/// `worktrees/list`: a repository's worktrees and the sessions in each.
+/// `worktrees/list`: a repository's worktrees and the threads in each.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "worktrees/list", response = ListWorktreesResponse)]
@@ -91,9 +92,9 @@ pub struct Worktree {
     /// The branch it tracks, and how far it is from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<Upstream>,
-    /// The sessions the Host has a record of in it, open or not, most recently active first.
+    /// The threads the Host has a record of in it, open or not, most recently active first.
     #[serde(default)]
-    pub sessions: Vec<SessionId>,
+    pub threads: Vec<ThreadId>,
 }
 
 /// Commits one side has that the other doesn't.
@@ -121,7 +122,7 @@ pub struct Upstream {
 /// `<repo>.<branch>` with the branch made safe for a path (`feature/auth` becomes
 /// `weave.feature-auth`). A branch that doesn't exist is made from `base`. One that exists is
 /// checked out, a branch only a remote has included, unless another worktree has it checked
-/// out. The client then starts a session there with `session/create`.
+/// out. The client then starts a thread there with `thread/create`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "worktrees/create", response = CreateWorktreeResponse)]
@@ -148,9 +149,9 @@ pub struct CreateWorktreeResponse {
     pub created_branch: bool,
 }
 
-/// `worktrees/remove`: remove a worktree other than the primary one. Refused while a session
+/// `worktrees/remove`: remove a worktree other than the primary one. Refused while a thread
 /// in it runs a turn or waits on a request (`worktree_busy`), and when it has changes
-/// (`uncommitted_changes`) unless `force`. Otherwise the sessions open in it close first. Their
+/// (`uncommitted_changes`) unless `force`. Otherwise the threads open in it close first. Their
 /// journals stay, so they can still be deleted. Its branch is deleted when git counts it merged,
 /// and regardless with `deleteBranch`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
@@ -171,9 +172,9 @@ pub struct RemoveWorktreeRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveWorktreeResponse {
-    /// The sessions that were open in it, now closed.
+    /// The threads that were open in it, now closed.
     #[serde(default)]
-    pub closed: Vec<SessionId>,
+    pub closed: Vec<ThreadId>,
     /// Its branch; absent when its HEAD was detached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
@@ -183,7 +184,7 @@ pub struct RemoveWorktreeResponse {
 
 /// `worktrees/release`: let a worktree go before something else removes it, as
 /// `weave worktrees pre-remove` asks when worktrunk does. Refused, as `worktrees/remove` is,
-/// while a session in it runs a turn or waits on a request; otherwise the sessions open in it
+/// while a thread in it runs a turn or waits on a request; otherwise the threads open in it
 /// close.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -197,7 +198,7 @@ pub struct ReleaseWorktreeRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseWorktreeResponse {
-    /// The sessions that were open in it, now closed.
+    /// The threads that were open in it, now closed.
     #[serde(default)]
-    pub closed: Vec<SessionId>,
+    pub closed: Vec<ThreadId>,
 }

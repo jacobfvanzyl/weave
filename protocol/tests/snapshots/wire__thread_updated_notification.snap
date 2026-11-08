@@ -1,0 +1,36 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ThreadUpdatedNotification { thread: listing() })"
+---
+{
+  "method": "threads/updated",
+  "params": {
+    "thread": {
+      "info": {
+        "sessionId": "s-1",
+        "cwd": "/repo",
+        "title": "Fix the parser"
+      },
+      "agentId": "claude",
+      "state": "open",
+      "activity": "running",
+      "clients": 1,
+      "headless": false,
+      "lastActivityAt": 1760180001234,
+      "git": {
+        "repo": "/repo",
+        "worktree": "/repo",
+        "branch": "main",
+        "remote": "github.com/jacobfvanzyl/weave"
+      },
+      "openedBy": {
+        "client": {
+          "name": "weave-app",
+          "id": "c9",
+          "device": "Jaco's iPad"
+        }
+      },
+      "openedAt": 1760180000500
+    }
+  }
+}

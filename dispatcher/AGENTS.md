@@ -26,13 +26,15 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
 - `store.rs`: its state in SQLite (`rusqlite`, bundled): `hosts` and `deliveries`, and in
   `store/calls.rs` the `calls` from Hosts' agents and the turns they began (`follows`). Migrations are
   numbered SQL in `MIGRATIONS`, applied in order and recorded in `PRAGMA user_version`; never
-  edit one once released, add the next. Times are milliseconds, kept signed.
+  edit one once released, add the next. The sixth (WVE-200) renamed the `session_id` columns to
+  `thread_id` and moved stored work to the Host protocol's version 3; Hosts' answers stored
+  before keep `sessionId`, which `answered_thread` reads too. Times are milliseconds, kept signed.
 - `link.rs`: one task per Host connection, which says hello with the Dispatcher's key over it
-  (`HostConnection::connect_with`), watches its threads (`sessions/watch`) and sends it its
+  (`HostConnection::connect_with`), watches its threads (`threads/watch`) and sends it its
   pending deliveries,
-  oldest first, settling a thread's prompt (`Work::Prompt`) into `queue/add` or `session/run`
+  oldest first, settling a thread's prompt (`Work::Prompt`) into `queue/add` or `thread/run`
   before its first send (in the last of the thread's successors, WVE-168), and reads with
-  `sessions/get` how started occurrences' turns ended when their threads go idle, following an
+  `threads/get` how started occurrences' turns ended when their threads go idle, following an
   interrupted turn into its continuation (`continuedIn`). A Host that closes with
   `CLOSE_REVOKED`, having left, is recorded as refused in `hosts.refused` until it joins again;
   removing a Host closes its connection with `CLOSE_REVOKED` (`Link::revoke`), which it forgets
@@ -49,7 +51,7 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   the Host refusing it and its turn ending update it from `store.rs` and `link.rs`.
 - `calls.rs` (WVE-185, ADR 0029): the Host tool calls naming another Host that a Host passes it
   (`HostEvent::HostCall`, since each link declares `hosts`), answered with `service/answerTool`.
-  Reads and steers go straight to the named Host while its link is connected; `session/run` and
+  Reads and steers go straight to the named Host while its link is connected; `thread/run` and
   `queue/add` are deliveries with a `calls` row, under a key hashed from the calling Host, thread
   and the agent's key, sent at once (`begin`), and if the answer is lost, sent again by the named
   Host's link, the caller told then (`settled`). It checks one hop from the caller's listing,

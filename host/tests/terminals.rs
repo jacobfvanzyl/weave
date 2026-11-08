@@ -102,7 +102,7 @@ impl Client {
             .send(NewTerminalRequest {
                 directory: directory.to_path_buf(),
                 label: Some("dev server".to_owned()),
-                opened_from: Some(agent_client_protocol::schema::v1::SessionId::new("s-1")),
+                opened_from: Some(weave_host_protocol::threads::ThreadId::new("s-1")),
                 ..NewTerminalRequest::default()
             })
             .await
@@ -457,7 +457,7 @@ async fn a_worktree_with_a_terminal_running_a_command_isnt_released() {
     assert!(errors::is(&error, errors::WORKTREE_BUSY));
     assert_eq!(error.data.expect("data")["terminals"], json!([terminal.id]));
 
-    // One that runs nothing is closed with the worktree's sessions.
+    // One that runs nothing is closed with the worktree's threads.
     let idle = daemon(dir.path(), Some(Arc::new(FakeOwner::default())));
     let mut client = client(&idle).await;
     client

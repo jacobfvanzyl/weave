@@ -41,7 +41,6 @@ use std::sync::MutexGuard;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::SessionId;
 use tokio::net::UnixListener;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -57,7 +56,8 @@ use weave_host_protocol::dispatcher::Overlap;
 use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::Schedule;
 use weave_host_protocol::hello::ClientInfo;
-use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadListing;
 use weave_remote::access::Remote;
 use weave_remote::access::RemoteSettings;
 
@@ -279,7 +279,7 @@ impl Dispatcher {
     }
 
     /// The threads on `host_id` as the Dispatcher last saw them, while it is connected there.
-    pub fn threads(&self, host_id: &str) -> Vec<SessionListing> {
+    pub fn threads(&self, host_id: &str) -> Vec<ThreadListing> {
         lock(&self.shared.links)
             .get(host_id)
             .map(Link::threads)
@@ -308,9 +308,9 @@ impl Shared {
             .unwrap_or_default()
     }
 
-    /// The thread `session_id` on `host_id` as the Dispatcher last saw it.
-    pub(crate) fn thread(&self, host_id: &str, session_id: &SessionId) -> Option<SessionListing> {
-        lock(&self.links).get(host_id)?.listing(session_id)
+    /// The thread `thread_id` on `host_id` as the Dispatcher last saw it.
+    pub(crate) fn thread(&self, host_id: &str, thread_id: &ThreadId) -> Option<ThreadListing> {
+        lock(&self.links).get(host_id)?.listing(thread_id)
     }
 
     /// The Hosts the Dispatcher is paired with, as `hosts/list` gives them.

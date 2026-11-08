@@ -5,7 +5,7 @@
 //! The Host starts a holder outside its own process tree, so a restart or update of the Host
 //! leaves every shell running. On Linux that's a systemd unit of its own (`systemd-run --user`),
 //! since the Host's unit stops everything left in its cgroup; where there's no user manager to
-//! ask, and on macOS, it's `weave-holder spawn`, which detaches into a session of its own.
+//! ask, and on macOS, it's `weave-holder spawn`, which detaches into a thread of its own.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -48,7 +48,7 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum Launch {
     /// A systemd unit of its own, through `systemd-run --user`.
     SystemdRun,
-    /// `weave-holder spawn`, in a session of its own.
+    /// `weave-holder spawn`, in a thread of its own.
     Spawn,
 }
 
@@ -165,8 +165,8 @@ impl Holders {
         if let Some(label) = &start.label {
             args.extend(["--label".to_owned(), label.clone()]);
         }
-        if let Some(session) = &start.opened_from {
-            args.extend(["--opened-from".to_owned(), session.to_string()]);
+        if let Some(thread) = &start.opened_from {
+            args.extend(["--opened-from".to_owned(), thread.to_string()]);
         }
         if let Some(command) = &start.command {
             args.push("--".to_owned());

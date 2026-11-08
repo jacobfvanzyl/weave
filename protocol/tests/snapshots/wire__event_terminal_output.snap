@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(43, SessionEvent::TerminalOutput\n{ terminal_id: \"term-1\".into(), data: \"ok\\n\".to_owned(), },))"
+expression: "message(&event(43, ThreadEvent::TerminalOutput\n{ terminal_id: \"term-1\".into(), data: \"ok\\n\".to_owned(), },))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 43,
     "at": 1760180001234,
     "event": {

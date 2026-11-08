@@ -1,4 +1,4 @@
-//! Agent processes: one per open session, started in the session's directory with the
+//! Agent processes: one per open thread, started in the thread's directory with the
 //! Host's agent environment under the agent's own settings.
 
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ pub struct Launch {
     /// The agent's id, as clients name it.
     pub agent_id: String,
     pub spec: AgentSpec,
-    /// Where the agent process starts, and the session's directory.
+    /// Where the agent process starts, and the thread's directory.
     pub cwd: PathBuf,
     /// The environment the agent inherits, under its own settings. Never written to disk.
     pub environment: BTreeMap<String, String>,
@@ -71,7 +71,7 @@ pub type Launcher = Arc<
         + Sync,
 >;
 
-/// Agents as processes, each in its own process group, killed with its session.
+/// Agents as processes, each in its own process group, killed with its thread.
 pub fn process_launcher() -> Launcher {
     Arc::new(
         |launch: &Launch, options: ClientOptions, traces: Arc<Traces>| {
@@ -86,7 +86,7 @@ pub fn process_launcher() -> Launcher {
 }
 
 /// What identifies an agent the daemon can reuse: for `initialize` answers, and to list and
-/// delete sessions without starting another process.
+/// delete threads without starting another process.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct LaunchKey {
     spec: AgentSpec,
@@ -134,7 +134,7 @@ impl Instance {
         Self::start_traced(launcher, launch, options, Arc::new(Traces::default())).await
     }
 
-    /// [`Self::start`], tracing into `traces`: a reopened session's, for the clients that
+    /// [`Self::start`], tracing into `traces`: a reopened thread's, for the clients that
     /// asked.
     pub(crate) async fn start_traced(
         launcher: &Launcher,
@@ -164,7 +164,7 @@ impl Instance {
         self.connection.agent()
     }
 
-    /// Drop events the agent sent so far: a recovered session's replay, which its journal
+    /// Drop events the agent sent so far: a recovered thread's replay, which its journal
     /// already has.
     pub(crate) fn discard_queued_events(&mut self) {
         while self.events.try_recv().is_ok() {}

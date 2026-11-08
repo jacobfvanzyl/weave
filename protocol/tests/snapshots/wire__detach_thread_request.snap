@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&DetachThreadRequest\n{ thread_id: \"s-1\".into(), close: CloseWhen::IfUnused, })"
+---
+{
+  "method": "thread/detach",
+  "params": {
+    "threadId": "s-1",
+    "close": "ifUnused"
+  }
+}

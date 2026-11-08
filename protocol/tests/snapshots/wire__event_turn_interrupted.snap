@@ -1,16 +1,16 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(45, SessionEvent::TurnEnded\n{\n    session_id: \"s-1\".into(), response: None, error:\n    Some(weave_host_protocol::errors::interrupted()),\n},))"
+expression: "message(&event(45, ThreadEvent::TurnEnded\n{\n    thread_id: \"s-1\".into(), response: None, error:\n    Some(weave_host_protocol::errors::interrupted()),\n},))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 45,
     "at": 1760180001234,
     "event": {
       "kind": "turnEnded",
-      "sessionId": "s-1",
+      "threadId": "s-1",
       "error": {
         "code": -32082,
         "message": "the weave Host stopped while this turn ran"

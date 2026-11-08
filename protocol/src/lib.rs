@@ -12,16 +12,16 @@
 //! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
 //! - [`files`]: files on the Host's computer, for clients that aren't on it.
 //! - [`worktrees`]: git repositories on the Host's computer, their worktrees, and where a
-//!   session is in one.
-//! - [`sessions`]: listing, creating, attaching to, reopening and closing sessions.
+//!   thread is in one.
+//! - [`threads`]: listing, creating, attaching to, reopening and closing threads.
 //! - [`events`]: what attached clients are sent: journaled events and changes.
 //! - [`turns`]: starting, steering and cancelling turns, and request keys.
-//! - [`queue`]: the prompts a session's queue holds for its next turns.
+//! - [`queue`]: the prompts a thread's queue holds for its next turns.
 //! - [`reports`]: what the Host tells a thread of a turn its agent began elsewhere.
 //! - [`pending`]: permission requests and elicitations waiting on a person, and client tool
 //!   calls waiting on a client.
 //! - [`tools`]: client tools, which an attached client runs for the agent.
-//! - [`mcp`]: the MCP servers a session's agent was given, and how each one is.
+//! - [`mcp`]: the MCP servers a thread's agent was given, and how each one is.
 //! - [`terminals`]: terminals on the Host's computer, which clients show beside a thread, and
 //!   their streams.
 //! - [`host`]: the Host's status, and stopping it.
@@ -43,8 +43,8 @@ pub mod policy;
 pub mod queue;
 pub mod reports;
 mod role;
-pub mod sessions;
 pub mod terminals;
+pub mod threads;
 pub mod tools;
 pub mod turns;
 pub mod worktrees;
@@ -59,11 +59,13 @@ pub use crate::role::Host;
 pub use crate::role::HostClient;
 
 /// This protocol's major version. Version 1 was the `_weave/*` ACP extension the daemon
-/// spoke before, which this protocol replaces.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// spoke before, which this protocol replaces. Version 3 says thread where version 2 said
+/// session (ADR 0031, WVE-200).
+pub const PROTOCOL_VERSION: u32 = 3;
 
-/// The oldest major version this build still speaks: from version 3 on, the one before.
-pub const OLDEST_SUPPORTED_VERSION: u32 = 2;
+/// The oldest major version this build still speaks. Version 3 renamed version 2's methods and
+/// fields without keeping the old names, so it speaks no other.
+pub const OLDEST_SUPPORTED_VERSION: u32 = 3;
 
 /// Milliseconds since the Unix epoch.
 pub type Timestamp = u64;

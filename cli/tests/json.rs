@@ -13,15 +13,15 @@ use std::time::Instant;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use weave_host_protocol::devices::Device;
-use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::events::ThreadEvent;
+use weave_host_protocol::events::ThreadEventNotification;
 use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::queue::AddQueuedResponse;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::GetSessionResponse;
-use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::GetThreadResponse;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::ThreadListing;
 use weave_host_protocol::turns::SteerOutcome;
 use weave_host_protocol::turns::SteerTurnResponse;
 
@@ -74,18 +74,18 @@ fn a_run_prints_its_threads_journal_events() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let events: Vec<SessionEventNotification> = String::from_utf8_lossy(&output.stdout)
+    let events: Vec<ThreadEventNotification> = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .map(|line| serde_json::from_str(line).expect("a session/event"))
+        .map(|line| serde_json::from_str(line).expect("a thread/event"))
         .collect();
     assert!(
         events
             .iter()
-            .any(|event| matches!(event.event, SessionEvent::TurnStarted { .. }))
+            .any(|event| matches!(event.event, ThreadEvent::TurnStarted { .. }))
     );
     assert!(matches!(
         events.last().map(|event| &event.event),
-        Some(SessionEvent::TurnEnded { .. })
+        Some(ThreadEvent::TurnEnded { .. })
     ));
     let seqs: Vec<u64> = events.iter().map(|event| event.seq).collect();
     assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
@@ -98,16 +98,16 @@ fn threads_and_their_turns_are_the_hosts_answers() {
         &host.weave(&["run", "--agent", "fake", "--detach", "--json", "slow 400"]),
         0,
     );
-    let id = run.session_id.to_string();
+    let id = run.thread_id.to_string();
 
-    let listed: Vec<SessionListing> = parsed(&host.weave(&["threads", "list", "--json"]), 0);
+    let listed: Vec<ThreadListing> = parsed(&host.weave(&["threads", "list", "--json"]), 0);
     assert!(
         listed
             .iter()
-            .any(|thread| thread.info.session_id == run.session_id)
+            .any(|thread| thread.info.session_id == run.thread_id)
     );
-    let read: GetSessionResponse = parsed(&host.weave(&["threads", "read", &id, "--json"]), 0);
-    assert_eq!(read.session.info.session_id, run.session_id);
+    let read: GetThreadResponse = parsed(&host.weave(&["threads", "read", &id, "--json"]), 0);
+    assert_eq!(read.thread.info.session_id, run.thread_id);
 
     // The detached turn still runs, so a prompt waits for it and a steer joins it.
     let queued: AddQueuedResponse = parsed(
@@ -125,9 +125,9 @@ fn threads_and_their_turns_are_the_hosts_answers() {
     host.weave(&["threads", "cancel", &id]);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let read: GetSessionResponse = parsed(&host.weave(&["threads", "read", &id, "--json"]), 0);
+        let read: GetThreadResponse = parsed(&host.weave(&["threads", "read", &id, "--json"]), 0);
         let ended = read.latest_turn.as_ref().is_some_and(|turn| !turn.running);
-        if read.session.activity == Some(Activity::Idle) && ended {
+        if read.thread.activity == Some(Activity::Idle) && ended {
             break;
         }
         assert!(Instant::now() < deadline, "still busy: {read:?}");

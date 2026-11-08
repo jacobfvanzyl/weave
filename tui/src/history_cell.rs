@@ -85,17 +85,17 @@ pub fn error(text: &str, width: usize) -> Vec<DisplayLine> {
     )
 }
 
-pub struct SessionHeader<'a> {
+pub struct ThreadHeader<'a> {
     pub agent: &'a str,
     pub agent_version: Option<&'a str>,
-    /// The session directory, as shown (home shortened to `~`).
+    /// The thread directory, as shown (home shortened to `~`).
     pub directory: &'a str,
     /// Current settings, such as mode and model.
     pub settings: Option<&'a str>,
 }
 
 /// The startup header, after Codex's `>_ OpenAI Codex (vX)` with the directory under it.
-pub fn session_header(header: &SessionHeader<'_>, width: usize) -> Vec<DisplayLine> {
+pub fn thread_header(header: &ThreadHeader<'_>, width: usize) -> Vec<DisplayLine> {
     let title = Line::from(vec![
         Span::styled(">_ ", Style::default().fg(style::accent())),
         "weave".bold(),

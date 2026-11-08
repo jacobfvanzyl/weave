@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AttachThreadRequest\n{\n    thread_id: \"s-1\".into(), after: None, agent_id: None, cwd: None, trace:\n    false, observe: true,\n})"
+---
+{
+  "method": "thread/attach",
+  "params": {
+    "threadId": "s-1",
+    "observe": true
+  }
+}

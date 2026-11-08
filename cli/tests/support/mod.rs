@@ -98,7 +98,7 @@ impl TestHost {
         })
     }
 
-    /// The directory sessions run in.
+    /// The directory threads run in.
     pub fn work(&self) -> PathBuf {
         self.dir.path().join("work")
     }

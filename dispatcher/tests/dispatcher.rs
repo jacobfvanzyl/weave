@@ -23,8 +23,8 @@ use crate::common::delivered;
 use crate::common::dispatcher_config;
 use crate::common::host_until;
 use crate::common::run;
-use crate::common::sessions;
 use crate::common::start;
+use crate::common::thread_count;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
@@ -89,7 +89,7 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
         while !dispatcher
             .threads(&studio_id)
             .iter()
-            .any(|thread| thread.info.session_id == started.session_id)
+            .any(|thread| thread.info.session_id == started.thread_id)
         {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
@@ -128,9 +128,9 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
         .expect("as though never answered");
     let (dispatcher, serving) = start(dir.path());
     let again = delivered(&dispatcher, &first.id).await;
-    assert_eq!(again.session_id, started.session_id);
+    assert_eq!(again.thread_id, started.thread_id);
     assert_eq!(again.turn_id, started.turn_id);
-    assert_eq!(sessions(&studio).await, 1);
+    assert_eq!(thread_count(&studio).await, 1);
     let status = ask(dir.path())
         .await
         .send(DispatcherStatusRequest {})

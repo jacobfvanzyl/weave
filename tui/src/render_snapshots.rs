@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use crate::events::ChatEvent;
-use crate::session_picker::listing;
+use crate::thread_picker::listing;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -69,11 +69,11 @@ use weave_host_protocol::terminals::TerminalCommand;
 use weave_host_protocol::terminals::TerminalSize;
 
 use crate::chat::ChatWidget;
-use crate::chat::SessionAbilities;
+use crate::chat::ThreadAbilities;
 use crate::elicitation::ElicitationView;
 use crate::permission::PermissionView;
-use crate::session::OpenedSession;
-use crate::session::Reopened;
+use crate::thread::OpenedThread;
+use crate::thread::Reopened;
 use crate::tool_call::ToolCallCell;
 
 const WIDTH: u16 = 72;
@@ -82,13 +82,13 @@ fn chat_with(
     modes: Option<SessionModeState>,
     config_options: Vec<SessionConfigOption>,
 ) -> ChatWidget {
-    let abilities = SessionAbilities {
+    let abilities = ThreadAbilities {
         list: true,
         delete: true,
     };
     let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, WIDTH);
-    chat.session_ready(OpenedSession {
-        session_id: "s1".into(),
+    chat.thread_ready(OpenedThread {
+        thread_id: "s1".into(),
         modes,
         config_options,
         reopened: None,
@@ -113,7 +113,7 @@ fn send(chat: &mut ChatWidget, update: SessionUpdate) {
 /// End the turn so streamed content commits to the transcript.
 fn finish_turn(chat: &mut ChatWidget) {
     chat.handle_agent_event(ChatEvent::TurnEnded {
-        session_id: "s1".into(),
+        thread_id: "s1".into(),
         result: Ok(PromptResponse::new(StopReason::EndTurn)),
         replayed: false,
     });
@@ -547,13 +547,13 @@ fn prompt_elicitation_url() {
 }
 
 #[test]
-fn picker_sessions() {
+fn picker_threads() {
     let mut chat = chat();
     chat.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
     // Untimed entries keep the snapshot independent of the clock.
-    chat.sessions_listed(
-        Ok(weave_host_protocol::sessions::ListSessionsResponse {
-            sessions: vec![
+    chat.threads_listed(
+        Ok(weave_host_protocol::threads::ListThreadsResponse {
+            threads: vec![
                 listing(
                     SessionInfo::new("a", "/repo").title("Fix the flaky parser test".to_owned()),
                 ),
@@ -575,14 +575,14 @@ fn picker_settings() {
 
 /// A chat whose Host reports its MCP servers, with the thread's panel open.
 fn thread_panel(servers: Vec<McpServerStatus>, agent_commands: &[&str]) -> String {
-    let abilities = SessionAbilities {
+    let abilities = ThreadAbilities {
         list: true,
         delete: true,
     };
     let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, WIDTH)
         .with_mcp_servers(true);
-    chat.session_ready(OpenedSession {
-        session_id: "s1".into(),
+    chat.thread_ready(OpenedThread {
+        thread_id: "s1".into(),
         modes: None,
         config_options: Vec::new(),
         reopened: None,
@@ -655,15 +655,15 @@ fn panel_thread_mcp_servers() {
 
 #[test]
 fn panel_thread_terminals_in_rex() {
-    let abilities = SessionAbilities {
+    let abilities = ThreadAbilities {
         list: true,
         delete: true,
     };
     let mut chat = ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, WIDTH)
         .with_mcp_servers(true)
         .with_rex(true);
-    chat.session_ready(OpenedSession {
-        session_id: "s1".into(),
+    chat.thread_ready(OpenedThread {
+        thread_id: "s1".into(),
         modes: None,
         config_options: Vec::new(),
         reopened: None,
@@ -753,16 +753,16 @@ fn disconnected() {
     insta::assert_snapshot!(screen(&mut chat));
 }
 
-/// A fullscreen widget with session `s1` open.
+/// A fullscreen widget with thread `s1` open.
 fn fullscreen_chat() -> ChatWidget {
-    let abilities = SessionAbilities {
+    let abilities = ThreadAbilities {
         list: true,
         delete: true,
     };
     let mut chat =
         ChatWidget::new("Agent".into(), PathBuf::from("/repo"), abilities, WIDTH).fullscreen();
-    chat.session_ready(OpenedSession {
-        session_id: "s1".into(),
+    chat.thread_ready(OpenedThread {
+        thread_id: "s1".into(),
         modes: None,
         config_options: Vec::new(),
         reopened: None,
@@ -836,13 +836,13 @@ fn release(version: &str) -> weave_host_protocol::agents::AgentRelease {
     }
 }
 
-/// A chat on a Host that updates agents, its session on 0.86.0 with a conversation to move,
+/// A chat on a Host that updates agents, its thread on 0.86.0 with a conversation to move,
 /// with 0.93.0 out.
 fn with_update(mut chat: ChatWidget) -> ChatWidget {
     chat = chat.with_updates(true, Default::default());
     chat.set_release(Some(release("0.86.0")));
-    chat.session_ready(OpenedSession {
-        session_id: "s1".into(),
+    chat.thread_ready(OpenedThread {
+        thread_id: "s1".into(),
         modes: None,
         config_options: Vec::new(),
         reopened: Some(Reopened::Loaded),
@@ -862,7 +862,7 @@ fn with_update(mut chat: ChatWidget) -> ChatWidget {
 
 fn reopened(version: &str, failed: Option<&str>) -> ChatEvent {
     ChatEvent::AgentReopened {
-        agent: Box::new(weave_host_protocol::sessions::SessionAgent {
+        agent: Box::new(weave_host_protocol::threads::ThreadAgent {
             id: "claude".into(),
             name: "Claude".into(),
             initialize: weave_acp_core::schema::InitializeResponse::new(
@@ -878,13 +878,13 @@ fn reopened(version: &str, failed: Option<&str>) -> ChatEvent {
     }
 }
 
-/// `/update` run, its check passed, moving the session; then the journal's word on how the
+/// `/update` run, its check passed, moving the thread; then the journal's word on how the
 /// move went, and on one that went back to the old version.
 fn updated(mut chat: ChatWidget) -> ChatWidget {
     chat.handle_paste("/update");
     chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.agent_updated(Ok("0.93.0".into()));
-    chat.session_reopened(&"s1".into(), Ok(()));
+    chat.thread_reopened(&"s1".into(), Ok(()));
     chat.handle_agent_event(reopened("0.93.0", None));
     chat.handle_agent_event(reopened(
         "0.93.0",
@@ -906,7 +906,7 @@ fn update_available_notice_fullscreen() {
 }
 
 #[test]
-fn update_moving_the_session() {
+fn update_moving_the_thread() {
     let mut chat = with_update(chat());
     chat.handle_paste("/update");
     chat.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -981,7 +981,7 @@ fn started_elsewhere(chat: &mut ChatWidget, replayed: bool) {
         chat,
         0,
         ChatEvent::TurnStarted {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             prompt: vec!["Fix the flaky parser test".into()],
             elapsed: std::time::Duration::from_secs(140),
             replayed,
@@ -1067,7 +1067,7 @@ fn worked(chat: &mut ChatWidget, fails: bool, replayed: bool) {
         chat,
         140,
         ChatEvent::TurnEnded {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             result: Ok(PromptResponse::new(StopReason::EndTurn)),
             replayed,
         },
@@ -1187,7 +1187,7 @@ fn fullscreen_lone_tool_call() {
         &mut chat,
         33,
         ChatEvent::TurnEnded {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             result: Ok(PromptResponse::new(StopReason::EndTurn)),
             replayed: false,
         },
@@ -1203,7 +1203,7 @@ fn fullscreen_turn_a_service_started() {
         &mut chat,
         0,
         ChatEvent::TurnStarted {
-            session_id: "s1".into(),
+            thread_id: "s1".into(),
             prompt: vec!["Review yesterday's merged pull requests".into()],
             elapsed: std::time::Duration::ZERO,
             replayed: true,

@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ReopenThreadRequest { thread_id: \"s-1\".into(), })"
+---
+{
+  "method": "thread/reopen",
+  "params": {
+    "threadId": "s-1"
+  }
+}

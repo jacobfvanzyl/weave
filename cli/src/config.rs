@@ -26,7 +26,7 @@ pub struct Config {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DaemonSettings {
-    /// Run agents in the daemon, so sessions outlive the TUI (default true). Without it each
+    /// Run agents in the daemon, so threads outlive the TUI (default true). Without it each
     /// `weave` runs its own, as `--no-daemon` does.
     pub enabled: Option<bool>,
 }
@@ -87,7 +87,7 @@ pub struct TuiConfig {
     pub status_line: Option<Vec<String>>,
     /// Desktop notifications when a turn ends or the agent needs you (default true).
     pub notifications: Option<bool>,
-    /// Keep the window title on the session and activity (default true).
+    /// Keep the window title on the thread and activity (default true).
     pub terminal_title: Option<bool>,
     /// The Vim composer, with relative line numbers, for new blank threads and multi-line
     /// drafts; Ctrl+G switches to and from it (default false).

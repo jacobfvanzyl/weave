@@ -10,11 +10,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::SessionId;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use weave_host_protocol::terminals::TerminalSize;
+use weave_host_protocol::threads::ThreadId;
 
 /// How many messages wait in a connection's channel before its owner is held back: with
 /// restores and output in chunks of up to 64 KiB, a few MiB.
@@ -41,7 +41,7 @@ pub struct Start {
     /// The worktree, or directory outside a repository, the terminal belongs to.
     pub scope: PathBuf,
     pub label: Option<String>,
-    pub opened_from: Option<SessionId>,
+    pub opened_from: Option<ThreadId>,
     /// A command to run under a login shell instead of an interactive shell.
     pub command: Option<Vec<String>>,
     pub size: TerminalSize,

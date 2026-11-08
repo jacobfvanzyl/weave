@@ -10,7 +10,7 @@ use anyhow::Context;
 /// A log bigger than this is set aside (as `….log.old`) when a server starts.
 const LOG_LIMIT: u64 = 10 * 1024 * 1024;
 
-/// Run this weave with `args`, its stdout and stderr appended to `log_path`, in a session of its
+/// Run this weave with `args`, its stdout and stderr appended to `log_path`, in a thread of its
 /// own; `what` is how errors name it.
 pub(crate) fn spawn(args: &[&str], log_path: &Path, what: &str) -> anyhow::Result<()> {
     if std::fs::metadata(log_path).is_ok_and(|metadata| metadata.len() > LOG_LIMIT) {
@@ -33,7 +33,7 @@ pub(crate) fn spawn(args: &[&str], log_path: &Path, what: &str) -> anyhow::Resul
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    // A session of its own, without this terminal: the terminal's signals (Ctrl+C, a closing
+    // A thread of its own, without this terminal: the terminal's signals (Ctrl+C, a closing
     // window) miss it, and nothing it runs can take the terminal over, as an interactive shell's
     // job control did, leaving the shell that started it in the background (WVE-154).
     #[cfg(unix)]

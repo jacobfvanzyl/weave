@@ -20,7 +20,7 @@ use weave_remote::websocket::Link;
 use weave_remote::websocket::RemoteConfig;
 
 use crate::Shared;
-use crate::session::Backlog;
+use crate::thread::Backlog;
 
 impl Backlog for Link {
     fn replaying(&self, bytes: usize) {

@@ -53,7 +53,7 @@ use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::errors;
-use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::files::ListFilesRequest;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::hello::ChallengeRequest;
@@ -65,16 +65,16 @@ use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::queue::AddQueuedRequest;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::ListSessionsRequest;
-use weave_host_protocol::sessions::OtherThread;
-use weave_host_protocol::sessions::RenameSessionRequest;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::ServiceOrigin;
-use weave_host_protocol::sessions::TurnOrigin;
-use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::OtherThread;
+use weave_host_protocol::threads::RenameThreadRequest;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::ServiceOrigin;
+use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::WatchThreadsRequest;
 use weave_host_protocol::tools::AnswerToolRequest;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::DeclareToolsRequest;
@@ -554,12 +554,12 @@ async fn remote_clients_do_everything_but_administer_the_host() {
     assert!(!errors::is(&update, errors::FORBIDDEN), "{update}");
     assert!(update.to_string().contains("yours to do"), "{update}");
     remote.send(StatusRequest {}).await.expect("host/status");
-    // Watching the Host's sessions isn't administering it.
+    // Watching the Host's threads isn't administering it.
     let watched = remote
-        .send(WatchSessionsRequest::default())
+        .send(WatchThreadsRequest::default())
         .await
-        .expect("sessions/watch");
-    assert_eq!(watched.sessions, Vec::new());
+        .expect("threads/watch");
+    assert_eq!(watched.threads, Vec::new());
     // Nor is listing a directory.
     let listed = remote
         .send(ListFilesRequest {
@@ -570,9 +570,9 @@ async fn remote_clients_do_everything_but_administer_the_host() {
         .expect("files/list");
     assert_eq!(listed.path, world.dir.path());
 
-    // A session and a turn, whose origin names the device.
+    // A thread and a turn, whose origin names the device.
     let state = remote
-        .send(CreateSessionRequest {
+        .send(CreateThreadRequest {
             agent_id: "fake".to_owned(),
             cwd: world.dir.path().to_path_buf(),
             additional_directories: Vec::new(),
@@ -582,10 +582,10 @@ async fn remote_clients_do_everything_but_administer_the_host() {
             labels: Vec::new(),
         })
         .await
-        .expect("session/create");
+        .expect("thread/create");
     remote
         .send(StartTurnRequest {
-            session_id: state.session_id.clone(),
+            thread_id: state.thread_id.clone(),
             prompt: vec![ContentBlock::from("hello".to_owned())],
             key: None,
         })
@@ -593,7 +593,7 @@ async fn remote_clients_do_everything_but_administer_the_host() {
         .expect("turn/start");
     loop {
         if let HostEvent::Event(notification) = next(&mut events).await
-            && let SessionEvent::TurnStarted { origin, .. } = notification.event
+            && let ThreadEvent::TurnStarted { origin, .. } = notification.event
         {
             let TurnOrigin::Client { device, .. } = origin else {
                 panic!("a client's turn");
@@ -602,15 +602,15 @@ async fn remote_clients_do_everything_but_administer_the_host() {
             break;
         }
     }
-    // Prompted, the watched session appears, opened by the device (WVE-167).
+    // Prompted, the watched thread appears, opened by the device (WVE-167).
     loop {
-        if let HostEvent::SessionUpdated(updated) = next(&mut events).await {
-            assert_eq!(updated.session.info.session_id, state.session_id);
-            let Some(TurnOrigin::Client { device, .. }) = &updated.session.opened_by else {
-                panic!("opened by a client: {:?}", updated.session);
+        if let HostEvent::ThreadUpdated(updated) = next(&mut events).await {
+            assert_eq!(updated.thread.info.session_id, state.thread_id);
+            let Some(TurnOrigin::Client { device, .. }) = &updated.thread.opened_by else {
+                panic!("opened by a client: {:?}", updated.thread);
             };
             assert_eq!(device.as_deref(), Some("Jaco's iPad"));
-            assert!(updated.session.opened_at.is_some());
+            assert!(updated.thread.opened_at.is_some());
             break;
         }
     }
@@ -674,12 +674,12 @@ async fn a_service_may_only_start_and_follow_threads() {
         "pending/answer",
         "queue/remove",
         "queue/resume",
-        "session/close",
-        "session/create",
-        "session/delete",
-        "session/reopen",
-        "session/setConfigOption",
-        "session/setMode",
+        "thread/close",
+        "thread/create",
+        "thread/delete",
+        "thread/reopen",
+        "thread/setConfigOption",
+        "thread/setMode",
         "terminals/attach",
         "terminals/close",
         "terminals/format",
@@ -698,9 +698,9 @@ async fn a_service_may_only_start_and_follow_threads() {
     .map(|method| (method, serde_json::json!({})))
     .into_iter()
     .chain([
-        ("session/attach", serde_json::json!({"sessionId": "s-1"})),
+        ("thread/attach", serde_json::json!({"threadId": "s-1"})),
         (
-            "session/run",
+            "thread/run",
             serde_json::json!({"agentId": "fake", "cwd": "/", "prompt": [], "attach": true}),
         ),
     ]);
@@ -718,14 +718,14 @@ async fn a_service_may_only_start_and_follow_threads() {
         .await
         .expect("agents/list");
     service
-        .send(WatchSessionsRequest::default())
+        .send(WatchThreadsRequest::default())
         .await
-        .expect("sessions/watch");
+        .expect("threads/watch");
     let run = || RunRequest {
         agent_id: "fake".to_owned(),
         cwd: world.dir.path().to_path_buf(),
         remote: None,
-        session_id: None,
+        thread_id: None,
         additional_directories: Vec::new(),
         mode: None,
         prompt: vec![ContentBlock::from("hello".to_owned())],
@@ -737,28 +737,28 @@ async fn a_service_may_only_start_and_follow_threads() {
         origin: None,
         labels: Vec::new(),
     };
-    let started = service.send(run()).await.expect("session/run");
+    let started = service.send(run()).await.expect("thread/run");
     let again = service.send(run()).await.expect("the same key again");
-    assert_eq!(again.session_id, started.session_id);
+    assert_eq!(again.thread_id, started.thread_id);
     assert_eq!(again.turn_id, started.turn_id);
     service
-        .send(RenameSessionRequest {
-            session_id: started.session_id.clone(),
+        .send(RenameThreadRequest {
+            thread_id: started.thread_id.clone(),
             title: "Daily review".to_owned(),
         })
         .await
-        .expect("session/rename");
+        .expect("thread/rename");
     let got = service
-        .send(GetSessionRequest {
-            session_id: started.session_id.clone(),
+        .send(GetThreadRequest {
+            thread_id: started.thread_id.clone(),
             turn_id: None,
         })
         .await
-        .expect("sessions/get");
-    assert_eq!(got.session.info.title.as_deref(), Some("Daily review"));
+        .expect("threads/get");
+    assert_eq!(got.thread.info.title.as_deref(), Some("Daily review"));
     service
-        .send(AttachSessionRequest {
-            session_id: started.session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: started.thread_id.clone(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -768,14 +768,14 @@ async fn a_service_may_only_start_and_follow_threads() {
         .await
         .expect("observing");
     let listed = service
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
-        .expect("sessions/list");
+        .expect("threads/list");
     assert!(
         listed
-            .sessions
+            .threads
             .iter()
-            .any(|listed| listed.info.session_id == started.session_id)
+            .any(|listed| listed.info.session_id == started.thread_id)
     );
     service.shutdown().await;
 }
@@ -805,7 +805,7 @@ async fn a_services_turns_name_what_started_them() {
             agent_id: "fake".to_owned(),
             cwd: world.dir.path().to_path_buf(),
             remote: None,
-            session_id: None,
+            thread_id: None,
             additional_directories: Vec::new(),
             mode: None,
             prompt: vec![ContentBlock::from("/slow 5".to_owned())],
@@ -818,11 +818,11 @@ async fn a_services_turns_name_what_started_them() {
             labels: Vec::new(),
         })
         .await
-        .expect("session/run");
-    let session_id = started.session_id.clone();
+        .expect("thread/run");
+    let thread_id = started.thread_id.clone();
     local
-        .send(AttachSessionRequest {
-            session_id: session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: thread_id.clone(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -833,28 +833,28 @@ async fn a_services_turns_name_what_started_them() {
         .expect("observing");
     loop {
         if let HostEvent::Event(notification) = next(&mut local_events).await
-            && let SessionEvent::TurnStarted { origin, .. } = notification.event
+            && let ThreadEvent::TurnStarted { origin, .. } = notification.event
         {
             assert_eq!(origin, named("schedule daily-review", "o-1"));
             break;
         }
     }
     let got = service
-        .send(GetSessionRequest {
-            session_id: session_id.clone(),
+        .send(GetThreadRequest {
+            thread_id: thread_id.clone(),
             turn_id: None,
         })
         .await
-        .expect("sessions/get");
+        .expect("threads/get");
     assert_eq!(
-        got.session.opened_by,
+        got.thread.opened_by,
         Some(named("schedule daily-review", "o-1"))
     );
 
     // A message for the thread waits behind it, and starts when it ends.
     service
         .send(AddQueuedRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             prompt: vec![ContentBlock::from("And the open ones?".to_owned())],
             key: Some("m-7".to_owned()),
             caller: None,
@@ -864,7 +864,7 @@ async fn a_services_turns_name_what_started_them() {
         .expect("queue/add");
     loop {
         if let HostEvent::Event(notification) = next(&mut local_events).await
-            && let SessionEvent::Queued { origin, .. } = notification.event
+            && let ThreadEvent::Queued { origin, .. } = notification.event
         {
             assert_eq!(origin, named("your message from iPhone", "m-7"));
             break;
@@ -872,19 +872,19 @@ async fn a_services_turns_name_what_started_them() {
     }
     loop {
         if let HostEvent::Event(notification) = next(&mut local_events).await
-            && let SessionEvent::TurnStarted { origin, .. } = notification.event
+            && let ThreadEvent::TurnStarted { origin, .. } = notification.event
         {
             assert_eq!(origin, named("your message from iPhone", "m-7"));
             break;
         }
     }
     let got = service
-        .send(GetSessionRequest {
-            session_id: session_id.clone(),
+        .send(GetThreadRequest {
+            thread_id: thread_id.clone(),
             turn_id: None,
         })
         .await
-        .expect("sessions/get");
+        .expect("threads/get");
     assert_eq!(
         got.latest_turn.map(|turn| turn.origin),
         Some(named("your message from iPhone", "m-7"))
@@ -893,10 +893,10 @@ async fn a_services_turns_name_what_started_them() {
     // Nor may it name a caller as well, and a device that isn't a service names nothing.
     let both = service
         .send(SteerTurnRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             prompt: vec![ContentBlock::from("also".to_owned())],
             caller: Some(OtherThread {
-                session_id: "s-0".into(),
+                thread_id: "s-0".into(),
                 host: "h-other".to_owned(),
                 host_name: None,
             }),
@@ -910,7 +910,7 @@ async fn a_services_turns_name_what_started_them() {
     let (ipad, _ipad_events) = connected.expect("connects");
     let refused = ipad
         .send(AddQueuedRequest {
-            session_id,
+            thread_id,
             prompt: vec![ContentBlock::from("hello".to_owned())],
             key: None,
             caller: None,
@@ -938,7 +938,7 @@ async fn a_replay_many_times_the_limit_arrives_whole() {
 
     // A thread with a long journal: each prompt and the agent's echo of it are twice the limit.
     let state = local
-        .send(CreateSessionRequest {
+        .send(CreateThreadRequest {
             agent_id: "fake".to_owned(),
             cwd: world.dir.path().to_path_buf(),
             additional_directories: Vec::new(),
@@ -948,11 +948,11 @@ async fn a_replay_many_times_the_limit_arrives_whole() {
             labels: Vec::new(),
         })
         .await
-        .expect("session/create");
+        .expect("thread/create");
     for _ in 0..4 {
         local
             .send(StartTurnRequest {
-                session_id: state.session_id.clone(),
+                thread_id: state.thread_id.clone(),
                 prompt: vec![ContentBlock::from("x".repeat(limit * 2))],
                 key: None,
             })
@@ -960,7 +960,7 @@ async fn a_replay_many_times_the_limit_arrives_whole() {
             .expect("turn/start");
         loop {
             if let HostEvent::Event(notification) = next(&mut local_events).await
-                && let SessionEvent::TurnEnded { .. } = notification.event
+                && let ThreadEvent::TurnEnded { .. } = notification.event
             {
                 break;
             }
@@ -971,8 +971,8 @@ async fn a_replay_many_times_the_limit_arrives_whole() {
     let (connected, reason) = remote(&url, self::device(&device, &key, None)).await;
     let (remote, mut events) = connected.expect("connects");
     let attached = remote
-        .send(AttachSessionRequest {
-            session_id: state.session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: state.thread_id.clone(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -980,7 +980,7 @@ async fn a_replay_many_times_the_limit_arrives_whole() {
             observe: false,
         })
         .await
-        .expect("session/attach");
+        .expect("thread/attach");
     let head = attached.state.journal.head;
     let mut replayed = 0;
     loop {
@@ -1312,17 +1312,17 @@ async fn a_host_with_paired_devices_turns_remote_access_back_on() {
     assert_eq!(offer.url, Some(url));
 }
 
-/// What the agent said in reply to `prompt`, sent to the new session `session_id` through
+/// What the agent said in reply to `prompt`, sent to the new thread `thread_id` through
 /// `local`, which is attached to it.
 async fn reply(
     local: &HostConnection,
     events: &mut UnboundedReceiver<HostEvent>,
-    session_id: &weave_acp_core::schema::SessionId,
+    thread_id: &weave_host_protocol::threads::ThreadId,
     prompt: &str,
 ) -> String {
     local
         .send(AddQueuedRequest {
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
             prompt: vec![ContentBlock::from(prompt.to_owned())],
             key: None,
             caller: None,
@@ -1340,7 +1340,7 @@ async fn reply(
             continue;
         };
         match event.event {
-            SessionEvent::Update { notification } if notification.session_id == *session_id => {
+            ThreadEvent::Update { notification } if notification.session_id == *thread_id => {
                 if let weave_acp_core::schema::SessionUpdate::AgentMessageChunk(chunk) =
                     notification.update
                     && let ContentBlock::Text(text) = chunk.content
@@ -1348,9 +1348,9 @@ async fn reply(
                     said.push_str(&text.text);
                 }
             }
-            SessionEvent::TurnEnded {
-                session_id: ended, ..
-            } if ended == *session_id => {
+            ThreadEvent::TurnEnded {
+                thread_id: ended, ..
+            } if ended == *thread_id => {
                 return said;
             }
             _ => {}
@@ -1358,10 +1358,13 @@ async fn reply(
     }
 }
 
-/// A new session, opened through `local`.
-async fn new_session(local: &HostConnection, world: &World) -> weave_acp_core::schema::SessionId {
+/// A new thread, opened through `local`.
+async fn new_thread(
+    local: &HostConnection,
+    world: &World,
+) -> weave_host_protocol::threads::ThreadId {
     local
-        .send(CreateSessionRequest {
+        .send(CreateThreadRequest {
             agent_id: "fake".to_owned(),
             cwd: world.dir.path().to_path_buf(),
             additional_directories: Vec::new(),
@@ -1371,8 +1374,8 @@ async fn new_session(local: &HostConnection, world: &World) -> weave_acp_core::s
             labels: Vec::new(),
         })
         .await
-        .expect("session/create")
-        .session_id
+        .expect("thread/create")
+        .thread_id
 }
 
 fn add_schedule() -> Tool {
@@ -1427,10 +1430,10 @@ async fn a_service_declares_tools_that_threads_agents_call() {
     assert_eq!(declared.names, ["dispatcher__add_schedule"]);
 
     // A thread set up from now on offers it beside the Host's own.
-    let session_id = new_session(&local, &world).await;
-    let listed = reply(&local, &mut local_events, &session_id, "tools").await;
+    let thread_id = new_thread(&local, &world).await;
+    let listed = reply(&local, &mut local_events, &thread_id, "tools").await;
     assert!(listed.contains("dispatcher__add_schedule"), "{listed}");
-    assert!(listed.contains("list_sessions"), "{listed}");
+    assert!(listed.contains("list_threads"), "{listed}");
 
     // A call reaches the service, which answers it, naming the thread that called.
     let answering = tokio::spawn(async move {
@@ -1462,7 +1465,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
     let said = reply(
         &local,
         &mut local_events,
-        &session_id,
+        &thread_id,
         r#"tool dispatcher__add_schedule {"cron": "0 9 * * *"}"#,
     )
     .await;
@@ -1473,7 +1476,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
         call.arguments.get("cron"),
         Some(&serde_json::json!("0 9 * * *"))
     );
-    assert_eq!(call.caller.session_id, session_id);
+    assert_eq!(call.caller.thread_id, thread_id);
     assert_eq!(call.caller.agent_id, "fake");
     assert_eq!(call.caller.policy, PermissionPolicy::ask());
 
@@ -1490,7 +1493,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
     // With the service away, a call fails at once saying so; the tool is still offered.
     service.shutdown().await;
     drop(service_events);
-    let away = new_session(&local, &world).await;
+    let away = new_thread(&local, &world).await;
     let listed = reply(&local, &mut local_events, &away, "tools").await;
     assert!(listed.contains("dispatcher__add_schedule"), "{listed}");
     let said = reply(
@@ -1507,7 +1510,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
     // The Host keeps them across a restart, and forgets them when the service is revoked.
     let daemon = world.daemon();
     let (local, mut local_events) = self::local(&daemon).await;
-    let restarted = new_session(&local, &world).await;
+    let restarted = new_thread(&local, &world).await;
     let listed = reply(&local, &mut local_events, &restarted, "tools").await;
     assert!(listed.contains("dispatcher__add_schedule"), "{listed}");
     local
@@ -1516,7 +1519,7 @@ async fn a_service_declares_tools_that_threads_agents_call() {
         })
         .await
         .expect("devices/revoke");
-    let revoked = new_session(&local, &world).await;
+    let revoked = new_thread(&local, &world).await;
     let listed = reply(&local, &mut local_events, &revoked, "tools").await;
     assert!(!listed.contains("dispatcher__"), "{listed}");
 }

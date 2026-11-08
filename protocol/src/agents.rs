@@ -8,11 +8,11 @@ use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::v1::AuthMethodId;
 use agent_client_protocol::schema::v1::InitializeResponse;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Empty;
+use crate::threads::ThreadId;
 
 /// An agent's id: a preset, a configured agent, or an ACP registry agent.
 pub type AgentId = String;
@@ -126,9 +126,9 @@ pub struct LogoutAgentRequest {
     pub agent_id: AgentId,
 }
 
-/// The `features` entry of a Host that looks for newer versions of its sessions' agents and
-/// moves them over: `agents/updateAvailable`, `SessionState.update`, `agents/update` and
-/// `session/reopen`.
+/// The `features` entry of a Host that looks for newer versions of its threads' agents and
+/// moves them over: `agents/updateAvailable`, `ThreadState.update`, `agents/update` and
+/// `thread/reopen`.
 pub const UPDATES_FEATURE: &str = "agents/updates";
 
 /// A version of an agent the Host launches and can update: a preset's npm package, or an ACP
@@ -142,7 +142,7 @@ pub struct AgentRelease {
     pub version: String,
 }
 
-/// A newer version of a session's agent than the one it runs.
+/// A newer version of a thread's agent than the one it runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -150,26 +150,26 @@ pub struct AgentUpdate {
     pub agent_id: AgentId,
     /// The package or registry agent, as [`AgentRelease::name`].
     pub name: String,
-    /// The version the session runs.
+    /// The version the thread runs.
     pub running: String,
     pub latest: String,
 }
 
-/// `agents/updateAvailable`: a newer version of an attached session's agent is out. The Host
-/// looks when a session opens, at most once an hour for each agent.
+/// `agents/updateAvailable`: a newer version of an attached thread's agent is out. The Host
+/// looks when a thread opens, at most once an hour for each agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcNotification)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[notification(method = "agents/updateAvailable")]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAvailableNotification {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     #[serde(flatten)]
     pub update: AgentUpdate,
 }
 
 /// `agents/update`: what `weave agents update <agent>` does. The Host checks that the newest
-/// version starts and answers `initialize`, then launches it for the agent's new sessions; open
-/// ones move over with `session/reopen`. A version that doesn't start changes nothing. Remote
+/// version starts and answers `initialize`, then launches it for the agent's new threads; open
+/// ones move over with `thread/reopen`. A version that doesn't start changes nothing. Remote
 /// clients may update agents too: it only ever takes one to its newest version.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -183,6 +183,6 @@ pub struct UpdateAgentRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAgentResponse {
-    /// The version the agent's new sessions launch now: the newest, or the one already there.
+    /// The version the agent's new threads launch now: the newest, or the one already there.
     pub version: String,
 }

@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&LabelThreadResponse\n{ labels: vec![\"dispatcher\".to_owned(), \"bot:daily\".to_owned()], })"
+---
+{
+  "labels": [
+    "dispatcher",
+    "bot:daily"
+  ]
+}

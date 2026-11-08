@@ -27,14 +27,14 @@ use serde::Deserialize;
 use serde::Serialize;
 use weave_host_protocol::devices::Jwk;
 use weave_host_protocol::queue::AddQueuedRequest;
-use weave_host_protocol::sessions::ReportSessionRequest;
-use weave_host_protocol::sessions::RunRequest;
+use weave_host_protocol::threads::ReportThreadRequest;
+use weave_host_protocol::threads::RunRequest;
 
 use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 6] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -130,6 +130,45 @@ const MIGRATIONS: [&str; 5] = [
     ALTER TABLE hosts ADD COLUMN joined_at INTEGER;
     ALTER TABLE hosts ADD COLUMN here INTEGER NOT NULL DEFAULT 0;
 ",
+    // The Host protocol's version 3 says thread where version 2 said session (WVE-200): the
+    // columns, and the work written down for Hosts, which is sent to them again as it is. The
+    // Hosts' answers stay as version 2 gave them, and are read under both names.
+    "
+    ALTER TABLE occurrences RENAME COLUMN session_id TO thread_id;
+    ALTER TABLE follows RENAME COLUMN session_id TO thread_id;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.run.sessionId'), '$.run.threadId',
+            json_extract(work, '$.run.sessionId'))
+        WHERE json_type(work, '$.run.sessionId') IS NOT NULL;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.run.caller.sessionId'), '$.run.caller.threadId',
+            json_extract(work, '$.run.caller.sessionId'))
+        WHERE json_type(work, '$.run.caller.sessionId') IS NOT NULL;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.prompt.sessionId'), '$.prompt.threadId',
+            json_extract(work, '$.prompt.sessionId'))
+        WHERE json_type(work, '$.prompt.sessionId') IS NOT NULL;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.prompt.caller.sessionId'), '$.prompt.caller.threadId',
+            json_extract(work, '$.prompt.caller.sessionId'))
+        WHERE json_type(work, '$.prompt.caller.sessionId') IS NOT NULL;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.queue.sessionId'), '$.queue.threadId',
+            json_extract(work, '$.queue.sessionId'))
+        WHERE json_type(work, '$.queue.sessionId') IS NOT NULL;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.queue.caller.sessionId'), '$.queue.caller.threadId',
+            json_extract(work, '$.queue.caller.sessionId'))
+        WHERE json_type(work, '$.queue.caller.sessionId') IS NOT NULL;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.report.sessionId'), '$.report.threadId',
+            json_extract(work, '$.report.sessionId'))
+        WHERE json_type(work, '$.report.sessionId') IS NOT NULL;
+    UPDATE deliveries
+        SET work = json_set(json_remove(work, '$.report.about.sessionId'), '$.report.about.threadId',
+            json_extract(work, '$.report.about.sessionId'))
+        WHERE json_type(work, '$.report.about.sessionId') IS NOT NULL;
+",
 ];
 
 /// A Host that joined the Dispatcher, or was paired with it before Hosts joined it.
@@ -163,7 +202,7 @@ pub enum Work {
     /// sent, otherwise run in it, which opens it. Which it is is written down before it's sent,
     /// so every send asks the same under its key.
     Prompt(RunRequest),
-    Report(ReportSessionRequest),
+    Report(ReportThreadRequest),
 }
 
 impl Work {
@@ -188,11 +227,21 @@ impl Work {
     fn started(&self, answer: &serde_json::Value) -> Option<(String, String)> {
         let text = |name: &str| answer.get(name)?.as_str().map(str::to_owned);
         match self {
-            Self::Run(_) | Self::Prompt(_) => Some((text("sessionId")?, text("turnId")?)),
-            Self::Queue(request) => Some((request.session_id.0.to_string(), text("queuedId")?)),
+            Self::Run(_) | Self::Prompt(_) => {
+                Some((answered_thread(answer)?.to_owned(), text("turnId")?))
+            }
+            Self::Queue(request) => Some((request.thread_id.0.to_string(), text("queuedId")?)),
             Self::Report(_) => None,
         }
     }
+}
+
+/// The thread a Host's answer to `thread/run` names: its `threadId`, or the `sessionId` a
+/// version-2 Host answered `session/run` with, as answers stored before WVE-200 have it.
+pub(crate) fn answered_thread(answer: &serde_json::Value) -> Option<&str> {
+    ["threadId", "sessionId"]
+        .into_iter()
+        .find_map(|name| answer.get(name)?.as_str())
 }
 
 /// Work written down for a Host before it is sent, so it reaches the Host once however often
@@ -459,15 +508,15 @@ impl Store {
         let started = work
             .and_then(|work| serde_json::from_str::<Work>(&work).ok())
             .and_then(|work| work.started(answer));
-        if let Some((session_id, turn_id)) = &started {
-            calls::begun(&transaction, id, session_id, turn_id).map_err(failed)?;
+        if let Some((thread_id, turn_id)) = &started {
+            calls::begun(&transaction, id, thread_id, turn_id).map_err(failed)?;
         }
-        let (session_id, turn_id) = started.unzip();
+        let (thread_id, turn_id) = started.unzip();
         transaction
             .execute(
-                "UPDATE occurrences SET state = 'started', session_id = ?2, turn_id = ?3 \
+                "UPDATE occurrences SET state = 'started', thread_id = ?2, turn_id = ?3 \
                  WHERE delivery_id = ?1 AND state = 'waiting'",
-                params![id, session_id, turn_id],
+                params![id, thread_id, turn_id],
             )
             .map_err(failed)?;
         transaction.commit().map_err(failed)
@@ -639,7 +688,7 @@ mod tests {
 
     fn queue(key: Option<&str>) -> Work {
         Work::Queue(AddQueuedRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             prompt: vec![ContentBlock::from("hello".to_owned())],
             key: key.map(str::to_owned),
             caller: None,
@@ -667,6 +716,84 @@ mod tests {
             let mode = std::fs::metadata(&path).expect("file").permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    /// A database from before the Host protocol said thread (WVE-200): its
+    /// columns said session, and so did the work it wrote down and the Hosts' answers.
+    #[test]
+    fn a_version_2_database_says_thread_once_migrated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dispatcher.db");
+        let connection = Connection::open(&path).expect("created");
+        for (version, migration) in (1i64..).zip(&MIGRATIONS[..5]) {
+            connection.execute_batch(migration).expect("migrated");
+            connection
+                .pragma_update(None, "user_version", version)
+                .expect("versioned");
+        }
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO hosts (host_id, name, url, device_id, paired_at)
+                    VALUES ('h1', 'host h1', '', 'd-h1', 1);
+                INSERT INTO deliveries (id, host_id, work, state, created_at, answer) VALUES
+                    ('d-run', 'h1', '{"run": {"agentId": "fake", "cwd": "/code",
+                        "sessionId": "s-1", "prompt": [], "policy": {}, "key": "k-run",
+                        "caller": {"sessionId": "s-9", "host": "h2"}}}',
+                        'delivered', 1, '{"sessionId": "s-1", "turnId": "t-1"}'),
+                    ('d-queue', 'h1', '{"queue": {"sessionId": "s-1", "prompt": [],
+                        "key": "k-queue"}}', 'pending', 2, NULL),
+                    ('d-report', 'h1', '{"report": {"sessionId": "s-9", "about":
+                        {"sessionId": "s-1", "host": "h1"}, "text": "done", "key": "k-report"}}',
+                        'pending', 3, NULL);
+                INSERT INTO schedules (id, name, cron, zone, host_id, run, missed, overlap,
+                        created_at, considered_until)
+                    VALUES ('sc-1', 'daily', '0 9 * * *', 'UTC', 'h1',
+                        '{"agentId": "fake", "cwd": "/code", "prompt": [], "policy": {}}',
+                        'skip', 'skip', 1, 1);
+                INSERT INTO occurrences (id, schedule_id, scheduled_at, late, manual, state,
+                        session_id, turn_id, recorded_at)
+                    VALUES ('o-1', 'sc-1', 1, 0, 0, 'started', 's-1', 't-1', 1);
+                INSERT INTO follows (id, host_id, session_id, turn_id, calling_host, caller,
+                        delegated, created_at)
+                    VALUES ('f-1', 'h1', 's-1', 't-1', 'h2', 's-9', 1, 1);
+                "#,
+            )
+            .expect("version-2 rows");
+        drop(connection);
+
+        let store = Store::open(&path).expect("migrated");
+        let run = store.delivery("d-run").expect("read").expect("there");
+        let Work::Run(request) = &run.work else {
+            panic!("{:?}", run.work);
+        };
+        assert_eq!(request.thread_id, Some("s-1".into()));
+        assert_eq!(
+            request
+                .caller
+                .as_ref()
+                .map(|caller| caller.thread_id.clone()),
+            Some("s-9".into())
+        );
+        let answer = run.answer.expect("an answer");
+        assert_eq!(answered_thread(&answer), Some("s-1"));
+        assert_eq!(
+            run.work.started(&answer),
+            Some(("s-1".to_owned(), "t-1".to_owned()))
+        );
+        let pending = store.pending("h1").expect("pending");
+        let works: Vec<&Work> = pending.iter().map(|delivery| &delivery.work).collect();
+        assert!(
+            matches!(works[..], [Work::Queue(queued), Work::Report(report)]
+                if queued.thread_id == "s-1".into()
+                    && report.thread_id == "s-9".into()
+                    && report.about.thread_id == "s-1".into()),
+            "{works:?}"
+        );
+        let occurrences = store.occurrences(Some("sc-1"), 10).expect("occurrences");
+        assert_eq!(occurrences[0].thread_id, Some("s-1".into()));
+        let follows = store.follows("h1").expect("follows");
+        assert_eq!(follows[0].thread_id, "s-1");
     }
 
     #[test]

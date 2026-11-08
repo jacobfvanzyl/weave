@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&RenameThreadRequest\n{ thread_id: \"s-1\".into(), title: \"Parser fixes\".to_owned(), })"
+---
+{
+  "method": "thread/rename",
+  "params": {
+    "threadId": "s-1",
+    "title": "Parser fixes"
+  }
+}

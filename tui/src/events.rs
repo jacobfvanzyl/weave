@@ -1,5 +1,5 @@
-//! What the chat is told about its session. The app turns the Host's messages into these,
-//! marking what replays the session's journal apart from what happens now.
+//! What the chat is told about its thread. The app turns the Host's messages into these,
+//! marking what replays the thread's journal apart from what happens now.
 
 use std::time::Duration;
 
@@ -10,7 +10,6 @@ use weave_acp_core::schema::Error;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::RequestPermissionRequest;
 use weave_acp_core::schema::SessionConfigOption;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionModeState;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::TerminalExitStatus;
@@ -18,7 +17,8 @@ use weave_acp_core::schema::TerminalId;
 use weave_host_protocol::agents::AgentRelease;
 use weave_host_protocol::pending::PendingId;
 use weave_host_protocol::pending::Resolution;
-use weave_host_protocol::sessions::SessionAgent;
+use weave_host_protocol::threads::ThreadAgent;
+use weave_host_protocol::threads::ThreadId;
 
 /// A permission request waiting on a person, as the Host keeps it.
 #[derive(Clone, Debug)]
@@ -35,7 +35,7 @@ pub struct ElicitationAsk {
 }
 
 pub enum ChatEvent {
-    /// A `session/update`, for this session or one of its subagents.
+    /// A `session/update`, for this thread or one of its subagents.
     SessionUpdate(SessionNotification),
     PermissionRequested(PermissionAsk),
     ElicitationRequested(ElicitationAsk),
@@ -51,7 +51,7 @@ pub enum ChatEvent {
     /// A turn started with `prompt`: another client's, a headless run's, or one in the replay.
     /// This client's own prompts are shown as they're sent instead.
     TurnStarted {
-        session_id: SessionId,
+        thread_id: ThreadId,
         prompt: Vec<ContentBlock>,
         /// How long ago, for a live one.
         elapsed: Duration,
@@ -62,17 +62,17 @@ pub enum ChatEvent {
     },
     /// A message joined the running turn: this client's, another's, or one in the replay.
     TurnSteered {
-        session_id: SessionId,
+        thread_id: ThreadId,
         prompt: Vec<ContentBlock>,
     },
     TurnEnded {
-        session_id: SessionId,
+        thread_id: ThreadId,
         result: Result<PromptResponse, Error>,
         replayed: bool,
     },
     /// A turn was already running when this client attached.
     TurnRunning {
-        session_id: SessionId,
+        thread_id: ThreadId,
         elapsed: Duration,
     },
     TerminalOutput {
@@ -83,37 +83,37 @@ pub enum ChatEvent {
         terminal_id: TerminalId,
         status: TerminalExitStatus,
     },
-    /// The session's agent was started again (`session/reopen`): on a new version, or on the
-    /// one it ran when that one `failed` to take the session up.
+    /// The thread's agent was started again (`thread/reopen`): on a new version, or on the
+    /// one it ran when that one `failed` to take the thread up.
     AgentReopened {
-        agent: Box<SessionAgent>,
+        agent: Box<ThreadAgent>,
         previous: Option<AgentRelease>,
         modes: Option<SessionModeState>,
         config_options: Vec<SessionConfigOption>,
         failed: Option<String>,
         replayed: bool,
     },
-    /// The session closed: its agent exited, or it was closed for everyone.
-    SessionEnded {
-        session_id: SessionId,
+    /// The thread closed: its agent exited, or it was closed for everyone.
+    ThreadEnded {
+        thread_id: ThreadId,
         reason: String,
     },
     /// The connection to the Host ended. Carries the reason unless it closed cleanly.
     Disconnected(Option<Error>),
-    /// Something the Host tells the session's clients, such as why its agent can't use client
+    /// Something the Host tells the thread's clients, such as why its agent can't use client
     /// tools.
     Notice(String),
-    /// The session was renamed through the Host. `by` says who, to start a sentence: "You",
+    /// The thread was renamed through the Host. `by` says who, to start a sentence: "You",
     /// "The agent", or another client or its device.
     Renamed {
         title: String,
         by: String,
     },
-    /// The session's work goes on in another, its successor, which a client named (WVE-168).
+    /// The thread's work goes on in another, its successor, which a client named (WVE-168).
     ContinuedIn {
-        successor: SessionId,
+        successor: ThreadId,
     },
-    /// A prompt joined the session's queue in the Host (WVE-107); `mine` when this client
+    /// A prompt joined the thread's queue in the Host (WVE-107); `mine` when this client
     /// added it.
     Queued {
         id: String,

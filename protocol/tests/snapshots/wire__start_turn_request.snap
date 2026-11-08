@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&StartTurnRequest\n{ session_id: \"s-1\".into(), prompt: vec![text(\"hello\")], })"
+expression: "message(&StartTurnRequest\n{ thread_id: \"s-1\".into(), prompt: vec![text(\"hello\")], key: None, })"
 ---
 {
   "method": "turn/start",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "prompt": [
       {
         "type": "text",

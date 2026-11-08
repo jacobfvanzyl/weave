@@ -1,6 +1,6 @@
 //! The thread's status panel, which `/thread` opens in place of the composer: the thread's MCP
-//! servers as the Host reports them (WVE-160; `SessionState.mcpServers`, kept current by
-//! `session/changed`), with a pointer to the agent's own `/mcp` for the servers only the agent
+//! servers as the Host reports them (WVE-160; `ThreadState.mcpServers`, kept current by
+//! `thread/changed`), with a pointer to the agent's own `/mcp` for the servers only the agent
 //! knows of, and its worktree's terminals (WVE-167; `terminals/watch`). weave never runs or
 //! parses the agent's `/mcp`.
 //!
@@ -21,13 +21,13 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use weave_acp_core::schema::SessionId;
 use weave_host_protocol::mcp::McpServerSource;
 use weave_host_protocol::mcp::McpServerState;
 use weave_host_protocol::mcp::McpServerStatus;
 use weave_host_protocol::mcp::McpTransport;
 use weave_host_protocol::terminals::ProgramState;
 use weave_host_protocol::terminals::Terminal;
+use weave_host_protocol::threads::ThreadId;
 
 use crate::history_cell::dim;
 use crate::style;
@@ -52,7 +52,7 @@ pub struct PanelView<'a> {
     /// The TUI runs in Rex, so terminals show in panes.
     pub in_rex: bool,
     /// The thread on screen, whose terminals come first.
-    pub session: Option<&'a SessionId>,
+    pub thread: Option<&'a ThreadId>,
 }
 
 impl PanelView<'_> {
@@ -63,8 +63,8 @@ impl PanelView<'_> {
             return Vec::new();
         };
         let own = |terminal: &&Terminal| {
-            self.session
-                .is_some_and(|session| terminal.opened_from.as_ref() == Some(session))
+            self.thread
+                .is_some_and(|thread| terminal.opened_from.as_ref() == Some(thread))
         };
         let (mut first, rest): (Vec<&Terminal>, Vec<&Terminal>) = terminals.iter().partition(own);
         first.extend(rest);
@@ -511,7 +511,7 @@ mod tests {
             id: id.to_owned(),
             scope: "/repo".into(),
             label: None,
-            opened_from: opened_from.map(|id| SessionId::from(id.to_owned())),
+            opened_from: opened_from.map(|id| ThreadId::from(id.to_owned())),
             title: None,
             pwd: Some("/repo".into()),
             process: None,
@@ -526,7 +526,7 @@ mod tests {
         terminals: Option<&'a [Terminal]>,
         shown: &'a BTreeSet<String>,
         in_rex: bool,
-        session: Option<&'a SessionId>,
+        thread: Option<&'a ThreadId>,
     ) -> PanelView<'a> {
         PanelView {
             mcp_servers: Some(&[]),
@@ -534,7 +534,7 @@ mod tests {
             terminals,
             shown,
             in_rex,
-            session,
+            thread,
         }
     }
 
@@ -619,8 +619,8 @@ mod tests {
         });
         let terminals = [terminal("t-1", Some("s-other")), tests];
         let shown = BTreeSet::from(["t-2".to_owned()]);
-        let session = SessionId::from("s1");
-        let view = view(Some(&terminals), &shown, true, Some(&session));
+        let thread = ThreadId::from("s1");
+        let view = view(Some(&terminals), &shown, true, Some(&thread));
         let mut panel = ThreadPanel::default();
         let lines = text(&panel, &view, 90);
         let at = lines

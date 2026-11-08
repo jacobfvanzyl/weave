@@ -8,7 +8,7 @@ expression: "message(&HostCallNotification\n{\n    call_id: \"c-2\".to_owned(), 
     "callId": "c-2",
     "host": "studio",
     "call": {
-      "method": "session/run",
+      "method": "thread/run",
       "params": {
         "agentId": "codex",
         "cwd": "~/src/app",
@@ -25,7 +25,7 @@ expression: "message(&HostCallNotification\n{\n    call_id: \"c-2\".to_owned(), 
       }
     },
     "caller": {
-      "sessionId": "sess-a",
+      "threadId": "sess-a",
       "agentId": "claude",
       "cwd": "/Users/jaco/src/app",
       "policy": {

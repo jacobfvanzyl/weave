@@ -1,7 +1,7 @@
 //! `weave worktrees`: what worktrunk asks the weave Host before it removes a worktree, and
 //! adding that question to worktrunk's hooks (ADR 0019). A worktrunk `pre-remove` hook that
 //! fails stops the removal, so `wt remove`, `wt merge` and `wt step prune` leave a worktree be
-//! while one of its sessions runs a turn or waits on a person, as the Host's own
+//! while one of its threads runs a turn or waits on a person, as the Host's own
 //! `worktrees/remove` does.
 
 use std::path::Path;
@@ -26,7 +26,7 @@ pub const LOG: &str = "warn";
 const HOOK_NAME: &str = "weave";
 /// What the hook runs, in the worktree being removed.
 const HOOK_COMMAND: &str = "weave worktrees pre-remove";
-/// How long the Host may take to close a worktree's sessions.
+/// How long the Host may take to close a worktree's threads.
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Args)]
@@ -73,7 +73,7 @@ pub async fn command(args: WorktreesArgs) -> anyhow::Result<ExitCode> {
     }
 }
 
-/// Ask a running Host to let the worktree at `path` go. With no Host running, no session is
+/// Ask a running Host to let the worktree at `path` go. With no Host running, no thread is
 /// open, so nothing stands in the way.
 async fn pre_remove(path: &Path) -> anyhow::Result<ExitCode> {
     let paths = paths()?;

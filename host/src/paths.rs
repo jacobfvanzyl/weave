@@ -1,4 +1,4 @@
-//! Where the daemon keeps its socket, lock, log and session journals.
+//! Where the daemon keeps its socket, lock, log and thread journals.
 
 use std::path::PathBuf;
 
@@ -66,9 +66,10 @@ impl DaemonPaths {
         self.dir.join("daemon.log")
     }
 
-    /// One JSONL journal per session.
+    /// One JSONL journal per thread. Hosts of the Host protocol's version 2 kept them in
+    /// `sessions`, which a Host of version 3 moves here when it first starts (WVE-200).
     pub fn journals(&self) -> PathBuf {
-        self.dir.join("sessions")
+        self.dir.join("threads")
     }
 
     /// The Host's id and the devices it accepts remote clients from.
@@ -111,7 +112,7 @@ impl DaemonPaths {
 }
 
 /// `$XDG_RUNTIME_DIR`, or on Linux the directory systemd keeps for the user, which a login
-/// would have set it to: a session that sets nothing, as over Tailscale SSH or `su`, finds
+/// would have set it to: a thread that sets nothing, as over Tailscale SSH or `su`, finds
 /// the socket of a Host systemd started all the same.
 fn runtime_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
@@ -164,6 +165,6 @@ mod tests {
         let paths = DaemonPaths::in_dir("/tmp/weave-dev".into());
         assert_eq!(paths.socket, PathBuf::from("/tmp/weave-dev/daemon.sock"));
         assert_eq!(paths.lock(), PathBuf::from("/tmp/weave-dev/daemon.lock"));
-        assert_eq!(paths.journals(), PathBuf::from("/tmp/weave-dev/sessions"));
+        assert_eq!(paths.journals(), PathBuf::from("/tmp/weave-dev/threads"));
     }
 }

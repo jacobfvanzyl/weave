@@ -10,8 +10,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use pretty_assertions::assert_eq;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::ThreadListing;
 
 use crate::support::TestHost;
 use crate::support::weave_command;
@@ -84,8 +84,8 @@ fn a_run_whose_turn_is_cancelled_exits_5() {
     let host = TestHost::start();
     let running = host.command(&["run", "--agent", "fake", "slow 400"]);
     let running = thread::spawn(move || running_output(running));
-    let session = wait_for_running(&host);
-    let cancelled = host.weave(&["threads", "cancel", &session]);
+    let thread = wait_for_running(&host);
+    let cancelled = host.weave(&["threads", "cancel", &thread]);
     assert_eq!(cancelled.status.code(), Some(0));
     let output = running.join().expect("join");
     assert_eq!(
@@ -121,7 +121,7 @@ fn wait_for_running(host: &TestHost) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let listed = host.weave(&["threads", "list", "--json"]);
-        let threads: Vec<SessionListing> =
+        let threads: Vec<ThreadListing> =
             serde_json::from_slice(&listed.stdout).expect("threads as JSON");
         if let Some(thread) = threads
             .iter()

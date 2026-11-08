@@ -4,7 +4,7 @@
 //! connection. The Dispatcher sends the request to the named Host only while it's connected
 //! there, naming the calling thread as its `caller`, and answers with `service/answerTool`.
 //!
-//! A call that starts a turn, `session/run` or `queue/add`, is written down first, as a
+//! A call that starts a turn, `thread/run` or `queue/add`, is written down first, as a
 //! delivery under a key made from the calling Host, thread and the agent's own key, so it
 //! lands once however often it's sent. One whose answer is lost is sent again on the named
 //! Host's next connection, as any delivery is, and the calling thread is told then whether it
@@ -16,16 +16,16 @@
 use std::sync::Arc;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 use weave_host_client::HostHandle;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::reports::why;
-use weave_host_protocol::sessions::OtherThread;
-use weave_host_protocol::sessions::ReportSessionRequest;
-use weave_host_protocol::sessions::RunResponse;
+use weave_host_protocol::threads::OtherThread;
+use weave_host_protocol::threads::ReportThreadRequest;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::tools::AnswerToolRequest;
 use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::HostCall;
@@ -39,6 +39,7 @@ use crate::store::Call;
 use crate::store::Delivery;
 use crate::store::StoredHost;
 use crate::store::Work;
+use crate::store::answered_thread;
 
 /// Answer `call`, which came from `calling` over `from`.
 pub(crate) async fn answer(
@@ -78,7 +79,7 @@ async fn respond(
     let host = host.ok_or("A call to another Host names it.")?;
     let named = resolve(shared, calling, host)?;
     if let Some(from) = shared
-        .thread(&calling.host_id, &caller.session_id)
+        .thread(&calling.host_id, &caller.thread_id)
         .and_then(|listing| listing.started_by_host)
     {
         return Err(format!(
@@ -95,15 +96,15 @@ async fn respond(
     })?;
     let there = |error: Error| format!("On {}: {}", named.name, why(&error));
     let me = OtherThread {
-        session_id: caller.session_id.clone(),
+        thread_id: caller.thread_id.clone(),
         host: calling.host_id.clone(),
         host_name: Some(calling.name.clone()),
     };
     match call {
         HostCall::ListHosts => hosts(shared, calling),
-        HostCall::ListSessions(request) => to_text(&handle.send(request).await.map_err(there)?),
+        HostCall::ListThreads(request) => to_text(&handle.send(request).await.map_err(there)?),
         HostCall::ListAgents(request) => to_text(&handle.send(request).await.map_err(there)?),
-        HostCall::GetSession(request) => to_text(&handle.send(request).await.map_err(there)?),
+        HostCall::GetThread(request) => to_text(&handle.send(request).await.map_err(there)?),
         HostCall::Cancel(request) => to_text(&handle.send(request).await.map_err(there)?),
         HostCall::Steer(mut request) => {
             request.caller = Some(me);
@@ -113,10 +114,10 @@ async fn respond(
         HostCall::Queue(mut request) => {
             request.caller = Some(me);
             request.origin = None;
-            request.key = Some(key(calling, &caller.session_id, request.key));
+            request.key = Some(key(calling, &caller.thread_id, request.key));
             let call = Call {
                 calling_host: calling.host_id.clone(),
-                caller: caller.session_id.to_string(),
+                caller: caller.thread_id.to_string(),
                 delegated: false,
                 lost: false,
             };
@@ -126,18 +127,18 @@ async fn respond(
                 &handle,
                 Work::Queue(request),
                 &call,
-                "prompt_session",
+                "prompt_thread",
             )
             .await?;
             to_text(&answer)
         }
         HostCall::Run(request) => {
             let mut request = *request;
-            let delegated = request.session_id.is_none();
+            let delegated = request.thread_id.is_none();
             if delegated && let Some(room) = room {
                 let running = shared
                     .store
-                    .delegated_running(&calling.host_id, &caller.session_id.0)
+                    .delegated_running(&calling.host_id, &caller.thread_id.0)
                     .map_err(|why| {
                         format!("The Dispatcher couldn't count this thread's threads: {why}.")
                     })?;
@@ -146,7 +147,7 @@ async fn respond(
                         "This thread may start no more delegated threads now: {running} of its \
                          run on other Hosts, and with those on its own Host that's as many as \
                          its Host allows (`[delegation] running`). Wait to hear that one \
-                         finished, or cancel one with cancel_session_turn."
+                         finished, or cancel one with cancel_thread_turn."
                     ));
                 }
             }
@@ -154,11 +155,11 @@ async fn respond(
             request.caller = Some(me);
             request.origin = None;
             request.attach = false;
-            request.key = Some(key(calling, &caller.session_id, request.key));
+            request.key = Some(key(calling, &caller.thread_id, request.key));
             let policy = request.policy.clone();
             let call = Call {
                 calling_host: calling.host_id.clone(),
-                caller: caller.session_id.to_string(),
+                caller: caller.thread_id.to_string(),
                 delegated,
                 lost: false,
             };
@@ -168,13 +169,13 @@ async fn respond(
                 &handle,
                 Work::Run(request),
                 &call,
-                "start_session",
+                "start_thread",
             )
             .await?;
             let ran: RunResponse = serde_json::from_value(answer)
                 .map_err(|error| format!("{} answered oddly: {error}.", named.name))?;
             to_text(&Started {
-                session_id: ran.session_id,
+                thread_id: ran.thread_id,
                 turn_id: ran.turn_id,
                 policy: ran.policy.unwrap_or(policy),
                 host: named.host_id.clone(),
@@ -183,15 +184,15 @@ async fn respond(
     }
 }
 
-/// What `start_session` on another Host answers.
+/// What `start_thread` on another Host answers.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Started {
-    session_id: SessionId,
-    /// The turn it started, for read_session.
+    thread_id: ThreadId,
+    /// The turn it started, for read_thread.
     #[serde(skip_serializing_if = "Option::is_none")]
     turn_id: Option<TurnId>,
-    /// The policy the session runs under, within the calling session's.
+    /// The policy the thread runs under, within the calling thread's.
     policy: PermissionPolicy,
     /// The Host it's on.
     host: String,
@@ -255,14 +256,14 @@ pub(crate) fn settled(
             return;
         }
     };
-    let (session_id, what) = match &delivery.work {
+    let (thread_id, what) = match &delivery.work {
         Work::Run(request) => (
-            request.session_id.clone(),
-            "the thread your thread asked start_session for",
+            request.thread_id.clone(),
+            "the thread your thread asked start_thread for",
         ),
         Work::Queue(request) => (
-            Some(request.session_id.clone()),
-            "the prompt your thread asked prompt_session for",
+            Some(request.thread_id.clone()),
+            "the prompt your thread asked prompt_thread for",
         ),
         _ => return,
     };
@@ -273,26 +274,27 @@ pub(crate) fn settled(
         ),
         (None, answer) => {
             let field = |name: &str| answer.and_then(|answer| answer.get(name)?.as_str());
-            let session = field("sessionId")
+            let thread = answer
+                .and_then(answered_thread)
                 .map(str::to_owned)
-                .or_else(|| session_id.as_ref().map(ToString::to_string))
+                .or_else(|| thread_id.as_ref().map(ToString::to_string))
                 .unwrap_or_default();
             let turn = field("turnId").or_else(|| field("queuedId")).unwrap_or("?");
             format!(
-                "[weave] {} took {what} after all: thread {session} there has turn {turn}, \
+                "[weave] {} took {what} after all: thread {thread} there has turn {turn}, \
                  and you'll hear how it ends.",
                 named.name
             )
         }
     };
     let about = OtherThread {
-        session_id: delivery
+        thread_id: delivery
             .answer
             .as_ref()
-            .and_then(|answer| answer.get("sessionId")?.as_str())
-            .map(|id| SessionId::new(id.to_owned()))
-            .or(session_id)
-            .unwrap_or_else(|| SessionId::new(String::new())),
+            .and_then(answered_thread)
+            .map(|id| ThreadId::new(id.to_owned()))
+            .or(thread_id)
+            .unwrap_or_else(|| ThreadId::new(String::new())),
         host: named.host_id.clone(),
         host_name: Some(named.name.clone()),
     };
@@ -301,8 +303,8 @@ pub(crate) fn settled(
 
 /// The report to `caller`, on `calling_host`, of `text` about `about`.
 pub(crate) fn report_work(caller: &str, about: OtherThread, text: String) -> Work {
-    Work::Report(ReportSessionRequest {
-        session_id: SessionId::new(caller.to_owned()),
+    Work::Report(ReportThreadRequest {
+        thread_id: ThreadId::new(caller.to_owned()),
         about,
         text,
         key: None,
@@ -391,7 +393,7 @@ fn resolve(shared: &Shared, calling: &StoredHost, by: &str) -> Result<StoredHost
 /// The request key the named Host gets for `key`, an agent's in `caller` on `calling`, or a new
 /// one: every calling Host's threads are one client to the named Host, whose keys are its own
 /// across clients, so the key names the Host and thread too, and two agents' keys never meet.
-fn key(calling: &StoredHost, caller: &SessionId, key: Option<String>) -> String {
+fn key(calling: &StoredHost, caller: &ThreadId, key: Option<String>) -> String {
     use base64::Engine as _;
     use sha2::Digest as _;
     let key = key.unwrap_or_else(crate::store::random_id);

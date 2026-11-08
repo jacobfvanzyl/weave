@@ -1,11 +1,11 @@
 //! A remote client for trying the Host's WebSocket by hand (WVE-90's live check): pair a
-//! device, list the Host's sessions, and attach to one, prompting it and reconnecting after a
+//! device, list the Host's threads, and attach to one, prompting it and reconnecting after a
 //! dropped network from the last position seen.
 //!
 //! ```text
 //! cargo run -p weave-host-client --example remote -- pair wss://mac.example.ts.net:7341 <code>
-//! cargo run -p weave-host-client --example remote -- sessions
-//! cargo run -p weave-host-client --example remote -- attach <session-id> [prompt]
+//! cargo run -p weave-host-client --example remote -- threads
+//! cargo run -p weave-host-client --example remote -- attach <thread-id> [prompt]
 //! ```
 //!
 //! The device's key is kept, unencrypted, in `$WEAVE_REMOTE_DEVICE` (by default
@@ -27,12 +27,12 @@ use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::remote::DeviceKey;
 use weave_host_client::remote::connect_websocket;
-use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::host::StatusRequest;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::JournalPosition;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::JournalPosition;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 
@@ -128,12 +128,12 @@ async fn main() {
         .as_slice()
     {
         ["pair", url, code] => pair(url, code).await,
-        ["sessions"] => sessions().await,
-        ["attach", session_id] => attach(session_id, None).await,
-        ["attach", session_id, prompt] => attach(session_id, Some(prompt)).await,
+        ["threads"] => threads().await,
+        ["attach", thread_id] => attach(thread_id, None).await,
+        ["attach", thread_id, prompt] => attach(thread_id, Some(prompt)).await,
         _ => {
             eprintln!(
-                "usage: remote pair <url> <code> | remote sessions | remote attach <session-id> [prompt]"
+                "usage: remote pair <url> <code> | remote threads | remote attach <thread-id> [prompt]"
             );
             std::process::exit(2);
         }
@@ -179,7 +179,7 @@ fn hostname() -> String {
         .unwrap_or_else(|| "this computer".to_owned())
 }
 
-async fn sessions() {
+async fn threads() {
     let saved = load();
     let (connection, _events, _) = connect(&saved)
         .await
@@ -192,19 +192,19 @@ async fn sessions() {
         "weave Host {} on {}, as {}:",
         status.version, saved.url, saved.name
     );
-    for session in status.sessions {
-        let title = session.info.title.unwrap_or_default();
+    for thread in status.threads {
+        let title = thread.info.title.unwrap_or_default();
         println!(
             "  {}  {:?}  {}  {}",
-            session.info.session_id, session.activity, session.agent_id, title
+            thread.info.session_id, thread.activity, thread.agent_id, title
         );
     }
     connection.shutdown().await;
 }
 
-/// Attach to `session_id` and print what arrives, prompting it once if asked, and attach
+/// Attach to `thread_id` and print what arrives, prompting it once if asked, and attach
 /// again after the last position seen whenever the connection drops.
-async fn attach(session_id: &str, mut prompt: Option<&str>) {
+async fn attach(thread_id: &str, mut prompt: Option<&str>) {
     let saved = load();
     let mut position: Option<JournalPosition> = None;
     let mut drop_after: Option<usize> = std::env::var("WEAVE_REMOTE_DROP_AFTER")
@@ -220,8 +220,8 @@ async fn attach(session_id: &str, mut prompt: Option<&str>) {
             }
         };
         let attached = connection
-            .send(AttachSessionRequest {
-                session_id: session_id.to_owned().into(),
+            .send(AttachThreadRequest {
+                thread_id: thread_id.to_owned().into(),
                 after: position.clone(),
                 agent_id: None,
                 cwd: None,
@@ -229,7 +229,7 @@ async fn attach(session_id: &str, mut prompt: Option<&str>) {
                 observe: false,
             })
             .await
-            .expect("session/attach");
+            .expect("thread/attach");
         let journal = attached.state.journal.id.clone();
         eprintln!(
             "[attached{}; replaying from {}]",
@@ -243,7 +243,7 @@ async fn attach(session_id: &str, mut prompt: Option<&str>) {
         if let Some(text) = prompt.take() {
             connection
                 .send(StartTurnRequest {
-                    session_id: session_id.to_owned().into(),
+                    thread_id: thread_id.to_owned().into(),
                     prompt: vec![text.to_owned().into()],
                     key: None,
                 })
@@ -284,11 +284,11 @@ async fn attach(session_id: &str, mut prompt: Option<&str>) {
     }
 }
 
-fn show(event: &SessionEvent) {
+fn show(event: &ThreadEvent) {
     use agent_client_protocol::schema::v1::ContentBlock;
     use agent_client_protocol::schema::v1::SessionUpdate;
     match event {
-        SessionEvent::TurnStarted { prompt, origin, .. } => {
+        ThreadEvent::TurnStarted { prompt, origin, .. } => {
             let text: String = prompt
                 .iter()
                 .filter_map(|block| match block {
@@ -298,7 +298,7 @@ fn show(event: &SessionEvent) {
                 .collect();
             println!("\n> {text}   [{origin:?}]");
         }
-        SessionEvent::Update { notification } => {
+        ThreadEvent::Update { notification } => {
             if let SessionUpdate::AgentMessageChunk(chunk) = &notification.update
                 && let ContentBlock::Text(text) = &chunk.content
             {
@@ -307,7 +307,7 @@ fn show(event: &SessionEvent) {
                 let _ = std::io::stdout().flush();
             }
         }
-        SessionEvent::TurnEnded { .. } => println!("\n[turn ended]"),
+        ThreadEvent::TurnEnded { .. } => println!("\n[turn ended]"),
         _ => {}
     }
 }

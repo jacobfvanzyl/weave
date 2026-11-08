@@ -1,39 +1,39 @@
 //! Starting, steering and cancelling turns. A turn's end reaches every attached client as a
 //! `turnEnded` event, whoever started it.
 //!
-//! Request keys: `session/run`, `turn/start` and `queue/add` take a `key` the caller chooses, so
+//! Request keys: `thread/run`, `turn/start` and `queue/add` take a `key` the caller chooses, so
 //! a request sent again after a dropped connection answers as the first did and starts nothing.
 
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Empty;
-use crate::sessions::OtherThread;
-use crate::sessions::ServiceOrigin;
+use crate::threads::OtherThread;
+use crate::threads::ServiceOrigin;
+use crate::threads::ThreadId;
 
 /// A turn, by the id of the prompt that started it: the prompt's `queuedId` when it came
 /// through the queue (so it's known before the turn starts), else one the Host gives it. Unique
-/// in its session. Turns a Host journaled before it gave ids have none.
+/// in its thread. Turns a Host journaled before it gave ids have none.
 pub type TurnId = String;
 
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that names turns: [`TurnId`]s
 /// in `turnStarted` events, running turns and the answers that start or join a turn,
-/// `sessions/get`'s `turnId`, the [`crate::sessions::TurnState`] of the turn it reads, and
-/// `sessions/list`'s `activity`.
+/// `threads/get`'s `turnId`, the [`crate::threads::TurnState`] of the turn it reads, and
+/// `threads/list`'s `activity`.
 pub const TURN_IDS_FEATURE: &str = "turnIds";
 
-/// `turn/start`: send a prompt. Answered once the turn has started. The session must be
-/// open; it may be a subagent session.
+/// `turn/start`: send a prompt. Answered once the turn has started. The thread must be
+/// open; it may be a subagent thread.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "turn/start", response = StartTurnResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct StartTurnRequest {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     pub prompt: Vec<ContentBlock>,
     /// Makes it safe to send again (feature [`REQUEST_KEYS_FEATURE`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,7 +52,7 @@ pub struct StartTurnResponse {
 }
 
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that takes request keys: the
-/// `key` of `session/run`, `turn/start` and `queue/add`. A repeat, the same method with the same
+/// `key` of `thread/run`, `turn/start` and `queue/add`. A repeat, the same method with the same
 /// key, answers as the first did and starts nothing, across Host restarts too; one whose method
 /// or params differ fails with `key_reused`. A request that fails doesn't use its key up.
 pub const REQUEST_KEYS_FEATURE: &str = "requestKeys";
@@ -63,7 +63,7 @@ pub const MAX_KEY: usize = 200;
 /// The [`crate::hello::HelloResponse::features`] entry of a Host that takes `turn/steer`.
 pub const STEER_FEATURE: &str = "turn/steer";
 
-/// `turn/steer`: a message for the session's running turn, which joins it rather than
+/// `turn/steer`: a message for the thread's running turn, which joins it rather than
 /// starting a turn of its own. Every attached client sees it as a `turnSteered` event, in
 /// order with the turn's updates. It needs an agent that takes steering, as its `initialize`
 /// response says.
@@ -72,7 +72,7 @@ pub const STEER_FEATURE: &str = "turn/steer";
 #[request(method = "turn/steer", response = SteerTurnResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct SteerTurnRequest {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     pub prompt: Vec<ContentBlock>,
     /// A service's only (feature `otherHosts`): the thread on another Host whose agent asks,
     /// which the steer's origin names.
@@ -106,11 +106,11 @@ pub enum SteerOutcome {
     NotRunning,
 }
 
-/// `turn/cancel`: cancel the session's running turn and its pending requests.
+/// `turn/cancel`: cancel the thread's running turn and its pending requests.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "turn/cancel", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelTurnRequest {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
 }

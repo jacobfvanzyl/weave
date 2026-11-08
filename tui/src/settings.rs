@@ -1,4 +1,4 @@
-//! Session settings: the agent's config options (or, from agents without them, its modes),
+//! Thread settings: the agent's config options (or, from agents without them, its modes),
 //! shown in a picker and cycled from the keyboard.
 //!
 //! The protocol prefers config options; modes are used only when an agent offers no config
@@ -91,7 +91,7 @@ pub fn any(options: &[SessionConfigOption], modes: Option<&SessionModeState>) ->
     options.iter().any(is_supported) || modes.is_some_and(|modes| !modes.available_modes.is_empty())
 }
 
-/// The change that moves the session to its next mode, as Shift+Tab does.
+/// The change that moves the thread to its next mode, as Shift+Tab does.
 pub fn next_mode(
     options: &[SessionConfigOption],
     modes: Option<&SessionModeState>,

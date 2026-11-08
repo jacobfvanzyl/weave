@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&SessionEventNotification\n{\n    session_id: \"s-1\".into(), seq: 49, at: 1_760_180_009_000, event:\n    SessionEvent::AgentReopened\n    {\n        agent: Box::new(session_agent(\"0.32.0\")), previous:\n        Some(release(\"0.31.0\")), modes: None, config_options: Vec::new(),\n        failed: None,\n    },\n})"
+expression: "message(&ThreadEventNotification\n{\n    thread_id: \"s-1\".into(), seq: 49, at: 1_760_180_009_000, event:\n    ThreadEvent::AgentReopened\n    {\n        agent: Box::new(thread_agent(\"0.32.0\")), previous:\n        Some(release(\"0.31.0\")), modes: None, config_options: Vec::new(),\n        failed: None,\n    },\n})"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 49,
     "at": 1760180009000,
     "event": {

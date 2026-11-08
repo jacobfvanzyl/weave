@@ -1,7 +1,7 @@
 //! A client of the weave Host: connecting and saying hello, typed requests, and everything the
 //! Host sends, in the order it sent it.
 //!
-//! Notifications arrive as [`HostEvent`]s on one channel. Opening a session with
+//! Notifications arrive as [`HostEvent`]s on one channel. Opening a thread with
 //! [`HostHandle::open`] answers on that channel too, ahead of the events that follow the
 //! answer on the wire, so a client knows whether to reset its transcript before the replay
 //! arrives.
@@ -33,8 +33,8 @@ use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::ElicitationCompletedNotification;
-use weave_host_protocol::events::SessionChangedNotification;
-use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::events::ThreadChangedNotification;
+use weave_host_protocol::events::ThreadEventNotification;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::hello::ChallengeRequest;
 use weave_host_protocol::hello::ClientCapabilities;
@@ -44,14 +44,14 @@ use weave_host_protocol::hello::HelloRequest;
 use weave_host_protocol::hello::HelloResponse;
 use weave_host_protocol::pending::PendingAddedNotification;
 use weave_host_protocol::pending::PendingResolvedNotification;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::Replay;
-use weave_host_protocol::sessions::SessionRemovedNotification;
-use weave_host_protocol::sessions::SessionState;
-use weave_host_protocol::sessions::SessionUpdatedNotification;
 use weave_host_protocol::terminals::TerminalRemovedNotification;
 use weave_host_protocol::terminals::TerminalUpdatedNotification;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::Replay;
+use weave_host_protocol::threads::ThreadRemovedNotification;
+use weave_host_protocol::threads::ThreadState;
+use weave_host_protocol::threads::ThreadUpdatedNotification;
 use weave_host_protocol::tools::HostCallNotification;
 use weave_host_protocol::tools::ToolCallCancelledNotification;
 use weave_host_protocol::tools::ToolCallNotification;
@@ -61,28 +61,28 @@ pub use crate::remote::Credentials;
 /// Everything the Host sends, in order.
 #[derive(Debug)]
 pub enum HostEvent {
-    /// A journaled event of a session this client is attached to.
-    Event(Box<SessionEventNotification>),
-    Changed(SessionChangedNotification),
+    /// A journaled event of a thread this client is attached to.
+    Event(Box<ThreadEventNotification>),
+    Changed(ThreadChangedNotification),
     PendingAdded(Box<PendingAddedNotification>),
     PendingResolved(PendingResolvedNotification),
     ElicitationCompleted(ElicitationCompletedNotification),
     /// A device took the offer this client made (`devices/offer`).
     DevicePaired(DevicePairedNotification),
-    /// A newer version of an attached session's agent is out.
+    /// A newer version of an attached thread's agent is out.
     UpdateAvailable(UpdateAvailableNotification),
-    /// A session appeared or changed, while this client watches the Host's sessions.
-    SessionUpdated(Box<SessionUpdatedNotification>),
-    /// A session went away, while this client watches the Host's sessions.
-    SessionRemoved(SessionRemovedNotification),
+    /// A thread appeared or changed, while this client watches the Host's threads.
+    ThreadUpdated(Box<ThreadUpdatedNotification>),
+    /// A thread went away, while this client watches the Host's threads.
+    ThreadRemoved(ThreadRemovedNotification),
     /// A terminal started or changed, in a scope this client watches.
     TerminalUpdated(Box<TerminalUpdatedNotification>),
     /// A terminal ended, in a scope this client watches.
     TerminalRemoved(TerminalRemovedNotification),
-    /// A session's agent called a tool this service declared (`service/toolCall`); answer it
+    /// A thread's agent called a tool this service declared (`service/toolCall`); answer it
     /// with `service/answerTool`.
     ToolCall(Box<ToolCallNotification>),
-    /// A session's agent called a Host tool naming another Host, and this service said it
+    /// A thread's agent called a Host tool naming another Host, and this service said it
     /// reaches the person's Hosts (`service/hostCall`); answer it with `service/answerTool`.
     HostCall(Box<HostCallNotification>),
     /// The agent stopped waiting for a call to this service.
@@ -90,25 +90,25 @@ pub enum HostEvent {
     /// The answer to [`HostHandle::open`], ahead of the events that follow it.
     Opened {
         tag: u64,
-        result: Result<Box<OpenedSession>, Error>,
+        result: Result<Box<OpenedThread>, Error>,
     },
     /// The connection ended. Carries the reason unless it closed cleanly.
     Disconnected(Option<Error>),
 }
 
-/// A session opened by [`HostHandle::open`], with this client attached.
+/// A thread opened by [`HostHandle::open`], with this client attached.
 #[derive(Clone, Debug)]
-pub struct OpenedSession {
-    pub state: SessionState,
-    /// What the replay that follows covers; none for a new session.
+pub struct OpenedThread {
+    pub state: ThreadState,
+    /// What the replay that follows covers; none for a new thread.
     pub replay: Option<Replay>,
 }
 
-/// A session to open: a new one, or one by id.
+/// A thread to open: a new one, or one by id.
 #[derive(Clone, Debug)]
 pub enum Open {
-    Create(CreateSessionRequest),
-    Attach(AttachSessionRequest),
+    Create(CreateThreadRequest),
+    Attach(AttachThreadRequest),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -177,8 +177,8 @@ impl HostConnection {
         let on_completed = events.clone();
         let on_paired = events.clone();
         let on_update = events.clone();
-        let on_session_updated = events.clone();
-        let on_session_removed = events.clone();
+        let on_thread_updated = events.clone();
+        let on_thread_removed = events.clone();
         let on_terminal_updated = events.clone();
         let on_terminal_removed = events.clone();
         let on_tool_call = events.clone();
@@ -190,14 +190,14 @@ impl HostConnection {
             .builder()
             .name("weave-host-client")
             .on_receive_notification(
-                async move |notification: SessionEventNotification, _cx| {
+                async move |notification: ThreadEventNotification, _cx| {
                     let _ = on_event.send(HostEvent::Event(Box::new(notification)));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_notification(
-                async move |notification: SessionChangedNotification, _cx| {
+                async move |notification: ThreadChangedNotification, _cx| {
                     let _ = on_changed.send(HostEvent::Changed(notification));
                     Ok(())
                 },
@@ -239,16 +239,16 @@ impl HostConnection {
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_notification(
-                async move |notification: SessionUpdatedNotification, _cx| {
+                async move |notification: ThreadUpdatedNotification, _cx| {
                     let _ =
-                        on_session_updated.send(HostEvent::SessionUpdated(Box::new(notification)));
+                        on_thread_updated.send(HostEvent::ThreadUpdated(Box::new(notification)));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_notification(
-                async move |notification: SessionRemovedNotification, _cx| {
-                    let _ = on_session_removed.send(HostEvent::SessionRemoved(notification));
+                async move |notification: ThreadRemovedNotification, _cx| {
+                    let _ = on_thread_removed.send(HostEvent::ThreadRemoved(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),
@@ -336,7 +336,7 @@ impl HostConnection {
         self.handle.clone()
     }
 
-    /// Close the connection. The Host detaches it from its sessions; nothing else changes.
+    /// Close the connection. The Host detaches it from its threads; nothing else changes.
     pub async fn shutdown(self) {
         let _ = self.shutdown.send(());
         let _ = self.driver.await;
@@ -436,8 +436,8 @@ impl HostHandle {
         self.cx.send_request(request).block_task().await
     }
 
-    /// Open a session; the answer arrives as [`HostEvent::Opened`] with `tag`, in order with
-    /// the session's events.
+    /// Open a thread; the answer arrives as [`HostEvent::Opened`] with `tag`, in order with
+    /// the thread's events.
     pub fn open(&self, open: Open, tag: u64) -> Result<(), Error> {
         let events = self.events.clone();
         match open {
@@ -446,7 +446,7 @@ impl HostHandle {
                     .send_request(request)
                     .on_receiving_result(async move |result| {
                         let result = result.map(|state| {
-                            Box::new(OpenedSession {
+                            Box::new(OpenedThread {
                                 state,
                                 replay: None,
                             })
@@ -460,7 +460,7 @@ impl HostHandle {
                     .send_request(request)
                     .on_receiving_result(async move |result| {
                         let result = result.map(|attached| {
-                            Box::new(OpenedSession {
+                            Box::new(OpenedThread {
                                 state: attached.state,
                                 replay: Some(attached.replay),
                             })

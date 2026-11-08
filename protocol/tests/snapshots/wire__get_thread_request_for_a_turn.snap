@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&GetThreadRequest\n{ thread_id: \"s-2\".into(), turn_id: Some(\"q-3\".to_owned()), })"
+---
+{
+  "method": "threads/get",
+  "params": {
+    "threadId": "s-2",
+    "turnId": "q-3"
+  }
+}

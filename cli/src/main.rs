@@ -24,11 +24,10 @@ use anyhow::Context;
 use clap::Parser;
 use clap::Subcommand;
 use tracing_subscriber::EnvFilter;
-use weave_acp_core::schema::SessionId;
 
 use crate::args::AgentArgs;
 use crate::args::AgentChoice;
-use crate::args::SessionArgs;
+use crate::args::ThreadArgs;
 use crate::args::WorkspaceArgs;
 use crate::commands::agents;
 use crate::commands::daemon;
@@ -43,6 +42,7 @@ use crate::config::AlternateScreen;
 use crate::exit::Status;
 use crate::host::Target;
 use crate::recent::Recent;
+use weave_host_protocol::threads::ThreadId;
 
 /// Terminal client for ACP agents.
 #[derive(Parser)]
@@ -58,7 +58,7 @@ struct Cli {
     workspace: WorkspaceArgs,
 
     #[command(flatten)]
-    session: SessionArgs,
+    thread: ThreadArgs,
 
     /// Write diagnostics to this file (with --no-daemon, agent stderr too).
     #[arg(long)]
@@ -81,7 +81,7 @@ enum Command {
     Run(run::RunArgs),
     /// Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close
     /// one.
-    #[command(name = "threads", alias = "sessions")]
+    #[command(name = "threads")]
     Threads(threads::ThreadsArgs),
     /// The agents weave launches: list them, move them to their newest releases, sign in to or
     /// out of one, or try one with a prompt.
@@ -210,7 +210,7 @@ fn env_filter(default: &str) -> EnvFilter {
 }
 
 async fn run_tui(cli: Cli) -> anyhow::Result<()> {
-    let mode = cli.session.mode();
+    let mode = cli.thread.mode();
     let explicit = cli.agent.choice();
     let recent = Recent::default_location();
     let disabled = cli.agent.load_config()?.daemon.enabled == Some(false);
@@ -261,7 +261,7 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
         notices.push(format!("Tracing the agent to {}", trace.display()));
     }
     let exit = weave_tui::run(
-        weave_tui::Session {
+        weave_tui::Connected {
             connection: started.connection,
             events: started.events,
             agent_id: launch.agent_id().to_owned(),
@@ -294,14 +294,14 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
     host.finish().await;
     let exit = exit?;
     // Name the agent when the command line didn't, or named another, so a resume reopens the
-    // session with its own.
+    // thread with its own.
     let agent = (explicit.as_ref() != Some(&launch.agent)).then_some(&launch.agent);
     if exit.reload {
-        return reload(exit.active_session.as_ref(), agent);
+        return reload(exit.active_thread.as_ref(), agent);
     }
     // Fullscreen leaves nothing behind in the terminal, so say how to get back, as Codex does.
-    if let Some(session_id) = exit.resumable_session {
-        let command = resume_command(std::env::args().skip(1), &session_id.to_string(), agent);
+    if let Some(thread_id) = exit.resumable_thread {
+        let command = resume_command(std::env::args().skip(1), &thread_id.to_string(), agent);
         if exit.turn_running && host.is_shared() {
             println!("The turn carries on in the weave Host. To attach again, run: {command}");
         } else {
@@ -328,11 +328,11 @@ fn status_line_items(config: &config::Config) -> (Vec<weave_tui::StatusItem>, Ve
 }
 
 /// `/reload`: replace this process with whatever weave binary is at its path now (a rebuilt
-/// one, say), reattaching to `session` (or starting as this one did, without one). The Host
+/// one, say), reattaching to `thread` (or starting as this one did, without one). The Host
 /// and its agents carry on regardless.
-fn reload(session: Option<&SessionId>, agent: Option<&AgentChoice>) -> anyhow::Result<()> {
-    let args: Vec<String> = match session {
-        Some(session_id) => resume_args(std::env::args().skip(1), &session_id.to_string(), agent),
+fn reload(thread: Option<&ThreadId>, agent: Option<&AgentChoice>) -> anyhow::Result<()> {
+    let args: Vec<String> = match thread {
+        Some(thread_id) => resume_args(std::env::args().skip(1), &thread_id.to_string(), agent),
         None => std::env::args().skip(1).collect(),
     };
     let executable = std::env::current_exe().context("finding the weave executable")?;
@@ -354,22 +354,22 @@ fn reload(session: Option<&SessionId>, agent: Option<&AgentChoice>) -> anyhow::R
     }
 }
 
-/// This invocation's command line, reopening `session_id` in place of any session choice.
+/// This invocation's command line, reopening `thread_id` in place of any thread choice.
 fn resume_command(
     args: impl IntoIterator<Item = String>,
-    session_id: &str,
+    thread_id: &str,
     agent: Option<&AgentChoice>,
 ) -> String {
     let mut words = vec!["weave".to_owned()];
-    words.extend(resume_args(args, session_id, agent));
+    words.extend(resume_args(args, thread_id, agent));
     args::shell_words(&words)
 }
 
-/// This invocation's arguments, reopening `session_id` in place of any session choice, and
+/// This invocation's arguments, reopening `thread_id` in place of any thread choice, and
 /// naming `agent` in place of the one given, when there's one to name.
 fn resume_args(
     args: impl IntoIterator<Item = String>,
-    session_id: &str,
+    thread_id: &str,
     agent: Option<&AgentChoice>,
 ) -> Vec<String> {
     let mut words = Vec::new();
@@ -404,7 +404,7 @@ fn resume_args(
             _ => words.push(arg),
         }
     }
-    words.extend(["--resume".to_owned(), session_id.to_owned()]);
+    words.extend(["--resume".to_owned(), thread_id.to_owned()]);
     words.extend(agent_command);
     words
 }
@@ -440,7 +440,7 @@ mod tests {
             "--approve",
             "all"
         ]));
-        // Sessions are named the same way everywhere.
+        // Threads are named the same way everywhere.
         assert!(parses(&["weave", "run", "--resume", "s1", "again"]));
         assert!(parses(&["weave", "run", "--continue", "again"]));
         assert!(parses(&["weave", "--continue"]));
@@ -462,16 +462,14 @@ mod tests {
         assert!(parses(&["weave", "threads"]));
         assert!(parses(&["weave", "threads", "close", "s1"]));
         assert!(parses(&["weave", "threads", "list", "--json"]));
+        // "Session" names ADR 0031's Sessions now, so threads' old name is gone (WVE-200).
+        assert!(!parses(&["weave", "sessions", "list"]));
     }
 
     /// Names commands had before, which messages, scripts and open panes still give.
     #[test]
     fn commands_answer_to_their_earlier_names() {
         let command = |line: &[&str]| Cli::try_parse_from(line).ok().and_then(|cli| cli.command);
-        assert!(matches!(
-            command(&["weave", "sessions", "cancel", "s1"]),
-            Some(Command::Threads(_))
-        ));
         // As the TUI's Rex panes ran it.
         assert!(matches!(
             command(&["weave", "terminal", "attach", "t-1"]),
@@ -519,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn the_resume_command_replaces_the_session_choice() {
+    fn the_resume_command_replaces_the_thread_choice() {
         assert_eq!(
             resume_command(words("--agent claude --continue"), "s1", None),
             "weave --agent claude --resume s1"
@@ -554,7 +552,7 @@ mod tests {
             resume_args(words("--continue --no-alt-screen"), "s1", Some(&codex)),
             words("--agent codex --no-alt-screen --resume s1")
         );
-        // A resumed session's own agent replaces the one given.
+        // A resumed thread's own agent replaces the one given.
         assert_eq!(
             resume_command(words("--agent claude --resume s1"), "s1", Some(&codex)),
             "weave --agent codex --resume s1"

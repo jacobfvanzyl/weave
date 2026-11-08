@@ -5,7 +5,7 @@
 //! Alt+Left / Alt+Right to watch another agent's transcript. The fullscreen transcript's
 //! compact view draws each row as its title alone, as a run's row is drawn.
 //!
-//! Each child is its own session with its own updates, kept in a chat of its own; the parent
+//! Each child is its own thread with its own updates, kept in a chat of its own; the parent
 //! only knows its label, controls and current work state.
 
 use std::time::Instant;
@@ -21,7 +21,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 use weave_acp_core::MaybeUndefined;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::StateUpdate;
 use weave_acp_core::schema::StopReason;
 use weave_acp_core::schema::SubagentUpdate;
@@ -33,6 +32,7 @@ use crate::status::format_elapsed;
 use crate::style;
 use crate::wrapping::DisplayLine;
 use crate::wrapping::wrap_sourced;
+use weave_host_protocol::threads::ThreadId;
 
 /// Longest preview of a message or reply in the parent's rows, as Codex bounds them.
 const PROMPT_PREVIEW: usize = 160;
@@ -42,9 +42,9 @@ const REPLY_PREVIEW: usize = 240;
 pub const COMMAND: &str = "subagents";
 pub const COMMAND_DESCRIPTION: &str = "Switch between this thread's subagents";
 
-/// A child session the parent created and owns.
+/// A child thread the parent created and owns.
 pub struct Subagent {
-    pub id: SessionId,
+    pub id: ThreadId,
     /// The parent's title for the child, if it gave one.
     pub title: Option<String>,
     /// The parent's description of the child's role.
@@ -287,15 +287,15 @@ fn preview(text: &str, max: usize) -> String {
     format!("{}…", kept.trim_end())
 }
 
-/// One row of the picker: the main session, or a subagent.
+/// One row of the picker: the main thread, or a subagent.
 pub struct PickerEntry {
-    /// `None` for the main session.
-    pub id: Option<SessionId>,
+    /// `None` for the main thread.
+    pub id: Option<ThreadId>,
     pub label: String,
     pub description: Option<String>,
     pub running: bool,
     pub activity: String,
-    /// How deep it is under the main session, for indenting nested subagents.
+    /// How deep it is under the main thread, for indenting nested subagents.
     pub depth: usize,
 }
 
@@ -306,13 +306,13 @@ pub struct Picker {
 }
 
 pub enum PickerAction {
-    Watch(Option<SessionId>),
+    Watch(Option<ThreadId>),
     Close,
 }
 
 impl Picker {
     /// Start on the agent being watched.
-    pub fn new(entries: &[PickerEntry], watching: Option<&SessionId>) -> Self {
+    pub fn new(entries: &[PickerEntry], watching: Option<&ThreadId>) -> Self {
         let selected = entries
             .iter()
             .position(|entry| entry.id.as_ref() == watching)

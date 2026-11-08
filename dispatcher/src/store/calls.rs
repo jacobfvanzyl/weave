@@ -34,7 +34,7 @@ pub(crate) struct Call {
 pub(crate) struct Follow {
     pub(crate) id: String,
     pub(crate) host_id: String,
-    pub(crate) session_id: String,
+    pub(crate) thread_id: String,
     pub(crate) turn_id: String,
     pub(crate) calling_host: String,
     pub(crate) caller: String,
@@ -129,7 +129,7 @@ impl Store {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT id, host_id, session_id, turn_id, calling_host, caller, delegated, told \
+                "SELECT id, host_id, thread_id, turn_id, calling_host, caller, delegated, told \
                  FROM follows WHERE host_id = ?1 ORDER BY created_at, rowid",
             )
             .map_err(failed)?;
@@ -139,7 +139,7 @@ impl Store {
                 Ok(Follow {
                     id: row.get(0)?,
                     host_id: row.get(1)?,
-                    session_id: row.get(2)?,
+                    thread_id: row.get(2)?,
                     turn_id: row.get(3)?,
                     calling_host: row.get(4)?,
                     caller: row.get(5)?,
@@ -191,11 +191,11 @@ impl Store {
     }
 }
 
-/// The call delivery `id` was taken, beginning `turn_id` in `session_id`: follow it.
+/// The call delivery `id` was taken, beginning `turn_id` in `thread_id`: follow it.
 pub(super) fn begun(
     transaction: &Transaction<'_>,
     id: &str,
-    session_id: &str,
+    thread_id: &str,
     turn_id: &str,
 ) -> rusqlite::Result<()> {
     let call: Option<(String, String, String, bool)> = transaction
@@ -212,12 +212,12 @@ pub(super) fn begun(
     };
     transaction.execute(
         "INSERT OR IGNORE INTO follows \
-         (id, host_id, session_id, turn_id, calling_host, caller, delegated, created_at) \
+         (id, host_id, thread_id, turn_id, calling_host, caller, delegated, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             format!("f-{}", random_id()),
             host_id,
-            session_id,
+            thread_id,
             turn_id,
             calling_host,
             caller,

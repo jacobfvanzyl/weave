@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(48, SessionEvent::Closed\n{\n    reason: \"closed by a client\".to_owned(), by:\n    Some(TurnOrigin::Client\n    {\n        name: \"weave-app\".to_owned(), id: \"c9\".to_owned(), device:\n        Some(\"Jaco's iPad\".to_owned()),\n    }),\n},))"
+expression: "message(&event(48, ThreadEvent::Closed\n{\n    reason: \"closed by a client\".to_owned(), by:\n    Some(TurnOrigin::Client\n    {\n        name: \"weave-app\".to_owned(), id: \"c9\".to_owned(), device:\n        Some(\"Jaco's iPad\".to_owned()),\n    }),\n},))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 48,
     "at": 1760180001234,
     "event": {

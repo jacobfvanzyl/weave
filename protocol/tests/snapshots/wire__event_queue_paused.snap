@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(51, SessionEvent::QueuePaused\n{ reason: QueuePause::Cancelled, },))"
+expression: "message(&event(51, ThreadEvent::QueuePaused\n{ reason: QueuePause::Cancelled, },))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 51,
     "at": 1760180001234,
     "event": {

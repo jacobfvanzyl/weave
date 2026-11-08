@@ -1,9 +1,9 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&HelloResponse\n{\n    protocol: 2, client_id: \"c7\".to_owned(), host: host_info(), features:\n    Vec::new(), acp: acp_info(), device: None,\n})"
+expression: "round_trip(&HelloResponse\n{\n    protocol: PROTOCOL_VERSION, client_id: \"c7\".to_owned(), host: host_info(),\n    features: Vec::new(), acp: acp_info(), device: None,\n})"
 ---
 {
-  "protocol": 2,
+  "protocol": 3,
   "clientId": "c7",
   "host": {
     "id": "8ZpX3kqW1m0aLr9TQv2cYw",

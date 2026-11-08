@@ -1,6 +1,6 @@
-//! A session's queue (WVE-107): prompts waiting, in order, to start its next turns, held by the
-//! session's task and journaled, so it outlives the clients that added to it and the Host
-//! that held it. The session task starts the first prompt whenever no turn of its own runs,
+//! A thread's queue (WVE-107): prompts waiting, in order, to start its next turns, held by the
+//! thread's task and journaled, so it outlives the clients that added to it and the Host
+//! that held it. The thread task starts the first prompt whenever no turn of its own runs,
 //! unless the queue is paused.
 
 use std::collections::VecDeque;
@@ -94,7 +94,7 @@ mod tests {
     use weave_acp_core::AgentSpec;
     use weave_acp_core::schema::ContentBlock;
     use weave_host_protocol::policy::PermissionPolicy;
-    use weave_host_protocol::sessions::TurnOrigin;
+    use weave_host_protocol::threads::TurnOrigin;
 
     use super::*;
 
@@ -144,7 +144,7 @@ mod tests {
             record(queued("b")),
             record(queued("c")),
             record(Entry::TurnStarted {
-                session_id: "s1".into(),
+                thread_id: "s1".into(),
                 at_ms: 7,
                 prompt: Vec::new(),
                 origin: None,

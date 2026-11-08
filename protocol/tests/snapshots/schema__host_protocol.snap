@@ -76,67 +76,67 @@ expression: schema()
       "params": "ListFilesRequest",
       "result": "ListFilesResponse"
     },
-    "sessions/list": {
-      "params": "ListSessionsRequest",
-      "result": "ListSessionsResponse"
+    "threads/list": {
+      "params": "ListThreadsRequest",
+      "result": "ListThreadsResponse"
     },
-    "sessions/get": {
-      "params": "GetSessionRequest",
-      "result": "GetSessionResponse"
+    "threads/get": {
+      "params": "GetThreadRequest",
+      "result": "GetThreadResponse"
     },
-    "sessions/watch": {
-      "params": "WatchSessionsRequest",
-      "result": "WatchSessionsResponse"
+    "threads/watch": {
+      "params": "WatchThreadsRequest",
+      "result": "WatchThreadsResponse"
     },
-    "sessions/unwatch": {
-      "params": "UnwatchSessionsRequest",
+    "threads/unwatch": {
+      "params": "UnwatchThreadsRequest",
       "result": "Empty"
     },
-    "session/create": {
-      "params": "CreateSessionRequest",
-      "result": "SessionState"
+    "thread/create": {
+      "params": "CreateThreadRequest",
+      "result": "ThreadState"
     },
-    "session/attach": {
-      "params": "AttachSessionRequest",
-      "result": "AttachSessionResponse"
+    "thread/attach": {
+      "params": "AttachThreadRequest",
+      "result": "AttachThreadResponse"
     },
-    "session/detach": {
-      "params": "DetachSessionRequest",
+    "thread/detach": {
+      "params": "DetachThreadRequest",
       "result": "Empty"
     },
-    "session/close": {
-      "params": "CloseSessionRequest",
+    "thread/close": {
+      "params": "CloseThreadRequest",
       "result": "Empty"
     },
-    "session/delete": {
-      "params": "DeleteSessionRequest",
+    "thread/delete": {
+      "params": "DeleteThreadRequest",
       "result": "Empty"
     },
-    "session/setMode": {
+    "thread/setMode": {
       "params": "SetModeRequest",
       "result": "Empty"
     },
-    "session/setConfigOption": {
+    "thread/setConfigOption": {
       "params": "SetConfigOptionRequest",
       "result": "SetSessionConfigOptionResponse"
     },
-    "session/reopen": {
-      "params": "ReopenSessionRequest",
-      "result": "ReopenSessionResponse"
+    "thread/reopen": {
+      "params": "ReopenThreadRequest",
+      "result": "ReopenThreadResponse"
     },
-    "session/rename": {
-      "params": "RenameSessionRequest",
+    "thread/rename": {
+      "params": "RenameThreadRequest",
       "result": "Empty"
     },
-    "session/setSuccessor": {
+    "thread/setSuccessor": {
       "params": "SetSuccessorRequest",
       "result": "Empty"
     },
-    "session/label": {
-      "params": "LabelSessionRequest",
-      "result": "LabelSessionResponse"
+    "thread/label": {
+      "params": "LabelThreadRequest",
+      "result": "LabelThreadResponse"
     },
-    "session/run": {
+    "thread/run": {
       "params": "RunRequest",
       "result": "RunResponse"
     },
@@ -220,8 +220,8 @@ expression: schema()
       "params": "AttachTerminalRequest",
       "result": "AttachTerminalResponse"
     },
-    "session/report": {
-      "params": "ReportSessionRequest",
+    "thread/report": {
+      "params": "ReportThreadRequest",
       "result": "Empty"
     },
     "service/declareTools": {
@@ -234,11 +234,11 @@ expression: schema()
     }
   },
   "x-weave-notifications": {
-    "session/event": "SessionEventNotification",
-    "session/changed": "SessionChangedNotification",
-    "sessions/updated": "SessionUpdatedNotification",
-    "sessions/removed": "SessionRemovedNotification",
-    "session/elicitationCompleted": "ElicitationCompletedNotification",
+    "thread/event": "ThreadEventNotification",
+    "thread/changed": "ThreadChangedNotification",
+    "threads/updated": "ThreadUpdatedNotification",
+    "threads/removed": "ThreadRemovedNotification",
+    "thread/elicitationCompleted": "ElicitationCompletedNotification",
     "pending/added": "PendingAddedNotification",
     "pending/resolved": "PendingResolvedNotification",
     "agents/updateAvailable": "UpdateAvailableNotification",
@@ -257,8 +257,8 @@ expression: schema()
   },
   "x-weave-constants": {
     "protocol": {
-      "version": 2,
-      "oldestSupported": 2
+      "version": 3,
+      "oldestSupported": 3
     },
     "websocket": {
       "subprotocol": "weave-host",
@@ -281,8 +281,8 @@ expression: schema()
       "unauthenticated": -32060,
       "incompatibleProtocol": -32061,
       "unknownAgent": -32062,
-      "unknownSession": -32063,
-      "sessionNotOpen": -32064,
+      "unknownThread": -32063,
+      "threadNotOpen": -32064,
       "turnRunning": -32065,
       "alreadyResolved": -32066,
       "wrongAgent": -32067,
@@ -307,12 +307,12 @@ expression: schema()
       "devices": "devices",
       "agentUpdates": "agents/updates",
       "clientTools": "clientTools",
-      "watch": "sessions/watch",
+      "watch": "threads/watch",
       "listFiles": "files/list",
-      "rename": "session/rename",
+      "rename": "thread/rename",
       "worktrees": "worktrees",
       "queue": "queue",
-      "getSession": "sessions/get",
+      "getThread": "threads/get",
       "requestKeys": "requestKeys",
       "drain": "drain",
       "terminals": "terminals",
@@ -323,7 +323,7 @@ expression: schema()
     "files": {
       "maxEntries": 2000
     },
-    "sessions": {
+    "threads": {
       "maxTitle": 200
     },
     "requestKeys": {
@@ -333,13 +333,13 @@ expression: schema()
       "clipboardWrite": "clipboard_write"
     },
     "hostTools": {
-      "renameSession": "rename_session",
-      "listSessions": "list_sessions",
-      "readSession": "read_session",
-      "startSession": "start_session",
-      "promptSession": "prompt_session",
-      "steerSession": "steer_session",
-      "cancelSessionTurn": "cancel_session_turn",
+      "renameThread": "rename_thread",
+      "listThreads": "list_threads",
+      "readThread": "read_thread",
+      "startThread": "start_thread",
+      "promptThread": "prompt_thread",
+      "steerThread": "steer_thread",
+      "cancelThreadTurn": "cancel_thread_turn",
       "listAgents": "list_agents",
       "listHosts": "list_hosts"
     }
@@ -724,12 +724,12 @@ expression: schema()
         "environment": {
           "$ref": "#/$defs/EnvironmentSource"
         },
-        "sessions": {
+        "threads": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/SessionListing"
+            "$ref": "#/$defs/ThreadListing"
           },
-          "description": "The open sessions."
+          "description": "The open threads."
         },
         "remote": {
           "type": [
@@ -757,7 +757,7 @@ expression: schema()
         "startedAt",
         "service",
         "environment",
-        "sessions"
+        "threads"
       ]
     },
     "Service": {
@@ -800,7 +800,7 @@ expression: schema()
       ],
       "description": "Where agents' environment comes from."
     },
-    "SessionListing": {
+    "ThreadListing": {
       "type": "object",
       "properties": {
         "info": {
@@ -811,7 +811,7 @@ expression: schema()
           "type": "string"
         },
         "state": {
-          "$ref": "#/$defs/SessionStatus"
+          "$ref": "#/$defs/ThreadStatus"
         },
         "activity": {
           "anyOf": [
@@ -822,7 +822,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "Open sessions only."
+          "description": "Open threads only."
         },
         "clients": {
           "type": "integer",
@@ -852,7 +852,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "Where in a git repository its directory is, as the Host last read it while the session\nwas open; absent outside one, and for sessions the Host has no record of."
+          "description": "Where in a git repository its directory is, as the Host last read it while the thread\nwas open; absent outside one, and for threads the Host has no record of."
         },
         "startedBy": {
           "anyOf": [
@@ -863,14 +863,14 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The session whose agent started it, for a delegated session."
+          "description": "The thread whose agent started it, for a delegated thread."
         },
         "startedByHost": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The Host the session that started it is on, when it isn't this one."
+          "description": "The Host the thread that started it is on, when it isn't this one."
         },
         "continuedIn": {
           "anyOf": [
@@ -881,7 +881,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "Its successor (feature `successors`, WVE-168): the session its work goes on in, which a\nclient named with `session/setSuccessor`. Clients following this one may follow that,\nand reports to this one go there."
+          "description": "Its successor (feature `successors`, WVE-168): the thread its work goes on in, which a\nclient named with `thread/setSuccessor`. Clients following this one may follow that,\nand reports to this one go there."
         },
         "labels": {
           "type": "array",
@@ -921,7 +921,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The client whose `session/create` or `session/attach` opened it last, while it's open:\na paired device's names its `device`. A service's `session/run` that opened it gives\nthe turn's origin. Absent for one another headless run or a Host taking it up opened."
+          "description": "The client whose `thread/create` or `thread/attach` opened it last, while it's open:\na paired device's names its `device`. A service's `thread/run` that opened it gives\nthe turn's origin. Absent for one another headless run or a Host taking it up opened."
         },
         "openedAt": {
           "type": [
@@ -995,7 +995,7 @@ expression: schema()
       "type": "string",
       "description": "A unique identifier for a conversation session between a client and agent.\n\nSessions maintain their own context, conversation history, and state,\nallowing multiple independent interactions with the same agent.\n\nSee protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)"
     },
-    "SessionStatus": {
+    "ThreadStatus": {
       "oneOf": [
         {
           "type": "string",
@@ -1029,7 +1029,7 @@ expression: schema()
           "description": "A pending request waits for a person."
         }
       ],
-      "description": "What an open session is doing."
+      "description": "What an open thread is doing."
     },
     "GitLocation": {
       "type": "object",
@@ -1061,7 +1061,7 @@ expression: schema()
         "repo",
         "worktree"
       ],
-      "description": "Where in a git repository a session's directory is, as the Host last read it: when the\nsession opened, and again after each of its turns."
+      "description": "Where in a git repository a thread's directory is, as the Host last read it: when the\nthread opened, and again after each of its turns."
     },
     "ContextUsage": {
       "type": "object",
@@ -1081,7 +1081,7 @@ expression: schema()
         "used",
         "size"
       ],
-      "description": "A session's context usage, as its agent last reported it: tokens in context, of the window."
+      "description": "A thread's context usage, as its agent last reported it: tokens in context, of the window."
     },
     "LastCompaction": {
       "type": "object",
@@ -1103,7 +1103,7 @@ expression: schema()
       "required": [
         "at"
       ],
-      "description": "A session's last completed compaction: when it completed, and the tokens in context its\nagent reported next, once it has."
+      "description": "A thread's last completed compaction: when it completed, and the tokens in context its\nagent reported next, once it has."
     },
     "TurnOrigin": {
       "oneOf": [
@@ -1154,14 +1154,14 @@ expression: schema()
         {
           "type": "object",
           "properties": {
-            "session": {
+            "thread": {
               "type": "object",
               "properties": {
-                "sessionId": {
+                "threadId": {
                   "$ref": "#/$defs/SessionId"
                 },
                 "host": {
-                  "description": "The Host that session is on, when it isn't this one: the id of another of the\nperson's Hosts, as the service that reaches them gave it (ADR 0029).",
+                  "description": "The Host that thread is on, when it isn't this one: the id of another of the\nperson's Hosts, as the service that reaches them gave it (ADR 0029).",
                   "type": [
                     "string",
                     "null"
@@ -1175,20 +1175,20 @@ expression: schema()
                   ]
                 },
                 "report": {
-                  "description": "The Host's report on that session, of how a turn this session's agent began there\nended or that it waits on a person. Nobody hears how a report's turn ends.",
+                  "description": "The Host's report on that thread, of how a turn this thread's agent began there\nended or that it waits on a person. Nobody hears how a report's turn ends.",
                   "type": "boolean"
                 }
               },
               "required": [
-                "sessionId"
+                "threadId"
               ]
             }
           },
           "required": [
-            "session"
+            "thread"
           ],
           "additionalProperties": false,
-          "description": "Another session: one whose agent began the turn through a Host tool, or, in a report,\nthe session the Host reports on (ADR 0023)."
+          "description": "Another thread: one whose agent began the turn through a Host tool, or, in a report,\nthe thread the Host reports on (ADR 0023)."
         },
         {
           "type": "object",
@@ -1323,7 +1323,7 @@ expression: schema()
           "description": "The agent process whose turn isn't waited for, from the `WEAVE_AGENT_PROCESS` the\nHost gives each agent: the one asking, when an agent stops the Host."
         }
       },
-      "description": "`host/drain`: get ready to stop. From now on the Host starts no new turns (`turn/start`\nand `session/run` answer `host_stopping`, and queued prompts wait), and with `wait` it\nanswers once no turn runs but `except`'s, or when its drain timeout passes. The stop that\nfollows doesn't wait again. If the asking client goes before the Host stops, the drain\nends. Local clients only."
+      "description": "`host/drain`: get ready to stop. From now on the Host starts no new turns (`turn/start`\nand `thread/run` answer `host_stopping`, and queued prompts wait), and with `wait` it\nanswers once no turn runs but `except`'s, or when its drain timeout passes. The stop that\nfollows doesn't wait again. If the asking client goes before the Host stops, the drain\nends. Local clients only."
     },
     "DrainResponse": {
       "type": "object",
@@ -1341,7 +1341,7 @@ expression: schema()
     },
     "ShutdownRequest": {
       "type": "object",
-      "description": "`host/shutdown`: suspend every open session and exit."
+      "description": "`host/shutdown`: suspend every open thread and exit."
     },
     "Empty": {
       "type": "object",
@@ -2068,14 +2068,14 @@ expression: schema()
       "required": [
         "agentId"
       ],
-      "description": "`agents/update`: what `weave agents update <agent>` does. The Host checks that the newest\nversion starts and answers `initialize`, then launches it for the agent's new sessions; open\nones move over with `session/reopen`. A version that doesn't start changes nothing. Remote\nclients may update agents too: it only ever takes one to its newest version."
+      "description": "`agents/update`: what `weave agents update <agent>` does. The Host checks that the newest\nversion starts and answers `initialize`, then launches it for the agent's new threads; open\nones move over with `thread/reopen`. A version that doesn't start changes nothing. Remote\nclients may update agents too: it only ever takes one to its newest version."
     },
     "UpdateAgentResponse": {
       "type": "object",
       "properties": {
         "version": {
           "type": "string",
-          "description": "The version the agent's new sessions launch now: the newest, or the one already there."
+          "description": "The version the agent's new threads launch now: the newest, or the one already there."
         }
       },
       "required": [
@@ -2252,7 +2252,7 @@ expression: schema()
       "properties": {
         "path": {
           "type": "string",
-          "description": "The directory listed, without `.` or `..`. Symlinks stay as named, so a session's\ndirectory reads as the person chose it."
+          "description": "The directory listed, without `.` or `..`. Symlinks stay as named, so a thread's\ndirectory reads as the person chose it."
         },
         "parent": {
           "type": [
@@ -2315,7 +2315,7 @@ expression: schema()
       ],
       "description": "What an entry is, following symlinks."
     },
-    "ListSessionsRequest": {
+    "ListThreadsRequest": {
       "type": "object",
       "properties": {
         "agentId": {
@@ -2335,7 +2335,7 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "Only the sessions in this repository's worktrees, given by any directory in it. Without\nan agent only (feature `worktrees`)."
+          "description": "Only the threads in this repository's worktrees, given by any directory in it. Without\nan agent only (feature `worktrees`)."
         },
         "activity": {
           "anyOf": [
@@ -2346,14 +2346,14 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "Only the open sessions doing this. Without an agent only (feature `turnIds`)."
+          "description": "Only the open threads doing this. Without an agent only (feature `turnIds`)."
         },
         "labels": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Only the sessions that carry every one of these labels (feature `labels`)."
+          "description": "Only the threads that carry every one of these labels (feature `labels`)."
         },
         "cursor": {
           "type": [
@@ -2362,15 +2362,15 @@ expression: schema()
           ]
         }
       },
-      "description": "`sessions/list`. Without an agent: the sessions the Host has a journal for, across\nagents, most recently active first. With one: that agent's in `cwd`, the Host's own first,\nthen the agent's own listing, paged by its cursor. Blank sessions are never listed."
+      "description": "`threads/list`. Without an agent: the threads the Host has a journal for, across\nagents, most recently active first. With one: that agent's in `cwd`, the Host's own first,\nthen the agent's own listing, paged by its cursor. Blank threads are never listed."
     },
-    "ListSessionsResponse": {
+    "ListThreadsResponse": {
       "type": "object",
       "properties": {
-        "sessions": {
+        "threads": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/SessionListing"
+            "$ref": "#/$defs/ThreadListing"
           }
         },
         "nextCursor": {
@@ -2381,13 +2381,13 @@ expression: schema()
         }
       },
       "required": [
-        "sessions"
+        "threads"
       ]
     },
-    "GetSessionRequest": {
+    "GetThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "turnId": {
@@ -2395,19 +2395,19 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "This turn rather than the latest, a queued one included; it fails with `unknown_turn`\nwhen the session's journal has no such turn (feature `turnIds`)."
+          "description": "This turn rather than the latest, a queued one included; it fails with `unknown_turn`\nwhen the thread's journal has no such turn (feature `turnIds`)."
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists\nit, with its latest turn, or the turn asked for, read without opening it or attaching."
+      "description": "`threads/get`: one thread the Host has a journal for, open or not, as `threads/list` lists\nit, with its latest turn, or the turn asked for, read without opening it or attaching."
     },
-    "GetSessionResponse": {
+    "GetThreadResponse": {
       "type": "object",
       "properties": {
-        "session": {
-          "$ref": "#/$defs/SessionListing"
+        "thread": {
+          "$ref": "#/$defs/ThreadListing"
         },
         "latestTurn": {
           "anyOf": [
@@ -2422,7 +2422,7 @@ expression: schema()
         }
       },
       "required": [
-        "session"
+        "thread"
       ]
     },
     "LatestTurn": {
@@ -2508,7 +2508,7 @@ expression: schema()
         "startedAt",
         "running"
       ],
-      "description": "A session's latest turn, or one asked for by id, as its journal records it."
+      "description": "A thread's latest turn, or one asked for by id, as its journal records it."
     },
     "TurnState": {
       "oneOf": [
@@ -2522,7 +2522,7 @@ expression: schema()
         {
           "type": "string",
           "const": "queued",
-          "description": "Its prompt waits in the session's queue."
+          "description": "Its prompt waits in the thread's queue."
         },
         {
           "type": "string",
@@ -2547,7 +2547,7 @@ expression: schema()
         {
           "type": "string",
           "const": "interrupted",
-          "description": "The Host stopped or crashed while it ran (WVE-144). A headless session continues it in a\nturn of its own."
+          "description": "The Host stopped or crashed while it ran (WVE-144). A headless thread continues it in a\nturn of its own."
         }
       ],
       "description": "Where a turn is: waiting to start, running, waiting on a person, or how it ended. The\nendings match the exit statuses of `weave run` and `weave threads follow`."
@@ -3140,7 +3140,7 @@ expression: schema()
       ],
       "description": "Predefined error codes for common JSON-RPC and ACP-specific errors.\n\nThese codes follow the JSON-RPC 2.0 specification for standard errors\nand use the reserved range (-32000 to -32099) for protocol-specific errors."
     },
-    "WatchSessionsRequest": {
+    "WatchThreadsRequest": {
       "type": "object",
       "properties": {
         "labels": {
@@ -3150,27 +3150,27 @@ expression: schema()
           }
         }
       },
-      "description": "`sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a\n[`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the\nconnection ends or the client sends `sessions/unwatch`. Blank sessions never appear. With\n`labels` (feature `labels`), only the sessions that carry every one of them: a change that\nmakes one stop matching is the last the watcher hears of it, as an update showing its labels."
+      "description": "`threads/watch`: the Host's threads as `threads/list` gives them without an agent, then a\n[`ThreadUpdatedNotification`] or [`ThreadRemovedNotification`] for every change, until the\nconnection ends or the client sends `threads/unwatch`. Blank threads never appear. With\n`labels` (feature `labels`), only the threads that carry every one of them: a change that\nmakes one stop matching is the last the watcher hears of it, as an update showing its labels."
     },
-    "WatchSessionsResponse": {
+    "WatchThreadsResponse": {
       "type": "object",
       "properties": {
-        "sessions": {
+        "threads": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/SessionListing"
+            "$ref": "#/$defs/ThreadListing"
           }
         }
       },
       "required": [
-        "sessions"
+        "threads"
       ]
     },
-    "UnwatchSessionsRequest": {
+    "UnwatchThreadsRequest": {
       "type": "object",
-      "description": "`sessions/unwatch`: stop what `sessions/watch` sends."
+      "description": "`threads/unwatch`: stop what `threads/watch` sends."
     },
-    "CreateSessionRequest": {
+    "CreateThreadRequest": {
       "type": "object",
       "properties": {
         "agentId": {
@@ -3219,7 +3219,7 @@ expression: schema()
         "agentId",
         "cwd"
       ],
-      "description": "`session/create`: start a session and attach to it."
+      "description": "`thread/create`: start a thread and attach to it."
     },
     "PermissionPolicy": {
       "type": "object",
@@ -3237,7 +3237,7 @@ expression: schema()
           "default": "ask"
         }
       },
-      "description": "How a session's permission requests are answered."
+      "description": "How a thread's permission requests are answered."
     },
     "ToolKind": {
       "oneOf": [
@@ -3309,14 +3309,14 @@ expression: schema()
       ],
       "description": "What happens to permission requests a policy doesn't approve."
     },
-    "SessionState": {
+    "ThreadState": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "agent": {
-          "$ref": "#/$defs/SessionAgent"
+          "$ref": "#/$defs/ThreadAgent"
         },
         "cwd": {
           "type": "string"
@@ -3346,7 +3346,7 @@ expression: schema()
           ]
         },
         "state": {
-          "$ref": "#/$defs/SessionStatus"
+          "$ref": "#/$defs/ThreadStatus"
         },
         "activity": {
           "$ref": "#/$defs/Activity"
@@ -3418,7 +3418,7 @@ expression: schema()
           "items": {
             "$ref": "#/$defs/SessionId"
           },
-          "description": "Subagent sessions so far.",
+          "description": "Subagent threads so far.",
           "default": []
         },
         "journal": {
@@ -3444,7 +3444,7 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "Where the Host writes this session's protocol trace, when asked to."
+          "description": "Where the Host writes this thread's protocol trace, when asked to."
         },
         "update": {
           "anyOf": [
@@ -3455,7 +3455,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "A newer version of the agent than the session runs, once the Host has found one."
+          "description": "A newer version of the agent than the thread runs, once the Host has found one."
         },
         "startedBy": {
           "anyOf": [
@@ -3466,14 +3466,14 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The session whose agent started it, for a delegated session."
+          "description": "The thread whose agent started it, for a delegated thread."
         },
         "startedByHost": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The Host the session that started it is on, when it isn't this one."
+          "description": "The Host the thread that started it is on, when it isn't this one."
         },
         "continuedIn": {
           "anyOf": [
@@ -3495,7 +3495,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "agent",
         "cwd",
         "state",
@@ -3505,9 +3505,9 @@ expression: schema()
         "policy",
         "journal"
       ],
-      "description": "An open session as a client attached to it sees it; notifications keep it up to date."
+      "description": "An open thread as a client attached to it sees it; notifications keep it up to date."
     },
-    "SessionAgent": {
+    "ThreadAgent": {
       "type": "object",
       "properties": {
         "id": {
@@ -3537,7 +3537,7 @@ expression: schema()
         "name",
         "initialize"
       ],
-      "description": "The agent a session runs with."
+      "description": "The agent a thread runs with."
     },
     "AgentRelease": {
       "type": "object",
@@ -3873,9 +3873,9 @@ expression: schema()
     "RunningTurn": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId",
-          "description": "The session it runs in: the root or a subagent session."
+          "description": "The thread it runs in: the root or a subagent thread."
         },
         "startedAt": {
           "type": "integer",
@@ -3894,7 +3894,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "startedAt",
         "origin"
       ],
@@ -3928,7 +3928,7 @@ expression: schema()
         "origin",
         "queuedAt"
       ],
-      "description": "A prompt waiting in a session's queue."
+      "description": "A prompt waiting in a thread's queue."
     },
     "QueuePause": {
       "oneOf": [
@@ -3945,7 +3945,7 @@ expression: schema()
         {
           "type": "string",
           "const": "interrupted",
-          "description": "The Host took the session up again, after it stopped or the session closed."
+          "description": "The Host took the thread up again, after it stopped or the thread closed."
         }
       ],
       "description": "Why a queue waits rather than start the next turn."
@@ -3956,7 +3956,7 @@ expression: schema()
         "id": {
           "type": "string"
         },
-        "sessionId": {
+        "threadId": {
           "anyOf": [
             {
               "$ref": "#/$defs/SessionId"
@@ -3965,7 +3965,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The session it's for, the root or a subagent session, when it's for one."
+          "description": "The thread it's for, the root or a subagent thread, when it's for one."
         },
         "createdAt": {
           "type": "integer",
@@ -5354,7 +5354,7 @@ expression: schema()
         "id",
         "head"
       ],
-      "description": "Where a session's journal is up to."
+      "description": "Where a thread's journal is up to."
     },
     "McpServerStatus": {
       "type": "object",
@@ -5393,7 +5393,7 @@ expression: schema()
         "source",
         "state"
       ],
-      "description": "One MCP server a session's agent was given, or left without."
+      "description": "One MCP server a thread's agent was given, or left without."
     },
     "McpServerSource": {
       "oneOf": [
@@ -5455,7 +5455,7 @@ expression: schema()
         {
           "type": "string",
           "const": "skipped",
-          "description": "A configured server left out of the session, `reason` saying why."
+          "description": "A configured server left out of the thread, `reason` saying why."
         },
         {
           "type": "string",
@@ -5482,7 +5482,7 @@ expression: schema()
         },
         "running": {
           "type": "string",
-          "description": "The version the session runs."
+          "description": "The version the thread runs."
         },
         "latest": {
           "type": "string"
@@ -5494,12 +5494,12 @@ expression: schema()
         "running",
         "latest"
       ],
-      "description": "A newer version of a session's agent than the one it runs."
+      "description": "A newer version of a thread's agent than the one it runs."
     },
-    "AttachSessionRequest": {
+    "AttachThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "after": {
@@ -5518,27 +5518,27 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "Required when the Host has no record of the session."
+          "description": "Required when the Host has no record of the thread."
         },
         "cwd": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Required when the Host has no record of the session."
+          "description": "Required when the Host has no record of the thread."
         },
         "trace": {
           "type": "boolean"
         },
         "observe": {
           "type": "boolean",
-          "description": "Receive the session as an observer ([`OBSERVE_FEATURE`]), as a script following it does:\nonly an open session, which this doesn't open; not one of its `clients`, so it never keeps\nthe session open or closes it, and is never sent a client tool to run."
+          "description": "Receive the thread as an observer ([`OBSERVE_FEATURE`]), as a script following it does:\nonly an open thread, which this doesn't open; not one of its `clients`, so it never keeps\nthe thread open or closes it, and is never sent a client tool to run."
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`session/attach`: attach to a session, opening it first if it isn't open. The session's\nevents after `after` follow the response, then live ones."
+      "description": "`thread/attach`: attach to a thread, opening it first if it isn't open. The thread's\nevents after `after` follow the response, then live ones."
     },
     "JournalPosition": {
       "type": "object",
@@ -5556,16 +5556,16 @@ expression: schema()
         "journal",
         "seq"
       ],
-      "description": "An event's place in a session's journal: where a client catches up after."
+      "description": "An event's place in a thread's journal: where a client catches up after."
     },
-    "AttachSessionResponse": {
+    "AttachThreadResponse": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "agent": {
-          "$ref": "#/$defs/SessionAgent"
+          "$ref": "#/$defs/ThreadAgent"
         },
         "cwd": {
           "type": "string"
@@ -5595,7 +5595,7 @@ expression: schema()
           ]
         },
         "state": {
-          "$ref": "#/$defs/SessionStatus"
+          "$ref": "#/$defs/ThreadStatus"
         },
         "activity": {
           "$ref": "#/$defs/Activity"
@@ -5667,7 +5667,7 @@ expression: schema()
           "items": {
             "$ref": "#/$defs/SessionId"
           },
-          "description": "Subagent sessions so far.",
+          "description": "Subagent threads so far.",
           "default": []
         },
         "journal": {
@@ -5693,7 +5693,7 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "Where the Host writes this session's protocol trace, when asked to."
+          "description": "Where the Host writes this thread's protocol trace, when asked to."
         },
         "update": {
           "anyOf": [
@@ -5704,7 +5704,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "A newer version of the agent than the session runs, once the Host has found one."
+          "description": "A newer version of the agent than the thread runs, once the Host has found one."
         },
         "startedBy": {
           "anyOf": [
@@ -5715,14 +5715,14 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The session whose agent started it, for a delegated session."
+          "description": "The thread whose agent started it, for a delegated thread."
         },
         "startedByHost": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The Host the session that started it is on, when it isn't this one."
+          "description": "The Host the thread that started it is on, when it isn't this one."
         },
         "continuedIn": {
           "anyOf": [
@@ -5747,7 +5747,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "agent",
         "cwd",
         "state",
@@ -5758,7 +5758,7 @@ expression: schema()
         "journal",
         "replay"
       ],
-      "description": "An open session as a client attached to it sees it; notifications keep it up to date."
+      "description": "An open thread as a client attached to it sees it; notifications keep it up to date."
     },
     "Replay": {
       "type": "object",
@@ -5780,10 +5780,10 @@ expression: schema()
       ],
       "description": "The events that follow an attach response before live ones."
     },
-    "DetachSessionRequest": {
+    "DetachThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "close": {
@@ -5792,9 +5792,9 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`session/detach`: stop receiving the session."
+      "description": "`thread/detach`: stop receiving the thread."
     },
     "CloseWhen": {
       "oneOf": [
@@ -5810,24 +5810,24 @@ expression: schema()
           "description": "Now, if nothing else needs it."
         }
       ],
-      "description": "When detaching closes the session."
+      "description": "When detaching closes the thread."
     },
-    "CloseSessionRequest": {
+    "CloseThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`session/close`: close the session for everyone, ending its turn and stopping its agent."
+      "description": "`thread/close`: close the thread for everyone, ending its turn and stopping its agent."
     },
-    "DeleteSessionRequest": {
+    "DeleteThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "agentId": {
@@ -5835,18 +5835,18 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "Required when the Host has no record of the session."
+          "description": "Required when the Host has no record of the thread."
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`session/delete`: close it if open, delete it in the agent, and remove its journal."
+      "description": "`thread/delete`: close it if open, delete it in the agent, and remove its journal."
     },
     "SetModeRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "modeId": {
@@ -5854,15 +5854,15 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "modeId"
       ],
-      "description": "`session/setMode`. The change reaches every attached client as an ACP update."
+      "description": "`thread/setMode`. The change reaches every attached client as an ACP update."
     },
     "SetConfigOptionRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "configId": {
@@ -5870,7 +5870,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "configId"
       ],
       "anyOf": [
@@ -5906,7 +5906,7 @@ expression: schema()
           "description": "A [`SessionConfigValueId`] string value.\n\nThis is the default when `type` is absent on the wire. Unknown `type`\nvalues with string payloads also gracefully deserialize into this\nvariant."
         }
       ],
-      "description": "`session/setConfigOption`. The change reaches every attached client as an ACP update."
+      "description": "`thread/setConfigOption`. The change reaches every attached client as an ACP update."
     },
     "SetSessionConfigOptionResponse": {
       "type": "object",
@@ -5937,19 +5937,19 @@ expression: schema()
       "x-side": "agent",
       "x-method": "session/set_config_option"
     },
-    "ReopenSessionRequest": {
+    "ReopenThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`session/reopen`: stop the session's agent and take the session up again in a new process\nof the version the agent's new sessions get, through ACP `session/resume` or\n`session/load`. The session keeps its id and journal, where an `agentReopened` event marks\nthe change. While a turn runs or a request waits, it waits for them. When the new version\ncan't take the session up, the old one does again, and the event says why. Anything that\nlived only in the old process, such as its background commands, ends with it."
+      "description": "`thread/reopen`: stop the thread's agent and take the thread up again in a new process\nof the version the agent's new threads get, through ACP `session/resume` or\n`session/load`. The thread keeps its id and journal, where an `agentReopened` event marks\nthe change. While a turn runs or a request waits, it waits for them. When the new version\ncan't take the thread up, the old one does again, and the event says why. Anything that\nlived only in the old process, such as its background commands, ends with it."
     },
-    "ReopenSessionResponse": {
+    "ReopenThreadResponse": {
       "type": "object",
       "properties": {
         "version": {
@@ -5957,14 +5957,14 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "The version the session's agent runs now."
+          "description": "The version the thread's agent runs now."
         }
       }
     },
-    "RenameSessionRequest": {
+    "RenameThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "title": {
@@ -5972,15 +5972,15 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "title"
       ],
-      "description": "`session/rename`: give an open session a title of the Host's, which its clients see, journaled\nas a `renamed` event, and which titles the agent sends later don't replace. The title is\ntrimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the session\nkeeps its title: ACP has no way to change it from outside."
+      "description": "`thread/rename`: give an open thread a title of the Host's, which its clients see, journaled\nas a `renamed` event, and which titles the agent sends later don't replace. The title is\ntrimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the thread\nkeeps its title: ACP has no way to change it from outside."
     },
     "SetSuccessorRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "successor": {
@@ -5988,15 +5988,15 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "successor"
       ],
-      "description": "`session/setSuccessor`: name the session an open session's work goes on in, as the\nDispatcher does when it starts a Bot's new thread. Journaled as a `continuedIn` event and\nlisted as the session's `continuedIn`; reports to the session go to its successor from then\non. The successor is a session the Host has a record of, other than this one and not one\nwhose successors lead back to it. A session's successor is named once: naming the same one\nagain does nothing, and another is refused."
+      "description": "`thread/setSuccessor`: name the thread an open thread's work goes on in, as the\nDispatcher does when it starts a Bot's new thread. Journaled as a `continuedIn` event and\nlisted as the thread's `continuedIn`; reports to the thread go to its successor from then\non. The successor is a thread the Host has a record of, other than this one and not one\nwhose successors lead back to it. A thread's successor is named once: naming the same one\nagain does nothing, and another is refused."
     },
-    "LabelSessionRequest": {
+    "LabelThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "add": {
@@ -6013,11 +6013,11 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`session/label`: add labels to an open session and take others off, journaled as a\n`labelled` event, answered with its labels after. Labels mean nothing to the Host: clients\ngive them, and filter `sessions/list` and `sessions/watch` by them. A labelled session's\njournal is kept past pruning. Each label is checked with [`check_label`], and a session\ncarries at most [`MAX_LABELS`]."
+      "description": "`thread/label`: add labels to an open thread and take others off, journaled as a\n`labelled` event, answered with its labels after. Labels mean nothing to the Host: clients\ngive them, and filter `threads/list` and `threads/watch` by them. A labelled thread's\njournal is kept past pruning. Each label is checked with [`check_label`], and a thread\ncarries at most [`MAX_LABELS`]."
     },
-    "LabelSessionResponse": {
+    "LabelThreadResponse": {
       "type": "object",
       "properties": {
         "labels": {
@@ -6048,7 +6048,7 @@ expression: schema()
           ],
           "description": "The repository `cwd` has to be a checkout of (feature `otherHosts`), by its remote as\n[`crate::worktrees::GitLocation::remote`] gives it, such as `github.com/owner/name`."
         },
-        "sessionId": {
+        "threadId": {
           "anyOf": [
             {
               "$ref": "#/$defs/SessionId"
@@ -6069,7 +6069,7 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "The mode a new session starts in; the agent's configured one when absent."
+          "description": "The mode a new thread starts in; the agent's configured one when absent."
         },
         "prompt": {
           "type": "array",
@@ -6095,7 +6095,7 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "Makes it safe to send again (feature `requestKeys`). A repeat answers with the session's\nid alone; a client that asked to attach attaches with `session/attach`."
+          "description": "Makes it safe to send again (feature `requestKeys`). A repeat answers with the thread's\nid alone; a client that asked to attach attaches with `thread/attach`."
         },
         "caller": {
           "anyOf": [
@@ -6106,7 +6106,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "A service's only (feature `otherHosts`): the thread on another Host whose agent asks,\nwhich the turn's origin names, and a new session's `startedBy` and `startedByHost`."
+          "description": "A service's only (feature `otherHosts`): the thread on another Host whose agent asks,\nwhich the turn's origin names, and a new thread's `startedBy` and `startedByHost`."
         },
         "origin": {
           "anyOf": [
@@ -6124,7 +6124,7 @@ expression: schema()
           "items": {
             "type": "string"
           },
-          "description": "Labels for a session it starts, from the start (feature `labels`); an existing session\nkeeps its own."
+          "description": "Labels for a thread it starts, from the start (feature `labels`); an existing thread\nkeeps its own."
         }
       },
       "required": [
@@ -6132,12 +6132,12 @@ expression: schema()
         "cwd",
         "prompt"
       ],
-      "description": "`session/run`: open a session (this one, or a new one) and start a turn in it, without\nthe client having to stay."
+      "description": "`thread/run`: open a thread (this one, or a new one) and start a turn in it, without\nthe client having to stay."
     },
     "OtherThread": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "host": {
@@ -6153,7 +6153,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "host"
       ],
       "description": "A thread on another of the person's Hosts (feature `otherHosts`), as a service names it."
@@ -6179,7 +6179,7 @@ expression: schema()
     "RunResponse": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "turnId": {
@@ -6192,7 +6192,7 @@ expression: schema()
         "state": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SessionState"
+              "$ref": "#/$defs/ThreadState"
             },
             {
               "type": "null"
@@ -6209,17 +6209,17 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The policy the session runs under (feature `otherHosts`): the one asked for, or an open\nsession's own. Absent from a repeat under a request key."
+          "description": "The policy the thread runs under (feature `otherHosts`): the one asked for, or an open\nthread's own. Absent from a repeat under a request key."
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ]
     },
     "StartTurnRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "prompt": {
@@ -6237,10 +6237,10 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "prompt"
       ],
-      "description": "`turn/start`: send a prompt. Answered once the turn has started. The session must be\nopen; it may be a subagent session."
+      "description": "`turn/start`: send a prompt. Answered once the turn has started. The thread must be\nopen; it may be a subagent thread."
     },
     "StartTurnResponse": {
       "type": "object",
@@ -6266,7 +6266,7 @@ expression: schema()
     "SteerTurnRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "prompt": {
@@ -6299,10 +6299,10 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "prompt"
       ],
-      "description": "`turn/steer`: a message for the session's running turn, which joins it rather than\nstarting a turn of its own. Every attached client sees it as a `turnSteered` event, in\norder with the turn's updates. It needs an agent that takes steering, as its `initialize`\nresponse says."
+      "description": "`turn/steer`: a message for the thread's running turn, which joins it rather than\nstarting a turn of its own. Every attached client sees it as a `turnSteered` event, in\norder with the turn's updates. It needs an agent that takes steering, as its `initialize`\nresponse says."
     },
     "SteerTurnResponse": {
       "type": "object",
@@ -6348,21 +6348,21 @@ expression: schema()
     "CancelTurnRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`turn/cancel`: cancel the session's running turn and its pending requests."
+      "description": "`turn/cancel`: cancel the thread's running turn and its pending requests."
     },
     "AddQueuedRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId",
-          "description": "The session's own id, not a subagent session's."
+          "description": "The thread's own id, not a subagent thread's."
         },
         "prompt": {
           "type": "array",
@@ -6401,10 +6401,10 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "prompt"
       ],
-      "description": "`queue/add`: add a prompt to the end of the session's queue. With no turn running and\nnothing waiting, it starts a turn at once. Adding to a paused queue resumes it."
+      "description": "`queue/add`: add a prompt to the end of the thread's queue. With no turn running and\nnothing waiting, it starts a turn at once. Adding to a paused queue resumes it."
     },
     "AddQueuedResponse": {
       "type": "object",
@@ -6433,7 +6433,7 @@ expression: schema()
     "RemoveQueuedRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "queuedId": {
@@ -6441,7 +6441,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "queuedId"
       ],
       "description": "`queue/remove`: take a prompt out of the queue, whoever added it."
@@ -6465,19 +6465,19 @@ expression: schema()
     "ResumeQueueRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
       "description": "`queue/resume`: start a paused queue again. A queue that isn't paused stays as it is."
     },
     "AnswerPendingRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "pendingId": {
@@ -6516,7 +6516,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "pendingId"
       ],
       "description": "`pending/answer`: answer a pending request, with the response for its kind. The first\nanswer goes to the agent; later ones fail with [`crate::errors::ALREADY_RESOLVED`]."
@@ -6787,7 +6787,7 @@ expression: schema()
       "required": [
         "repo"
       ],
-      "description": "`worktrees/list`: a repository's worktrees and the sessions in each."
+      "description": "`worktrees/list`: a repository's worktrees and the threads in each."
     },
     "ListWorktreesResponse": {
       "type": "object",
@@ -6873,12 +6873,12 @@ expression: schema()
           ],
           "description": "The branch it tracks, and how far it is from it."
         },
-        "sessions": {
+        "threads": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/SessionId"
           },
-          "description": "The sessions the Host has a record of in it, open or not, most recently active first.",
+          "description": "The threads the Host has a record of in it, open or not, most recently active first.",
           "default": []
         }
       },
@@ -6957,7 +6957,7 @@ expression: schema()
         "repo",
         "branch"
       ],
-      "description": "`worktrees/create`: a new worktree for `branch`, beside the repository as\n`<repo>.<branch>` with the branch made safe for a path (`feature/auth` becomes\n`weave.feature-auth`). A branch that doesn't exist is made from `base`. One that exists is\nchecked out, a branch only a remote has included, unless another worktree has it checked\nout. The client then starts a session there with `session/create`."
+      "description": "`worktrees/create`: a new worktree for `branch`, beside the repository as\n`<repo>.<branch>` with the branch made safe for a path (`feature/auth` becomes\n`weave.feature-auth`). A branch that doesn't exist is made from `base`. One that exists is\nchecked out, a branch only a remote has included, unless another worktree has it checked\nout. The client then starts a thread there with `thread/create`."
     },
     "CreateWorktreeResponse": {
       "type": "object",
@@ -6997,7 +6997,7 @@ expression: schema()
       "required": [
         "path"
       ],
-      "description": "`worktrees/remove`: remove a worktree other than the primary one. Refused while a session\nin it runs a turn or waits on a request (`worktree_busy`), and when it has changes\n(`uncommitted_changes`) unless `force`. Otherwise the sessions open in it close first. Their\njournals stay, so they can still be deleted. Its branch is deleted when git counts it merged,\nand regardless with `deleteBranch`."
+      "description": "`worktrees/remove`: remove a worktree other than the primary one. Refused while a thread\nin it runs a turn or waits on a request (`worktree_busy`), and when it has changes\n(`uncommitted_changes`) unless `force`. Otherwise the threads open in it close first. Their\njournals stay, so they can still be deleted. Its branch is deleted when git counts it merged,\nand regardless with `deleteBranch`."
     },
     "RemoveWorktreeResponse": {
       "type": "object",
@@ -7007,7 +7007,7 @@ expression: schema()
           "items": {
             "$ref": "#/$defs/SessionId"
           },
-          "description": "The sessions that were open in it, now closed.",
+          "description": "The threads that were open in it, now closed.",
           "default": []
         },
         "branch": {
@@ -7032,7 +7032,7 @@ expression: schema()
       "required": [
         "path"
       ],
-      "description": "`worktrees/release`: let a worktree go before something else removes it, as\n`weave worktrees pre-remove` asks when worktrunk does. Refused, as `worktrees/remove` is,\nwhile a session in it runs a turn or waits on a request; otherwise the sessions open in it\nclose."
+      "description": "`worktrees/release`: let a worktree go before something else removes it, as\n`weave worktrees pre-remove` asks when worktrunk does. Refused, as `worktrees/remove` is,\nwhile a thread in it runs a turn or waits on a request; otherwise the threads open in it\nclose."
     },
     "ReleaseWorktreeResponse": {
       "type": "object",
@@ -7042,7 +7042,7 @@ expression: schema()
           "items": {
             "$ref": "#/$defs/SessionId"
           },
-          "description": "The sessions that were open in it, now closed.",
+          "description": "The threads that were open in it, now closed.",
           "default": []
         }
       }
@@ -7105,7 +7105,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The session it was opened from, whose clients put it in front by default."
+          "description": "The thread it was opened from, whose clients put it in front by default."
         },
         "title": {
           "type": [
@@ -7528,10 +7528,10 @@ expression: schema()
         "expiresAt"
       ]
     },
-    "ReportSessionRequest": {
+    "ReportThreadRequest": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "about": {
@@ -7550,11 +7550,11 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "about",
         "text"
       ],
-      "description": "`session/report` (feature `otherHosts`), a service's only: tell a session how a turn its\nagent began on another Host went, or that it waits on a person there, as the Host tells it\nof its own sessions' turns (ADR 0023): into its running turn if its agent takes steers,\notherwise through its queue, in the last of its successors, taking it up again if it isn't\nopen. The turn or steer it makes is a report on `about`, which nobody hears the end of."
+      "description": "`thread/report` (feature `otherHosts`), a service's only: tell a thread how a turn its\nagent began on another Host went, or that it waits on a person there, as the Host tells it\nof its own threads' turns (ADR 0023): into its running turn if its agent takes steers,\notherwise through its queue, in the last of its successors, taking it up again if it isn't\nopen. The turn or steer it makes is a report on `about`, which nobody hears the end of."
     },
     "DeclareToolsRequest": {
       "type": "object",
@@ -7628,18 +7628,18 @@ expression: schema()
       ],
       "description": "`service/answerTool`: the result of a call made to this service, which only it may answer,\nonce."
     },
-    "SessionEventNotification": {
+    "ThreadEventNotification": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId",
-          "description": "The attached session, the root of any subagent session the event is about."
+          "description": "The attached thread, the root of any subagent thread the event is about."
         },
         "seq": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
-          "description": "The event's position in the session's journal."
+          "description": "The event's position in the thread's journal."
         },
         "at": {
           "type": "integer",
@@ -7647,18 +7647,18 @@ expression: schema()
           "minimum": 0
         },
         "event": {
-          "$ref": "#/$defs/SessionEvent"
+          "$ref": "#/$defs/ThreadEvent"
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "seq",
         "at",
         "event"
       ],
-      "description": "`session/event`: one journaled event, in order."
+      "description": "`thread/event`: one journaled event, in order."
     },
-    "SessionEvent": {
+    "ThreadEvent": {
       "oneOf": [
         {
           "type": "object",
@@ -7675,12 +7675,12 @@ expression: schema()
             "kind",
             "notification"
           ],
-          "description": "The agent's `session/update`, for this session or a subagent session; or a client's\nmode or config option change, which reaches the others this way."
+          "description": "The agent's `session/update`, for this thread or a subagent thread; or a client's\nmode or config option change, which reaches the others this way."
         },
         {
           "type": "object",
           "properties": {
-            "sessionId": {
+            "threadId": {
               "$ref": "#/$defs/SessionId"
             },
             "prompt": {
@@ -7720,7 +7720,7 @@ expression: schema()
           },
           "required": [
             "kind",
-            "sessionId",
+            "threadId",
             "prompt",
             "origin"
           ],
@@ -7729,7 +7729,7 @@ expression: schema()
         {
           "type": "object",
           "properties": {
-            "sessionId": {
+            "threadId": {
               "$ref": "#/$defs/SessionId"
             },
             "prompt": {
@@ -7748,7 +7748,7 @@ expression: schema()
           },
           "required": [
             "kind",
-            "sessionId",
+            "threadId",
             "prompt",
             "origin"
           ],
@@ -7757,7 +7757,7 @@ expression: schema()
         {
           "type": "object",
           "properties": {
-            "sessionId": {
+            "threadId": {
               "$ref": "#/$defs/SessionId"
             },
             "response": {
@@ -7787,7 +7787,7 @@ expression: schema()
           },
           "required": [
             "kind",
-            "sessionId"
+            "threadId"
           ],
           "description": "A turn ended: how, as the agent answered the prompt, or why it failed."
         },
@@ -7837,7 +7837,7 @@ expression: schema()
           "type": "object",
           "properties": {
             "agent": {
-              "$ref": "#/$defs/SessionAgent"
+              "$ref": "#/$defs/ThreadAgent"
             },
             "previous": {
               "anyOf": [
@@ -7872,7 +7872,7 @@ expression: schema()
                 "string",
                 "null"
               ],
-              "description": "Why it runs the version it ran before: the one it was reopened for couldn't take\nthe session up."
+              "description": "Why it runs the version it ran before: the one it was reopened for couldn't take\nthe thread up."
             },
             "kind": {
               "type": "string",
@@ -7883,7 +7883,7 @@ expression: schema()
             "kind",
             "agent"
           ],
-          "description": "The session's agent was started again and took the session up (`session/reopen`).\nWhat it says about itself, its modes and its config options are the new process's."
+          "description": "The thread's agent was started again and took the thread up (`thread/reopen`).\nWhat it says about itself, its modes and its config options are the new process's."
         },
         {
           "type": "object",
@@ -7910,7 +7910,7 @@ expression: schema()
             "kind",
             "reason"
           ],
-          "description": "The session closed. `by` is the client whose `session/close` or `session/delete` closed\nit for everyone; absent when nobody did, as when its agent exited."
+          "description": "The thread closed. `by` is the client whose `thread/close` or `thread/delete` closed\nit for everyone; absent when nobody did, as when its agent exited."
         },
         {
           "type": "object",
@@ -7938,7 +7938,7 @@ expression: schema()
             "kind",
             "title"
           ],
-          "description": "The session was renamed through the Host (`session/rename`, or the `rename_session` Host\ntool). Its title is the Host's from then on: titles the agent sends later don't replace\nit."
+          "description": "The thread was renamed through the Host (`thread/rename`, or the `rename_thread` Host\ntool). Its title is the Host's from then on: titles the agent sends later don't replace\nit."
         },
         {
           "type": "object",
@@ -7966,7 +7966,7 @@ expression: schema()
             "kind",
             "successor"
           ],
-          "description": "The session's work goes on in another, its successor, which a client named\n(`session/setSuccessor`, WVE-168): clients following this one may follow that."
+          "description": "The thread's work goes on in another, its successor, which a client named\n(`thread/setSuccessor`, WVE-168): clients following this one may follow that."
         },
         {
           "type": "object",
@@ -7997,7 +7997,7 @@ expression: schema()
             "kind",
             "labels"
           ],
-          "description": "The session's labels changed (`session/label`, WVE-173): all of them, after."
+          "description": "The thread's labels changed (`thread/label`, WVE-173): all of them, after."
         },
         {
           "type": "object",
@@ -8014,7 +8014,7 @@ expression: schema()
             "kind",
             "text"
           ],
-          "description": "Something the Host tells the session's clients, such as why its agent can't use client\ntools."
+          "description": "Something the Host tells the thread's clients, such as why its agent can't use client\ntools."
         },
         {
           "type": "object",
@@ -8042,7 +8042,7 @@ expression: schema()
             "prompt",
             "origin"
           ],
-          "description": "A prompt joined the session's queue (`queue/add`)."
+          "description": "A prompt joined the thread's queue (`queue/add`)."
         },
         {
           "type": "object",
@@ -9396,10 +9396,10 @@ expression: schema()
       },
       "description": "Exit status of a terminal command."
     },
-    "SessionChangedNotification": {
+    "ThreadChangedNotification": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "activity": {
@@ -9441,7 +9441,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "Where in a git repository the session's directory is, as a turn left it."
+          "description": "Where in a git repository the thread's directory is, as a turn left it."
         },
         "mcpServers": {
           "type": [
@@ -9455,38 +9455,38 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`session/changed`: what changed about the session, as `SessionState` describes it."
+      "description": "`thread/changed`: what changed about the thread, as `ThreadState` describes it."
     },
-    "SessionUpdatedNotification": {
+    "ThreadUpdatedNotification": {
       "type": "object",
       "properties": {
-        "session": {
-          "$ref": "#/$defs/SessionListing"
+        "thread": {
+          "$ref": "#/$defs/ThreadListing"
         }
       },
       "required": [
-        "session"
+        "thread"
       ],
-      "description": "`sessions/updated`, to watching clients: a session appeared or changed (opened, suspended,\nclosed, its activity, its clients, its title, or a blank session's first prompt), as it lists\nnow."
+      "description": "`threads/updated`, to watching clients: a thread appeared or changed (opened, suspended,\nclosed, its activity, its clients, its title, or a blank thread's first prompt), as it lists\nnow."
     },
-    "SessionRemovedNotification": {
+    "ThreadRemovedNotification": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
-        "sessionId"
+        "threadId"
       ],
-      "description": "`sessions/removed`, to watching clients: a session went away: deleted, its journal pruned,\nor closed while blank."
+      "description": "`threads/removed`, to watching clients: a thread went away: deleted, its journal pruned,\nor closed while blank."
     },
     "ElicitationCompletedNotification": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "notification": {
@@ -9494,10 +9494,10 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "notification"
       ],
-      "description": "`session/elicitationCompleted`: an accepted URL elicitation's external step finished."
+      "description": "`thread/elicitationCompleted`: an accepted URL elicitation's external step finished."
     },
     "CompleteElicitationNotification": {
       "type": "object",
@@ -9526,7 +9526,7 @@ expression: schema()
     "PendingAddedNotification": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "pending": {
@@ -9534,15 +9534,15 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "pending"
       ],
-      "description": "`pending/added`: a request now waits in an attached session."
+      "description": "`pending/added`: a request now waits in an attached thread."
     },
     "PendingResolvedNotification": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "pendingId": {
@@ -9560,7 +9560,7 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "pendingId",
         "outcome"
       ],
@@ -9577,7 +9577,7 @@ expression: schema()
         {
           "type": "string",
           "const": "cancelled",
-          "description": "Its turn was cancelled or ended, or its session closed."
+          "description": "Its turn was cancelled or ended, or its thread closed."
         },
         {
           "type": "string",
@@ -9590,7 +9590,7 @@ expression: schema()
     "UpdateAvailableNotification": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "agentId": {
@@ -9602,20 +9602,20 @@ expression: schema()
         },
         "running": {
           "type": "string",
-          "description": "The version the session runs."
+          "description": "The version the thread runs."
         },
         "latest": {
           "type": "string"
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "agentId",
         "name",
         "running",
         "latest"
       ],
-      "description": "`agents/updateAvailable`: a newer version of an attached session's agent is out. The Host\nlooks when a session opens, at most once an hour for each agent."
+      "description": "`agents/updateAvailable`: a newer version of an attached thread's agent is out. The Host\nlooks when a thread opens, at most once an hour for each agent."
     },
     "DevicePairedNotification": {
       "type": "object",
@@ -9689,12 +9689,12 @@ expression: schema()
         "tool",
         "caller"
       ],
-      "description": "`service/toolCall`, to the service that declared the tool: a session's agent called it.\nThe service answers with `service/answerTool`; the agent waits until it does."
+      "description": "`service/toolCall`, to the service that declared the tool: a thread's agent called it.\nThe service answers with `service/answerTool`; the agent waits until it does."
     },
     "ToolCaller": {
       "type": "object",
       "properties": {
-        "sessionId": {
+        "threadId": {
           "$ref": "#/$defs/SessionId"
         },
         "agentId": {
@@ -9715,12 +9715,12 @@ expression: schema()
         }
       },
       "required": [
-        "sessionId",
+        "threadId",
         "agentId",
         "cwd",
         "policy"
       ],
-      "description": "The session whose agent calls a service tool."
+      "description": "The thread whose agent calls a service tool."
     },
     "HostCallNotification": {
       "type": "object",
@@ -9756,7 +9756,7 @@ expression: schema()
         "call",
         "caller"
       ],
-      "description": "`service/hostCall` (feature `otherHosts`), to the service that said it reaches the person's\nHosts: a session's agent called a Host tool naming another Host. The service answers with\n`service/answerTool`, as for a tool call, with the method's answer as JSON text or a tool\nerror; `service/toolCallCancelled` says the agent stopped waiting."
+      "description": "`service/hostCall` (feature `otherHosts`), to the service that said it reaches the person's\nHosts: a thread's agent called a Host tool naming another Host. The service answers with\n`service/answerTool`, as for a tool call, with the method's answer as JSON text or a tool\nerror; `service/toolCallCancelled` says the agent stopped waiting."
     },
     "HostCall": {
       "oneOf": [
@@ -9778,10 +9778,10 @@ expression: schema()
           "properties": {
             "method": {
               "type": "string",
-              "const": "sessions/list"
+              "const": "threads/list"
             },
             "params": {
-              "$ref": "#/$defs/ListSessionsRequest"
+              "$ref": "#/$defs/ListThreadsRequest"
             }
           },
           "required": [
@@ -9810,10 +9810,10 @@ expression: schema()
           "properties": {
             "method": {
               "type": "string",
-              "const": "sessions/get"
+              "const": "threads/get"
             },
             "params": {
-              "$ref": "#/$defs/GetSessionRequest"
+              "$ref": "#/$defs/GetThreadRequest"
             }
           },
           "required": [
@@ -9826,7 +9826,7 @@ expression: schema()
           "properties": {
             "method": {
               "type": "string",
-              "const": "session/run"
+              "const": "thread/run"
             },
             "params": {
               "$ref": "#/$defs/RunRequest"

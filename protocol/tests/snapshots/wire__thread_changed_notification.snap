@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ThreadChangedNotification\n{\n    thread_id: \"s-1\".into(), activity: Some(Activity::Idle), clients: Some(1),\n    title: None, blank: None, git: None, mcp_servers: None,\n})"
+---
+{
+  "method": "thread/changed",
+  "params": {
+    "threadId": "s-1",
+    "activity": "idle",
+    "clients": 1
+  }
+}

@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
+use weave_host_protocol::PROTOCOL_VERSION;
 use weave_host_protocol::VersionRange;
 use weave_host_protocol::hello::AcpInfo;
 use weave_host_protocol::hello::Auth;
@@ -78,7 +79,7 @@ async fn a_client_reaches_a_hosts_handlers() {
                 .block_task()
                 .await
                 .expect("hello answered");
-            assert_eq!(hello.protocol, 2);
+            assert_eq!(hello.protocol, PROTOCOL_VERSION);
             assert_eq!(hello.client_id, "c1");
 
             let unknown = cx

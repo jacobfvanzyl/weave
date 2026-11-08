@@ -1,0 +1,28 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&event(41, ThreadEvent::TurnStarted\n{\n    thread_id: \"s-2\".into(), prompt:\n    vec![text(\"port the parser's tests to the new runner\")], origin:\n    TurnOrigin::Thread\n    { thread_id: \"s-1\".into(), report: false, host: None, host_name: None, },\n    queued_id: None, turn_id: Some(\"t-1\".to_owned()), continues: None,\n},))"
+---
+{
+  "method": "thread/event",
+  "params": {
+    "threadId": "s-1",
+    "seq": 41,
+    "at": 1760180001234,
+    "event": {
+      "kind": "turnStarted",
+      "threadId": "s-2",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "port the parser's tests to the new runner"
+        }
+      ],
+      "origin": {
+        "thread": {
+          "threadId": "s-1"
+        }
+      },
+      "turnId": "t-1"
+    }
+  }
+}

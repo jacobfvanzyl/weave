@@ -1,5 +1,5 @@
 //! Answering permission requests without asking anyone, by a [`PermissionPolicy`]: as the
-//! Host does for headless sessions, and `weave agents smoke` for its one turn.
+//! Host does for headless threads, and `weave agents smoke` for its one turn.
 
 use std::collections::HashMap;
 
@@ -14,7 +14,7 @@ use agent_client_protocol::schema::v1::ToolKind;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// How a session's permission requests are answered.
+/// How a thread's permission requests are answered.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +40,7 @@ pub enum Unapproved {
 }
 
 impl PermissionPolicy {
-    /// Ask attached clients, waiting for one when none is attached: an interactive session.
+    /// Ask attached clients, waiting for one when none is attached: an interactive thread.
     pub fn ask() -> Self {
         Self::default()
     }
@@ -100,8 +100,8 @@ impl PermissionPolicy {
     }
 
     /// This policy, approving nothing `ceiling` doesn't, and rejecting the rest if either
-    /// rejects it: what a delegated session gets from the policy asked for and the policy of the
-    /// session that starts it (ADR 0020).
+    /// rejects it: what a delegated thread gets from the policy asked for and the policy of the
+    /// thread that starts it (ADR 0020).
     pub fn within(&self, ceiling: &PermissionPolicy) -> PermissionPolicy {
         PermissionPolicy {
             approve: self

@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(44, SessionEvent::Queued\n{\n    queued_id: \"q-3\".to_owned(), prompt: vec![text(\"then update the docs\")],\n    origin: tui(),\n},))"
+expression: "message(&event(44, ThreadEvent::Queued\n{\n    queued_id: \"q-3\".to_owned(), prompt: vec![text(\"then update the docs\")],\n    origin: tui(),\n},))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 44,
     "at": 1760180001234,
     "event": {

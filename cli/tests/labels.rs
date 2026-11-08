@@ -6,8 +6,8 @@
 mod support;
 
 use pretty_assertions::assert_eq;
-use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::ThreadListing;
 
 use crate::support::TestHost;
 
@@ -18,11 +18,10 @@ fn listed(host: &TestHost, labels: &[&str]) -> Vec<String> {
     }
     let output = host.weave(&args);
     assert!(output.status.success(), "{output:?}");
-    let sessions: Vec<SessionListing> =
-        serde_json::from_slice(&output.stdout).expect("the listings");
-    sessions
+    let threads: Vec<ThreadListing> = serde_json::from_slice(&output.stdout).expect("the listings");
+    threads
         .into_iter()
-        .map(|session| session.info.session_id.to_string())
+        .map(|thread| thread.info.session_id.to_string())
         .collect()
 }
 
@@ -39,8 +38,8 @@ fn threads_are_labelled_and_found_by_their_labels() {
         "bot:daily",
         "hello",
     ]);
-    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("session/run's answer");
-    let id = run.session_id.to_string();
+    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("thread/run's answer");
+    let id = run.thread_id.to_string();
     let other = host.weave(&["run", "--agent", "fake", "--detach", "--json", "hello"]);
     assert!(other.status.success(), "{other:?}");
     assert_eq!(listed(&host, &["bot:daily"]), std::slice::from_ref(&id));

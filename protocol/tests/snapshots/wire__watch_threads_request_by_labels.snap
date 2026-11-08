@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&WatchThreadsRequest { labels: vec![\"dispatcher\".to_owned()], })"
+---
+{
+  "method": "threads/watch",
+  "params": {
+    "labels": [
+      "dispatcher"
+    ]
+  }
+}

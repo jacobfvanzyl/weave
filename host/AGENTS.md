@@ -1,105 +1,107 @@
 # host
 
-The weave Host (`weave-host`), which `weave daemon` runs: client connections, open sessions and
+The weave Host (`weave-host`), which `weave daemon` runs: client connections, open threads and
 their agents, journals, permission policies, headless runs, the Host MCP server and its bridge,
 and the WebSocket and paired devices of remote clients. No UI. Read the root `AGENTS.md` first;
 the Host protocol is `../docs/specs/wve-85-host-protocol.md`.
 
 In the Host, `client` is one client's connection (`host/hello` first, then requests across
-any agents and sessions) and `session` the task that owns an open session: its agent, its
-journal (`journal`, JSONL under `~/.local/state/weave/daemon/sessions`, 0600; each line's
-position is its event's `seq`, the header's creation time the journal's id), the clients
-attached to it, its turns, and its pending requests. Everything a session's clients are
+any agents and threads) and `thread` the task that owns an open thread: its agent, its
+journal (`journal`, JSONL under `~/.local/state/weave/daemon/threads`, 0600; each line's
+position is its event's `seq`, the header's creation time the journal's id; Hosts of protocol
+version 2 kept them in `daemon/sessions`, which `journal::move_from_version_2` moves once, and
+whose records `journal::version_2` still reads, WVE-200), the clients
+attached to it, its turns, and its pending requests. Everything a thread's clients are
 sent is journaled, so attaching after a position replays only what follows, and a restarted
-Host resumes sessions it left open (suspended). A session `session/create` opened is blank
-until it's prompted (`SessionHandle::is_blank`): it isn't listed, closes `blank_grace` (a
+Host resumes threads it left open (suspended). A thread `thread/create` opened is blank
+until it's prompted (`ThreadHandle::is_blank`): it isn't listed, closes `blank_grace` (a
 minute) rather than `idle_grace` after nothing needs it, and closes rather than suspends when
-the Host stops, its journal removed; the TUI detaches from a blank session with `ifUnused`
+the Host stops, its journal removed; the TUI detaches from a blank thread with `ifUnused`
 when it quits or switches away, and opens a new one when it reconnects to a Host that
 dropped it. Journals untouched for 14 days are pruned at startup and hourly, never an open
-or a labelled session's (`lib::labelled`; the journals are indexed before the startup prune, so
+or a labelled thread's (`lib::labelled`; the journals are indexed before the startup prune, so
 their labels are known). Labels (WVE-173) are a `labelled` entry with all of them after each
-change, and the header's `labels` for those a session started with or a closed one carried;
-`Summary` and `Recorded` keep them, `session/label` is `Command::Label`, and `client::check_labels`
-checks those `session/create` and `session/run` give. Context usage and the last completed compaction
-(WVE-174) are `journal::Usage`, noted from the session's own `usage_update`s and
+change, and the header's `labels` for those a thread started with or a closed one carried;
+`Summary` and `Recorded` keep them, `thread/label` is `Command::Label`, and `client::check_labels`
+checks those `thread/create` and `thread/run` give. Context usage and the last completed compaction
+(WVE-174) are `journal::Usage`, noted from the thread's own `usage_update`s and
 `compaction_update`s as `Actor::record` journals them, read again from a journal (`journal::usage`,
-and `record_of` for the index), and carried into a closed session's new journal header; watchers
-hear of usage once it moves by a hundredth of the window (`session::stepped`). A prompt is journaled with its turn (`turnStarted`, with the client's origin);
+and `record_of` for the index), and carried into a closed thread's new journal header; watchers
+hear of usage once it moves by a hundredth of the window (`thread::stepped`). A prompt is journaled with its turn (`turnStarted`, with the client's origin);
 turns end in `turnEnded` for every client. `turn/steer` (a `features` entry) passes a steer to
 the agent only while a turn the Host started runs, journals it as `turnSteered` where the
-agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Each session's queue (`queue.rs`,
-a `features` entry, WVE-107) is the session task's: `queue/add` starts a turn when none of the
-session's own runs and nothing waits, and otherwise journals a `queued` entry; `advance` starts
-the first queued prompt whenever the session's turn isn't running and the queue isn't paused,
+agent took it, and otherwise answers `notRunning` for the client to prompt with it instead. Each thread's queue (`queue.rs`,
+a `features` entry, WVE-107) is the thread task's: `queue/add` starts a turn when none of the
+thread's own runs and nothing waits, and otherwise journals a `queued` entry; `advance` starts
+the first queued prompt whenever the thread's turn isn't running and the queue isn't paused,
 with that prompt's origin and its id in `turnStarted`. A cancelled or failed turn pauses a queue
 that holds prompts (`queuePaused`), and prompting, adding or `queue/resume` resumes it. The queue
-is rebuilt from the journal (`Queue::from_records`); a closed session's new journal header
-carries it on, as it does a title; taking up an interactive session with prompts waiting pauses
-it as `interrupted`, and a Host starting takes up suspended headless sessions whose queue waits
-(`Daemon::resume_queues`). A turn a stopped Host left open ends `interrupted` when the session is
-taken up (`client::reopen`, `errors::interrupted`, WVE-144); a headless session continues its
-own once, from its origin, before its queue starts anything (`session::Continuation`, started
+is rebuilt from the journal (`Queue::from_records`); a closed thread's new journal header
+carries it on, as it does a title; taking up an interactive thread with prompts waiting pauses
+it as `interrupted`, and a Host starting takes up suspended headless threads whose queue waits
+(`Daemon::resume_queues`). A turn a stopped Host left open ends `interrupted` when the thread is
+taken up (`client::reopen`, `errors::interrupted`, WVE-144); a headless thread continues its
+own once, from its origin, before its queue starts anything (`thread::Continuation`, started
 before the task runs), and its `turnStarted` names the turn in `continues`, which also keeps a
 continuation from being continued again. That `turnStarted` is journaled in `client::reopen`
 with the interrupted turn's end, before the agent is prompted, so a reader never finds one
 without the other; `journal::turn` gives the interrupted turn's `continuedIn` from it (WVE-168).
-Those sessions are taken up at startup too. A session's successor (`session/setSuccessor`,
+Those threads are taken up at startup too. A thread's successor (`thread/setSuccessor`,
 `Command::SetSuccessor`) is a `continuedIn` entry, kept in `Summary` and `Recorded` and carried
-into a closed session's new journal header; `host_tools::tell` sends a report to the last of the
+into a closed thread's new journal header; `host_tools::tell` sends a report to the last of the
 caller's successors (`Registry::latest_successor`). Request keys (`admissions.rs`, feature `requestKeys`) are admitted
-before `session/run`, `turn/start` and `queue/add` act: a line in `admissions.jsonl` beside the
+before `thread/run`, `turn/start` and `queue/add` act: a line in `admissions.jsonl` beside the
 journals, synced, then the answer, or a refusal that frees the key. The key is journaled with the
 `turnStarted` or `queued` entry it caused, so a repeat of a key a stopped Host never answered
 finds out from the journal whether the work happened (`client::keyed`). Keys go with the journals'
 retention. Permission requests and elicitations are pending
 requests (`pending/added`) every attached client sees, and later attachers in their state;
-the first `pending/answer` counts, and `turn/cancel` cancels them. `sessions/watch` (a
-`features` entry) keeps a client's list of the Host's sessions live without attaching:
+the first `pending/answer` counts, and `turn/cancel` cancels them. `threads/watch` (a
+`features` entry) keeps a client's list of the Host's threads live without attaching:
 `Shared::watch` answers with `Shared::listings` and registers the connection under the
-watchers' lock, so nothing comes between, and `tell_updated` sends `sessions/updated` from
-each session task's `update_summary` (the change that sends `session/changed`, unless the
-session is blank) and from `finish` (suspended or closed), and `sessions/removed` when a
-session is deleted, its journal pruned, or closed while blank (`tell_removed`). A watcher for
-labels (`Watcher`) hears of the sessions that carry them, and of one that stops carrying them
-once more, through the sessions it last heard of while they did (`matched`). Take the watchers' lock before
+watchers' lock, so nothing comes between, and `tell_updated` sends `threads/updated` from
+each thread task's `update_summary` (the change that sends `thread/changed`, unless the
+thread is blank) and from `finish` (suspended or closed), and `threads/removed` when a
+thread is deleted, its journal pruned, or closed while blank (`tell_removed`). A watcher for
+labels (`Watcher`) hears of the threads that carry them, and of one that stops carrying them
+once more, through the threads it last heard of while they did (`matched`). Take the watchers' lock before
 the registry, never while holding it. `files/list` (`files.rs`) lists a directory on the Host's computer for clients
 that aren't on it: names and kinds, off the dispatch loop, with paths worked out from their text
 so symlinks stay as named. It's the first of the `files/*` family, which `files/search` and
 `files/read` are to join. The Host is git-aware (ADR 0019, `git.rs`, through the `git` command
-with the agents' environment, `GIT_OPTIONAL_LOCKS=0` and no prompts): a session's `GitLocation`
+with the agents' environment, `GIT_OPTIONAL_LOCKS=0` and no prompts): a thread's `GitLocation`
 (repository by primary worktree, worktree, branch, remote without credentials) is read alongside
 starting its agent, kept in its summary and `Registry::known` and the header of any journal it
 begins, and read again after each of its own turns (`Command::Located`, which sends
-`session/changed`). `worktrees/*` list, make (beside the repository as worktrunk lays them out,
-`git::worktree_path`) and remove worktrees; `Shared::release` refuses while a session in one runs
+`thread/changed`). `worktrees/*` list, make (beside the repository as worktrunk lays them out,
+`git::worktree_path`) and remove worktrees; `Shared::release` refuses while a thread in one runs
 a turn or waits on a request, and otherwise closes them, for `worktrees/remove` and for
 `worktrees/release`, which worktrunk's `pre-remove` hook asks through `weave worktrees
 pre-remove`. The Host never removes a worktree on its own. Tests run git with
 `GIT_CONFIG_GLOBAL=/dev/null`, so the person's git configuration stays out. Host-run terminals reach
 clients as `terminalOutput`/`terminalExit` events; the Host strips agents' `_meta` terminal
 output after turning it into the same events, so each chunk arrives once. The Host resolves
-agents by id (`../agents`) and starts them in the session's directory with its own
+agents by id (`../agents`) and starts them in the thread's directory with its own
 environment over the login shell's (`instance.rs`), which their Host-run terminals start in too
-(`Launch::agent_environment`, handed to `acp-core`); an agent started for no session (to
-answer `agents/get`, sign-in or listing) is a spare the next session for that agent and
-directory takes, stopped after a minute unused. New sessions start in the agent's configured
-`mode` (`modes.rs`), those `session/run` starts too (ADR 0026); when a session's policy rejects a
+(`Launch::agent_environment`, handed to `acp-core`); an agent started for no thread (to
+answer `agents/get`, sign-in or listing) is a spare the next thread for that agent and
+directory takes, stopped after a minute unused. New threads start in the agent's configured
+`mode` (`modes.rs`), those `thread/run` starts too (ADR 0026); when a thread's policy rejects a
 permission request, it journals a `notice` saying which tool, its kind and `--approve` for it
-(`session::rejected_text`). When a session of a preset or registry agent opens, `updates.rs` looks for
+(`thread::rejected_text`). When a thread of a preset or registry agent opens, `updates.rs` looks for
 a newer version in the background, one lookup an hour per package (or for the registry's
 catalog) with the version source swappable (`DaemonConfig.upstream`), and tells the agent's
-sessions of an older one, which tell their clients (`agents/updateAvailable`,
-`SessionState.update`). `agents/update` is `weave agents update <agent>` checked with the Host's own
-launcher; `session/reopen` has the session's task swap its agent process for one of the
-current version once no turn runs or request waits, taking the session up through ACP resume
+threads of an older one, which tell their clients (`agents/updateAvailable`,
+`ThreadState.update`). `agents/update` is `weave agents update <agent>` checked with the Host's own
+launcher; `thread/reopen` has the thread's task swap its agent process for one of the
+current version once no turn runs or request waits, taking the thread up through ACP resume
 or load, journaling `agentReopened`, and going back to the old version when the new one
-can't (`tests/updates.rs`); a blank session it refuses, since the agent may have
+can't (`tests/updates.rs`); a blank thread it refuses, since the agent may have
 kept nothing of it to take up. An ACP `initialize` from a client of the old protocol is answered with
 the protocol version, so it reloads into the current weave. Before it stops, the Host drains
-(WVE-143, `Shared::begin_drain`): `SessionTask::prompt` refuses new turns with `host_stopping`,
+(WVE-143, `Shared::begin_drain`): `Actor::prompt` refuses new turns with `host_stopping`,
 `enqueue` queues and `advance` holds the queue, while `wait_for_turns` waits, up to
-`drain_timeout` (5 minutes), for every session whose `Summary::activity` isn't idle, but the
+`drain_timeout` (5 minutes), for every thread whose `Summary::activity` isn't idle, but the
 one whose agent process is `except`. Each agent process gets a name, `WEAVE_AGENT_PROCESS`
 (`Launch::process`, kept in `Summary::agent_process`), which a `weave` it runs passes as
 `except`. `host/drain` begins a drain for a client, which `lapse_drain` ends if that client
@@ -110,48 +112,48 @@ named in a test config.
 
 Service tools (WVE-171, ADR 0027) are `service_tools.rs`: a service's declared tools are kept
 with its device in `devices.json` (`Devices::declare_tools`, `service_tools`), offered in every
-session set up after (`client::service_tools`, `Mcp::declare`), and a call to one is a
+thread set up after (`client::service_tools`, `Mcp::declare`), and a call to one is a
 `service/toolCall` to the connection that declared them last (`ServiceTools::serve`), which
 answers with `service/answerTool`; the connection ending fails its calls. Client tools (WVE-89, ADR 0009) run on a client's device for an agent: `clipboard_write`,
 whose catalog is `weave_host_protocol::tools`. `mcp.rs` is the Host MCP server, `weave`, which
-`client::setup` declares for every session setup under a new `serverId` or token (a
-`Binding` the session keeps, bound to its id once the agent gives it, so calls that come
+`client::setup` declares for every thread setup under a new `serverId` or token (a
+`Binding` the thread keeps, bound to its id once the agent gives it, so calls that come
 first wait for it), with the tools the config's `client_tools` choose. The binding and the
-configured servers make up the session's `Servers`, whose statuses (WVE-160) are
-`SessionState.mcpServers` and `session/changed`'s: `weave` declared, connected from the
+configured servers make up the thread's `Servers`, whose statuses (WVE-160) are
+`ThreadState.mcpServers` and `thread/changed`'s: `weave` declared, connected from the
 agent's first 2026-07-28 request (`Command::SummaryChanged`), or unavailable, and each
 configured server passed or skipped. It speaks MCP
 2026-07-28 only and answers `server/discover`, `tools/list`, `tools/call`, an empty
 `resources/list`, and `subscriptions/listen`, which it acknowledges and holds open (Claude
-Code opens one regardless); `initialize` is refused with `-32022`, and the session journals a
+Code opens one regardless); `initialize` is refused with `-32022`, and the thread journals a
 `notice` that the agent can't use client tools. Agents that advertise `mcpCapabilities.acp`
 reach it over ACP: `acp-core`'s `mcp/message` handler hands calls to the `McpProvider` the
 Host installs on each agent it starts (`AgentHandle::provide_mcp`). The rest get the stdio
 server `weave mcp-bridge` (`DaemonConfig.mcp_bridge`, the Host's own binary), which `relay`s
 bytes to `mcp.sock` beside the Host's socket (same mode and peer check), after its token. A
-`tools/call` becomes `Command::ClientTool` in the session: a `clientTool` pending request for
+`tools/call` becomes `Command::ClientTool` in the thread: a `clientTool` pending request for
 the client that sent the running turn's latest prompt or steer, if it's attached and lists the
 tool, which only that client may answer (`not_target`); otherwise a tool error at once. The
 target detaching fails it as one that may have run; the agent cancelling it withdraws it.
 Agents get only text in `content`, since Claude Code gives the model `structuredContent` in
 its place. Host tools (`host_catalog`, chosen by the config's `host_tools`; ADR 0020) are
-answered by the Host itself, in `host_tools.rs`, for the bound session: each is a Host protocol
-method seen from inside the session, through the same code as the client request (the free
-functions in `client.rs`: `list_sessions`, `get_session`, `run_as`, `add_queued`, `steer_turn`,
-`cancel_turn`), answering with its JSON or a tool error. `start_session` starts a delegated
-session (`session/run` with the `session` turn origin, its journal header's `started_by` naming
+answered by the Host itself, in `host_tools.rs`, for the bound thread: each is a Host protocol
+method seen from inside the thread, through the same code as the client request (the free
+functions in `client.rs`: `list_threads`, `get_thread`, `run_as`, `add_queued`, `steer_turn`,
+`cancel_turn`), answering with its JSON or a tool error. `start_thread` starts a delegated
+thread (`thread/run` with the `thread` turn origin, its journal header's `started_by` naming
 the caller, its policy `PermissionPolicy::within` the caller's); every tool reads and acts on any
-session (ADR 0023), and `[delegation]` caps depth and the caller's own running delegated
-sessions (`one_more`, `room`). A session's task reports to the session whose agent began its
-running turn (`Actor::caller`, the turn's `session` origin) when that turn ends (`ended_text`,
+thread (ADR 0023), and `[delegation]` caps depth and the caller's own running delegated
+threads (`one_more`, `room`). A thread's task reports to the thread whose agent began its
+running turn (`Actor::caller`, the turn's `thread` origin) when that turn ends (`ended_text`,
 with `journal::latest_turn`'s last message) or waits on a person (`waiting_text`), through
 `host_tools::tell`: a steer into the caller's running turn, or else `queue/add`, taking the
 caller up again first if it isn't open. A report's origin has `report: true`, and a report's
-turn reports to nobody, which is all that keeps two sessions from trading reports. `rename_session` sends `Command::Rename` as `session/rename` does.
+turn reports to nobody, which is all that keeps two threads from trading reports. `rename_thread` sends `Command::Rename` as `thread/rename` does.
 A rename journals `Entry::Renamed`, and
-the session task keeps the title in `renamed`, leaving the agent's later titles out of the
-journal and summary. `journal::kept_title` reads it back for a suspended session, and a closed
-session's new journal header carries it on. A session shows its rename or else its agent's last
+the thread task keeps the title in `renamed`, leaving the agent's later titles out of the
+journal and summary. `journal::kept_title` reads it back for a suspended thread, and a closed
+thread's new journal header carries it on. A thread shows its rename or else its agent's last
 title (`journal::shown_title`; `Recorded::title` for one the Host isn't running), and is ordered
 by its last activity, the last journal record that is some (`Entry::is_activity`): taking it up,
 and the commands, modes and usage its agent tells as it's taken up, aren't. The TUI lists `clipboard_write` (`daemon::capabilities`) and runs calls targeted at
@@ -172,10 +174,10 @@ reader holds its owner back rather than the Host buffering.
   rest, the first time terminals are asked for (`Terminals::ready`).
 - **The service:** `Terminals` holds one control connection per terminal, subscribed to its
   events, and asks it `describe` again on Rex's change events, so `terminals/list` and its
-  scope's watchers (`terminals/watch`, the same no-gap watch as sessions') stay current. A
+  scope's watchers (`terminals/watch`, the same no-gap watch as threads') stay current. A
   terminal's scope is the deepest worktree its directory is in, else the directory, symlinks
   resolved. `Shared::release` refuses a worktree while one of its terminals runs a command
-  (OSC 133), and otherwise closes them with its sessions.
+  (OSC 133), and otherwise closes them with its threads.
 - **The stream:** `terminals::stream` serves a `weave-terminal` upgrade on the remote listener,
   and the same WebSocket to local clients on `terminals.sock` beside the Host's socket
   (`serve_local`, `Daemon::serve_terminal_streams`, WVE-167), generic over its transport. It
@@ -235,12 +237,12 @@ Dispatcher: Hosts don't pair with each other. A service that declared `hosts`
 `host_tools::elsewhere` works the method's request out here (`request`, `start_elsewhere`: the
 caller's directory under the home, `Shared::home`, as `~/…` from the repository's main worktree
 with its `remote`, `counterpart`; the policy within the caller's; the agent's own key; and
-`room`, `[delegation] running` less this Host's busy delegated sessions, `busy_here`) and
+`room`, `[delegation] running` less this Host's busy delegated threads, `busy_here`) and
 `ServiceTools::call_host` sends it as `service/hostCall`, answered by `service/answerTool` as a
 service tool call is. This Host keeps no record of it: the Dispatcher follows the turn and
-reports with `session/report` (`client::report_session`, keyed), which `host_tools::tell` tells
+reports with `thread/report` (`client::report_thread`, keyed), which `host_tools::tell` tells
 as it tells this Host's own reports. On the serving side `Connection::origin_for` turns a
-service's `caller` into the `session` origin naming the other Host and its name, `client::place`
+service's `caller` into the `thread` origin naming the other Host and its name, `client::place`
 expands `~` and checks the checkout's remote, and `Actor::caller` ignores origins on another
 Host. `Summary::turn_from_host` and `startedByHost` up the starting chain keep turns another
 Host's agent began from reaching further (`host_tools::from_other_host`). Reports that take up a

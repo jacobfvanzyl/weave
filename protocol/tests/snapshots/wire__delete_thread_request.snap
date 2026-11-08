@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&DeleteThreadRequest\n{ thread_id: \"s-1\".into(), agent_id: Some(\"claude\".to_owned()), })"
+---
+{
+  "method": "thread/delete",
+  "params": {
+    "threadId": "s-1",
+    "agentId": "claude"
+  }
+}

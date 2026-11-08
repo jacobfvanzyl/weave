@@ -3,7 +3,7 @@
 The interactive terminal client (`weave-tui`): fullscreen transcript or inline viewport, chat
 state, composer. The `weave` binary in `../cli` runs it. Read the root `AGENTS.md` first.
 
-The TUI shows one session at a time. Like Codex, it runs fullscreen by default: on the
+The TUI shows one thread at a time. Like Codex, it runs fullscreen by default: on the
 alternate screen, `weave` owns the transcript (`transcript.rs`: retained cells that
 reflow, scrolling, selection and copy, and Find, matched by `find.rs`), and folds the agent's
 work as the app does (WVE-140): each run of tool calls into one row, a lone call too (`runs.rs`),
@@ -55,11 +55,11 @@ agent's slash commands) and queues otherwise, and Tab always queues, as in Codex
 lists `queue` holds the queue (WVE-107): queued messages go to `queue/add`, the queue shown is
 the Host's, every client's prompts in it (`set_queue`, then `queued`/`unqueued` events, with the
 state covering a replay), the Host starts them, and Esc takes this client's own back with
-`queue/remove`, leaving the rest paused, which `/queue` resumes; messages sent while a session
+`queue/remove`, leaving the rest paused, which `/queue` resumes; messages sent while a thread
 opens are kept here and go to the Host once it's open (`send_kept_messages`);
 `/new`, `/reload`, `/exit` (`/quit` too), `/rename`, `/subagents`, `/thread` and `/update` are
 the TUI's own slash commands (`/thread` opens `thread_panel`, the thread's status in place of the
-composer: its MCP servers as the Host reports them, from `SessionState` and `session/changed`,
+composer: its MCP servers as the Host reports them, from `ThreadState` and `thread/changed`,
 with a pointer to the agent's own `/mcp` when it offers one, WVE-160, and its worktree's
 terminals from `terminals/watch`, which the panel manages, WVE-167: in Rex, `rex` shows each in a
 pane of its own running `weave terminals attach`, to the right of the TUI and then stacked
@@ -70,17 +70,17 @@ panes and closing its own when it's alone in its tab, ADR 0025), offered with th
 closing the thread once nothing else needs it, if its agent can load or resume it again, while
 Ctrl+D quits leaving it open in the weave Host (WVE-159);
 `/reload` ends the TUI and the CLI execs its own
-binary again with `--resume`; `/rename <title>`, offered when the Host lists `session/rename`,
-sends that in place of the agent's own `/rename`, and the `renamed` event titles the session;
-`/update`, in `updates.rs`, runs `agents/update` and then `session/reopen`, or opens a new
-session in place of a blank one,
-and `/update dismiss` hides a version's notice, kept in `$XDG_STATE_HOME/weave/updates.json`). The app follows the active session's journal position (`app.rs`): an attach's
+binary again with `--resume`; `/rename <title>`, offered when the Host lists `thread/rename`,
+sends that in place of the agent's own `/rename`, and the `renamed` event titles the thread;
+`/update`, in `updates.rs`, runs `agents/update` and then `thread/reopen`, or opens a new
+thread in place of a blank one,
+and `/update dismiss` hides a version's notice, kept in `$XDG_STATE_HOME/weave/updates.json`). The app follows the active thread's journal position (`app.rs`): an attach's
 answer arrives in order ahead of its replay, events up to the journal head it gave are
 replayed history (no notifications, no turn state), and the TUI's own prompts are known by
 their turn origin's `clientId`. When the Host goes away, the app reconnects through the
 CLI's `Reconnector` (which never starts a Host) and attaches again after its position, so
 only what it missed arrives, and `/reload`s itself if the new Host speaks another protocol
-version; `subagents` shows ACP subagents as Codex shows its own, each child session in a chat of its
+version; `subagents` shows ACP subagents as Codex shows its own, each subagent thread in a chat of its
 own that the parent routes updates to; the fullscreen transcript's compact view draws their rows in
 the parent as one line each, the title alone on a run row's fill (`event_row`), and Ctrl+T and
 inline mode in full. `ChatWidget` stays free of I/O: it turns

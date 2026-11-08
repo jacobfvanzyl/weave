@@ -45,7 +45,7 @@ use crate::Shared;
 use crate::devices::write_private;
 use crate::journal::now_ms;
 use crate::paths::DaemonPaths;
-use crate::session::lock;
+use crate::thread::lock;
 
 /// The WebSocket's own close code for a connection that ends as it should.
 const CLOSE_NORMAL: u16 = 1000;

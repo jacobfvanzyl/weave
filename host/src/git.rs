@@ -1,4 +1,4 @@
-//! Git through the `git` command (ADR 0019): where a session's directory is in a repository,
+//! Git through the `git` command (ADR 0019): where a thread's directory is in a repository,
 //! and a repository's worktrees, which the Host lists, makes beside it as worktrunk lays them
 //! out (`<repo>.<branch>`) and removes. Git runs with the agents' environment, so the person's
 //! configuration and hooks apply, never prompts, and reads without taking optional locks, so
@@ -216,7 +216,7 @@ impl Git {
     }
 
     /// `repository`'s worktrees whose directories are there, with their status: changes,
-    /// how far each is from `default` and from its upstream. No sessions yet.
+    /// how far each is from `default` and from its upstream. No threads yet.
     pub(crate) async fn worktrees(
         &self,
         repository: &Repository,
@@ -261,7 +261,7 @@ impl Git {
                     changes,
                     divergence,
                     upstream,
-                    sessions: Vec::new(),
+                    threads: Vec::new(),
                 }
             })
             .collect();

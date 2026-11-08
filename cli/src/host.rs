@@ -1,4 +1,4 @@
-//! Reaching the weave Host, which runs agents so sessions outlive the TUI: the per-user one
+//! Reaching the weave Host, which runs agents so threads outlive the TUI: the per-user one
 //! over its socket, started on first use, or one inside this process (`--no-daemon`); and
 //! stopping the per-user one. `weave daemon` manages it ([`crate::commands::daemon`]).
 
@@ -140,7 +140,7 @@ impl Host {
         }
     }
 
-    /// Whether sessions outlive this process.
+    /// Whether threads outlive this process.
     pub fn is_shared(&self) -> bool {
         matches!(self, Self::Shared(_))
     }

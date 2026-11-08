@@ -322,12 +322,12 @@ impl Vim {
     }
 
     /// Settle a finished command: keep the draft before it for undo, and its keys for `.`,
-    /// once it changed something. An Insert or Replace session settles when it ends.
+    /// once it changed something. An Insert or Replace thread settles when it ends.
     fn finish(&mut self, text: &str) {
         if !self.at_rest() {
             return;
         }
-        // The command's keys are done with, even when it starts an Insert or Replace session.
+        // The command's keys are done with, even when it starts an Insert or Replace thread.
         self.typed.clear();
         if matches!(self.mode, Mode::Insert | Mode::Replace) {
             return;

@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListThreadsRequest\n{ repo: Some(\"/repo/src\".into()), ..ListThreadsRequest::default() })"
+---
+{
+  "method": "threads/list",
+  "params": {
+    "repo": "/repo/src"
+  }
+}

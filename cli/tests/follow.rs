@@ -17,17 +17,17 @@ use std::time::Instant;
 
 use pretty_assertions::assert_eq;
 use weave_acp_core::schema::ContentBlock;
-use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::events::ThreadEvent;
+use weave_host_protocol::events::ThreadEventNotification;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::queue::AddQueuedResponse;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::CloseSessionRequest;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::GetSessionResponse;
-use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionStatus;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::CloseThreadRequest;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::GetThreadResponse;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadStatus;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::StartTurnRequest;
 
@@ -40,12 +40,12 @@ fn stderr(output: &Output) -> String {
 /// A headless thread, idle after one turn.
 fn idle_thread(host: &TestHost) -> String {
     let output = host.weave(&["run", "--agent", "fake", "--detach", "--json", "hello"]);
-    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("session/run's answer");
-    let id = run.session_id.to_string();
+    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("thread/run's answer");
+    let id = run.thread_id.to_string();
     wait_until(|| {
         let read = host.weave(&["threads", "read", &id, "--json"]);
-        let read: GetSessionResponse = serde_json::from_slice(&read.stdout).expect("sessions/get");
-        read.session.activity == Some(Activity::Idle)
+        let read: GetThreadResponse = serde_json::from_slice(&read.stdout).expect("threads/get");
+        read.thread.activity == Some(Activity::Idle)
             && read.latest_turn.is_some_and(|turn| !turn.running)
     });
     id
@@ -98,18 +98,18 @@ fn following_a_prompts_turn_waits_for_it_and_exits_as_it_went() {
             "{}",
             stderr(&followed)
         );
-        let events: Vec<SessionEventNotification> = String::from_utf8_lossy(&followed.stdout)
+        let events: Vec<ThreadEventNotification> = String::from_utf8_lossy(&followed.stdout)
             .lines()
-            .map(|line| serde_json::from_str(line).expect("a session/event"))
+            .map(|line| serde_json::from_str(line).expect("a thread/event"))
             .collect();
         assert_eq!(events.first().map(|event| event.seq), Some(queued.seq));
         assert!(matches!(
             events.first().map(|event| &event.event),
-            Some(SessionEvent::TurnStarted { .. })
+            Some(ThreadEvent::TurnStarted { .. })
         ));
         assert!(matches!(
             events.last().map(|event| &event.event),
-            Some(SessionEvent::TurnEnded { .. })
+            Some(ThreadEvent::TurnEnded { .. })
         ));
     }
 }
@@ -128,18 +128,18 @@ fn a_follower_isnt_one_of_the_threads_clients() {
         .spawn()
         .expect("follow");
     let lines = lines(&mut follower);
-    let first: SessionEventNotification =
+    let first: ThreadEventNotification =
         serde_json::from_str(&lines.recv_timeout(Duration::from_secs(10)).expect("a line"))
-            .expect("a session/event");
+            .expect("a thread/event");
     assert_eq!(first.seq, queued.seq);
     assert!(
-        matches!(first.event, SessionEvent::TurnStarted { .. }),
+        matches!(first.event, ThreadEvent::TurnStarted { .. }),
         "{first:?}"
     );
 
     // Following, it isn't counted, and closing the thread ends it.
     let listed = host.weave(&["threads", "list", "--json"]);
-    let listed: Vec<SessionListing> = serde_json::from_slice(&listed.stdout).expect("threads");
+    let listed: Vec<ThreadListing> = serde_json::from_slice(&listed.stdout).expect("threads");
     let thread = listed
         .iter()
         .find(|thread| thread.info.session_id.to_string() == id)
@@ -183,9 +183,9 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
     // A thread whose policy asks the person: it runs a while, and then `write` waits on them
     // until it's cancelled.
     let (client, _events) = host.client();
-    let session_id = host.block_on(async {
+    let thread_id = host.block_on(async {
         let state = client
-            .send(CreateSessionRequest {
+            .send(CreateThreadRequest {
                 agent_id: "fake".to_owned(),
                 cwd: host.work(),
                 additional_directories: Vec::new(),
@@ -195,10 +195,10 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
                 labels: Vec::new(),
             })
             .await
-            .expect("session/create");
+            .expect("thread/create");
         client
             .send(StartTurnRequest {
-                session_id: state.session_id.clone(),
+                thread_id: state.thread_id.clone(),
                 prompt: vec![ContentBlock::from("slow 3".to_owned())],
                 key: None,
             })
@@ -206,7 +206,7 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
             .expect("turn/start");
         client
             .send(AddQueuedRequest {
-                session_id: state.session_id.clone(),
+                thread_id: state.thread_id.clone(),
                 prompt: vec![ContentBlock::from("write notes.txt hi".to_owned())],
                 key: None,
                 caller: None,
@@ -214,24 +214,24 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
             })
             .await
             .expect("queue/add");
-        state.session_id
+        state.thread_id
     });
 
     let mut seen = Vec::new();
-    let next = |seen: &mut Vec<(String, Option<Activity>, SessionStatus)>| {
+    let next = |seen: &mut Vec<(String, Option<Activity>, ThreadStatus)>| {
         let line = lines
             .recv_timeout(Duration::from_secs(10))
             .unwrap_or_else(|_| panic!("no line after {seen:?}"));
         let value: serde_json::Value = serde_json::from_str(&line).expect("JSON");
         let method = value["method"].as_str().expect("a method").to_owned();
-        assert_eq!(method, "sessions/updated", "{line}");
-        let listing: SessionListing =
-            serde_json::from_value(value["params"]["session"].clone()).expect("a listing");
-        if listing.info.session_id == session_id {
+        assert_eq!(method, "threads/updated", "{line}");
+        let listing: ThreadListing =
+            serde_json::from_value(value["params"]["thread"].clone()).expect("a listing");
+        if listing.info.session_id == thread_id {
             seen.push((method, listing.activity, listing.state));
         }
     };
-    let saw = |seen: &[(String, Option<Activity>, SessionStatus)], activity| {
+    let saw = |seen: &[(String, Option<Activity>, ThreadStatus)], activity| {
         seen.iter().any(|(_, seen, _)| *seen == Some(activity))
     };
     while !saw(&seen, Activity::Waiting) {
@@ -242,7 +242,7 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
     host.block_on(async {
         client
             .send(CancelTurnRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
             })
             .await
             .expect("turn/cancel");
@@ -252,15 +252,15 @@ fn watching_prints_a_thread_as_it_starts_runs_waits_and_ends() {
     }
     host.block_on(async {
         client
-            .send(CloseSessionRequest {
-                session_id: session_id.clone(),
+            .send(CloseThreadRequest {
+                thread_id: thread_id.clone(),
             })
             .await
-            .expect("session/close");
+            .expect("thread/close");
     });
     while !seen
         .iter()
-        .any(|(_, _, state)| *state == SessionStatus::Closed)
+        .any(|(_, _, state)| *state == ThreadStatus::Closed)
     {
         next(&mut seen);
     }

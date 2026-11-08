@@ -31,7 +31,7 @@ const DISPATCHER_UNIT: &str = "weave-dispatcher";
 /// How long systemd lets the Dispatcher take to stop: it only closes its connections.
 const DISPATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long the Host may take to suspend its sessions as it stops, each given up to 10
+/// How long the Host may take to suspend its threads as it stops, each given up to 10
 /// seconds.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -253,7 +253,7 @@ enum Lingering {
 }
 
 /// Lingering, turned on if it's off: without it the user manager, and the Host, stops when
-/// the person's last session ends, and starts only when they log in.
+/// the person's last thread ends, and starts only when they log in.
 fn linger(uid: u32) -> Lingering {
     if lingering(uid) == Some(true) {
         return Lingering::On;

@@ -25,7 +25,6 @@ use std::time::Duration;
 
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::SessionId;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::OnceCell;
@@ -45,6 +44,7 @@ use weave_host_protocol::terminals::TerminalRemovedNotification;
 use weave_host_protocol::terminals::TerminalSize;
 use weave_host_protocol::terminals::TerminalUpdatedNotification;
 use weave_host_protocol::terminals::stream::TICKET_LIFETIME_MS;
+use weave_host_protocol::threads::ThreadId;
 
 pub use self::holder::Holders;
 pub use self::holder::Launch;
@@ -56,7 +56,7 @@ pub use self::owner::Start;
 pub use self::owner::Wire;
 use crate::devices::random_bytes;
 use crate::journal::now_ms;
-use crate::session::lock;
+use crate::thread::lock;
 
 /// How long a request to a terminal's owner may take.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -616,7 +616,7 @@ pub(crate) fn describe(described: &Value) -> Option<Terminal> {
         id: described["id"].as_str()?.to_owned(),
         scope: PathBuf::from(described["scope"].as_str()?),
         label: string("label"),
-        opened_from: string("opened_from").map(SessionId::new),
+        opened_from: string("opened_from").map(ThreadId::new),
         title: string("title"),
         pwd: string("pwd").and_then(|pwd| pwd_path(&pwd)),
         process: foreground.is_object().then(|| TerminalProcesses {

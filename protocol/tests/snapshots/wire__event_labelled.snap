@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(39, SessionEvent::Labelled\n{\n    labels: vec![\"dispatcher\".to_owned(), \"bot:daily\".to_owned()], by: None,\n},))"
+expression: "message(&event(39, ThreadEvent::Labelled\n{\n    labels: vec![\"dispatcher\".to_owned(), \"bot:daily\".to_owned()], by: None,\n},))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 39,
     "at": 1760180001234,
     "event": {

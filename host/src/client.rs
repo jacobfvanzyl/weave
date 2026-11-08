@@ -1,9 +1,9 @@
 //! One client's connection: the Host protocol's requests, answered against the Host's
-//! sessions and agents.
+//! threads and agents.
 //!
-//! Session work goes to the open session's task. Requests that need an agent outside any
-//! session (`agents/get`, sign-in, listing, deleting) use an open session's agent or a spare
-//! one, which the next session for that agent and directory takes.
+//! Thread work goes to the open thread's task. Requests that need an agent outside any
+//! thread (`agents/get`, sign-in, listing, deleting) use an open thread's agent or a spare
+//! one, which the next thread for that agent and directory takes.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -36,7 +36,6 @@ use weave_acp_core::schema::InitializeRequest;
 use weave_acp_core::schema::InitializeResponse;
 use weave_acp_core::schema::McpServer;
 use weave_acp_core::schema::Meta;
-use weave_acp_core::schema::SessionId;
 use weave_acp_core::schema::SessionInfo;
 use weave_acp_core::schema::SessionNotification;
 use weave_acp_core::schema::SessionUpdate;
@@ -98,46 +97,6 @@ use weave_host_protocol::queue::QueuePause;
 use weave_host_protocol::queue::RemoveQueuedRequest;
 use weave_host_protocol::queue::RemoveQueuedResponse;
 use weave_host_protocol::queue::ResumeQueueRequest;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CONTEXT_FEATURE;
-use weave_host_protocol::sessions::CloseSessionRequest;
-use weave_host_protocol::sessions::CloseWhen;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::DeleteSessionRequest;
-use weave_host_protocol::sessions::DetachSessionRequest;
-use weave_host_protocol::sessions::GET_FEATURE;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::GetSessionResponse;
-use weave_host_protocol::sessions::LABELS_FEATURE;
-use weave_host_protocol::sessions::LabelSessionRequest;
-use weave_host_protocol::sessions::LabelSessionResponse;
-use weave_host_protocol::sessions::LatestTurn;
-use weave_host_protocol::sessions::ListSessionsRequest;
-use weave_host_protocol::sessions::ListSessionsResponse;
-use weave_host_protocol::sessions::MAX_LABELS;
-use weave_host_protocol::sessions::OBSERVE_FEATURE;
-use weave_host_protocol::sessions::OTHER_HOSTS_FEATURE;
-use weave_host_protocol::sessions::OtherThread;
-use weave_host_protocol::sessions::RENAME_FEATURE;
-use weave_host_protocol::sessions::RenameSessionRequest;
-use weave_host_protocol::sessions::ReopenSessionRequest;
-use weave_host_protocol::sessions::ReopenSessionResponse;
-use weave_host_protocol::sessions::ReportSessionRequest;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::SUCCESSORS_FEATURE;
-use weave_host_protocol::sessions::ServiceOrigin;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionStatus;
-use weave_host_protocol::sessions::SetConfigOptionRequest;
-use weave_host_protocol::sessions::SetModeRequest;
-use weave_host_protocol::sessions::SetSuccessorRequest;
-use weave_host_protocol::sessions::TurnOrigin;
-use weave_host_protocol::sessions::UnwatchSessionsRequest;
-use weave_host_protocol::sessions::WATCH_FEATURE;
-use weave_host_protocol::sessions::WatchSessionsRequest;
-use weave_host_protocol::sessions::WatchSessionsResponse;
-use weave_host_protocol::sessions::check_label;
 use weave_host_protocol::terminals::AttachTerminalRequest;
 use weave_host_protocol::terminals::AttachTerminalResponse;
 use weave_host_protocol::terminals::CloseTerminalRequest;
@@ -152,6 +111,47 @@ use weave_host_protocol::terminals::TerminalsResponse;
 use weave_host_protocol::terminals::UnwatchTerminalsRequest;
 use weave_host_protocol::terminals::WatchTerminalsRequest;
 use weave_host_protocol::terminals::WriteTerminalRequest;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CONTEXT_FEATURE;
+use weave_host_protocol::threads::CloseThreadRequest;
+use weave_host_protocol::threads::CloseWhen;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::DeleteThreadRequest;
+use weave_host_protocol::threads::DetachThreadRequest;
+use weave_host_protocol::threads::GET_FEATURE;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::GetThreadResponse;
+use weave_host_protocol::threads::LABELS_FEATURE;
+use weave_host_protocol::threads::LabelThreadRequest;
+use weave_host_protocol::threads::LabelThreadResponse;
+use weave_host_protocol::threads::LatestTurn;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::ListThreadsResponse;
+use weave_host_protocol::threads::MAX_LABELS;
+use weave_host_protocol::threads::OBSERVE_FEATURE;
+use weave_host_protocol::threads::OTHER_HOSTS_FEATURE;
+use weave_host_protocol::threads::OtherThread;
+use weave_host_protocol::threads::RENAME_FEATURE;
+use weave_host_protocol::threads::RenameThreadRequest;
+use weave_host_protocol::threads::ReopenThreadRequest;
+use weave_host_protocol::threads::ReopenThreadResponse;
+use weave_host_protocol::threads::ReportThreadRequest;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::SUCCESSORS_FEATURE;
+use weave_host_protocol::threads::ServiceOrigin;
+use weave_host_protocol::threads::SetConfigOptionRequest;
+use weave_host_protocol::threads::SetModeRequest;
+use weave_host_protocol::threads::SetSuccessorRequest;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadStatus;
+use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::UnwatchThreadsRequest;
+use weave_host_protocol::threads::WATCH_FEATURE;
+use weave_host_protocol::threads::WatchThreadsRequest;
+use weave_host_protocol::threads::WatchThreadsResponse;
+use weave_host_protocol::threads::check_label;
 use weave_host_protocol::tools::AnswerToolRequest;
 use weave_host_protocol::tools::CLIENT_TOOLS_FEATURE;
 use weave_host_protocol::tools::DeclareToolsRequest;
@@ -202,22 +202,22 @@ use crate::mcp::Servers;
 use crate::modes;
 use crate::queue::Queue;
 use crate::service_tools;
-use crate::session;
-use crate::session::Answer;
-use crate::session::AttachReply;
-use crate::session::Backlog;
-use crate::session::ClientId;
-use crate::session::ClientLink;
-use crate::session::Command;
-use crate::session::Continuation;
-use crate::session::Opened;
-use crate::session::ReplayFrom;
-use crate::session::SessionHandle;
-use crate::session::Snapshot;
-use crate::session::Steer;
-use crate::session::lock;
 use crate::terminals;
 use crate::terminals::Terminals;
+use crate::thread;
+use crate::thread::Answer;
+use crate::thread::AttachReply;
+use crate::thread::Backlog;
+use crate::thread::ClientId;
+use crate::thread::ClientLink;
+use crate::thread::Command;
+use crate::thread::Continuation;
+use crate::thread::Opened;
+use crate::thread::ReplayFrom;
+use crate::thread::Snapshot;
+use crate::thread::Steer;
+use crate::thread::ThreadHandle;
+use crate::thread::lock;
 use crate::updates;
 
 /// What a client said at `host/hello`.
@@ -245,18 +245,18 @@ struct Connection {
     hello: Mutex<Option<Hello>>,
     /// The paired device a remote client proved at hello.
     device: Mutex<Option<DeviceInfo>>,
-    /// Open sessions this client is attached to.
-    attached: Mutex<HashSet<SessionId>>,
+    /// Open threads this client is attached to.
+    attached: Mutex<HashSet<ThreadId>>,
 }
 
-/// A session opened for a client, ready to attach it to.
+/// A thread opened for a client, ready to attach it to.
 struct Ready {
-    session: SessionHandle,
+    thread: ThreadHandle,
     notices: Vec<String>,
     trace: Option<PathBuf>,
 }
 
-/// Serve one local client until it disconnects, then detach it from its sessions.
+/// Serve one local client until it disconnects, then detach it from its threads.
 pub(crate) async fn serve(
     shared: Arc<Shared>,
     transport: impl ConnectTo<Host> + 'static,
@@ -323,11 +323,11 @@ async fn serve_as(
     if let Some(device) = lock(&connection.device).take() {
         shared.devices.disconnected(&device.id, connection.id);
     }
-    let attached: Vec<SessionId> = lock(&connection.attached).drain().collect();
-    for session_id in attached {
-        if let Some(session) = shared.registry().live(&session_id) {
-            session.traces.remove(connection.id);
-            let _ = session.send(Command::Detach {
+    let attached: Vec<ThreadId> = lock(&connection.attached).drain().collect();
+    for thread_id in attached {
+        if let Some(thread) = shared.registry().live(&thread_id) {
+            thread.traces.remove(connection.id);
+            let _ = thread.send(Command::Detach {
                 client: connection.id,
             });
         }
@@ -487,7 +487,7 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            answer!(connection, list_sessions),
+            answer!(connection, list_threads),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -495,7 +495,7 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            answer!(connection, get_session),
+            answer!(connection, get_thread),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -568,14 +568,14 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: WatchSessionsRequest, responder, cx: ConnectionTo<HostClient>| {
+            async move |request: WatchThreadsRequest, responder, cx: ConnectionTo<HostClient>| {
                 if let Err(error) = on_watch.hello_info() {
                     return responder.respond_with_error(error);
                 }
                 on_watch
                     .shared
-                    .watch(on_watch.id, cx, request.labels, |sessions| {
-                        responder.respond(WatchSessionsResponse { sessions })
+                    .watch(on_watch.id, cx, request.labels, |threads| {
+                        responder.respond(WatchThreadsResponse { threads })
                     })
             },
             agent_client_protocol::on_receive_request!(),
@@ -594,14 +594,14 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |_request: UnwatchSessionsRequest, responder, _cx| {
+            async move |_request: UnwatchThreadsRequest, responder, _cx| {
                 on_unwatch.shared.unwatch(on_unwatch.id);
                 responder.respond(Empty {})
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: CreateSessionRequest, responder, cx: ConnectionTo<HostClient>| {
+            async move |request: CreateThreadRequest, responder, cx: ConnectionTo<HostClient>| {
                 let connection = Arc::clone(&on_create);
                 let client = cx.clone();
                 cx.spawn(async move {
@@ -623,7 +623,7 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: AttachSessionRequest, responder, cx: ConnectionTo<HostClient>| {
+            async move |request: AttachThreadRequest, responder, cx: ConnectionTo<HostClient>| {
                 let connection = Arc::clone(&on_attach);
                 let client = cx.clone();
                 cx.spawn(async move {
@@ -657,7 +657,7 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            answer!(connection, reopen_session),
+            answer!(connection, reopen_thread),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -669,11 +669,11 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            answer!(connection, rename_session),
+            answer!(connection, rename_thread),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            answer!(connection, label_session),
+            answer!(connection, label_thread),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -681,7 +681,7 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            answer!(connection, report_session),
+            answer!(connection, report_thread),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -749,17 +749,17 @@ const FOR_SERVICES: [&str; 20] = [
     "host/challenge",
     "host/status",
     "agents/list",
-    "sessions/list",
-    "sessions/get",
-    "sessions/watch",
-    "sessions/unwatch",
-    "session/run",
-    "session/attach",
-    "session/detach",
-    "session/rename",
-    "session/setSuccessor",
-    "session/label",
-    "session/report",
+    "threads/list",
+    "threads/get",
+    "threads/watch",
+    "threads/unwatch",
+    "thread/run",
+    "thread/attach",
+    "thread/detach",
+    "thread/rename",
+    "thread/setSuccessor",
+    "thread/label",
+    "thread/report",
     "service/declareTools",
     "service/answerTool",
     "queue/add",
@@ -779,10 +779,10 @@ fn not_allowed(request: &UntypedMessage, methods: &[&str]) -> Option<String> {
     };
     if !methods.contains(&method) {
         Some(method.to_owned())
-    } else if method == "session/attach" && flag("observe") != Some(true) {
-        Some("session/attach without observe".to_owned())
-    } else if method == "session/run" && flag("attach") == Some(true) {
-        Some("session/run with attach".to_owned())
+    } else if method == "thread/attach" && flag("observe") != Some(true) {
+        Some("thread/attach without observe".to_owned())
+    } else if method == "thread/run" && flag("attach") == Some(true) {
+        Some("thread/run with attach".to_owned())
     } else {
         None
     }
@@ -802,7 +802,7 @@ fn legacy_initialize() -> InitializeResponse {
     InitializeResponse::new(ProtocolVersion::V1).meta(meta)
 }
 
-/// The services an interactive session's agent is offered: a local client can run its
+/// The services an interactive thread's agent is offered: a local client can run its
 /// command for terminal sign-in.
 fn interactive(options: ClientOptions) -> ClientOptions {
     ClientOptions {
@@ -811,7 +811,7 @@ fn interactive(options: ClientOptions) -> ClientOptions {
     }
 }
 
-/// Nobody can sign in at a terminal for a headless session.
+/// Nobody can sign in at a terminal for a headless thread.
 fn headless(options: ClientOptions) -> ClientOptions {
     ClientOptions {
         terminal_auth: false,
@@ -819,7 +819,7 @@ fn headless(options: ClientOptions) -> ClientOptions {
     }
 }
 
-/// Where agents asked things outside any session start.
+/// Where agents asked things outside any thread start.
 pub(crate) fn home() -> PathBuf {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
@@ -971,8 +971,8 @@ impl Connection {
                     return Err(Error::invalid_params()
                         .data("a caller on another Host names another Host than this one"));
                 }
-                Ok(TurnOrigin::Session {
-                    session_id: caller.session_id,
+                Ok(TurnOrigin::Thread {
+                    thread_id: caller.thread_id,
                     host: Some(caller.host),
                     host_name: caller.host_name,
                     report: false,
@@ -1171,7 +1171,7 @@ impl Connection {
         })
     }
 
-    /// The agents to sign in: the spare ones of `agent`, which the next sessions take, or one
+    /// The agents to sign in: the spare ones of `agent`, which the next threads take, or one
     /// started for it.
     async fn sign_in_handles(&self, agent: &Agent) -> Result<Vec<AgentHandle>, Error> {
         let spares = self.shared.spare_handles(&agent.id);
@@ -1269,20 +1269,20 @@ impl Connection {
             .map_err(|error| Error::internal_error().data(error.to_string()))?
     }
 
-    async fn list_sessions(
+    async fn list_threads(
         &self,
-        request: ListSessionsRequest,
-    ) -> Result<ListSessionsResponse, Error> {
+        request: ListThreadsRequest,
+    ) -> Result<ListThreadsResponse, Error> {
         self.hello_info()?;
-        list_sessions(&self.shared, request).await
+        list_threads(&self.shared, request).await
     }
 
-    async fn get_session(&self, request: GetSessionRequest) -> Result<GetSessionResponse, Error> {
+    async fn get_thread(&self, request: GetThreadRequest) -> Result<GetThreadResponse, Error> {
         self.hello_info()?;
-        get_session(&self.shared, request).await
+        get_thread(&self.shared, request).await
     }
 
-    /// `worktrees/list`: the repository's worktrees and the sessions in each.
+    /// `worktrees/list`: the repository's worktrees and the threads in each.
     async fn list_worktrees(
         &self,
         request: ListWorktreesRequest,
@@ -1292,16 +1292,16 @@ impl Connection {
         let repository = git.repository(&request.repo).await?;
         let default = git.default_branch(&repository).await;
         let mut worktrees = git.worktrees(&repository, default.as_ref()).await;
-        let mut sessions = self.shared.session_directories();
-        sessions.sort_by_key(|(_, _, last_activity)| std::cmp::Reverse(*last_activity));
-        for (session_id, dir, _) in sessions {
+        let mut threads = self.shared.thread_directories();
+        threads.sort_by_key(|(_, _, last_activity)| std::cmp::Reverse(*last_activity));
+        for (thread_id, dir, _) in threads {
             // The deepest worktree it's in, as one can sit inside another.
             if let Some(worktree) = worktrees
                 .iter_mut()
                 .filter(|worktree| dir.starts_with(&worktree.path))
                 .max_by_key(|worktree| worktree.path.components().count())
             {
-                worktree.sessions.push(session_id);
+                worktree.threads.push(thread_id);
             }
         }
         Ok(ListWorktreesResponse {
@@ -1324,8 +1324,8 @@ impl Connection {
             .await
     }
 
-    /// `worktrees/remove`: refused while a session in it is busy, or when it has changes
-    /// unless forced; otherwise its sessions close and it goes, with its branch when merged.
+    /// `worktrees/remove`: refused while a thread in it is busy, or when it has changes
+    /// unless forced; otherwise its threads close and it goes, with its branch when merged.
     async fn remove_worktree(
         &self,
         request: RemoveWorktreeRequest,
@@ -1501,10 +1501,10 @@ impl Connection {
         Ok(AttachTerminalResponse { ticket, expires_at })
     }
 
-    /// `agent_id`'s sessions: the Host's own in the directory first, open ones and then ones
+    /// `agent_id`'s threads: the Host's own in the directory first, open ones and then ones
     /// a stopped Host left open within the idle grace of their last activity; then the
     /// agent's own listing, paged by its cursor.
-    async fn create(&self, request: CreateSessionRequest) -> Result<Ready, Error> {
+    async fn create(&self, request: CreateThreadRequest) -> Result<Ready, Error> {
         self.hello_info()?;
         check_labels(&request.labels)?;
         let agent = self.shared.resolve(&request.agent_id).await?;
@@ -1540,7 +1540,7 @@ impl Connection {
                 notices.push(notice);
             }
         }
-        let session = open(
+        let thread = open(
             &self.shared,
             response.session_id,
             instance,
@@ -1557,34 +1557,33 @@ impl Connection {
             servers,
             git,
         )?;
-        session.opened_by(self.origin(&self.hello_info()?));
-        let trace = self.trace(&session, request.trace)?;
-        updates::look_for_update(&self.shared, &session);
+        thread.opened_by(self.origin(&self.hello_info()?));
+        let trace = self.trace(&thread, request.trace)?;
+        updates::look_for_update(&self.shared, &thread);
         Ok(Ready {
-            session,
+            thread,
             notices,
             trace,
         })
     }
 
-    /// Open a session the client named: attach to it if it's open, otherwise open it in its
+    /// Open a thread the client named: attach to it if it's open, otherwise open it in its
     /// agent (from its journal, if a stopped Host left it open).
-    async fn open_existing(&self, request: &AttachSessionRequest) -> Result<Ready, Error> {
+    async fn open_existing(&self, request: &AttachThreadRequest) -> Result<Ready, Error> {
         self.hello_info()?;
-        let session_id = &request.session_id;
+        let thread_id = &request.thread_id;
         let (live, known) = {
             let registry = self.shared.registry();
-            let live = registry.live(session_id);
-            let root = live.as_ref().map_or_else(
-                || session_id.clone(),
-                |session| session.summary().session_id,
-            );
+            let live = registry.live(thread_id);
+            let root = live
+                .as_ref()
+                .map_or_else(|| thread_id.clone(), |thread| thread.summary().thread_id);
             (live, registry.known.get(&root).cloned())
         };
-        // A session belongs to the agent it was started with.
+        // A thread belongs to the agent it was started with.
         let recorded_agent = live
             .as_ref()
-            .map(|session| session.agent_id.clone())
+            .map(|thread| thread.agent_id.clone())
             .or_else(|| {
                 known
                     .as_ref()
@@ -1594,29 +1593,29 @@ impl Connection {
         if let (Some(recorded), Some(asked)) = (&recorded_agent, &request.agent_id)
             && recorded != asked
         {
-            return Err(errors::wrong_agent(&session_id.to_string(), recorded));
+            return Err(errors::wrong_agent(&thread_id.to_string(), recorded));
         }
-        if let Some(session) = live {
-            let trace = self.trace(&session, request.trace)?;
-            updates::look_for_update(&self.shared, &session);
+        if let Some(thread) = live {
+            let trace = self.trace(&thread, request.trace)?;
+            updates::look_for_update(&self.shared, &thread);
             return Ok(Ready {
-                session,
+                thread,
                 notices: Vec::new(),
                 trace,
             });
         }
-        // An observer follows a session that's open; it never opens one.
+        // An observer follows a thread that's open; it never opens one.
         if request.observe {
-            return Err(errors::session_not_open(&session_id.to_string()));
+            return Err(errors::thread_not_open(&thread_id.to_string()));
         }
         let agent_id = recorded_agent
             .or_else(|| request.agent_id.clone())
-            .ok_or_else(|| errors::unknown_session(&session_id.to_string()))?;
+            .ok_or_else(|| errors::unknown_thread(&thread_id.to_string()))?;
         let cwd = known
             .as_ref()
             .map(|recorded| recorded.cwd.clone())
             .or_else(|| request.cwd.clone())
-            .ok_or_else(|| errors::unknown_session(&session_id.to_string()))?;
+            .ok_or_else(|| errors::unknown_thread(&thread_id.to_string()))?;
         let agent = self.shared.resolve(&agent_id).await?;
         let (instance, git) = tokio::join!(
             self.shared
@@ -1628,7 +1627,7 @@ impl Connection {
         match reopen(
             &self.shared,
             instance,
-            session_id.clone(),
+            thread_id.clone(),
             setup,
             servers,
             &agent,
@@ -1638,12 +1637,12 @@ impl Connection {
         )
         .await
         {
-            Ok(session) => {
-                session.opened_by(self.origin(&self.hello_info()?));
-                let trace = self.trace(&session, request.trace)?;
-                updates::look_for_update(&self.shared, &session);
+            Ok(thread) => {
+                thread.opened_by(self.origin(&self.hello_info()?));
+                let trace = self.trace(&thread, request.trace)?;
+                updates::look_for_update(&self.shared, &thread);
                 Ok(Ready {
-                    session,
+                    thread,
                     notices,
                     trace,
                 })
@@ -1657,23 +1656,23 @@ impl Connection {
         }
     }
 
-    /// Trace the session's agent for this client, when it asked.
-    fn trace(&self, session: &SessionHandle, wanted: bool) -> Result<Option<PathBuf>, Error> {
+    /// Trace the thread's agent for this client, when it asked.
+    fn trace(&self, thread: &ThreadHandle, wanted: bool) -> Result<Option<PathBuf>, Error> {
         if !wanted {
             return Ok(None);
         }
-        let path = self.shared.trace_path(&session.summary().session_id)?;
+        let path = self.shared.trace_path(&thread.summary().thread_id)?;
         let trace = ProtocolTrace::create(&path).map_err(|error| {
             Error::internal_error().data(format!(
                 "creating the protocol trace {}: {error}",
                 path.display()
             ))
         })?;
-        session.traces.add(self.id, trace);
+        thread.traces.add(self.id, trace);
         Ok(Some(path))
     }
 
-    /// Attach this client to `ready`'s session, answering through `reply` before its replay.
+    /// Attach this client to `ready`'s thread, answering through `reply` before its replay.
     fn attach_to(
         &self,
         ready: Ready,
@@ -1682,8 +1681,8 @@ impl Connection {
         observer: bool,
         reply: AttachReply,
     ) {
-        let session_id = ready.session.summary().session_id;
-        lock(&self.attached).insert(session_id);
+        let thread_id = ready.thread.summary().thread_id;
+        lock(&self.attached).insert(thread_id);
         let command = Command::Attach {
             client: self.id,
             link: Box::new(ClientLink {
@@ -1698,24 +1697,24 @@ impl Connection {
             reply,
         };
         if let Err(tokio::sync::mpsc::error::SendError(Command::Attach { reply, .. })) =
-            ready.session.commands.send(command)
+            ready.thread.commands.send(command)
         {
-            reply.fail(session::ended());
+            reply.fail(thread::ended());
         }
     }
 
-    async fn detach(&self, request: DetachSessionRequest) -> Result<Empty, Error> {
+    async fn detach(&self, request: DetachThreadRequest) -> Result<Empty, Error> {
         self.hello_info()?;
-        let live = self.shared.registry().live(&request.session_id);
-        if let Some(session) = live
-            && lock(&self.attached).remove(&session.summary().session_id)
+        let live = self.shared.registry().live(&request.thread_id);
+        if let Some(thread) = live
+            && lock(&self.attached).remove(&thread.summary().thread_id)
         {
-            session.traces.remove(self.id);
+            thread.traces.remove(self.id);
             let client = self.id;
             match request.close {
-                CloseWhen::Never => session.send(Command::Detach { client })?,
+                CloseWhen::Never => thread.send(Command::Detach { client })?,
                 CloseWhen::IfUnused => {
-                    session
+                    thread
                         .finish(|done| Command::Close { client, done })
                         .await?;
                 }
@@ -1724,11 +1723,11 @@ impl Connection {
         Ok(Empty {})
     }
 
-    async fn close(&self, request: CloseSessionRequest) -> Result<Empty, Error> {
+    async fn close(&self, request: CloseThreadRequest) -> Result<Empty, Error> {
         let hello = self.hello_info()?;
-        let session = self.live(&request.session_id)?;
+        let thread = self.live(&request.thread_id)?;
         let by = Some(self.origin(&hello));
-        session
+        thread
             .finish(|done| Command::End {
                 reason: "closed by a client".to_owned(),
                 by,
@@ -1738,26 +1737,26 @@ impl Connection {
         Ok(Empty {})
     }
 
-    /// `session/reopen`: answered once the session runs in its new process, after any turn.
-    async fn reopen_session(
+    /// `thread/reopen`: answered once the thread runs in its new process, after any turn.
+    async fn reopen_thread(
         &self,
-        request: ReopenSessionRequest,
-    ) -> Result<ReopenSessionResponse, Error> {
+        request: ReopenThreadRequest,
+    ) -> Result<ReopenThreadResponse, Error> {
         self.hello_info()?;
-        let session = self.live(&request.session_id)?;
+        let thread = self.live(&request.thread_id)?;
         let (reply, reopened) = oneshot::channel();
-        session.send(Command::Reopen { reply })?;
-        reopened.await.map_err(|_| session::ended())?
+        thread.send(Command::Reopen { reply })?;
+        reopened.await.map_err(|_| thread::ended())?
     }
 
-    async fn delete(&self, request: DeleteSessionRequest) -> Result<Empty, Error> {
+    async fn delete(&self, request: DeleteThreadRequest) -> Result<Empty, Error> {
         let hello = self.hello_info()?;
-        let session_id = request.session_id;
-        let live = self.shared.registry().live(&session_id);
-        let known = self.shared.registry().known.get(&session_id).cloned();
+        let thread_id = request.thread_id;
+        let live = self.shared.registry().live(&thread_id);
+        let known = self.shared.registry().known.get(&thread_id).cloned();
         let agent_id = live
             .as_ref()
-            .map(|session| session.agent_id.clone())
+            .map(|thread| thread.agent_id.clone())
             .or_else(|| {
                 known
                     .as_ref()
@@ -1765,10 +1764,10 @@ impl Connection {
                     .map(str::to_owned)
             })
             .or(request.agent_id)
-            .ok_or_else(|| errors::unknown_session(&session_id.to_string()))?;
-        if let Some(session) = live {
+            .ok_or_else(|| errors::unknown_thread(&thread_id.to_string()))?;
+        if let Some(thread) = live {
             let by = Some(self.origin(&hello));
-            let _ = session
+            let _ = thread
                 .finish(|done| Command::End {
                     reason: "deleted".to_owned(),
                     by,
@@ -1779,28 +1778,28 @@ impl Connection {
         let cwd = known
             .as_ref()
             .map_or_else(home, |recorded| recorded.cwd.clone());
-        // The agent's part runs it in the session's directory. One that's gone, as a removed
-        // worktree, leaves the agent its own history of the session; the Host forgets it anyway.
+        // The agent's part runs it in the thread's directory. One that's gone, as a removed
+        // worktree, leaves the agent its own history of the thread; the Host forgets it anyway.
         if cwd.is_dir() {
-            self.delete_in_agent(&agent_id, &cwd, &session_id).await?;
+            self.delete_in_agent(&agent_id, &cwd, &thread_id).await?;
         } else {
-            tracing::info!(%session_id, cwd = %cwd.display(), "deleting a session whose directory is gone; its agent keeps its history");
+            tracing::info!(%thread_id, cwd = %cwd.display(), "deleting a thread whose directory is gone; its agent keeps its history");
         }
-        self.shared.registry().known.remove(&session_id);
+        self.shared.registry().known.remove(&thread_id);
         if let Some(dir) = &self.shared.config.journals {
-            let _ = std::fs::remove_file(journal::path_for(dir, &session_id));
+            let _ = std::fs::remove_file(journal::path_for(dir, &thread_id));
         }
-        self.shared.tell_removed(session_id);
+        self.shared.tell_removed(thread_id);
         Ok(Empty {})
     }
 
-    /// Delete a session in its agent, run in `cwd`, when the agent can delete sessions; one that
+    /// Delete a thread in its agent, run in `cwd`, when the agent can delete threads; one that
     /// can't keeps its own history of it.
     async fn delete_in_agent(
         &self,
         agent_id: &str,
         cwd: &Path,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
     ) -> Result<(), Error> {
         let agent = self.shared.resolve(agent_id).await?;
         let handle = self
@@ -1815,27 +1814,27 @@ impl Connection {
                 .is_some()
         });
         if deletes {
-            handle.delete_session(session_id.clone()).await?;
+            handle.delete_session(thread_id.clone()).await?;
         }
         Ok(())
     }
 
-    fn live(&self, session_id: &SessionId) -> Result<SessionHandle, Error> {
-        live(&self.shared, session_id)
+    fn live(&self, thread_id: &ThreadId) -> Result<ThreadHandle, Error> {
+        live(&self.shared, thread_id)
     }
 
-    /// `session/rename`: a title of the Host's, which the session keeps.
-    async fn rename_session(&self, request: RenameSessionRequest) -> Result<Empty, Error> {
+    /// `thread/rename`: a title of the Host's, which the thread keeps.
+    async fn rename_thread(&self, request: RenameThreadRequest) -> Result<Empty, Error> {
         let hello = self.hello_info()?;
         let title =
-            session::title(&request.title).map_err(|why| Error::invalid_params().data(why))?;
-        let session = self.live(&request.session_id)?;
+            thread::title(&request.title).map_err(|why| Error::invalid_params().data(why))?;
+        let thread = self.live(&request.thread_id)?;
         let by = TurnOrigin::Client {
             name: hello.client.name,
             id: self.client_id(),
             device: self.device_name(),
         };
-        session
+        thread
             .finish(|done| Command::Rename {
                 title,
                 by: Some(by),
@@ -1885,17 +1884,17 @@ impl Connection {
         Ok(Empty {})
     }
 
-    /// `session/report`: a service's report on a thread on another Host to the session whose
-    /// agent began a turn there (ADR 0029), told as the Host tells its own sessions' reports.
-    async fn report_session(&self, request: ReportSessionRequest) -> Result<Empty, Error> {
+    /// `thread/report`: a service's report on a thread on another Host to the thread whose
+    /// agent began a turn there (ADR 0029), told as the Host tells its own threads' reports.
+    async fn report_thread(&self, request: ReportThreadRequest) -> Result<Empty, Error> {
         self.hello_info()?;
         self.service()?;
-        let digest = admissions::digest(&ReportSessionRequest {
+        let digest = admissions::digest(&ReportThreadRequest {
             key: None,
             ..request.clone()
         });
-        let ReportSessionRequest {
-            session_id,
+        let ReportThreadRequest {
+            thread_id,
             about,
             text,
             key,
@@ -1904,18 +1903,18 @@ impl Connection {
             return Err(Error::invalid_params().data("a report is on a thread on another Host"));
         }
         let shared = Arc::clone(&self.shared);
-        let told = session_id.clone();
+        let told = thread_id.clone();
         keyed(
             &self.shared,
             key,
-            "session/report",
+            "thread/report",
             digest,
             Some(&told),
             |_| Some(Empty {}),
             Empty::clone,
             async |_key| {
                 let host = Some((about.host, about.host_name));
-                crate::host_tools::tell(shared, session_id, about.session_id, host, text)
+                crate::host_tools::tell(shared, thread_id, about.thread_id, host, text)
                     .await
                     .map(|()| Empty {})
                     .map_err(|why| Error::invalid_params().data(why))
@@ -1924,20 +1923,20 @@ impl Connection {
         .await
     }
 
-    /// `session/label`: add labels to an open session and take others off (WVE-173).
-    async fn label_session(
+    /// `thread/label`: add labels to an open thread and take others off (WVE-173).
+    async fn label_thread(
         &self,
-        request: LabelSessionRequest,
-    ) -> Result<LabelSessionResponse, Error> {
+        request: LabelThreadRequest,
+    ) -> Result<LabelThreadResponse, Error> {
         let hello = self.hello_info()?;
-        let LabelSessionRequest {
-            session_id,
+        let LabelThreadRequest {
+            thread_id,
             add,
             remove,
         } = request;
         check_labels(&add)?;
-        let session = self.live(&session_id)?;
-        let labels = session
+        let thread = self.live(&thread_id)?;
+        let labels = thread
             .finish(|done| Command::Label {
                 add,
                 remove,
@@ -1945,30 +1944,30 @@ impl Connection {
                 done,
             })
             .await??;
-        Ok(LabelSessionResponse { labels })
+        Ok(LabelThreadResponse { labels })
     }
 
-    /// `session/setSuccessor`: name the session an open one's work goes on in (WVE-168).
+    /// `thread/setSuccessor`: name the thread an open one's work goes on in (WVE-168).
     async fn set_successor(&self, request: SetSuccessorRequest) -> Result<Empty, Error> {
         let hello = self.hello_info()?;
         let SetSuccessorRequest {
-            session_id,
+            thread_id,
             successor,
         } = request;
-        let session = self.live(&session_id)?;
-        if successor == session_id {
+        let thread = self.live(&thread_id)?;
+        if successor == thread_id {
             return Err(Error::invalid_params().data("a thread can't continue in itself"));
         }
         {
             let registry = self.shared.registry();
             if !registry.known.contains_key(&successor) {
-                return Err(errors::unknown_session(&successor.to_string()));
+                return Err(errors::unknown_thread(&successor.to_string()));
             }
             // Its successors mustn't lead back here, or following them would never end.
             let mut next = Some(successor.clone());
             for _ in 0..MAX_SUCCESSORS {
                 let Some(at) = next else { break };
-                if at == session_id {
+                if at == thread_id {
                     return Err(Error::invalid_params().data(format!(
                         "{successor} already continues, through its successors, in this thread"
                     )));
@@ -1979,7 +1978,7 @@ impl Connection {
                     .and_then(|recorded| recorded.successor.clone());
             }
         }
-        session
+        thread
             .finish(|done| Command::SetSuccessor {
                 successor,
                 by: Some(self.origin(&hello)),
@@ -1991,14 +1990,14 @@ impl Connection {
 
     async fn set_mode(&self, request: SetModeRequest) -> Result<Empty, Error> {
         self.hello_info()?;
-        let session = self.live(&request.session_id)?;
-        session
+        let thread = self.live(&request.thread_id)?;
+        thread
             .agent
-            .set_mode(request.session_id.clone(), request.mode_id.clone())
+            .set_mode(request.thread_id.clone(), request.mode_id.clone())
             .await?;
         let update = SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(request.mode_id));
-        session.send(Command::Changed {
-            notification: Box::new(SessionNotification::new(request.session_id, update)),
+        thread.send(Command::Changed {
+            notification: Box::new(SessionNotification::new(request.thread_id, update)),
         })?;
         Ok(Empty {})
     }
@@ -2008,14 +2007,14 @@ impl Connection {
         request: SetConfigOptionRequest,
     ) -> Result<SetSessionConfigOptionResponse, Error> {
         self.hello_info()?;
-        let session = self.live(&request.session_id)?;
-        let options = session
+        let thread = self.live(&request.thread_id)?;
+        let options = thread
             .agent
-            .set_config_option(request.session_id.clone(), request.config_id, request.value)
+            .set_config_option(request.thread_id.clone(), request.config_id, request.value)
             .await?;
         let update = SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options.clone()));
-        session.send(Command::Changed {
-            notification: Box::new(SessionNotification::new(request.session_id, update)),
+        thread.send(Command::Changed {
+            notification: Box::new(SessionNotification::new(request.thread_id, update)),
         })?;
         Ok(SetSessionConfigOptionResponse::new(options))
     }
@@ -2028,11 +2027,11 @@ impl Connection {
             ..request.clone()
         });
         let StartTurnRequest {
-            session_id,
+            thread_id,
             prompt,
             key,
         } = request;
-        let root = self.shared.registry().root(&session_id);
+        let root = self.shared.registry().root(&thread_id);
         keyed(
             &self.shared,
             key,
@@ -2047,16 +2046,16 @@ impl Connection {
             },
             StartTurnResponse::clone,
             async |key| {
-                let session = self.live(&session_id)?;
+                let thread = self.live(&thread_id)?;
                 let (reply, started) = oneshot::channel();
-                session.send(Command::Prompt {
+                thread.send(Command::Prompt {
                     origin,
-                    session_id,
+                    thread_id,
                     prompt,
                     key,
                     reply,
                 })?;
-                let (seq, turn_id) = started.await.map_err(|_| session::ended())??;
+                let (seq, turn_id) = started.await.map_err(|_| thread::ended())??;
                 Ok(StartTurnResponse {
                     seq,
                     turn_id: Some(turn_id),
@@ -2078,21 +2077,21 @@ impl Connection {
         request: RemoveQueuedRequest,
     ) -> Result<RemoveQueuedResponse, Error> {
         let hello = self.hello_info()?;
-        let session = self.live(&request.session_id)?;
+        let thread = self.live(&request.thread_id)?;
         let (reply, removed) = oneshot::channel();
-        session.send(Command::Unqueue {
+        thread.send(Command::Unqueue {
             queued_id: request.queued_id,
             by: self.origin(&hello),
             reply,
         })?;
-        removed.await.map_err(|_| session::ended())
+        removed.await.map_err(|_| thread::ended())
     }
 
     async fn resume_queue(&self, request: ResumeQueueRequest) -> Result<Empty, Error> {
         let hello = self.hello_info()?;
-        let session = self.live(&request.session_id)?;
+        let thread = self.live(&request.thread_id)?;
         let by = self.origin(&hello);
-        session
+        thread
             .finish(|done| Command::ResumeQueue { by, done })
             .await?;
         Ok(Empty {})
@@ -2112,7 +2111,7 @@ impl Connection {
 
     async fn answer_pending(&self, request: AnswerPendingRequest) -> Result<Empty, Error> {
         self.hello_info()?;
-        let session = self.live(&request.session_id)?;
+        let thread = self.live(&request.thread_id)?;
         let answer = match (request.permission, request.elicitation, request.client_tool) {
             (Some(permission), None, None) => Answer::Permission(permission),
             (None, Some(elicitation), None) => Answer::Elicitation(elicitation),
@@ -2124,13 +2123,13 @@ impl Connection {
             }
         };
         let (reply, answered) = oneshot::channel();
-        session.send(Command::Answer {
+        thread.send(Command::Answer {
             pending_id: request.pending_id,
             by: self.client_id(),
             answer,
             reply,
         })?;
-        answered.await.map_err(|_| session::ended())??;
+        answered.await.map_err(|_| thread::ended())??;
         Ok(Empty {})
     }
 
@@ -2140,8 +2139,8 @@ impl Connection {
         cx: ConnectionTo<HostClient>,
     ) -> Result<RunResponse, Error> {
         let hello = self.hello_info()?;
-        // Another Host's agent starting a session here, through a service: the session is a
-        // delegated session of the one there that asks.
+        // Another Host's agent starting a thread here, through a service: the thread is a
+        // delegated thread of the one there that asks.
         let origin = self.origin_for(
             &hello,
             request.caller.clone(),
@@ -2151,7 +2150,7 @@ impl Connection {
         let started_by = request
             .caller
             .as_ref()
-            .map(|caller| caller.session_id.clone());
+            .map(|caller| caller.thread_id.clone());
         let link = request.attach.then(|| {
             let client_tools = self.client_tools();
             let backlog = self.backlog();
@@ -2168,7 +2167,7 @@ impl Connection {
         let attaching = link.is_some();
         let answer = run_as(&self.shared, request, link, origin, started_by).await?;
         if attaching {
-            lock(&self.attached).insert(answer.session_id.clone());
+            lock(&self.attached).insert(answer.thread_id.clone());
         }
         Ok(answer)
     }
@@ -2247,7 +2246,7 @@ pub(crate) async fn add_queued(
         ..request.clone()
     });
     let AddQueuedRequest {
-        session_id,
+        thread_id,
         prompt,
         key,
         caller: _,
@@ -2258,7 +2257,7 @@ pub(crate) async fn add_queued(
         key,
         "queue/add",
         digest,
-        Some(&session_id),
+        Some(&thread_id),
         |work| {
             Some(AddQueuedResponse {
                 queued_id: work.queued_id?,
@@ -2268,19 +2267,19 @@ pub(crate) async fn add_queued(
         },
         AddQueuedResponse::clone,
         async |key| {
-            let session = live(shared, &session_id)?;
-            if session.summary().session_id != session_id {
+            let thread = live(shared, &thread_id)?;
+            if thread.summary().thread_id != thread_id {
                 return Err(Error::invalid_params()
                     .data("a subagent thread has no queue: add to its parent's"));
             }
             let (reply, added) = oneshot::channel();
-            session.send(Command::Enqueue {
+            thread.send(Command::Enqueue {
                 origin,
                 prompt,
                 key,
                 reply,
             })?;
-            added.await.map_err(|_| session::ended())?
+            added.await.map_err(|_| thread::ended())?
         },
     )
     .await
@@ -2292,15 +2291,15 @@ pub(crate) async fn steer_turn(
     request: SteerTurnRequest,
     origin: TurnOrigin,
 ) -> Result<SteerTurnResponse, Error> {
-    let session = live(shared, &request.session_id)?;
+    let thread = live(shared, &request.thread_id)?;
     let (reply, answered) = oneshot::channel();
-    session.send(Command::Steer(Steer {
+    thread.send(Command::Steer(Steer {
         origin,
-        session_id: request.session_id,
+        thread_id: request.thread_id,
         prompt: request.prompt,
         reply,
     }))?;
-    answered.await.map_err(|_| session::ended())?
+    answered.await.map_err(|_| thread::ended())?
 }
 
 /// `turn/cancel`, for a client or a Host tool.
@@ -2308,69 +2307,69 @@ pub(crate) fn cancel_turn(
     shared: &Arc<Shared>,
     request: CancelTurnRequest,
 ) -> Result<Empty, Error> {
-    let session = live(shared, &request.session_id)?;
-    session.send(Command::Cancel {
-        session_id: request.session_id,
+    let thread = live(shared, &request.thread_id)?;
+    thread.send(Command::Cancel {
+        thread_id: request.thread_id,
     })?;
     Ok(Empty {})
 }
 
-/// The open session `session_id` is, or belongs to as a subagent.
-pub(crate) fn live(shared: &Shared, session_id: &SessionId) -> Result<SessionHandle, Error> {
+/// The open thread `thread_id` is, or belongs to as a subagent.
+pub(crate) fn live(shared: &Shared, thread_id: &ThreadId) -> Result<ThreadHandle, Error> {
     shared
         .registry()
-        .live(session_id)
-        .ok_or_else(|| errors::session_not_open(&session_id.to_string()))
+        .live(thread_id)
+        .ok_or_else(|| errors::thread_not_open(&thread_id.to_string()))
 }
 
-/// `sessions/list`, for a client or a Host tool.
-pub(crate) async fn list_sessions(
+/// `threads/list`, for a client or a Host tool.
+pub(crate) async fn list_threads(
     shared: &Arc<Shared>,
-    request: ListSessionsRequest,
-) -> Result<ListSessionsResponse, Error> {
+    request: ListThreadsRequest,
+) -> Result<ListThreadsResponse, Error> {
     match request.agent_id.clone() {
         None => {
             let repo = match &request.repo {
                 Some(dir) => Some(shared.git.repository(dir).await?.primary),
                 None => None,
             };
-            let mut sessions = shared.listings(request.cwd.as_deref(), repo.as_deref());
+            let mut threads = shared.listings(request.cwd.as_deref(), repo.as_deref());
             if let Some(activity) = request.activity {
-                sessions.retain(|listing| listing.activity == Some(activity));
+                threads.retain(|listing| listing.activity == Some(activity));
             }
-            sessions.retain(|listing| labelled(listing, &request.labels));
-            Ok(ListSessionsResponse {
-                sessions,
+            threads.retain(|listing| labelled(listing, &request.labels));
+            Ok(ListThreadsResponse {
+                threads,
                 next_cursor: None,
             })
         }
         Some(_) if request.repo.is_some() => {
             Err(Error::invalid_params()
-                .data("sessions/list takes a repository only without an agent"))
+                .data("threads/list takes a repository only without an agent"))
         }
         Some(_) if request.activity.is_some() => {
             Err(Error::invalid_params()
-                .data("sessions/list takes an activity only without an agent"))
+                .data("threads/list takes an activity only without an agent"))
         }
         Some(_) if !request.labels.is_empty() => {
-            Err(Error::invalid_params().data("sessions/list takes labels only without an agent"))
+            Err(Error::invalid_params().data("threads/list takes labels only without an agent"))
         }
-        Some(agent_id) => agent_sessions(shared, &agent_id, request).await,
+        Some(agent_id) => agent_threads(shared, &agent_id, request).await,
     }
 }
 
 /// Whether `listing` carries every one of `labels`.
-pub(crate) fn labelled(listing: &SessionListing, labels: &[String]) -> bool {
+pub(crate) fn labelled(listing: &ThreadListing, labels: &[String]) -> bool {
     labels.iter().all(|label| listing.labels.contains(label))
 }
 
-/// `sessions/list` for one agent: the Host's own sessions of it in the directory first, then the
+/// `threads/list` for one agent: the Host's own threads of it in the directory first, then the
 /// agent's own listing.
-async fn agent_sessions(
+async fn agent_threads(
     shared: &Arc<Shared>,
     agent_id: &str,
-    request: ListSessionsRequest,
-) -> Result<ListSessionsResponse, Error> {
+    request: ListThreadsRequest,
+) -> Result<ListThreadsResponse, Error> {
     let agent = shared.resolve(agent_id).await?;
     let cwd = request.cwd.clone().unwrap_or_else(home);
     let handle = shared
@@ -2383,41 +2382,39 @@ async fn agent_sessions(
     let grace_ms = u64::try_from(shared.config.idle_grace.as_millis()).unwrap_or(u64::MAX);
     let (open, blank, known) = {
         let registry = shared.registry();
-        let (blank, open): (Vec<&SessionHandle>, Vec<&SessionHandle>) = registry
-            .sessions
+        let (blank, open): (Vec<&ThreadHandle>, Vec<&ThreadHandle>) = registry
+            .threads
             .values()
-            .partition(|session| session.is_blank());
-        let blank: HashSet<SessionId> = blank
+            .partition(|thread| thread.is_blank());
+        let blank: HashSet<ThreadId> = blank
             .into_iter()
-            .map(|session| session.summary().session_id)
+            .map(|thread| thread.summary().thread_id)
             .collect();
-        let open: Vec<session::Summary> = open.into_iter().map(SessionHandle::summary).collect();
+        let open: Vec<thread::Summary> = open.into_iter().map(ThreadHandle::summary).collect();
         (open, blank, registry.known.clone())
     };
-    let mut leading: Vec<SessionListing> = open
+    let mut leading: Vec<ThreadListing> = open
         .iter()
         .filter(|summary| summary.agent_id == agent.id && in_scope(&summary.cwd))
-        .map(session::Summary::listing)
+        .map(thread::Summary::listing)
         .collect();
     leading.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
-    let mut dormant_here: Vec<SessionListing> = known
+    let mut dormant_here: Vec<ThreadListing> = known
         .iter()
-        .filter(|(session_id, recorded)| {
+        .filter(|(thread_id, recorded)| {
             !recorded.closed
                 && now_ms().saturating_sub(recorded.last_activity_ms) < grace_ms
                 && in_scope(&recorded.cwd)
                 && recorded.agent_id() == Some(agent.id.as_str())
-                && !blank.contains(*session_id)
-                && !open
-                    .iter()
-                    .any(|summary| summary.session_id == **session_id)
+                && !blank.contains(*thread_id)
+                && !open.iter().any(|summary| summary.thread_id == **thread_id)
         })
-        .map(|(session_id, recorded)| dormant(session_id, &agent.id, recorded))
+        .map(|(thread_id, recorded)| dormant(thread_id, &agent.id, recorded))
         .collect();
     dormant_here.sort_by_key(|listing| std::cmp::Reverse(listing.last_activity_at));
     leading.extend(dormant_here);
 
-    let mut sessions = Vec::new();
+    let mut threads = Vec::new();
     let mut agents_own = listed.sessions;
     // An agent may list more than `cwd` asks: Claude's lists the repository's other worktrees.
     agents_own.retain(|info| !blank.contains(&info.session_id) && in_scope(&info.cwd));
@@ -2432,12 +2429,12 @@ async fn agent_sessions(
                 let title = listing.info.title.take();
                 listing.info = info;
                 // The Host's title: the agent may save its own only once a turn ends, and
-                // one the session was renamed to is the session's.
+                // one the thread was renamed to is the thread's.
                 if title.is_some() {
                     listing.info.title = title;
                 }
             }
-            sessions.push(listing);
+            threads.push(listing);
         }
     } else {
         agents_own.retain(|info| {
@@ -2448,18 +2445,18 @@ async fn agent_sessions(
     }
     for info in agents_own {
         let state = match known.get(&info.session_id) {
-            Some(recorded) if !recorded.closed => SessionStatus::Suspended,
-            _ => SessionStatus::Closed,
+            Some(recorded) if !recorded.closed => ThreadStatus::Suspended,
+            _ => ThreadStatus::Closed,
         };
         let open = open
             .iter()
-            .find(|summary| summary.session_id == info.session_id);
+            .find(|summary| summary.thread_id == info.session_id);
         let listing = match open {
-            Some(summary) => SessionListing {
+            Some(summary) => ThreadListing {
                 info,
                 ..summary.listing()
             },
-            None => SessionListing {
+            None => ThreadListing {
                 headless: known
                     .get(&info.session_id)
                     .is_some_and(|recorded| recorded.policy.is_headless()),
@@ -2497,40 +2494,40 @@ async fn agent_sessions(
                 clients: 0,
             },
         };
-        sessions.push(listing);
+        threads.push(listing);
     }
-    Ok(ListSessionsResponse {
-        sessions,
+    Ok(ListThreadsResponse {
+        threads,
         next_cursor: listed.next_cursor,
     })
 }
 
-/// `sessions/get`, for a client or a Host tool: the session as it lists, with its latest turn
+/// `threads/get`, for a client or a Host tool: the thread as it lists, with its latest turn
 /// from its journal, without opening it.
-pub(crate) async fn get_session(
+pub(crate) async fn get_thread(
     shared: &Arc<Shared>,
-    request: GetSessionRequest,
-) -> Result<GetSessionResponse, Error> {
-    let unknown = || errors::unknown_session(&request.session_id.to_string());
+    request: GetThreadRequest,
+) -> Result<GetThreadResponse, Error> {
+    let unknown = || errors::unknown_thread(&request.thread_id.to_string());
     let (live, recorded) = {
         let registry = shared.registry();
         (
-            registry.sessions.get(&request.session_id).cloned(),
-            registry.known.get(&request.session_id).cloned(),
+            registry.threads.get(&request.thread_id).cloned(),
+            registry.known.get(&request.thread_id).cloned(),
         )
     };
-    if let Some(session) = live {
-        if session.is_blank() {
+    if let Some(thread) = live {
+        if thread.is_blank() {
             return Err(unknown());
         }
         let (reply, latest) = oneshot::channel();
-        session.send(Command::LatestTurn {
+        thread.send(Command::LatestTurn {
             turn_id: request.turn_id.clone(),
             reply,
         })?;
-        let latest_turn = latest.await.map_err(|_| session::ended())?;
-        return Ok(GetSessionResponse {
-            session: session.summary().listing(),
+        let latest_turn = latest.await.map_err(|_| thread::ended())?;
+        return Ok(GetThreadResponse {
+            thread: thread.summary().listing(),
             latest_turn: asked_for(&request, latest_turn)?,
         });
     }
@@ -2540,46 +2537,42 @@ pub(crate) async fn get_session(
         .config
         .journals
         .as_ref()
-        .and_then(|dir| journal::read(&journal::path_for(dir, &request.session_id)).ok())
+        .and_then(|dir| journal::read(&journal::path_for(dir, &request.thread_id)).ok())
         .unwrap_or_default();
-    let mut session = dormant(&request.session_id, &agent_id, &recorded);
-    session.info.title = journal::shown_title(&records);
-    let latest_turn = journal::turn(&records, &request.session_id, request.turn_id.as_deref());
-    Ok(GetSessionResponse {
+    let mut thread = dormant(&request.thread_id, &agent_id, &recorded);
+    thread.info.title = journal::shown_title(&records);
+    let latest_turn = journal::turn(&records, &request.thread_id, request.turn_id.as_deref());
+    Ok(GetThreadResponse {
         latest_turn: asked_for(&request, latest_turn)?,
-        session,
+        thread,
     })
 }
 
-/// The turn `sessions/get` found: an error when it asked for one by id and there's none.
+/// The turn `threads/get` found: an error when it asked for one by id and there's none.
 fn asked_for(
-    request: &GetSessionRequest,
+    request: &GetThreadRequest,
     found: Option<LatestTurn>,
 ) -> Result<Option<LatestTurn>, Error> {
     match (&request.turn_id, found) {
         (Some(turn_id), None) => Err(errors::unknown_turn(
-            &request.session_id.to_string(),
+            &request.thread_id.to_string(),
             turn_id,
         )),
         (_, found) => Ok(found),
     }
 }
 
-/// A session a stopped Host left, or one closed since, as listings show it.
-pub(crate) fn dormant(
-    session_id: &SessionId,
-    agent_id: &str,
-    recorded: &Recorded,
-) -> SessionListing {
-    let mut info = SessionInfo::new(session_id.clone(), recorded.cwd.clone());
+/// A thread a stopped Host left, or one closed since, as listings show it.
+pub(crate) fn dormant(thread_id: &ThreadId, agent_id: &str, recorded: &Recorded) -> ThreadListing {
+    let mut info = SessionInfo::new(thread_id.clone(), recorded.cwd.clone());
     info.title.clone_from(&recorded.title);
-    SessionListing {
+    ThreadListing {
         info,
         agent_id: agent_id.to_owned(),
         state: if recorded.closed {
-            SessionStatus::Closed
+            ThreadStatus::Closed
         } else {
-            SessionStatus::Suspended
+            ThreadStatus::Suspended
         },
         activity: None,
         clients: 0,
@@ -2597,9 +2590,9 @@ pub(crate) fn dormant(
     }
 }
 
-/// How a session in `cwd` is set up for `instance`'s agent: the configured MCP servers it
+/// How a thread in `cwd` is set up for `instance`'s agent: the configured MCP servers it
 /// accepts, the Host MCP server, and `additional_directories` if it accepts those; with a
-/// notice for each left out, and the MCP servers for the session to keep: the Host MCP
+/// notice for each left out, and the MCP servers for the thread to keep: the Host MCP
 /// server's declaration, and every server's status.
 pub(crate) fn setup(
     shared: &Arc<Shared>,
@@ -2693,7 +2686,7 @@ fn service_tools(shared: &Shared, agent: &Agent) -> Vec<service_tools::Offered> 
 
 /// `work`, done under the request key `key` when there is one (feature `requestKeys`): a
 /// repeat gets the answer the first got, `remembered` from it, and starts nothing. A key a
-/// stopped Host admitted without answering is looked for first in the journal of `session_id`,
+/// stopped Host admitted without answering is looked for first in the journal of `thread_id`,
 /// or every journal without one, where `recover` makes the answer from the work it finds.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn keyed<T, W>(
@@ -2701,7 +2694,7 @@ pub(crate) async fn keyed<T, W>(
     key: Option<String>,
     method: &str,
     digest: String,
-    session_id: Option<&SessionId>,
+    thread_id: Option<&ThreadId>,
     recover: impl FnOnce(journal::KeyedWork) -> Option<T>,
     remembered: impl FnOnce(&T) -> T,
     work: impl FnOnce(Option<String>) -> W,
@@ -2719,7 +2712,7 @@ where
     };
     if ticket.unsettled()
         && let Some(dir) = &shared.config.journals
-        && let Some(answer) = admissions::find_work(dir, session_id, ticket.key()).and_then(recover)
+        && let Some(answer) = admissions::find_work(dir, thread_id, ticket.key()).and_then(recover)
     {
         ticket.settle(&answer);
         return Ok(answer);
@@ -2729,19 +2722,19 @@ where
     Ok(answer)
 }
 
-/// Open `session_id`, which the Host doesn't have open, with no client: as `session/run` does
-/// before its turn, and as a Host starting does for a headless session whose queue waits.
+/// Open `thread_id`, which the Host doesn't have open, with no client: as `thread/run` does
+/// before its turn, and as a Host starting does for a headless thread whose queue waits.
 pub(crate) async fn take_up(
     shared: &Arc<Shared>,
     agent_id: &str,
     cwd: PathBuf,
-    session_id: SessionId,
+    thread_id: ThreadId,
     policy: PermissionPolicy,
-) -> Result<SessionHandle, Error> {
+) -> Result<ThreadHandle, Error> {
     let agent = shared.resolve(agent_id).await?;
-    let (session, _notices) =
-        take_up_with(shared, &agent, cwd, session_id, Vec::new(), policy).await?;
-    Ok(session)
+    let (thread, _notices) =
+        take_up_with(shared, &agent, cwd, thread_id, Vec::new(), policy).await?;
+    Ok(thread)
 }
 
 /// [`take_up`], with `agent` resolved already; with what's worth telling the client.
@@ -2749,10 +2742,10 @@ async fn take_up_with(
     shared: &Arc<Shared>,
     agent: &Agent,
     cwd: PathBuf,
-    session_id: SessionId,
+    thread_id: ThreadId,
     additional_directories: Vec<PathBuf>,
     policy: PermissionPolicy,
-) -> Result<(SessionHandle, Vec<String>), Error> {
+) -> Result<(ThreadHandle, Vec<String>), Error> {
     let (instance, git) = tokio::join!(
         shared.instance(agent, &cwd, headless(agent.options)),
         shared.git.locate(&cwd),
@@ -2760,11 +2753,11 @@ async fn take_up_with(
     let instance = instance?;
     let (setup, notices, servers) = setup(shared, agent, &instance, cwd, additional_directories);
     match reopen(
-        shared, instance, session_id, setup, servers, agent, policy, false, git,
+        shared, instance, thread_id, setup, servers, agent, policy, false, git,
     )
     .await
     {
-        Ok(session) => Ok((session, notices)),
+        Ok(thread) => Ok((thread, notices)),
         Err((error, instance)) => {
             if let Some(instance) = instance {
                 instance.connection.shutdown().await;
@@ -2774,9 +2767,9 @@ async fn take_up_with(
     }
 }
 
-/// Open `request`'s session and start its turn; see [`crate::Daemon::run`]. `link` is the
+/// Open `request`'s thread and start its turn; see [`crate::Daemon::run`]. `link` is the
 /// requesting client, attached before the prompt goes out so it sees the whole turn. Under a
-/// request key, a repeat answers with the session alone, attaching nobody.
+/// request key, a repeat answers with the thread alone, attaching nobody.
 pub(crate) async fn run(
     shared: &Arc<Shared>,
     request: RunRequest,
@@ -2785,30 +2778,30 @@ pub(crate) async fn run(
     run_as(shared, request, link, TurnOrigin::Run {}, None).await
 }
 
-/// [`run`], its turn from `origin`; a new session is a delegated session of `started_by`'s when
-/// a session's agent starts it (ADR 0020), on the other Host `origin` names when it's one's.
+/// [`run`], its turn from `origin`; a new thread is a delegated thread of `started_by`'s when
+/// a thread's agent starts it (ADR 0020), on the other Host `origin` names when it's one's.
 pub(crate) async fn run_as(
     shared: &Arc<Shared>,
     request: RunRequest,
     link: Option<(ClientId, ClientLink)>,
     origin: TurnOrigin,
-    started_by: Option<SessionId>,
+    started_by: Option<ThreadId>,
 ) -> Result<RunResponse, Error> {
     let digest = admissions::digest(&RunRequest {
         key: None,
         ..request.clone()
     });
-    let session_id = request.session_id.clone();
+    let thread_id = request.thread_id.clone();
     let key = request.key.clone();
     keyed(
         shared,
         key,
-        "session/run",
+        "thread/run",
         digest,
-        session_id.as_ref(),
+        thread_id.as_ref(),
         |work| {
             Some(RunResponse {
-                session_id: work.session_id,
+                thread_id: work.thread_id,
                 turn_id: work.turn_id,
                 state: None,
                 policy: None,
@@ -2823,7 +2816,7 @@ pub(crate) async fn run_as(
     .await
 }
 
-/// Where `session/run` runs: `cwd`, under the Host's home when it starts with `~`, and a
+/// Where `thread/run` runs: `cwd`, under the Host's home when it starts with `~`, and a
 /// checkout of `remote` when one is named, as another Host's agent asks for the directory it
 /// works in on its own Host.
 async fn place(shared: &Shared, cwd: PathBuf, remote: Option<&str>) -> Result<PathBuf, Error> {
@@ -2868,7 +2861,7 @@ async fn run_now(
     link: Option<(ClientId, ClientLink)>,
     key: Option<String>,
     origin: TurnOrigin,
-    started_by: Option<SessionId>,
+    started_by: Option<ThreadId>,
 ) -> Result<RunResponse, Error> {
     if shared.draining() {
         return Err(errors::host_stopping());
@@ -2877,7 +2870,7 @@ async fn run_now(
         agent_id,
         cwd,
         remote,
-        session_id,
+        thread_id,
         additional_directories,
         mode,
         prompt,
@@ -2892,31 +2885,31 @@ async fn run_now(
     check_labels(&labels)?;
     let cwd = place(shared, cwd, remote.as_deref()).await?;
     let started_by_host = match &origin {
-        TurnOrigin::Session { host, .. } if started_by.is_some() => host.clone(),
+        TurnOrigin::Thread { host, .. } if started_by.is_some() => host.clone(),
         _ => None,
     };
     let agent = shared.resolve(&agent_id).await?;
     let options = headless(agent.options);
-    let live = session_id
+    let live = thread_id
         .as_ref()
-        .and_then(|session_id| shared.registry().live(session_id));
+        .and_then(|thread_id| shared.registry().live(thread_id));
     let mut notices = Vec::new();
     let opening = live.is_none();
-    let session = match (live, session_id) {
-        // An open session keeps its own policy.
-        (Some(session), _) => session,
-        (None, Some(session_id)) => {
-            let (session, more) = take_up_with(
+    let thread = match (live, thread_id) {
+        // An open thread keeps its own policy.
+        (Some(thread), _) => thread,
+        (None, Some(thread_id)) => {
+            let (thread, more) = take_up_with(
                 shared,
                 &agent,
                 cwd,
-                session_id,
+                thread_id,
                 additional_directories,
                 policy,
             )
             .await?;
             notices = more;
-            session
+            thread
         }
         (None, None) => {
             let (instance, git) = tokio::join!(
@@ -2938,7 +2931,7 @@ async fn run_now(
                 modes: response.modes,
                 config_options: response.config_options.unwrap_or_default(),
             };
-            // As `session/create` starts one, so a headless run is in the mode the person set.
+            // As `thread/create` starts one, so a headless run is in the mode the person set.
             if let Some(mode) = mode.or_else(|| agent.mode.clone()) {
                 let handle = instance.connection.handle();
                 if let Err(notice) =
@@ -2968,9 +2961,9 @@ async fn run_now(
     };
     // A service's run opened it for what started it, as listings say.
     if opening && let TurnOrigin::Service { .. } = &origin {
-        session.opened_by(origin.clone());
+        thread.opened_by(origin.clone());
     }
-    let root = session.summary().session_id;
+    let root = thread.summary().thread_id;
     let owner = link.as_ref().map_or(0, |(client, _)| *client);
     let trace = if trace {
         let path = shared.trace_path(&root)?;
@@ -2981,7 +2974,7 @@ async fn run_now(
             ))
         })?;
         // For the attached client while it's there; for a run nobody attaches to, for good.
-        session.traces.add(owner, trace);
+        thread.traces.add(owner, trace);
         Some(path)
     } else {
         None
@@ -2989,7 +2982,7 @@ async fn run_now(
     let state = match link {
         Some((client, link)) => {
             let (reply, attached) = oneshot::channel();
-            session.send(Command::Attach {
+            thread.send(Command::Attach {
                 client,
                 link: Box::new(link),
                 from: ReplayFrom::Now,
@@ -2997,28 +2990,28 @@ async fn run_now(
                 trace,
                 reply: AttachReply::Run(reply),
             })?;
-            Some(attached.await.map_err(|_| session::ended())?)
+            Some(attached.await.map_err(|_| thread::ended())?)
         }
         None => None,
     };
     let (reply, started) = oneshot::channel();
-    session.send(Command::Prompt {
+    thread.send(Command::Prompt {
         origin,
-        session_id: root.clone(),
+        thread_id: root.clone(),
         prompt,
         key,
         reply,
     })?;
-    let (_, turn_id) = started.await.map_err(|_| session::ended())??;
+    let (_, turn_id) = started.await.map_err(|_| thread::ended())??;
     Ok(RunResponse {
-        session_id: root,
+        thread_id: root,
         turn_id: Some(turn_id),
         state: state.map(Box::new),
-        policy: Some(session.summary().policy),
+        policy: Some(thread.summary().policy),
     })
 }
 
-/// Open a session the Host doesn't have open in `instance`: resume it from the journal a
+/// Open a thread the Host doesn't have open in `instance`: resume it from the journal a
 /// stopped Host left, or reopen it in the agent, loading it when `replay` asks for its
 /// history and there's no journal to show instead. On failure the agent comes back, unless
 /// it's gone.
@@ -3026,17 +3019,17 @@ async fn run_now(
 async fn reopen(
     shared: &Arc<Shared>,
     mut instance: Instance,
-    session_id: SessionId,
+    thread_id: ThreadId,
     setup: SessionSetup,
     servers: Servers,
     agent: &Agent,
     policy: PermissionPolicy,
     replay: bool,
     git: Option<GitLocation>,
-) -> Result<SessionHandle, (Error, Option<Instance>)> {
+) -> Result<ThreadHandle, (Error, Option<Instance>)> {
     // Nothing closes the journal while it's taken up (`Daemon::close_unclaimed`).
-    let _taking_up = TakingUp::new(shared, &session_id);
-    let recovered = recoverable(shared, &session_id);
+    let _taking_up = TakingUp::new(shared, &thread_id);
+    let recovered = recoverable(shared, &thread_id);
     let capabilities = instance
         .init()
         .map(|init| init.agent_capabilities.clone())
@@ -3052,13 +3045,13 @@ async fn reopen(
     let opened = if load {
         instance
             .connection
-            .load_session(session_id.clone(), &setup)
+            .load_session(thread_id.clone(), &setup)
             .await
             .map(|response| (response.modes, response.config_options))
     } else if can_resume {
         instance
             .connection
-            .resume_session(session_id.clone(), &setup)
+            .resume_session(thread_id.clone(), &setup)
             .await
             .map(|response| (response.modes, response.config_options))
     } else {
@@ -3075,7 +3068,7 @@ async fn reopen(
         modes,
         config_options: config_options.unwrap_or_default(),
     };
-    // A title the Host kept and a queue outlive the journal: a closed session's new one begins
+    // A title the Host kept and a queue outlive the journal: a closed thread's new one begins
     // with them.
     let closed = match &recovered {
         Some(_) => None,
@@ -3083,7 +3076,7 @@ async fn reopen(
             .config
             .journals
             .as_ref()
-            .and_then(|dir| journal::read(&journal::path_for(dir, &session_id)).ok()),
+            .and_then(|dir| journal::read(&journal::path_for(dir, &thread_id)).ok()),
     };
     let earlier = recovered
         .as_ref()
@@ -3114,14 +3107,14 @@ async fn reopen(
                 Err(error) => return Err((journal_error(&error), Some(instance))),
             };
             // A turn the stopped Host was running was cut off with it (WVE-144). A headless
-            // session continues its own once, unless that turn was a continuation already, so a
+            // thread continues its own once, unless that turn was a continuation already, so a
             // turn that brings the Host down can't do it again and again.
             for open in open_turns {
                 journal.append(Entry::turn_ended(
-                    open.session_id.clone(),
+                    open.thread_id.clone(),
                     &Err(errors::interrupted()),
                 ));
-                if open.session_id == session_id
+                if open.thread_id == thread_id
                     && policy.is_headless()
                     && open.continues.is_none()
                     && let Some(turn_id) = open.turn_id
@@ -3134,9 +3127,9 @@ async fn reopen(
             continuation = interrupted.map(|(origin, continues)| {
                 let turn_id = crate::queue::new_id();
                 let (_, started_ms) = journal.append(Entry::TurnStarted {
-                    session_id: session_id.clone(),
+                    thread_id: thread_id.clone(),
                     at_ms: now_ms(),
-                    prompt: vec![ContentBlock::from(session::CONTINUE.to_owned())],
+                    prompt: vec![ContentBlock::from(thread::CONTINUE.to_owned())],
                     origin: Some(origin.clone()),
                     queued_id: None,
                     turn_id: Some(turn_id.clone()),
@@ -3164,7 +3157,7 @@ async fn reopen(
     };
     match open(
         shared,
-        session_id,
+        thread_id,
         instance,
         agent,
         setup.cwd,
@@ -3187,36 +3180,36 @@ async fn reopen(
         servers,
         git,
     ) {
-        Ok(session) => Ok(session),
+        Ok(thread) => Ok(thread),
         Err(error) => Err((error, None)),
     }
 }
 
-/// The journal a stopped Host left for `session_id` while it was open.
-/// A session being taken up from its journal, until dropped.
+/// The journal a stopped Host left for `thread_id` while it was open.
+/// A thread being taken up from its journal, until dropped.
 struct TakingUp<'a> {
     shared: &'a Shared,
-    session_id: SessionId,
+    thread_id: ThreadId,
 }
 
 impl<'a> TakingUp<'a> {
-    fn new(shared: &'a Shared, session_id: &SessionId) -> Self {
-        shared.registry().taking_up.insert(session_id.clone());
+    fn new(shared: &'a Shared, thread_id: &ThreadId) -> Self {
+        shared.registry().taking_up.insert(thread_id.clone());
         Self {
             shared,
-            session_id: session_id.clone(),
+            thread_id: thread_id.clone(),
         }
     }
 }
 
 impl Drop for TakingUp<'_> {
     fn drop(&mut self) {
-        self.shared.registry().taking_up.remove(&self.session_id);
+        self.shared.registry().taking_up.remove(&self.thread_id);
     }
 }
 
-/// An interactive session taken up again with prompts waiting has its queue paused, for a
-/// person to resume; a headless session's carries on. Whether it paused now.
+/// An interactive thread taken up again with prompts waiting has its queue paused, for a
+/// person to resume; a headless thread's carries on. Whether it paused now.
 fn interrupt(queue: &mut Queue, policy: &PermissionPolicy) -> bool {
     if !queue.is_ready() || policy.is_headless() {
         return false;
@@ -3225,22 +3218,22 @@ fn interrupt(queue: &mut Queue, policy: &PermissionPolicy) -> bool {
     true
 }
 
-fn recoverable(shared: &Shared, session_id: &SessionId) -> Option<(PathBuf, Vec<journal::Record>)> {
-    let path = journal::path_for(shared.config.journals.as_ref()?, session_id);
+fn recoverable(shared: &Shared, thread_id: &ThreadId) -> Option<(PathBuf, Vec<journal::Record>)> {
+    let path = journal::path_for(shared.config.journals.as_ref()?, thread_id);
     let records = journal::read(&path).ok()?;
     (!records.is_empty() && !journal::is_closed(&records)).then_some((path, records))
 }
 
-/// Where a session [`open`] starts came from.
+/// Where a thread [`open`] starts came from.
 enum Origin {
-    /// `session/create` or a new run: the session is blank until it's prompted. A delegated
-    /// session names the session that started it, and the other Host that one is on.
+    /// `thread/create` or a new run: the thread is blank until it's prompted. A delegated
+    /// thread names the thread that started it, and the other Host that one is on.
     New {
-        started_by: Option<SessionId>,
+        started_by: Option<ThreadId>,
         started_by_host: Option<String>,
         labels: Vec<String>,
     },
-    /// The agent's session reopened, with the journal a stopped Host left, if there is one,
+    /// The agent's thread reopened, with the journal a stopped Host left, if there is one,
     /// and the title and queue the Host kept for it, the last title its agent gave it, and when
     /// it was last active.
     Reopened {
@@ -3249,13 +3242,13 @@ enum Origin {
         agent_title: Option<String>,
         last_activity_ms: Option<u64>,
         queue: Queue,
-        started_by: Option<SessionId>,
+        started_by: Option<ThreadId>,
         started_by_host: Option<String>,
-        /// The session its work goes on in.
-        successor: Option<SessionId>,
+        /// The thread its work goes on in.
+        successor: Option<ThreadId>,
         labels: Vec<String>,
         usage: Usage,
-        /// The turn the stopped Host cut off, for a headless session to continue.
+        /// The turn the stopped Host cut off, for a headless thread to continue.
         continuation: Option<Box<Continuation>>,
     },
 }
@@ -3263,7 +3256,7 @@ enum Origin {
 #[allow(clippy::too_many_arguments)]
 fn open(
     shared: &Arc<Shared>,
-    session_id: SessionId,
+    thread_id: ThreadId,
     instance: Instance,
     agent: &Agent,
     cwd: PathBuf,
@@ -3273,7 +3266,7 @@ fn open(
     origin: Origin,
     servers: Servers,
     git: Option<GitLocation>,
-) -> Result<SessionHandle, Error> {
+) -> Result<ThreadHandle, Error> {
     let (journal, blank, title, agent_title, last_activity_ms, queue, starter) = match origin {
         Origin::New {
             started_by,
@@ -3329,7 +3322,7 @@ fn open(
         Some(journal) => *journal,
         None => {
             let mut header = Entry::header(
-                session_id.clone(),
+                thread_id.clone(),
                 agent.spec.clone(),
                 &agent.id,
                 cwd.clone(),
@@ -3363,7 +3356,7 @@ fn open(
                 carried_successor.clone_from(&successor);
             }
             match &shared.config.journals {
-                Some(dir) => Journal::create(dir, &session_id, header)
+                Some(dir) => Journal::create(dir, &thread_id, header)
                     .map_err(|error| journal_error(&error))?,
                 None => Journal::memory(header),
             }
@@ -3373,12 +3366,12 @@ fn open(
         .init()
         .cloned()
         .unwrap_or_else(|| InitializeResponse::new(ProtocolVersion::V1));
-    Ok(session::start(
+    Ok(thread::start(
         shared,
         Opened {
-            session_id,
+            thread_id,
             instance,
-            agent: agent.session_agent(initialize),
+            agent: agent.thread_agent(initialize),
             resolved: agent.clone(),
             journal,
             policy,
@@ -3402,7 +3395,7 @@ fn open(
     ))
 }
 
-/// Whether `labels` may start a session: each a label, and not too many (WVE-173).
+/// Whether `labels` may start a thread: each a label, and not too many (WVE-173).
 fn check_labels(labels: &[String]) -> Result<(), Error> {
     for label in labels {
         check_label(label).map_err(|why| Error::invalid_params().data(why))?;

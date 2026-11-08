@@ -1,13 +1,13 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&HelloRequest\n{\n    protocol: VersionRange::supported(), client: ClientInfo\n    { name: \"weave-tui\".to_owned(), version: \"0.1.0\".to_owned(), }, auth:\n    Auth::Local, capabilities: ClientCapabilities { terminal_sign_in: true, },\n})"
+expression: "message(&HelloRequest\n{\n    protocol: VersionRange::supported(), client: ClientInfo\n    { name: \"weave-tui\".to_owned(), version: \"0.1.0\".to_owned(), }, auth:\n    Auth::Local, capabilities: ClientCapabilities\n    { terminal_sign_in: true, client_tools: Vec::new(), },\n})"
 ---
 {
   "method": "host/hello",
   "params": {
     "protocol": {
-      "min": 2,
-      "max": 2
+      "min": 3,
+      "max": 3
     },
     "client": {
       "name": "weave-tui",

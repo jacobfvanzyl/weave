@@ -1,0 +1,17 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ReportThreadRequest\n{\n    thread_id: \"sess-a\".into(), about: OtherThread\n    {\n        thread_id: \"sess-b\".into(), host: \"h-7Rk2\".to_owned(), host_name:\n        Some(\"studio\".to_owned()),\n    }, text:\n    \"[weave] Thread sess-b (codex) on studio finished its turn.\".to_owned(),\n    key: Some(\"dispatcher/w-1\".to_owned()),\n})"
+---
+{
+  "method": "thread/report",
+  "params": {
+    "threadId": "sess-a",
+    "about": {
+      "threadId": "sess-b",
+      "host": "h-7Rk2",
+      "hostName": "studio"
+    },
+    "text": "[weave] Thread sess-b (codex) on studio finished its turn.",
+    "key": "dispatcher/w-1"
+  }
+}

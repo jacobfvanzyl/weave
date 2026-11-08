@@ -3,7 +3,7 @@ source: protocol/tests/wire.rs
 expression: message(&run)
 ---
 {
-  "method": "session/run",
+  "method": "thread/run",
   "params": {
     "agentId": "codex",
     "cwd": "~/src/app",
@@ -19,7 +19,7 @@ expression: message(&run)
     },
     "key": "Yk9…",
     "caller": {
-      "sessionId": "sess-a",
+      "threadId": "sess-a",
       "host": "h-2Lm9",
       "hostName": "mini"
     }

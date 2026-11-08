@@ -1,22 +1,22 @@
-//! Reports (ADR 0023): what the Host tells a session of a turn its agent began in another
-//! session, when the turn ends or waits on a person. The Host writes them for its own
-//! sessions' turns, and the Dispatcher for turns on another of the person's Hosts (ADR 0029),
+//! Reports (ADR 0023): what the Host tells a thread of a turn its agent began in another
+//! thread, when the turn ends or waits on a person. The Host writes them for its own
+//! threads' turns, and the Dispatcher for turns on another of the person's Hosts (ADR 0029),
 //! in the same words, which [`ended_text`] and [`waiting_text`] give.
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::SessionId;
 use agent_client_protocol::schema::v1::StopReason;
 use serde_json::Value;
 
 use crate::pending::PendingKind;
 use crate::pending::PendingRequest;
-use crate::sessions::LatestTurn;
-use crate::sessions::SessionListing;
+use crate::threads::LatestTurn;
+use crate::threads::ThreadId;
+use crate::threads::ThreadListing;
 
-/// How much of a delegated agent's last message its starting session is told.
+/// How much of a delegated agent's last message its starting thread is told.
 pub const MESSAGE_CHARS: usize = 2_000;
 
-/// What a person must answer in a session another session's agent began a turn in.
+/// What a person must answer in a thread another thread's agent began a turn in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Asks {
     /// Permission for a tool call, by its title when it has one.
@@ -40,10 +40,10 @@ impl Asks {
     }
 }
 
-/// A session as a report names it: its title, agent and id, and the Host it's on when it
-/// isn't the told session's.
+/// A thread as a report names it: its title, agent and id, and the Host it's on when it
+/// isn't the told thread's.
 pub struct Named<'a> {
-    pub session_id: &'a SessionId,
+    pub thread_id: &'a ThreadId,
     pub title: Option<&'a str>,
     pub agent_id: &'a str,
     /// The other Host's name.
@@ -51,9 +51,9 @@ pub struct Named<'a> {
 }
 
 impl<'a> Named<'a> {
-    pub fn of(listing: &'a SessionListing, host: Option<&'a str>) -> Self {
+    pub fn of(listing: &'a ThreadListing, host: Option<&'a str>) -> Self {
         Self {
-            session_id: &listing.info.session_id,
+            thread_id: &listing.info.session_id,
             title: listing.info.title.as_deref(),
             agent_id: &listing.agent_id,
             host,
@@ -63,7 +63,7 @@ impl<'a> Named<'a> {
 
 impl std::fmt::Display for Named<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let id = self.session_id;
+        let id = self.thread_id;
         match self.title {
             Some(title) => write!(f, "“{title}” ({}, {id})", self.agent_id)?,
             None => write!(f, "{id} ({})", self.agent_id)?,
@@ -75,7 +75,7 @@ impl std::fmt::Display for Named<'_> {
     }
 }
 
-/// The report on a session to the session whose agent began a turn there, when the turn ends:
+/// The report on a thread to the thread whose agent began a turn there, when the turn ends:
 /// how, and the start of the agent's last message.
 pub fn ended_text(named: &Named<'_>, latest: Option<&LatestTurn>) -> String {
     let how = match latest {
@@ -103,7 +103,7 @@ pub fn ended_text(named: &Named<'_>, latest: Option<&LatestTurn>) -> String {
         text.push_str(" Its agent's last message:\n\n");
         text.push_str(&shown);
         if shown.len() < message.len() {
-            text.push_str("\n\n[…] read_session gives the rest");
+            text.push_str("\n\n[…] read_thread gives the rest");
             if let Some(host) = named.host {
                 text.push_str(&format!(", with host {host}"));
             }
@@ -113,7 +113,7 @@ pub fn ended_text(named: &Named<'_>, latest: Option<&LatestTurn>) -> String {
     text
 }
 
-/// The report on a session to the session whose agent began a turn there, when a person must
+/// The report on a thread to the thread whose agent began a turn there, when a person must
 /// answer something in it.
 pub fn waiting_text(named: &Named<'_>, asks: &Asks) -> String {
     let what = match asks {

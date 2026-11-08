@@ -18,15 +18,16 @@ A command that manages a kind of thing (`threads`, `agents`, `schedules`, `hosts
 lists them when given no subcommand, as `list` does; `daemon` and `dispatcher` say how they are,
 as `status` does. Commands keep the names they had before WVE-188 as hidden ones, since some are
 in what other programs say and run: `weave login` and `logout` (`agents login` and `logout`),
-which Hosts' sign-in errors and the app's messages gave; `weave terminal` (`terminals`), which
-panes the TUI opened in Rex run; and `weave sessions` (`threads`). `main.rs`'s
+which Hosts' sign-in errors and the app's messages gave; and `weave terminal` (`terminals`),
+which panes the TUI opened in Rex run. `weave sessions` no longer runs `threads`: "session" names
+ADR 0031's Sessions (WVE-200). `main.rs`'s
 `commands_answer_to_their_earlier_names` keeps them parsing; a rename adds one there.
 
 Clients name agents by id, so `-- <command>` works only with `--no-daemon` (the in-process
 Host is given it as agent `command`); for the shared Host, define the agent under
 `[agents.<id>]`, as `[agents.fake] command = "…/weave-fake-agent"`. Likewise `--no-fs` and
 `--no-terminal` apply in-process; for the shared Host set `fs`/`terminal` under the agent.
-`--resume [ID]` opens a session (or the picker, also on Ctrl+R in the TUI), `--continue` the
+`--resume [ID]` opens a thread (or the picker, also on Ctrl+R in the TUI), `--continue` the
 latest one here (of the agent last used here, `cli/src/recent.rs`, unless `--agent` or `--`
 names one), and `--add-dir` adds workspace roots. Ctrl+D on an empty composer leaves the TUI
 with a turn still running in the Host. `weave agents login` and `logout` manage sign-in
@@ -48,13 +49,13 @@ with a `resync`. With `[rex] open_threads = true`, `weave daemon run` runs
 `src/rex_threads.rs` beside the Host (ADR 0025): an in-process client that watches every thread,
 connected through `Daemon::connect_beside` so it doesn't keep an idle Host running,
 and gives the ones a paired device opens a tab in this computer's Rex, running `weave --resume
-<id>` in the session named for the thread's repository, kept in `rex-threads.json` beside the
+<id>` in the Rex session named for the thread's repository, kept in `rex-threads.json` beside the
 journals.
 
 ```bash
 ./target/debug/weave run --approve read,edit "fix the tests" --agent <id>   # headless, in the Host
-./target/debug/weave run --detach "…"     # leave it running; prints the session id
-./target/debug/weave run --continue "…"   # or --resume <id>, as the TUI names sessions
+./target/debug/weave run --detach "…"     # leave it running; prints the thread id
+./target/debug/weave run --continue "…"   # or --resume <id>, as the TUI names threads
 ./target/debug/weave threads              # open in the Host; also read, prompt, steer, cancel, close <id>
 ./target/debug/weave threads prompt <id> "address the review"   # or pipe it in; steer joins a running turn
 ./target/debug/weave threads prompt <id> --wait --timeout 10m "…"   # and wait for the reply
@@ -71,14 +72,14 @@ journals.
 ./target/debug/weave schedules            # the Dispatcher's schedules; also add, pause, run, occurrences
 ```
 
-`weave threads` (`src/commands/threads.rs`; alias `sessions`) acts on any thread without attaching,
+`weave threads` (`src/commands/threads.rs`) acts on any thread without attaching,
 as Rex's CLI does on its blocks, so scripts and agents' shells compose threads (ADR 0023):
 `read` gives how a thread lists and its latest turn on stderr and the agent's last message on
-stdout (`--json` for `sessions/get`; `--turn` for a turn other than the latest), `prompt` is
+stdout (`--json` for `threads/get`; `--turn` for a turn other than the latest), `prompt` is
 `queue/add`, and `steer` is `turn/steer`, failing when no turn runs. Their turns' origin is the
 CLI's, a client's, so no thread hears how they end, even when an agent ran it; an agent's Host
 tools do that. `list --activity` lists the threads idle, running or waiting. `watch` prints
-`sessions/watch` as JSON lines, and `follow` observes an open thread (`session/attach` with
+`threads/watch` as JSON lines, and `follow` observes an open thread (`thread/attach` with
 `observe`): it isn't one of its clients, so it keeps no thread open and closes none, and prints
 what happens after `--after`, or from now, as `run` prints; `--until-turn-ends` exits with that
 turn's status. A turn goes by its prompt's id (the protocol's turn ids): `prompt` names it, as
@@ -101,10 +102,10 @@ one turn (WVE-168). `follow` without a turn moves on to a thread's successor, fr
 What a command reports, it prints with `--json` as the Host protocol's own types, so scripts
 follow the protocol's versioning rather than a shape kept for the CLI: `daemon status`
 (`host/status`'s `HostStatus`; nothing on stdout when the Host isn't running, and the service's
-notes on stderr), `threads list` (`SessionListing`s), `threads read` (`sessions/get`), `threads
+notes on stderr), `threads list` (`ThreadListing`s), `threads read` (`threads/get`), `threads
 prompt` (`queue/add`, whose `queuedId` is the turn's id) and `steer` (`turn/steer`), `devices`
-(`Device`s), `run --detach` (`session/run`), and `run` and `prompt --wait`, whose thread's
-journal events (`session/event`) stream as JSON lines. CLI tests check each parses as the type it claims
+(`Device`s), `run --detach` (`thread/run`), and `run` and `prompt --wait`, whose thread's
+journal events (`thread/event`) stream as JSON lines. CLI tests check each parses as the type it claims
 (`tests/json.rs`).
 
 The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
@@ -122,24 +123,24 @@ in-process, whose `stop <reason>` and `fail` scripts end turns each way.
 
 `weave worktrees pre-remove` is worktrunk's `pre-remove` hook (`src/commands/worktrees.rs`): run in the
 worktree being removed, it asks a running Host for `worktrees/release` and exits non-zero while a
-session there runs a turn or waits on the person, which stops `wt remove`, `wt merge` and `wt step
+thread there runs a turn or waits on the person, which stops `wt remove`, `wt merge` and `wt step
 prune`; with no Host running it passes. `install-hook` adds it to worktrunk's user config
 (`$XDG_CONFIG_HOME/worktrunk/config.toml`, else `~/.config/worktrunk/`) only when run, leaving the
 rest of the file as written.
 
-`--resume <id>` reopens a session with the agent and directory its journal records,
-overriding `--agent` and `--cwd` (`start::choose`); the Host refuses to attach a session to
-another agent (`wrong_agent`). `sessions/list` with an agent leads with the Host's sessions
+`--resume <id>` reopens a thread with the agent and directory its journal records,
+overriding `--agent` and `--cwd` (`start::choose`); the Host refuses to attach a thread to
+another agent (`wrong_agent`). `threads/list` with an agent leads with the Host's threads
 of that agent in the directory, open ones and then ones a stopped Host left open within the
 idle grace of their last activity (its index of journals, `Registry::known`), each listing
 saying its state, activity, clients and whether it's headless, which the TUI's picker shows
 as badges and `--continue` uses to pass over headless runs; without an agent it lists the
-Host's sessions across agents. Session state carries the session's directory, which the TUI
+Host's threads across agents. Thread state carries the thread's directory, which the TUI
 adopts.
 
 Commands share their argument groups (`cli/src/args.rs`): `AgentArgs` (which agent, its
-config and trace) everywhere an agent is involved, `WorkspaceArgs` where a session is,
-`SessionArgs` (`--resume`, `--continue`) where one is reopened, and `ApproveArgs`
+config and trace) everywhere an agent is involved, `WorkspaceArgs` where a thread is,
+`ThreadArgs` (`--resume`, `--continue`) where one is reopened, and `ApproveArgs`
 (`--approve <kinds>|all`, the rest rejected, through `acp-core`'s `PermissionPolicy`) where a
 turn runs headless. `weave run --mode` starts its new thread in a mode other than the agent's
 configured one, which otherwise applies and may approve for itself what `--approve` doesn't
@@ -170,7 +171,7 @@ the system's `PATH`: link it into `/usr/local/bin`, or name it by path. On macOS
 with a service installed, say so when the login shell, run as sshd runs a command, doesn't find
 weave (`service::ssh_note`). With no terminal nothing prompts: `weave agents login` then needs
 `--method`, and names the methods, and a sign-in that runs in a terminal says to use `ssh -t`. `weave daemon restart` picks up a rebuilt binary (the TUI needs no restart, as long as
-`weave_host_protocol::PROTOCOL_VERSION` is one it speaks); sessions it had open resume when
+`weave_host_protocol::PROTOCOL_VERSION` is one it speaks); threads it had open resume when
 reattached. The Host captures the login shell's environment when it starts, so restart it
 after changing your shell's. It runs that shell, an interactive one, in a session of its own
 without a terminal, and a Host started in the background has a session of its own too: an

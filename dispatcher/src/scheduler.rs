@@ -27,8 +27,8 @@ use croner::parser::Year;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use weave_host_protocol::dispatcher::Missed;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::ServiceOrigin;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::ServiceOrigin;
 
 use crate::Shared;
 use crate::now_ms;
@@ -238,7 +238,7 @@ pub(crate) fn fire(
             agent_id: run.agent_id.clone(),
             cwd: run.cwd.clone(),
             remote: None,
-            session_id: run.thread.clone(),
+            thread_id: run.thread.clone(),
             additional_directories: Vec::new(),
             mode: run.mode.clone(),
             prompt,

@@ -1,10 +1,10 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&ResumeQueueRequest { session_id: \"s-1\".into(), })"
+expression: "message(&ResumeQueueRequest { thread_id: \"s-1\".into(), })"
 ---
 {
   "method": "queue/resume",
   "params": {
-    "sessionId": "s-1"
+    "threadId": "s-1"
   }
 }

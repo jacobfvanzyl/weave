@@ -113,7 +113,7 @@ Dispatcher is the Host's client, so only the Dispatcher needs an address.
   doesn't exit when idle. Joining revokes a service pairing with the Dispatcher's key from
   before Hosts joined. Joining another Dispatcher leaves the first.
 - **Over the connection** the Dispatcher says it reaches the person's Hosts
-  (`service/declareTools` with `hosts`), watches the Host's threads (`sessions/watch`) and sends
+  (`service/declareTools` with `hosts`), watches the Host's threads (`threads/watch`) and sends
   it the work waiting for it. A newer connection from the same Host replaces the older.
 - **Leaving and removing.** `dispatcher/leave` on the Host closes its connection with
   `CLOSE_REVOKED`; the Dispatcher records it as refused, with why, across restarts, until it
@@ -128,7 +128,7 @@ Dispatcher is the Host's client, so only the Dispatcher needs an address.
 
 ## Deliveries
 
-A delivery is a request for one Host, `session/run`, `queue/add` or `session/report`, written to
+A delivery is a request for one Host, `thread/run`, `queue/add` or `thread/report`, written to
 the database before it is sent:
 
 - it goes under the request's own key, which a trigger makes from itself and the occurrence's
@@ -148,7 +148,7 @@ Schedules make deliveries ([Schedules](#schedules)); so may the Dispatcher's lib
 
 A delivery may also be a prompt for a thread: the first time it's sent it becomes
 `queue/add` if the Dispatcher last saw the thread open, so it waits for whatever runs there,
-and otherwise `session/run` with its `sessionId`, which opens it. A thread the Dispatcher saw
+and otherwise `thread/run` with its `threadId`, which opens it. A thread the Dispatcher saw
 name a successor (`continuedIn`, WVE-168) is prompted in the last of its successors instead.
 That choice is written down before it's sent, so a repeat asks the same request under its key
 (`key_reused` otherwise).
@@ -166,34 +166,34 @@ answers it with `service/answerTool`. The calling Host keeps no record of it.
   there only while connected to it: a call for a Host it can't reach now fails at once, with
   nothing left to send. `list_hosts` (`hosts/list`) answers with the calling Host's id and every
   other Host, with whether the Dispatcher is connected to it and why not.
-- **For the calling thread.** It sends `session/run`, `queue/add` and `turn/steer` with
-  `caller: {sessionId, host, hostName}`, the calling thread and its Host, so the turn's origin
-  and a new thread's `startedBy` name them. It narrows `session/run`'s policy to the calling
+- **For the calling thread.** It sends `thread/run`, `queue/add` and `turn/steer` with
+  `caller: {threadId, host, hostName}`, the calling thread and its Host, so the turn's origin
+  and a new thread's `startedBy` name them. It narrows `thread/run`'s policy to the calling
   thread's, and refuses a call from a thread another Host's agent started (one hop).
-- **Sent once.** `session/run` and `queue/add` are deliveries with a `calls` row naming the
+- **Sent once.** `thread/run` and `queue/add` are deliveries with a `calls` row naming the
   calling Host and thread, under a key made from the calling Host, the thread and the agent's
   own key (or a new one), hashed: one agent's retry is the same request, and two agents' keys
-  never meet. The call's answer is the named Host's, as the tool's; `start_session`'s is
-  `{sessionId, turnId, policy, host}`. When the connection goes before the Host answers, the
+  never meet. The call's answer is the named Host's, as the tool's; `start_thread`'s is
+  `{threadId, turnId, policy, host}`. When the connection goes before the Host answers, the
   tool says the Dispatcher keeps asking; the delivery stays pending, is sent again on the next
   connection, and once the Host answers, the calling thread is told whether it started ("…
-  took the thread your thread asked start_session for after all").
-- **Delegation.** A `start_session` that starts a delegated thread gives `room`, how many more
+  took the thread your thread asked start_thread for after all").
+- **Delegation.** A `start_thread` that starts a delegated thread gives `room`, how many more
   of the caller's delegated threads may run on other Hosts; the Dispatcher refuses it when the
   turns it follows for that thread, with its calls not yet taken, are as many.
 - **Following.** Once the named Host takes a call that began a turn, a `follows` row keeps the
   turn: the Host, thread and turn, the calling Host and thread, whether it's delegated, and the
   pending requests the caller has been told of. When the thread goes idle on the named Host, or
-  the link connects, the Dispatcher reads the turn with `sessions/get`, following one the Host
+  the link connects, the Dispatcher reads the turn with `threads/get`, following one the Host
   stopped under into its continuation (`continuedIn`), and waiting for that in a headless thread
   until its Host takes it up. When it's over it reports how it ended to the calling thread, in
   the Host's words (`weave_host_protocol::reports`), and forgets it, in one transaction. A
-  thread that waits on a person there it observes for a moment (`session/attach` with
+  thread that waits on a person there it observes for a moment (`thread/attach` with
   `observe`) to read what's asked, and reports each request once. A turn whose thread closed
   before it ran, or stopped with its Host and wasn't taken up again, a turn the Host has no
   record of, are reported as such.
-- **Reports.** A report is a delivery to the calling Host: `session/report` `{sessionId:
-  <caller>, about: {sessionId, host, hostName}, text}`, which the Host tells the thread as it
+- **Reports.** A report is a delivery to the calling Host: `thread/report` `{threadId:
+  <caller>, about: {threadId, host, hostName}, text}`, which the Host tells the thread as it
   tells its own reports. It lands however long the calling Host is away.
 
 ## Schedules
@@ -229,7 +229,7 @@ can find or set aside the Dispatcher's threads; a thread a schedule prompts keep
 An occurrence is `skipped` (with why), `waiting` (written down, its Host hasn't taken it,
 as while it's unreachable), `started`, `finished` (with its turn's `outcome`, and its error),
 or `failed` (its Host refused it, saying why). The Dispatcher reads how a started turn ended
-when the thread it watches goes idle or closes, with `sessions/get` and the turn's id, and
+when the thread it watches goes idle or closes, with `threads/get` and the turn's id, and
 again on each connection. A turn its Host stopped under that the thread continued
 (`continuedIn`, WVE-168) is followed into the continuation, whose id the occurrence takes and
 whose outcome it ends with.
@@ -266,13 +266,13 @@ connection says hello first; anything else before it answers `unauthenticated`.
 
 Only on the WebSocket, before hello, and first on a Host's own connection.
 
-**`hosts/connect`** `{protocol: 1, hostId, name, version, signature, join?: {code, publicKey}}` →
+**`hosts/connect`** `{protocol: 2, hostId, name, version, signature, join?: {code, publicKey}}` →
 `{dispatcherId, dispatcherName, publicKey, name}`
 
 Only on a Host's own connection, after its challenge ([Hosts](#hosts)); then the Dispatcher says
 `host/hello` there.
 
-**`dispatcher/hello`** `{protocol: 1, client: {name, version}, auth?}` → `{protocol, version,
+**`dispatcher/hello`** `{protocol: 2, client: {name, version}, auth?}` → `{protocol, version,
 id, device?}`
 
 Another `protocol` answers `incompatible_protocol`. `auth` is the Host's (`device` or `pair`),
@@ -343,7 +343,7 @@ type Occurrence = {
   state: "skipped" | "waiting" | "started" | "finished" | "failed";
   outcome?: TurnState;   // finished ones
   why?: string;          // why skipped or failed, or the turn's error
-  sessionId?: string; turnId?: string;
+  threadId?: string; turnId?: string;
   recordedAt: number; endedAt?: number;
 };
 ```

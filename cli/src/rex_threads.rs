@@ -2,7 +2,7 @@
 //! TUI on its thread (WVE-167, ADR 0025). Opt-in per Host: `[rex] open_threads = true`.
 //!
 //! `weave daemon` runs this beside the Host as a client of its own, in-process: it watches every
-//! thread (`sessions/watch`) and drives the `rex` CLI, so neither the Host nor its protocol knows
+//! thread (`threads/watch`) and drives the `rex` CLI, so neither the Host nor its protocol knows
 //! of Rex (ADR 0018). It acts only on the Rex server on this computer, reached by its local
 //! socket and never started, since a TUI attaches only to its own computer's Host: a thread on
 //! another computer shows in the Rex app through that computer's own Rex.
@@ -26,10 +26,10 @@ use serde::Serialize;
 use tokio::sync::mpsc::UnboundedReceiver;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionStatus;
-use weave_host_protocol::sessions::TurnOrigin;
-use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadStatus;
+use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::WatchThreadsRequest;
 
 use crate::host;
 
@@ -54,7 +54,7 @@ pub async fn follow(daemon: weave_host::Daemon, rex: PathBuf, record: PathBuf) {
             return;
         }
     };
-    let watched = match connection.send(WatchSessionsRequest::default()).await {
+    let watched = match connection.send(WatchThreadsRequest::default()).await {
         Ok(watched) => watched,
         Err(error) => {
             tracing::warn!(%error, "threads won't open in Rex: the Host lists none");
@@ -67,7 +67,7 @@ pub async fn follow(daemon: weave_host::Daemon, rex: PathBuf, record: PathBuf) {
         weave: std::env::current_exe().ok(),
     };
     // What's open already was opened before; only later openings get tabs.
-    for listing in &watched.sessions {
+    for listing in &watched.threads {
         follower.seen(listing);
     }
     follow_events(&mut follower, &mut events).await;
@@ -76,11 +76,11 @@ pub async fn follow(daemon: weave_host::Daemon, rex: PathBuf, record: PathBuf) {
 async fn follow_events(follower: &mut Follower, events: &mut UnboundedReceiver<HostEvent>) {
     while let Some(event) = events.recv().await {
         match event {
-            HostEvent::SessionUpdated(updated) => {
-                let listing = updated.session;
+            HostEvent::ThreadUpdated(updated) => {
+                let listing = updated.thread;
                 tokio::task::block_in_place(|| follower.updated(&listing));
             }
-            HostEvent::SessionRemoved(removed) => follower.record.forget(&removed.session_id),
+            HostEvent::ThreadRemoved(removed) => follower.record.forget(&removed.thread_id),
             _ => {}
         }
     }
@@ -96,14 +96,14 @@ struct Follower {
 
 impl Follower {
     /// A listing at startup: its opening, if a device's, is one that was already there.
-    fn seen(&mut self, listing: &SessionListing) {
+    fn seen(&mut self, listing: &ThreadListing) {
         if let Some(at) = device_opening(listing) {
             self.record.seen(&listing.info.session_id.to_string(), at);
         }
     }
 
     /// A thread changed: one a device just opened gets a tab, and a tab follows its title.
-    fn updated(&mut self, listing: &SessionListing) {
+    fn updated(&mut self, listing: &ThreadListing) {
         let id = listing.info.session_id.to_string();
         let title = listing
             .info
@@ -141,8 +141,8 @@ impl Follower {
         }
     }
 
-    /// A tab for the thread `listing` describes, in its repository's session.
-    fn open_tab(&self, listing: &SessionListing, title: &str) -> anyhow::Result<Tab> {
+    /// A tab for the thread `listing` describes, in its repository's thread.
+    fn open_tab(&self, listing: &ThreadListing, title: &str) -> anyhow::Result<Tab> {
         if !self.rex.is_local()? {
             anyhow::bail!("the Rex server `rex` reaches isn't this computer's");
         }
@@ -178,8 +178,8 @@ impl Follower {
 }
 
 /// When a paired device opened the thread last, if one did and it's open.
-fn device_opening(listing: &SessionListing) -> Option<u64> {
-    if listing.state != SessionStatus::Open || listing.headless || listing.started_by.is_some() {
+fn device_opening(listing: &ThreadListing) -> Option<u64> {
+    if listing.state != ThreadStatus::Open || listing.headless || listing.started_by.is_some() {
         return None;
     }
     match &listing.opened_by {
@@ -191,8 +191,8 @@ fn device_opening(listing: &SessionListing) -> Option<u64> {
 }
 
 /// The Rex session a thread's tab goes in: named for its repository, by its primary worktree,
-/// or for its directory outside one, as the person's own sessions are.
-fn group_of(listing: &SessionListing) -> String {
+/// or for its directory outside one, as the person's own threads are.
+fn group_of(listing: &ThreadListing) -> String {
     let home = listing
         .git
         .as_ref()
@@ -204,7 +204,7 @@ fn group_of(listing: &SessionListing) -> String {
 }
 
 /// What a tab runs: the TUI on the thread, with what finds the same Host.
-fn tui_command(weave: &Path, session_id: &str) -> Vec<String> {
+fn tui_command(weave: &Path, thread_id: &str) -> Vec<String> {
     let passed: Vec<String> = ["WEAVE_DAEMON_DIR", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"]
         .iter()
         .filter_map(|name| {
@@ -220,7 +220,7 @@ fn tui_command(weave: &Path, session_id: &str) -> Vec<String> {
         command.extend(passed);
     }
     command.push(weave.display().to_string());
-    command.extend(["--resume".to_owned(), session_id.to_owned()]);
+    command.extend(["--resume".to_owned(), thread_id.to_owned()]);
     command
 }
 
@@ -480,13 +480,13 @@ mod tests {
         id: &str,
         title: Option<&str>,
         opened: Option<(Option<&str>, u64)>,
-    ) -> SessionListing {
+    ) -> ThreadListing {
         let mut info = SessionInfo::new(id.to_owned(), "/code/weave.feature");
         info.title = title.map(str::to_owned);
-        SessionListing {
+        ThreadListing {
             info,
             agent_id: "claude".to_owned(),
-            state: SessionStatus::Open,
+            state: ThreadStatus::Open,
             activity: None,
             clients: 1,
             headless: false,

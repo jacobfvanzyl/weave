@@ -50,10 +50,10 @@ use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::policy::PermissionPolicy;
-use weave_host_protocol::sessions::ListSessionsRequest;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::SessionListing;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::ThreadListing;
 
 pub const WAIT: Duration = Duration::from_secs(10);
 
@@ -428,7 +428,7 @@ pub fn run(world: &World, prompt: &str) -> Work {
         agent_id: "fake".to_owned(),
         cwd: world.dir.path().to_path_buf(),
         remote: None,
-        session_id: None,
+        thread_id: None,
         additional_directories: Vec::new(),
         mode: None,
         prompt: vec![ContentBlock::from(prompt.to_owned())],
@@ -442,23 +442,24 @@ pub fn run(world: &World, prompt: &str) -> Work {
     })
 }
 
-pub async fn sessions(world: &World) -> usize {
+/// How many threads `world`'s Host has.
+pub async fn thread_count(world: &World) -> usize {
     let local = world.local().await;
     let listed = local
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
-        .expect("sessions/list");
+        .expect("threads/list");
     local.shutdown().await;
-    listed.sessions.len()
+    listed.threads.len()
 }
 
 /// The threads on `world`'s Host.
-pub async fn threads(world: &World) -> Vec<SessionListing> {
+pub async fn threads(world: &World) -> Vec<ThreadListing> {
     let local = world.local().await;
     let listed = local
-        .send(ListSessionsRequest::default())
+        .send(ListThreadsRequest::default())
         .await
-        .expect("sessions/list");
+        .expect("threads/list");
     local.shutdown().await;
-    listed.sessions
+    listed.threads
 }

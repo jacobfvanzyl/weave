@@ -13,7 +13,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v1::SessionId;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -27,13 +26,14 @@ use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::queue::AddQueuedRequest;
-use weave_host_protocol::sessions::Activity;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::RunRequest;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::SessionStatus;
-use weave_host_protocol::sessions::TurnState;
-use weave_host_protocol::sessions::WatchSessionsRequest;
+use weave_host_protocol::threads::Activity;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::ThreadStatus;
+use weave_host_protocol::threads::TurnState;
+use weave_host_protocol::threads::WatchThreadsRequest;
 use weave_host_protocol::tools::DeclareToolsRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
@@ -81,7 +81,7 @@ pub(crate) struct Seen {
     pub(crate) connected_at: Option<u64>,
     /// The connection, while there's one, for calls from other Hosts' agents.
     pub(crate) handle: Option<HostHandle>,
-    pub(crate) threads: HashMap<SessionId, SessionListing>,
+    pub(crate) threads: HashMap<ThreadId, ThreadListing>,
 }
 
 impl Default for Seen {
@@ -174,12 +174,12 @@ impl Link {
         lock(&self.seen).clone()
     }
 
-    pub(crate) fn listing(&self, session_id: &SessionId) -> Option<SessionListing> {
-        lock(&self.seen).threads.get(session_id).cloned()
+    pub(crate) fn listing(&self, thread_id: &ThreadId) -> Option<ThreadListing> {
+        lock(&self.seen).threads.get(thread_id).cloned()
     }
 
-    pub(crate) fn threads(&self) -> Vec<SessionListing> {
-        let mut threads: Vec<SessionListing> = lock(&self.seen).threads.values().cloned().collect();
+    pub(crate) fn threads(&self) -> Vec<ThreadListing> {
+        let mut threads: Vec<ThreadListing> = lock(&self.seen).threads.values().cloned().collect();
         threads.sort_by(|a, b| a.info.session_id.0.cmp(&b.info.session_id.0));
         threads
     }
@@ -290,10 +290,10 @@ async fn follow(
         seen.connected_at = Some(now_ms());
         seen.handle = Some(handle.clone());
     }
-    match connection.send(WatchSessionsRequest::default()).await {
+    match connection.send(WatchThreadsRequest::default()).await {
         Ok(watched) => {
             lock(seen).threads = watched
-                .sessions
+                .threads
                 .into_iter()
                 .map(|listing| (listing.info.session_id.clone(), listing))
                 .collect();
@@ -308,24 +308,24 @@ async fn follow(
     let ended = loop {
         tokio::select! {
             event = events.recv() => match event {
-                Some(HostEvent::SessionUpdated(updated)) => {
-                    let listing = updated.session;
-                    let session_id = listing.info.session_id.clone();
+                Some(HostEvent::ThreadUpdated(updated)) => {
+                    let listing = updated.thread;
+                    let thread_id = listing.info.session_id.clone();
                     let idle = !matches!(listing.activity, Some(Activity::Running | Activity::Waiting));
                     let waiting = listing.activity == Some(Activity::Waiting);
-                    lock(seen).threads.insert(session_id.clone(), listing);
+                    lock(seen).threads.insert(thread_id.clone(), listing);
                     if idle {
-                        settle(shared, host, &connection, Some(&session_id)).await;
-                        follows::check(shared, host, &handle, Some(&session_id)).await;
+                        settle(shared, host, &connection, Some(&thread_id)).await;
+                        follows::check(shared, host, &handle, Some(&thread_id)).await;
                     } else if waiting {
-                        follows::waiting(shared, host, &handle, &session_id).await;
+                        follows::waiting(shared, host, &handle, &thread_id).await;
                     }
                 }
                 Some(HostEvent::HostCall(call)) => {
                     tokio::spawn(calls::answer(Arc::clone(shared), host.clone(), handle.clone(), *call));
                 }
-                Some(HostEvent::SessionRemoved(removed)) => {
-                    lock(seen).threads.remove(&removed.session_id);
+                Some(HostEvent::ThreadRemoved(removed)) => {
+                    lock(seen).threads.remove(&removed.thread_id);
                 }
                 Some(HostEvent::Disconnected(_)) | None => break None,
                 Some(_) => {}
@@ -420,8 +420,8 @@ pub(crate) async fn send(connection: &HostHandle, work: &Work) -> Result<serde_j
 fn into_thread(request: &RunRequest, seen: &Mutex<Seen>) -> Work {
     let seen = lock(seen);
     // A thread that continues in another, as a Bot's does, is prompted there (WVE-168).
-    let session_id = request.session_id.as_ref().map(|session_id| {
-        let mut latest = session_id.clone();
+    let thread_id = request.thread_id.as_ref().map(|thread_id| {
+        let mut latest = thread_id.clone();
         for _ in 0..MOST_SUCCESSORS {
             match seen
                 .threads
@@ -434,21 +434,21 @@ fn into_thread(request: &RunRequest, seen: &Mutex<Seen>) -> Work {
         }
         latest
     });
-    let open = session_id.as_ref().is_some_and(|session_id| {
+    let open = thread_id.as_ref().is_some_and(|thread_id| {
         seen.threads
-            .get(session_id)
-            .is_some_and(|listing| listing.state == SessionStatus::Open)
+            .get(thread_id)
+            .is_some_and(|listing| listing.state == ThreadStatus::Open)
     });
-    match (session_id, open) {
-        (Some(session_id), true) => Work::Queue(AddQueuedRequest {
-            session_id,
+    match (thread_id, open) {
+        (Some(thread_id), true) => Work::Queue(AddQueuedRequest {
+            thread_id,
             prompt: request.prompt.clone(),
             key: request.key.clone(),
             caller: None,
             origin: request.origin.clone(),
         }),
-        (session_id, _) => Work::Run(RunRequest {
-            session_id,
+        (thread_id, _) => Work::Run(RunRequest {
+            thread_id,
             ..request.clone()
         }),
     }
@@ -461,17 +461,17 @@ async fn look(
     host: &StoredHost,
     handle: &HostHandle,
     seen: &Mutex<Seen>,
-    only: Option<&SessionId>,
+    only: Option<&ThreadId>,
 ) {
     follows::check(shared, host, handle, only).await;
-    let waiting: Vec<SessionId> = lock(seen)
+    let waiting: Vec<ThreadId> = lock(seen)
         .threads
         .values()
         .filter(|listing| listing.activity == Some(Activity::Waiting))
         .map(|listing| listing.info.session_id.clone())
         .collect();
-    for session_id in waiting {
-        follows::waiting(shared, host, handle, &session_id).await;
+    for thread_id in waiting {
+        follows::waiting(shared, host, handle, &thread_id).await;
     }
 }
 
@@ -484,7 +484,7 @@ async fn settle(
     shared: &Shared,
     host: &StoredHost,
     connection: &HostConnection,
-    only: Option<&SessionId>,
+    only: Option<&ThreadId>,
 ) {
     let started = match shared.store.started(&host.host_id) {
         Ok(started) => started,
@@ -494,18 +494,18 @@ async fn settle(
         }
     };
     let signed_out = i32::from(Error::auth_required().code);
-    for (occurrence, session_id, turn_id) in started {
-        if only.is_some_and(|only| *only.0 != *session_id) {
+    for (occurrence, thread_id, turn_id) in started {
+        if only.is_some_and(|only| *only.0 != *thread_id) {
             continue;
         }
-        let session_id = SessionId::new(session_id);
+        let thread_id = ThreadId::new(thread_id);
         let mut turn_id = turn_id;
         // A turn its Host stopped under that the thread continued ends as its continuation
         // does (WVE-168).
         let got = loop {
             let got = connection
-                .send(GetSessionRequest {
-                    session_id: session_id.clone(),
+                .send(GetThreadRequest {
+                    thread_id: thread_id.clone(),
                     turn_id: Some(turn_id.clone()),
                 })
                 .await;
@@ -542,7 +542,7 @@ async fn settle(
                 )),
             },
             Err(error)
-                if errors::is(&error, errors::UNKNOWN_SESSION)
+                if errors::is(&error, errors::UNKNOWN_THREAD)
                     || errors::is(&error, errors::UNKNOWN_TURN) =>
             {
                 Some((TurnState::Failed, Some(error.message), false))

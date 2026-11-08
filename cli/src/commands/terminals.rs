@@ -89,7 +89,7 @@ async fn attach(id: &str) -> anyhow::Result<ExitCode> {
     let mut screen = Screen;
     let mut first = true;
     loop {
-        match session(&paths, id, &mut screen, &mut typed, &mut window, first).await {
+        match attach_once(&paths, id, &mut screen, &mut typed, &mut window, first).await {
             Ok(Ended::Exited) => break,
             Ok(Ended::HostGone) => {
                 first = false;
@@ -115,7 +115,7 @@ enum Ended {
 
 /// One attach, until the terminal ends or the Host goes. Errors are for good: the terminal
 /// isn't the Host's, or the Host isn't running on the first try.
-async fn session(
+async fn attach_once(
     paths: &DaemonPaths,
     id: &str,
     screen: &mut Screen,

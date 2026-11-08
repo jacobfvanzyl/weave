@@ -1,15 +1,15 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&HostStatus\n{\n    protocol: 2, version: \"0.1.0\".to_owned(), pid: 4242, started_at:\n    1_760_180_000_000, service: Service::OnDemand, environment:\n    EnvironmentSource::LoginShell, sessions: vec![listing()], remote:\n    Some(\"127.0.0.1:7341\".to_owned()), dispatcher: Some(joined()),\n})"
+expression: "round_trip(&HostStatus\n{\n    protocol: PROTOCOL_VERSION, version: \"0.1.0\".to_owned(), pid: 4242,\n    started_at: 1_760_180_000_000, service: Service::OnDemand, environment:\n    EnvironmentSource::LoginShell, threads: vec![listing()], remote:\n    Some(\"127.0.0.1:7341\".to_owned()), dispatcher: Some(joined()),\n})"
 ---
 {
-  "protocol": 2,
+  "protocol": 3,
   "version": "0.1.0",
   "pid": 4242,
   "startedAt": 1760180000000,
   "service": "onDemand",
   "environment": "loginShell",
-  "sessions": [
+  "threads": [
     {
       "info": {
         "sessionId": "s-1",

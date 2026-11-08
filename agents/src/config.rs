@@ -44,7 +44,7 @@
 //!
 //! client_tools = ["clipboard_write"] # the client tools agents are offered; all when absent,
 //!                                     # [] for none; `[agents.<id>] client_tools` overrides it
-//! host_tools = ["rename_session"]     # the Host tools agents are offered, likewise
+//! host_tools = ["rename_thread"]     # the Host tools agents are offered, likewise
 //!
 //! [[mcp_servers]]            # stdio
 //! name = "files"
@@ -115,18 +115,18 @@ pub struct Config {
     pub lock: Lock,
 }
 
-/// `[delegation]`: limits on the sessions agents start through the Host's tools.
+/// `[delegation]`: limits on the threads agents start through the Host's tools.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DelegationConfig {
-    /// How many levels below a session a person started a session may start sessions.
+    /// How many levels below a thread a person started a thread may start threads.
     pub depth: Option<u32>,
-    /// How many delegated sessions of one session may run a turn or wait on a request at once.
+    /// How many delegated threads of one thread may run a turn or wait on a request at once.
     pub running: Option<u32>,
 }
 
 impl DelegationConfig {
-    /// One level: a person's session may start sessions; those may not.
+    /// One level: a person's thread may start threads; those may not.
     pub const DEFAULT_DEPTH: u32 = 1;
     pub const DEFAULT_RUNNING: u32 = 3;
 
@@ -159,10 +159,10 @@ pub struct AgentConfig {
     pub compaction: Option<bool>,
     /// Ask for subagent sessions, from ACP's draft Subagent Sessions RFD (default true).
     pub subagents: Option<bool>,
-    /// The mode new sessions start in, by the agent's id or name for it, such as Codex's
-    /// `agent-full-access`, set through ACP once the session is open, headless `weave run` ones
+    /// The mode new threads start in, by the agent's id or name for it, such as Codex's
+    /// `agent-full-access`, set through ACP once the thread is open, headless `weave run` ones
     /// too (ADR 0026), where it may approve what `--approve` doesn't. It isn't applied to
-    /// sessions reopened by load or resume, which are in whatever mode the agent restores.
+    /// threads reopened by load or resume, which are in whatever mode the agent restores.
     /// Codex's adapter restores no mode, so for those set its own `INITIAL_AGENT_MODE` in `env`
     /// too.
     pub mode: Option<String>,
@@ -297,7 +297,7 @@ impl Config {
         (spec, options)
     }
 
-    /// The mode new sessions of the agent named `id` start in, if one is configured.
+    /// The mode new threads of the agent named `id` start in, if one is configured.
     pub fn mode(&self, id: &str) -> Option<&str> {
         self.agents.get(id)?.mode.as_deref()
     }
@@ -364,7 +364,7 @@ impl Config {
     }
 }
 
-/// A configured MCP server, as a session's agent gets it.
+/// A configured MCP server, as a thread's agent gets it.
 #[derive(Clone, Debug)]
 pub struct ConfiguredMcpServer {
     pub name: String,
@@ -514,13 +514,13 @@ mod tests {
             host_tools = []
 
             [agents.codex]
-            host_tools = ["rename_session"]
+            host_tools = ["rename_thread"]
             "#,
         );
         assert_eq!(config.host_tools("claude"), Some(&[][..]));
         assert_eq!(
             config.host_tools("codex"),
-            Some(&["rename_session".to_owned()][..])
+            Some(&["rename_thread".to_owned()][..])
         );
     }
 

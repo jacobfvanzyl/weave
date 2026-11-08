@@ -1,0 +1,11 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&ListThreadsRequest\n{\n    agent_id: Some(\"claude\".to_owned()), cwd: Some(\"/repo\".into()), repo:\n    None, activity: None, cursor: None, labels: Vec::new(),\n})"
+---
+{
+  "method": "threads/list",
+  "params": {
+    "agentId": "claude",
+    "cwd": "/repo"
+  }
+}

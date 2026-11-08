@@ -1,5 +1,5 @@
 //! The argument groups commands share: which agent, the workspace it works in, which
-//! session, and what a headless turn may do without asking; and the prompt they're given.
+//! thread, and what a headless turn may do without asking; and the prompt they're given.
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -22,7 +22,7 @@ use crate::start::StartMode;
 pub const COMMAND_AGENT: &str = "command";
 
 /// An agent as the user chose it, by name or as a command, so it can be chosen again: what
-/// `--resume <id>` reopens a session with, and `--continue` remembers per directory.
+/// `--resume <id>` reopens a thread with, and `--continue` remembers per directory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentChoice {
@@ -73,7 +73,7 @@ pub struct AgentArgs {
     config: Option<PathBuf>,
 }
 
-/// Where a session works, and what the agent may use there.
+/// Where a thread works, and what the agent may use there.
 #[derive(Args, Default)]
 pub struct WorkspaceArgs {
     /// Thread working directory. Defaults to the current directory.
@@ -93,9 +93,9 @@ pub struct WorkspaceArgs {
     no_terminal: bool,
 }
 
-/// Which session to open.
+/// Which thread to open.
 #[derive(Args)]
-pub struct SessionArgs {
+pub struct ThreadArgs {
     /// Reopen a thread: by id, or (in the TUI) choose one from a list when no id is given.
     #[arg(long, value_name = "THREAD_ID", num_args = 0..=1, conflicts_with = "continue_last")]
     resume: Option<Option<String>>,
@@ -106,7 +106,7 @@ pub struct SessionArgs {
     continue_last: bool,
 }
 
-impl SessionArgs {
+impl ThreadArgs {
     pub fn mode(&self) -> StartMode {
         match (&self.resume, self.continue_last) {
             (Some(Some(id)), _) => StartMode::Resume(id.clone().into()),
@@ -164,13 +164,13 @@ const ALL_KINDS: [(&str, ToolKind); 10] = [
     ("other", ToolKind::Other),
 ];
 
-/// The command that reopens `session_id` with `agent`.
-pub fn reopen_command(agent: &AgentChoice, session_id: &str) -> String {
+/// The command that reopens `thread_id` with `agent`.
+pub fn reopen_command(agent: &AgentChoice, thread_id: &str) -> String {
     let words: Vec<String> = match agent {
-        AgentChoice::Named(id) => ["weave", "--agent", id, "--resume", session_id]
+        AgentChoice::Named(id) => ["weave", "--agent", id, "--resume", thread_id]
             .map(str::to_owned)
             .to_vec(),
-        AgentChoice::Command(command) => ["weave", "--resume", session_id, "--"]
+        AgentChoice::Command(command) => ["weave", "--resume", thread_id, "--"]
             .map(str::to_owned)
             .into_iter()
             .chain(command.iter().cloned())
@@ -200,7 +200,7 @@ fn shell_quote(word: &str) -> String {
     }
 }
 
-/// What a session through the Host is opened with.
+/// What a thread through the Host is opened with.
 pub struct HostLaunch {
     pub config: Config,
     /// How the agent was chosen: on the command line, as last used here, or by default.
@@ -218,7 +218,7 @@ impl HostLaunch {
     }
 }
 
-/// Everything needed to launch the agent directly, outside the Host, and set up its sessions:
+/// Everything needed to launch the agent directly, outside the Host, and set up its threads:
 /// for `weave agents smoke`, `login` and `logout`.
 pub struct Launch {
     pub config: Config,
@@ -249,7 +249,7 @@ impl AgentArgs {
         self.config.clone()
     }
 
-    /// `agent` (else the config's `default_agent`), for a session through the Host in `cwd`
+    /// `agent` (else the config's `default_agent`), for a thread through the Host in `cwd`
     /// or else the workspace's directory, with the rest of the workspace's settings. The Host
     /// resolves the agent.
     pub fn host_launch(

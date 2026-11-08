@@ -10,7 +10,7 @@ expression: "message(&HostCallNotification\n{\n    call_id: \"c-3\".to_owned(), 
       "method": "hosts/list"
     },
     "caller": {
-      "sessionId": "sess-a",
+      "threadId": "sess-a",
       "agentId": "claude",
       "cwd": "/Users/jaco/src/app",
       "policy": {

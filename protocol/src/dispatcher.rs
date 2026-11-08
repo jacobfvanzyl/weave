@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -28,7 +27,8 @@ use crate::devices::Jwk;
 use crate::hello::Auth;
 use crate::hello::ClientInfo;
 use crate::policy::PermissionPolicy;
-use crate::sessions::TurnState;
+use crate::threads::ThreadId;
+use crate::threads::TurnState;
 use crate::turns::TurnId;
 
 /// How the Dispatcher's last attempt to connect to a Host went.
@@ -55,7 +55,7 @@ pub enum Reachability {
 }
 
 /// The Dispatcher API's version, which a client and the Dispatcher must share.
-pub const DISPATCHER_PROTOCOL: u32 = 1;
+pub const DISPATCHER_PROTOCOL: u32 = 2;
 
 /// The subprotocol a client of the Dispatcher's WebSocket asks for, so one that reached a Host
 /// instead fails at the upgrade.
@@ -377,7 +377,7 @@ pub struct ScheduledRun {
     pub mode: Option<String>,
     /// The thread each occurrence prompts; each starts a new one when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread: Option<SessionId>,
+    pub thread: Option<ThreadId>,
 }
 
 /// How one occurrence of a schedule went.
@@ -420,7 +420,7 @@ pub struct Occurrence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<SessionId>,
+    pub thread_id: Option<ThreadId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<TurnId>,
     pub recorded_at: Timestamp,

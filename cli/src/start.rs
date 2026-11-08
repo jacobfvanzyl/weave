@@ -1,4 +1,4 @@
-//! Choosing and opening the first session through the Host, signing in when the agent
+//! Choosing and opening the first thread through the Host, signing in when the agent
 //! requires it; and connecting to an agent directly, for `weave agents login` and `logout`.
 
 use std::collections::BTreeMap;
@@ -19,18 +19,18 @@ use weave_acp_core::schema::AuthMethod;
 use weave_acp_core::schema::AuthMethodTerminal;
 use weave_acp_core::schema::Error;
 use weave_acp_core::schema::InitializeResponse;
-use weave_acp_core::schema::SessionId;
 use weave_host::RecordedChoice;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::HostHandle;
-use weave_host_client::OpenedSession;
+use weave_host_client::OpenedThread;
 use weave_host_protocol::agents::AuthenticateAgentRequest;
 use weave_host_protocol::agents::GetAgentRequest;
 use weave_host_protocol::agents::TerminalSignInRequest;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::ListSessionsRequest;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::ThreadId;
 
 use crate::args::AgentChoice;
 use crate::args::HostLaunch;
@@ -41,7 +41,7 @@ use crate::host::TUI;
 use crate::host::Target;
 use crate::recent::Recent;
 
-/// The agent and directory to open a session with.
+/// The agent and directory to open a thread with.
 pub struct Chosen {
     /// The agent; the config's `default_agent` without one.
     pub agent: Option<AgentChoice>,
@@ -51,7 +51,7 @@ pub struct Chosen {
     pub note: Option<String>,
 }
 
-/// The agent and directory for `mode`. `--resume <id>` reopens the session with the agent and
+/// The agent and directory for `mode`. `--resume <id>` reopens the thread with the agent and
 /// directory it was started with, whatever `--agent` and `--cwd` say, when the Host's journal
 /// records them. `--continue` without an agent uses the one last used in the directory.
 /// Otherwise it's what the command line says.
@@ -68,8 +68,8 @@ pub fn choose(
         note: None,
     };
     match (mode, target) {
-        (StartMode::Resume(session_id), Target::Shared(paths)) => {
-            let Some(recorded) = weave_host::recorded_session(paths, session_id) else {
+        (StartMode::Resume(thread_id), Target::Shared(paths)) => {
+            let Some(recorded) = weave_host::recorded_thread(paths, thread_id) else {
                 return Ok(as_given(explicit));
             };
             let here = workspace.cwd().ok();
@@ -85,15 +85,15 @@ pub fn choose(
             let agent = recorded_agent.or(explicit.clone());
             let note = match (&agent, &explicit) {
                 (Some(agent), Some(given)) if agent != given => Some(format!(
-                    "Resuming {session_id} with {}, the agent it was started with (not {}){elsewhere}",
+                    "Resuming {thread_id} with {}, the agent it was started with (not {}){elsewhere}",
                     agent.describe(),
                     given.describe()
                 )),
                 (Some(agent), None) => Some(format!(
-                    "Resuming {session_id} with {}{elsewhere}",
+                    "Resuming {thread_id} with {}{elsewhere}",
                     agent.describe()
                 )),
-                _ if !elsewhere.is_empty() => Some(format!("Resuming {session_id}{elsewhere}")),
+                _ if !elsewhere.is_empty() => Some(format!("Resuming {thread_id}{elsewhere}")),
                 _ => None,
             };
             Ok(Chosen {
@@ -123,13 +123,13 @@ pub fn choose(
     }
 }
 
-/// Which session to start in.
+/// Which thread to start in.
 pub enum StartMode {
     New,
-    Resume(SessionId),
-    /// The most recent session in this directory, or a new one.
+    Resume(ThreadId),
+    /// The most recent thread in this directory, or a new one.
     Continue,
-    /// Choose in the TUI's session picker.
+    /// Choose in the TUI's thread picker.
     Pick,
 }
 
@@ -138,7 +138,7 @@ pub struct Started {
     pub events: UnboundedReceiver<HostEvent>,
     /// What the agent said about itself.
     pub agent: InitializeResponse,
-    pub opened: Option<OpenedSession>,
+    pub opened: Option<OpenedThread>,
     pub notices: Vec<String>,
 }
 
@@ -165,7 +165,7 @@ pub async fn connect_direct(
     Ok((connection, events))
 }
 
-/// Connect to the Host and open the session `mode` asks for, signing in first if the agent
+/// Connect to the Host and open the thread `mode` asks for, signing in first if the agent
 /// requires it.
 pub async fn start(launch: &HostLaunch, host: &Host, mode: &StartMode) -> anyhow::Result<Started> {
     let (connection, events) = host.connect(TUI).await?;
@@ -213,13 +213,13 @@ pub async fn start(launch: &HostLaunch, host: &Host, mode: &StartMode) -> anyhow
     })
 }
 
-/// Open the session `mode` asks for, and anything worth telling the user about it.
+/// Open the thread `mode` asks for, and anything worth telling the user about it.
 async fn establish(
     handle: &HostHandle,
     launch: &HostLaunch,
     mode: &StartMode,
-) -> Result<(Option<OpenedSession>, Vec<String>), Error> {
-    let create = || CreateSessionRequest {
+) -> Result<(Option<OpenedThread>, Vec<String>), Error> {
+    let create = || CreateThreadRequest {
         agent_id: launch.agent_id().to_owned(),
         cwd: launch.cwd.clone(),
         additional_directories: launch.additional_directories.clone(),
@@ -228,8 +228,8 @@ async fn establish(
         trace: launch.trace,
         labels: Vec::new(),
     };
-    let attach = |session_id: SessionId| AttachSessionRequest {
-        session_id,
+    let attach = |thread_id: ThreadId| AttachThreadRequest {
+        thread_id,
         after: None,
         agent_id: Some(launch.agent_id().to_owned()),
         cwd: Some(launch.cwd.clone()),
@@ -237,31 +237,30 @@ async fn establish(
         observe: false,
     };
     let created = async |handle: &HostHandle| {
-        handle.send(create()).await.map(|state| OpenedSession {
+        handle.send(create()).await.map(|state| OpenedThread {
             state,
             replay: None,
         })
     };
-    let attached = async |handle: &HostHandle, session_id| {
+    let attached = async |handle: &HostHandle, thread_id| {
         handle
-            .send(attach(session_id))
+            .send(attach(thread_id))
             .await
-            .map(|attached| OpenedSession {
+            .map(|attached| OpenedThread {
                 state: attached.state,
                 replay: Some(attached.replay),
             })
     };
     match mode {
         StartMode::New => Ok((Some(created(handle).await?), Vec::new())),
-        StartMode::Resume(session_id) => Ok((
-            Some(attached(handle, session_id.clone()).await?),
-            Vec::new(),
-        )),
+        StartMode::Resume(thread_id) => {
+            Ok((Some(attached(handle, thread_id.clone()).await?), Vec::new()))
+        }
         StartMode::Continue => {
-            // The Host lists the sessions it has here first; headless runs aren't for
-            // continuing interactively, so `weave sessions` and `--resume <id>` reach those.
+            // The Host lists the threads it has here first; headless runs aren't for
+            // continuing interactively, so `weave threads` and `--resume <id>` reach those.
             let listed = handle
-                .send(ListSessionsRequest {
+                .send(ListThreadsRequest {
                     agent_id: Some(launch.agent_id().to_owned()),
                     cwd: Some(launch.cwd.clone()),
                     repo: None,
@@ -270,11 +269,7 @@ async fn establish(
                     labels: Vec::new(),
                 })
                 .await?;
-            match listed
-                .sessions
-                .into_iter()
-                .find(|listing| !listing.headless)
-            {
+            match listed.threads.into_iter().find(|listing| !listing.headless) {
                 Some(latest) => Ok((
                     Some(attached(handle, latest.info.session_id).await?),
                     Vec::new(),
@@ -288,7 +283,7 @@ async fn establish(
         StartMode::Pick => {
             // Listing here surfaces sign-in requirements before the TUI starts.
             handle
-                .send(ListSessionsRequest {
+                .send(ListThreadsRequest {
                     agent_id: Some(launch.agent_id().to_owned()),
                     cwd: Some(launch.cwd.clone()),
                     repo: None,
@@ -517,13 +512,13 @@ mod tests {
     }
 
     /// A journal header as the Host writes one.
-    fn record(paths: &DaemonPaths, session_id: &str, choice: &str, cwd: &str) {
+    fn record(paths: &DaemonPaths, thread_id: &str, choice: &str, cwd: &str) {
         let dir = paths.journals();
         std::fs::create_dir_all(&dir).expect("journals");
         let header = serde_json::json!({
             "type": "header",
             "version": 1,
-            "sessionId": session_id,
+            "threadId": thread_id,
             "agent": {"command": "npx", "args": [choice]},
             "choice": {"named": choice},
             "cwd": cwd,
@@ -531,14 +526,14 @@ mod tests {
             "createdMs": 0,
         });
         std::fs::write(
-            dir.join(format!("{session_id}.jsonl")),
+            dir.join(format!("{thread_id}.jsonl")),
             format!("{header}\n"),
         )
         .expect("journal");
     }
 
     #[test]
-    fn resuming_a_session_uses_the_agent_and_directory_it_started_with() {
+    fn resuming_a_thread_uses_the_agent_and_directory_it_started_with() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = DaemonPaths::in_dir(dir.path().to_path_buf());
         record(&paths, "s1", "codex", "/elsewhere/repo");
@@ -558,7 +553,7 @@ mod tests {
             )
         );
 
-        // A session weave has no record of opens as the command line says.
+        // A thread weave has no record of opens as the command line says.
         let unknown = StartMode::Resume("s2".into());
         let chosen = choose(&unknown, claude.clone(), &workspace, &target, None).expect("choose");
         assert_eq!(

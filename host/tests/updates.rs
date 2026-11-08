@@ -1,5 +1,5 @@
-//! Newer versions of a session's agent (WVE-93): the Host's background lookup when a session
-//! opens, `agents/update`, and `session/reopen`. The agent is the `claude` preset, which the
+//! Newer versions of a thread's agent (WVE-93): the Host's background lookup when a thread
+//! opens, `agents/update`, and `thread/reopen`. The agent is the `claude` preset, which the
 //! launcher runs as the fake agent whatever version it's asked for, noting each; npm is a stub.
 
 #![allow(clippy::expect_used)]
@@ -20,7 +20,6 @@ use weave_acp_core::AgentConnection;
 use weave_acp_core::ClientOptions;
 use weave_acp_core::Preset;
 use weave_acp_core::schema::ContentBlock;
-use weave_acp_core::schema::SessionId;
 use weave_agents::environment::Environment;
 use weave_agents::lock::Lock;
 use weave_agents::registry::Fetched;
@@ -37,14 +36,15 @@ use weave_host_client::HostEvent;
 use weave_host_protocol::agents::UPDATES_FEATURE;
 use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::agents::UpdateAvailableNotification;
-use weave_host_protocol::events::SessionEvent;
+use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::host::Service;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::ReopenSessionRequest;
-use weave_host_protocol::sessions::SessionState;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::ReopenThreadRequest;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadState;
 use weave_host_protocol::turns::StartTurnRequest;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -88,7 +88,7 @@ impl Upstream for Npm {
 struct Versions {
     /// Exit before `initialize`.
     broken: Vec<String>,
-    /// Start with storage of their own, so they don't know the others' sessions.
+    /// Start with storage of their own, so they don't know the others' threads.
     amnesiac: Vec<String>,
     /// Advertise only what every agent must, so no resume or load.
     minimal: bool,
@@ -154,7 +154,7 @@ impl World {
             })
         });
         Daemon::new(DaemonConfig {
-            journals: Some(self.dir.path().join("sessions")),
+            journals: Some(self.dir.path().join("threads")),
             idle_grace: Duration::from_secs(60),
             drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
             blank_grace: Duration::from_secs(60),
@@ -219,9 +219,9 @@ impl Client {
         Self { connection, events }
     }
 
-    async fn create(&self, world: &World, agent: &str) -> SessionState {
+    async fn create(&self, world: &World, agent: &str) -> ThreadState {
         self.connection
-            .send(CreateSessionRequest {
+            .send(CreateThreadRequest {
                 agent_id: agent.to_owned(),
                 cwd: world.dir.path().to_path_buf(),
                 additional_directories: Vec::new(),
@@ -231,13 +231,13 @@ impl Client {
                 labels: Vec::new(),
             })
             .await
-            .expect("session/create")
+            .expect("thread/create")
     }
 
-    async fn prompt(&self, session_id: &SessionId, text: &str) {
+    async fn prompt(&self, thread_id: &ThreadId, text: &str) {
         self.connection
             .send(StartTurnRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 prompt: vec![ContentBlock::from(text.to_owned())],
                 key: None,
             })
@@ -264,8 +264,8 @@ impl Client {
     /// Journaled events until `until` says to stop, with their positions.
     async fn events_until(
         &mut self,
-        mut until: impl FnMut(&SessionEvent) -> bool,
-    ) -> Vec<(u64, SessionEvent)> {
+        mut until: impl FnMut(&ThreadEvent) -> bool,
+    ) -> Vec<(u64, ThreadEvent)> {
         let mut seen = Vec::new();
         loop {
             if let HostEvent::Event(notification) = self.next().await {
@@ -278,9 +278,9 @@ impl Client {
         }
     }
 
-    async fn turn(&mut self, session_id: &SessionId, text: &str) -> Vec<(u64, SessionEvent)> {
-        self.prompt(session_id, text).await;
-        self.events_until(|event| matches!(event, SessionEvent::TurnEnded { .. }))
+    async fn turn(&mut self, thread_id: &ThreadId, text: &str) -> Vec<(u64, ThreadEvent)> {
+        self.prompt(thread_id, text).await;
+        self.events_until(|event| matches!(event, ThreadEvent::TurnEnded { .. }))
             .await
     }
 
@@ -293,12 +293,12 @@ impl Client {
     }
 }
 
-fn is_reopened(event: &SessionEvent) -> bool {
-    matches!(event, SessionEvent::AgentReopened { .. })
+fn is_reopened(event: &ThreadEvent) -> bool {
+    matches!(event, ThreadEvent::AgentReopened { .. })
 }
 
 #[tokio::test]
-async fn a_session_start_looks_once_an_hour_in_the_background_and_tells_every_client() {
+async fn a_thread_start_looks_once_an_hour_in_the_background_and_tells_every_client() {
     let slow = Arc::new(Semaphore::new(0));
     let world = World::new(Ok("99.0.0"), Some(Arc::clone(&slow)));
     let daemon = world.daemon();
@@ -311,7 +311,7 @@ async fn a_session_start_looks_once_an_hour_in_the_background_and_tells_every_cl
             .iter()
             .any(|feature| feature == UPDATES_FEATURE)
     );
-    // npm hasn't answered, and the sessions open anyway.
+    // npm hasn't answered, and the threads open anyway.
     let one = first.create(&world, "claude").await;
     let mut second = Client::new(&daemon).await;
     let two = second.create(&world, "claude").await;
@@ -321,7 +321,7 @@ async fn a_session_start_looks_once_an_hour_in_the_background_and_tells_every_cl
         (release.name.as_str(), release.version.as_str()),
         (claude().package, claude().version)
     );
-    // Two sessions opened together share one lookup.
+    // Two threads opened together share one lookup.
     tokio::time::timeout(WAIT, async {
         while world.lookups() == 0 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -330,9 +330,9 @@ async fn a_session_start_looks_once_an_hour_in_the_background_and_tells_every_cl
     .await
     .expect("a lookup");
     slow.add_permits(10);
-    for (client, session) in [(&mut first, &one), (&mut second, &two)] {
+    for (client, thread) in [(&mut first, &one), (&mut second, &two)] {
         let notice = client.update_available().await;
-        assert_eq!(notice.session_id, session.session_id);
+        assert_eq!(notice.thread_id, thread.thread_id);
         assert_eq!(notice.update.agent_id, "claude");
         assert_eq!(notice.update.name, claude().package);
         assert_eq!(notice.update.running, claude().version);
@@ -340,13 +340,13 @@ async fn a_session_start_looks_once_an_hour_in_the_background_and_tells_every_cl
     }
     assert_eq!(world.lookups(), 1);
 
-    // A client attaching later finds it in the session's state, and the hour's lookup
-    // serves another session start.
+    // A client attaching later finds it in the thread's state, and the hour's lookup
+    // serves another thread start.
     let late = Client::new(&daemon).await;
     let attached = late
         .connection
-        .send(AttachSessionRequest {
-            session_id: one.session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: one.thread_id.clone(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -354,7 +354,7 @@ async fn a_session_start_looks_once_an_hour_in_the_background_and_tells_every_cl
             observe: false,
         })
         .await
-        .expect("session/attach");
+        .expect("thread/attach");
     assert_eq!(
         attached.state.update.map(|update| update.latest).as_deref(),
         Some("99.0.0")
@@ -426,7 +426,7 @@ async fn agents_update_locks_a_version_that_starts_and_nothing_else() {
         [spec_at("99.0.0"), spec_at("98.0.0")],
         "each checked as it would run"
     );
-    // New sessions start it.
+    // New threads start it.
     let state = client.create(&world, "claude").await;
     assert_eq!(
         state
@@ -449,13 +449,13 @@ async fn agents_update_locks_a_version_that_starts_and_nothing_else() {
 }
 
 #[tokio::test]
-async fn an_idle_session_moves_to_the_new_version_keeping_its_id_and_journal() {
+async fn an_idle_thread_moves_to_the_new_version_keeping_its_id_and_journal() {
     let world = World::new(Ok("98.0.0"), None);
     let daemon = world.daemon();
     let mut client = Client::new(&daemon).await;
     let state = client.create(&world, "claude").await;
-    let session_id = state.session_id.clone();
-    client.turn(&session_id, "hello").await;
+    let thread_id = state.thread_id.clone();
+    client.turn(&thread_id, "hello").await;
     client
         .connection
         .send(UpdateAgentRequest {
@@ -465,16 +465,16 @@ async fn an_idle_session_moves_to_the_new_version_keeping_its_id_and_journal() {
         .expect("agents/update");
     let reopened = client
         .connection
-        .send(ReopenSessionRequest {
-            session_id: session_id.clone(),
+        .send(ReopenThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/reopen");
+        .expect("thread/reopen");
     assert_eq!(reopened.version.as_deref(), Some("98.0.0"));
     let events = client.events_until(is_reopened).await;
     let Some((
         seq,
-        SessionEvent::AgentReopened {
+        ThreadEvent::AgentReopened {
             agent,
             previous,
             failed,
@@ -495,13 +495,13 @@ async fn an_idle_session_moves_to_the_new_version_keeping_its_id_and_journal() {
     assert_eq!(failed, None);
     assert_eq!(world.launched().last(), Some(&spec_at("98.0.0")));
 
-    // The same session and journal carry on, in the new process.
-    client.turn(&session_id, "again").await;
+    // The same thread and journal carry on, in the new process.
+    client.turn(&thread_id, "again").await;
     let later = Client::new(&daemon).await;
     let attached = later
         .connection
-        .send(AttachSessionRequest {
-            session_id: session_id.clone(),
+        .send(AttachThreadRequest {
+            thread_id: thread_id.clone(),
             after: None,
             agent_id: None,
             cwd: None,
@@ -509,7 +509,7 @@ async fn an_idle_session_moves_to_the_new_version_keeping_its_id_and_journal() {
             observe: false,
         })
         .await
-        .expect("session/attach");
+        .expect("thread/attach");
     assert_eq!(attached.state.journal.id, state.journal.id);
     assert!(attached.state.journal.head > seq);
     assert_eq!(
@@ -529,7 +529,7 @@ async fn a_running_turn_holds_the_reopen_until_it_ends() {
     let world = World::new(Ok("98.0.0"), None);
     let daemon = world.daemon();
     let mut client = Client::new(&daemon).await;
-    let session_id = client.create(&world, "claude").await.session_id;
+    let thread_id = client.create(&world, "claude").await.thread_id;
     client
         .connection
         .send(UpdateAgentRequest {
@@ -537,36 +537,36 @@ async fn a_running_turn_holds_the_reopen_until_it_ends() {
         })
         .await
         .expect("agents/update");
-    client.prompt(&session_id, "/slow 5").await;
+    client.prompt(&thread_id, "/slow 5").await;
     let handle = client.connection.handle();
     let reopen = tokio::spawn({
-        let session_id = session_id.clone();
-        async move { handle.send(ReopenSessionRequest { session_id }).await }
+        let thread_id = thread_id.clone();
+        async move { handle.send(ReopenThreadRequest { thread_id }).await }
     });
     tokio::time::sleep(SETTLE).await;
     assert!(!reopen.is_finished(), "it waits for the turn");
     let events = client.events_until(is_reopened).await;
     let ended = events
         .iter()
-        .position(|(_, event)| matches!(event, SessionEvent::TurnEnded { .. }))
+        .position(|(_, event)| matches!(event, ThreadEvent::TurnEnded { .. }))
         .expect("the turn ended first");
     assert_eq!(ended, events.len() - 2, "then it moved");
     let reopened = tokio::time::timeout(WAIT, reopen)
         .await
         .expect("answered")
         .expect("joined")
-        .expect("session/reopen");
+        .expect("thread/reopen");
     assert_eq!(reopened.version.as_deref(), Some("98.0.0"));
 }
 
 #[tokio::test]
-async fn a_version_that_cant_take_the_session_up_gives_way_to_the_old_one() {
+async fn a_version_that_cant_take_the_thread_up_gives_way_to_the_old_one() {
     let world = World::new(Ok("98.0.0"), None);
     world.versions.lock().expect("lock").amnesiac = vec!["@98.0.0".to_owned()];
     let daemon = world.daemon();
     let mut client = Client::new(&daemon).await;
-    let session_id = client.create(&world, "claude").await.session_id;
-    client.turn(&session_id, "hello").await;
+    let thread_id = client.create(&world, "claude").await.thread_id;
+    client.turn(&thread_id, "hello").await;
     client
         .connection
         .send(UpdateAgentRequest {
@@ -576,15 +576,14 @@ async fn a_version_that_cant_take_the_session_up_gives_way_to_the_old_one() {
         .expect("agents/update");
     let reopened = client
         .connection
-        .send(ReopenSessionRequest {
-            session_id: session_id.clone(),
+        .send(ReopenThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
-        .expect("session/reopen");
+        .expect("thread/reopen");
     assert_eq!(reopened.version.as_deref(), Some(claude().version));
     let events = client.events_until(is_reopened).await;
-    let Some((_, SessionEvent::AgentReopened { agent, failed, .. })) = events.last().cloned()
-    else {
+    let Some((_, ThreadEvent::AgentReopened { agent, failed, .. })) = events.last().cloned() else {
         panic!("agentReopened");
     };
     assert_eq!(
@@ -604,15 +603,15 @@ async fn a_version_that_cant_take_the_session_up_gives_way_to_the_old_one() {
         "the new one, then the old one again"
     );
     // It carries on, on the old version.
-    client.turn(&session_id, "still here").await;
+    client.turn(&thread_id, "still here").await;
 }
 
 #[tokio::test]
-async fn a_blank_session_stays_as_it_was_with_nothing_to_move() {
+async fn a_blank_thread_stays_as_it_was_with_nothing_to_move() {
     let world = World::new(Ok("98.0.0"), None);
     let daemon = world.daemon();
     let mut client = Client::new(&daemon).await;
-    let session_id = client.create(&world, "claude").await.session_id;
+    let thread_id = client.create(&world, "claude").await.thread_id;
     client
         .connection
         .send(UpdateAgentRequest {
@@ -623,15 +622,15 @@ async fn a_blank_session_stays_as_it_was_with_nothing_to_move() {
     let started = world.launched().len();
     let error = client
         .connection
-        .send(ReopenSessionRequest {
-            session_id: session_id.clone(),
+        .send(ReopenThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
         .expect_err("nothing to move");
     assert!(error.to_string().contains("nothing to move"), "{error}");
     assert_eq!(world.launched().len(), started, "nothing started");
     // It carries on in the process it had.
-    client.turn(&session_id, "hello").await;
+    client.turn(&thread_id, "hello").await;
     assert_eq!(world.launched().len(), started);
 }
 
@@ -641,16 +640,16 @@ async fn an_agent_that_cant_resume_or_load_keeps_its_process() {
     world.versions.lock().expect("lock").minimal = true;
     let daemon = world.daemon();
     let mut client = Client::new(&daemon).await;
-    let session_id = client.create(&world, "claude").await.session_id;
+    let thread_id = client.create(&world, "claude").await.thread_id;
     let started = world.launched().len();
     let error = client
         .connection
-        .send(ReopenSessionRequest {
-            session_id: session_id.clone(),
+        .send(ReopenThreadRequest {
+            thread_id: thread_id.clone(),
         })
         .await
         .expect_err("it can't move");
     assert!(error.to_string().contains("new threads"), "{error}");
     assert_eq!(world.launched().len(), started, "nothing started");
-    client.turn(&session_id, "hello").await;
+    client.turn(&thread_id, "hello").await;
 }

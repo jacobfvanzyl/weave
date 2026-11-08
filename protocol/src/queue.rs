@@ -1,29 +1,29 @@
-//! A session's queue: prompts waiting, in order, to start its next turns. The Host holds it,
+//! A thread's queue: prompts waiting, in order, to start its next turns. The Host holds it,
 //! so every attached client sees the same queue, and it outlives the client that added to it.
-//! When the session's turn ends, the Host starts the first queued prompt as the next turn,
-//! unless the queue is paused: after a cancelled or failed turn, or when an interactive session
+//! When the thread's turn ends, the Host starts the first queued prompt as the next turn,
+//! unless the queue is paused: after a cancelled or failed turn, or when an interactive thread
 //! is taken up again with prompts waiting.
 
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
 use agent_client_protocol::schema::v1::ContentBlock;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Empty;
 use crate::Timestamp;
-use crate::sessions::OtherThread;
-use crate::sessions::ServiceOrigin;
-use crate::sessions::TurnOrigin;
+use crate::threads::OtherThread;
+use crate::threads::ServiceOrigin;
+use crate::threads::ThreadId;
+use crate::threads::TurnOrigin;
 
-/// The [`crate::hello::HelloResponse::features`] entry of a Host that holds sessions' queues.
+/// The [`crate::hello::HelloResponse::features`] entry of a Host that holds threads' queues.
 pub const FEATURE: &str = "queue";
 
-/// A queued prompt, by an id unique in its session.
+/// A queued prompt, by an id unique in its thread.
 pub type QueuedId = String;
 
-/// A prompt waiting in a session's queue.
+/// A prompt waiting in a thread's queue.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -44,19 +44,19 @@ pub enum QueuePause {
     Cancelled,
     /// The turn failed.
     Failed,
-    /// The Host took the session up again, after it stopped or the session closed.
+    /// The Host took the thread up again, after it stopped or the thread closed.
     Interrupted,
 }
 
-/// `queue/add`: add a prompt to the end of the session's queue. With no turn running and
+/// `queue/add`: add a prompt to the end of the thread's queue. With no turn running and
 /// nothing waiting, it starts a turn at once. Adding to a paused queue resumes it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "queue/add", response = AddQueuedResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct AddQueuedRequest {
-    /// The session's own id, not a subagent session's.
-    pub session_id: SessionId,
+    /// The thread's own id, not a subagent thread's.
+    pub thread_id: ThreadId,
     pub prompt: Vec<ContentBlock>,
     /// Makes it safe to send again (feature `requestKeys`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,7 +89,7 @@ pub struct AddQueuedResponse {
 #[request(method = "queue/remove", response = RemoveQueuedResponse)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveQueuedRequest {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     pub queued_id: QueuedId,
 }
 
@@ -108,5 +108,5 @@ pub struct RemoveQueuedResponse {
 #[request(method = "queue/resume", response = Empty)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeQueueRequest {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
 }

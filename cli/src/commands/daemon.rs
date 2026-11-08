@@ -1,4 +1,4 @@
-//! `weave daemon`: managing the per-user weave Host, which runs agents so sessions outlive the
+//! `weave daemon`: managing the per-user weave Host, which runs agents so threads outlive the
 //! TUI: running it in the foreground, starting and stopping it in the background, installing
 //! it as a service, and saying what it runs.
 
@@ -19,7 +19,7 @@ use weave_host::socket;
 use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::StatusRequest;
-use weave_host_protocol::sessions::Activity;
+use weave_host_protocol::threads::Activity;
 
 use crate::clock::ago;
 use crate::clock::now_ms;
@@ -334,15 +334,15 @@ fn print_notes(notes: &[String], json: bool) {
 
 fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
     let running = status
-        .sessions
+        .threads
         .iter()
-        .filter(|session| {
-            session
+        .filter(|thread| {
+            thread
                 .activity
                 .is_some_and(|activity| activity != Activity::Idle)
         })
         .count();
-    let sessions = match (status.sessions.len(), running) {
+    let threads = match (status.threads.len(), running) {
         (0, _) => "No threads open.".to_owned(),
         (1, 0) => "1 thread open; `weave threads` lists it.".to_owned(),
         (1, _) => "1 thread open, at work; `weave threads` lists it.".to_owned(),
@@ -385,7 +385,7 @@ fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
         })
         .unwrap_or_default();
     format!(
-        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n{remote}{dispatcher}  agents get {environment} environment\n\n{sessions}\n",
+        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n{remote}{dispatcher}  agents get {environment} environment\n\n{threads}\n",
         status.version,
         status.pid,
         ago(now_ms, status.started_at),
@@ -400,8 +400,8 @@ mod tests {
     use weave_acp_core::schema::SessionInfo;
     use weave_host_protocol::PROTOCOL_VERSION;
     use weave_host_protocol::host::EnvironmentSource;
-    use weave_host_protocol::sessions::SessionListing;
-    use weave_host_protocol::sessions::SessionStatus;
+    use weave_host_protocol::threads::ThreadListing;
+    use weave_host_protocol::threads::ThreadStatus;
 
     use super::*;
 
@@ -415,15 +415,15 @@ mod tests {
             started_at: 0,
             service: Service::OnDemand,
             environment: EnvironmentSource::LoginShell,
-            sessions: Vec::new(),
+            threads: Vec::new(),
             remote: None,
             dispatcher: None,
         };
         assert!(describe(&status, &paths, 90_000).ends_with("No threads open.\n"));
-        status.sessions.push(SessionListing {
+        status.threads.push(ThreadListing {
             info: SessionInfo::new("s1", "/repo").title("Fix the build".to_owned()),
             agent_id: "claude".into(),
-            state: SessionStatus::Open,
+            state: ThreadStatus::Open,
             activity: Some(Activity::Waiting),
             clients: 0,
             headless: false,
@@ -441,7 +441,7 @@ mod tests {
         assert_eq!(
             describe(&status, &paths, 7_230_000),
             "weave Host 0.1.0 (pid 42), up 2h, run on demand\n  socket   \
-             /state/weave/daemon/daemon.sock\n  journals /state/weave/daemon/sessions\n  agents \
+             /state/weave/daemon/daemon.sock\n  journals /state/weave/daemon/threads\n  agents \
              get your login shell's environment\n\n1 thread open, at work; `weave threads` \
              lists it.\n"
         );

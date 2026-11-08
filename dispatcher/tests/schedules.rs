@@ -26,10 +26,10 @@ use weave_host_protocol::dispatcher::Overlap;
 use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::ScheduledRun;
 use weave_host_protocol::policy::PermissionPolicy;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::LatestTurn;
-use weave_host_protocol::sessions::TurnOrigin;
-use weave_host_protocol::sessions::TurnState;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::LatestTurn;
+use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::TurnState;
 
 use crate::common::WAIT;
 use crate::common::World;
@@ -135,12 +135,12 @@ fn finished(occurrence: &Occurrence) -> bool {
 async fn turn(world: &World, occurrence: &Occurrence) -> LatestTurn {
     let local = world.local().await;
     let got = local
-        .send(GetSessionRequest {
-            session_id: occurrence.session_id.clone().expect("a thread"),
+        .send(GetThreadRequest {
+            thread_id: occurrence.thread_id.clone().expect("a thread"),
             turn_id: occurrence.turn_id.clone(),
         })
         .await
-        .expect("sessions/get");
+        .expect("threads/get");
     local.shutdown().await;
     got.latest_turn.expect("its turn")
 }
@@ -192,7 +192,7 @@ async fn a_schedule_starts_a_turn_at_its_time_naming_itself() {
     let thread = threads(&studio)
         .await
         .into_iter()
-        .find(|thread| Some(&thread.info.session_id) == due.session_id.as_ref())
+        .find(|thread| Some(&thread.info.session_id) == due.thread_id.as_ref())
         .expect("its thread");
     assert_eq!(
         thread.labels,
@@ -404,7 +404,7 @@ async fn a_schedule_that_prompts_one_thread_queues_its_prompt_there() {
     })
     .await
     .remove(0);
-    let thread = first.session_id.clone().expect("its thread");
+    let thread = first.thread_id.clone().expect("its thread");
 
     let mut again = schedule(&studio, "again", "30 9 * * *", "and again");
     again.run.thread = Some(thread.clone());
@@ -415,7 +415,7 @@ async fn a_schedule_that_prompts_one_thread_queues_its_prompt_there() {
     })
     .await
     .remove(0);
-    assert_eq!(queued.session_id, Some(thread));
+    assert_eq!(queued.thread_id, Some(thread));
     assert_eq!(
         text(&turn(&studio, &queued).await),
         vec!["and again".to_owned()]

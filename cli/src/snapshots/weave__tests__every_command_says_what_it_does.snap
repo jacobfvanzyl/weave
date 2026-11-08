@@ -131,7 +131,7 @@ Options:
           Wait on while the turn waits on a person to answer it, rather than exiting 7
 
       --json
-          Print the thread's journal events (`session/event`) as JSON lines instead of the reply's text; with --detach, the Host's answer (`session/run`)
+          Print the thread's journal events (`thread/event`) as JSON lines instead of the reply's text; with --detach, the Host's answer (`thread/run`)
 
       --no-daemon
           Run the agent in this process rather than the weave Host
@@ -151,8 +151,8 @@ Commands:
   steer          Send a message into a thread's running turn, without starting another; it fails when no turn runs
   cancel         Stop the turn a thread is running, as Esc does in the TUI
   close          Close a thread for every client: its turn ends and its agent stops. `weave --resume` can still reopen it from the agent's history
-  watch          Print the Host's threads as they open, change and close, as JSON lines: a `sessions/updated` for each at first, then one for every change, until stopped
-  follow         Follow an open thread as it goes, without being one of its clients: the agent's reply as text, or with --json its journal events (`session/event`) as JSON lines
+  watch          Print the Host's threads as they open, change and close, as JSON lines: a `threads/updated` for each at first, then one for every change, until stopped
+  follow         Follow an open thread as it goes, without being one of its clients: the agent's reply as text, or with --json its journal events (`thread/event`) as JSON lines
   set-successor  Name the thread an open thread's work goes on in, its successor: clients following it may follow that, and reports to it go there. Named once
   label          Add labels to an open thread and take others off, and print its labels. Labels mean nothing to the Host: they're for finding threads, and labelled threads are kept past the Host's two weeks
   help           Print this message or the help of the given subcommand(s)
@@ -195,7 +195,7 @@ Options:
           Read this turn rather than the latest, as `threads prompt` named it
 
       --json
-          Print the Host's answer (`sessions/get`) as JSON
+          Print the Host's answer (`threads/get`) as JSON
 
   -h, --help
           Print help
@@ -277,7 +277,7 @@ Options:
           Print help
 
 $ weave threads watch --help
-Print the Host's threads as they open, change and close, as JSON lines: a `sessions/updated` for each at first, then one for every change, until stopped
+Print the Host's threads as they open, change and close, as JSON lines: a `threads/updated` for each at first, then one for every change, until stopped
 
 Usage: weave threads watch
 
@@ -286,7 +286,7 @@ Options:
           Print help
 
 $ weave threads follow --help
-Follow an open thread as it goes, without being one of its clients: the agent's reply as text, or with --json its journal events (`session/event`) as JSON lines
+Follow an open thread as it goes, without being one of its clients: the agent's reply as text, or with --json its journal events (`thread/event`) as JSON lines
 
 Usage: weave threads follow [OPTIONS] <THREAD_ID>
 

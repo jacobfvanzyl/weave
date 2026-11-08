@@ -1,4 +1,4 @@
-//! Starting a new session in a mode, as `[agents.<name>] mode` or `session/create` asks: by
+//! Starting a new thread in a mode, as `[agents.<name>] mode` or `thread/create` asks: by
 //! the mode's id, or its name in any case, through the mode config option when the agent
 //! offers one and its modes otherwise.
 
@@ -7,15 +7,15 @@ use weave_acp_core::schema::SessionConfigKind;
 use weave_acp_core::schema::SessionConfigOptionCategory;
 use weave_acp_core::schema::SessionConfigOptionValue;
 use weave_acp_core::schema::SessionConfigSelectOptions;
-use weave_acp_core::schema::SessionId;
 
-use crate::session::Snapshot;
+use crate::thread::Snapshot;
+use weave_host_protocol::threads::ThreadId;
 
-/// Put `session_id` in the mode `wanted` names, updating `snapshot`. It stays in the agent's
+/// Put `thread_id` in the mode `wanted` names, updating `snapshot`. It stays in the agent's
 /// own default when that fails, and the error says why, for the client to show.
 pub(crate) async fn start_in(
     agent: &AgentHandle,
-    session_id: &SessionId,
+    thread_id: &ThreadId,
     snapshot: &mut Snapshot,
     wanted: &str,
 ) -> Result<(), String> {
@@ -46,7 +46,7 @@ pub(crate) async fn start_in(
             value: choice.value.clone(),
         };
         snapshot.config_options = agent
-            .set_config_option(session_id.clone(), option.id.clone(), value)
+            .set_config_option(thread_id.clone(), option.id.clone(), value)
             .await
             .map_err(failed)?;
         return Ok(());
@@ -66,7 +66,7 @@ pub(crate) async fn start_in(
         .map(|mode| mode.id.clone())
         .ok_or_else(missing)?;
     agent
-        .set_mode(session_id.clone(), mode_id.clone())
+        .set_mode(thread_id.clone(), mode_id.clone())
         .await
         .map_err(failed)?;
     if let Some(modes) = &mut snapshot.modes {

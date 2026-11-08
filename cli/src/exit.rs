@@ -13,7 +13,7 @@ use std::fmt;
 use std::process::ExitCode;
 
 use weave_acp_core::schema::StopReason;
-use weave_host_protocol::sessions::TurnState;
+use weave_host_protocol::threads::TurnState;
 
 /// What `weave`'s exit status says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,12 +1,12 @@
-//! Newer versions of the agents sessions run (WVE-93). When a session opens, the Host looks
+//! Newer versions of the agents threads run (WVE-93). When a thread opens, the Host looks
 //! for one in the background: npm's `latest` for a preset's package, the ACP registry's catalog
-//! for a registry agent. A lookup serves every session for an hour, so sessions opened together
-//! make one request, and one that failed shows nothing. Sessions of the agent that run an older
+//! for a registry agent. A lookup serves every thread for an hour, so threads opened together
+//! make one request, and one that failed shows nothing. Threads of the agent that run an older
 //! version are told, and tell their clients.
 //!
-//! `agents/update` moves the agent's new sessions to the newest version through
+//! `agents/update` moves the agent's new threads to the newest version through
 //! `weave_agents::update`, as `weave agents update` does, checking that it starts with the Host's
-//! own launcher and environment; `session/reopen` moves an open one.
+//! own launcher and environment; `thread/reopen` moves an open one.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,9 +30,9 @@ use weave_host_protocol::errors;
 use crate::Shared;
 use crate::instance::Instance;
 use crate::instance::Launch;
-use crate::session::Command;
-use crate::session::SessionHandle;
-use crate::session::lock;
+use crate::thread::Command;
+use crate::thread::ThreadHandle;
+use crate::thread::lock;
 
 /// How long a lookup's answer serves.
 const LOOKUP_TTL: Duration = Duration::from_secs(60 * 60);
@@ -77,7 +77,7 @@ enum Found {
     Catalog(Registry),
 }
 
-/// One lookup, shared by every session that opens while it serves.
+/// One lookup, shared by every thread that opens while it serves.
 struct Lookup {
     at: Instant,
     found: OnceCell<Option<Found>>,
@@ -139,14 +139,14 @@ impl Updates {
     }
 }
 
-/// Look for a newer version of `session`'s agent in the background, and tell the agent's
-/// sessions if there is one.
-pub(crate) fn look_for_update(shared: &Arc<Shared>, session: &SessionHandle) {
-    let Some(feed) = session.feed.clone() else {
+/// Look for a newer version of `thread`'s agent in the background, and tell the agent's
+/// threads if there is one.
+pub(crate) fn look_for_update(shared: &Arc<Shared>, thread: &ThreadHandle) {
+    let Some(feed) = thread.feed.clone() else {
         return;
     };
     let shared = Arc::clone(shared);
-    let agent_id = session.agent_id.clone();
+    let agent_id = thread.agent_id.clone();
     tokio::spawn(async move {
         if let Some(latest) = shared.updates.latest(&shared, &feed).await {
             offer(&shared, &agent_id, &latest);
@@ -154,25 +154,25 @@ pub(crate) fn look_for_update(shared: &Arc<Shared>, session: &SessionHandle) {
     });
 }
 
-/// Tell the open sessions of `agent_id` about `latest`; those running older ones tell their
+/// Tell the open threads of `agent_id` about `latest`; those running older ones tell their
 /// clients.
 fn offer(shared: &Shared, agent_id: &str, latest: &str) {
-    let sessions: Vec<SessionHandle> = shared
+    let threads: Vec<ThreadHandle> = shared
         .registry()
-        .sessions
+        .threads
         .values()
-        .filter(|session| session.agent_id == agent_id)
+        .filter(|thread| thread.agent_id == agent_id)
         .cloned()
         .collect();
-    for session in sessions {
-        let _ = session.send(Command::UpdateAvailable {
+    for thread in threads {
+        let _ = thread.send(Command::UpdateAvailable {
             latest: latest.to_owned(),
         });
     }
 }
 
 /// `agents/update`: what `weave agents update <agent>` does, checked with this Host's launcher.
-/// Returns the version the agent's new sessions launch.
+/// Returns the version the agent's new threads launch.
 pub(crate) async fn update(shared: &Arc<Shared>, agent_id: &str) -> Result<String, Error> {
     let agent = shared.resolve(agent_id).await?;
     if agent.source == AgentSource::Config {
@@ -216,7 +216,7 @@ pub(crate) async fn update(shared: &Arc<Shared>, agent_id: &str) -> Result<Strin
         _ => None,
     }
     .ok_or_else(|| Error::internal_error().data(format!("{agent_id} has no version to update")))?;
-    // The next sessions start the new version, not a spare of the old one.
+    // The next threads start the new version, not a spare of the old one.
     shared.drop_spares(agent_id);
     offer(shared, agent_id, &version);
     Ok(version)

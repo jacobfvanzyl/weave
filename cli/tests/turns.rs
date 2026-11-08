@@ -11,17 +11,17 @@ use std::process::Output;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::UnboundedReceiver;
 use weave_acp_core::schema::ContentBlock;
-use weave_acp_core::schema::SessionId;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
-use weave_host_protocol::events::SessionEvent;
-use weave_host_protocol::events::SessionEventNotification;
+use weave_host_protocol::events::ThreadEvent;
+use weave_host_protocol::events::ThreadEventNotification;
 use weave_host_protocol::queue::AddQueuedResponse;
-use weave_host_protocol::sessions::CreateSessionRequest;
-use weave_host_protocol::sessions::GetSessionResponse;
-use weave_host_protocol::sessions::RunResponse;
-use weave_host_protocol::sessions::SessionListing;
-use weave_host_protocol::sessions::TurnState;
+use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::GetThreadResponse;
+use weave_host_protocol::threads::RunResponse;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::ThreadListing;
+use weave_host_protocol::threads::TurnState;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::StartTurnRequest;
 
@@ -40,17 +40,17 @@ fn status(output: &Output) -> Option<i32> {
 }
 
 /// `output`'s JSON lines, as journal events.
-fn events(output: &Output) -> Vec<SessionEventNotification> {
+fn events(output: &Output) -> Vec<ThreadEventNotification> {
     stdout(output)
         .lines()
-        .map(|line| serde_json::from_str(line).expect("a session/event"))
+        .map(|line| serde_json::from_str(line).expect("a thread/event"))
         .collect()
 }
 
 /// The id of the turn whose start `events` begin with.
-fn started_turn(events: &[SessionEventNotification]) -> Option<String> {
+fn started_turn(events: &[ThreadEventNotification]) -> Option<String> {
     match events.first().map(|event| &event.event) {
-        Some(SessionEvent::TurnStarted { turn_id, .. }) => turn_id.clone(),
+        Some(ThreadEvent::TurnStarted { turn_id, .. }) => turn_id.clone(),
         _ => None,
     }
 }
@@ -58,8 +58,8 @@ fn started_turn(events: &[SessionEventNotification]) -> Option<String> {
 /// A headless thread, open and idle after one turn.
 fn idle_thread(host: &TestHost) -> String {
     let output = host.weave(&["run", "--agent", "fake", "--detach", "--json", "hello"]);
-    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("session/run's answer");
-    let id = run.session_id.to_string();
+    let run: RunResponse = serde_json::from_slice(&output.stdout).expect("thread/run's answer");
+    let id = run.thread_id.to_string();
     let turn = run.turn_id.expect("the turn's id");
     let waited = host.weave(&["threads", "follow", &id, "--turn", &turn]);
     assert_eq!(status(&waited), Some(0), "{}", stderr(&waited));
@@ -68,11 +68,11 @@ fn idle_thread(host: &TestHost) -> String {
 
 /// A thread whose policy asks the person, held open by a client that never answers, and idle
 /// after a first turn.
-fn asking_thread(host: &TestHost) -> (HostConnection, UnboundedReceiver<HostEvent>, SessionId) {
+fn asking_thread(host: &TestHost) -> (HostConnection, UnboundedReceiver<HostEvent>, ThreadId) {
     let (client, mut events) = host.client();
-    let session_id = host.block_on(async {
-        let session_id = client
-            .send(CreateSessionRequest {
+    let thread_id = host.block_on(async {
+        let thread_id = client
+            .send(CreateThreadRequest {
                 agent_id: "fake".to_owned(),
                 cwd: host.work(),
                 additional_directories: Vec::new(),
@@ -82,11 +82,11 @@ fn asking_thread(host: &TestHost) -> (HostConnection, UnboundedReceiver<HostEven
                 labels: Vec::new(),
             })
             .await
-            .expect("session/create")
-            .session_id;
+            .expect("thread/create")
+            .thread_id;
         client
             .send(StartTurnRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
                 prompt: vec![ContentBlock::from("hello".to_owned())],
                 key: None,
             })
@@ -94,23 +94,21 @@ fn asking_thread(host: &TestHost) -> (HostConnection, UnboundedReceiver<HostEven
             .expect("turn/start");
         loop {
             match events.recv().await.expect("an event") {
-                HostEvent::Event(event)
-                    if matches!(event.event, SessionEvent::TurnEnded { .. }) =>
-                {
+                HostEvent::Event(event) if matches!(event.event, ThreadEvent::TurnEnded { .. }) => {
                     break;
                 }
                 _ => {}
             }
         }
-        session_id
+        thread_id
     });
-    (client, events, session_id)
+    (client, events, thread_id)
 }
 
-fn read(host: &TestHost, id: &str, turn: &str) -> GetSessionResponse {
+fn read(host: &TestHost, id: &str, turn: &str) -> GetThreadResponse {
     let output = host.weave(&["threads", "read", id, "--turn", turn, "--json"]);
     assert_eq!(status(&output), Some(0), "{}", stderr(&output));
-    serde_json::from_slice(&output.stdout).expect("sessions/get")
+    serde_json::from_slice(&output.stdout).expect("threads/get")
 }
 
 #[test]
@@ -128,7 +126,7 @@ fn a_prompts_id_is_its_turns_which_follow_waits_for_or_prints_once_ended() {
         assert_eq!(started_turn(&events).as_ref(), Some(&turn));
         assert!(matches!(
             events.last().map(|event| &event.event),
-            Some(SessionEvent::TurnEnded { .. })
+            Some(ThreadEvent::TurnEnded { .. })
         ));
     }
     let got = read(&host, &id, &turn);
@@ -159,8 +157,8 @@ fn prompting_and_waiting_prints_the_reply_and_exits_as_the_turn_went() {
 #[test]
 fn a_turn_waiting_on_a_person_stops_the_wait_with_7_and_goes_on() {
     let host = TestHost::start();
-    let (client, _events, session_id) = asking_thread(&host);
-    let id = session_id.to_string();
+    let (client, _events, thread_id) = asking_thread(&host);
+    let id = thread_id.to_string();
     let waited = host.weave(&[
         "threads",
         "prompt",
@@ -201,7 +199,7 @@ fn a_turn_waiting_on_a_person_stops_the_wait_with_7_and_goes_on() {
     host.block_on(async {
         client
             .send(CancelTurnRequest {
-                session_id: session_id.clone(),
+                thread_id: thread_id.clone(),
             })
             .await
             .expect("turn/cancel");
@@ -243,7 +241,7 @@ fn a_timeout_stops_waiting_with_8_and_the_turn_goes_on() {
     let ran = host.weave(&["run", "--agent", "fake", "--timeout", "200ms", "slow 5"]);
     assert_eq!(status(&ran), Some(8), "{}", stderr(&ran));
     let listed = host.weave(&["threads", "list", "--activity", "running", "--json"]);
-    let listed: Vec<SessionListing> = serde_json::from_slice(&listed.stdout).expect("threads");
+    let listed: Vec<ThreadListing> = serde_json::from_slice(&listed.stdout).expect("threads");
     assert_eq!(listed.len(), 1, "{listed:?}");
 }
 
@@ -278,7 +276,7 @@ fn a_key_makes_prompting_or_running_again_safe() {
     assert_eq!(status(&refused), Some(1), "another prompt under the key");
 
     let detached = host.weave(&["run", "--agent", "fake", "--detach", "--json", "hello"]);
-    let detached: RunResponse = serde_json::from_slice(&detached.stdout).expect("session/run");
+    let detached: RunResponse = serde_json::from_slice(&detached.stdout).expect("thread/run");
     assert!(detached.turn_id.is_some());
 }
 

@@ -3,7 +3,6 @@
 //! however often the Dispatcher considers that time it records it once, and a restart neither
 //! loses it nor starts it again.
 
-use agent_client_protocol::schema::v1::SessionId;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension as _;
 use rusqlite::Transaction;
@@ -13,7 +12,8 @@ use weave_host_protocol::dispatcher::Occurrence;
 use weave_host_protocol::dispatcher::OccurrenceState;
 use weave_host_protocol::dispatcher::Overlap;
 use weave_host_protocol::dispatcher::ScheduledRun;
-use weave_host_protocol::sessions::TurnState;
+use weave_host_protocol::threads::ThreadId;
+use weave_host_protocol::threads::TurnState;
 
 use super::Delivery;
 use super::Store;
@@ -79,7 +79,7 @@ const SELECT_SCHEDULE: &str = "SELECT id, name, cron, zone, host_id, run, missed
      created_at, considered_until, paused, failures FROM schedules";
 
 const SELECT_OCCURRENCE: &str = "SELECT id, schedule_id, scheduled_at, late, manual, state, \
-     outcome, why, session_id, turn_id, recorded_at, ended_at FROM occurrences";
+     outcome, why, thread_id, turn_id, recorded_at, ended_at FROM occurrences";
 
 impl Store {
     pub(crate) fn add_schedule(&self, schedule: &StoredSchedule) -> Result<(), String> {
@@ -305,10 +305,10 @@ impl Store {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT occurrences.id, occurrences.session_id, occurrences.turn_id \
+                "SELECT occurrences.id, occurrences.thread_id, occurrences.turn_id \
                  FROM occurrences JOIN schedules ON schedules.id = occurrences.schedule_id \
                  WHERE schedules.host_id = ?1 AND occurrences.state = 'started' \
-                 AND occurrences.session_id IS NOT NULL AND occurrences.turn_id IS NOT NULL",
+                 AND occurrences.thread_id IS NOT NULL AND occurrences.turn_id IS NOT NULL",
             )
             .map_err(failed)?;
         let rows = statement
@@ -540,7 +540,7 @@ fn occurrence(row: &rusqlite::Row<'_>) -> rusqlite::Result<Occurrence> {
             .map(|text| named(6, &text))
             .transpose()?,
         why: row.get(7)?,
-        session_id: row.get::<_, Option<String>>(8)?.map(SessionId::new),
+        thread_id: row.get::<_, Option<String>>(8)?.map(ThreadId::new),
         turn_id: row.get(9)?,
         recorded_at: from_sql(row.get(10)?),
         ended_at: row.get::<_, Option<i64>>(11)?.map(from_sql),
@@ -615,7 +615,7 @@ mod tests {
 
     fn work(occurrence: &str) -> Work {
         Work::Queue(AddQueuedRequest {
-            session_id: "s-1".into(),
+            thread_id: "s-1".into(),
             prompt: Vec::new(),
             key: Some(format!("schedule/{occurrence}")),
             caller: None,
@@ -644,7 +644,7 @@ mod tests {
             .expect("delivered");
         let listed = store.occurrences(Some(&schedule.id), 10).expect("listed");
         assert_eq!(listed[0].state, OccurrenceState::Started);
-        assert_eq!(listed[0].session_id, Some("s-1".into()));
+        assert_eq!(listed[0].thread_id, Some("s-1".into()));
         assert_eq!(listed[0].turn_id.as_deref(), Some("q-1"));
         assert_eq!(store.started("h1").expect("started").len(), 1);
     }

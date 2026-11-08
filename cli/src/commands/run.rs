@@ -1,11 +1,11 @@
-//! `weave run`: one prompt in a headless session, in the weave Host.
+//! `weave run`: one prompt in a headless thread, in the weave Host.
 //!
-//! The session's permission requests are answered by its policy: the tool kinds given with
+//! The thread's permission requests are answered by its policy: the tool kinds given with
 //! `--approve` are allowed once, everything else is rejected, and elicitations are dismissed,
 //! since nobody is there to answer. The reply streams to stdout until the turn ends, or with
-//! `--json` the session's journal events (`session/event`) as JSON lines; with `--detach` the
+//! `--json` the thread's journal events (`thread/event`) as JSON lines; with `--detach` the
 //! turn is left running in the Host, to attach to later with `weave --resume`, and the thread's
-//! id, or with `--json` the Host's answer (`session/run`), is printed.
+//! id, or with `--json` the Host's answer (`thread/run`), is printed.
 
 use std::process::ExitCode;
 
@@ -13,22 +13,22 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Args;
 use weave_acp_core::schema::ContentBlock;
-use weave_acp_core::schema::SessionId;
 use weave_host_client::HostConnection;
 use weave_host_protocol::policy::PermissionPolicy;
-use weave_host_protocol::sessions::AttachSessionRequest;
-use weave_host_protocol::sessions::CloseWhen;
-use weave_host_protocol::sessions::DetachSessionRequest;
-use weave_host_protocol::sessions::GetSessionRequest;
-use weave_host_protocol::sessions::LatestTurn;
-use weave_host_protocol::sessions::ListSessionsRequest;
-use weave_host_protocol::sessions::RunRequest;
+use weave_host_protocol::threads::AttachThreadRequest;
+use weave_host_protocol::threads::CloseWhen;
+use weave_host_protocol::threads::DetachThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
+use weave_host_protocol::threads::LatestTurn;
+use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::RunRequest;
+use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::turns::CancelTurnRequest;
 use weave_host_protocol::turns::TurnId;
 
 use crate::args::AgentArgs;
 use crate::args::ApproveArgs;
-use crate::args::SessionArgs;
+use crate::args::ThreadArgs;
 use crate::args::WorkspaceArgs;
 use crate::args::prompt_text;
 use crate::args::reopen_command;
@@ -65,7 +65,7 @@ pub struct RunArgs {
     /// Continue a thread (`--resume <id>`, or `--continue` for the last one here) instead
     /// of starting one.
     #[command(flatten)]
-    session: SessionArgs,
+    thread: ThreadArgs,
 
     #[command(flatten)]
     approve: ApproveArgs,
@@ -92,8 +92,8 @@ pub struct RunArgs {
     #[command(flatten)]
     waiting: WaitArgs,
 
-    /// Print the thread's journal events (`session/event`) as JSON lines instead of the reply's
-    /// text; with --detach, the Host's answer (`session/run`).
+    /// Print the thread's journal events (`thread/event`) as JSON lines instead of the reply's
+    /// text; with --detach, the Host's answer (`thread/run`).
     #[arg(long)]
     json: bool,
 
@@ -105,7 +105,7 @@ pub struct RunArgs {
 pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     let prompt = prompt_text(&args.prompt)?;
     let policy = PermissionPolicy::headless(args.approve.kinds()?);
-    let mode = args.session.mode();
+    let mode = args.thread.mode();
     if matches!(mode, StartMode::Pick) {
         bail!("--resume needs a thread id here; choosing from a list is the TUI's");
     }
@@ -133,12 +133,12 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     }
     let host = target.host(&launch, &args.workspace, args.agent.config_file())?;
     let (connection, events) = host.connect("weave-cli").await?;
-    let session_id = match mode {
-        StartMode::Resume(session_id) => Some(session_id),
-        // The open session here first, as the Host lists them.
+    let thread_id = match mode {
+        StartMode::Resume(thread_id) => Some(thread_id),
+        // The open thread here first, as the Host lists them.
         StartMode::Continue => {
             let listed = connection
-                .send(ListSessionsRequest {
+                .send(ListThreadsRequest {
                     agent_id: Some(launch.agent_id().to_owned()),
                     cwd: Some(launch.cwd.clone()),
                     repo: None,
@@ -147,7 +147,7 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
                     labels: Vec::new(),
                 })
                 .await;
-            match listed.map(|listed| listed.sessions.into_iter().next()) {
+            match listed.map(|listed| listed.threads.into_iter().next()) {
                 Ok(Some(latest)) => Some(latest.info.session_id),
                 Ok(None) => {
                     eprintln!("weave: no earlier thread here; starting one");
@@ -166,7 +166,7 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
         agent_id: launch.agent_id().to_owned(),
         cwd: launch.cwd.clone(),
         remote: None,
-        session_id,
+        thread_id,
         additional_directories: launch.additional_directories.clone(),
         mode: args.mode.clone(),
         prompt: vec![ContentBlock::from(prompt)],
@@ -191,7 +191,7 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
             return Err(error).context("starting the run");
         }
     };
-    let session_id = response.session_id.clone();
+    let thread_id = response.thread_id.clone();
     for notice in response.state.iter().flat_map(|state| &state.notices) {
         eprintln!("weave: {notice}");
     }
@@ -207,14 +207,14 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
         if args.json {
             println!("{}", serde_json::to_string_pretty(&response)?);
         } else {
-            println!("{session_id}");
+            println!("{thread_id}");
         }
         eprintln!(
             "Running in the weave Host; attach with: {}",
-            reopen_command(&launch.agent, &session_id.to_string())
+            reopen_command(&launch.agent, &thread_id.to_string())
         );
         if let Some(turn) = &response.turn_id {
-            eprintln!("`weave threads follow {session_id} --turn {turn}` waits for its turn.");
+            eprintln!("`weave threads follow {thread_id} --turn {turn}` waits for its turn.");
         }
         return Ok(ExitCode::SUCCESS);
     }
@@ -227,7 +227,7 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
             (*state, Print::After(head))
         }
         None => {
-            if let Some(over) = ended_turn(&connection, &session_id, response.turn_id.clone()).await
+            if let Some(over) = ended_turn(&connection, &thread_id, response.turn_id.clone()).await
             {
                 connection.shutdown().await;
                 host.finish().await;
@@ -237,8 +237,8 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
                 return Ok(Status::of_state(over.state).into());
             }
             let observed = connection
-                .send(AttachSessionRequest {
-                    session_id: session_id.clone(),
+                .send(AttachThreadRequest {
+                    thread_id: thread_id.clone(),
                     after: None,
                     agent_id: None,
                     cwd: None,
@@ -283,13 +283,13 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
                 eprintln!("\nweave: cancelling (Ctrl-C again to leave it)");
                 link.connection
                     .send(CancelTurnRequest {
-                        session_id: session_id.clone(),
+                        thread_id: thread_id.clone(),
                     })
                     .await?;
                 continue;
             }
         };
-        // A new session's policy answers what the agent asks. A session that asks its clients
+        // A new thread's policy answers what the agent asks. A thread that asks its clients
         // instead (continued with --resume) waits for one that can answer, and this stops
         // waiting then, unless asked to wait on.
         match follower.handle(event, &mut out) {
@@ -311,8 +311,8 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     let goes_on = matches!(&outcome, Ok(Outcome::Waiting(_) | Outcome::TimedOut));
     let connection = link.connection;
     let _ = connection
-        .send(DetachSessionRequest {
-            session_id: session_id.clone(),
+        .send(DetachThreadRequest {
+            thread_id: thread_id.clone(),
             close: if goes_on {
                 CloseWhen::Never
             } else {
@@ -331,11 +331,11 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
         }
     ) {
         eprintln!(
-            "weave: thread {session_id}; continue it with {}",
-            reopen_command(&launch.agent, &session_id.to_string())
+            "weave: thread {thread_id}; continue it with {}",
+            reopen_command(&launch.agent, &thread_id.to_string())
         );
     }
-    let status = report(outcome, &session_id, follower.turn(), args.json, false)?;
+    let status = report(outcome, &thread_id, follower.turn(), args.json, false)?;
     Ok(status.into())
 }
 
@@ -343,12 +343,12 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
 /// closed since, so there's nothing to follow.
 async fn ended_turn(
     connection: &HostConnection,
-    session_id: &SessionId,
+    thread_id: &ThreadId,
     turn_id: Option<TurnId>,
 ) -> Option<LatestTurn> {
     let got = connection
-        .send(GetSessionRequest {
-            session_id: session_id.clone(),
+        .send(GetThreadRequest {
+            thread_id: thread_id.clone(),
             turn_id: Some(turn_id?),
         })
         .await

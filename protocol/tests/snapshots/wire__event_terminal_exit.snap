@@ -1,11 +1,11 @@
 ---
 source: protocol/tests/wire.rs
-expression: "message(&event(44, SessionEvent::TerminalExit\n{\n    terminal_id: \"term-1\".into(), status:\n    TerminalExitStatus::new().exit_code(0),\n},))"
+expression: "message(&event(44, ThreadEvent::TerminalExit\n{\n    terminal_id: \"term-1\".into(), status:\n    TerminalExitStatus::new().exit_code(0),\n},))"
 ---
 {
-  "method": "session/event",
+  "method": "thread/event",
   "params": {
-    "sessionId": "s-1",
+    "threadId": "s-1",
     "seq": 44,
     "at": 1760180001234,
     "event": {

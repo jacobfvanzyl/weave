@@ -23,7 +23,7 @@ use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::Schedule;
 use weave_host_protocol::dispatcher::ScheduledRun;
 use weave_host_protocol::policy::PermissionPolicy;
-use weave_host_protocol::sessions::TurnState;
+use weave_host_protocol::threads::TurnState;
 
 use crate::args::ApproveArgs;
 use crate::args::prompt_text;
@@ -368,7 +368,7 @@ fn describe_occurrences(occurrences: &[Occurrence], schedules: &[Schedule], now:
                 (false, false) => "",
             };
             let thread = occurrence
-                .session_id
+                .thread_id
                 .as_ref()
                 .map(|thread| format!(", thread {thread}"))
                 .unwrap_or_default();
@@ -398,7 +398,7 @@ mod tests {
             state,
             outcome: None,
             why: None,
-            session_id: None,
+            thread_id: None,
             turn_id: None,
             recorded_at: 0,
             ended_at: None,
@@ -411,7 +411,7 @@ mod tests {
         let ended = Occurrence {
             outcome: Some(TurnState::Ended),
             ended_at: Some(hour),
-            session_id: Some("s-1".into()),
+            thread_id: Some("s-1".into()),
             ..occurrence(OccurrenceState::Finished)
         };
         assert_eq!(outcome(&ended, 3 * hour), "finished 2h ago: ended");

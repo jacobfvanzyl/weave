@@ -1,4 +1,4 @@
-//! The `@` file picker: a fuzzy search over the session directory's files, as Codex and Toad
+//! The `@` file picker: a fuzzy search over the thread directory's files, as Codex and Toad
 //! offer, using the same pieces as Codex's file search (ripgrep's `ignore` walker, which
 //! honors .gitignore, and nucleo's matcher).
 
@@ -33,7 +33,7 @@ enum IndexState {
     Ready(Vec<String>),
 }
 
-/// The session directory's files, indexed in the background on first use.
+/// The thread directory's files, indexed in the background on first use.
 pub struct FileIndex {
     root: PathBuf,
     state: Arc<Mutex<IndexState>>,

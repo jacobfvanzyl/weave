@@ -1,26 +1,25 @@
-//! The tools the Host offers a session's agent through the Host MCP server (`weave`), of two
+//! The tools the Host offers a thread's agent through the Host MCP server (`weave`), of two
 //! kinds:
 //!
 //! - Client tools, which an attached client runs on its own device (ADR 0009). A call is a
 //!   pending request for one client, the one that sent the running turn's latest prompt or
 //!   steer; it answers with the tool's result.
-//! - Host tools, which the Host answers itself, for the calling session. Each is a Host protocol
-//!   method seen from inside the session, answered by the same code (ADR 0020): no tool does
-//!   what no client request can. They need no client, so they work in headless sessions. They
-//!   read and act on any session on the Host (ADR 0023), and start delegated sessions: sessions
-//!   of their own that the calling session starts. Given `host`, they act on another of the
+//! - Host tools, which the Host answers itself, for the calling thread. Each is a Host protocol
+//!   method seen from inside the thread, answered by the same code (ADR 0020): no tool does
+//!   what no client request can. They need no client, so they work in headless threads. They
+//!   read and act on any thread on the Host (ADR 0023), and start delegated threads: threads
+//!   of their own that the calling thread starts. Given `host`, they act on another of the
 //!   person's Hosts instead (ADR 0029), through the service that reaches them, the Dispatcher,
 //!   as a `service/hostCall`.
 //! - Service tools, which a service declares and answers over its own connection (ADR 0027,
 //!   WVE-171): agents see them as `<service>__<tool>`, and a call is a `service/toolCall` for
-//!   the service that declared it, naming the calling session.
+//!   the service that declared it, naming the calling thread.
 
 use std::path::PathBuf;
 
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
 use agent_client_protocol::JsonRpcResponse;
-use agent_client_protocol::schema::v1::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -31,9 +30,10 @@ use crate::Empty;
 use crate::agents::ListAgentsRequest;
 use crate::policy::PermissionPolicy;
 use crate::queue::AddQueuedRequest;
-use crate::sessions::GetSessionRequest;
-use crate::sessions::ListSessionsRequest;
-use crate::sessions::RunRequest;
+use crate::threads::GetThreadRequest;
+use crate::threads::ListThreadsRequest;
+use crate::threads::RunRequest;
+use crate::threads::ThreadId;
 use crate::turns::CancelTurnRequest;
 use crate::turns::SteerTurnRequest;
 
@@ -43,26 +43,26 @@ pub const CLIENT_TOOLS_FEATURE: &str = "clientTools";
 /// Put text on the clipboard of the device that sent the turn.
 pub const CLIPBOARD_WRITE: &str = "clipboard_write";
 
-/// The Host tool that renames the calling session, as `session/rename` does.
-pub const RENAME_SESSION: &str = "rename_session";
+/// The Host tool that renames the calling thread, as `thread/rename` does.
+pub const RENAME_THREAD: &str = "rename_thread";
 
-/// The Host tool that lists the Host's sessions, as `sessions/list` does.
-pub const LIST_SESSIONS: &str = "list_sessions";
+/// The Host tool that lists the Host's threads, as `threads/list` does.
+pub const LIST_THREADS: &str = "list_threads";
 
-/// The Host tool that reads one session and its latest turn, as `sessions/get` does.
-pub const READ_SESSION: &str = "read_session";
+/// The Host tool that reads one thread and its latest turn, as `threads/get` does.
+pub const READ_THREAD: &str = "read_thread";
 
-/// The Host tool that starts a delegated session with a turn, as `session/run` does.
-pub const START_SESSION: &str = "start_session";
+/// The Host tool that starts a delegated thread with a turn, as `thread/run` does.
+pub const START_THREAD: &str = "start_thread";
 
-/// The Host tool that sends a session a prompt, as `queue/add` does.
-pub const PROMPT_SESSION: &str = "prompt_session";
+/// The Host tool that sends a thread a prompt, as `queue/add` does.
+pub const PROMPT_THREAD: &str = "prompt_thread";
 
-/// The Host tool that steers a session's running turn, as `turn/steer` does.
-pub const STEER_SESSION: &str = "steer_session";
+/// The Host tool that steers a thread's running turn, as `turn/steer` does.
+pub const STEER_THREAD: &str = "steer_thread";
 
-/// The Host tool that cancels a session's running turn, as `turn/cancel` does.
-pub const CANCEL_SESSION_TURN: &str = "cancel_session_turn";
+/// The Host tool that cancels a thread's running turn, as `turn/cancel` does.
+pub const CANCEL_THREAD_TURN: &str = "cancel_thread_turn";
 
 /// The Host tool that lists the agents threads can run, as `agents/list` does.
 pub const LIST_AGENTS: &str = "list_agents";
@@ -118,9 +118,9 @@ pub fn catalog() -> Vec<Tool> {
 
 /// Every Host tool the Host defines, in the order agents see them, after the client tools.
 pub fn host_catalog() -> Vec<Tool> {
-    let session_id = json!({
+    let thread_id = json!({
         "type": "string",
-        "description": "The thread's id, as list_sessions or start_session gave it."
+        "description": "The thread's id, as list_threads or start_thread gave it."
     });
     let key = json!({
         "type": "string",
@@ -135,7 +135,7 @@ pub fn host_catalog() -> Vec<Tool> {
                         list_hosts gives, to act there instead of on this thread's Host."
     });
     vec![
-        rename_session(),
+        rename_thread(),
         Tool {
             name: LIST_HOSTS.to_owned(),
             title: "List the person's other Hosts".to_owned(),
@@ -155,12 +155,12 @@ pub fn host_catalog() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: LIST_SESSIONS.to_owned(),
+            name: LIST_THREADS.to_owned(),
             title: "List threads".to_owned(),
             description: "List the threads of the weave Host this thread runs in, across \
                           agents and directories, most recently active first: each one's id, \
                           agent, directory, title, whether it is open and running, and which \
-                          thread started it. Answers with the Host's sessions/list result as \
+                          thread started it. Answers with the Host's threads/list result as \
                           JSON."
                 .to_owned(),
             input_schema: json!({
@@ -185,7 +185,7 @@ pub fn host_catalog() -> Vec<Tool> {
             title: "List agents".to_owned(),
             description: "List the agents the weave Host can start threads with: each one's \
                           id, name, and what it's for when its configuration says, and which \
-                          is the default. Use it to choose an agent for start_session. Answers \
+                          is the default. Use it to choose an agent for start_thread. Answers \
                           with the Host's agents/list result as JSON."
                 .to_owned(),
             input_schema: json!({
@@ -195,29 +195,29 @@ pub fn host_catalog() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: READ_SESSION.to_owned(),
+            name: READ_THREAD.to_owned(),
             title: "Read a thread".to_owned(),
             description: "Read one thread of the weave Host: how it lists, and its latest \
                           turn, or the one turnId names: the prompt, its state (queued, \
                           running, waiting on a person, or how it ended), and the agent's last \
                           message in it. Use it to read the full answer of a thread you \
-                          prompted, or any other thread. Answers with the Host's sessions/get \
+                          prompted, or any other thread. Answers with the Host's threads/get \
                           result as JSON."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "host": host,
-                    "sessionId": session_id,
+                    "threadId": thread_id,
                     "turnId": {"type": "string", "description": "Optional: a turn of the \
-                        thread, as prompt_session (its queuedId) or start_session gave it."}
+                        thread, as prompt_thread (its queuedId) or start_thread gave it."}
                 },
-                "required": ["sessionId"],
+                "required": ["threadId"],
                 "additionalProperties": false
             }),
         },
         Tool {
-            name: START_SESSION.to_owned(),
+            name: START_THREAD.to_owned(),
             title: "Start a thread with another agent".to_owned(),
             description: "Hand work to another agent: start a thread with it in the weave Host \
                           and send it a prompt. It works on its own, in a thread people can \
@@ -225,7 +225,7 @@ pub fn host_catalog() -> Vec<Tool> {
                           has started; when the turn ends, you'll get a message saying how it \
                           ended, with the start of the agent's answer, so don't wait or poll for \
                           it. It can approve only the tool kinds your own thread approves. Give \
-                          sessionId to prompt an existing thread instead of a new one."
+                          threadId to prompt an existing thread instead of a new one."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -240,7 +240,7 @@ pub fn host_catalog() -> Vec<Tool> {
                         host and no cwd, the same directory under the home there, which has to \
                         be a checkout of the same repository: its main checkout when yours is \
                         another worktree, since your branch may not be there."},
-                    "sessionId": {"type": "string", "description": "An existing thread, to \
+                    "threadId": {"type": "string", "description": "An existing thread, to \
                         prompt instead of starting one."},
                     "approve": {
                         "type": "array",
@@ -262,63 +262,63 @@ pub fn host_catalog() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: PROMPT_SESSION.to_owned(),
+            name: PROMPT_THREAD.to_owned(),
             title: "Prompt a thread".to_owned(),
             description: "Send a prompt to any open thread of the weave Host, one you started \
                           or another: it starts a turn at once if none runs, or waits in the \
                           thread's queue for the running one to end. When the turn ends, you'll \
                           get a message saying how it ended. Its answer's queuedId names the \
-                          turn, for read_session."
+                          turn, for read_thread."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "host": host,
-                    "sessionId": session_id,
+                    "threadId": thread_id,
                     "prompt": {"type": "string", "description": "What to ask of it."},
                     "key": key
                 },
-                "required": ["sessionId", "prompt"],
+                "required": ["threadId", "prompt"],
                 "additionalProperties": false
             }),
         },
         Tool {
-            name: STEER_SESSION.to_owned(),
+            name: STEER_THREAD.to_owned(),
             title: "Steer a thread".to_owned(),
             description: "Send a message into the running turn of any thread of the weave Host, \
                           to correct or add to what it's doing, without starting another turn. \
-                          If no turn runs, nothing is sent: use prompt_session instead."
+                          If no turn runs, nothing is sent: use prompt_thread instead."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "host": host,
-                    "sessionId": session_id,
+                    "threadId": thread_id,
                     "prompt": {"type": "string", "description": "The message for its turn."}
                 },
-                "required": ["sessionId", "prompt"],
+                "required": ["threadId", "prompt"],
                 "additionalProperties": false
             }),
         },
         Tool {
-            name: CANCEL_SESSION_TURN.to_owned(),
+            name: CANCEL_THREAD_TURN.to_owned(),
             title: "Cancel a thread's turn".to_owned(),
             description: "Stop the running turn of any thread of the weave Host. The thread \
                           stays, and can be prompted again."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
-                "properties": {"host": host, "sessionId": session_id},
-                "required": ["sessionId"],
+                "properties": {"host": host, "threadId": thread_id},
+                "required": ["threadId"],
                 "additionalProperties": false
             }),
         },
     ]
 }
 
-fn rename_session() -> Tool {
+fn rename_thread() -> Tool {
     Tool {
-        name: RENAME_SESSION.to_owned(),
+        name: RENAME_THREAD.to_owned(),
         title: "Rename this thread".to_owned(),
         description: "Give this thread a new title: the name people see for it in their \
                       weave thread lists, on every device. Use it when the person asks for a \
@@ -332,7 +332,7 @@ fn rename_session() -> Tool {
                     "type": "string",
                     "description": "The new title, up to 200 characters.",
                     "minLength": 1,
-                    "maxLength": crate::sessions::MAX_TITLE
+                    "maxLength": crate::threads::MAX_TITLE
                 }
             },
             "required": ["title"],
@@ -378,12 +378,12 @@ pub struct DeclareToolsResponse {
     pub names: Vec<String>,
 }
 
-/// The session whose agent calls a service tool.
+/// The thread whose agent calls a service tool.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCaller {
-    pub session_id: SessionId,
+    pub thread_id: ThreadId,
     pub agent_id: String,
     pub cwd: PathBuf,
     /// Its permission policy, which what the call starts should approve no more than.
@@ -392,7 +392,7 @@ pub struct ToolCaller {
     pub labels: Vec<String>,
 }
 
-/// `service/toolCall`, to the service that declared the tool: a session's agent called it.
+/// `service/toolCall`, to the service that declared the tool: a thread's agent called it.
 /// The service answers with `service/answerTool`; the agent waits until it does.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcNotification)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -418,13 +418,13 @@ pub enum HostCall {
     /// `list_hosts`: the Hosts the service reaches, and whether it's connected to each now.
     #[serde(rename = "hosts/list")]
     ListHosts,
-    #[serde(rename = "sessions/list")]
-    ListSessions(ListSessionsRequest),
+    #[serde(rename = "threads/list")]
+    ListThreads(ListThreadsRequest),
     #[serde(rename = "agents/list")]
     ListAgents(ListAgentsRequest),
-    #[serde(rename = "sessions/get")]
-    GetSession(GetSessionRequest),
-    #[serde(rename = "session/run")]
+    #[serde(rename = "threads/get")]
+    GetThread(GetThreadRequest),
+    #[serde(rename = "thread/run")]
     Run(Box<RunRequest>),
     #[serde(rename = "queue/add")]
     Queue(AddQueuedRequest),
@@ -435,7 +435,7 @@ pub enum HostCall {
 }
 
 /// `service/hostCall` (feature `otherHosts`), to the service that said it reaches the person's
-/// Hosts: a session's agent called a Host tool naming another Host. The service answers with
+/// Hosts: a thread's agent called a Host tool naming another Host. The service answers with
 /// `service/answerTool`, as for a tool call, with the method's answer as JSON text or a tool
 /// error; `service/toolCallCancelled` says the agent stopped waiting.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonRpcNotification)]

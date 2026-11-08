@@ -1,6 +1,6 @@
 //! `agents.lock`, beside the config file: the versions of presets that `weave agents update`
 //! moved past weave's built-in ones. Every agent launch reads it, the Host's included, so a new
-//! version applies to the next session without a rebuild. The newer of a preset's built-in
+//! version applies to the next thread without a rebuild. The newer of a preset's built-in
 //! and locked version is the one launched, so a weave with bumped presets isn't held back by
 //! an old lock; an entry for another package than the preset's is ignored.
 

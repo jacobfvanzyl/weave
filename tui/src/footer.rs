@@ -30,26 +30,26 @@ pub enum StatusItem {
     Model,
     /// The agent's name: the title it reports, such as "Codex".
     Agent,
-    /// The session's mode, such as Claude's permission mode.
+    /// The thread's mode, such as Claude's permission mode.
     Mode,
     Directory,
-    /// The session's title.
-    Session,
+    /// The thread's title.
+    Thread,
     /// How much of the context window is used, as a percentage.
     Context,
-    /// What the session has cost, as the agent reports it, shown at the right.
+    /// What the thread has cost, as the agent reports it, shown at the right.
     Cost,
 }
 
 impl StatusItem {
-    /// The agent, the model, the mode, the context used, the session's title, and its cost.
+    /// The agent, the model, the mode, the context used, the thread's title, and its cost.
     /// Codex also shows the directory; weave leaves it to `directory`.
     pub const DEFAULT: [Self; 6] = [
         Self::Agent,
         Self::Model,
         Self::Mode,
         Self::Context,
-        Self::Session,
+        Self::Thread,
         Self::Cost,
     ];
 
@@ -59,8 +59,7 @@ impl StatusItem {
             "agent" => Self::Agent,
             "mode" => Self::Mode,
             "directory" => Self::Directory,
-            // Its name before threads.
-            "thread" | "session" => Self::Session,
+            "thread" => Self::Thread,
             "context" => Self::Context,
             "cost" => Self::Cost,
             _ => return None,
@@ -85,7 +84,7 @@ impl StatusItem {
             Self::Model | Self::Agent => &["entity.name.type", "support.type", "variable"],
             Self::Mode => &["storage.modifier", "keyword.operator"],
             Self::Directory => &["string", "markup.underline.link"],
-            Self::Session => &["markup.heading", "entity.name.section"],
+            Self::Thread => &["markup.heading", "entity.name.section"],
             Self::Context | Self::Cost => &["constant.numeric", "constant"],
         }
     }
@@ -99,10 +98,10 @@ pub struct StatusValues {
     pub reasoning: Option<String>,
     pub mode: Option<String>,
     pub directory: String,
-    pub session: Option<String>,
+    pub thread: Option<String>,
     /// The percentage of the context window used.
     pub context_used: Option<u64>,
-    /// What the session has cost so far, and in which ISO 4217 currency.
+    /// What the thread has cost so far, and in which ISO 4217 currency.
     pub cost: Option<(f64, String)>,
     /// Whether the agent has settings to change, so the footer ends with Ctrl+O's hint.
     pub settings: bool,
@@ -136,7 +135,7 @@ impl StatusValues {
             StatusItem::Agent => Some(self.agent.clone()),
             StatusItem::Mode => self.mode.clone(),
             StatusItem::Directory => Some(self.directory.clone()),
-            StatusItem::Session => self.session.clone(),
+            StatusItem::Thread => self.thread.clone(),
             StatusItem::Context => self.context_used.map(|used| format!("{used}%")),
             // Shown at the right, with the hints, rather than in the line.
             StatusItem::Cost => None,
@@ -158,7 +157,7 @@ pub enum FooterMode {
     ShortcutsOpen,
     /// The composer is in shell mode.
     Shell,
-    /// The usual footer: the status line (or `? for shortcuts`), then the session's cost and
+    /// The usual footer: the status line (or `? for shortcuts`), then the thread's cost and
     /// the settings hint.
     Contextual {
         composer_empty: bool,
@@ -259,7 +258,7 @@ fn assemble(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -
     Line::from(spans)
 }
 
-/// What the session has cost, as the agent reports it.
+/// What the thread has cost, as the agent reports it.
 fn cost(values: &StatusValues) -> Vec<Span<'static>> {
     values
         .cost
@@ -440,7 +439,7 @@ fn compose_keys(vim: bool, steer: bool) -> Vec<(&'static str, &'static str)> {
     keys
 }
 
-const SESSION: &[(&str, &str)] = &[
+const THREAD: &[(&str, &str)] = &[
     ("⇧tab", "Next mode"),
     ("⌃o", "Settings"),
     ("⌃r", "Threads"),
@@ -448,8 +447,8 @@ const SESSION: &[(&str, &str)] = &[
     ("⌃c", "Quit"),
 ];
 
-/// With the weave Host, a session outlives the TUI, so leaving needn't stop a turn.
-const SESSION_IN_DAEMON: &[(&str, &str)] = &[
+/// With the weave Host, a thread outlives the TUI, so leaving needn't stop a turn.
+const THREAD_IN_DAEMON: &[(&str, &str)] = &[
     ("⇧tab", "Next mode"),
     ("⌃o", "Settings"),
     ("⌃r", "Threads"),
@@ -459,7 +458,7 @@ const SESSION_IN_DAEMON: &[(&str, &str)] = &[
 ];
 
 /// The `?` panel: weave's keys in three columns, as Codex lays out its shortcuts.
-/// `detachable` when sessions outlive the TUI, in the weave Host; `steer` when Enter steers a
+/// `detachable` when threads outlive the TUI, in the weave Host; `steer` when Enter steers a
 /// running turn.
 pub fn shortcut_lines(
     width: usize,
@@ -471,12 +470,7 @@ pub fn shortcut_lines(
         ("Compose", compose_keys(vim, steer)),
         (
             "Thread",
-            if detachable {
-                SESSION_IN_DAEMON
-            } else {
-                SESSION
-            }
-            .to_vec(),
+            if detachable { THREAD_IN_DAEMON } else { THREAD }.to_vec(),
         ),
         (
             "Transcript",
@@ -561,7 +555,7 @@ mod tests {
             reasoning: Some("High".into()),
             mode: Some("Plan".into()),
             directory: "~/repo".into(),
-            session: Some("Fix the build".into()),
+            thread: Some("Fix the build".into()),
             context_used: Some(25),
             cost: Some((1.5, "USD".into())),
             settings: true,
@@ -676,11 +670,11 @@ mod tests {
     #[test]
     fn values_read_as_one_line() {
         let values = StatusValues {
-            session: Some("first line\nsecond  line".into()),
+            thread: Some("first line\nsecond  line".into()),
             ..StatusValues::default()
         };
         assert_eq!(
-            values.parts(StatusItem::Session, &[]),
+            values.parts(StatusItem::Thread, &[]),
             ["first line second line"]
         );
     }
@@ -701,8 +695,8 @@ mod tests {
             ["high"]
         );
         assert_eq!(StatusItem::parse("directory"), Some(StatusItem::Directory));
-        assert_eq!(StatusItem::parse("thread"), Some(StatusItem::Session));
-        assert_eq!(StatusItem::parse("session"), Some(StatusItem::Session));
+        assert_eq!(StatusItem::parse("thread"), Some(StatusItem::Thread));
+        assert_eq!(StatusItem::parse("session"), None);
         assert_eq!(StatusItem::parse("branch"), None);
     }
 
