@@ -81,7 +81,8 @@ connect`. The Host this computer runs, named by its id or the name the Dispatche
 the connection with `weave_host_client::carry`, which `Carry::connect` maps to exit statuses (3
 while the Dispatcher or the Host can't be reached). A new thread's directory there is this one's
 counterpart under the home, `~/…` (`WorkspaceArgs::cwd_on`, `additional_directories_on`), and an
-error outside the home; `--cwd` names a directory there as given. `start::choose` reads a resumed
+error outside the home; `--cwd` names a directory there, one under this computer's home (as a
+shell expands `~/…`) the same path under the home there. `start::choose` reads a resumed
 thread's agent and directory from that Host (`threads/get`). An agent that needs signing in
 there says to run `weave agents login` on that computer. Waiting for a turn and the TUI reach the
 Host again through the Dispatcher (`host::Again`, `Host::reconnector`), and the TUI's status line

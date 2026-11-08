@@ -374,9 +374,11 @@ impl WorkspaceArgs {
         }
     }
 
-    /// The thread's directory on another computer's Host, `host` (WVE-195): `--cwd` as given,
-    /// a directory there, or else this one's, the same path under the home there (`~/…`), as
-    /// the thread tools name a directory on another Host. The Host says so if there's none.
+    /// The thread's directory on another computer's Host, `host` (WVE-195): `--cwd`, a
+    /// directory there, or else this one's, the same path under the home there (`~/…`), as
+    /// the thread tools name a directory on another Host. A `--cwd` under this computer's home,
+    /// as a shell expands `~/…`, is the same path under the home there too. The Host says so if
+    /// there's none.
     pub fn cwd_on(&self, host: &str) -> anyhow::Result<PathBuf> {
         if let Some(cwd) = &self.cwd {
             return there(cwd, "--cwd");
@@ -427,9 +429,12 @@ impl WorkspaceArgs {
 }
 
 /// `path`, given with `flag` for another computer's Host, if it names a directory there whole:
-/// from its root, or under the home there.
+/// from its root, or under the home there, as one under this computer's home does.
 fn there(path: &Path, flag: &str) -> anyhow::Result<PathBuf> {
-    if path.is_absolute() || path.starts_with("~") {
+    if path.is_absolute() {
+        return Ok(under_home(path).unwrap_or_else(|| path.to_path_buf()));
+    }
+    if path.starts_with("~") {
         return Ok(path.to_path_buf());
     }
     bail!(
@@ -503,6 +508,32 @@ mod tests {
         ApproveArgs {
             approve: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn a_directory_on_another_host_is_named_under_the_home_there() {
+        let home = std::env::var_os("HOME").map(PathBuf::from).expect("a home");
+        let home = home.canonicalize().unwrap_or(home);
+        assert_eq!(under_home(&home), Some(PathBuf::from("~")));
+        assert_eq!(
+            under_home(&home.join("code/weave")),
+            Some(PathBuf::from("~/code/weave"))
+        );
+        assert_eq!(under_home(Path::new("/srv/elsewhere")), None);
+        // As given, but a shell's `~/…` is the home there too.
+        assert_eq!(
+            there(&home.join("code"), "--cwd").ok(),
+            Some(PathBuf::from("~/code"))
+        );
+        assert_eq!(
+            there(Path::new("~/code"), "--cwd").ok(),
+            Some(PathBuf::from("~/code"))
+        );
+        assert_eq!(
+            there(Path::new("/srv/code"), "--cwd").ok(),
+            Some(PathBuf::from("/srv/code"))
+        );
+        assert!(there(Path::new("code"), "--cwd").is_err());
     }
 
     #[test]
