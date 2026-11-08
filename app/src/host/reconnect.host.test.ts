@@ -103,6 +103,12 @@ describe.skipIf(!devHostAvailable())('reconnecting through a dev Dispatcher', ()
   const until = (what: string, done: (open: OpenThread) => boolean, ms?: number) =>
     waitFor(() => model().thread && done(thread()) ? thread() : undefined, what, ms);
   const connected = (ms?: number) => waitFor(() => model().hosts.find(({ id }) => id === hostId)?.status === 'connected', 'the Host to be connected', ms);
+  /** Connected, and the thread on screen attached again, open on the Host. */
+  const attached = async (ms?: number) => {
+    await connected(ms);
+    const { key } = thread();
+    await waitFor(() => model().threads.find((listed) => listed.key === key)?.state === 'open', 'the thread to be open again', ms);
+  };
 
   beforeAll(async () => {
     [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
@@ -163,6 +169,16 @@ describe.skipIf(!devHostAvailable())('reconnecting through a dev Dispatcher', ()
     expect(answered.transcript.entries.map(line).slice(-2)).toEqual(['user: after the restart', 'assistant: You said: after the restart']);
   }, 60_000);
 
+  it("says why while the Dispatcher can't reach the Host, and connects again once it can", async () => {
+    await host.down();
+    const away = await waitFor(() => model().hosts.find(({ id, status }) => id === hostId && status === 'unreachable'), 'the Host to be unreachable');
+    expect(away.error).toBeTruthy();
+    expect(model().dispatcher?.status).toBe('connected');
+    // It joins the Dispatcher again by itself once it's back, and the app lists it connected.
+    await host.up();
+    await attached(30_000);
+  }, 60_000);
+
   it("keeps the Hosts it last listed while the Dispatcher can't be reached, and goes on once it can", async () => {
     const key = thread().key;
     const threads = model().threads.length;
@@ -176,7 +192,7 @@ describe.skipIf(!devHostAvailable())('reconnecting through a dev Dispatcher', ()
 
     await dispatcher.up();
     await waitFor(() => model().dispatcher?.status === 'connected', 'the Dispatcher again', 30_000);
-    await connected(30_000);
+    await attached(30_000);
     expect(thread().key).toBe(key);
     await store.actions.send('after the Dispatcher came back');
     await until('the answer', (open) => open.transcript.entries.map(line).includes('assistant: You said: after the Dispatcher came back'));

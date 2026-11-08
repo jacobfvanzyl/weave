@@ -35,6 +35,9 @@ export type DevHost = {
    * threads suspended, and starts it again in the same directory, with the same config and port.
    */
   restart(): Promise<void>;
+  /** Stops it as `restart` does, and leaves it stopped until `up`. */
+  down(): Promise<void>;
+  up(): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -110,12 +113,15 @@ export async function startDevHost(): Promise<DevHost> {
     }
   };
   await started();
-  const restart = async () => {
-    await halt();
+  const up = async () => {
     host = spawn();
     await started();
   };
-  return { dir: daemon, socket, cwd, restart, stop };
+  const restart = async () => {
+    await halt();
+    await up();
+  };
+  return { dir: daemon, socket, cwd, restart, down: halt, up, stop };
 }
 
 /** The Host's Unix socket as a transport: one JSON-RPC message per line. */
