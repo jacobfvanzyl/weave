@@ -279,6 +279,9 @@ async fn serve_websocket(shared: Arc<Shared>, listener: TcpListener, stop: Cance
         };
         match accepted {
             Ok((stream, _)) => {
+                // Nagle's algorithm off, as where host-client dials: small messages, such as a
+                // terminal's echo, go out at once.
+                let _ = stream.set_nodelay(true);
                 let shared = Arc::clone(&shared);
                 let config = Arc::clone(&config);
                 tokio::spawn(async move { websocket(shared, stream, config).await });

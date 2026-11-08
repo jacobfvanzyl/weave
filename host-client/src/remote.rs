@@ -223,7 +223,10 @@ pub async fn open_websocket(
         "Sec-WebSocket-Protocol",
         HeaderValue::from_static(subprotocol),
     );
-    let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(limits()), false)
+    // Nagle's algorithm off (`disable_nagle`): with it, a small message written after another
+    // waits for the peer's delayed acknowledgement, some 40 ms, which a terminal's typing
+    // through the Dispatcher shows at every keystroke.
+    let (socket, _) = tokio_tungstenite::connect_async_with_config(request, Some(limits()), true)
         .await
         .map_err(io::Error::other)?;
     Ok(socket)

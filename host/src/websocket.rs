@@ -59,6 +59,8 @@ pub(crate) fn serve(
                 () = stop_serving.cancelled() => break,
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => {
+                        // Nagle's algorithm off, so small messages go out at once.
+                        let _ = stream.set_nodelay(true);
                         let shared = Arc::clone(&shared);
                         let config = Arc::clone(&config);
                         tokio::spawn(async move { connection(shared, stream, config).await });
