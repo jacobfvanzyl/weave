@@ -2,7 +2,7 @@
 
 Status: structure settled 2026-10-20 (WVE-99); connecting to Hosts 2026-10-20 (WVE-100); the
 whole journal in the transcript (WVE-101), prompting (WVE-102), pending requests and client
-tools (WVE-103), the live session list (WVE-104), and browsing for a session's directory
+tools (WVE-103), the live thread list (WVE-104), and browsing for a thread's directory
 (WVE-112) 2026-10-21; reconnecting and several Hosts (WVE-105) 2026-10-22.
 
 Decision: [ADR 0015](../../../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md).
@@ -12,88 +12,88 @@ Glossary: [`CONTEXT.md`](../../../CONTEXT.md). Host protocol:
 
 ## Purpose
 
-The app is a remote client of the weave Host for the iPad and iPhone. It lists the sessions on
-every paired Host, follows one session's transcript live, prompts and steers its agent, and
-answers its pending requests. Sessions run in the Host, so they keep going whatever happens to
+The app is a remote client of the weave Host for the iPad and iPhone. It lists the threads on
+every paired Host, follows one thread's transcript live, prompts and steers its agent, and
+answers its pending requests. Threads run in the Host, so they keep going whatever happens to
 the app.
 
 It is Alpha's React app in its Capacitor shell, brought back from commit `e30f6e93`. Alpha was
-last terminal-first (WVE-65); the app is chat-first: sessions and their transcripts.
+last terminal-first (WVE-65); the app is chat-first: threads and their transcripts.
 
 ## Structure
 
-### The session list
+### The thread list
 
-- **One list across Hosts.** Sessions from every paired Host show in one list. The app keeps a
+- **One list across Hosts.** Threads from every paired Host show in one list. The app keeps a
   connection to each Host. A directory's heading names its Host only when more than one Host
   is paired.
-- **Grouped by directory.** Sessions are grouped by the directory they run in, one group per
-  Host and directory. Groups are ordered by their latest activity, and sessions in a group most
+- **Grouped by directory.** Threads are grouped by the directory they run in, one group per
+  Host and directory. Groups are ordered by their latest activity, and threads in a group most
   recent first.
-- **Or by repository and worktree.** Sessions in a git repository (the listing's `git`, ADR
+- **Or by repository and worktree.** Threads in a git repository (the listing's `git`, ADR
   0019) are grouped under the repository instead, with each of its worktrees indented beneath,
-  headed by its branch (or its directory, when detached), and its sessions under that. A row
+  headed by its branch (or its directory, when detached), and its threads under that. A row
   says its subdirectory when it isn't the worktree's top. The repository's place among the
-  groups is its latest activity in any worktree. A session from a journal written before the
-  Host recorded repositories joins the worktree another session of its Host places its
+  groups is its latest activity in any worktree. A thread from a journal written before the
+  Host recorded repositories joins the worktree another thread of its Host places its
   directory in. Under "Needs you" a row names the repository and branch.
-- **Needs you.** Sessions waiting on the person (activity `waiting`) also show in a "Needs you"
+- **Needs you.** Threads waiting on the person (activity `waiting`) also show in a "Needs you"
   group at the top, across Hosts and directories.
-- **A row** shows the session's title, its agent, its activity (waiting, running or idle), when
-  it was last active, and whether it is headless. A session whose turn ended since the person
+- **A row** shows the thread's title, its agent, its activity (waiting, running or idle), when
+  it was last active, and whether it is headless. A thread whose turn ended since the person
   last looked at it is marked until they open it; the app keeps that per device.
-- **Closed sessions** are hidden. A "Show closed" filter shows them in their directories,
-  dimmed. Opening one opens it again in its agent. A session a stopped Host left suspended
+- **Closed threads** are hidden. A "Show closed" filter shows them in their directories,
+  dimmed. Opening one opens it again in its agent. A thread a stopped Host left suspended
   closes once nobody takes it up within the idle grace of the Host starting (WVE-120).
-- **A row's menu.** A long press, or a right-click, on a row offers Close session for an open
-  one and Delete session, confirmed, for any, so an old session goes without being opened (and
-  resumed in its agent) first. The Host forgets a deleted session even when its agent can't
+- **A row's menu.** A long press, or a right-click, on a row offers Close thread for an open
+  one and Delete thread, confirmed, for any, so an old thread goes without being opened (and
+  resumed in its agent) first. The Host forgets a deleted thread even when its agent can't
   delete it, or its directory is gone. A failure says what failed and why.
 - **Removing a worktree.** A long press, or a right-click, on the heading of a worktree other
   than the repository's own checkout offers Remove worktree, confirmed. The Host refuses while
-  a session in it runs a turn or waits on the person; one with uncommitted changes asks again,
-  as Remove anyway. Its sessions close, and its branch goes too when it's merged.
+  a thread in it runs a turn or waits on the person; one with uncommitted changes asks again,
+  as Remove anyway. Its threads close, and its branch goes too when it's merged.
 - **Filtering.** A field filters the list by title, directory, agent and branch.
-- **New sessions.** A directory's heading starts a session in that directory with a chosen
-  agent. "New session" asks for the Host (with more than one), the directory and the agent.
-  The directory comes from a picker that replaces the form: the directories the Host's sessions
+- **New threads.** A directory's heading starts a thread in that directory with a chosen
+  agent. "New thread" asks for the Host (with more than one), the directory and the agent.
+  The directory comes from a picker that replaces the form: the directories the Host's threads
   use, most recent first, then the Host's computer to browse; a Host that doesn't list its
   directories (`files/list`) takes a path typed instead. When the
   directory is in a git repository on a Host that lists `worktrees`, a Worktree field opens a
-  picker of the repository's worktrees, with their branches, changes and sessions, which also
+  picker of the repository's worktrees, with their branches, changes and threads, which also
   creates one: a branch, and what to start it from (the default branch unless told otherwise).
-  The Host creates it beside the repository there and then, and the session starts in it.
+  The Host creates it beside the repository there and then, and the thread starts in it.
 - **Hosts.** "Hosts" at the foot of the list opens the paired Hosts, with each one's connection
   state, pairing a Host, renaming one, and forgetting one, which deletes its key. A Host's name
   is this device's own: the URL's host name until the person renames it, which the Host and other
   devices aren't told; pairing with the same Host again keeps it (WVE-142). Hosts are told apart by
   `host.id`, and each has its own connection and device id. While a Host is unreachable its
-  sessions stay in the list, marked as such. A revoked one offers Pair again (see
+  threads stay in the list, marked as such. A revoked one offers Pair again (see
   [Connections that end](#connections-that-end)).
 
-### A session
+### A thread
 
 - **Header:** the title; the agent, directory and, with more than one Host, the Host; the
   activity; and how many other clients are attached. Its menu has:
-  - Rename session, for an open session on a Host that lists `session/rename`. The new title
+  - Rename thread, for an open thread on a Host that lists `thread/rename`. The new title
     shows on every client, and the agent's own later titles don't replace it.
-  - Close session: the Host stops it, and opening it later takes it up in its agent again.
-  - Delete session, confirmed: the agent and the Host forget it.
-- **Transcript:** Alpha's ACP transcript and its views (`src/chat`), fed from the session's
+  - Close thread: the Host stops it, and opening it later takes it up in its agent again.
+  - Delete thread, confirmed: the agent and the Host forget it.
+- **Transcript:** Alpha's ACP transcript and its views (`src/chat`), fed from the thread's
   journal (see [The transcript](#the-transcript)).
 - **Subagents** show as rows in their parent's transcript, as the TUI shows them: one line each,
   on the fill of a run's card, saying what happened and to whom (`Spawned Robie`, `Sent input to
   Robie`, `Completed Robie`), without the description, message or reply. Tapping a subagent's
-  name shows its own transcript in place of the session's, under a bar naming it with a way back
+  name shows its own transcript in place of the thread's, under a bar naming it with a way back
   to Main; a subagent's transcript has no composer.
-- **Agent updates.** When a newer version of the session's agent is out
-  (`agents/updateAvailable`, or `SessionState.update` on attaching), a notice above the
-  transcript names it and the version the session runs. Remote clients can't update agents, so
-  while the Host's new sessions of the agent launch the version the session runs (`agents/list`'s
+- **Agent updates.** When a newer version of the thread's agent is out
+  (`agents/updateAvailable`, or `ThreadState.update` on attaching), a notice above the
+  transcript names it and the version the thread runs. Remote clients can't update agents, so
+  while the Host's new threads of the agent launch the version the thread runs (`agents/list`'s
   `version`), the notice says to run `weave agents update <agent>` on the Host's computer, and offers
-  nothing. The Host tells open sessions again once it has updated, and the app reads its agents
+  nothing. The Host tells open threads again once it has updated, and the app reads its agents
   again; when they launch another version, the notice offers Move to that version
-  (`session/reopen`), which waits for a running turn.
+  (`thread/reopen`), which waits for a running turn.
 - **Composer:** one Send button. With no turn running it starts one. While a turn runs it
   steers the turn when the Host lists `turn/steer` and the agent takes steering, and otherwise
   queues the message in the Host. Queued messages show above the composer, every client's, each
@@ -106,13 +106,13 @@ last terminal-first (WVE-65); the app is chat-first: sessions and their transcri
 
 ### Layout
 
-- **iPad and wider:** the session list as a sidebar, and one session beside it. The sidebar
+- **iPad and wider:** the thread list as a sidebar, and one thread beside it. The sidebar
   collapses, and dragging its edge's grip, or the arrow keys on it, make it wider or narrower,
   from 14rem to half the window and at most 30rem; a double-click puts back 16rem, and the device
   keeps the width (WVE-142). There are no Panes or docks; a second Pane for views and visuals may
   come with WVE-96 and WVE-95.
 - **iPhone:** portrait only, and a navigation stack. The list is the first screen; opening a
-  session pushes it, and Back (or a swipe from the left edge) returns to the list.
+  thread pushes it, and Back (or a swipe from the left edge) returns to the list.
 - Phone or not follows the device (`data-device-idiom`, set by the native shell), not the
   window's width, so a narrow iPad window keeps the sidebar.
 - The layout scales to a desktop-sized window, but there is no Electron shell and no desktop
@@ -140,26 +140,27 @@ The iPad mirrors for now (WVE-184).
   transcript once and then the entries that changed, through the `Surface` plugin, and it says
   where it's scrolled to. Nothing on it animates.
 
-### Requests in other sessions
+### Requests in other threads
 
-- A session waiting on the person shows under "Needs you". The iPhone's Back button, and the
-  iPad's sidebar button while the sidebar is collapsed, show how many sessions other than the one
+- A thread waiting on the person shows under "Needs you". The iPhone's Back button, and the
+  iPad's sidebar button while the sidebar is collapsed, show how many threads other than the one
   on screen are waiting.
-- When a session that isn't on screen starts waiting, a banner names the session. The Host's
-  list doesn't say what a session waits on, so the banner says its agent is waiting. Tapping it
-  opens the session.
-- Pending requests are answered only inside their session (see [Pending requests](#pending-requests)).
+- When a thread that isn't on screen starts waiting, a banner names the thread. The Host's
+  list doesn't say what a thread waits on, so the banner says its agent is waiting. Tapping it
+  opens the thread.
+- Pending requests are answered only inside their thread (see [Pending requests](#pending-requests)).
 
 ### Names
 
-The app uses the glossary's terms. Alpha's Threads are sessions, its Connections are Hosts, and
-its execution contexts and Workspaces are directories. Alpha archived threads; the Host closes
-and deletes sessions instead.
+The app uses the glossary's terms, and since version 3 of the Host protocol (WVE-200) so does its
+code: a thread is weave's conversation with an agent, "session" is ACP's word for the agent's side
+of one, and a Session is ADR 0031's. Alpha's Connections are Hosts, and its execution contexts
+and Workspaces are directories. Alpha archived threads; the Host closes and deletes them instead.
 
 ## The controller seam
 
 The UI reads one `AppController`, a model and actions, as Alpha's `AlphaController` was. Until
-WVE-100 a mock controller drives it from fixtures: two Hosts, several directories, sessions in
+WVE-100 a mock controller drives it from fixtures: two Hosts, several directories, threads in
 every activity, and Alpha's ACP showcase transcript. WVE-100 adds the controller backed by the
 Host protocol; the mock stays for UI work and tests.
 
@@ -200,16 +201,16 @@ is one and otherwise a `ThisDeviceOnly` Keychain key, and gives the public key a
 signatures as DER, unpadded base64url. In a browser, during development, a WebCrypto key in
 memory stands in; it is gone after a reload, and the browser pairs again.
 
-### Following a session
+### Following a thread
 
-`src/host/host-store.ts` keeps the paired Hosts, one connection each, and their sessions. A Host
-that lists the `sessions/watch` feature keeps the list live: `sessions/watch` gives the sessions,
-then `sessions/updated` and `sessions/removed` say what changed, in sessions the app isn't
-attached to too, so "Needs you", the waiting count and the banner follow sessions another client
-drives. A watched session closed keeps the title the app last had for it, since the Host lists a
-closed session without one. A Host without the feature is listed once with `sessions/list`.
+`src/host/host-store.ts` keeps the paired Hosts, one connection each, and their threads. A Host
+that lists the `threads/watch` feature keeps the list live: `threads/watch` gives the threads,
+then `threads/updated` and `threads/removed` say what changed, in threads the app isn't
+attached to too, so "Needs you", the waiting count and the banner follow threads another client
+drives. A watched thread closed keeps the title the app last had for it, since the Host lists a
+closed thread without one. A Host without the feature is listed once with `threads/list`.
 Either way the list is asked for again when the app comes to the front and when it's pulled down.
-Opening a session attaches to it after the last journal position this device handled
+Opening a thread attaches to it after the last journal position this device handled
 (`JournalFollower`), so only what it missed arrives; events up to the journal's head at attach
 are history. Journal events become the transcript's events (`transcriptEvents`), described next.
 
@@ -218,14 +219,15 @@ events renders a frame at a time rather than once an event.
 
 ### The transcript
 
-Every `session/event` kind shows, the same whether it arrives live or replayed
+Every `thread/event` kind shows, the same whether it arrives live or replayed
 (`src/host/journal.ts`, `src/chat/acp-transcript.ts`):
 
-- `update`: every ACP session update. One for a subagent session (`notification.sessionId`)
-  goes to that subagent's own transcript; kinds the app doesn't know change nothing.
+- `update`: every ACP session update. One for a subagent thread (its ACP session,
+  `notification.sessionId`) goes to that subagent's own transcript; kinds the app doesn't know
+  change nothing.
 - `turnStarted` and `turnSteered`: the prompt as the person's message, marked when it was a
   steer. One from another client or device says where it came from ("From Jaco's iPad", "From
-  the TUI", "From a headless run", "From another session" for a delegated session's turn or the
+  the TUI", "From a headless run", "From another thread" for a delegated thread's turn or the
   Host's message about one); this device's own (its connection, or its paired name)
   replaces the message it showed while sending.
 - `turnEnded`: nothing for a turn that finished; otherwise why it didn't ("Turn cancelled",
@@ -233,13 +235,13 @@ Every `session/event` kind shows, the same whether it arrives live or replayed
 - `terminalOutput` and `terminalExit`: the command's output as text in the tool call that
   embeds its terminal, escape sequences removed and carriage returns applied, and how it
   exited. A transcript keeps a terminal's last 256 KiB.
-- `agentReopened`: what the session runs now, worded as the TUI words it; `closed` and `notice`
+- `agentReopened`: what the thread runs now, worded as the TUI words it; `closed` and `notice`
   as notes.
 - `renamed`: the new title, and a note saying who renamed it: "You", "The TUI", "Jaco's iPhone",
-  or "The agent" for the agent's own `rename_session` Host tool.
+  or "The agent" for the agent's own `rename_thread` Host tool.
 - Kinds the app doesn't know are skipped; the position still advances.
 
-Replayed history changes no turn state: whether a turn runs comes from `SessionState.turns` on
+Replayed history changes no turn state: whether a turn runs comes from `ThreadState.turns` on
 attaching, then from live events. Images in prompts and messages show as thumbnails that open
 whole. Agent text is untrusted: its Markdown renders raw HTML as text, and a link opens only
 after a confirmation naming its host and the whole URL, with not opening the default. Tables read
@@ -268,42 +270,42 @@ transcript live and replayed, and an outline of each is a reviewed snapshot.
 
 ### Prompting
 
-`HostStore` speaks for the session on screen (`src/host/host-store.ts`):
+`HostStore` speaks for the thread on screen (`src/host/host-store.ts`):
 
-- **New sessions** (`session/create`) take a Host, a directory and an agent from `agents/list`,
+- **New threads** (`thread/create`) take a Host, a directory and an agent from `agents/list`,
   and open at once. For a Host that lists `files/list` (WVE-112), the Directory field opens a
-  folder picker in the dialog: up to five directories the Host's sessions use, then the Host's
+  folder picker in the dialog: up to five directories the Host's threads use, then the Host's
   computer from the directory chosen so far, or from home when that can't be listed, with paths
   under home as `~/…`. You can go into a directory, up, or home, with hidden directories on
   request. "Use this directory" fills in the dialog. For a Host that lists `worktrees`, the
   Worktree field opens a picker of the repository's worktrees (`worktrees/list`) that also
-  creates one (`worktrees/create`). A session nobody has prompted isn't listed
+  creates one (`worktrees/create`). A thread nobody has prompted isn't listed
   by the Host, so the app lists it while it's open; leaving it detaches with `ifUnused`, which
   closes it, as the TUI does.
 - **Send** starts a turn (`turn/start`) and shows the prompt at once. While a turn runs it
-  steers (`turn/steer`) when the Host lists `turn/steer` and the session's agent advertises
+  steers (`turn/steer`) when the Host lists `turn/steer` and the thread's agent advertises
   `_meta.steering.supported`; the steer shows as "Steering" above the composer until the agent
   takes it, and then where it joined the turn. `notRunning` sends it as a prompt instead, and a
   turn another client started meanwhile (`turn_running`) queues it. With an agent that can't
   steer, the message queues. The queue is the Host's (`queue/add`, WVE-107), which starts queued
   messages one at a time as turns end, whether the app is there or not: the app shows it from
-  `SessionState.queue` and the `queued`, `unqueued`, `queuePaused` and `queueResumed` events,
+  `ThreadState.queue` and the `queued`, `unqueued`, `queuePaused` and `queueResumed` events,
   removes from it with `queue/remove` and resumes it with `queue/resume`. A Host without the
-  `queue` feature gets the app's own queue, which sends messages as turns end while the session
+  `queue` feature gets the app's own queue, which sends messages as turns end while the thread
   is open in the app.
 - **Photos** go only to an agent whose `promptCapabilities.image` allows them, scaled to 2048
   pixels on the longest edge and re-encoded as JPEG, up to 12 MiB a message, well under the
   WebSocket's 32 MiB.
-- **Stop** is `turn/cancel`; modes and config options are `session/setMode` and
-  `session/setConfigOption`, whose changes come back through the journal for every client.
-- **Rename, Close and Delete** are `session/rename` (WVE-114), `session/close` and
-  `session/delete`.
+- **Stop** is `turn/cancel`; modes and config options are `thread/setMode` and
+  `thread/setConfigOption`, whose changes come back through the journal for every client.
+- **Rename, Close and Delete** are `thread/rename` (WVE-114), `thread/close` and
+  `thread/delete`.
 - **Sign-in.** An agent that answers `auth_required` gets "… needs signing in. Run `weave agents login
   --agent <agent>` on the Host's computer, then try again": remote clients can't sign agents in.
 
 ### Pending requests
 
-What an agent waits on comes from `SessionState.pending` on attaching and `pending/added` after,
+What an agent waits on comes from `ThreadState.pending` on attaching and `pending/added` after,
 and stops waiting with `pending/resolved` (`src/host/host-store.ts`). Requests aren't journaled,
 so one shows once the attach's replay is in, after the history before it; one shown before that
 no longer waits on attaching says "No longer waiting".
@@ -316,7 +318,7 @@ no longer waits on attaching says "No longer waiting".
   and warns of a page that isn't encrypted, a Punycode or bare IP host, or credentials in the
   URL. Nothing opens until the person taps Open in browser, which hands the URL to iOS (the app
   never fetches it) and accepts; only `http` and `https` URLs open. Decline and Cancel answer
-  without opening. `session/elicitationCompleted` marks an accepted one finished.
+  without opening. `thread/elicitationCompleted` marks an accepted one finished.
 - **A subagent's request** shows in the subagent's own transcript. While another transcript is
   on screen, a notice above it says "Robie is waiting for you" (or Main), with Show.
 - **Answering** shows the answer at once. Each card then says how its request ended, as the
@@ -331,19 +333,19 @@ no longer waits on attaching says "No longer waiting".
 
 ### Connections that end
 
-Sessions keep going in the Host whatever happens to the app (WVE-105). Each paired Host has its
+Threads keep going in the Host whatever happens to the app (WVE-105). Each paired Host has its
 own connection, and every connection proves the device again and then attaches after the last
-position of the session on screen, so only what the app missed arrives, once and in order.
+position of the thread on screen, so only what the app missed arrives, once and in order.
 
 - **Dropped.** A connection that closes is tried again after 1, 2, 5, 10 and then every 30
   seconds. A try that hasn't connected and said hello within 15 seconds counts as failed; one
   still under way when another starts is abandoned.
 - **To the front, or another network.** When the app comes to the front (`appStateChange`), when
   the network comes back or changes, as from Wi-Fi to cellular (Capacitor's Network plugin), and
-  when the list is pulled down, each connection lists its sessions again. One that doesn't answer
+  when the list is pulled down, each connection lists its threads again. One that doesn't answer
   within 5 seconds is taken for dead, as over a network that's gone, and replaced. A Host waiting
   to be tried again is tried at once.
-- **A restarted Host** keeps a session's journal: it resumes the session when the app attaches,
+- **A restarted Host** keeps a thread's journal: it resumes the thread when the app attaches,
   with the turn the restart interrupted ended as cancelled, and the app catches up after its
   position.
 - **Close codes.** 4000, revoked: the app deletes the Host's key and pairing, and lists the Host
@@ -353,12 +355,12 @@ position of the session on screen, so only what the app missed arrives, once and
   tried again.
 - **Protocol versions.** A Host that answers `incompatible_protocol` is listed as incompatible,
   with its range and what to change: a newer Host needs a newer app ("This Host needs a newer
-  version of the app: it speaks protocol versions 3 to 4; this app speaks version 2"), and an
+  version of the app: it speaks protocol versions 4 to 5; this app speaks version 3"), and an
   older one an older app or a newer weave on its computer. It isn't tried again until the person
   asks.
-- **While away.** A session whose Host isn't connected says so under its header ("Reconnecting to
+- **While away.** A thread whose Host isn't connected says so under its header ("Reconnecting to
   mac…", or why it stopped trying), and its rows in the list say the Host is unreachable.
-- **Drafts** are kept per session in the web view's storage as they're typed, so they survive
+- **Drafts** are kept per thread in the web view's storage as they're typed, so they survive
   reconnecting, and iOS discarding the web view in the background. Photos attached to a draft
   don't.
 

@@ -1,7 +1,7 @@
 {
   "name": "run",
   "state": {
-    "sessionId": "fake-18e07dd17f43d088",
+    "threadId": "fake-18e60410b7564af8",
     "agent": {
       "id": "fake",
       "name": "Fake Agent",
@@ -150,20 +150,28 @@
     "pending": [],
     "subagents": [],
     "journal": {
-      "id": "1792570990432",
+      "id": "1794125971397",
       "head": 1
     },
-    "notices": []
+    "notices": [],
+    "mcpServers": [
+      {
+        "name": "weave",
+        "source": "host",
+        "transport": "stdio",
+        "state": "declared"
+      }
+    ]
   },
   "events": [
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 1,
-      "at": 1792570990433,
+      "at": 1794125971397,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "available_commands_update",
             "availableCommands": [
@@ -207,8 +215,19 @@
                 }
               },
               {
+                "name": "markdown",
+                "description": "Write diagrams, math, alerts and other rich Markdown"
+              },
+              {
                 "name": "ask",
                 "description": "Ask a few questions with a form"
+              },
+              {
+                "name": "questions",
+                "description": "Ask as Claude's and Codex's adapters do, with Other and a note",
+                "input": {
+                  "hint": "claude or codex, to ask only that one"
+                }
               },
               {
                 "name": "connect",
@@ -221,6 +240,13 @@
               {
                 "name": "think",
                 "description": "Reason out loud, then answer"
+              },
+              {
+                "name": "work",
+                "description": "Think, then make five tool calls a moment apart",
+                "input": {
+                  "hint": "fail, to fail one"
+                }
               },
               {
                 "name": "compact",
@@ -252,12 +278,12 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 2,
-      "at": 1792570990454,
+      "at": 1794125971404,
       "event": {
         "kind": "turnStarted",
-        "sessionId": "fake-18e07dd17f43d088",
+        "threadId": "fake-18e60410b7564af8",
         "prompt": [
           {
             "type": "text",
@@ -269,33 +295,34 @@
             "name": "weave-tui",
             "id": "c2"
           }
-        }
+        },
+        "turnId": "q-qHbctlfU"
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 3,
-      "at": 1792570990457,
+      "at": 1794125971405,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "session_info_update",
             "title": "/run printf '\\033[1;32mgreen\\033[0m and ",
-            "updatedAt": "2026-10-21T08:23:10.455109Z"
+            "updatedAt": "2026-11-08T08:19:31.404606Z"
           }
         }
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 4,
-      "at": 1792570990460,
+      "at": 1794125971406,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "tool_call",
             "toolCallId": "call-1",
@@ -313,9 +340,9 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 5,
-      "at": 1792570990462,
+      "at": 1794125971409,
       "event": {
         "kind": "terminalOutput",
         "terminalId": "term-1",
@@ -323,9 +350,9 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 6,
-      "at": 1792570990463,
+      "at": 1794125971410,
       "event": {
         "kind": "terminalExit",
         "terminalId": "term-1",
@@ -335,13 +362,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 7,
-      "at": 1792570990465,
+      "at": 1794125971412,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "tool_call_update",
             "toolCallId": "call-1",
@@ -351,13 +378,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 8,
-      "at": 1792570990465,
+      "at": 1794125971412,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -369,13 +396,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 9,
-      "at": 1792570990465,
+      "at": 1794125971412,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -387,13 +414,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 10,
-      "at": 1792570990465,
+      "at": 1794125971413,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -405,13 +432,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 11,
-      "at": 1792570990465,
+      "at": 1794125971413,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -423,13 +450,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 12,
-      "at": 1792570990465,
+      "at": 1794125971413,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd17f43d088",
+          "sessionId": "fake-18e60410b7564af8",
           "update": {
             "sessionUpdate": "usage_update",
             "used": 257,
@@ -439,12 +466,12 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd17f43d088",
+      "threadId": "fake-18e60410b7564af8",
       "seq": 13,
-      "at": 1792570990465,
+      "at": 1794125971413,
       "event": {
         "kind": "turnEnded",
-        "sessionId": "fake-18e07dd17f43d088",
+        "threadId": "fake-18e60410b7564af8",
         "response": {
           "stopReason": "end_turn"
         }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Records journals from a dev Host with the fake agent (`src/host/testing/dev-host.ts`), one
-// session per script, into `src/chat/fixtures/journals/`, for the transcript's tests (WVE-101).
+// thread per script, into `src/chat/fixtures/journals/`, for the transcript's tests (WVE-101).
 // Build the debug binaries first: `(cd .. && cargo build -p weave-cli -p weave-fake-agent)`.
 //
 //   bun scripts/record-journals.ts [name…]
@@ -8,7 +8,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { HostConnection, type HostEvent } from '../src/host/connection';
-import type { ContentBlock, ElicitationContentValue, PendingRequest, SessionEventNotification, SessionState } from '../src/host/protocol';
+import type { ContentBlock, ElicitationContentValue, PendingRequest, ThreadEventNotification, ThreadState } from '../src/host/protocol';
 import { formAnswer, formCompanions } from '../src/chat/elicitation-conventions';
 import { formElicitation } from '../src/chat/acp-transcript';
 import { devHostAvailable, startDevHost, unixConnector, type DevHost } from '../src/host/testing/dev-host';
@@ -18,92 +18,92 @@ const out = resolve(import.meta.dirname, '../src/chat/fixtures/journals');
 /** A 2×2 PNG, for a prompt with an image. */
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==';
 
-type Recording = { name: string; state: SessionState; events: SessionEventNotification[] };
+type Recording = { name: string; state: ThreadState; events: ThreadEventNotification[] };
 
-type Script = (session: Session) => Promise<void>;
+type Script = (thread: Thread) => Promise<void>;
 
-type Session = {
+type Thread = {
   id: string;
-  /** The directory the session runs in. */
+  /** The directory the thread runs in. */
   cwd: string;
   local: HostConnection;
   prompt(words: string | ContentBlock[]): Promise<void>;
   /** Waits until the journal has been quiet for `ms`. */
   quiet(ms?: number): Promise<void>;
-  /** The next form elicitation the session waits on, answered as the app answers it with these choices. */
+  /** The next form elicitation the thread waits on, answered as the app answers it with these choices. */
   answerForm(choices: { values: Partial<Record<string, ElicitationContentValue>>; otherChosen?: string[] }): Promise<void>;
-  events: SessionEventNotification[];
+  events: ThreadEventNotification[];
 };
 
 const text = (words: string): ContentBlock[] => [{ type: 'text', text: words }];
 
 const scripts: Record<string, Script> = {
-  plan: (session) => session.prompt('/plan'),
-  run: (session) => session.prompt("/run printf '\\033[1;32mgreen\\033[0m and plain\\nline two\\r\\nline three\\n'; exit 3"),
-  write: (session) => session.prompt(`/write ${session.cwd}/notes.txt Hello from the fake agent`),
-  delegate: async (session) => {
-    await session.prompt('/delegate');
-    await session.quiet(1_500);
+  plan: (thread) => thread.prompt('/plan'),
+  run: (thread) => thread.prompt("/run printf '\\033[1;32mgreen\\033[0m and plain\\nline two\\r\\nline three\\n'; exit 3"),
+  write: (thread) => thread.prompt(`/write ${thread.cwd}/notes.txt Hello from the fake agent`),
+  delegate: async (thread) => {
+    await thread.prompt('/delegate');
+    await thread.quiet(1_500);
   },
-  compact: (session) => session.prompt('/compact'),
-  think: (session) => session.prompt('/think'),
-  markdown: (session) => session.prompt('/markdown'),
-  image: (session) => session.prompt([{ type: 'text', text: 'What is in this picture?' }, { type: 'image', mimeType: 'image/png', data: PNG }]),
-  steer: async (session) => {
-    const ended = session.prompt('/slow 12');
+  compact: (thread) => thread.prompt('/compact'),
+  think: (thread) => thread.prompt('/think'),
+  markdown: (thread) => thread.prompt('/markdown'),
+  image: (thread) => thread.prompt([{ type: 'text', text: 'What is in this picture?' }, { type: 'image', mimeType: 'image/png', data: PNG }]),
+  steer: async (thread) => {
+    const ended = thread.prompt('/slow 12');
     await Bun.sleep(400);
-    await session.local.request('turn/steer', { sessionId: session.id, prompt: text('And mention the steer.') });
+    await thread.local.request('turn/steer', { threadId: thread.id, prompt: text('And mention the steer.') });
     await ended;
   },
-  cancel: async (session) => {
-    const ended = session.prompt('/slow 40');
+  cancel: async (thread) => {
+    const ended = thread.prompt('/slow 40');
     await Bun.sleep(400);
-    await session.local.request('turn/cancel', { sessionId: session.id });
+    await thread.local.request('turn/cancel', { threadId: thread.id });
     await ended;
   },
-  modes: (session) => session.prompt('/switch-mode'),
-  notice: async (session) => {
-    await session.prompt('/mcp-legacy');
-    await session.quiet();
+  modes: (thread) => thread.prompt('/switch-mode'),
+  notice: async (thread) => {
+    await thread.prompt('/mcp-legacy');
+    await thread.quiet();
   },
-  reopen: async (session) => {
-    await session.prompt('hello before the reopen');
-    await session.local.request('session/reopen', { sessionId: session.id });
-    await session.quiet();
-    await session.prompt('hello after it');
+  reopen: async (thread) => {
+    await thread.prompt('hello before the reopen');
+    await thread.local.request('thread/reopen', { threadId: thread.id });
+    await thread.quiet();
+    await thread.prompt('hello after it');
   },
-  close: async (session) => {
-    await session.prompt('hello before closing');
-    await session.local.request('session/close', { sessionId: session.id });
-    await session.quiet();
+  close: async (thread) => {
+    await thread.prompt('hello before closing');
+    await thread.local.request('thread/close', { threadId: thread.id });
+    await thread.quiet();
   },
   // Claude's and Codex's questions, each with its free text (WVE-155).
-  questions: async (session) => {
-    const ended = session.prompt('/questions');
+  questions: async (thread) => {
+    const ended = thread.prompt('/questions');
     // Claude's: Other typed in place of a pick, and picks with Other beside them.
-    await session.answerForm({
+    await thread.answerForm({
       values: { question_0_custom: 'MySQL 8', question_1: ['Tests', 'Lint'], question_1_custom: 'Benchmarks' },
       otherChosen: ['question_0'],
     });
     // Codex's: a pick, and a note with it.
-    await session.answerForm({ values: { deploy_target: 'Staging', deploy_target_note: 'After the 5pm freeze' } });
+    await thread.answerForm({ values: { deploy_target: 'Staging', deploy_target_note: 'After the 5pm freeze' } });
     await ended;
   },
 };
 
 async function record(host: DevHost, name: string, script: Script): Promise<Recording> {
-  const events: SessionEventNotification[] = [];
+  const events: ThreadEventNotification[] = [];
   const pending: PendingRequest[] = [];
-  let opened: SessionState | undefined;
+  let opened: ThreadState | undefined;
   let failed: Error | undefined;
   const local = await HostConnection.connect({
     connector: unixConnector(host.socket),
     client: { name: 'weave-tui', version: '0' },
     credentials: { method: 'local' },
     onEvent(event: HostEvent) {
-      if (event.type === 'opened') opened = event.session.state;
+      if (event.type === 'opened') opened = event.thread.state;
       else if (event.type === 'openFailed') failed = event.error;
-      else if (event.type === 'notification' && event.method === 'session/event') events.push(event.params);
+      else if (event.type === 'notification' && event.method === 'thread/event') events.push(event.params);
       else if (event.type === 'notification' && event.method === 'pending/added') pending.push(event.params.pending);
     },
   });
@@ -123,8 +123,8 @@ async function record(host: DevHost, name: string, script: Script): Promise<Reco
         }
       }
     };
-    const session: Session = {
-      id: state.sessionId,
+    const thread: Thread = {
+      id: state.threadId,
       cwd: host.cwd,
       local,
       events,
@@ -140,19 +140,19 @@ async function record(host: DevHost, name: string, script: Script): Promise<Reco
         if (!form) throw new Error(`${name}: expected a form elicitation, got a ${asked.kind} request`);
         const schema = form.requestedSchema;
         const content = formAnswer(schema, formCompanions(schema), values, new Set(otherChosen));
-        await local.request('pending/answer', { sessionId: state.sessionId, pendingId: asked.id, elicitation: { action: 'accept', content } });
+        await local.request('pending/answer', { threadId: state.threadId, pendingId: asked.id, elicitation: { action: 'accept', content } });
       },
       async prompt(words) {
         const before = events.length;
-        await local.request('turn/start', { sessionId: state.sessionId, prompt: typeof words === 'string' ? text(words) : words });
+        await local.request('turn/start', { threadId: state.threadId, prompt: typeof words === 'string' ? text(words) : words });
         const deadline = Date.now() + 20_000;
-        while (!events.slice(before).some(({ event, sessionId }) => event.kind === 'turnEnded' && event.sessionId === sessionId)) {
+        while (!events.slice(before).some(({ event, threadId }) => event.kind === 'turnEnded' && event.threadId === threadId)) {
           if (Date.now() > deadline) throw new Error(`${name}: the turn didn't end`);
           await Bun.sleep(20);
         }
       },
     };
-    await script(session);
+    await script(thread);
     await quiet(300);
     return { name, state, events };
   } finally {

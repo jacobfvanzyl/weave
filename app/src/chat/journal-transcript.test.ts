@@ -2,21 +2,21 @@
 // each event kind as the app shows it, and the same transcript whether the journal arrives live or
 // replayed.
 import { describe, expect, it } from 'vitest';
-import type { OpenedSession } from '@/host/connection';
+import type { OpenedThread } from '@/host/connection';
 import { JournalFollower, transcriptEvents } from '@/host/journal';
-import type { SessionEventNotification, SessionState } from '@/host/protocol';
+import type { ThreadEventNotification, ThreadState } from '@/host/protocol';
 import {
   type AcpTranscript,
   blocksText,
   createTranscript,
   reduceAcpEvent,
-  sessionLabel,
   TERMINAL_KEEP,
+  threadLabel,
   type TranscriptEntry,
 } from './acp-transcript';
 import { terminalText } from './terminal-text';
 
-type Recording = { name: string; state: SessionState; events: SessionEventNotification[] };
+type Recording = { name: string; state: ThreadState; events: ThreadEventNotification[] };
 
 const recordings = Object.fromEntries(
   Object.values(import.meta.glob<Recording>('./fixtures/journals/*.json', { eager: true, import: 'default' }))
@@ -31,8 +31,8 @@ function follow(recording: Recording, how: 'live' | 'replayed'): AcpTranscript {
   const follower = new JournalFollower();
   const head = how === 'replayed' ? recording.events.at(-1)?.seq ?? 0 : 0;
   const state = { ...recording.state, journal: { ...recording.state.journal, head } };
-  follower.opened({ state, replay: { from: 1, reset: true } } as OpenedSession);
-  let transcript = reduceAcpEvent(createTranscript(state.sessionId), { type: 'session/loaded', modes: state.modes, configOptions: state.configOptions });
+  follower.opened({ state, replay: { from: 1, reset: true } } as OpenedThread);
+  let transcript = reduceAcpEvent(createTranscript(state.threadId), { type: 'thread/loaded', modes: state.modes, configOptions: state.configOptions });
   for (const notification of recording.events) {
     if (!follower.accept(notification)) continue;
     const reading = { history: follower.isHistory(notification), own: () => false };
@@ -68,9 +68,9 @@ function outline(transcript: AcpTranscript, root = transcript, depth = 0): strin
       case 'diagnostic':
         return [`${entry.severity}: ${entry.title}${entry.detail ? ` — ${entry.detail}` : ''}`];
       case 'subagent':
-        return [`• ${entry.event} ${sessionLabel(root, entry.subagentId)}${entry.detail ? ` — ${entry.detail}` : ''}`];
+        return [`• ${entry.event} ${threadLabel(root, entry.subagentId)}${entry.detail ? ` — ${entry.detail}` : ''}`];
       case 'session-message':
-        return [`message ${sessionLabel(root, entry.senderSessionId)} → ${sessionLabel(root, entry.recipientSessionId)}: ${blocksText(entry.content)}`];
+        return [`message ${threadLabel(root, entry.senderSessionId)} → ${threadLabel(root, entry.recipientSessionId)}: ${blocksText(entry.content)}`];
       case 'elicitation':
         return [`elicitation ${entry.status}`];
       case 'client-tool':
@@ -78,7 +78,7 @@ function outline(transcript: AcpTranscript, root = transcript, depth = 0): strin
     }
   });
   const nested = transcript.subagents.flatMap((subagent) => [
-    `subagent ${sessionLabel(root, subagent.sessionId)} (${subagent.state ?? 'no state'}):`,
+    `subagent ${threadLabel(root, subagent.threadId)} (${subagent.state ?? 'no state'}):`,
     ...outline(subagent.transcript, root, 1),
   ]);
   return [...lines, ...nested].map((line) => indent + line);
@@ -163,19 +163,19 @@ describe('transcripts from recorded journals', () => {
   });
 
   it('replays a journal of thousands of events quickly', () => {
-    const sessionId = 's-long';
-    const events: SessionEventNotification[] = [];
+    const threadId = 's-long';
+    const events: ThreadEventNotification[] = [];
     let seq = 0;
-    const push = (event: SessionEventNotification['event']) => events.push({ sessionId, seq: ++seq, at: 0, event });
+    const push = (event: ThreadEventNotification['event']) => events.push({ threadId, seq: ++seq, at: 0, event });
     for (let turn = 0; turn < 200; turn += 1) {
-      push({ kind: 'turnStarted', sessionId, prompt: [{ type: 'text', text: `Turn ${turn}` }], origin: { run: {} } });
+      push({ kind: 'turnStarted', threadId, prompt: [{ type: 'text', text: `Turn ${turn}` }], origin: { run: {} } });
       for (let chunk = 0; chunk < 40; chunk += 1) {
-        push({ kind: 'update', notification: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `word${chunk} ` } } } });
+        push({ kind: 'update', notification: { sessionId: threadId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `word${chunk} ` } } } });
       }
-      push({ kind: 'update', notification: { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: `tool-${turn}`, title: 'Read', kind: 'read', status: 'completed' } } });
-      push({ kind: 'turnEnded', sessionId, response: { stopReason: 'end_turn' } });
+      push({ kind: 'update', notification: { sessionId: threadId, update: { sessionUpdate: 'tool_call', toolCallId: `tool-${turn}`, title: 'Read', kind: 'read', status: 'completed' } } });
+      push({ kind: 'turnEnded', threadId, response: { stopReason: 'end_turn' } });
     }
-    const state = { ...recordings.plan.state, sessionId, journal: { id: 'j', head: seq } };
+    const state = { ...recordings.plan.state, threadId, journal: { id: 'j', head: seq } };
     const started = performance.now();
     const transcript = follow({ name: 'long', state, events }, 'replayed');
     const elapsed = performance.now() - started;

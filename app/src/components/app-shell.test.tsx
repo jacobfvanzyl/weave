@@ -15,8 +15,8 @@ const setIdiom = (idiom?: 'phone' | 'pad') => {
 
 afterEach(() => setIdiom());
 
-describe('the session list', () => {
-  it('groups sessions by Host, then directory or repository, naming each one\u2019s agent and branch', () => {
+describe('the thread list', () => {
+  it('groups threads by Host, then directory or repository, naming each one\u2019s agent and branch', () => {
     setIdiom('phone');
     render(<MockApp />);
     const mac = screen.getByRole('group', { name: 'mac.tail1234.ts.net' });
@@ -31,7 +31,7 @@ describe('the session list', () => {
     expect(screen.queryByRole('group', { name: 'Needs you' })).not.toBeInTheDocument();
   });
 
-  it('closes or deletes a session from its row, without opening it', async () => {
+  it('closes or deletes a thread from its row, without opening it', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -53,7 +53,7 @@ describe('the session list', () => {
     await waitFor(() => expect(row()).not.toBeInTheDocument());
   });
 
-  it('hides closed sessions until asked', async () => {
+  it('hides closed threads until asked', async () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -64,7 +64,7 @@ describe('the session list', () => {
     expect(screen.queryByText('Pencil hover')).not.toBeInTheDocument();
   });
 
-  it('filters sessions', async () => {
+  it('filters threads', async () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -80,7 +80,7 @@ describe('the session list', () => {
     expect(screen.getByRole('button', { name: 'Pair a Host' })).toBeInTheDocument();
   });
 
-  it('starts a session in a directory from its heading', async () => {
+  it('starts a thread in a directory from its heading', async () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -89,13 +89,13 @@ describe('the session list', () => {
     expect(within(form).getByRole('button', { name: 'Directory' })).toHaveAttribute('title', '/srv/odin');
     await user.selectOptions(within(form).getByLabelText('Agent'), 'Codex');
     await user.click(within(form).getByRole('button', { name: 'Start' }));
-    const session = await screen.findByRole('region', { name: 'New thread' });
-    expect(within(session).getByText('Codex')).toBeInTheDocument();
+    const thread = await screen.findByRole('region', { name: 'New thread' });
+    expect(within(thread).getByText('Codex')).toBeInTheDocument();
   });
 });
 
 describe('worktrees', () => {
-  it('starts a session in a new worktree from a repository\u2019s heading, and removes the worktree from its thread', async () => {
+  it('starts a thread in a new worktree from a repository\u2019s heading, and removes the worktree from its thread', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -124,7 +124,7 @@ describe('worktrees', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: /· feature\/auth/ })).not.toBeInTheDocument());
   });
 
-  it('keeps a worktree while one of its sessions waits on the person, and the primary one always', async () => {
+  it('keeps a worktree while one of its threads waits on the person, and the primary one always', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -143,7 +143,7 @@ describe('worktrees', () => {
 });
 
 describe('on an iPhone', () => {
-  it('stacks the session over the list, with Back counting the other waiting sessions', async () => {
+  it('stacks the thread over the list, with Back counting the other waiting threads', async () => {
     setIdiom('phone');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -185,7 +185,7 @@ describe('Hosts', () => {
 });
 
 describe('on an iPad', () => {
-  it('shows the list beside one session', async () => {
+  it('shows the list beside one thread', async () => {
     setIdiom('pad');
     const user = userEvent.setup();
     render(<MockApp />);
@@ -230,7 +230,7 @@ describe('on an iPad', () => {
   });
 });
 
-describe('a session that starts waiting off screen', () => {
+describe('a thread that starts waiting off screen', () => {
   it('raises a banner that opens it', async () => {
     setIdiom('phone');
     const user = userEvent.setup();
@@ -243,7 +243,7 @@ describe('a session that starts waiting off screen', () => {
     await waitFor(() => expect(screen.queryByText('Bring Alpha back needs you')).not.toBeInTheDocument());
   });
 
-  it('raises none for sessions already waiting when the app opens', async () => {
+  it('raises none for threads already waiting when the app opens', async () => {
     setIdiom('phone');
     render(<MockApp />);
     await act(() => new Promise((resolve) => setTimeout(resolve, 30)));
@@ -251,7 +251,7 @@ describe('a session that starts waiting off screen', () => {
   });
 });
 
-describe('the composer in a running session', () => {
+describe('the composer in a running thread', () => {
   it('queues for an agent that cannot take steers, and sends the queue when the turn ends', async () => {
     setIdiom('phone');
     const user = userEvent.setup();

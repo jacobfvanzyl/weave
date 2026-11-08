@@ -1,7 +1,7 @@
 {
   "name": "reopen",
   "state": {
-    "sessionId": "fake-18e07dd3536c9998",
+    "threadId": "fake-18e60413012545d8",
     "agent": {
       "id": "fake",
       "name": "Fake Agent",
@@ -150,20 +150,28 @@
     "pending": [],
     "subagents": [],
     "journal": {
-      "id": "1792570998287",
+      "id": "1794125981228",
       "head": 1
     },
-    "notices": []
+    "notices": [],
+    "mcpServers": [
+      {
+        "name": "weave",
+        "source": "host",
+        "transport": "stdio",
+        "state": "declared"
+      }
+    ]
   },
   "events": [
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 1,
-      "at": 1792570998288,
+      "at": 1794125981228,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "available_commands_update",
             "availableCommands": [
@@ -207,8 +215,19 @@
                 }
               },
               {
+                "name": "markdown",
+                "description": "Write diagrams, math, alerts and other rich Markdown"
+              },
+              {
                 "name": "ask",
                 "description": "Ask a few questions with a form"
+              },
+              {
+                "name": "questions",
+                "description": "Ask as Claude's and Codex's adapters do, with Other and a note",
+                "input": {
+                  "hint": "claude or codex, to ask only that one"
+                }
               },
               {
                 "name": "connect",
@@ -221,6 +240,13 @@
               {
                 "name": "think",
                 "description": "Reason out loud, then answer"
+              },
+              {
+                "name": "work",
+                "description": "Think, then make five tool calls a moment apart",
+                "input": {
+                  "hint": "fail, to fail one"
+                }
               },
               {
                 "name": "compact",
@@ -252,12 +278,12 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 2,
-      "at": 1792570998305,
+      "at": 1794125981230,
       "event": {
         "kind": "turnStarted",
-        "sessionId": "fake-18e07dd3536c9998",
+        "threadId": "fake-18e60413012545d8",
         "prompt": [
           {
             "type": "text",
@@ -267,35 +293,36 @@
         "origin": {
           "client": {
             "name": "weave-tui",
-            "id": "c12"
+            "id": "c13"
           }
-        }
+        },
+        "turnId": "q-tWKujFxc"
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 3,
-      "at": 1792570998308,
+      "at": 1794125981233,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "session_info_update",
             "title": "hello before the reopen",
-            "updatedAt": "2026-10-21T08:23:18.306348Z"
+            "updatedAt": "2026-11-08T08:19:41.230481Z"
           }
         }
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 4,
-      "at": 1792570998308,
+      "at": 1794125981233,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -307,13 +334,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 5,
-      "at": 1792570998308,
+      "at": 1794125981233,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -325,13 +352,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 6,
-      "at": 1792570998308,
+      "at": 1794125981233,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "usage_update",
             "used": 71,
@@ -341,21 +368,21 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 7,
-      "at": 1792570998308,
+      "at": 1794125981233,
       "event": {
         "kind": "turnEnded",
-        "sessionId": "fake-18e07dd3536c9998",
+        "threadId": "fake-18e60413012545d8",
         "response": {
           "stopReason": "end_turn"
         }
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 8,
-      "at": 1792570998348,
+      "at": 1794125981265,
       "event": {
         "kind": "agentReopened",
         "agent": {
@@ -491,13 +518,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 9,
-      "at": 1792570998348,
+      "at": 1794125981265,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "available_commands_update",
             "availableCommands": [
@@ -541,8 +568,19 @@
                 }
               },
               {
+                "name": "markdown",
+                "description": "Write diagrams, math, alerts and other rich Markdown"
+              },
+              {
                 "name": "ask",
                 "description": "Ask a few questions with a form"
+              },
+              {
+                "name": "questions",
+                "description": "Ask as Claude's and Codex's adapters do, with Other and a note",
+                "input": {
+                  "hint": "claude or codex, to ask only that one"
+                }
               },
               {
                 "name": "connect",
@@ -555,6 +593,13 @@
               {
                 "name": "think",
                 "description": "Reason out loud, then answer"
+              },
+              {
+                "name": "work",
+                "description": "Think, then make five tool calls a moment apart",
+                "input": {
+                  "hint": "fail, to fail one"
+                }
               },
               {
                 "name": "compact",
@@ -586,12 +631,12 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 10,
-      "at": 1792570998961,
+      "at": 1794125981887,
       "event": {
         "kind": "turnStarted",
-        "sessionId": "fake-18e07dd3536c9998",
+        "threadId": "fake-18e60413012545d8",
         "prompt": [
           {
             "type": "text",
@@ -601,19 +646,20 @@
         "origin": {
           "client": {
             "name": "weave-tui",
-            "id": "c12"
+            "id": "c13"
           }
-        }
+        },
+        "turnId": "q-YgE4kjJI"
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 11,
-      "at": 1792570998969,
+      "at": 1794125981897,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -625,13 +671,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 12,
-      "at": 1792570998969,
+      "at": 1794125981898,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -643,13 +689,13 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 13,
-      "at": 1792570998970,
+      "at": 1794125981898,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e07dd3536c9998",
+          "sessionId": "fake-18e60413012545d8",
           "update": {
             "sessionUpdate": "usage_update",
             "used": 137,
@@ -659,12 +705,12 @@
       }
     },
     {
-      "sessionId": "fake-18e07dd3536c9998",
+      "threadId": "fake-18e60413012545d8",
       "seq": 14,
-      "at": 1792570998970,
+      "at": 1794125981898,
       "event": {
         "kind": "turnEnded",
-        "sessionId": "fake-18e07dd3536c9998",
+        "threadId": "fake-18e60413012545d8",
         "response": {
           "stopReason": "end_turn"
         }

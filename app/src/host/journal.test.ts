@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
-import type { OpenedSession } from './connection';
+import type { OpenedThread } from './connection';
 import { JournalFollower, type JournalReading, reopenedText, transcriptEvents } from './journal';
-import { HOST_PROTOCOL, type SessionEvent, type SessionEventNotification, type TurnOrigin } from './protocol';
+import { HOST_PROTOCOL, type ThreadEvent, type ThreadEventNotification, type TurnOrigin } from './protocol';
 
-const opened = (journal: string, head: number, replay?: OpenedSession['replay']) =>
-  ({ state: { journal: { id: journal, head } }, replay }) as unknown as OpenedSession;
+const opened = (journal: string, head: number, replay?: OpenedThread['replay']) =>
+  ({ state: { journal: { id: journal, head } }, replay }) as unknown as OpenedThread;
 
-const event = (seq: number, body: SessionEvent, sessionId = 's-1'): SessionEventNotification =>
-  ({ sessionId, seq, at: 0, event: body });
+const event = (seq: number, body: ThreadEvent, threadId = 's-1'): ThreadEventNotification =>
+  ({ threadId, seq, at: 0, event: body });
 
 describe('JournalFollower', () => {
   it('handles each event once and knows which are history', () => {
@@ -49,10 +49,10 @@ const replayed: JournalReading = { ...live, history: true };
 describe('transcriptEvents', () => {
   it('shows prompts as the user\'s messages, one per turn, with where others came from', () => {
     const events = [
-      event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'First' }], origin: { client: { name: 'weave-ios', id: 'c1', device: "Jaco's iPad" } } }),
+      event(1, { kind: 'turnStarted', threadId: 's-1', prompt: [{ type: 'text', text: 'First' }], origin: { client: { name: 'weave-ios', id: 'c1', device: "Jaco's iPad" } } }),
       event(2, { kind: 'update', notification: { sessionId: 's-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi' } } } }),
-      event(3, { kind: 'turnSteered', sessionId: 's-1', prompt: [{ type: 'text', text: 'Also this' }], origin: { client: { name: 'weave-app', id: 'c2' } } }),
-      event(4, { kind: 'turnEnded', sessionId: 's-1', response: { stopReason: 'end_turn' } }),
+      event(3, { kind: 'turnSteered', threadId: 's-1', prompt: [{ type: 'text', text: 'Also this' }], origin: { client: { name: 'weave-app', id: 'c2' } } }),
+      event(4, { kind: 'turnEnded', threadId: 's-1', response: { stopReason: 'end_turn' } }),
     ];
     const transcript = events.flatMap((notification) => transcriptEvents(notification, live)).reduce(reduceAcpEvent, createTranscript('s-1'));
     expect(transcript.entries.map((entry) => entry.kind === 'message' ? [entry.role, entry.origin, entry.steer] : entry.kind)).toEqual([
@@ -63,11 +63,11 @@ describe('transcriptEvents', () => {
     expect(transcript.turn.status).toBe('stopped');
   });
 
-  it('names another session as where a prompt came from, and shows a queued one of its own', () => {
+  it('names another thread as where a prompt came from, and shows a queued one of its own', () => {
     const events = [
-      event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'Port the tests' }], origin: { session: { sessionId: 's-0' } } }),
-      event(2, { kind: 'turnEnded', sessionId: 's-1', response: { stopReason: 'end_turn' } }),
-      event(3, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'Queued here' }], origin: { client: { name: 'weave-app', id: 'c2' } }, queuedId: 'q-1' }),
+      event(1, { kind: 'turnStarted', threadId: 's-1', prompt: [{ type: 'text', text: 'Port the tests' }], origin: { thread: { threadId: 's-0' } } }),
+      event(2, { kind: 'turnEnded', threadId: 's-1', response: { stopReason: 'end_turn' } }),
+      event(3, { kind: 'turnStarted', threadId: 's-1', prompt: [{ type: 'text', text: 'Queued here' }], origin: { client: { name: 'weave-app', id: 'c2' } }, queuedId: 'q-1' }),
     ];
     const transcript = events.flatMap((notification) => transcriptEvents(notification, live)).reduce(reduceAcpEvent, createTranscript('s-1'));
     expect(transcript.entries.map((entry) => entry.kind === 'message' ? [entry.role, entry.origin ?? null] : entry.kind)).toEqual([
@@ -78,7 +78,7 @@ describe('transcriptEvents', () => {
 
   it('names what started a service\'s turn, and the service', () => {
     const events = [
-      event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'Review the merged pull requests' }], origin: { service: { name: 'Dispatcher', label: 'schedule daily-review', id: 'o-1' } } }),
+      event(1, { kind: 'turnStarted', threadId: 's-1', prompt: [{ type: 'text', text: 'Review the merged pull requests' }], origin: { service: { name: 'Dispatcher', label: 'schedule daily-review', id: 'o-1' } } }),
     ];
     const transcript = events.flatMap((notification) => transcriptEvents(notification, live)).reduce(reduceAcpEvent, createTranscript('s-1'));
     expect(transcript.entries.map((entry) => entry.kind === 'message' ? [entry.role, entry.origin] : entry.kind)).toEqual([
@@ -87,38 +87,38 @@ describe('transcriptEvents', () => {
   });
 
   it('changes no turn state for history', () => {
-    const started = event(1, { kind: 'turnStarted', sessionId: 's-1', prompt: [{ type: 'text', text: 'First' }], origin: { run: {} } });
+    const started = event(1, { kind: 'turnStarted', threadId: 's-1', prompt: [{ type: 'text', text: 'First' }], origin: { run: {} } });
     expect(transcriptEvents(started, replayed).map(({ type }) => type)).toEqual(['prompt']);
     expect(transcriptEvents(started, live).map(({ type }) => type)).toEqual(['prompt', 'turn/started']);
-    const ended = event(2, { kind: 'turnEnded', sessionId: 's-1', response: { stopReason: 'cancelled' } });
-    expect(transcriptEvents(ended, replayed)).toEqual([{ type: 'turn/ended', sessionId: 's-1', stopReason: 'cancelled' }]);
+    const ended = event(2, { kind: 'turnEnded', threadId: 's-1', response: { stopReason: 'cancelled' } });
+    expect(transcriptEvents(ended, replayed)).toEqual([{ type: 'turn/ended', threadId: 's-1', stopReason: 'cancelled' }]);
     expect(transcriptEvents(ended, live).map(({ type }) => type)).toEqual(['turn/ended', 'turn/stopped']);
   });
 
   it('says why a turn failed', () => {
-    const failed = event(1, { kind: 'turnEnded', sessionId: 's-1', error: { code: -32603, message: 'The agent crashed' } });
+    const failed = event(1, { kind: 'turnEnded', threadId: 's-1', error: { code: -32603, message: 'The agent crashed' } });
     const transcript = transcriptEvents(failed, live).reduce(reduceAcpEvent, createTranscript('s-1'));
     expect(transcript.entries).toMatchObject([{ kind: 'diagnostic', severity: 'error', title: 'Turn failed', detail: 'The agent crashed' }]);
     expect(transcript.turn).toEqual({ status: 'failed', error: 'The agent crashed' });
   });
 
   it('says a turn the Host stopped under was interrupted, in history too', () => {
-    const cut = event(1, { kind: 'turnEnded', sessionId: 's-1', error: { code: HOST_PROTOCOL.errors.interrupted, message: 'the weave Host stopped while this turn ran' } });
+    const cut = event(1, { kind: 'turnEnded', threadId: 's-1', error: { code: HOST_PROTOCOL.errors.interrupted, message: 'the weave Host stopped while this turn ran' } });
     for (const position of [replayed, live]) {
       const transcript = transcriptEvents(cut, position).reduce(reduceAcpEvent, createTranscript('s-1'));
       expect(transcript.entries).toMatchObject([{ kind: 'diagnostic', severity: 'info', title: 'Interrupted: the weave Host stopped while this turn ran' }]);
     }
   });
 
-  it('routes subagent updates to their session and skips unknown kinds', () => {
+  it('routes subagent updates to their thread and skips unknown kinds', () => {
     expect(transcriptEvents(event(1, { kind: 'update', notification: { sessionId: 'child', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x' } } } }), live))
-      .toEqual([{ type: 'session/update', sessionId: 'child', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x' } } }]);
-    expect(transcriptEvents(event(2, { kind: 'somethingNew' } as unknown as SessionEvent), live)).toEqual([]);
+      .toEqual([{ type: 'session/update', threadId: 'child', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x' } } }]);
+    expect(transcriptEvents(event(2, { kind: 'somethingNew' } as unknown as ThreadEvent), live)).toEqual([]);
   });
 
-  it('says who renamed the session, and titles it', () => {
+  it('says who renamed the thread, and titles it', () => {
     const renamed = (by?: TurnOrigin) => transcriptEvents(event(1, { kind: 'renamed', title: 'Parser fixes', ...(by ? { by } : {}) }), live);
-    expect(renamed()).toEqual([{ type: 'session/renamed', title: 'Parser fixes', by: 'The agent' }]);
+    expect(renamed()).toEqual([{ type: 'thread/renamed', title: 'Parser fixes', by: 'The agent' }]);
     expect(renamed({ client: { name: 'weave-app', id: 'c2' } })[0]).toMatchObject({ by: 'You' });
     expect(renamed({ client: { name: 'weave-tui', id: 'c7' } })[0]).toMatchObject({ by: 'The TUI' });
     expect(renamed({ client: { name: 'weave-app', id: 'c8', device: "Jaco's iPhone" } })[0]).toMatchObject({ by: "Jaco's iPhone" });
@@ -134,11 +134,11 @@ describe('transcriptEvents', () => {
 });
 
 describe('reopenedText', () => {
-  it('says what the session runs now, as the TUI does', () => {
+  it('says what the thread runs now, as the TUI does', () => {
     const release = { name: '@zed-industries/claude-code-acp', version: '0.7.0' };
     expect(reopenedText(release, { name: release.name, version: '0.6.1' })).toBe('Moved this thread to claude-code-acp 0.7.0, from 0.6.1');
     expect(reopenedText(release)).toBe('Reopened this thread on claude-code-acp 0.7.0');
-    expect(reopenedText(release, undefined, "0.7.1 couldn't take the session up")).toBe("0.7.1 couldn't take the session up; it runs claude-code-acp 0.7.0 again");
+    expect(reopenedText(release, undefined, "0.7.1 couldn't take the thread up")).toBe("0.7.1 couldn't take the thread up; it runs claude-code-acp 0.7.0 again");
     expect(reopenedText()).toBe('Reopened this thread in a new agent process');
   });
 });

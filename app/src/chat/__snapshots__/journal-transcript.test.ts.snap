@@ -4,6 +4,7 @@ exports[`transcripts from recorded journals > shows the cancel journal the same 
 "user (from the TUI): /slow 40
 assistant: Chunk 1 of 40.
 Chunk 2 of 40.
+Chunk 3 of 40.
 
 info: Turn cancelled"
 `;
@@ -167,7 +168,7 @@ assistant: I switched to code mode."
 
 exports[`transcripts from recorded journals > shows the notice journal the same live and replayed 1`] = `
 "user (from the TUI): /mcp-legacy
-info: This agent's MCP client predates MCP 2026-07-28, so it can't use weave's client tools.
+info: This agent's MCP client predates MCP 2026-07-28, so it can't use weave's tools.
 assistant: weave refused initialize: {"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2026-07-28"],"requested":"2025-06-18"}}"
 `;
 

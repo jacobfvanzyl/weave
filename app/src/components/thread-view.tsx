@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, Cancel01Icon, ComputerTerminal01Icon, Delete02Icon, Edit02Icon, InformationCircleIcon, MoreHorizontalIcon, SparklesIcon, StopIcon, Tv01Icon, UserMultiple02Icon } from '@hugeicons/core-free-icons';
-import type { AgentUpdateNotice, AppController, OpenSession, PairedHost, SessionSummary } from '@/app/app-controller';
+import type { AgentUpdateNotice, AppController, OpenThread, PairedHost, ThreadSummary } from '@/app/app-controller';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { useUpdateNotice } from '@/app/use-update-notice';
-import { allSubagents, findSubagent, sessionLabel, waitsForAnswer } from '@/chat/acp-transcript';
+import { allSubagents, findSubagent, threadLabel, waitsForAnswer } from '@/chat/acp-transcript';
 import { ChatPane, SurfacedThread } from '@/chat/chat-pane';
 import { ActivityIndicator } from '@/components/activity-indicator';
-import { DeleteSessionDialog } from '@/components/delete-session-dialog';
+import { DeleteThreadDialog } from '@/components/delete-thread-dialog';
 import { PathLabel } from '@/components/path-label';
 import { ResizeHandle } from '@/components/resize-handle';
 import { TerminalPanel } from '@/components/terminal-panel';
@@ -24,10 +24,10 @@ import type { DeviceSurface } from '@/surface/use-surface';
 import { clampPaneWidth, PANE_WIDTH, selectTab } from '@/terminal/terminal-layout';
 import { useThreadTerminals } from '@/terminal/use-thread-terminals';
 
-/** The bar above a session, and above the empty state when none is open. */
-export function SessionHeader({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
+/** The bar above a thread, and above the empty state when none is open. */
+export function ThreadHeader({ leading, children }: { leading?: ReactNode; children?: ReactNode }) {
   return (
-    <header data-slot='session-header'
+    <header data-slot='thread-header'
       className='flex h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] shrink-0 items-center gap-2 border-b border-border bg-title-bar pt-[env(safe-area-inset-top)] pr-2 pl-[max(env(safe-area-inset-left),0.5rem)]'>
       {leading}
       {children}
@@ -35,9 +35,9 @@ export function SessionHeader({ leading, children }: { leading?: ReactNode; chil
   );
 }
 
-/** Renames an open session through the Host, for every client. */
-function RenameDialog({ session, actions, open, onOpenChange }: {
-  session: SessionSummary;
+/** Renames an open thread through the Host, for every client. */
+function RenameDialog({ thread, actions, open, onOpenChange }: {
+  thread: ThreadSummary;
   actions: AppController['actions'];
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -47,7 +47,7 @@ function RenameDialog({ session, actions, open, onOpenChange }: {
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setTitle(session.title ?? '');
+    setTitle(thread.title ?? '');
     setError(undefined);
     // Starts from the title it has when it opens.
   }, [open]);
@@ -63,7 +63,7 @@ function RenameDialog({ session, actions, open, onOpenChange }: {
           setSaving(true);
           setError(undefined);
           try {
-            await actions.renameSession(session.key, title);
+            await actions.renameThread(thread.key, title);
             onOpenChange(false);
           } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause));
@@ -82,8 +82,8 @@ function RenameDialog({ session, actions, open, onOpenChange }: {
   );
 }
 
-function SessionMenu({ session, actions, canRename, onStatus, surface }: {
-  session: SessionSummary;
+function ThreadMenu({ thread, actions, canRename, onStatus, surface }: {
+  thread: ThreadSummary;
   actions: AppController['actions'];
   canRename?: boolean;
   /** Show the thread's status sheet. */
@@ -112,12 +112,12 @@ function SessionMenu({ session, actions, canRename, onStatus, surface }: {
               </DropdownMenuItem>
             )}
             {canRename && (
-              <DropdownMenuItem disabled={session.state !== 'open'} onClick={() => setRenaming(true)}>
+              <DropdownMenuItem disabled={thread.state !== 'open'} onClick={() => setRenaming(true)}>
                 <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
                 Rename thread…
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem disabled={session.state === 'closed'} onClick={() => void actions.closeSession(session.key)}>
+            <DropdownMenuItem disabled={thread.state === 'closed'} onClick={() => void actions.closeThread(thread.key)}>
               <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
               Close thread
             </DropdownMenuItem>
@@ -128,8 +128,8 @@ function SessionMenu({ session, actions, canRename, onStatus, surface }: {
           </DropdownMenuGroup>
         </DropdownMenuContent>
       </DropdownMenu>
-      <RenameDialog session={session} actions={actions} open={renaming} onOpenChange={setRenaming} />
-      <DeleteSessionDialog session={session} actions={actions} open={confirmDelete} onOpenChange={setConfirmDelete} />
+      <RenameDialog thread={thread} actions={actions} open={renaming} onOpenChange={setRenaming} />
+      <DeleteThreadDialog thread={thread} actions={actions} open={confirmDelete} onOpenChange={setConfirmDelete} />
     </>
   );
 }
@@ -156,10 +156,10 @@ function useEdgeSwipe(onSwipe?: () => void) {
 const shortName = (name: string) => name.startsWith('@') && name.includes('/') ? name.slice(name.indexOf('/') + 1) : name;
 
 /**
- * A newer version of the session's agent is out. Update has the Host update the agent and moves
- * this session over, as the TUI's `/update` does; once the Host's new sessions launch another
- * version already, Move only moves it (`session/reopen`). Dismissed, it stays hidden in this
- * session on this device until a newer release, or a version to move to.
+ * A newer version of the thread's agent is out. Update has the Host update the agent and moves
+ * this thread over, as the TUI's `/update` does; once the Host's new threads launch another
+ * version already, Move only moves it (`thread/reopen`). Dismissed, it stays hidden in this
+ * thread on this device until a newer release, or a version to move to.
  */
 function UpdateNotice({ update, updating, reopening, onUpdate, onMove, onDismiss }: {
   update: AgentUpdateNotice;
@@ -215,7 +215,7 @@ function TerminalsButton({ shown, count, onToggle }: { shown: boolean; count: nu
   );
 }
 
-/** The session's Host isn't connected: the transcript catches up once it is. */
+/** The thread's Host isn't connected: the transcript catches up once it is. */
 function ConnectionNotice({ host }: { host: PairedHost }) {
   const text = host.status === 'connecting'
     ? `Connecting to ${host.name}…`
@@ -229,10 +229,10 @@ function ConnectionNotice({ host }: { host: PairedHost }) {
   );
 }
 
-/** The session on screen: its header, transcript and composer. */
-export function SessionView({ controller, session, leading, onSwipeBack, surface }: {
+/** The thread on screen: its header, transcript and composer. */
+export function ThreadView({ controller, thread, leading, onSwipeBack, surface }: {
   controller: AppController;
-  session: OpenSession;
+  thread: OpenThread;
   leading?: ReactNode;
   onSwipeBack?: () => void;
   /**
@@ -242,39 +242,39 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
   surface?: DeviceSurface;
 }) {
   const { model, actions } = controller;
-  const summary = model.sessions.find(({ key }) => key === session.key);
+  const summary = model.threads.find(({ key }) => key === thread.key);
   const host = model.hosts.find(({ id }) => id === summary?.hostId);
   const others = Math.max(0, (summary?.clients ?? 0) - 1);
   const phone = usePhoneLayout();
-  const sessionId = summary?.sessionId ?? session.key.slice(session.key.indexOf('/') + 1);
-  const terminals = useThreadTerminals(session.key, sessionId, session.terminals);
+  const threadId = summary?.threadId ?? thread.key.slice(thread.key.indexOf('/') + 1);
+  const terminals = useThreadTerminals(thread.key, threadId, thread.terminals);
   const surfaced = phone && Boolean(surface?.status.connected);
   // On the iPhone, a thread on the Surface leaves its terminals for later (WVE-184).
-  const canTerminals = Boolean(host?.canTerminals && session.terminals) && !surfaced;
+  const canTerminals = Boolean(host?.canTerminals && thread.terminals) && !surfaced;
   const terminalsShown = canTerminals && terminals.thread.shown;
   // On the iPad the terminals sit beside the thread, or over its width, their tabs in its top
   // rail; on the iPhone they take the chat's place under its header.
   const wide = !phone && terminalsShown && terminals.thread.wide;
   const paned = phone && terminalsShown;
-  // A subagent whose own transcript shows instead of the session's.
+  // A subagent whose own transcript shows instead of the thread's.
   const [watching, setWatching] = useState<string>();
-  useEffect(() => setWatching(undefined), [session.key]);
-  const subagent = watching ? findSubagent(session.transcript, watching) : undefined;
-  const openSubagent = useCallback((sessionId: string) => setWatching(sessionId), []);
+  useEffect(() => setWatching(undefined), [thread.key]);
+  const subagent = watching ? findSubagent(thread.transcript, watching) : undefined;
+  const openSubagent = useCallback((threadId: string) => setWatching(threadId), []);
   // A terminal starting here, until the list has it; why the last one didn't start; and the one
   // just started, which takes the keyboard.
   const [starting, setStarting] = useState<{ id?: string }>();
   const [startError, setStartError] = useState<string>();
   const [started, setStarted] = useState<string>();
-  const shownKey = useRef(session.key);
-  shownKey.current = session.key;
+  const shownKey = useRef(thread.key);
+  shownKey.current = thread.key;
   useEffect(() => {
     setStarting(undefined);
     setStartError(undefined);
     setStarted(undefined);
-  }, [session.key]);
+  }, [thread.key]);
   const startTerminal = async () => {
-    const key = session.key;
+    const key = thread.key;
     setStarting({});
     setStartError(undefined);
     try {
@@ -328,21 +328,21 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
   const terminalsButton = canTerminals && (
     <TerminalsButton shown={terminalsShown} count={terminals.tabs.length} onToggle={toggleTerminals} />
   );
-  const [update, dismissUpdate] = useUpdateNotice(session.key, session.update);
+  const [update, dismissUpdate] = useUpdateNotice(thread.key, thread.update);
   const [statusShown, setStatusShown] = useState(false);
-  useEffect(() => setStatusShown(false), [session.key]);
+  useEffect(() => setStatusShown(false), [thread.key]);
   // Requests waiting in a transcript not on screen: Main's while a subagent's shows, or a subagent's.
   const asking = surfaced ? [] : [
-    ...(subagent && waitsForAnswer(session.transcript) ? [undefined] : []),
-    ...allSubagents(session.transcript)
-      .filter(({ sessionId, transcript }) => sessionId !== subagent?.sessionId && waitsForAnswer(transcript))
-      .map(({ sessionId }) => sessionId),
+    ...(subagent && waitsForAnswer(thread.transcript) ? [undefined] : []),
+    ...allSubagents(thread.transcript)
+      .filter(({ threadId, transcript }) => threadId !== subagent?.threadId && waitsForAnswer(transcript))
+      .map(({ threadId }) => threadId),
   ];
   return (
-    <section ref={view} aria-label={summary?.title || 'New thread'} data-slot='session-view' className='flex min-h-0 min-w-0 flex-1' {...swipe}>
+    <section ref={view} aria-label={summary?.title || 'New thread'} data-slot='thread-view' className='flex min-h-0 min-w-0 flex-1' {...swipe}>
       <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col', wide && 'hidden')}>
         {!wide && (
-          <SessionHeader leading={leading}>
+          <ThreadHeader leading={leading}>
             <div className='min-w-0 flex-1 py-1.5'>
               <h2 className='truncate text-sm font-semibold'>{summary?.title || 'New thread'}</h2>
               {summary && (
@@ -363,16 +363,16 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
             )}
             {terminalsButton}
             {summary && (
-              <SessionMenu session={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)}
+              <ThreadMenu thread={summary} actions={actions} canRename={host?.canRename} onStatus={() => setStatusShown(true)}
                 surface={phone && surface?.status.available ? { enabled: surface.status.enabled, setEnabled: surface.setEnabled } : undefined} />
             )}
-          </SessionHeader>
+          </ThreadHeader>
         )}
         <ThreadStatusSheet
           open={statusShown}
           onOpenChange={setStatusShown}
-          servers={session.mcpServers}
-          agentListsServers={session.transcript.availableCommands.some(({ name }) => name === 'mcp')}
+          servers={thread.mcpServers}
+          agentListsServers={thread.transcript.availableCommands.some(({ name }) => name === 'mcp')}
           side={phone ? 'bottom' : 'right'}
         />
         {host && host.status !== 'connected' && <ConnectionNotice host={host} />}
@@ -385,27 +385,27 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
           <Alert className='m-2 w-auto' data-slot='successor-notice'>
             <AlertTitle>This thread continues in {summary.continuedIn.label}</AlertTitle>
             <AlertAction>
-              <Button size='sm' variant='outline' onClick={() => actions.selectSession(summary.continuedIn?.key)}>Open</Button>
+              <Button size='sm' variant='outline' onClick={() => actions.selectThread(summary.continuedIn?.key)}>Open</Button>
             </AlertAction>
           </Alert>
         )}
         {update && (
           <UpdateNotice
             update={update}
-            updating={session.updating}
-            reopening={session.reopening}
+            updating={thread.updating}
+            reopening={thread.reopening}
             onUpdate={() => void actions.updateAgent()}
-            onMove={() => void actions.reopenSession()}
+            onMove={() => void actions.reopenThread()}
             onDismiss={dismissUpdate}
           />
         )}
-        {asking.map((sessionId) => {
-          const label = sessionId ? sessionLabel(session.transcript, sessionId) : 'Main';
+        {asking.map((threadId) => {
+          const label = threadId ? threadLabel(thread.transcript, threadId) : 'Main';
           return (
-            <Alert key={sessionId ?? 'main'} className='m-2 mb-0 w-auto border-warning/40' data-slot='asking-notice'>
+            <Alert key={threadId ?? 'main'} className='m-2 mb-0 w-auto border-warning/40' data-slot='asking-notice'>
               <AlertTitle>{label} is waiting for you</AlertTitle>
               <AlertAction>
-                <Button size='sm' variant='outline' aria-label={`Show ${label}`} onClick={() => setWatching(sessionId)}>Show</Button>
+                <Button size='sm' variant='outline' aria-label={`Show ${label}`} onClick={() => setWatching(threadId)}>Show</Button>
               </AlertAction>
             </Alert>
           );
@@ -414,14 +414,14 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
           {surfaced && surface
             ? (
               <SurfacedThread
-                key={session.key}
-                draftKey={session.key}
-                model={session.transcript}
+                key={thread.key}
+                draftKey={thread.key}
+                model={thread.transcript}
                 actions={actions}
-                queued={session.queued}
-                queuePaused={session.queuePaused}
-                canSteer={session.canSteer}
-                canAttachImages={session.canAttachImages}
+                queued={thread.queued}
+                queuePaused={thread.queuePaused}
+                canSteer={thread.canSteer}
+                canAttachImages={thread.canAttachImages}
                 aside={<SurfaceScrubber position={surface.position} onScroll={surface.scroll} onFollow={surface.follow} />}
               />
             )
@@ -433,14 +433,14 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
                     <HugeiconsIcon data-icon='inline-start' icon={ArrowLeft01Icon} strokeWidth={2} />
                     Main
                   </Button>
-                  <span className='min-w-0 truncate font-semibold'>{sessionLabel(session.transcript, subagent.sessionId)}</span>
+                  <span className='min-w-0 truncate font-semibold'>{threadLabel(thread.transcript, subagent.threadId)}</span>
                   {subagent.description && <span className='min-w-0 truncate text-muted-foreground'>{subagent.description}</span>}
                   {subagent.state && <Badge variant='outline' className='ml-auto shrink-0'>{subagent.state.replace('_', ' ')}</Badge>}
                 </div>
                 <ChatPane
-                  key={`${session.key}/${subagent.sessionId}`}
+                  key={`${thread.key}/${subagent.threadId}`}
                   model={subagent.transcript}
-                  root={session.transcript}
+                  root={thread.transcript}
                   actions={actions}
                   readOnly
                   onOpenSubagent={openSubagent}
@@ -449,15 +449,15 @@ export function SessionView({ controller, session, leading, onSwipeBack, surface
             )
             : (
               <ChatPane
-                key={session.key}
-                draftKey={session.key}
-                model={session.transcript}
+                key={thread.key}
+                draftKey={thread.key}
+                model={thread.transcript}
                 actions={actions}
-                queued={session.queued}
-                queuePaused={session.queuePaused}
-                canSteer={session.canSteer}
-                canAttachImages={session.canAttachImages}
-                loading={session.loading}
+                queued={thread.queued}
+                queuePaused={thread.queuePaused}
+                canSteer={thread.canSteer}
+                canAttachImages={thread.canAttachImages}
+                loading={thread.loading}
                 onOpenSubagent={openSubagent}
               />
             )}

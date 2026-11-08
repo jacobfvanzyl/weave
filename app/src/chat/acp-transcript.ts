@@ -70,7 +70,7 @@ export type TranscriptToolCall = {
 /**
  * A pending request waiting, or how it stopped: `answered` here, on another client
  * (`elsewhere`), `cancelled` with its turn, `withdrawn` by the agent, or `ended` while this device
- * wasn't following the session.
+ * wasn't following the thread.
  */
 export type RequestStatus = 'pending' | 'answered' | 'elsewhere' | 'cancelled' | 'withdrawn' | 'ended';
 
@@ -147,7 +147,7 @@ export type TranscriptSubagentRow = {
   detail?: string;
 };
 
-/** A message between two sessions: a parent and its subagent. */
+/** A message between two threads, a parent and its subagent: ACP's `session_message`. */
 export type TranscriptSessionMessage = {
   id: string;
   kind: 'session-message';
@@ -188,9 +188,9 @@ type TranscriptEntryInput =
   | Omit<TranscriptSubagentRow, 'id'>
   | Omit<TranscriptSessionMessage, 'id'>;
 
-/** A child session the parent created (ACP's draft Subagent Sessions RFD), with its own transcript. */
+/** A subagent thread its parent's agent started (ACP's draft Subagent Sessions RFD), with its own transcript. */
 export type TranscriptSubagent = {
-  sessionId: string;
+  threadId: string;
   /** Its place among its siblings, from 1, for a label when it has no title. */
   number: number;
   title?: string;
@@ -213,7 +213,7 @@ export type TranscriptTerminal = {
 export const TERMINAL_KEEP = 256 * 1024;
 
 export type AcpTranscript = {
-  sessionId: string;
+  threadId: string;
   entries: TranscriptEntry[];
   title?: string | null;
   updatedAt?: string | null;
@@ -231,61 +231,61 @@ export type AcpTranscript = {
     stopReason?: StopReason;
     error?: string;
   };
-  /** This session's subagents, in the order they appeared. */
+  /** This thread's subagents, in the order they appeared. */
   subagents: TranscriptSubagent[];
-  /** Commands the Host runs for the agent, by terminal id; the root session's, for every subagent too. */
+  /** Commands the Host runs for the agent, by terminal id; the root thread's, for every subagent too. */
   terminals: Record<string, TranscriptTerminal>;
   nextEntrySequence: number;
 };
 
 export type AcpTranscriptEvent =
-  /** An agent's update, for this session or, with `sessionId`, one of its subagents. */
-  | { type: 'session/update'; update: SessionUpdate; sessionId?: string; replayed?: boolean }
+  /** An agent's update, for this thread or, with `threadId`, one of its subagents. */
+  | { type: 'session/update'; update: SessionUpdate; threadId?: string; replayed?: boolean }
   /**
    * A prompt that started a turn, or with `steer` joined the running one. `own` marks this client's,
    * which replaces the optimistic message it showed, unless it waited in the Host's queue
    * (`queued`); `origin` names another client's or device's.
    */
-  | { type: 'prompt'; prompt: ContentBlock[]; sessionId?: string; steer?: boolean; own?: boolean; origin?: string; queued?: boolean; replayed?: boolean }
+  | { type: 'prompt'; prompt: ContentBlock[]; threadId?: string; steer?: boolean; own?: boolean; origin?: string; queued?: boolean; replayed?: boolean }
   /** How a turn ended, as the transcript records it; the turn's state changes with `turn/stopped`. */
-  | { type: 'turn/ended'; sessionId?: string; stopReason?: StopReason; error?: string; interrupted?: boolean }
+  | { type: 'turn/ended'; threadId?: string; stopReason?: StopReason; error?: string; interrupted?: boolean }
   | { type: 'terminal/output'; terminalId: string; data: string }
   | { type: 'terminal/exit'; terminalId: string; status: TerminalExitStatus }
-  /** The session's agent was started again (`session/reopen`); `text` says how it went. */
+  /** The thread's agent was started again (`thread/reopen`); `text` says how it went. */
   | { type: 'agent/reopened'; text: string; failed: boolean; modes?: SessionModeState | null; configOptions?: SessionConfigOption[] }
-  | { type: 'session/closed'; reason: string }
-  /** The session was renamed through the Host; `by` starts the sentence: "You", "The agent", "The TUI". */
-  | { type: 'session/renamed'; title: string; by: string }
+  | { type: 'thread/closed'; reason: string }
+  /** The thread was renamed through the Host; `by` starts the sentence: "You", "The agent", "The TUI". */
+  | { type: 'thread/renamed'; title: string; by: string }
   | {
       type: 'protocol/unknown';
       method: string;
       payload: Record<string, unknown>;
     }
   | {
-      type: 'session/loaded';
+      type: 'thread/loaded';
       modes?: SessionModeState | null;
       configOptions?: SessionConfigOption[] | null;
     }
   /**
-   * A pending request waits, in this session or with `sessionId` one of its subagents. Asking
+   * A pending request waits, in this thread or with `threadId` one of its subagents. Asking
    * again for one already shown makes it wait again, as after an answer that failed.
    */
-  | { type: 'permission/requested'; requestId: string; request: RequestPermissionRequest; sessionId?: string }
-  | { type: 'elicitation/requested'; requestId: string; request: CreateElicitationRequest; sessionId?: string }
-  | { type: 'clientTool/requested'; requestId: string; tool: string; runner: string; sessionId?: string }
+  | { type: 'permission/requested'; requestId: string; request: RequestPermissionRequest; threadId?: string }
+  | { type: 'elicitation/requested'; requestId: string; request: CreateElicitationRequest; threadId?: string }
+  | { type: 'clientTool/requested'; requestId: string; tool: string; runner: string; threadId?: string }
   /** This device answered a pending request. */
   | { type: 'permission/resolved'; requestId: string; optionId?: string }
   | { type: 'elicitation/resolved'; requestId: string; response: CreateElicitationResponse }
   /** A pending request stopped waiting, as the Host says (`pending/resolved`). */
   | { type: 'request/resolved'; requestId: string; status: Exclude<RequestStatus, 'pending'> }
-  /** Only `waiting` still wait: the rest stopped while this device wasn't following the session. */
+  /** Only `waiting` still wait: the rest stopped while this device wasn't following the thread. */
   | { type: 'requests/settled'; waiting: string[] }
   | { type: 'elicitation/completed'; notification: CompleteElicitationNotification }
   | { type: 'turn/started' }
   | { type: 'turn/stopped'; stopReason: StopReason }
   | { type: 'turn/failed'; error: string }
-  | { type: 'history/reset'; sessionId?: string }
-  /** Something the Host tells the session's clients, such as why the agent can't use client tools. */
+  | { type: 'history/reset'; threadId?: string }
+  /** Something the Host tells the thread's clients, such as why the agent can't use client tools. */
   | { type: 'notice'; severity: 'info' | 'error'; title: string; detail?: string };
 
 /** A form elicitation. A mode this schema doesn't know is a plain string, so `mode` alone can't tell. */
@@ -298,8 +298,8 @@ export const formElicitation = (request: CreateElicitationRequest): FormElicitat
 export const urlElicitation = (request: CreateElicitationRequest): UrlElicitation | undefined =>
   request.mode === 'url' && 'elicitationId' in request && 'url' in request ? request as UrlElicitation : undefined;
 
-export const createTranscript = (sessionId: string): AcpTranscript => ({
-  sessionId,
+export const createTranscript = (threadId: string): AcpTranscript => ({
+  threadId,
   entries: [],
   availableCommands: [],
   availableModes: [],
@@ -323,7 +323,7 @@ const canonical = (value: unknown): string => {
 const contentEquals = (left: ContentBlock, right: ContentBlock) => canonical(left) === canonical(right);
 
 const nextEntryId = (model: AcpTranscript) =>
-  `${model.sessionId}:entry:${model.nextEntrySequence}`;
+  `${model.threadId}:entry:${model.nextEntrySequence}`;
 
 const appendProtocolMessage = (
   model: AcpTranscript,
@@ -698,9 +698,9 @@ const patched = (current: string | undefined, value: string | null | undefined) 
  * work become rows in the parent's transcript.
  */
 const applySubagentUpdate = (model: AcpTranscript, update: SubagentUpdate): AcpTranscript => {
-  const index = model.subagents.findIndex(({ sessionId }) => sessionId === update.sessionId);
+  const index = model.subagents.findIndex(({ threadId }) => threadId === update.sessionId);
   const current: TranscriptSubagent = index === -1
-    ? { sessionId: update.sessionId, number: model.subagents.length + 1, transcript: createTranscript(update.sessionId) }
+    ? { threadId: update.sessionId, number: model.subagents.length + 1, transcript: createTranscript(update.sessionId) }
     : model.subagents[index];
   const subagent: TranscriptSubagent = {
     ...current,
@@ -715,13 +715,13 @@ const applySubagentUpdate = (model: AcpTranscript, update: SubagentUpdate): AcpT
   if (index === -1) {
     next = appendEntry(next, {
       kind: 'subagent',
-      subagentId: subagent.sessionId,
+      subagentId: subagent.threadId,
       event: 'spawned',
       ...(subagent.description ? { detail: subagent.description } : {}),
     });
   }
   const row = update.state ? stateRow(current.state, update.state, lastReply(subagent.transcript)) : undefined;
-  if (row) next = appendEntry(next, { kind: 'subagent', subagentId: subagent.sessionId, ...row });
+  if (row) next = appendEntry(next, { kind: 'subagent', subagentId: subagent.threadId, ...row });
   return next;
 };
 
@@ -750,43 +750,43 @@ const upsertSessionMessage = (
   });
 };
 
-/** Applies `reduce` to the transcript of `sessionId`: this one, or one of its subagents' at any depth. */
-const inSession = (
+/** Applies `reduce` to the transcript of `threadId`: this one, or one of its subagents' at any depth. */
+const inThread = (
   model: AcpTranscript,
-  sessionId: string | undefined,
+  threadId: string | undefined,
   reduce: (transcript: AcpTranscript) => AcpTranscript,
 ): AcpTranscript => {
-  if (sessionId === undefined || sessionId === model.sessionId) return reduce(model);
+  if (threadId === undefined || threadId === model.threadId) return reduce(model);
   for (let index = 0; index < model.subagents.length; index += 1) {
     const subagent = model.subagents[index];
-    if (!containsSession(subagent.transcript, sessionId)) continue;
-    const transcript = inSession(subagent.transcript, sessionId, reduce);
+    if (!containsThread(subagent.transcript, threadId)) continue;
+    const transcript = inThread(subagent.transcript, threadId, reduce);
     const subagents = [...model.subagents];
     subagents[index] = { ...subagent, transcript };
     return { ...model, subagents };
   }
-  // A session this one doesn't know: nothing shows it.
+  // A thread this one doesn't know: nothing shows it.
   return model;
 };
 
-const containsSession = (model: AcpTranscript, sessionId: string): boolean =>
-  model.sessionId === sessionId || model.subagents.some(({ transcript }) => containsSession(transcript, sessionId));
+const containsThread = (model: AcpTranscript, threadId: string): boolean =>
+  model.threadId === threadId || model.subagents.some(({ transcript }) => containsThread(transcript, threadId));
 
-/** The subagent with `sessionId`, at any depth. */
-export const findSubagent = (model: AcpTranscript, sessionId: string): TranscriptSubagent | undefined => {
+/** The subagent with `threadId`, at any depth. */
+export const findSubagent = (model: AcpTranscript, threadId: string): TranscriptSubagent | undefined => {
   for (const subagent of model.subagents) {
-    if (subagent.sessionId === sessionId) return subagent;
-    const nested = findSubagent(subagent.transcript, sessionId);
+    if (subagent.threadId === threadId) return subagent;
+    const nested = findSubagent(subagent.transcript, threadId);
     if (nested) return nested;
   }
   return undefined;
 };
 
-/** What a session is called in a transcript: "Main" for the root, a subagent's title, or "Subagent N". */
-export const sessionLabel = (root: AcpTranscript, sessionId: string | null | undefined): string => {
-  if (!sessionId) return 'another agent';
-  if (sessionId === root.sessionId) return 'Main';
-  const subagent = findSubagent(root, sessionId);
+/** What a thread is called in a transcript: "Main" for the root, a subagent's title, or "Subagent N". */
+export const threadLabel = (root: AcpTranscript, threadId: string | null | undefined): string => {
+  if (!threadId) return 'another agent';
+  if (threadId === root.threadId) return 'Main';
+  const subagent = findSubagent(root, threadId);
   return subagent ? subagent.title ?? `Subagent ${subagent.number}` : 'another agent';
 };
 
@@ -895,7 +895,7 @@ const withStatus = (entry: TranscriptEntry, status: RequestStatus): TranscriptEn
   return entry;
 };
 
-/** Changes the entry of pending request `requestId`, in this session or whichever subagent's it is. */
+/** Changes the entry of pending request `requestId`, in this thread or whichever subagent's it is. */
 const updateRequest = (
   model: AcpTranscript,
   requestId: string,
@@ -917,7 +917,7 @@ const updateRequest = (
   return model;
 };
 
-/** Every entry of a request still pending, in this session and its subagents, changed. */
+/** Every entry of a request still pending, in this thread and its subagents, changed. */
 const updatePending = (
   model: AcpTranscript,
   change: (entry: TranscriptEntry, requestId: string) => TranscriptEntry,
@@ -1005,7 +1005,7 @@ const completeElicitation = (
   return replaceEntry(model, index, { ...current, status: 'completed' });
 };
 
-/** A session's subagents, theirs, and so on. */
+/** A thread's subagents, theirs, and so on. */
 export const allSubagents = (model: AcpTranscript): TranscriptSubagent[] =>
   model.subagents.flatMap((subagent) => [subagent, ...allSubagents(subagent.transcript)]);
 
@@ -1064,7 +1064,7 @@ const stampTranscript = (before: AcpTranscript | undefined, after: AcpTranscript
   const subagents = after.subagents === before?.subagents
     ? after.subagents
     : after.subagents.map((subagent) => {
-        const earlier = before?.subagents.find(({ sessionId }) => sessionId === subagent.sessionId);
+        const earlier = before?.subagents.find(({ threadId }) => threadId === subagent.threadId);
         return earlier?.transcript === subagent.transcript ? subagent : { ...subagent, transcript: stampTranscript(earlier?.transcript, subagent.transcript, at) };
       });
   return { ...after, entries: stampEntries(before?.entries ?? [], after.entries, at), subagents };
@@ -1080,11 +1080,11 @@ export const reduceAcpEvent = (
 ): AcpTranscript => {
   switch (event.type) {
     case 'session/update':
-      return inSession(model, event.sessionId, (transcript) => reduceSessionUpdate(transcript, event.update, event.replayed));
+      return inThread(model, event.threadId, (transcript) => reduceSessionUpdate(transcript, event.update, event.replayed));
     case 'prompt':
-      return inSession(model, event.sessionId, (transcript) => appendPrompt(transcript, event));
+      return inThread(model, event.threadId, (transcript) => appendPrompt(transcript, event));
     case 'turn/ended':
-      return inSession(model, event.sessionId, (transcript) => recordTurnEnd(transcript, event));
+      return inThread(model, event.threadId, (transcript) => recordTurnEnd(transcript, event));
     case 'terminal/output':
       return appendTerminalOutput(model, event.terminalId, event.data);
     case 'terminal/exit': {
@@ -1097,12 +1097,12 @@ export const reduceAcpEvent = (
         ...(event.modes ? { currentModeId: event.modes.currentModeId, availableModes: event.modes.availableModes } : {}),
         ...(event.configOptions ? { configOptions: event.configOptions } : {}),
       };
-    case 'session/renamed':
+    case 'thread/renamed':
       return {
         ...appendEntry(model, { kind: 'diagnostic', severity: 'info', title: `${event.by} renamed this thread to “${event.title}”` }),
         title: event.title,
       };
-    case 'session/closed':
+    case 'thread/closed':
       return {
         ...settleOptimisticPrompts(appendEntry(model, { kind: 'diagnostic', severity: 'info', title: 'The thread closed', detail: event.reason })),
         turn: { status: 'idle' },
@@ -1124,7 +1124,7 @@ export const reduceAcpEvent = (
         detail: event.method,
         raw: event.payload,
       });
-    case 'session/loaded':
+    case 'thread/loaded':
       return {
         ...model,
         ...(event.modes
@@ -1138,7 +1138,7 @@ export const reduceAcpEvent = (
           : {}),
       };
     case 'history/reset':
-      return createTranscript(event.sessionId ?? model.sessionId);
+      return createTranscript(event.threadId ?? model.threadId);
     case 'turn/started':
       return { ...model, turn: { status: 'running' } };
     case 'turn/stopped':
@@ -1152,11 +1152,11 @@ export const reduceAcpEvent = (
         turn: { status: 'failed', error: event.error },
       };
     case 'permission/requested':
-      return inSession(model, event.sessionId, (transcript) => requestPermission(transcript, event.requestId, event.request));
+      return inThread(model, event.threadId, (transcript) => requestPermission(transcript, event.requestId, event.request));
     case 'elicitation/requested':
-      return inSession(model, event.sessionId, (transcript) => requestElicitation(transcript, event.requestId, event.request));
+      return inThread(model, event.threadId, (transcript) => requestElicitation(transcript, event.requestId, event.request));
     case 'clientTool/requested':
-      return inSession(model, event.sessionId, (transcript) => requestClientTool(transcript, event));
+      return inThread(model, event.threadId, (transcript) => requestClientTool(transcript, event));
     case 'permission/resolved':
       return answerPermission(model, event.requestId, event.optionId);
     case 'elicitation/resolved':

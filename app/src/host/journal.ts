@@ -1,10 +1,10 @@
 import type { AcpTranscriptEvent } from '@/chat/acp-transcript';
-import type { OpenedSession } from './connection';
-import type { AgentRelease, JournalPosition, SessionEventNotification, TurnOrigin } from './protocol';
+import type { OpenedThread } from './connection';
+import type { AgentRelease, JournalPosition, ThreadEventNotification, TurnOrigin } from './protocol';
 import { HOST_PROTOCOL } from './protocol';
 
 /**
- * Where this client is in one attached session's journal. A client attaches after the last
+ * Where this client is in one attached thread's journal. A client attaches after the last
  * position it handled, so it gets only what it missed; events up to the journal's head when it
  * attached are history, replayed, and the rest live.
  */
@@ -22,9 +22,9 @@ export class JournalFollower {
    * An attach's answer, ahead of its replay. Returns whether the transcript starts over: the
    * Host replays everything when the client named another journal, or none.
    */
-  opened(session: OpenedSession): { reset: boolean } {
-    const { journal } = session.state;
-    const reset = session.replay?.reset ?? this.#journal !== journal.id;
+  opened(thread: OpenedThread): { reset: boolean } {
+    const { journal } = thread.state;
+    const reset = thread.replay?.reset ?? this.#journal !== journal.id;
     if (reset) this.#seq = 0;
     this.#journal = journal.id;
     this.#historyUntil = journal.head;
@@ -32,14 +32,14 @@ export class JournalFollower {
   }
 
   /** Whether to handle an event: false for one already handled, as after a reconnect. */
-  accept(notification: SessionEventNotification): boolean {
+  accept(notification: ThreadEventNotification): boolean {
     if (this.#journal === undefined || notification.seq <= this.#seq) return false;
     this.#seq = notification.seq;
     return true;
   }
 
   /** Whether an event was written before this client attached. */
-  isHistory(notification: SessionEventNotification): boolean {
+  isHistory(notification: ThreadEventNotification): boolean {
     return notification.seq <= this.#historyUntil;
   }
 
@@ -61,14 +61,14 @@ const clientNames: Record<string, string> = { 'weave-tui': 'the TUI', 'weave-app
 
 /**
  * Where another client's prompt came from: its device, its client, a headless run, what started
- * a service's turn, or another session: one whose agent prompted this one, or one the Host
+ * a service's turn, or another thread: one whose agent prompted this one, or one the Host
  * reports on, on this Host or another of the person's Hosts.
  */
 export function originLabel(origin: TurnOrigin): string {
   if ('run' in origin) return 'a headless run';
   if ('service' in origin) return `${origin.service.label}, via ${origin.service.name}`;
-  if ('session' in origin) {
-    const { host, hostName } = origin.session;
+  if ('thread' in origin) {
+    const { host, hostName } = origin.thread;
     if (hostName) return `a thread on ${hostName}`;
     return host ? 'a thread on another Host' : 'another thread';
   }
@@ -83,7 +83,7 @@ const shortName = (name: string) => {
   return slash === -1 ? name : name.slice(slash + 1);
 };
 
-/** What the transcript says when the session's agent was started again, as the TUI says it. */
+/** What the transcript says when the thread's agent was started again, as the TUI says it. */
 export function reopenedText(release?: AgentRelease | null, previous?: AgentRelease | null, failed?: string | null): string {
   if (failed) {
     return release ? `${failed}; it runs ${shortName(release.name)} ${release.version} again` : `${failed}; it runs the agent it ran again`;
@@ -99,8 +99,8 @@ export function reopenedText(release?: AgentRelease | null, previous?: AgentRele
  * A journaled event as the transcript's events. Replayed history shows the same as live events
  * but changes no turn state; kinds this client doesn't know are skipped.
  */
-export function transcriptEvents(notification: SessionEventNotification, reading: JournalReading): AcpTranscriptEvent[] {
-  const root = notification.sessionId;
+export function transcriptEvents(notification: ThreadEventNotification, reading: JournalReading): AcpTranscriptEvent[] {
+  const root = notification.threadId;
   const { event } = notification;
   const live = !reading.history;
   switch (event.kind) {
@@ -108,7 +108,7 @@ export function transcriptEvents(notification: SessionEventNotification, reading
       return [{
         type: 'session/update',
         update: event.notification.update,
-        sessionId: event.notification.sessionId,
+        threadId: event.notification.sessionId,
         ...(live ? {} : { replayed: true }),
       }];
     case 'turnStarted':
@@ -117,14 +117,14 @@ export function transcriptEvents(notification: SessionEventNotification, reading
       const prompt: AcpTranscriptEvent = {
         type: 'prompt',
         prompt: event.prompt,
-        sessionId: event.sessionId,
+        threadId: event.threadId,
         ...(event.kind === 'turnSteered' ? { steer: true } : {}),
         // One that waited in the Host's queue was never shown here before.
         ...(event.kind === 'turnStarted' && event.queuedId ? { queued: true } : {}),
         ...(own ? { own } : { origin: originLabel(event.origin) }),
         ...(live ? {} : { replayed: true }),
       };
-      return event.kind === 'turnStarted' && event.sessionId === root && live ? [prompt, { type: 'turn/started' }] : [prompt];
+      return event.kind === 'turnStarted' && event.threadId === root && live ? [prompt, { type: 'turn/started' }] : [prompt];
     }
     case 'turnEnded': {
       const error = event.error ? event.error.message : event.response ? undefined : 'The turn ended unexplained';
@@ -133,12 +133,12 @@ export function transcriptEvents(notification: SessionEventNotification, reading
       const interrupted = event.error?.code === HOST_PROTOCOL.errors.interrupted;
       const ended: AcpTranscriptEvent = {
         type: 'turn/ended',
-        sessionId: event.sessionId,
+        threadId: event.threadId,
         ...(error === undefined ? {} : { error }),
         ...(stopReason ? { stopReason } : {}),
         ...(interrupted ? { interrupted } : {}),
       };
-      if (event.sessionId !== root || !live) return [ended];
+      if (event.threadId !== root || !live) return [ended];
       return [ended, error === undefined ? { type: 'turn/stopped', stopReason: stopReason ?? 'end_turn' } : { type: 'turn/failed', error }];
     }
     case 'terminalOutput':
@@ -156,12 +156,12 @@ export function transcriptEvents(notification: SessionEventNotification, reading
     case 'notice':
       return [{ type: 'notice', severity: 'info', title: event.text }];
     case 'closed':
-      return [{ type: 'session/closed', reason: event.reason }];
+      return [{ type: 'thread/closed', reason: event.reason }];
     case 'continuedIn':
       return [{ type: 'notice', severity: 'info', title: 'This thread continues in another' }];
     case 'renamed': {
       const by = !event.by ? 'The agent' : reading.own(event.by) ? 'You' : originLabel(event.by);
-      return [{ type: 'session/renamed', title: event.title, by: by.charAt(0).toUpperCase() + by.slice(1) }];
+      return [{ type: 'thread/renamed', title: event.title, by: by.charAt(0).toUpperCase() + by.slice(1) }];
     }
     default:
       return [];

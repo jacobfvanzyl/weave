@@ -2,13 +2,13 @@
 /// <reference types="bun" />
 // happy-dom's WebSocket fails the Host's upgrade; this file uses Bun's own, as the app uses WebKit's.
 // The TypeScript client against a real dev Host (`testing/dev-host.ts`): pairing, device
-// authentication, listing sessions and attaching after a journal position. A local client on
-// the Host's Unix socket makes the pairing offers and the sessions, as `weave pair` and the TUI
+// authentication, listing threads and attaching after a journal position. A local client on
+// the Host's Unix socket makes the pairing offers and the threads, as `weave pair` and the TUI
 // would. Skipped unless the debug `weave` and fake agent are built.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ConnectError, HostConnection, type Credentials, type HostEvent, websocketConnector } from './connection';
 import { webCryptoDeviceKey, type DeviceKey } from './device-key';
-import { HOST_PROTOCOL, type SessionEventNotification } from './protocol';
+import { HOST_PROTOCOL, type ThreadEventNotification } from './protocol';
 import { devHostAvailable, startDevHost, unixConnector, type DevHost } from './testing/dev-host';
 
 const client = { name: 'weave-app-test', version: '0.0.0' };
@@ -35,9 +35,9 @@ const waitFor = async <T>(find: () => T | undefined, what: string, ms = 15_000):
   }
 };
 
-const sessionEvents = (events: HostEvent[], sessionId: string): SessionEventNotification[] =>
+const threadEvents = (events: HostEvent[], threadId: string): ThreadEventNotification[] =>
   events.flatMap((event) =>
-    event.type === 'notification' && event.method === 'session/event' && event.params.sessionId === sessionId ? [event.params] : []);
+    event.type === 'notification' && event.method === 'thread/event' && event.params.threadId === threadId ? [event.params] : []);
 
 describe.skipIf(!devHostAvailable())('a remote client of a dev Host', () => {
   let host: DevHost;
@@ -46,7 +46,7 @@ describe.skipIf(!devHostAvailable())('a remote client of a dev Host', () => {
   let key: DeviceKey;
   let deviceId: string;
   let hostId: string;
-  let sessionId: string;
+  let threadId: string;
 
   const offer = async () => (await local.request('devices/offer', {})).code;
 
@@ -90,59 +90,59 @@ describe.skipIf(!devHostAvailable())('a remote client of a dev Host', () => {
     await expect(otherHost).rejects.toMatchObject({ kind: 'wrongHost' });
   });
 
-  it('lists the sessions a local client started', async () => {
+  it('lists the threads a local client started', async () => {
     local.open({ create: { agentId: 'fake', cwd: host.cwd } }, 1);
-    const opened = await waitFor(() => localEvents.find((event) => event.type === 'opened' && event.tag === 1), 'the session');
+    const opened = await waitFor(() => localEvents.find((event) => event.type === 'opened' && event.tag === 1), 'the thread');
     if (opened.type !== 'opened') throw new Error('unreachable');
-    sessionId = opened.session.state.sessionId;
-    await local.request('turn/start', { sessionId, prompt: [{ type: 'text', text: 'hello from the test' }] });
-    await waitFor(() => sessionEvents(localEvents, sessionId).find(({ event }) => event.kind === 'turnEnded'), 'the turn to end');
+    threadId = opened.thread.state.threadId;
+    await local.request('turn/start', { threadId, prompt: [{ type: 'text', text: 'hello from the test' }] });
+    await waitFor(() => threadEvents(localEvents, threadId).find(({ event }) => event.kind === 'turnEnded'), 'the turn to end');
 
     const { connection } = await connect({ method: 'device', deviceId, key, hostId }, 'remote', host);
-    const { sessions } = await connection.request('sessions/list', {});
-    expect(sessions.map(({ info }) => info.sessionId)).toContain(sessionId);
-    expect(sessions.find(({ info }) => info.sessionId === sessionId)).toMatchObject({ agentId: 'fake', state: 'open' });
+    const { threads } = await connection.request('threads/list', {});
+    expect(threads.map(({ info }) => info.sessionId)).toContain(threadId);
+    expect(threads.find(({ info }) => info.sessionId === threadId)).toMatchObject({ agentId: 'fake', state: 'open' });
     connection.close();
   });
 
   it('attaches after a position and gets only what follows; from another journal, everything with reset', async () => {
     const { connection, events } = await connect({ method: 'device', deviceId, key, hostId }, 'remote', host);
-    connection.open({ attach: { sessionId } }, 1);
+    connection.open({ attach: { threadId } }, 1);
     const first = await waitFor(() => events.find((event) => event.type === 'opened' && event.tag === 1), 'the attach');
     if (first.type !== 'opened') throw new Error(`attach failed: ${JSON.stringify(first)}`);
-    const { journal } = first.session.state;
-    expect(first.session.replay).toEqual({ from: 1, reset: true });
+    const { journal } = first.thread.state;
+    expect(first.thread.replay).toEqual({ from: 1, reset: true });
     const all = await waitFor(() => {
-      const replayed = sessionEvents(events, sessionId);
+      const replayed = threadEvents(events, threadId);
       return replayed.at(-1)?.seq === journal.head ? replayed : undefined;
     }, 'the whole journal');
     expect(all.map(({ seq }) => seq)).toEqual(Array.from({ length: journal.head }, (_, index) => index + 1));
     expect(all.some(({ event }) => event.kind === 'turnStarted')).toBe(true);
-    await connection.request('session/detach', { sessionId });
+    await connection.request('thread/detach', { threadId });
     connection.close();
 
     const after = 2;
     const second = await connect({ method: 'device', deviceId, key, hostId }, 'remote', host);
-    second.connection.open({ attach: { sessionId, after: { journal: journal.id, seq: after } } }, 2);
+    second.connection.open({ attach: { threadId, after: { journal: journal.id, seq: after } } }, 2);
     const reopened = await waitFor(() => second.events.find((event) => event.type === 'opened'), 'the second attach');
     if (reopened.type !== 'opened') throw new Error('attach failed');
-    expect(reopened.session.replay).toEqual({ from: after + 1, reset: false });
+    expect(reopened.thread.replay).toEqual({ from: after + 1, reset: false });
     const rest = await waitFor(() => {
-      const replayed = sessionEvents(second.events, sessionId);
+      const replayed = threadEvents(second.events, threadId);
       return replayed.at(-1)?.seq === journal.head ? replayed : undefined;
     }, 'the rest of the journal');
     expect(rest.map(({ seq }) => seq)).toEqual(Array.from({ length: journal.head - after }, (_, index) => after + 1 + index));
     // The answer came ahead of the replay that follows it.
     const order = second.events.filter((event) => event.type === 'opened' || event.type === 'notification');
     expect(order[0]?.type).toBe('opened');
-    await second.connection.request('session/detach', { sessionId });
+    await second.connection.request('thread/detach', { threadId });
     second.connection.close();
 
     const third = await connect({ method: 'device', deviceId, key, hostId }, 'remote', host);
-    third.connection.open({ attach: { sessionId, after: { journal: 'another-journal', seq: 1 } } }, 3);
+    third.connection.open({ attach: { threadId, after: { journal: 'another-journal', seq: 1 } } }, 3);
     const reset = await waitFor(() => third.events.find((event) => event.type === 'opened'), 'the third attach');
     if (reset.type !== 'opened') throw new Error('attach failed');
-    expect(reset.session.replay).toEqual({ from: 1, reset: true });
+    expect(reset.thread.replay).toEqual({ from: 1, reset: true });
     third.connection.close();
   });
 

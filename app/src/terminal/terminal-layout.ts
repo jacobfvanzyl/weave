@@ -15,7 +15,7 @@ export type ThreadTerminals = {
 };
 
 export type TerminalLayout = {
-  /** By session key, with when each was last changed, so old threads' layouts are let go. */
+  /** By thread key, with when each was last changed, so old threads' layouts are let go. */
   threads: Record<string, ThreadTerminals & { usedAt: number }>;
   /** Points, for every terminal on this device. */
   fontSize: number;
@@ -45,9 +45,9 @@ export function terminalTabs(terminals: TerminalSummary[]): TerminalSummary[] {
  * The tab in front: the one last chosen here while its terminal runs, else the newest the thread
  * opened, else the first.
  */
-export function activeTab(thread: ThreadTerminals, tabs: TerminalSummary[], sessionId: string): TerminalSummary | undefined {
+export function activeTab(thread: ThreadTerminals, tabs: TerminalSummary[], threadId: string): TerminalSummary | undefined {
   return tabs.find(({ id }) => id === thread.active)
-    ?? tabs.filter(({ openedFrom }) => openedFrom === sessionId).at(-1)
+    ?? tabs.filter(({ openedFrom }) => openedFrom === threadId).at(-1)
     ?? tabs[0];
 }
 

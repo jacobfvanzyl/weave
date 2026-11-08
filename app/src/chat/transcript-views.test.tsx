@@ -43,7 +43,7 @@ describe('the transcript', () => {
     const model = transcript(
       { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:robie', title: 'Robie', description: 'Counts files', state: { state: 'running' } } },
       { type: 'session/update', update: { sessionUpdate: 'session_message', messageId: 'm1', senderSessionId: 'main', recipientSessionId: 'main:robie', content: [{ type: 'text', text: 'Count them.' }] } },
-      { type: 'session/update', sessionId: 'main:robie', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'There are 12.' } } },
+      { type: 'session/update', threadId: 'main:robie', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'There are 12.' } } },
       { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:robie', state: { state: 'idle', stopReason: 'end_turn' } } },
     );
     render(<ChatPane model={model} actions={actions()} onOpenSubagent={openSubagent} />);
@@ -61,7 +61,7 @@ describe('the transcript', () => {
   it('shows a subagent\'s messages from its parent in its own transcript', () => {
     const model = transcript(
       { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:ada', title: 'Ada' } },
-      { type: 'session/update', sessionId: 'main:ada', update: { sessionUpdate: 'session_message', messageId: 'task', senderSessionId: 'main', recipientSessionId: 'main:ada', content: [{ type: 'text', text: 'Review it.' }] } },
+      { type: 'session/update', threadId: 'main:ada', update: { sessionUpdate: 'session_message', messageId: 'task', senderSessionId: 'main', recipientSessionId: 'main:ada', content: [{ type: 'text', text: 'Review it.' }] } },
     );
     render(<ChatPane model={model.subagents[0].transcript} root={model} readOnly actions={actions()} />);
     expect(screen.getByText('From')).toBeInTheDocument();

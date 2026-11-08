@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import { ArrowLeft01Icon, SidebarLeftIcon } from '@hugeicons/core-free-icons';
 import type { AppController } from '@/app/app-controller';
-import { waitingCount } from '@/app/session-list';
+import { waitingCount } from '@/app/thread-list';
 import { usePhoneLayout } from '@/app/use-phone-layout';
 import { HostsDialog } from '@/components/hosts-dialog';
-import { SessionList } from '@/components/session-list';
-import { SessionHeader, SessionView } from '@/components/session-view';
 import { ResizableSidebarProvider, SidebarResizeHandle } from '@/components/sidebar-resize';
+import { ThreadList } from '@/components/thread-list';
+import { ThreadHeader, ThreadView } from '@/components/thread-view';
 import { WaitingBanner } from '@/components/waiting-banner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,25 +21,25 @@ function WaitingBadge({ count }: { count: number }) {
   return <Badge className='bg-warning text-background' aria-label={`${count} waiting`}>{count}</Badge>;
 }
 
-/** iPhone: Back to the list, with how many other sessions wait on the person. */
+/** iPhone: Back to the list, with how many other threads wait on the person. */
 function BackButton({ controller }: { controller: AppController }) {
   const { model, actions } = controller;
-  const count = waitingCount(model.sessions, model.selectedKey);
+  const count = waitingCount(model.threads, model.selectedKey);
   return (
     <Button variant='ghost' size='lg' aria-label={count ? `Threads, ${count} waiting` : 'Threads'} className='min-h-11 shrink-0 px-1.5'
-      onClick={() => actions.selectSession(undefined)}>
+      onClick={() => actions.selectThread(undefined)}>
       <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
       <WaitingBadge count={count} />
     </Button>
   );
 }
 
-/** iPad and wider: shows and hides the session list, with a count while it is hidden. */
+/** iPad and wider: shows and hides the thread list, with a count while it is hidden. */
 function SidebarToggle({ controller }: { controller: AppController }) {
   const { model } = controller;
   const { isMobile, openMobile, state, toggleSidebar } = useSidebar();
   const hidden = isMobile ? !openMobile : state === 'collapsed';
-  const count = hidden ? waitingCount(model.sessions, model.selectedKey) : 0;
+  const count = hidden ? waitingCount(model.threads, model.selectedKey) : 0;
   return (
     <Button variant='ghost' size='lg' aria-label={hidden ? (count ? `Show threads, ${count} waiting` : 'Show threads') : 'Hide threads'}
       aria-expanded={!hidden} className='min-h-11 shrink-0 px-1.5 aria-expanded:bg-transparent' onClick={toggleSidebar}>
@@ -57,13 +57,13 @@ function PhoneShell({ controller, onOpenHosts, surfaceLink }: {
   const { model, actions } = controller;
   // A Surface (WVE-183) shows the open thread, or the one last open while the list is here.
   const surface = useSurface(model, surfaceLink);
-  const surfaced = Boolean(surface?.status.connected && model.session);
+  const surfaced = Boolean(surface?.status.connected && model.thread);
   // With the thread on the Surface, the iPhone may turn for a bigger keyboard; elsewhere it stays upright.
   useEffect(() => surfaceLink?.setLandscape(surfaced), [surfaceLink, surfaced]);
-  if (!model.session) return <SessionList controller={controller} onOpenHosts={onOpenHosts} />;
+  if (!model.thread) return <ThreadList controller={controller} onOpenHosts={onOpenHosts} />;
   return (
-    <SessionView controller={controller} session={model.session} leading={<BackButton controller={controller} />}
-      onSwipeBack={() => actions.selectSession(undefined)} surface={surface} />
+    <ThreadView controller={controller} thread={model.thread} leading={<BackButton controller={controller} />}
+      onSwipeBack={() => actions.selectThread(undefined)} surface={surface} />
   );
 }
 
@@ -73,15 +73,15 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
   return (
     <>
       <Sidebar collapsible='offcanvas'>
-        <SessionList controller={controller} onOpen={() => setOpenMobile(false)} onOpenHosts={onOpenHosts} />
+        <ThreadList controller={controller} onOpen={() => setOpenMobile(false)} onOpenHosts={onOpenHosts} />
         <SidebarResizeHandle />
       </Sidebar>
       <SidebarInset className='min-h-0 min-w-0 overflow-hidden'>
-        {model.session
-          ? <SessionView controller={controller} session={model.session} leading={<SidebarToggle controller={controller} />} />
+        {model.thread
+          ? <ThreadView controller={controller} thread={model.thread} leading={<SidebarToggle controller={controller} />} />
           : (
             <>
-              <SessionHeader leading={<SidebarToggle controller={controller} />} />
+              <ThreadHeader leading={<SidebarToggle controller={controller} />} />
               <Empty className='flex-1'>
                 <EmptyHeader>
                   <EmptyTitle>No thread open</EmptyTitle>
@@ -96,8 +96,8 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
 }
 
 /**
- * The app's layout. An iPhone stacks the list and a session; an iPad, or anything wider, shows the
- * list as a sidebar beside one session, as wide as its edge is dragged. Which follows the device,
+ * The app's layout. An iPhone stacks the list and a thread; an iPad, or anything wider, shows the
+ * list as a sidebar beside one thread, as wide as its edge is dragged. Which follows the device,
  * not the window's width.
  */
 export function AppShell({ controller, pairingOffer, surfaceLink }: {

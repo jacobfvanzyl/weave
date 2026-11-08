@@ -1,6 +1,6 @@
 const STORAGE_KEY = 'weave.sidebarWidth';
 
-/** The session list's width beside a session, in CSS pixels: shadcn's 16rem until it's dragged. */
+/** The thread list's width beside a thread, in CSS pixels: shadcn's 16rem until it's dragged. */
 export const SIDEBAR_WIDTH = { initial: 256, min: 224, max: 480 } as const;
 
 /** The widest the list goes in a window `windowWidth` wide: half of it, up to `SIDEBAR_WIDTH.max`. */

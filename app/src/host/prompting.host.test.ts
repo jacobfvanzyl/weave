@@ -1,12 +1,12 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// Prompting from the app against a real dev Host (`testing/dev-host.ts`), WVE-102: new sessions,
+// Prompting from the app against a real dev Host (`testing/dev-host.ts`), WVE-102: new threads,
 // prompts, steers, queued prompts, cancelling, modes and an agent that needs signing in. Skipped
 // unless the debug `weave` and fake agent are built.
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AppModel, OpenSession } from '@/app/app-controller';
+import type { AppModel, OpenThread } from '@/app/app-controller';
 import { blocksText, type TranscriptEntry } from '@/chat/acp-transcript';
 import { type Connector, HostConnection, websocketConnector } from './connection';
 import { type DeviceKey, webCryptoDeviceKey } from './device-key';
@@ -57,17 +57,17 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
   };
 
   const model = (): AppModel => store.snapshot();
-  const session = (): OpenSession => {
-    const open = model().session;
-    if (!open) throw new Error('No session is open.');
+  const thread = (): OpenThread => {
+    const open = model().thread;
+    if (!open) throw new Error('No thread is open.');
     return open;
   };
-  const lines = () => session().transcript.entries.map(line);
-  const until = (what: string, done: (lines: string[], open: OpenSession) => boolean, ms?: number) =>
-    waitFor(() => model().session && done(lines(), session()) ? lines() : undefined, what, ms);
+  const lines = () => thread().transcript.entries.map(line);
+  const until = (what: string, done: (lines: string[], open: OpenThread) => boolean, ms?: number) =>
+    waitFor(() => model().thread && done(lines(), thread()) ? lines() : undefined, what, ms);
   const create = async (agentId: string) => {
-    await store.actions.createSession({ hostId, cwd: host.cwd, agentId });
-    return session();
+    await store.actions.createThread({ hostId, cwd: host.cwd, agentId });
+    return thread();
   };
   const running = () => until('the turn to run, and the agent to answer', (current, open) =>
     open.transcript.turn.status === 'running' && current.some((entry) => entry.startsWith('assistant: Chunk')));
@@ -107,10 +107,10 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     await host?.stop();
   });
 
-  it('starts a session and prompts it', async () => {
+  it('starts a thread and prompts it', async () => {
     const open = await create('fake');
     expect(open.transcript.entries).toEqual([]);
-    expect(model().sessions.find(({ key }) => key === open.key)).toMatchObject({ agentId: 'fake', cwd: host.cwd, state: 'open' });
+    expect(model().threads.find(({ key }) => key === open.key)).toMatchObject({ agentId: 'fake', cwd: host.cwd, state: 'open' });
     expect(open.canAttachImages).toBe(true);
     await store.actions.send('hello there');
     expect(await until('the answer', (current) => current.includes('assistant: You said: hello there'))).toEqual([
@@ -118,7 +118,7 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
       'assistant: You said: hello there',
     ]);
     // Its own prompt carries no origin: it came from here.
-    expect(session().transcript.entries[0]).not.toHaveProperty('origin');
+    expect(thread().transcript.entries[0]).not.toHaveProperty('origin');
   });
 
   it('sends photos with a prompt', async () => {
@@ -127,12 +127,12 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     // Shown once: the journaled prompt replaced the one shown while sending.
     expect(shown.slice(-2)).toEqual(['user: What is this?', 'assistant: You said: What is this? Attachments: image image/png.']);
     expect(shown.filter((entry) => entry === 'user: What is this?')).toHaveLength(1);
-    const prompt = session().transcript.entries.at(-2);
+    const prompt = thread().transcript.entries.at(-2);
     expect(prompt?.kind === 'message' && prompt.chunks[0].content.map(({ type }) => type)).toEqual(['text', 'image']);
   });
 
   it('steers a running turn', async () => {
-    expect(session().canSteer).toBe(true);
+    expect(thread().canSteer).toBe(true);
     await store.actions.send('/slow 30');
     await running();
     await store.actions.send('Mention the steer.');
@@ -142,17 +142,17 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
   });
 
   it('starts a turn with a steer that arrives after the turn ended', async () => {
-    const sessionId = session().key.slice(hostId.length + 1);
+    const threadId = thread().key.slice(hostId.length + 1);
     await store.actions.send('/slow 3');
     await running();
     // The app hears nothing more while the turn ends on the Host, so it still steers.
     gate.held = true;
     for (;;) {
-      const { sessions } = await local.request('sessions/list', {});
-      if (sessions.find(({ info }) => info.sessionId === sessionId)?.activity === 'idle') break;
+      const { threads } = await local.request('threads/list', {});
+      if (threads.find(({ info }) => info.sessionId === threadId)?.activity === 'idle') break;
       await Bun.sleep(50);
     }
-    expect(session().transcript.turn.status).toBe('running');
+    expect(thread().transcript.turn.status).toBe('running');
     await store.actions.send('Too late to steer.');
     release();
     const shown = await until('the new turn', (current) => current.includes('assistant: You said: Too late to steer.'));
@@ -171,7 +171,7 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
   it('sets a mode and a config option, as every client sees them', async () => {
     await store.actions.setMode('code');
     await until('the mode', (_, open) => open.transcript.currentModeId === 'code');
-    const model = session().transcript.configOptions.find(({ id }) => id === 'model');
+    const model = thread().transcript.configOptions.find(({ id }) => id === 'model');
     const other = model?.type === 'select'
       ? model.options.flatMap((item) => 'options' in item ? item.options : [item]).find(({ value }) => value !== model.currentValue)
       : undefined;
@@ -185,98 +185,98 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     await create('fake-minimal');
     await store.actions.send('/slow 4');
     await running();
-    expect(session().canSteer).toBe(false);
+    expect(thread().canSteer).toBe(false);
     await store.actions.send('After that.');
     // The Host holds it, and says so before it answers.
-    expect(session().queued).toMatchObject([{ text: 'After that.' }]);
+    expect(thread().queued).toMatchObject([{ text: 'After that.' }]);
     const shown = await until('the queued prompt to be answered', (current) => current.includes('assistant: You said: After that.'));
     expect(shown.filter((entry) => entry.startsWith('user'))).toEqual(['user: /slow 4', 'user: After that.']);
-    expect(session().queued).toEqual([]);
+    expect(thread().queued).toEqual([]);
   });
 
   it('shares the Host\'s queue with other clients, and resumes it after a cancel', async () => {
     const open = await create('fake-minimal');
-    const sessionId = open.key.slice(hostId.length + 1);
+    const threadId = open.key.slice(hostId.length + 1);
     await store.actions.send('/slow 50');
     await running();
     // The TUI queues one, unattached; this device queues another.
-    await local.request('queue/add', { sessionId, prompt: [{ type: 'text', text: 'From the TUI.' }] });
+    await local.request('queue/add', { threadId, prompt: [{ type: 'text', text: 'From the TUI.' }] });
     await store.actions.send('From here.');
-    const queued = await waitFor(() => session().queued.length === 2 && session().queued, 'both queued');
+    const queued = await waitFor(() => thread().queued.length === 2 && thread().queued, 'both queued');
     expect(queued).toMatchObject([{ text: 'From the TUI.', origin: 'the TUI' }, { text: 'From here.' }]);
     expect(queued[1]).not.toHaveProperty('origin');
     // Taking one out takes it out for everyone.
     store.actions.removeQueued(queued[0].id);
-    await waitFor(() => session().queued.length === 1, 'the TUI\'s to leave the queue');
+    await waitFor(() => thread().queued.length === 1, 'the TUI\'s to leave the queue');
     // A cancelled turn pauses the queue, until the person resumes it.
     await store.actions.cancelTurn();
-    await waitFor(() => session().queuePaused, 'the queue to pause');
-    expect(session().transcript.turn.status).not.toBe('running');
+    await waitFor(() => thread().queuePaused, 'the queue to pause');
+    expect(thread().transcript.turn.status).not.toBe('running');
     await store.actions.resumeQueue();
     const shown = await until('the queued prompt to be answered', (current) => current.includes('assistant: You said: From here.'));
     expect(shown.filter((entry) => entry.startsWith('user'))).toEqual(['user: /slow 50', 'user: From here.']);
-    expect(session().queued).toEqual([]);
-    expect(session().queuePaused).toBeUndefined();
+    expect(thread().queued).toEqual([]);
+    expect(thread().queuePaused).toBeUndefined();
   });
 
-  it('opens a session another session\'s agent started, saying where its prompt came from', async () => {
-    // The TUI's session, whose agent hands work to another through the Host.
-    const caller = await local.request('session/create', { agentId: 'fake', cwd: host.cwd });
+  it('opens a thread another thread\'s agent started, saying where its prompt came from', async () => {
+    // The TUI's thread, whose agent hands work to another through the Host.
+    const caller = await local.request('thread/create', { agentId: 'fake', cwd: host.cwd });
     await local.request('turn/start', {
-      sessionId: caller.sessionId,
-      prompt: [{ type: 'text', text: 'tool start_session {"agentId": "fake", "prompt": "hello from the caller"}' }],
+      threadId: caller.threadId,
+      prompt: [{ type: 'text', text: 'tool start_thread {"agentId": "fake", "prompt": "hello from the caller"}' }],
     });
     let delegated: string | undefined;
     for (const deadline = Date.now() + 15_000; !delegated && Date.now() < deadline; await Bun.sleep(50)) {
-      const { sessions } = await local.request('sessions/list', {});
-      delegated = sessions.find(({ startedBy }) => startedBy === caller.sessionId)?.info.sessionId;
+      const { threads } = await local.request('threads/list', {});
+      delegated = threads.find(({ startedBy }) => startedBy === caller.threadId)?.info.sessionId;
     }
     expect(delegated).toBeDefined();
-    store.actions.selectSession(`${hostId}/${delegated}`);
-    await until('the delegated session\'s answer', (current) => current.includes('assistant: You said: hello from the caller'));
-    const prompt = session().transcript.entries.find((entry) => entry.kind === 'message' && entry.role === 'user');
+    store.actions.selectThread(`${hostId}/${delegated}`);
+    await until('the delegated thread\'s answer', (current) => current.includes('assistant: You said: hello from the caller'));
+    const prompt = thread().transcript.entries.find((entry) => entry.kind === 'message' && entry.role === 'user');
     expect(prompt).toMatchObject({ origin: 'another thread' });
   });
 
-  it('closes a session nobody prompted when it leaves it', async () => {
+  it('closes a thread nobody prompted when it leaves it', async () => {
     const blank = await create('fake');
-    const sessionId = blank.key.slice(hostId.length + 1);
-    store.actions.selectSession(undefined);
+    const threadId = blank.key.slice(hostId.length + 1);
+    store.actions.selectThread(undefined);
     for (let tries = 0; ; tries += 1) {
-      const { sessions } = await local.request('host/status', {});
-      if (!sessions.some(({ info }) => info.sessionId === sessionId)) break;
-      if (tries > 200) throw new Error('The blank session stayed open.');
+      const { threads } = await local.request('host/status', {});
+      if (!threads.some(({ info }) => info.sessionId === threadId)) break;
+      if (tries > 200) throw new Error('The blank thread stayed open.');
       await Bun.sleep(50);
     }
   });
 
-  it('moves a session to a new agent process', async () => {
+  it('moves a thread to a new agent process', async () => {
     await create('fake');
     await store.actions.send('before');
     await until('the answer', (current) => current.includes('assistant: You said: before'));
-    await store.actions.reopenSession();
-    expect(session().reopening).toBeUndefined();
+    await store.actions.reopenThread();
+    expect(thread().reopening).toBeUndefined();
     await until('the reopen', (current) => current.includes('info: Reopened this thread in a new agent process'));
     await store.actions.send('after');
     await until('the answer from the new process', (current) => current.includes('assistant: You said: after'));
   });
 
-  it('closes a session, then deletes it', async () => {
-    const { key } = session();
-    await store.actions.closeSession(key);
+  it('closes a thread, then deletes it', async () => {
+    const { key } = thread();
+    await store.actions.closeThread(key);
     expect(model().selectedKey).toBeUndefined();
-    await waitFor(() => model().sessions.find((listed) => listed.key === key)?.state === 'closed', 'the session to close');
-    await store.actions.deleteSession(key);
+    await waitFor(() => model().threads.find((listed) => listed.key === key)?.state === 'closed', 'the thread to close');
+    await store.actions.deleteThread(key);
     expect(model().error).toBeUndefined();
-    await waitFor(() => !model().sessions.some((listed) => listed.key === key), 'the session to go');
+    await waitFor(() => !model().threads.some((listed) => listed.key === key), 'the thread to go');
   });
 
   it('says to sign in on the Host\'s computer when the agent needs it', async () => {
-    await expect(store.actions.createSession({ hostId, cwd: host.cwd, agentId: 'fake-auth' }))
+    await expect(store.actions.createThread({ hostId, cwd: host.cwd, agentId: 'fake-auth' }))
       .rejects.toThrow(/needs signing in\. Run `weave agents login --agent fake-auth` on the Host's computer/);
   });
 
-  it('lists the Host\'s directories, and starts a session in one picked there', async () => {
+  it('lists the Host\'s directories, and starts a thread in one picked there', async () => {
     expect(model().hosts[0].canBrowse).toBe(true);
     await mkdir(join(host.cwd, 'picked', 'deeper'), { recursive: true });
     const listed = await store.actions.listDirectory({ hostId, path: join(host.cwd, 'picked', '..') });
@@ -287,25 +287,25 @@ describe.skipIf(!devHostAvailable())('prompting from the app with a dev Host', (
     await expect(store.actions.listDirectory({ hostId, path: join(host.cwd, 'missing') }))
       .rejects.toThrow(`${join(host.cwd, 'missing')} doesn't exist`);
 
-    await store.actions.createSession({ hostId, cwd: join(host.cwd, 'picked'), agentId: 'fake' });
-    expect(model().sessions.find(({ key }) => key === session().key)?.cwd).toBe(join(host.cwd, 'picked'));
+    await store.actions.createThread({ hostId, cwd: join(host.cwd, 'picked'), agentId: 'fake' });
+    expect(model().threads.find(({ key }) => key === thread().key)?.cwd).toBe(join(host.cwd, 'picked'));
   });
 
-  it('renames a session from the app, and its agent renames it through the Host too', async () => {
+  it('renames a thread from the app, and its agent renames it through the Host too', async () => {
     const { key } = await create('fake');
     expect(model().hosts[0].canRename).toBe(true);
     await store.actions.send('hello');
     await until('the answer', (current) => current.includes('assistant: You said: hello'));
-    const listedTitle = () => model().sessions.find((listed) => listed.key === key)?.title;
+    const listedTitle = () => model().threads.find((listed) => listed.key === key)?.title;
 
-    await store.actions.renameSession(key, '  Named here ');
+    await store.actions.renameThread(key, '  Named here ');
     await until('the rename', (current) => current.includes('info: You renamed this thread to “Named here”'));
     await waitFor(() => listedTitle() === 'Named here', 'the listed title');
-    await expect(store.actions.renameSession(key, ' ')).rejects.toThrow("Couldn't rename it: a title can't be empty.");
+    await expect(store.actions.renameThread(key, ' ')).rejects.toThrow("Couldn't rename it: a title can't be empty.");
 
-    await store.actions.send('/tool rename_session {"title": "Named by its agent"}');
+    await store.actions.send('/tool rename_thread {"title": "Named by its agent"}');
     await until('the agent\'s rename', (current) => current.includes('info: The agent renamed this thread to “Named by its agent”'));
     await waitFor(() => listedTitle() === 'Named by its agent', 'the agent\'s title');
-    expect(session().transcript.title).toBe('Named by its agent');
+    expect(thread().transcript.title).toBe('Named by its agent');
   });
 });

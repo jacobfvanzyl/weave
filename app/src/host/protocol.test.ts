@@ -32,7 +32,7 @@ describe('the generated Host protocol types', () => {
   });
 
   it('carry the protocol\'s constants', () => {
-    expect(HOST_PROTOCOL.protocol.version).toBe(2);
+    expect(HOST_PROTOCOL.protocol.version).toBe(3);
     expect(HOST_PROTOCOL.websocket.subprotocol).toBe('weave-host');
     expect(HOST_PROTOCOL.errors.notTarget).toBe(-32070);
   });

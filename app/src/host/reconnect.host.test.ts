@@ -4,7 +4,7 @@
 // a Host restarting under the app, a revoked device pairing again, and two Hosts at once. Skipped
 // unless the debug `weave` and fake agent are built.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AppModel, OpenSession } from '@/app/app-controller';
+import type { AppModel, OpenThread } from '@/app/app-controller';
 import { blocksText, type TranscriptEntry } from '@/chat/acp-transcript';
 import { type Connector, HostConnection, websocketConnector } from './connection';
 import { type DeviceKey, webCryptoDeviceKey } from './device-key';
@@ -29,8 +29,8 @@ const line = (entry: TranscriptEntry) => {
   return entry.kind === 'diagnostic' ? `${entry.severity}: ${entry.title}` : entry.kind;
 };
 
-/** What the agent said in a session, every message of it together. */
-const said = (open: OpenSession) => open.transcript.entries
+/** What the agent said in a thread, every message of it together. */
+const said = (open: OpenThread) => open.transcript.entries
   .flatMap((entry) => entry.kind === 'message' && entry.role === 'assistant' ? [line(entry).slice('assistant: '.length)] : [])
   .join('');
 
@@ -124,13 +124,13 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
   let hostId: string;
 
   const model = (): AppModel => store.snapshot();
-  const session = (): OpenSession => {
-    const open = model().session;
-    if (!open) throw new Error('No session is open.');
+  const thread = (): OpenThread => {
+    const open = model().thread;
+    if (!open) throw new Error('No thread is open.');
     return open;
   };
-  const until = (what: string, done: (open: OpenSession) => boolean, ms?: number) =>
-    waitFor(() => model().session && done(session()) ? session() : undefined, what, ms);
+  const until = (what: string, done: (open: OpenThread) => boolean, ms?: number) =>
+    waitFor(() => model().thread && done(thread()) ? thread() : undefined, what, ms);
   const connected = () => waitFor(() => model().hosts.find(({ id }) => id === hostId)?.status === 'connected', 'the Host to be connected');
 
   beforeAll(async () => {
@@ -148,7 +148,7 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
   });
 
   it('catches up after a network dropped mid-turn, with every chunk once and in order', async () => {
-    await store.actions.createSession({ hostId, cwd: host.cwd, agentId: 'fake' });
+    await store.actions.createThread({ hostId, cwd: host.cwd, agentId: 'fake' });
     await store.actions.send('/slow 40');
     const before = await until('a few chunks', (open) => said(open).includes('Chunk 3 of 40.'));
 
@@ -157,7 +157,7 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
     await waitFor(() => model().hosts[0].status === 'reconnecting', 'the app to notice');
     // The turn goes on in the Host while the app is away.
     await Bun.sleep(1_500);
-    expect(said(session())).not.toContain('Chunk 15 of 40.');
+    expect(said(thread())).not.toContain('Chunk 15 of 40.');
     const opened = net.state.opened;
     net.state.offline = false;
 
@@ -177,7 +177,7 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
     await connected();
     const resumed = await until('the interrupted turn to end', (open) =>
       open.transcript.turn.status !== 'running' && open.transcript.entries.some((entry) => line(entry) === 'info: Interrupted: the weave Host stopped while this turn ran'));
-    // The Host continued the session's journal, and the app went on after its position.
+    // The Host continued the thread's journal, and the app went on after its position.
     expect(resumed.transcript.entries[0]).toBe(before.transcript.entries[0]);
     const lines = resumed.transcript.entries.map(line);
     expect(lines.filter((entry) => entry === 'user: /slow 40')).toHaveLength(2);
@@ -200,15 +200,15 @@ describe.skipIf(!devHostAvailable())('reconnecting to a dev Host', () => {
 
     await waitFor(() => model().hosts[0]?.status === 'revoked', 'the app to hear of it');
     expect(model().hosts[0].error).toContain('Pair it again');
-    expect(model().sessions).toEqual([]);
-    expect(model().session).toBeUndefined();
+    expect(model().threads).toEqual([]);
+    expect(model().thread).toBeUndefined();
     expect(await storage.load()).toEqual([]);
     expect(forgotten).toHaveLength(1);
 
     await pair(store, host);
     expect(model().hosts).toMatchObject([{ id: hostId, status: 'connected' }]);
     expect(await storage.load()).toHaveLength(1);
-    await waitFor(() => model().sessions.length > 0 || undefined, 'its sessions again');
+    await waitFor(() => model().threads.length > 0 || undefined, 'its threads again');
   }, 30_000);
 });
 
@@ -241,19 +241,19 @@ describe.skipIf(!devHostAvailable())('two dev Hosts', () => {
     expect(new Set(records.map(({ deviceId }) => deviceId)).size).toBe(2);
     expect(new Set(records.map(({ keyId }) => keyId)).size).toBe(2);
 
-    // A session on each, both in the one list: the first from its Host's listing, once the second is on screen.
+    // A thread on each, both in the one list: the first from its Host's listing, once the second is on screen.
     const keys: string[] = [];
     for (const [index, host] of hosts.entries()) {
-      await store.actions.createSession({ hostId: host.id, cwd: [first, second][index].cwd, agentId: 'fake' });
+      await store.actions.createThread({ hostId: host.id, cwd: [first, second][index].cwd, agentId: 'fake' });
       await store.actions.send('hello');
-      keys.push(store.snapshot().session!.key);
+      keys.push(store.snapshot().thread!.key);
     }
-    await waitFor(() => keys.every((key) => store.snapshot().sessions.some((listed) => listed.key === key)) || undefined, 'both sessions in the list');
+    await waitFor(() => keys.every((key) => store.snapshot().threads.some((listed) => listed.key === key)) || undefined, 'both threads in the list');
 
     await store.actions.forgetHost(hosts[0].id);
     expect(forgotten).toEqual([records.find(({ hostId }) => hostId === hosts[0].id)!.keyId]);
     expect(store.snapshot().hosts).toMatchObject([{ id: hosts[1].id, status: 'connected' }]);
-    expect(store.snapshot().sessions.every(({ hostId }) => hostId === hosts[1].id)).toBe(true);
+    expect(store.snapshot().threads.every(({ hostId }) => hostId === hosts[1].id)).toBe(true);
     expect((await storage.load()).map(({ hostId }) => hostId)).toEqual([hosts[1].id]);
   }, 60_000);
 });

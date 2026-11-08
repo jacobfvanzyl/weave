@@ -12,7 +12,7 @@ import {
 } from './terminal-layout';
 
 /** A thread's terminals, as tabs, and how this device lays them out, kept in the web view's storage. */
-export function useThreadTerminals(key: string, sessionId: string, terminals: TerminalSummary[] | undefined) {
+export function useThreadTerminals(key: string, threadId: string, terminals: TerminalSummary[] | undefined) {
   const [layout, setLayout] = useState<TerminalLayout>(loadTerminalLayout);
   const store = useCallback((change: (layout: TerminalLayout) => TerminalLayout) => setLayout((current) => {
     const next = change(current);
@@ -30,5 +30,5 @@ export function useThreadTerminals(key: string, sessionId: string, terminals: Te
 
   const thread = layout.threads[key] ?? emptyThread();
   const tabs = terminalTabs(terminals ?? []);
-  return { thread, tabs, active: activeTab(thread, tabs, sessionId), fontSize: layout.fontSize, width: layout.width, change, setFontSize, setWidth };
+  return { thread, tabs, active: activeTab(thread, tabs, threadId), fontSize: layout.fontSize, width: layout.width, change, setFontSize, setWidth };
 }

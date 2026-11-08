@@ -1,4 +1,4 @@
-import type { SessionActivity } from '@/app/app-controller';
+import type { ThreadActivity } from '@/app/app-controller';
 import { cn } from '@/lib/utils';
 
 const indicators = {
@@ -7,9 +7,9 @@ const indicators = {
   unread: { label: 'Finished since you last looked', color: 'bg-success' },
 };
 
-/** A session's activity as a dot: waiting, running, or a turn that ended while you weren't looking. */
+/** A thread's activity as a dot: waiting, running, or a turn that ended while you weren't looking. */
 export function ActivityIndicator({ activity, unread, className }: {
-  activity?: SessionActivity;
+  activity?: ThreadActivity;
   unread?: boolean;
   className?: string;
 }) {
@@ -17,7 +17,7 @@ export function ActivityIndicator({ activity, unread, className }: {
   if (!state) return null;
   const indicator = indicators[state];
   return (
-    <span role='img' aria-label={indicator.label} title={indicator.label} data-slot='session-activity' data-state={state}
+    <span role='img' aria-label={indicator.label} title={indicator.label} data-slot='thread-activity' data-state={state}
       className={cn('size-2 shrink-0 rounded-full', className)}>
       <span aria-hidden='true' className={cn('block size-full rounded-full', indicator.color)} />
     </span>

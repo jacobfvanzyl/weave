@@ -26,11 +26,11 @@ export type DevHost = {
   socket: string;
   /** The WebSocket remote clients use, once an offer turns it on: `ws://127.0.0.1:<port>`. */
   url: string;
-  /** A directory sessions can run in. */
+  /** A directory threads can run in. */
   cwd: string;
   /**
    * Stops the Host as `weave daemon restart --now` does, its running turns cut off and its open
-   * sessions suspended, and starts it again in the same directory, with the same config and port.
+   * threads suspended, and starts it again in the same directory, with the same config and port.
    */
   restart(): Promise<void>;
   stop(): Promise<void>;
@@ -59,7 +59,7 @@ export async function startDevHost(): Promise<DevHost> {
   const url = `ws://127.0.0.1:${port}`;
   const config = join(root, 'config.toml');
   const cwd = join(root, 'work');
-  await Bun.write(join(cwd, 'README.md'), 'A directory for test sessions.\n');
+  await Bun.write(join(cwd, 'README.md'), 'A directory for test threads.\n');
   await writeFile(config, [
     '[agents.fake]',
     `command = ${JSON.stringify(fakeAgent)}`,

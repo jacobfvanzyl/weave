@@ -14,7 +14,7 @@ const SidebarWidthContext = createContext<SidebarWidth | null>(null);
 
 /**
  * `SidebarProvider`, with the sidebar as wide as the person dragged it (`SidebarResizeHandle`),
- * which this device keeps. A drag changes only the sidebar's width: what's in it, and the session
+ * which this device keeps. A drag changes only the sidebar's width: what's in it, and the thread
  * beside it, don't render again.
  */
 export function ResizableSidebarProvider({ style, children, ...props }: ComponentProps<typeof SidebarProvider>) {

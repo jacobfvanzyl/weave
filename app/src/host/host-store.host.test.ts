@@ -1,7 +1,7 @@
 // @vitest-environment node
 /// <reference types="bun" />
-// The app's Host store against a real dev Host (`testing/dev-host.ts`): pairing, the session list
-// and a session's transcript, replayed and then live. Skipped unless the debug `weave` and fake
+// The app's Host store against a real dev Host (`testing/dev-host.ts`): pairing, the thread list
+// and a thread's transcript, replayed and then live. Skipped unless the debug `weave` and fake
 // agent are built.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AppModel } from '@/app/app-controller';
@@ -32,14 +32,14 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
   let local: HostConnection;
   const localEvents: HostEvent[] = [];
   let store: HostStore;
-  let sessionId: string;
+  let threadId: string;
   const keys = new Map<string, DeviceKey>();
 
   const prompt = async (words: string) => {
     const before = localEvents.length;
-    await local.request('turn/start', { sessionId, prompt: [{ type: 'text', text: words }] });
+    await local.request('turn/start', { threadId, prompt: [{ type: 'text', text: words }] });
     await waitFor(() => localEvents.slice(before).some((event) =>
-      event.type === 'notification' && event.method === 'session/event' && event.params.event.kind === 'turnEnded'), 'the turn to end');
+      event.type === 'notification' && event.method === 'thread/event' && event.params.event.kind === 'turnEnded'), 'the turn to end');
   };
 
   beforeAll(async () => {
@@ -51,9 +51,9 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
       onEvent: (event) => localEvents.push(event),
     });
     local.open({ create: { agentId: 'fake', cwd: host.cwd } }, 1);
-    const opened = await waitFor(() => localEvents.find((event) => event.type === 'opened'), 'the session');
+    const opened = await waitFor(() => localEvents.find((event) => event.type === 'opened'), 'the thread');
     if (opened.type !== 'opened') throw new Error('unreachable');
-    sessionId = opened.session.state.sessionId;
+    threadId = opened.thread.state.threadId;
     await prompt('first words');
 
     store = new HostStore({
@@ -78,23 +78,23 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
     await host?.stop();
   });
 
-  it('pairs, then lists the Host\'s sessions', async () => {
+  it('pairs, then lists the Host\'s threads', async () => {
     const { code } = await local.request('devices/offer', {});
     await store.actions.pairHost({ url: host.url, code, name: 'Test iPhone' });
     const model = store.snapshot();
     expect(model.hosts).toMatchObject([{ name: '127.0.0.1', status: 'connected' }]);
     const { devices } = await local.request('devices/list', {});
     expect(devices.map(({ name }) => name)).toContain('Test iPhone');
-    const listed = await waitFor(() => store.snapshot().sessions.find((session) => session.sessionId === sessionId), 'the session in the list');
+    const listed = await waitFor(() => store.snapshot().threads.find((thread) => thread.threadId === threadId), 'the thread in the list');
     expect(listed).toMatchObject({ agentId: 'fake', cwd: host.cwd, state: 'open' });
   });
 
-  it('opens a session with its history, then follows it live', async () => {
-    const key = store.snapshot().sessions.find((session) => session.sessionId === sessionId)!.key;
-    store.actions.selectSession(key);
+  it('opens a thread with its history, then follows it live', async () => {
+    const key = store.snapshot().threads.find((thread) => thread.threadId === threadId)!.key;
+    store.actions.selectThread(key);
     const replayed = await waitFor(() => {
       const model: AppModel = store.snapshot();
-      const lines = model.session?.transcript.entries.map(text).filter(Boolean) ?? [];
+      const lines = model.thread?.transcript.entries.map(text).filter(Boolean) ?? [];
       return lines.length >= 2 ? lines : undefined;
     }, 'the replayed transcript');
     expect(replayed[0]).toBe('user: first words');
@@ -102,11 +102,11 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
 
     await prompt('second words');
     const live = await waitFor(() => {
-      const lines = store.snapshot().session?.transcript.entries.map(text).filter(Boolean) ?? [];
+      const lines = store.snapshot().thread?.transcript.entries.map(text).filter(Boolean) ?? [];
       return lines.some((line) => line?.startsWith('assistant:') && line.includes('second words')) ? lines : undefined;
     }, 'the live turn');
     expect(live.filter((line) => line?.startsWith('user:'))).toEqual(['user: first words', 'user: second words']);
-    expect(store.snapshot().session?.transcript.turn.status).toBe('stopped');
+    expect(store.snapshot().thread?.transcript.turn.status).toBe('stopped');
   });
 
   it('keeps the name this device gave a Host when it pairs with it again', async () => {
@@ -121,7 +121,7 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Host', () => {
     const [paired] = store.snapshot().hosts;
     await store.actions.forgetHost(paired.id);
     expect(store.snapshot().hosts).toEqual([]);
-    expect(store.snapshot().sessions).toEqual([]);
-    expect(store.snapshot().session).toBeUndefined();
+    expect(store.snapshot().threads).toEqual([]);
+    expect(store.snapshot().thread).toBeUndefined();
   });
 });

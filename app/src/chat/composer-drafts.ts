@@ -6,7 +6,7 @@ export type ComposerDraft = {
 const STORAGE_KEY = 'weave.composerDrafts';
 
 /**
- * Drafts by session, kept in the web view's storage too: iOS may discard the web view while the
+ * Drafts by thread, kept in the web view's storage too: iOS may discard the web view while the
  * app is in the background, and the draft should be there when it comes back.
  */
 function storedDrafts(): Map<string, ComposerDraft> {
@@ -31,14 +31,14 @@ function store() {
 export const composerDrafts = storedDrafts();
 export const composerDraftListeners = new Map<string, Set<(draft: ComposerDraft) => void>>();
 
-export const writeComposerDraft = (sessionId: string, draft: ComposerDraft) => {
-  composerDrafts.set(sessionId, draft);
+export const writeComposerDraft = (key: string, draft: ComposerDraft) => {
+  composerDrafts.set(key, draft);
   store();
-  composerDraftListeners.get(sessionId)?.forEach((listener) => listener(draft));
+  composerDraftListeners.get(key)?.forEach((listener) => listener(draft));
 };
 
-export function discardComposerDraft(sessionId: string) {
-  composerDrafts.delete(sessionId);
+export function discardComposerDraft(key: string) {
+  composerDrafts.delete(key);
   store();
 }
 

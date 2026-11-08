@@ -44,11 +44,11 @@ export type Service = "launchd" | "systemd" | "onDemand" | "inProcess";
 export type EnvironmentSource = "loginShell" | "process";
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionStatus".
+ * via the `definition` "ThreadStatus".
  */
-export type SessionStatus = "open" | "suspended" | "closed";
+export type ThreadStatus = "open" | "suspended" | "closed";
 /**
- * What an open session is doing.
+ * What an open thread is doing.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "Activity".
@@ -84,10 +84,10 @@ export type TurnOrigin =
       run: {};
     }
   | {
-      session: {
-        sessionId: SessionId;
+      thread: {
+        threadId: SessionId;
         /**
-         * The Host that session is on, when it isn't this one: the id of another of the
+         * The Host that thread is on, when it isn't this one: the id of another of the
          * person's Hosts, as the service that reaches them gave it (ADR 0029).
          */
         host?: string | null;
@@ -96,7 +96,7 @@ export type TurnOrigin =
          */
         hostName?: string | null;
         /**
-         * The Host's report on that session, of how a turn this session's agent began there
+         * The Host's report on that thread, of how a turn this thread's agent began there
          * ended or that it waits on a person. Nobody hears how a report's turn ends.
          */
         report?: boolean;
@@ -386,9 +386,9 @@ export type QueuePause = "cancelled" | "failed" | "interrupted";
 export type PendingRequest = {
   id: string;
   /**
-   * The session it's for, the root or a subagent session, when it's for one.
+   * The thread it's for, the root or a subagent thread, when it's for one.
    */
-  sessionId?: SessionId | null;
+  threadId?: SessionId | null;
   createdAt: number;
 } & PendingRequest1;
 export type PendingRequest1 =
@@ -692,20 +692,20 @@ export type MultiSelectItems =
  */
 export type ElicitationId = string;
 /**
- * When detaching closes the session.
+ * When detaching closes the thread.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CloseWhen".
  */
 export type CloseWhen = "never" | "ifUnused";
 /**
- * `session/setConfigOption`. The change reaches every attached client as an ACP update.
+ * `thread/setConfigOption`. The change reaches every attached client as an ACP update.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SetConfigOptionRequest".
  */
 export type SetConfigOptionRequest = {
-  sessionId: SessionId;
+  threadId: SessionId;
   configId: SessionConfigId;
 } & (
   | {
@@ -805,15 +805,15 @@ export type BlockedKind = "permission" | "question" | "auth";
 export type TerminalFormat = "text" | "vt";
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionEvent".
+ * via the `definition` "ThreadEvent".
  */
-export type SessionEvent =
+export type ThreadEvent =
   | {
       notification: SessionNotification;
       kind: "update";
     }
   | {
-      sessionId: SessionId;
+      threadId: SessionId;
       prompt: ContentBlock[];
       origin: TurnOrigin;
       /**
@@ -832,13 +832,13 @@ export type SessionEvent =
       kind: "turnStarted";
     }
   | {
-      sessionId: SessionId;
+      threadId: SessionId;
       prompt: ContentBlock[];
       origin: TurnOrigin;
       kind: "turnSteered";
     }
   | {
-      sessionId: SessionId;
+      threadId: SessionId;
       response?: PromptResponse | null;
       error?: Error | null;
       kind: "turnEnded";
@@ -854,7 +854,7 @@ export type SessionEvent =
       kind: "terminalExit";
     }
   | {
-      agent: SessionAgent;
+      agent: ThreadAgent;
       /**
        * The version it ran before.
        */
@@ -863,7 +863,7 @@ export type SessionEvent =
       configOptions?: SessionConfigOption[];
       /**
        * Why it runs the version it ran before: the one it was reopened for couldn't take
-       * the session up.
+       * the thread up.
        */
       failed?: string | null;
       kind: "agentReopened";
@@ -1097,19 +1097,19 @@ export type HostCall =
       method: "hosts/list";
     }
   | {
-      method: "sessions/list";
-      params: ListSessionsRequest;
+      method: "threads/list";
+      params: ListThreadsRequest;
     }
   | {
       method: "agents/list";
       params: ListAgentsRequest;
     }
   | {
-      method: "sessions/get";
-      params: GetSessionRequest;
+      method: "threads/get";
+      params: GetThreadRequest;
     }
   | {
-      method: "session/run";
+      method: "thread/run";
       params: RunRequest;
     }
   | {
@@ -1402,9 +1402,9 @@ export interface HostStatus {
   service: Service;
   environment: EnvironmentSource;
   /**
-   * The open sessions.
+   * The open threads.
    */
-  sessions: SessionListing[];
+  threads: ThreadListing[];
   /**
    * The loopback address of the WebSocket remote clients reach, when the Host serves one.
    */
@@ -1416,14 +1416,14 @@ export interface HostStatus {
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionListing".
+ * via the `definition` "ThreadListing".
  */
-export interface SessionListing {
+export interface ThreadListing {
   info: SessionInfo;
   agentId: string;
-  state: SessionStatus;
+  state: ThreadStatus;
   /**
-   * Open sessions only.
+   * Open threads only.
    */
   activity?: Activity | null;
   clients?: number;
@@ -1433,21 +1433,21 @@ export interface SessionListing {
   headless?: boolean;
   lastActivityAt?: number | null;
   /**
-   * Where in a git repository its directory is, as the Host last read it while the session
-   * was open; absent outside one, and for sessions the Host has no record of.
+   * Where in a git repository its directory is, as the Host last read it while the thread
+   * was open; absent outside one, and for threads the Host has no record of.
    */
   git?: GitLocation | null;
   /**
-   * The session whose agent started it, for a delegated session.
+   * The thread whose agent started it, for a delegated thread.
    */
   startedBy?: SessionId | null;
   /**
-   * The Host the session that started it is on, when it isn't this one.
+   * The Host the thread that started it is on, when it isn't this one.
    */
   startedByHost?: string | null;
   /**
-   * Its successor (feature `successors`, WVE-168): the session its work goes on in, which a
-   * client named with `session/setSuccessor`. Clients following this one may follow that,
+   * Its successor (feature `successors`, WVE-168): the thread its work goes on in, which a
+   * client named with `thread/setSuccessor`. Clients following this one may follow that,
    * and reports to this one go there.
    */
   continuedIn?: SessionId | null;
@@ -1466,8 +1466,8 @@ export interface SessionListing {
    */
   lastCompaction?: LastCompaction | null;
   /**
-   * The client whose `session/create` or `session/attach` opened it last, while it's open:
-   * a paired device's names its `device`. A service's `session/run` that opened it gives
+   * The client whose `thread/create` or `thread/attach` opened it last, while it's open:
+   * a paired device's names its `device`. A service's `thread/run` that opened it gives
    * the turn's origin. Absent for one another headless run or a Host taking it up opened.
    */
   openedBy?: TurnOrigin | null;
@@ -1516,8 +1516,8 @@ export interface SessionInfo {
   } | null;
 }
 /**
- * Where in a git repository a session's directory is, as the Host last read it: when the
- * session opened, and again after each of its turns.
+ * Where in a git repository a thread's directory is, as the Host last read it: when the
+ * thread opened, and again after each of its turns.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "GitLocation".
@@ -1543,7 +1543,7 @@ export interface GitLocation {
   remote?: string | null;
 }
 /**
- * A session's context usage, as its agent last reported it: tokens in context, of the window.
+ * A thread's context usage, as its agent last reported it: tokens in context, of the window.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ContextUsage".
@@ -1553,7 +1553,7 @@ export interface ContextUsage {
   size: number;
 }
 /**
- * A session's last completed compaction: when it completed, and the tokens in context its
+ * A thread's last completed compaction: when it completed, and the tokens in context its
  * agent reported next, once it has.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -1638,7 +1638,7 @@ export interface SessionInfo1 {
 }
 /**
  * `host/drain`: get ready to stop. From now on the Host starts no new turns (`turn/start`
- * and `session/run` answer `host_stopping`, and queued prompts wait), and with `wait` it
+ * and `thread/run` answer `host_stopping`, and queued prompts wait), and with `wait` it
  * answers once no turn runs but `except`'s, or when its drain timeout passes. The stop that
  * follows doesn't wait again. If the asking client goes before the Host stops, the drain
  * ends. Local clients only.
@@ -1668,7 +1668,7 @@ export interface DrainResponse {
   running: number;
 }
 /**
- * `host/shutdown`: suspend every open session and exit.
+ * `host/shutdown`: suspend every open thread and exit.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ShutdownRequest".
@@ -2311,8 +2311,8 @@ export interface LogoutAgentRequest {
 }
 /**
  * `agents/update`: what `weave agents update <agent>` does. The Host checks that the newest
- * version starts and answers `initialize`, then launches it for the agent's new sessions; open
- * ones move over with `session/reopen`. A version that doesn't start changes nothing. Remote
+ * version starts and answers `initialize`, then launches it for the agent's new threads; open
+ * ones move over with `thread/reopen`. A version that doesn't start changes nothing. Remote
  * clients may update agents too: it only ever takes one to its newest version.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -2327,7 +2327,7 @@ export interface UpdateAgentRequest {
  */
 export interface UpdateAgentResponse {
   /**
-   * The version the agent's new sessions launch now: the newest, or the one already there.
+   * The version the agent's new threads launch now: the newest, or the one already there.
    */
   version: string;
 }
@@ -2459,7 +2459,7 @@ export interface ListFilesRequest {
  */
 export interface ListFilesResponse {
   /**
-   * The directory listed, without `.` or `..`. Symlinks stay as named, so a session's
+   * The directory listed, without `.` or `..`. Symlinks stay as named, so a thread's
    * directory reads as the person chose it.
    */
   path: string;
@@ -2489,67 +2489,67 @@ export interface FileEntry {
   kind: FileKind;
 }
 /**
- * `sessions/list`. Without an agent: the sessions the Host has a journal for, across
+ * `threads/list`. Without an agent: the threads the Host has a journal for, across
  * agents, most recently active first. With one: that agent's in `cwd`, the Host's own first,
- * then the agent's own listing, paged by its cursor. Blank sessions are never listed.
+ * then the agent's own listing, paged by its cursor. Blank threads are never listed.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ListSessionsRequest".
+ * via the `definition` "ListThreadsRequest".
  */
-export interface ListSessionsRequest {
+export interface ListThreadsRequest {
   agentId?: string | null;
   cwd?: string | null;
   /**
-   * Only the sessions in this repository's worktrees, given by any directory in it. Without
+   * Only the threads in this repository's worktrees, given by any directory in it. Without
    * an agent only (feature `worktrees`).
    */
   repo?: string | null;
   /**
-   * Only the open sessions doing this. Without an agent only (feature `turnIds`).
+   * Only the open threads doing this. Without an agent only (feature `turnIds`).
    */
   activity?: Activity | null;
   /**
-   * Only the sessions that carry every one of these labels (feature `labels`).
+   * Only the threads that carry every one of these labels (feature `labels`).
    */
   labels?: string[];
   cursor?: string | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ListSessionsResponse".
+ * via the `definition` "ListThreadsResponse".
  */
-export interface ListSessionsResponse {
-  sessions: SessionListing[];
+export interface ListThreadsResponse {
+  threads: ThreadListing[];
   nextCursor?: string | null;
 }
 /**
- * `sessions/get`: one session the Host has a journal for, open or not, as `sessions/list` lists
+ * `threads/get`: one thread the Host has a journal for, open or not, as `threads/list` lists
  * it, with its latest turn, or the turn asked for, read without opening it or attaching.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "GetSessionRequest".
+ * via the `definition` "GetThreadRequest".
  */
-export interface GetSessionRequest {
-  sessionId: SessionId;
+export interface GetThreadRequest {
+  threadId: SessionId;
   /**
    * This turn rather than the latest, a queued one included; it fails with `unknown_turn`
-   * when the session's journal has no such turn (feature `turnIds`).
+   * when the thread's journal has no such turn (feature `turnIds`).
    */
   turnId?: string | null;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "GetSessionResponse".
+ * via the `definition` "GetThreadResponse".
  */
-export interface GetSessionResponse {
-  session: SessionListing;
+export interface GetThreadResponse {
+  thread: ThreadListing;
   /**
    * The latest turn, or the one asked for.
    */
   latestTurn?: LatestTurn | null;
 }
 /**
- * A session's latest turn, or one asked for by id, as its journal records it.
+ * A thread's latest turn, or one asked for by id, as its journal records it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "LatestTurn".
@@ -2963,39 +2963,39 @@ export interface BlobResourceContents1 {
   } | null;
 }
 /**
- * `sessions/watch`: the Host's sessions as `sessions/list` gives them without an agent, then a
- * [`SessionUpdatedNotification`] or [`SessionRemovedNotification`] for every change, until the
- * connection ends or the client sends `sessions/unwatch`. Blank sessions never appear. With
- * `labels` (feature `labels`), only the sessions that carry every one of them: a change that
+ * `threads/watch`: the Host's threads as `threads/list` gives them without an agent, then a
+ * [`ThreadUpdatedNotification`] or [`ThreadRemovedNotification`] for every change, until the
+ * connection ends or the client sends `threads/unwatch`. Blank threads never appear. With
+ * `labels` (feature `labels`), only the threads that carry every one of them: a change that
  * makes one stop matching is the last the watcher hears of it, as an update showing its labels.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "WatchSessionsRequest".
+ * via the `definition` "WatchThreadsRequest".
  */
-export interface WatchSessionsRequest {
+export interface WatchThreadsRequest {
   labels?: string[];
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "WatchSessionsResponse".
+ * via the `definition` "WatchThreadsResponse".
  */
-export interface WatchSessionsResponse {
-  sessions: SessionListing[];
+export interface WatchThreadsResponse {
+  threads: ThreadListing[];
 }
 /**
- * `sessions/unwatch`: stop what `sessions/watch` sends.
+ * `threads/unwatch`: stop what `threads/watch` sends.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "UnwatchSessionsRequest".
+ * via the `definition` "UnwatchThreadsRequest".
  */
-export interface UnwatchSessionsRequest {}
+export interface UnwatchThreadsRequest {}
 /**
- * `session/create`: start a session and attach to it.
+ * `thread/create`: start a thread and attach to it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "CreateSessionRequest".
+ * via the `definition` "CreateThreadRequest".
  */
-export interface CreateSessionRequest {
+export interface CreateThreadRequest {
   agentId: string;
   cwd: string;
   additionalDirectories?: string[];
@@ -3017,7 +3017,7 @@ export interface CreateSessionRequest {
   labels?: string[];
 }
 /**
- * How a session's permission requests are answered.
+ * How a thread's permission requests are answered.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PermissionPolicy".
@@ -3033,14 +3033,14 @@ export interface PermissionPolicy {
   otherwise?: "ask" | "reject";
 }
 /**
- * An open session as a client attached to it sees it; notifications keep it up to date.
+ * An open thread as a client attached to it sees it; notifications keep it up to date.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionState".
+ * via the `definition` "ThreadState".
  */
-export interface SessionState {
-  sessionId: SessionId;
-  agent: SessionAgent;
+export interface ThreadState {
+  threadId: SessionId;
+  agent: ThreadAgent;
   cwd: string;
   additionalDirectories?: string[];
   /**
@@ -3048,7 +3048,7 @@ export interface SessionState {
    */
   git?: GitLocation | null;
   title?: string | null;
-  state: SessionStatus;
+  state: ThreadStatus;
   activity: Activity;
   /**
    * Attached now, the receiving client included.
@@ -3072,7 +3072,7 @@ export interface SessionState {
   queuePaused?: QueuePause | null;
   pending?: PendingRequest[];
   /**
-   * Subagent sessions so far.
+   * Subagent threads so far.
    */
   subagents?: SessionId[];
   journal: JournalHead;
@@ -3085,19 +3085,19 @@ export interface SessionState {
    */
   mcpServers?: McpServerStatus[];
   /**
-   * Where the Host writes this session's protocol trace, when asked to.
+   * Where the Host writes this thread's protocol trace, when asked to.
    */
   trace?: string | null;
   /**
-   * A newer version of the agent than the session runs, once the Host has found one.
+   * A newer version of the agent than the thread runs, once the Host has found one.
    */
   update?: AgentUpdate | null;
   /**
-   * The session whose agent started it, for a delegated session.
+   * The thread whose agent started it, for a delegated thread.
    */
   startedBy?: SessionId | null;
   /**
-   * The Host the session that started it is on, when it isn't this one.
+   * The Host the thread that started it is on, when it isn't this one.
    */
   startedByHost?: string | null;
   /**
@@ -3110,12 +3110,12 @@ export interface SessionState {
   labels?: string[];
 }
 /**
- * The agent a session runs with.
+ * The agent a thread runs with.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionAgent".
+ * via the `definition` "ThreadAgent".
  */
-export interface SessionAgent {
+export interface ThreadAgent {
   id: string;
   name: string;
   initialize: InitializeResponse1;
@@ -3339,7 +3339,7 @@ export interface RunningTurn {
    *
    * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
    */
-  sessionId: string;
+  threadId: string;
   startedAt: number;
   origin: TurnOrigin;
   /**
@@ -3348,7 +3348,7 @@ export interface RunningTurn {
   turnId?: string | null;
 }
 /**
- * A prompt waiting in a session's queue.
+ * A prompt waiting in a thread's queue.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "QueuedPrompt".
@@ -3371,10 +3371,10 @@ export interface QueuedPrompt {
         run: {};
       }
     | {
-        session: {
-          sessionId: SessionId;
+        thread: {
+          threadId: SessionId;
           /**
-           * The Host that session is on, when it isn't this one: the id of another of the
+           * The Host that thread is on, when it isn't this one: the id of another of the
            * person's Hosts, as the service that reaches them gave it (ADR 0029).
            */
           host?: string | null;
@@ -3383,7 +3383,7 @@ export interface QueuedPrompt {
            */
           hostName?: string | null;
           /**
-           * The Host's report on that session, of how a turn this session's agent began there
+           * The Host's report on that thread, of how a turn this thread's agent began there
            * ended or that it waits on a person. Nobody hears how a report's turn ends.
            */
           report?: boolean;
@@ -4174,7 +4174,7 @@ export interface ElicitationRequestScope2 {
   requestId: null | number | string;
 }
 /**
- * Where a session's journal is up to.
+ * Where a thread's journal is up to.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "JournalHead".
@@ -4187,7 +4187,7 @@ export interface JournalHead {
   head: number;
 }
 /**
- * One MCP server a session's agent was given, or left without.
+ * One MCP server a thread's agent was given, or left without.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "McpServerStatus".
@@ -4209,7 +4209,7 @@ export interface McpServerStatus {
   reason?: string | null;
 }
 /**
- * A newer version of a session's agent than the one it runs.
+ * A newer version of a thread's agent than the one it runs.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "AgentUpdate".
@@ -4221,7 +4221,7 @@ export interface AgentUpdate {
    */
   name: string;
   /**
-   * The version the session runs.
+   * The version the thread runs.
    */
   running: string;
   latest: string;
@@ -4409,36 +4409,36 @@ export interface TitledMultiSelectItems1 {
   } | null;
 }
 /**
- * `session/attach`: attach to a session, opening it first if it isn't open. The session's
+ * `thread/attach`: attach to a thread, opening it first if it isn't open. The thread's
  * events after `after` follow the response, then live ones.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "AttachSessionRequest".
+ * via the `definition` "AttachThreadRequest".
  */
-export interface AttachSessionRequest {
-  sessionId: SessionId;
+export interface AttachThreadRequest {
+  threadId: SessionId;
   /**
    * The last event this client handled; everything is sent without it.
    */
   after?: JournalPosition | null;
   /**
-   * Required when the Host has no record of the session.
+   * Required when the Host has no record of the thread.
    */
   agentId?: string | null;
   /**
-   * Required when the Host has no record of the session.
+   * Required when the Host has no record of the thread.
    */
   cwd?: string | null;
   trace?: boolean;
   /**
-   * Receive the session as an observer ([`OBSERVE_FEATURE`]), as a script following it does:
-   * only an open session, which this doesn't open; not one of its `clients`, so it never keeps
-   * the session open or closes it, and is never sent a client tool to run.
+   * Receive the thread as an observer ([`OBSERVE_FEATURE`]), as a script following it does:
+   * only an open thread, which this doesn't open; not one of its `clients`, so it never keeps
+   * the thread open or closes it, and is never sent a client tool to run.
    */
   observe?: boolean;
 }
 /**
- * An event's place in a session's journal: where a client catches up after.
+ * An event's place in a thread's journal: where a client catches up after.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "JournalPosition".
@@ -4448,14 +4448,14 @@ export interface JournalPosition {
   seq: number;
 }
 /**
- * An open session as a client attached to it sees it; notifications keep it up to date.
+ * An open thread as a client attached to it sees it; notifications keep it up to date.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "AttachSessionResponse".
+ * via the `definition` "AttachThreadResponse".
  */
-export interface AttachSessionResponse {
-  sessionId: SessionId;
-  agent: SessionAgent;
+export interface AttachThreadResponse {
+  threadId: SessionId;
+  agent: ThreadAgent;
   cwd: string;
   additionalDirectories?: string[];
   /**
@@ -4463,7 +4463,7 @@ export interface AttachSessionResponse {
    */
   git?: GitLocation | null;
   title?: string | null;
-  state: SessionStatus;
+  state: ThreadStatus;
   activity: Activity;
   /**
    * Attached now, the receiving client included.
@@ -4487,7 +4487,7 @@ export interface AttachSessionResponse {
   queuePaused?: QueuePause | null;
   pending?: PendingRequest[];
   /**
-   * Subagent sessions so far.
+   * Subagent threads so far.
    */
   subagents?: SessionId[];
   journal: JournalHead;
@@ -4500,19 +4500,19 @@ export interface AttachSessionResponse {
    */
   mcpServers?: McpServerStatus[];
   /**
-   * Where the Host writes this session's protocol trace, when asked to.
+   * Where the Host writes this thread's protocol trace, when asked to.
    */
   trace?: string | null;
   /**
-   * A newer version of the agent than the session runs, once the Host has found one.
+   * A newer version of the agent than the thread runs, once the Host has found one.
    */
   update?: AgentUpdate | null;
   /**
-   * The session whose agent started it, for a delegated session.
+   * The thread whose agent started it, for a delegated thread.
    */
   startedBy?: SessionId | null;
   /**
-   * The Host the session that started it is on, when it isn't this one.
+   * The Host the thread that started it is on, when it isn't this one.
    */
   startedByHost?: string | null;
   /**
@@ -4542,48 +4542,48 @@ export interface Replay {
   reset: boolean;
 }
 /**
- * `session/detach`: stop receiving the session.
+ * `thread/detach`: stop receiving the thread.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "DetachSessionRequest".
+ * via the `definition` "DetachThreadRequest".
  */
-export interface DetachSessionRequest {
-  sessionId: SessionId;
+export interface DetachThreadRequest {
+  threadId: SessionId;
   /**
-   * When detaching closes the session.
+   * When detaching closes the thread.
    */
   close?: "never" | "ifUnused";
 }
 /**
- * `session/close`: close the session for everyone, ending its turn and stopping its agent.
+ * `thread/close`: close the thread for everyone, ending its turn and stopping its agent.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "CloseSessionRequest".
+ * via the `definition` "CloseThreadRequest".
  */
-export interface CloseSessionRequest {
-  sessionId: SessionId;
+export interface CloseThreadRequest {
+  threadId: SessionId;
 }
 /**
- * `session/delete`: close it if open, delete it in the agent, and remove its journal.
+ * `thread/delete`: close it if open, delete it in the agent, and remove its journal.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "DeleteSessionRequest".
+ * via the `definition` "DeleteThreadRequest".
  */
-export interface DeleteSessionRequest {
-  sessionId: SessionId;
+export interface DeleteThreadRequest {
+  threadId: SessionId;
   /**
-   * Required when the Host has no record of the session.
+   * Required when the Host has no record of the thread.
    */
   agentId?: string | null;
 }
 /**
- * `session/setMode`. The change reaches every attached client as an ACP update.
+ * `thread/setMode`. The change reaches every attached client as an ACP update.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SetModeRequest".
  */
 export interface SetModeRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
   modeId: SessionModeId;
 }
 /**
@@ -4609,81 +4609,81 @@ export interface SetSessionConfigOptionResponse {
   } | null;
 }
 /**
- * `session/reopen`: stop the session's agent and take the session up again in a new process
- * of the version the agent's new sessions get, through ACP `session/resume` or
- * `session/load`. The session keeps its id and journal, where an `agentReopened` event marks
+ * `thread/reopen`: stop the thread's agent and take the thread up again in a new process
+ * of the version the agent's new threads get, through ACP `session/resume` or
+ * `session/load`. The thread keeps its id and journal, where an `agentReopened` event marks
  * the change. While a turn runs or a request waits, it waits for them. When the new version
- * can't take the session up, the old one does again, and the event says why. Anything that
+ * can't take the thread up, the old one does again, and the event says why. Anything that
  * lived only in the old process, such as its background commands, ends with it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ReopenSessionRequest".
+ * via the `definition` "ReopenThreadRequest".
  */
-export interface ReopenSessionRequest {
-  sessionId: SessionId;
+export interface ReopenThreadRequest {
+  threadId: SessionId;
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ReopenSessionResponse".
+ * via the `definition` "ReopenThreadResponse".
  */
-export interface ReopenSessionResponse {
+export interface ReopenThreadResponse {
   /**
-   * The version the session's agent runs now.
+   * The version the thread's agent runs now.
    */
   version?: string | null;
 }
 /**
- * `session/rename`: give an open session a title of the Host's, which its clients see, journaled
+ * `thread/rename`: give an open thread a title of the Host's, which its clients see, journaled
  * as a `renamed` event, and which titles the agent sends later don't replace. The title is
- * trimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the session
+ * trimmed, and must be 1 to [`MAX_TITLE`] characters. The agent's own record of the thread
  * keeps its title: ACP has no way to change it from outside.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "RenameSessionRequest".
+ * via the `definition` "RenameThreadRequest".
  */
-export interface RenameSessionRequest {
-  sessionId: SessionId;
+export interface RenameThreadRequest {
+  threadId: SessionId;
   title: string;
 }
 /**
- * `session/setSuccessor`: name the session an open session's work goes on in, as the
+ * `thread/setSuccessor`: name the thread an open thread's work goes on in, as the
  * Dispatcher does when it starts a Bot's new thread. Journaled as a `continuedIn` event and
- * listed as the session's `continuedIn`; reports to the session go to its successor from then
- * on. The successor is a session the Host has a record of, other than this one and not one
- * whose successors lead back to it. A session's successor is named once: naming the same one
+ * listed as the thread's `continuedIn`; reports to the thread go to its successor from then
+ * on. The successor is a thread the Host has a record of, other than this one and not one
+ * whose successors lead back to it. A thread's successor is named once: naming the same one
  * again does nothing, and another is refused.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "SetSuccessorRequest".
  */
 export interface SetSuccessorRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
   successor: SessionId;
 }
 /**
- * `session/label`: add labels to an open session and take others off, journaled as a
+ * `thread/label`: add labels to an open thread and take others off, journaled as a
  * `labelled` event, answered with its labels after. Labels mean nothing to the Host: clients
- * give them, and filter `sessions/list` and `sessions/watch` by them. A labelled session's
- * journal is kept past pruning. Each label is checked with [`check_label`], and a session
+ * give them, and filter `threads/list` and `threads/watch` by them. A labelled thread's
+ * journal is kept past pruning. Each label is checked with [`check_label`], and a thread
  * carries at most [`MAX_LABELS`].
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "LabelSessionRequest".
+ * via the `definition` "LabelThreadRequest".
  */
-export interface LabelSessionRequest {
-  sessionId: SessionId;
+export interface LabelThreadRequest {
+  threadId: SessionId;
   add?: string[];
   remove?: string[];
 }
 /**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "LabelSessionResponse".
+ * via the `definition` "LabelThreadResponse".
  */
-export interface LabelSessionResponse {
+export interface LabelThreadResponse {
   labels: string[];
 }
 /**
- * `session/run`: open a session (this one, or a new one) and start a turn in it, without
+ * `thread/run`: open a thread (this one, or a new one) and start a turn in it, without
  * the client having to stay.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -4701,10 +4701,10 @@ export interface RunRequest {
    * [`crate::worktrees::GitLocation::remote`] gives it, such as `github.com/owner/name`.
    */
   remote?: string | null;
-  sessionId?: SessionId | null;
+  threadId?: SessionId | null;
   additionalDirectories?: string[];
   /**
-   * The mode a new session starts in; the agent's configured one when absent.
+   * The mode a new thread starts in; the agent's configured one when absent.
    */
   mode?: string | null;
   prompt: ContentBlock[];
@@ -4715,13 +4715,13 @@ export interface RunRequest {
   attach?: boolean;
   trace?: boolean;
   /**
-   * Makes it safe to send again (feature `requestKeys`). A repeat answers with the session's
-   * id alone; a client that asked to attach attaches with `session/attach`.
+   * Makes it safe to send again (feature `requestKeys`). A repeat answers with the thread's
+   * id alone; a client that asked to attach attaches with `thread/attach`.
    */
   key?: string | null;
   /**
    * A service's only (feature `otherHosts`): the thread on another Host whose agent asks,
-   * which the turn's origin names, and a new session's `startedBy` and `startedByHost`.
+   * which the turn's origin names, and a new thread's `startedBy` and `startedByHost`.
    */
   caller?: OtherThread | null;
   /**
@@ -4729,13 +4729,13 @@ export interface RunRequest {
    */
   origin?: ServiceOrigin | null;
   /**
-   * Labels for a session it starts, from the start (feature `labels`); an existing session
+   * Labels for a thread it starts, from the start (feature `labels`); an existing thread
    * keeps its own.
    */
   labels?: string[];
 }
 /**
- * How a session's permission requests are answered.
+ * How a thread's permission requests are answered.
  */
 export interface PermissionPolicy1 {
   /**
@@ -4754,7 +4754,7 @@ export interface PermissionPolicy1 {
  * via the `definition` "OtherThread".
  */
 export interface OtherThread {
-  sessionId: SessionId;
+  threadId: SessionId;
   /**
    * The Host it's on, by its id.
    */
@@ -4785,7 +4785,7 @@ export interface ServiceOrigin {
  * via the `definition` "RunResponse".
  */
 export interface RunResponse {
-  sessionId: SessionId;
+  threadId: SessionId;
   /**
    * The id of the turn it started (feature `turnIds`).
    */
@@ -4793,22 +4793,22 @@ export interface RunResponse {
   /**
    * When attached.
    */
-  state?: SessionState | null;
+  state?: ThreadState | null;
   /**
-   * The policy the session runs under (feature `otherHosts`): the one asked for, or an open
-   * session's own. Absent from a repeat under a request key.
+   * The policy the thread runs under (feature `otherHosts`): the one asked for, or an open
+   * thread's own. Absent from a repeat under a request key.
    */
   policy?: PermissionPolicy | null;
 }
 /**
- * `turn/start`: send a prompt. Answered once the turn has started. The session must be
- * open; it may be a subagent session.
+ * `turn/start`: send a prompt. Answered once the turn has started. The thread must be
+ * open; it may be a subagent thread.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "StartTurnRequest".
  */
 export interface StartTurnRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
   prompt: ContentBlock[];
   /**
    * Makes it safe to send again (feature [`REQUEST_KEYS_FEATURE`]).
@@ -4830,7 +4830,7 @@ export interface StartTurnResponse {
   turnId?: string | null;
 }
 /**
- * `turn/steer`: a message for the session's running turn, which joins it rather than
+ * `turn/steer`: a message for the thread's running turn, which joins it rather than
  * starting a turn of its own. Every attached client sees it as a `turnSteered` event, in
  * order with the turn's updates. It needs an agent that takes steering, as its `initialize`
  * response says.
@@ -4839,7 +4839,7 @@ export interface StartTurnResponse {
  * via the `definition` "SteerTurnRequest".
  */
 export interface SteerTurnRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
   prompt: ContentBlock[];
   /**
    * A service's only (feature `otherHosts`): the thread on another Host whose agent asks,
@@ -4867,16 +4867,16 @@ export interface SteerTurnResponse {
   turnId?: string | null;
 }
 /**
- * `turn/cancel`: cancel the session's running turn and its pending requests.
+ * `turn/cancel`: cancel the thread's running turn and its pending requests.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CancelTurnRequest".
  */
 export interface CancelTurnRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
 }
 /**
- * `queue/add`: add a prompt to the end of the session's queue. With no turn running and
+ * `queue/add`: add a prompt to the end of the thread's queue. With no turn running and
  * nothing waiting, it starts a turn at once. Adding to a paused queue resumes it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -4891,7 +4891,7 @@ export interface AddQueuedRequest {
    *
    * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
    */
-  sessionId: string;
+  threadId: string;
   prompt: ContentBlock[];
   /**
    * Makes it safe to send again (feature `requestKeys`).
@@ -4933,7 +4933,7 @@ export interface AddQueuedResponse {
  * via the `definition` "RemoveQueuedRequest".
  */
 export interface RemoveQueuedRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
   queuedId: string;
 }
 /**
@@ -4953,7 +4953,7 @@ export interface RemoveQueuedResponse {
  * via the `definition` "ResumeQueueRequest".
  */
 export interface ResumeQueueRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
 }
 /**
  * `pending/answer`: answer a pending request, with the response for its kind. The first
@@ -4963,7 +4963,7 @@ export interface ResumeQueueRequest {
  * via the `definition` "AnswerPendingRequest".
  */
 export interface AnswerPendingRequest {
-  sessionId: SessionId;
+  threadId: SessionId;
   pendingId: string;
   permission?: RequestPermissionResponse | null;
   elicitation?: CreateElicitationResponse | null;
@@ -5052,7 +5052,7 @@ export interface ClientToolResult {
   isError?: boolean;
 }
 /**
- * `worktrees/list`: a repository's worktrees and the sessions in each.
+ * `worktrees/list`: a repository's worktrees and the threads in each.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ListWorktreesRequest".
@@ -5118,9 +5118,9 @@ export interface Worktree {
    */
   upstream?: Upstream | null;
   /**
-   * The sessions the Host has a record of in it, open or not, most recently active first.
+   * The threads the Host has a record of in it, open or not, most recently active first.
    */
-  sessions?: SessionId[];
+  threads?: SessionId[];
 }
 /**
  * Commits one side has that the other doesn't.
@@ -5163,7 +5163,7 @@ export interface Upstream {
  * `<repo>.<branch>` with the branch made safe for a path (`feature/auth` becomes
  * `weave.feature-auth`). A branch that doesn't exist is made from `base`. One that exists is
  * checked out, a branch only a remote has included, unless another worktree has it checked
- * out. The client then starts a session there with `session/create`.
+ * out. The client then starts a thread there with `thread/create`.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "CreateWorktreeRequest".
@@ -5196,9 +5196,9 @@ export interface CreateWorktreeResponse {
   createdBranch?: boolean;
 }
 /**
- * `worktrees/remove`: remove a worktree other than the primary one. Refused while a session
+ * `worktrees/remove`: remove a worktree other than the primary one. Refused while a thread
  * in it runs a turn or waits on a request (`worktree_busy`), and when it has changes
- * (`uncommitted_changes`) unless `force`. Otherwise the sessions open in it close first. Their
+ * (`uncommitted_changes`) unless `force`. Otherwise the threads open in it close first. Their
  * journals stay, so they can still be deleted. Its branch is deleted when git counts it merged,
  * and regardless with `deleteBranch`.
  *
@@ -5222,7 +5222,7 @@ export interface RemoveWorktreeRequest {
  */
 export interface RemoveWorktreeResponse {
   /**
-   * The sessions that were open in it, now closed.
+   * The threads that were open in it, now closed.
    */
   closed?: SessionId[];
   /**
@@ -5234,7 +5234,7 @@ export interface RemoveWorktreeResponse {
 /**
  * `worktrees/release`: let a worktree go before something else removes it, as
  * `weave worktrees pre-remove` asks when worktrunk does. Refused, as `worktrees/remove` is,
- * while a session in it runs a turn or waits on a request; otherwise the sessions open in it
+ * while a thread in it runs a turn or waits on a request; otherwise the threads open in it
  * close.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -5249,7 +5249,7 @@ export interface ReleaseWorktreeRequest {
  */
 export interface ReleaseWorktreeResponse {
   /**
-   * The sessions that were open in it, now closed.
+   * The threads that were open in it, now closed.
    */
   closed?: SessionId[];
 }
@@ -5295,7 +5295,7 @@ export interface HostTerminal {
    */
   label?: string | null;
   /**
-   * The session it was opened from, whose clients put it in front by default.
+   * The thread it was opened from, whose clients put it in front by default.
    */
   openedFrom?: SessionId | null;
   /**
@@ -5501,17 +5501,17 @@ export interface AttachTerminalResponse {
   expiresAt: number;
 }
 /**
- * `session/report` (feature `otherHosts`), a service's only: tell a session how a turn its
+ * `thread/report` (feature `otherHosts`), a service's only: tell a thread how a turn its
  * agent began on another Host went, or that it waits on a person there, as the Host tells it
- * of its own sessions' turns (ADR 0023): into its running turn if its agent takes steers,
+ * of its own threads' turns (ADR 0023): into its running turn if its agent takes steers,
  * otherwise through its queue, in the last of its successors, taking it up again if it isn't
  * open. The turn or steer it makes is a report on `about`, which nobody hears the end of.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ReportSessionRequest".
+ * via the `definition` "ReportThreadRequest".
  */
-export interface ReportSessionRequest {
-  sessionId: SessionId;
+export interface ReportThreadRequest {
+  threadId: SessionId;
   about: OtherThread1;
   text: string;
   /**
@@ -5523,7 +5523,7 @@ export interface ReportSessionRequest {
  * A thread on another of the person's Hosts (feature `otherHosts`), as a service names it.
  */
 export interface OtherThread1 {
-  sessionId: SessionId;
+  threadId: SessionId;
   /**
    * The Host it's on, by its id.
    */
@@ -5587,12 +5587,12 @@ export interface AnswerToolRequest {
   result: ClientToolResult;
 }
 /**
- * `session/event`: one journaled event, in order.
+ * `thread/event`: one journaled event, in order.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionEventNotification".
+ * via the `definition` "ThreadEventNotification".
  */
-export interface SessionEventNotification {
+export interface ThreadEventNotification {
   /**
    * A unique identifier for a conversation session between a client and agent.
    *
@@ -5601,13 +5601,13 @@ export interface SessionEventNotification {
    *
    * See protocol docs: [Session ID](https://agentclientprotocol.com/protocol/session-setup#session-id)
    */
-  sessionId: string;
+  threadId: string;
   /**
-   * The event's position in the session's journal.
+   * The event's position in the thread's journal.
    */
   seq: number;
   at: number;
-  event: SessionEvent;
+  event: ThreadEvent;
 }
 /**
  * Notification containing a session update from the agent.
@@ -6550,19 +6550,19 @@ export interface UnstructuredCommandInput1 {
   } | null;
 }
 /**
- * `session/changed`: what changed about the session, as `SessionState` describes it.
+ * `thread/changed`: what changed about the thread, as `ThreadState` describes it.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionChangedNotification".
+ * via the `definition` "ThreadChangedNotification".
  */
-export interface SessionChangedNotification {
-  sessionId: SessionId;
+export interface ThreadChangedNotification {
+  threadId: SessionId;
   activity?: Activity | null;
   clients?: number | null;
   title?: string | null;
   blank?: boolean | null;
   /**
-   * Where in a git repository the session's directory is, as a turn left it.
+   * Where in a git repository the thread's directory is, as a turn left it.
    */
   git?: GitLocation | null;
   /**
@@ -6572,34 +6572,34 @@ export interface SessionChangedNotification {
   mcpServers?: McpServerStatus[] | null;
 }
 /**
- * `sessions/updated`, to watching clients: a session appeared or changed (opened, suspended,
- * closed, its activity, its clients, its title, or a blank session's first prompt), as it lists
+ * `threads/updated`, to watching clients: a thread appeared or changed (opened, suspended,
+ * closed, its activity, its clients, its title, or a blank thread's first prompt), as it lists
  * now.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionUpdatedNotification".
+ * via the `definition` "ThreadUpdatedNotification".
  */
-export interface SessionUpdatedNotification {
-  session: SessionListing;
+export interface ThreadUpdatedNotification {
+  thread: ThreadListing;
 }
 /**
- * `sessions/removed`, to watching clients: a session went away: deleted, its journal pruned,
+ * `threads/removed`, to watching clients: a thread went away: deleted, its journal pruned,
  * or closed while blank.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "SessionRemovedNotification".
+ * via the `definition` "ThreadRemovedNotification".
  */
-export interface SessionRemovedNotification {
-  sessionId: SessionId;
+export interface ThreadRemovedNotification {
+  threadId: SessionId;
 }
 /**
- * `session/elicitationCompleted`: an accepted URL elicitation's external step finished.
+ * `thread/elicitationCompleted`: an accepted URL elicitation's external step finished.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ElicitationCompletedNotification".
  */
 export interface ElicitationCompletedNotification {
-  sessionId: SessionId;
+  threadId: SessionId;
   notification: CompleteElicitationNotification;
 }
 /**
@@ -6627,13 +6627,13 @@ export interface CompleteElicitationNotification {
   } | null;
 }
 /**
- * `pending/added`: a request now waits in an attached session.
+ * `pending/added`: a request now waits in an attached thread.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "PendingAddedNotification".
  */
 export interface PendingAddedNotification {
-  sessionId: SessionId;
+  threadId: SessionId;
   pending: PendingRequest;
 }
 /**
@@ -6643,7 +6643,7 @@ export interface PendingAddedNotification {
  * via the `definition` "PendingResolvedNotification".
  */
 export interface PendingResolvedNotification {
-  sessionId: SessionId;
+  threadId: SessionId;
   pendingId: string;
   outcome: Resolution;
   /**
@@ -6652,21 +6652,21 @@ export interface PendingResolvedNotification {
   by?: string | null;
 }
 /**
- * `agents/updateAvailable`: a newer version of an attached session's agent is out. The Host
- * looks when a session opens, at most once an hour for each agent.
+ * `agents/updateAvailable`: a newer version of an attached thread's agent is out. The Host
+ * looks when a thread opens, at most once an hour for each agent.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "UpdateAvailableNotification".
  */
 export interface UpdateAvailableNotification {
-  sessionId: SessionId;
+  threadId: SessionId;
   agentId: string;
   /**
    * The package or registry agent, as [`AgentRelease::name`].
    */
   name: string;
   /**
-   * The version the session runs.
+   * The version the thread runs.
    */
   running: string;
   latest: string;
@@ -6704,7 +6704,7 @@ export interface TerminalRemovedNotification {
   exitCode?: number | null;
 }
 /**
- * `service/toolCall`, to the service that declared the tool: a session's agent called it.
+ * `service/toolCall`, to the service that declared the tool: a thread's agent called it.
  * The service answers with `service/answerTool`; the agent waits until it does.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -6722,20 +6722,20 @@ export interface ToolCallNotification {
   caller: ToolCaller;
 }
 /**
- * The session whose agent calls a service tool.
+ * The thread whose agent calls a service tool.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ToolCaller".
  */
 export interface ToolCaller {
-  sessionId: SessionId;
+  threadId: SessionId;
   agentId: string;
   cwd: string;
   policy: PermissionPolicy2;
   labels?: string[];
 }
 /**
- * How a session's permission requests are answered.
+ * How a thread's permission requests are answered.
  */
 export interface PermissionPolicy2 {
   /**
@@ -6749,7 +6749,7 @@ export interface PermissionPolicy2 {
 }
 /**
  * `service/hostCall` (feature `otherHosts`), to the service that said it reaches the person's
- * Hosts: a session's agent called a Host tool naming another Host. The service answers with
+ * Hosts: a thread's agent called a Host tool naming another Host. The service answers with
  * `service/answerTool`, as for a tool call, with the method's answer as JSON text or a tool
  * error; `service/toolCallCancelled` says the agent stopped waiting.
  *
@@ -6829,8 +6829,8 @@ export interface TerminalStreamOpened {
 /** Versions, the WebSocket's subprotocol and close codes, error codes, features and client tools. */
 export const HOST_PROTOCOL = {
   "protocol": {
-    "version": 2,
-    "oldestSupported": 2
+    "version": 3,
+    "oldestSupported": 3
   },
   "websocket": {
     "subprotocol": "weave-host",
@@ -6853,8 +6853,8 @@ export const HOST_PROTOCOL = {
     "unauthenticated": -32060,
     "incompatibleProtocol": -32061,
     "unknownAgent": -32062,
-    "unknownSession": -32063,
-    "sessionNotOpen": -32064,
+    "unknownThread": -32063,
+    "threadNotOpen": -32064,
     "turnRunning": -32065,
     "alreadyResolved": -32066,
     "wrongAgent": -32067,
@@ -6879,12 +6879,12 @@ export const HOST_PROTOCOL = {
     "devices": "devices",
     "agentUpdates": "agents/updates",
     "clientTools": "clientTools",
-    "watch": "sessions/watch",
+    "watch": "threads/watch",
     "listFiles": "files/list",
-    "rename": "session/rename",
+    "rename": "thread/rename",
     "worktrees": "worktrees",
     "queue": "queue",
-    "getSession": "sessions/get",
+    "getThread": "threads/get",
     "requestKeys": "requestKeys",
     "drain": "drain",
     "terminals": "terminals",
@@ -6895,7 +6895,7 @@ export const HOST_PROTOCOL = {
   "files": {
     "maxEntries": 2000
   },
-  "sessions": {
+  "threads": {
     "maxTitle": 200
   },
   "requestKeys": {
@@ -6905,13 +6905,13 @@ export const HOST_PROTOCOL = {
     "clipboardWrite": "clipboard_write"
   },
   "hostTools": {
-    "renameSession": "rename_session",
-    "listSessions": "list_sessions",
-    "readSession": "read_session",
-    "startSession": "start_session",
-    "promptSession": "prompt_session",
-    "steerSession": "steer_session",
-    "cancelSessionTurn": "cancel_session_turn",
+    "renameThread": "rename_thread",
+    "listThreads": "list_threads",
+    "readThread": "read_thread",
+    "startThread": "start_thread",
+    "promptThread": "prompt_thread",
+    "steerThread": "steer_thread",
+    "cancelThreadTurn": "cancel_thread_turn",
     "listAgents": "list_agents",
     "listHosts": "list_hosts"
   }
@@ -6936,22 +6936,22 @@ export interface HostRequests {
   "dispatcher/join": { params: JoinDispatcherRequest; result: JoinDispatcherResponse };
   "dispatcher/leave": { params: LeaveDispatcherRequest; result: Empty };
   "files/list": { params: ListFilesRequest; result: ListFilesResponse };
-  "sessions/list": { params: ListSessionsRequest; result: ListSessionsResponse };
-  "sessions/get": { params: GetSessionRequest; result: GetSessionResponse };
-  "sessions/watch": { params: WatchSessionsRequest; result: WatchSessionsResponse };
-  "sessions/unwatch": { params: UnwatchSessionsRequest; result: Empty };
-  "session/create": { params: CreateSessionRequest; result: SessionState };
-  "session/attach": { params: AttachSessionRequest; result: AttachSessionResponse };
-  "session/detach": { params: DetachSessionRequest; result: Empty };
-  "session/close": { params: CloseSessionRequest; result: Empty };
-  "session/delete": { params: DeleteSessionRequest; result: Empty };
-  "session/setMode": { params: SetModeRequest; result: Empty };
-  "session/setConfigOption": { params: SetConfigOptionRequest; result: SetSessionConfigOptionResponse };
-  "session/reopen": { params: ReopenSessionRequest; result: ReopenSessionResponse };
-  "session/rename": { params: RenameSessionRequest; result: Empty };
-  "session/setSuccessor": { params: SetSuccessorRequest; result: Empty };
-  "session/label": { params: LabelSessionRequest; result: LabelSessionResponse };
-  "session/run": { params: RunRequest; result: RunResponse };
+  "threads/list": { params: ListThreadsRequest; result: ListThreadsResponse };
+  "threads/get": { params: GetThreadRequest; result: GetThreadResponse };
+  "threads/watch": { params: WatchThreadsRequest; result: WatchThreadsResponse };
+  "threads/unwatch": { params: UnwatchThreadsRequest; result: Empty };
+  "thread/create": { params: CreateThreadRequest; result: ThreadState };
+  "thread/attach": { params: AttachThreadRequest; result: AttachThreadResponse };
+  "thread/detach": { params: DetachThreadRequest; result: Empty };
+  "thread/close": { params: CloseThreadRequest; result: Empty };
+  "thread/delete": { params: DeleteThreadRequest; result: Empty };
+  "thread/setMode": { params: SetModeRequest; result: Empty };
+  "thread/setConfigOption": { params: SetConfigOptionRequest; result: SetSessionConfigOptionResponse };
+  "thread/reopen": { params: ReopenThreadRequest; result: ReopenThreadResponse };
+  "thread/rename": { params: RenameThreadRequest; result: Empty };
+  "thread/setSuccessor": { params: SetSuccessorRequest; result: Empty };
+  "thread/label": { params: LabelThreadRequest; result: LabelThreadResponse };
+  "thread/run": { params: RunRequest; result: RunResponse };
   "turn/start": { params: StartTurnRequest; result: StartTurnResponse };
   "turn/steer": { params: SteerTurnRequest; result: SteerTurnResponse };
   "turn/cancel": { params: CancelTurnRequest; result: Empty };
@@ -6972,18 +6972,18 @@ export interface HostRequests {
   "terminals/write": { params: WriteTerminalRequest; result: Empty };
   "terminals/format": { params: FormatTerminalRequest; result: FormatTerminalResponse };
   "terminals/attach": { params: AttachTerminalRequest; result: AttachTerminalResponse };
-  "session/report": { params: ReportSessionRequest; result: Empty };
+  "thread/report": { params: ReportThreadRequest; result: Empty };
   "service/declareTools": { params: DeclareToolsRequest; result: DeclareToolsResponse };
   "service/answerTool": { params: AnswerToolRequest; result: Empty };
 }
 
 /** What each notification the Host sends carries. */
 export interface HostNotifications {
-  "session/event": SessionEventNotification;
-  "session/changed": SessionChangedNotification;
-  "sessions/updated": SessionUpdatedNotification;
-  "sessions/removed": SessionRemovedNotification;
-  "session/elicitationCompleted": ElicitationCompletedNotification;
+  "thread/event": ThreadEventNotification;
+  "thread/changed": ThreadChangedNotification;
+  "threads/updated": ThreadUpdatedNotification;
+  "threads/removed": ThreadRemovedNotification;
+  "thread/elicitationCompleted": ElicitationCompletedNotification;
   "pending/added": PendingAddedNotification;
   "pending/resolved": PendingResolvedNotification;
   "agents/updateAvailable": UpdateAvailableNotification;

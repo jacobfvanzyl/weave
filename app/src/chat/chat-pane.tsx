@@ -21,7 +21,7 @@ import {
   SendIcon,
   StopIcon,
 } from '@hugeicons/core-free-icons';
-import { allSubagents, pendingRequests, sessionLabel } from './acp-transcript';
+import { allSubagents, pendingRequests, threadLabel } from './acp-transcript';
 import type {
   AcpTranscript,
   TranscriptClientTool,
@@ -83,7 +83,7 @@ import { Context, ContextContent, ContextTrigger } from '@/components/ai-element
 import { cn } from '@/lib/utils';
 
 export type ChatPaneActions = {
-  setDraftText?(sessionId: string, text: string): void;
+  setDraftText?(threadId: string, text: string): void;
   /** Starts a turn, or while one runs, steers it or queues the message. */
   send(text: string, images?: PromptImage[]): Promise<void> | void;
   removeQueued?(id: string): void;
@@ -229,7 +229,7 @@ const EntryView = memo(function EntryView({
   previous.entry === next.entry
   && previous.isStreaming === next.isStreaming
   && previous.actions === next.actions
-  // Only messages between sessions read the transcript around them, for its subagents' names.
+  // Only messages between threads read the transcript around them, for its subagents' names.
   && (previous.entry.kind !== 'session-message' || previous.transcript.subagents === next.transcript.subagents));
 
 const selectOptions = (option: Extract<SessionConfigOption, { type: 'select' }>) =>
@@ -562,7 +562,7 @@ function Composer({
   const [images, setImages] = useState<PromptImage[]>([]);
   const [imageError, setImageError] = useState<string>();
   const fileRef = useRef<HTMLInputElement>(null);
-  const composerKey = draftKey ?? model.sessionId;
+  const composerKey = draftKey ?? model.threadId;
   const [draft, setDraft] = useState<ComposerDraft>(
     () => composerDrafts.get(composerKey) ?? { revision: 0, text: '' },
   );
@@ -789,9 +789,9 @@ export function ChatPane({
   canAttachImages?: boolean;
   /** Shows the transcript without a composer, as a subagent's is shown. */
   readOnly?: boolean;
-  /** The session's own transcript, when `model` is one of its subagents'. */
+  /** The thread's own transcript, when `model` is one of its subagents'. */
   root?: AcpTranscript;
-  onOpenSubagent?(sessionId: string): void;
+  onOpenSubagent?(threadId: string): void;
   focusRequest?: number;
   discardDraftOnUnmount?: boolean;
   draftKey?: string;
@@ -806,8 +806,8 @@ export function ChatPane({
   const running = model.turn.status === 'running';
   const items = useMemo(() => loading ? [] : transcriptItems(model.entries, running), [loading, model.entries, running]);
   const streamingId = running ? model.entries.at(-1)?.id : undefined;
-  const session = root ?? model;
-  const context = useMemo<TranscriptContextValue>(() => ({ root: session, openSubagent: onOpenSubagent }), [session, onOpenSubagent]);
+  const thread = root ?? model;
+  const context = useMemo<TranscriptContextValue>(() => ({ root: thread, openSubagent: onOpenSubagent }), [thread, onOpenSubagent]);
   return (
     <TranscriptContext.Provider value={context}>
       <div
@@ -856,7 +856,7 @@ export function ChatPane({
           {inScroller}
         </MessageScrollerProvider>}
         {!readOnly && <Composer
-          key={draftKey ?? model.sessionId}
+          key={draftKey ?? model.threadId}
           draftKey={draftKey}
           model={model}
           actions={actions}
@@ -898,8 +898,8 @@ export function SurfacedThread({
 }) {
   const requests = [
     ...pendingRequests(model).map((entry) => ({ entry, transcript: model, from: undefined })),
-    ...allSubagents(model).flatMap(({ sessionId, transcript }) =>
-      pendingRequests(transcript).map((entry) => ({ entry, transcript, from: sessionLabel(model, sessionId) }))),
+    ...allSubagents(model).flatMap(({ threadId, transcript }) =>
+      pendingRequests(transcript).map((entry) => ({ entry, transcript, from: threadLabel(model, threadId) }))),
   ];
   const context = useMemo<TranscriptContextValue>(() => ({ root: model }), [model]);
   return (
@@ -909,7 +909,7 @@ export function SurfacedThread({
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-3 pr-10 pl-3">
             {requests.length > 0
               ? requests.map(({ entry, transcript, from }) => (
-                <section key={`${transcript.sessionId}/${entry.id}`} aria-label={from ? `Waiting for you, from ${from}` : 'Waiting for you'} className="grid gap-1">
+                <section key={`${transcript.threadId}/${entry.id}`} aria-label={from ? `Waiting for you, from ${from}` : 'Waiting for you'} className="grid gap-1">
                   {from && <p className="text-[0.6875rem] text-muted-foreground">From {from}</p>}
                   <EntryView entry={entry} transcript={transcript} actions={actions} isStreaming={false} />
                 </section>
@@ -925,7 +925,7 @@ export function SurfacedThread({
           {aside}
         </div>
         <Composer
-          key={draftKey ?? model.sessionId}
+          key={draftKey ?? model.threadId}
           draftKey={draftKey}
           model={model}
           actions={actions}

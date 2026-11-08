@@ -5,7 +5,7 @@ import {
   blocksText,
   findSubagent,
   type SubagentEvent,
-  sessionLabel,
+  threadLabel,
   type TranscriptSessionMessage,
   type TranscriptSubagentRow,
 } from './acp-transcript';
@@ -49,7 +49,7 @@ function Card({ verb, label, subagentId }: { verb: string; label: string; subage
   );
 }
 
-/** A message with this session's parent, as a subagent's own transcript shows it: who, and what it said. */
+/** A message with this thread's parent, as a subagent's own transcript shows it: who, and what it said. */
 function Row({ verb, label, detail }: { verb: string; label: string; detail?: string }) {
   return (
     <div className='flex min-w-0 flex-col gap-0.5 text-xs' data-slot='subagent-row'>
@@ -66,21 +66,21 @@ function Row({ verb, label, detail }: { verb: string; label: string; detail?: st
 /** What happened to a subagent, as its parent's transcript says it: `Spawned Robie`, and no more. */
 export function SubagentRowView({ entry }: { entry: TranscriptSubagentRow }) {
   const { root } = useTranscriptContext();
-  const label = root ? sessionLabel(root, entry.subagentId) : 'A subagent';
+  const label = root ? threadLabel(root, entry.subagentId) : 'A subagent';
   return <Card verb={verbs[entry.event]} label={label} subagentId={entry.subagentId} />;
 }
 
 /**
- * A message between this session and another: to or from one of its subagents, as its parent
+ * A message between this thread and another: to or from one of its subagents, as its parent
  * shows them, one line without the message, or to or from its parent, as a subagent's own
  * transcript shows them, with it.
  */
 export function SessionMessageView({ entry, transcript }: { entry: TranscriptSessionMessage; transcript: AcpTranscript }) {
   const { root } = useTranscriptContext();
-  const own = transcript.sessionId;
+  const own = transcript.threadId;
   const outgoing = entry.senderSessionId === own || (entry.recipientSessionId != null && entry.recipientSessionId !== own);
   const other = outgoing ? entry.recipientSessionId : entry.senderSessionId;
-  const label = sessionLabel(root ?? transcript, other);
+  const label = threadLabel(root ?? transcript, other);
   const toSubagent = Boolean(other && findSubagent(transcript, other));
   if (toSubagent && other) return <Card verb={outgoing ? 'Sent input to' : 'Message from'} label={label} subagentId={other} />;
   return <Row verb={outgoing ? 'To' : 'From'} label={label} detail={blocksText(entry.content)} />;

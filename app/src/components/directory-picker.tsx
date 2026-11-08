@@ -14,18 +14,18 @@ export const homePath = (path: string, home: string) =>
 
 const join = (path: string, name: string) => path.endsWith('/') ? `${path}${name}` : `${path}/${name}`;
 
-/** How many of the directories sessions use the picker offers. */
+/** How many of the directories threads use the picker offers. */
 const RECENT = 5;
 
 /**
- * Picks a directory on a Host's computer: one its sessions use (`recent`), or any by browsing it
+ * Picks a directory on a Host's computer: one its threads use (`recent`), or any by browsing it
  * (`files/list`): into a directory, up to its parent, or home, with hidden ones on request. It
  * opens at `start`, or at home when `start` can't be listed.
  */
 export function DirectoryPicker({ list, start, recent = [], onChoose, onCancel }: {
   list(input: { path?: string; hidden?: boolean }): Promise<DirectoryListing>;
   start?: string;
-  /** Directories the Host's sessions use, most recently active first. */
+  /** Directories the Host's threads use, most recently active first. */
   recent?: string[];
   onChoose(path: string): void;
   onCancel(): void;

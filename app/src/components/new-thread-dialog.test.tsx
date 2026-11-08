@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { AppActions, AppController, DirectoryListing, PairedHost, RepositoryListing } from '@/app/app-controller';
 import { homePath } from './directory-picker';
-import { NewSessionDialog } from './new-session-dialog';
+import { NewThreadDialog } from './new-thread-dialog';
 
 const TREE: Record<string, string[]> = {
   '/': ['Users'],
@@ -31,14 +31,14 @@ const listDirectory = vi.fn(async ({ path, hidden }: { hostId: string; path?: st
 const controller = (host: Partial<PairedHost> = {}): AppController => ({
   model: {
     hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected', canBrowse: true, ...host }],
-    sessions: [{
-      key: 'h/s', hostId: 'h', sessionId: 's', agentId: 'claude', agentName: 'Claude', cwd: '/Users/jaco/Projects/weave',
+    threads: [{
+      key: 'h/s', hostId: 'h', threadId: 's', agentId: 'claude', agentName: 'Claude', cwd: '/Users/jaco/Projects/weave',
       state: 'open', activity: 'idle', clients: 0, headless: false,
     }],
     agents: { h: [{ id: 'claude', name: 'Claude' }] },
     unread: new Set(),
   },
-  actions: { createSession: vi.fn(), listDirectory } as unknown as AppActions,
+  actions: { createThread: vi.fn(), listDirectory } as unknown as AppActions,
 });
 
 const shown = () => screen.getByText((_, element) => element?.getAttribute('aria-live') === 'polite' && element.tagName === 'P');
@@ -47,12 +47,12 @@ const REPOSITORY: RepositoryListing = {
   repo: '/Users/jaco/Projects/weave',
   defaultBranch: 'main',
   worktrees: [
-    { path: '/Users/jaco/Projects/weave', branch: 'main', primary: true, changes: false, sessions: ['s'] },
-    { path: '/Users/jaco/Projects/weave.review', primary: false, changes: false, sessions: [] },
+    { path: '/Users/jaco/Projects/weave', branch: 'main', primary: true, changes: false, threads: ['s'] },
+    { path: '/Users/jaco/Projects/weave.review', primary: false, changes: false, threads: [] },
   ],
 };
 
-describe('the new-session dialog in a repository', () => {
+describe('the new-thread dialog in a repository', () => {
   const inRepository = (actions: Partial<AppActions>): AppController => {
     const base = controller({ canWorktree: true });
     return { ...base, actions: { ...base.actions, listWorktrees: vi.fn(async () => REPOSITORY), ...actions } };
@@ -62,7 +62,7 @@ describe('the new-session dialog in a repository', () => {
   it('starts in another of its worktrees, picked from its list', async () => {
     const user = userEvent.setup();
     const handlers = inRepository({});
-    render(<NewSessionDialog controller={handlers} target={{ hostId: 'h', cwd: '/Users/jaco/Projects/weave' }} onClose={() => {}} />);
+    render(<NewThreadDialog controller={handlers} target={{ hostId: 'h', cwd: '/Users/jaco/Projects/weave' }} onClose={() => {}} />);
     const field = await screen.findByRole('button', { name: 'Worktree' });
     expect(field).toHaveTextContent('mainweave');
     await user.click(field);
@@ -72,7 +72,7 @@ describe('the new-session dialog in a repository', () => {
     await user.click(worktrees()[1]);
     expect(screen.getByRole('button', { name: 'Worktree' })).toHaveTextContent('detached HEADweave.review');
     await user.click(screen.getByRole('button', { name: 'Start' }));
-    expect(handlers.actions.createSession).toHaveBeenCalledWith({ hostId: 'h', cwd: '/Users/jaco/Projects/weave.review', agentId: 'claude' });
+    expect(handlers.actions.createThread).toHaveBeenCalledWith({ hostId: 'h', cwd: '/Users/jaco/Projects/weave.review', agentId: 'claude' });
   });
 
   it('creates a worktree from the picker, saying why when it can\u2019t, and starts there', async () => {
@@ -81,7 +81,7 @@ describe('the new-session dialog in a repository', () => {
       .mockRejectedValueOnce(new Error("Couldn't make the worktree: feature/auth is checked out in /x already"))
       .mockResolvedValueOnce('/Users/jaco/Projects/weave.feature-auth');
     const handlers = inRepository({ createWorktree });
-    render(<NewSessionDialog controller={handlers} target={{ hostId: 'h', cwd: '/Users/jaco/Projects/weave' }} onClose={() => {}} />);
+    render(<NewThreadDialog controller={handlers} target={{ hostId: 'h', cwd: '/Users/jaco/Projects/weave' }} onClose={() => {}} />);
     await user.click(await screen.findByRole('button', { name: 'Worktree' }));
     expect(screen.getByRole('button', { name: 'Create worktree' })).toBeDisabled();
     expect(screen.getByRole('textbox', { name: 'Start from' })).toHaveAttribute('placeholder', 'Start from main');
@@ -95,7 +95,7 @@ describe('the new-session dialog in a repository', () => {
     expect(field).toHaveTextContent('feature/authweave.feature-auth');
     await user.click(screen.getByRole('button', { name: 'Start' }));
     expect(createWorktree).toHaveBeenLastCalledWith({ hostId: 'h', repo: '/Users/jaco/Projects/weave', branch: 'feature/auth', base: 'v1.2' });
-    expect(handlers.actions.createSession).toHaveBeenCalledWith({ hostId: 'h', cwd: '/Users/jaco/Projects/weave.feature-auth', agentId: 'claude' });
+    expect(handlers.actions.createThread).toHaveBeenCalledWith({ hostId: 'h', cwd: '/Users/jaco/Projects/weave.feature-auth', agentId: 'claude' });
     // It's among the worktrees now.
     await user.click(screen.getByRole('button', { name: 'Worktree' }));
     expect(worktrees().map(({ textContent }) => textContent)).toContain('feature/authweave.feature-auth');
@@ -103,17 +103,17 @@ describe('the new-session dialog in a repository', () => {
 
   it('leaves worktrees out for a directory outside a repository', async () => {
     const listWorktrees = vi.fn(async () => undefined);
-    render(<NewSessionDialog controller={inRepository({ listWorktrees })} target={{ hostId: 'h', cwd: '/Users/jaco/Documents' }} onClose={() => {}} />);
+    render(<NewThreadDialog controller={inRepository({ listWorktrees })} target={{ hostId: 'h', cwd: '/Users/jaco/Documents' }} onClose={() => {}} />);
     await waitFor(() => expect(listWorktrees).toHaveBeenCalledWith({ hostId: 'h', path: '/Users/jaco/Documents' }));
     expect(screen.queryByRole('button', { name: 'Worktree' })).not.toBeInTheDocument();
   });
 });
 
-describe('the new-session dialog', () => {
+describe('the new-thread dialog', () => {
   it('picks the directory by browsing a Host that lists its directories, and takes it typed otherwise', () => {
-    const { rerender } = render(<NewSessionDialog controller={controller({ canBrowse: false })} target={{}} onClose={() => {}} />);
+    const { rerender } = render(<NewThreadDialog controller={controller({ canBrowse: false })} target={{}} onClose={() => {}} />);
     expect(screen.getByRole('textbox', { name: 'Directory' })).toHaveValue('/Users/jaco/Projects/weave');
-    rerender(<NewSessionDialog controller={controller()} target={{ hostId: 'h' }} onClose={() => {}} />);
+    rerender(<NewThreadDialog controller={controller()} target={{ hostId: 'h' }} onClose={() => {}} />);
     expect(screen.queryByRole('combobox', { name: 'Directory' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Directory' })).toHaveAttribute('title', '/Users/jaco/Projects/weave');
   });
@@ -121,7 +121,7 @@ describe('the new-session dialog', () => {
   it('browses in, up and among hidden directories, then fills in the one chosen', async () => {
     const user = userEvent.setup();
     const handlers = controller();
-    render(<NewSessionDialog controller={handlers} target={{ hostId: 'h', cwd: '/Users/jaco/Projects/weave' }} onClose={() => {}} />);
+    render(<NewThreadDialog controller={handlers} target={{ hostId: 'h', cwd: '/Users/jaco/Projects/weave' }} onClose={() => {}} />);
     await user.click(screen.getByRole('button', { name: 'Directory' }));
     // It opens where the dialog was.
     await waitFor(() => expect(shown()).toHaveTextContent('~/Projects/weave'));
@@ -140,12 +140,12 @@ describe('the new-session dialog', () => {
     await user.click(screen.getByRole('button', { name: 'Use this directory' }));
     expect(screen.getByRole('button', { name: 'Directory' })).toHaveAttribute('title', '/Users/jaco/Documents');
     await user.click(screen.getByRole('button', { name: 'Start' }));
-    expect(handlers.actions.createSession).toHaveBeenCalledWith({ hostId: 'h', cwd: '/Users/jaco/Documents', agentId: 'claude' });
+    expect(handlers.actions.createThread).toHaveBeenCalledWith({ hostId: 'h', cwd: '/Users/jaco/Documents', agentId: 'claude' });
   });
 
-  it('offers the directories its sessions use, and opens at home when the one given can\u2019t be listed', async () => {
+  it('offers the directories its threads use, and opens at home when the one given can\u2019t be listed', async () => {
     const user = userEvent.setup();
-    render(<NewSessionDialog controller={controller()} target={{ hostId: 'h', cwd: '/nowhere' }} onClose={() => {}} />);
+    render(<NewThreadDialog controller={controller()} target={{ hostId: 'h', cwd: '/nowhere' }} onClose={() => {}} />);
     await user.click(screen.getByRole('button', { name: 'Directory' }));
     await waitFor(() => expect(shown()).toHaveTextContent('~'));
     expect(screen.getByText("/nowhere doesn't exist")).toBeInTheDocument();

@@ -1,23 +1,23 @@
-import type { SessionActivity } from './app-controller';
+import type { ThreadActivity } from './app-controller';
 
 /**
- * Which sessions finished a turn while the person wasn't looking at them, on this device. A
- * session becomes unread when it goes from running or waiting to idle off screen, and read again
+ * Which threads finished a turn while the person wasn't looking at them, on this device. A
+ * thread becomes unread when it goes from running or waiting to idle off screen, and read again
  * when it is opened.
  */
-export class SessionReadState {
+export class ThreadReadState {
   #focused?: string;
-  readonly #activity = new Map<string, SessionActivity | undefined>();
+  readonly #activity = new Map<string, ThreadActivity | undefined>();
   readonly #unread = new Set<string>();
 
-  /** The session on screen, or none. Returns whether the unread set changed. */
+  /** The thread on screen, or none. Returns whether the unread set changed. */
   focus(key?: string): boolean {
     this.#focused = key;
     return key !== undefined && this.#unread.delete(key);
   }
 
-  /** A session's latest activity. Returns whether the unread set changed. */
-  observe(key: string, activity: SessionActivity | undefined): boolean {
+  /** A thread's latest activity. Returns whether the unread set changed. */
+  observe(key: string, activity: ThreadActivity | undefined): boolean {
     const previous = this.#activity.get(key);
     this.#activity.set(key, activity);
     const finished = (previous === 'running' || previous === 'waiting') && activity === 'idle';

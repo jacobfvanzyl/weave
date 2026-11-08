@@ -40,7 +40,7 @@ describe('journal times', () => {
   it('dates a subagent\'s entries too', () => {
     let transcript = createTranscript('main');
     transcript = reduceJournalEvent(transcript, { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:ada', title: 'Ada' } }, 100);
-    transcript = reduceJournalEvent(transcript, { type: 'session/update', sessionId: 'main:ada', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'On it.' } } }, 250);
+    transcript = reduceJournalEvent(transcript, { type: 'session/update', threadId: 'main:ada', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'On it.' } } }, 250);
     expect(times(transcript.subagents[0].transcript)).toEqual([[250, 250]]);
   });
 });
@@ -80,7 +80,7 @@ describe('ACP transcript message reduction', () => {
         type: 'session/update',
         update,
       }),
-      createTranscript('session-1'),
+      createTranscript('thread-1'),
     );
 
     expect(model.entries).toMatchObject([
@@ -137,7 +137,7 @@ describe('ACP transcript message reduction', () => {
 
   it('deduplicates only a matching optimistic prompt echo', () => {
     const optimistic = queueOptimisticPrompt(
-      createTranscript('session-1'),
+      createTranscript('thread-1'),
       'local-1',
       [{ type: 'text', text: 'Typed prompt' }],
     );
@@ -181,7 +181,7 @@ describe('ACP transcript message reduction', () => {
 
   it('acknowledges a matching optimistic prompt even after another entry arrives', () => {
     const optimistic = queueOptimisticPrompt(
-      createTranscript('session-1'),
+      createTranscript('thread-1'),
       'local-1',
       [{ type: 'text', text: 'Typed prompt' }],
     );
@@ -213,7 +213,7 @@ describe('ACP transcript message reduction', () => {
     'settles and retains an optimistic prompt when a turn stops with %s',
     (stopReason) => {
       const optimistic = queueOptimisticPrompt(
-        createTranscript('session-1'),
+        createTranscript('thread-1'),
         'local-1',
         [{ type: 'text', text: 'Keep this prompt' }],
       );
@@ -236,7 +236,7 @@ describe('ACP transcript message reduction', () => {
   it('settles and retains an optimistic prompt when a turn fails', () => {
     const failed = reduceAcpEvent(
       queueOptimisticPrompt(
-        createTranscript('session-1'),
+        createTranscript('thread-1'),
         'local-1',
         [{ type: 'text', text: 'Keep failed prompt' }],
       ),
@@ -253,7 +253,7 @@ describe('ACP transcript message reduction', () => {
 
 describe('ACP transcript structured updates', () => {
   it('upserts tool calls, preserves rich content, and surfaces update-before-create', () => {
-    const created = reduceAcpEvent(createTranscript('session-1'), {
+    const created = reduceAcpEvent(createTranscript('thread-1'), {
       type: 'session/update',
       update: {
         sessionUpdate: 'tool_call',
@@ -304,7 +304,7 @@ describe('ACP transcript structured updates', () => {
       rawOutput: { lines: 12 },
     });
 
-    const missing = reduceAcpEvent(createTranscript('session-1'), {
+    const missing = reduceAcpEvent(createTranscript('thread-1'), {
       type: 'session/update',
       update: {
         sessionUpdate: 'tool_call_update',
@@ -328,7 +328,7 @@ describe('ACP transcript structured updates', () => {
 
     const model = updates.reduce(
       (current, update) => reduceAcpEvent(current, { type: 'session/update', update }),
-      createTranscript('session-1'),
+      createTranscript('thread-1'),
     );
 
     expect(model.entries.filter((entry) => entry.kind === 'plan')).toMatchObject([
@@ -337,8 +337,8 @@ describe('ACP transcript structured updates', () => {
   });
 
   it('tracks commands, mode, configuration, session metadata, and cumulative usage', () => {
-    let model = reduceAcpEvent(createTranscript('session-1'), {
-      type: 'session/loaded',
+    let model = reduceAcpEvent(createTranscript('thread-1'), {
+      type: 'thread/loaded',
       modes: {
         currentModeId: 'ask',
         availableModes: [
@@ -428,7 +428,7 @@ describe('ACP transcript structured updates', () => {
         type: 'session/update',
         update,
       }),
-      createTranscript('session-1'),
+      createTranscript('thread-1'),
     );
 
     expect(model.entries).toMatchObject([
@@ -444,7 +444,7 @@ describe('ACP transcript structured updates', () => {
 
 describe('ACP transcript client requests', () => {
   it('surfaces unknown protocol payloads without discarding their data', () => {
-    const model = reduceAcpEvent(createTranscript('session-1'), {
+    const model = reduceAcpEvent(createTranscript('thread-1'), {
       type: 'protocol/unknown',
       method: 'session/update',
       payload: {
@@ -463,11 +463,11 @@ describe('ACP transcript client requests', () => {
   });
 
   it('keeps permission state attached to its tool through updates and resolution', () => {
-    const requested = reduceAcpEvent(createTranscript('session-1'), {
+    const requested = reduceAcpEvent(createTranscript('thread-1'), {
       type: 'permission/requested',
       requestId: 'permission-1',
       request: {
-        sessionId: 'session-1',
+        sessionId: 'thread-1',
         toolCall: {
           toolCallId: 'tool-1',
           title: 'Run tests',
@@ -506,12 +506,12 @@ describe('ACP transcript client requests', () => {
   });
 
   it('retains form, URL, and unknown elicitation requests and their lifecycle', () => {
-    const form = reduceAcpEvent(createTranscript('session-1'), {
+    const form = reduceAcpEvent(createTranscript('thread-1'), {
       type: 'elicitation/requested',
       requestId: 'elicit-form',
       request: {
         mode: 'form',
-        sessionId: 'session-1',
+        sessionId: 'thread-1',
         message: 'Configure the run',
         requestedSchema: {
           type: 'object',
@@ -535,7 +535,7 @@ describe('ACP transcript client requests', () => {
       requestId: 'elicit-url',
       request: {
         mode: 'url',
-        sessionId: 'session-1',
+        sessionId: 'thread-1',
         elicitationId: 'url-1',
         url: 'https://example.com/complete',
         message: 'Complete sign-in',
@@ -546,7 +546,7 @@ describe('ACP transcript client requests', () => {
       requestId: 'elicit-custom',
       request: {
         mode: '_vendor_challenge',
-        sessionId: 'session-1',
+        sessionId: 'thread-1',
         message: 'Complete custom challenge',
         _meta: { nonce: 'abc' },
       },
@@ -628,12 +628,12 @@ describe('pending requests in the transcript', () => {
   it('puts a subagent\'s request in its own transcript, and finds it there to answer', () => {
     const asked = reduceAll(
       { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:robie', title: 'Robie', state: { state: 'running' } } },
-      { type: 'permission/requested', requestId: 'p-1', request: permission('t-1', 'main:robie'), sessionId: 'main:robie' },
+      { type: 'permission/requested', requestId: 'p-1', request: permission('t-1', 'main:robie'), threadId: 'main:robie' },
     );
     expect(asked.entries.some((entry) => entry.kind === 'tool')).toBe(false);
     const robie = findSubagent(asked, 'main:robie')!;
     expect(waitsForAnswer(robie.transcript)).toBe(true);
-    expect(allSubagents(asked).map(({ sessionId }) => sessionId)).toEqual(['main:robie']);
+    expect(allSubagents(asked).map(({ threadId }) => threadId)).toEqual(['main:robie']);
 
     const answered = reduceAcpEvent(asked, { type: 'permission/resolved', requestId: 'p-1', optionId: 'reject' });
     expect(findSubagent(answered, 'main:robie')!.transcript.entries[0]).toMatchObject({ permission: { status: 'answered', selectedOptionId: 'reject' } });
@@ -652,7 +652,7 @@ describe('pending requests in the transcript', () => {
       { type: 'session/update', update: { sessionUpdate: 'subagent_update', sessionId: 'main:robie', title: 'Robie' } },
       { type: 'permission/requested', requestId: 'p-1', request: permission('t-1') },
       { type: 'permission/requested', requestId: 'p-2', request: permission('t-2') },
-      { type: 'permission/requested', requestId: 'p-3', request: permission('t-3', 'main:robie'), sessionId: 'main:robie' },
+      { type: 'permission/requested', requestId: 'p-3', request: permission('t-3', 'main:robie'), threadId: 'main:robie' },
       { type: 'permission/resolved', requestId: 'p-2', optionId: 'allow' },
     );
     const settled = reduceAcpEvent(asked, { type: 'requests/settled', waiting: ['p-1'] });

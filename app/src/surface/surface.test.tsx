@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppActions, AppController, OpenSession } from '@/app/app-controller';
+import type { AppActions, AppController, OpenThread } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { AppShell } from '@/components/app-shell';
 import { SurfaceApp } from './surface-app';
@@ -9,15 +9,15 @@ import type { SurfaceEnd, SurfaceLink, SurfaceStatus } from './surface-link';
 import type { FromSurface, ToSurface } from './surface-messages';
 
 const actions = (): AppActions => ({
-  selectSession: vi.fn(),
-  createSession: vi.fn(),
+  selectThread: vi.fn(),
+  createThread: vi.fn(),
   listDirectory: vi.fn(),
   listWorktrees: vi.fn(),
   createWorktree: vi.fn(),
   removeWorktree: vi.fn(),
-  closeSession: vi.fn(),
-  renameSession: vi.fn(),
-  deleteSession: vi.fn(),
+  closeThread: vi.fn(),
+  renameThread: vi.fn(),
+  deleteThread: vi.fn(),
   pairHost: vi.fn(),
   forgetHost: vi.fn(),
   renameHost: vi.fn(),
@@ -26,7 +26,7 @@ const actions = (): AppActions => ({
   removeQueued: vi.fn(),
   resumeQueue: vi.fn(),
   cancelTurn: vi.fn(),
-  reopenSession: vi.fn(),
+  reopenThread: vi.fn(),
   updateAgent: vi.fn(),
   respondToPermission: vi.fn(),
   respondToElicitation: vi.fn(),
@@ -38,22 +38,22 @@ const actions = (): AppActions => ({
   attachTerminal: vi.fn(),
 });
 
-const controller = (session: OpenSession | undefined, handlers: AppActions): AppController => ({
+const controller = (thread: OpenThread | undefined, handlers: AppActions): AppController => ({
   model: {
     hosts: [{ id: 'h', name: 'mac.example.ts.net', url: 'wss://mac.example.ts.net:7341', status: 'connected' }],
-    sessions: [
+    threads: [
       {
-        key: 'h/main', hostId: 'h', sessionId: 'main', title: 'Count the files', agentId: 'claude', agentName: 'Claude',
+        key: 'h/main', hostId: 'h', threadId: 'main', title: 'Count the files', agentId: 'claude', agentName: 'Claude',
         cwd: '/work/project', state: 'open', activity: 'running', clients: 1, headless: false,
       },
       {
-        key: 'h/other', hostId: 'h', sessionId: 'other', title: 'Review the branch', agentId: 'codex', agentName: 'Codex',
+        key: 'h/other', hostId: 'h', threadId: 'other', title: 'Review the branch', agentId: 'codex', agentName: 'Codex',
         cwd: '/work/project', state: 'open', activity: 'waiting', clients: 1, headless: false,
       },
     ],
     agents: {},
-    selectedKey: session?.key,
-    session,
+    selectedKey: thread?.key,
+    thread,
     unread: new Set(),
   },
   actions: handlers,
@@ -117,8 +117,8 @@ describe('a Surface', () => {
   it('shows the open thread while the iPhone keeps the composer, and dims it when the list is back', async () => {
     const { link, end } = joined();
     const handlers = actions();
-    const session: OpenSession = { key: 'h/main', transcript: transcript(reply('Counting the files now.')), canSteer: true, queued: [] };
-    const phone = render(<AppShell controller={controller(session, handlers)} surfaceLink={link} />);
+    const thread: OpenThread = { key: 'h/main', transcript: transcript(reply('Counting the files now.')), canSteer: true, queued: [] };
+    const phone = render(<AppShell controller={controller(thread, handlers)} surfaceLink={link} />);
     const surface = render(<SurfaceApp end={end} />);
     const onSurface = within(surface.container);
     const onPhone = within(phone.container);
@@ -133,7 +133,7 @@ describe('a Surface', () => {
     expect(link.setLandscape).toHaveBeenLastCalledWith(true);
 
     // The reply goes on, and the Surface follows it.
-    const streamed = { ...session, transcript: reduceAcpEvent(session.transcript, reply(' 42 so far.')) };
+    const streamed = { ...thread, transcript: reduceAcpEvent(thread.transcript, reply(' 42 so far.')) };
     phone.rerender(<AppShell controller={controller(streamed, handlers)} surfaceLink={link} />);
     await waitFor(() => expect(onSurface.getByText('Counting the files now. 42 so far.')).toBeInTheDocument());
 
@@ -148,8 +148,8 @@ describe('a Surface', () => {
     const user = userEvent.setup();
     const { link, end } = joined();
     const handlers = actions();
-    const session: OpenSession = { key: 'h/main', transcript: transcript(ask), canSteer: true, queued: [] };
-    const phone = render(<AppShell controller={controller(session, handlers)} surfaceLink={link} />);
+    const thread: OpenThread = { key: 'h/main', transcript: transcript(ask), canSteer: true, queued: [] };
+    const phone = render(<AppShell controller={controller(thread, handlers)} surfaceLink={link} />);
     render(<SurfaceApp end={end} />);
     const onPhone = within(phone.container);
     const request = await onPhone.findByRole('region', { name: 'Waiting for you' });
@@ -161,8 +161,8 @@ describe('a Surface', () => {
   it('scrolls the Surface from the scrubber, and follows the end again from Latest', async () => {
     const user = userEvent.setup();
     const { link, end, toSurface } = joined();
-    const session: OpenSession = { key: 'h/main', transcript: transcript(reply('Counting.')), canSteer: true, queued: [] };
-    const phone = render(<AppShell controller={controller(session, actions())} surfaceLink={link} />);
+    const thread: OpenThread = { key: 'h/main', transcript: transcript(reply('Counting.')), canSteer: true, queued: [] };
+    const phone = render(<AppShell controller={controller(thread, actions())} surfaceLink={link} />);
     render(<SurfaceApp end={end} />);
     const onPhone = within(phone.container);
     const scrubber = await onPhone.findByRole('slider', { name: 'Scroll the Surface' });
@@ -181,8 +181,8 @@ describe('a Surface', () => {
   it('hands the display back when turned off, and the iPhone shows the thread again', async () => {
     const user = userEvent.setup();
     const { link, end } = joined();
-    const session: OpenSession = { key: 'h/main', transcript: transcript(reply('Counting the files now.')), canSteer: true, queued: [] };
-    const phone = render(<AppShell controller={controller(session, actions())} surfaceLink={link} />);
+    const thread: OpenThread = { key: 'h/main', transcript: transcript(reply('Counting the files now.')), canSteer: true, queued: [] };
+    const phone = render(<AppShell controller={controller(thread, actions())} surfaceLink={link} />);
     render(<SurfaceApp end={end} />);
     const onPhone = within(phone.container);
     await onPhone.findByText('The thread is on your Surface.');

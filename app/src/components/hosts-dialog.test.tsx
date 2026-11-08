@@ -5,7 +5,7 @@ import type { AppActions, AppController, PairedHost } from '@/app/app-controller
 import { HostsDialog } from './hosts-dialog';
 
 const controller = (hosts: PairedHost[]): AppController => ({
-  model: { hosts, sessions: [], agents: {}, unread: new Set() },
+  model: { hosts, threads: [], agents: {}, unread: new Set() },
   actions: { forgetHost: vi.fn(), renameHost: vi.fn(), reconnectHost: vi.fn(), pairHost: vi.fn() } as unknown as AppActions,
 });
 

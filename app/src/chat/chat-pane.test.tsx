@@ -37,7 +37,7 @@ describe('ChatPane', () => {
   });
 
   it('focuses the composer when a new focus request arrives', () => {
-    const model = createTranscript('draft-session');
+    const model = createTranscript('draft-thread');
     const handlers = actions();
     const { rerender } = render(
       <ChatPane model={model} actions={handlers} />,
@@ -233,7 +233,7 @@ describe('ChatPane', () => {
 
   it('grows the composer from two rows to a maximum of eight after multiline input', async () => {
     const user = userEvent.setup();
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-rows' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'composer-rows' };
     render(<ChatPane model={model} actions={actions()} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
@@ -345,7 +345,7 @@ describe('ChatPane', () => {
     expect(anchor('Sent just now')).toBe('true');
   });
 
-  it('uses the shadcn empty state when a session has no transcript entries', () => {
+  it('uses the shadcn empty state when a thread has no transcript entries', () => {
     const model = createAcpShowcaseTranscript();
     model.entries = [];
 
@@ -416,7 +416,7 @@ describe('ChatPane', () => {
 
   it('uses a paper plane with a mauve enabled state for Send', async () => {
     const user = userEvent.setup();
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-send-style' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'composer-send-style' };
     render(<ChatPane model={model} actions={actions()} />);
 
     const send = screen.getByRole('button', { name: 'Send message' });
@@ -463,7 +463,7 @@ describe('ChatPane', () => {
     const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
       matches: true,
     } as MediaQueryList);
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-mobile' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'composer-mobile' };
     render(<ChatPane model={model} actions={actions()} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
@@ -481,7 +481,7 @@ describe('ChatPane', () => {
     const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
       matches: false,
     } as MediaQueryList);
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'composer-native-tablet' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'composer-native-tablet' };
     render(<ChatPane model={model} actions={actions()} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
@@ -494,21 +494,21 @@ describe('ChatPane', () => {
     matchMedia.mockRestore();
   });
 
-  it('keeps a separate draft for each session when the active transcript changes', async () => {
+  it('keeps a separate draft for each thread when the active transcript changes', async () => {
     const user = userEvent.setup();
-    const first = { ...createAcpShowcaseTranscript(), sessionId: 'draft-first' };
-    const second = { ...createAcpShowcaseTranscript(), sessionId: 'draft-second' };
+    const first = { ...createAcpShowcaseTranscript(), threadId: 'draft-first' };
+    const second = { ...createAcpShowcaseTranscript(), threadId: 'draft-second' };
     const view = render(<ChatPane model={first} actions={actions()} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
-    await user.type(composer, 'First session draft');
+    await user.type(composer, 'First thread draft');
 
     view.rerender(<ChatPane model={second} actions={actions()} />);
     expect(screen.getByRole('textbox', { name: 'Message agent' })).toHaveValue('');
-    await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'Second session draft');
+    await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'Second thread draft');
 
     view.rerender(<ChatPane model={first} actions={actions()} />);
-    expect(screen.getByRole('textbox', { name: 'Message agent' })).toHaveValue('First session draft');
+    expect(screen.getByRole('textbox', { name: 'Message agent' })).toHaveValue('First thread draft');
   });
 
   it('does not replace newly typed text when an earlier send fails', async () => {
@@ -518,7 +518,7 @@ describe('ChatPane', () => {
     handlers.send = vi.fn(() => new Promise<void>((_resolve, reject) => {
       rejectSend = reject;
     }));
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'send-new-text' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'send-new-text' };
     render(<ChatPane model={model} actions={handlers} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
@@ -537,7 +537,7 @@ describe('ChatPane', () => {
     handlers.send = vi.fn(() => new Promise<void>((_resolve, reject) => {
       rejectSend = reject;
     }));
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'send-cleared-replacement' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'send-cleared-replacement' };
     render(<ChatPane model={model} actions={handlers} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
@@ -550,15 +550,15 @@ describe('ChatPane', () => {
     expect(composer).toHaveValue('');
   });
 
-  it('restores a failed prompt to its session after the user switches away', async () => {
+  it('restores a failed prompt to its thread after the user switches away', async () => {
     const user = userEvent.setup();
     let rejectSend: ((reason?: unknown) => void) | undefined;
     const handlers = actions();
     handlers.send = vi.fn(() => new Promise<void>((_resolve, reject) => {
       rejectSend = reject;
     }));
-    const first = { ...createAcpShowcaseTranscript(), sessionId: 'send-switch-first' };
-    const second = { ...createAcpShowcaseTranscript(), sessionId: 'send-switch-second' };
+    const first = { ...createAcpShowcaseTranscript(), threadId: 'send-switch-first' };
+    const second = { ...createAcpShowcaseTranscript(), threadId: 'send-switch-second' };
     const view = render(<ChatPane model={first} actions={handlers} />);
 
     await user.type(screen.getByRole('textbox', { name: 'Message agent' }), 'Restore here');
@@ -576,7 +576,7 @@ describe('ChatPane', () => {
     const user = userEvent.setup();
     const handlers = actions();
     handlers.send = vi.fn(() => Promise.reject(new Error('offline')));
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'send-rejected' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'send-rejected' };
     render(<ChatPane model={model} actions={handlers} />);
 
     const composer = screen.getByRole('textbox', { name: 'Message agent' });
@@ -601,7 +601,7 @@ describe('ChatPane', () => {
 
   it('steers the running turn when the agent takes steers', async () => {
     const user = userEvent.setup();
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'steer' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'steer' };
     model.turn = { status: 'running' };
     const handlers = actions();
     render(<ChatPane model={model} actions={handlers} canSteer />);
@@ -614,7 +614,7 @@ describe('ChatPane', () => {
 
   it('queues while a turn runs when the agent cannot take steers, and lets a queued message go', async () => {
     const user = userEvent.setup();
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'queue' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'queue' };
     model.turn = { status: 'running' };
     const handlers = actions();
     render(<ChatPane model={model} actions={handlers} queued={[{ id: 'q1', text: 'Then run the tests' }]} />);
@@ -630,7 +630,7 @@ describe('ChatPane', () => {
 
   it('says who queued a message elsewhere, and when the queue is paused offers to resume it', async () => {
     const user = userEvent.setup();
-    const model = { ...createAcpShowcaseTranscript(), sessionId: 'paused' };
+    const model = { ...createAcpShowcaseTranscript(), threadId: 'paused' };
     const handlers = actions();
     render(
       <ChatPane

@@ -5,11 +5,11 @@ const STORAGE_KEY = 'weave.dismissedUpdates';
 
 /**
  * What a dismissal hides: the notice as it was. A newer release, or the Host launching a version
- * the session can move to, shows it again.
+ * the thread can move to, shows it again.
  */
 const shown = ({ latest, available }: AgentUpdateNotice) => available ? `${latest} ${available}` : latest;
 
-/** The notices dismissed on this device, by session key, from the web view's storage. */
+/** The notices dismissed on this device, by thread key, from the web view's storage. */
 function stored(): Record<string, string> {
   try {
     const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(STORAGE_KEY) ?? '{}');
@@ -20,7 +20,7 @@ function stored(): Record<string, string> {
   }
 }
 
-/** Session `key`'s update notice unless the person dismissed it on this device, and what dismisses it. */
+/** Thread `key`'s update notice unless the person dismissed it on this device, and what dismisses it. */
 export function useUpdateNotice(key: string, update?: AgentUpdateNotice) {
   const [dismissed, setDismissed] = useState(stored);
   const notice = update && dismissed[key] !== shown(update) ? update : undefined;

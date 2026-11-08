@@ -1,10 +1,10 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { AppActions, SessionGit } from '@/app/app-controller';
+import type { AppActions, ThreadGit } from '@/app/app-controller';
 import { RemoveWorktreeDialog } from './remove-worktree-dialog';
 
-const worktree: SessionGit = { repo: '/code/weave', worktree: '/code/weave.feature-auth', branch: 'feature/auth' };
+const worktree: ThreadGit = { repo: '/code/weave', worktree: '/code/weave.feature-auth', branch: 'feature/auth' };
 
 describe('removing a worktree', () => {
   it('asks again before losing its changes, then removes it anyway', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AppModel, OpenSession, SessionSummary } from '@/app/app-controller';
+import type { AppModel, OpenThread, ThreadSummary } from '@/app/app-controller';
 import { type AcpTranscriptEvent, createTranscript, reduceAcpEvent } from '@/chat/acp-transcript';
 import { applyTranscript, showMessage, transcriptMessage, type ToSurface } from './surface-messages';
 
@@ -46,24 +46,24 @@ describe('transcript messages', () => {
   });
 });
 
-const summary = (key: string, activity: SessionSummary['activity'], title?: string): SessionSummary => ({
-  key, hostId: 'h', sessionId: key.slice(2), title, agentId: 'claude', agentName: 'Claude', cwd: '/work/project',
+const summary = (key: string, activity: ThreadSummary['activity'], title?: string): ThreadSummary => ({
+  key, hostId: 'h', threadId: key.slice(2), title, agentId: 'claude', agentName: 'Claude', cwd: '/work/project',
   git: { repo: '/work/project', worktree: '/work/project', branch: 'main' }, state: 'open', activity, clients: 1, headless: false,
 });
 
-const model = (session?: OpenSession): AppModel => ({
+const model = (thread?: OpenThread): AppModel => ({
   hosts: [{ id: 'h', name: 'mac', url: 'wss://mac', status: 'connected' }],
-  sessions: [summary('h/main', 'running', 'Count the files'), summary('h/other', 'waiting'), summary('h/third', 'waiting')],
+  threads: [summary('h/main', 'running', 'Count the files'), summary('h/other', 'waiting'), summary('h/third', 'waiting')],
   agents: {},
-  selectedKey: session?.key,
-  session,
+  selectedKey: thread?.key,
+  thread,
   unread: new Set(),
 });
 
 describe('show messages', () => {
   it('show the open thread, and count the others that wait', () => {
-    const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
-    expect(showMessage(model(session), undefined)).toEqual({
+    const thread: OpenThread = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [] };
+    expect(showMessage(model(thread), undefined)).toEqual({
       kind: 'show',
       thread: { key: 'h/main', title: 'Count the files', agentName: 'Claude', cwd: '/work/project', branch: 'main', activity: 'running' },
       dimmed: false,
@@ -77,7 +77,7 @@ describe('show messages', () => {
   });
 
   it('say while the thread\'s history is still loading', () => {
-    const session: OpenSession = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [], loading: true };
-    expect(showMessage(model(session), undefined).thread).toMatchObject({ loading: true });
+    const thread: OpenThread = { key: 'h/main', transcript: createTranscript('main'), canSteer: true, queued: [], loading: true };
+    expect(showMessage(model(thread), undefined).thread).toMatchObject({ loading: true });
   });
 });

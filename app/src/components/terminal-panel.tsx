@@ -242,7 +242,7 @@ export function TerminalPanel(props: TerminalPanelProps) {
       <div data-slot={rail ? 'terminal-rail' : 'terminal-bar'}
         className={cn('flex shrink-0 items-center gap-1 border-b border-border bg-title-bar px-1.5',
           rail
-            // The thread's top rail goes on over the terminals, at its height (`SessionHeader`).
+            // The thread's top rail goes on over the terminals, at its height (`ThreadHeader`).
             ? 'h-[calc(env(safe-area-inset-top)+var(--title-bar-height))] pt-[env(safe-area-inset-top)]'
             : 'h-9',
           leading && 'pl-[max(env(safe-area-inset-left),0.5rem)]')}>

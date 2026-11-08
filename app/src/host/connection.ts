@@ -1,18 +1,18 @@
 import { authMessage, type DeviceKey } from './device-key';
 import {
   HOST_PROTOCOL,
-  type AttachSessionRequest,
+  type AttachThreadRequest,
   type Auth,
   type ClientCapabilities,
   type ClientInfo,
-  type CreateSessionRequest,
+  type CreateThreadRequest,
   type HelloResponse,
   type HostMethod,
   type HostNotificationMethod,
   type HostNotifications,
   type HostRequests,
   type Replay,
-  type SessionState,
+  type ThreadState,
   type VersionRange,
 } from './protocol';
 
@@ -89,10 +89,10 @@ export type Credentials =
   /** A device pairing with the code `weave pair` showed. */
   | { method: 'pair'; code: string; name: string; key: DeviceKey };
 
-/** A session `open` attached this client to. */
-export type OpenedSession = {
-  state: SessionState;
-  /** What the replay that follows covers; none for a new session. */
+/** A thread `open` attached this client to. */
+export type OpenedThread = {
+  state: ThreadState;
+  /** What the replay that follows covers; none for a new thread. */
   replay?: Replay;
 };
 
@@ -104,7 +104,7 @@ export type NotificationEvent = {
 export type HostEvent =
   | NotificationEvent
   /** The answer to `open`, ahead of the events that follow it on the wire. */
-  | { type: 'opened'; tag: number; session: OpenedSession }
+  | { type: 'opened'; tag: number; thread: OpenedThread }
   | { type: 'openFailed'; tag: number; error: HostError }
   /** The connection ended, with the WebSocket's close code when there was one. */
   | { type: 'disconnected'; code?: number; reason?: string };
@@ -199,29 +199,29 @@ export class HostConnection {
   }
 
   /**
-   * Opens a session, new or by id. Its answer arrives as an `opened` (or `openFailed`) event with
-   * `tag`, in order with the session's events, so a client knows whether to reset its transcript
+   * Opens a thread, new or by id. Its answer arrives as an `opened` (or `openFailed`) event with
+   * `tag`, in order with the thread's events, so a client knows whether to reset its transcript
    * before the replay that follows.
    */
-  open(open: { create: CreateSessionRequest } | { attach: AttachSessionRequest }, tag: number) {
+  open(open: { create: CreateThreadRequest } | { attach: AttachThreadRequest }, tag: number) {
     const fail = (error: HostError) => this.#onEvent({ type: 'openFailed', tag, error });
     if ('create' in open) {
-      this.#send('session/create', open.create, {
-        resolve: (state) => this.#onEvent({ type: 'opened', tag, session: { state: state as SessionState } }),
+      this.#send('thread/create', open.create, {
+        resolve: (state) => this.#onEvent({ type: 'opened', tag, thread: { state: state as ThreadState } }),
         reject: fail,
       });
     } else {
-      this.#send('session/attach', open.attach, {
+      this.#send('thread/attach', open.attach, {
         resolve: (answer) => {
-          const { replay, ...state } = answer as HostRequests['session/attach']['result'];
-          this.#onEvent({ type: 'opened', tag, session: { state, replay } });
+          const { replay, ...state } = answer as HostRequests['thread/attach']['result'];
+          this.#onEvent({ type: 'opened', tag, thread: { state, replay } });
         },
         reject: fail,
       });
     }
   }
 
-  /** Ends the connection. The Host detaches it from its sessions; nothing else changes. */
+  /** Ends the connection. The Host detaches it from its threads; nothing else changes. */
   close() {
     if (this.#closed) return;
     this.#transport?.close();

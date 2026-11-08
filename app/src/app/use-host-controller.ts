@@ -13,7 +13,7 @@ import { useNetworkChange } from './use-network-change';
 
 const client = { name: 'weave-app', version: '0.1.0' };
 
-const emptyModel: AppModel = { hosts: [], sessions: [], agents: {}, unread: new Set() };
+const emptyModel: AppModel = { hosts: [], threads: [], agents: {}, unread: new Set() };
 
 // A browser, during development, keeps its keys in memory: after a reload it pairs again.
 const browserKeys = new Map<string, DeviceKey>();
@@ -48,15 +48,15 @@ const noSubscription = () => () => {};
 
 // What the controller does in the moment before its store exists: nothing.
 const idleActions: AppController['actions'] = {
-  selectSession() {},
-  createSession() {},
+  selectThread() {},
+  createThread() {},
   listDirectory: () => Promise.reject(new Error('The app is still starting.')),
   listWorktrees: () => Promise.reject(new Error('The app is still starting.')),
   createWorktree: () => Promise.reject(new Error('The app is still starting.')),
   removeWorktree: () => Promise.reject(new Error('The app is still starting.')),
-  closeSession() {},
-  renameSession() {},
-  deleteSession() {},
+  closeThread() {},
+  renameThread() {},
+  deleteThread() {},
   pairHost: () => Promise.reject(new Error('The app is still starting.')),
   forgetHost() {},
   renameHost() {},
@@ -65,7 +65,7 @@ const idleActions: AppController['actions'] = {
   removeQueued() {},
   resumeQueue() {},
   cancelTurn() {},
-  reopenSession() {},
+  reopenThread() {},
   updateAgent() {},
   respondToPermission() {},
   respondToElicitation() {},

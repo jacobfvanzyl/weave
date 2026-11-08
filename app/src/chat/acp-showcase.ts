@@ -347,7 +347,7 @@ const events: AcpTranscriptEvent[] = [
   },
   {
     type: 'session/update',
-    sessionId: 'showcase:robie',
+    threadId: 'showcase:robie',
     update: {
       sessionUpdate: 'tool_call',
       toolCallId: 'robie-read',
@@ -358,7 +358,7 @@ const events: AcpTranscriptEvent[] = [
   },
   {
     type: 'session/update',
-    sessionId: 'showcase:robie',
+    threadId: 'showcase:robie',
     update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'There are 12 files.' } },
   },
   {

@@ -10,15 +10,15 @@ import {
   type PromptImage,
   type QueuedPrompt,
   type RepositoryListing,
-  type SessionGit,
-  type SessionSummary,
   type TerminalSummary,
-  sessionKey,
+  type ThreadGit,
+  type ThreadSummary,
+  threadKey,
 } from './app-controller';
-import { SessionReadState } from './session-read-state';
+import { ThreadReadState } from './thread-read-state';
 
 /** Fixture states for UI work and tests until the app talks to a Host (WVE-100). */
-export const MOCK_SCENARIOS = ['list', 'session', 'running', 'unreachable', 'banner', 'empty', 'markdown', 'terminals'] as const;
+export const MOCK_SCENARIOS = ['list', 'thread', 'running', 'unreachable', 'banner', 'empty', 'markdown', 'terminals'] as const;
 export type MockScenario = (typeof MOCK_SCENARIOS)[number];
 
 export const mockScenarioFromLocation = (search = location.search): MockScenario => {
@@ -94,23 +94,23 @@ const repositories = (): MockRepositories => ({
   },
 });
 
-const onMain: SessionGit = { repo: WEAVE, worktree: WEAVE, branch: 'main' };
+const onMain: ThreadGit = { repo: WEAVE, worktree: WEAVE, branch: 'main' };
 
 const parentOf = (path: string) => path === '/' ? undefined : path.slice(0, path.lastIndexOf('/')) || '/';
 
 const summary = (
   hostId: string,
-  sessionId: string,
+  threadId: string,
   cwd: string,
   title: string,
   agentId: string,
   ago: number,
   now: number,
-  extra: Partial<SessionSummary> = {},
-): SessionSummary => ({
-  key: sessionKey(hostId, sessionId),
+  extra: Partial<ThreadSummary> = {},
+): ThreadSummary => ({
+  key: threadKey(hostId, threadId),
   hostId,
-  sessionId,
+  threadId,
   title,
   agentId,
   agentName: AGENTS.find(({ id }) => id === agentId)?.name ?? agentId,
@@ -123,7 +123,7 @@ const summary = (
   ...extra,
 });
 
-const sessions = (now: number): SessionSummary[] => [
+const threads = (now: number): ThreadSummary[] => [
   summary(MAC, 'fix-reconnect', RECONNECT, 'Fix the flaky reconnect test', 'claude', 1, now, {
     git: { repo: WEAVE, worktree: RECONNECT, branch: 'fix-reconnect' },
     activity: 'waiting',
@@ -204,38 +204,38 @@ type MockState = {
 /** The `markdown` scenario's thread, which shows the fake agent's rich Markdown reply. */
 const MARKDOWN = 'rich-markdown';
 
-const transcriptFor = (session: SessionSummary): AcpTranscript => {
-  const showcase = session.sessionId === MARKDOWN ? createMarkdownShowcaseTranscript() : createAcpShowcaseTranscript();
-  const transcript = { ...showcase, sessionId: session.sessionId, title: session.title };
-  return session.activity === 'running' ? reduceAcpEvent(transcript, { type: 'turn/started' }) : transcript;
+const transcriptFor = (thread: ThreadSummary): AcpTranscript => {
+  const showcase = thread.threadId === MARKDOWN ? createMarkdownShowcaseTranscript() : createAcpShowcaseTranscript();
+  const transcript = { ...showcase, threadId: thread.threadId, title: thread.title };
+  return thread.activity === 'running' ? reduceAcpEvent(transcript, { type: 'turn/started' }) : transcript;
 };
 
 const initialState = (scenario: MockScenario, now: number): MockState => {
   if (scenario === 'empty') {
-    return { model: { hosts: [], sessions: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {} };
+    return { model: { hosts: [], threads: [], agents: {}, unread: new Set() }, transcripts: {}, queued: {}, repositories: {}, terminals: {} };
   }
   const list = scenario === 'markdown'
-    ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain }), ...sessions(now)]
-    : sessions(now);
-  const selectedKey = scenario === 'session'
-    ? sessionKey(MAC, 'fix-reconnect')
+    ? [summary(MAC, MARKDOWN, WEAVE, 'Render rich Markdown', 'claude', 0, now, { git: onMain }), ...threads(now)]
+    : threads(now);
+  const selectedKey = scenario === 'thread'
+    ? threadKey(MAC, 'fix-reconnect')
     : scenario === 'running'
-      ? sessionKey(MAC, 'protocol-spec')
+      ? threadKey(MAC, 'protocol-spec')
       : scenario === 'markdown'
-        ? sessionKey(MAC, MARKDOWN)
+        ? threadKey(MAC, MARKDOWN)
         : scenario === 'terminals'
-          ? sessionKey(MAC, 'steer-tui')
+          ? threadKey(MAC, 'steer-tui')
           : undefined;
   return {
     model: {
       hosts: hosts(now, scenario === 'unreachable'),
-      sessions: list,
+      threads: list,
       agents: { [MAC]: AGENTS, [SERVER]: AGENTS },
       selectedKey,
       unread: new Set(),
     },
     transcripts: {},
-    queued: scenario === 'running' ? { [sessionKey(MAC, 'protocol-spec')]: [{ id: 'q1', text: 'Then regenerate the fixtures.' }] } : {},
+    queued: scenario === 'running' ? { [threadKey(MAC, 'protocol-spec')]: [{ id: 'q1', text: 'Then regenerate the fixtures.' }] } : {},
     repositories: repositories(),
     terminals: { [MAC]: terminals(now) },
   };
@@ -246,8 +246,8 @@ const repositoryOf = (repositories: MockRepositories, hostId: string, path: stri
   Object.entries(repositories[hostId] ?? {}).find(([, { worktrees }]) =>
     worktrees.some((worktree) => path === worktree.path || path.startsWith(`${worktree.path}/`)));
 
-/** Where a session in `cwd` is in the fixture repositories. */
-const gitOf = (repositories: MockRepositories, hostId: string, cwd: string): SessionGit | undefined => {
+/** Where a thread in `cwd` is in the fixture repositories. */
+const gitOf = (repositories: MockRepositories, hostId: string, cwd: string): ThreadGit | undefined => {
   const [repo, found] = repositoryOf(repositories, hostId, cwd) ?? [];
   const worktree = found?.worktrees
     .filter(({ path }) => cwd === path || cwd.startsWith(`${path}/`))
@@ -263,7 +263,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
   const { turnMs = 1500, bannerMs = 2500 } = options;
   const state = useRef<MockState>(undefined as unknown as MockState);
   state.current ??= initialState(scenario, Date.now());
-  const readState = useRef(new SessionReadState());
+  const readState = useRef(new ThreadReadState());
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const [, render] = useReducer((value: number) => value + 1, 0);
 
@@ -274,24 +274,24 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
 
   const update = (change: (current: MockState) => MockState) => {
     const next = change(state.current);
-    for (const session of next.model.sessions) readState.current.observe(session.key, session.activity);
+    for (const thread of next.model.threads) readState.current.observe(thread.key, thread.activity);
     state.current = { ...next, model: { ...next.model, unread: readState.current.unread() } };
     render();
   };
 
-  const setSession = (key: string, change: Partial<SessionSummary>) => update((current) => ({
+  const setThread = (key: string, change: Partial<ThreadSummary>) => update((current) => ({
     ...current,
     model: {
       ...current.model,
-      sessions: current.model.sessions.map((session) => session.key === key ? { ...session, ...change } : session),
+      threads: current.model.threads.map((thread) => thread.key === key ? { ...thread, ...change } : thread),
     },
   }));
 
   const transcript = (key: string) => {
     const known = state.current.transcripts[key];
     if (known) return known;
-    const session = state.current.model.sessions.find((item) => item.key === key);
-    return session ? transcriptFor(session) : createTranscript(key);
+    const thread = state.current.model.threads.find((item) => item.key === key);
+    return thread ? transcriptFor(thread) : createTranscript(key);
   };
 
   const reduce = (key: string, ...events: AcpTranscriptEvent[]) => update((current) => ({
@@ -311,7 +311,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
 
   const startTurn = (key: string, text: string, images?: PromptImage[]) => {
     reduce(key, userMessage(text, images), { type: 'turn/started' });
-    setSession(key, { activity: 'running', lastActivityAt: Date.now() });
+    setThread(key, { activity: 'running', lastActivityAt: Date.now() });
     later(turnMs, () => finishTurn(key));
   };
 
@@ -322,7 +322,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       { type: 'session/update', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done. This reply is from the mock controller.' } } },
       { type: 'turn/stopped', stopReason: 'end_turn' },
     );
-    setSession(key, { activity: 'idle', waitingOn: undefined, lastActivityAt: Date.now() });
+    setThread(key, { activity: 'idle', waitingOn: undefined, lastActivityAt: Date.now() });
     const [next, ...rest] = state.current.queued[key] ?? [];
     if (!next) return;
     update((current) => ({ ...current, queued: { ...current.queued, [key]: rest } }));
@@ -332,9 +332,9 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
   useEffect(() => {
     if (scenario !== 'banner') return;
     later(bannerMs, () => {
-      const key = sessionKey(MAC, 'alpha-back');
+      const key = threadKey(MAC, 'alpha-back');
       if (state.current.model.selectedKey === key) return;
-      setSession(key, { activity: 'waiting', waitingOn: 'Permission to edit app/src/App.tsx' });
+      setThread(key, { activity: 'waiting', waitingOn: 'Permission to edit app/src/App.tsx' });
     });
   }, [scenario, bannerMs]);
 
@@ -344,8 +344,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
   }, []);
 
   const { model } = state.current;
-  const selected = model.sessions.find(({ key }) => key === model.selectedKey);
-  const session = selected
+  const selected = model.threads.find(({ key }) => key === model.selectedKey);
+  const thread = selected
     ? {
         key: selected.key,
         transcript: transcript(selected.key),
@@ -361,25 +361,25 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
 
   const actions = useMemo<AppController['actions']>(() => {
     const selectedKey = () => state.current.model.selectedKey;
-    const selectedSession = () => state.current.model.sessions.find(({ key }) => key === selectedKey());
+    const selectedThread = () => state.current.model.threads.find(({ key }) => key === selectedKey());
     const setTerminals = (hostId: string, change: (terminals: TerminalSummary[]) => TerminalSummary[]) => update((current) => ({
       ...current,
       terminals: { ...current.terminals, [hostId]: change(current.terminals[hostId] ?? []) },
     }));
-    const selectSession = (key?: string) => {
+    const selectThread = (key?: string) => {
       readState.current.focus(key);
       update((current) => ({ ...current, model: { ...current.model, selectedKey: key } }));
     };
     return {
-      selectSession,
-      createSession({ hostId, cwd, agentId }) {
-        const sessionId = localId('session');
+      selectThread,
+      createThread({ hostId, cwd, agentId }) {
+        const threadId = localId('thread');
         const git = gitOf(state.current.repositories, hostId, cwd);
-        const created = summary(hostId, sessionId, cwd, '', agentId, 0, Date.now(), git ? { git } : {});
+        const created = summary(hostId, threadId, cwd, '', agentId, 0, Date.now(), git ? { git } : {});
         update((current) => ({
           ...current,
-          transcripts: { ...current.transcripts, [created.key]: createTranscript(sessionId) },
-          model: { ...current.model, sessions: [created, ...current.model.sessions], selectedKey: created.key },
+          transcripts: { ...current.transcripts, [created.key]: createTranscript(threadId) },
+          model: { ...current.model, threads: [created, ...current.model.threads], selectedKey: created.key },
         }));
       },
       async listDirectory({ hostId, path, hidden }) {
@@ -405,9 +405,9 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           worktrees: found.worktrees.map((worktree, index) => ({
             ...worktree,
             primary: index === 0,
-            sessions: state.current.model.sessions
-              .filter((session) => session.hostId === hostId && session.git?.worktree === worktree.path)
-              .map(({ sessionId }) => sessionId),
+            threads: state.current.model.threads
+              .filter((thread) => thread.hostId === hostId && thread.git?.worktree === worktree.path)
+              .map(({ threadId }) => threadId),
           })),
         };
       },
@@ -434,7 +434,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         const [repo, found] = repositoryOf(state.current.repositories, hostId, path) ?? [];
         const worktree = found?.worktrees.find((item) => item.path === path);
         if (!repo || !found || !worktree || worktree.path === repo) throw new Error(`Couldn't remove the worktree: ${path} isn't one that can be removed`);
-        const inside = state.current.model.sessions.filter((session) => session.hostId === hostId && session.git?.worktree === path);
+        const inside = state.current.model.threads.filter((thread) => thread.hostId === hostId && thread.git?.worktree === path);
         if (inside.some(({ activity }) => activity === 'running' || activity === 'waiting')) {
           throw new Error('A thread in it is running a turn or waiting on you. Let it finish, or stop it, first.');
         }
@@ -447,29 +447,29 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           },
           model: {
             ...current.model,
-            sessions: current.model.sessions.map((session) => inside.includes(session)
-              ? { ...session, state: 'closed', activity: undefined, waitingOn: undefined }
-              : session),
+            threads: current.model.threads.map((thread) => inside.includes(thread)
+              ? { ...thread, state: 'closed', activity: undefined, waitingOn: undefined }
+              : thread),
             selectedKey: inside.some(({ key }) => key === current.model.selectedKey) ? undefined : current.model.selectedKey,
           },
         }));
         return { outcome: 'removed', ...(worktree.branch ? { branch: worktree.branch } : {}), branchDeleted: false };
       },
-      renameSession(key, title) {
-        setSession(key, { title });
-        reduce(key, { type: 'session/renamed', title, by: 'You' });
+      renameThread(key, title) {
+        setThread(key, { title });
+        reduce(key, { type: 'thread/renamed', title, by: 'You' });
       },
-      closeSession(key) {
-        setSession(key, { state: 'closed', activity: undefined, waitingOn: undefined });
-        if (selectedKey() === key) selectSession(undefined);
+      closeThread(key) {
+        setThread(key, { state: 'closed', activity: undefined, waitingOn: undefined });
+        if (selectedKey() === key) selectThread(undefined);
       },
-      deleteSession(key) {
+      deleteThread(key) {
         readState.current.forget(key);
         update((current) => ({
           ...current,
           model: {
             ...current.model,
-            sessions: current.model.sessions.filter((item) => item.key !== key),
+            threads: current.model.threads.filter((item) => item.key !== key),
             selectedKey: current.model.selectedKey === key ? undefined : current.model.selectedKey,
           },
         }));
@@ -493,8 +493,8 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           model: {
             ...current.model,
             hosts: current.model.hosts.filter(({ id }) => id !== hostId),
-            sessions: current.model.sessions.filter((item) => item.hostId !== hostId),
-            selectedKey: current.model.sessions.some((item) => item.hostId === hostId && item.key === current.model.selectedKey)
+            threads: current.model.threads.filter((item) => item.hostId !== hostId),
+            selectedKey: current.model.threads.some((item) => item.hostId === hostId && item.key === current.model.selectedKey)
               ? undefined
               : current.model.selectedKey,
           },
@@ -519,7 +519,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
       send(text, images) {
         const key = selectedKey();
         if (!key) return;
-        const current = state.current.model.sessions.find((item) => item.key === key);
+        const current = state.current.model.threads.find((item) => item.key === key);
         if (transcript(key).turn.status !== 'running') {
           startTurn(key, text, images);
         } else if (current && steers(current.agentId)) {
@@ -531,7 +531,7 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
           }));
         }
       },
-      reopenSession() {
+      reopenThread() {
         const key = selectedKey();
         if (!key) return;
         reduce(key, { type: 'agent/reopened', text: 'Reopened this thread in a new agent process', failed: false });
@@ -555,19 +555,19 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         const key = selectedKey();
         if (!key) return;
         reduce(key, { type: 'turn/stopped', stopReason: 'cancelled' });
-        setSession(key, { activity: 'idle', waitingOn: undefined });
+        setThread(key, { activity: 'idle', waitingOn: undefined });
       },
       respondToPermission(requestId, optionId) {
         const key = selectedKey();
         if (!key) return;
         reduce(key, { type: 'permission/resolved', requestId, optionId });
-        setSession(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
+        setThread(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
       },
       respondToElicitation(requestId, response) {
         const key = selectedKey();
         if (!key) return;
         reduce(key, { type: 'elicitation/resolved', requestId, response });
-        setSession(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
+        setThread(key, { activity: transcript(key).turn.status === 'running' ? 'running' : 'idle', waitingOn: undefined });
       },
       setMode(modeId) {
         const key = selectedKey();
@@ -586,14 +586,14 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         reduce(key, { type: 'session/update', update: { sessionUpdate: 'config_option_update', configOptions } });
       },
       async newTerminal() {
-        const session = selectedSession();
-        if (!session) throw new Error('No thread is open.');
+        const thread = selectedThread();
+        if (!thread) throw new Error('No thread is open.');
         const id = localId('terminal');
-        setTerminals(session.hostId, (list) => [...list, {
+        setTerminals(thread.hostId, (list) => [...list, {
           id,
-          scope: session.git?.worktree ?? session.cwd,
-          pwd: session.cwd,
-          openedFrom: session.sessionId,
+          scope: thread.git?.worktree ?? thread.cwd,
+          pwd: thread.cwd,
+          openedFrom: thread.threadId,
           process: 'zsh',
           size: { cols: 80, rows: 24 },
           command: { running: false },
@@ -602,13 +602,13 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
         return id;
       },
       async closeTerminal(id) {
-        const session = selectedSession();
-        if (session) setTerminals(session.hostId, (list) => list.filter((terminal) => terminal.id !== id));
+        const thread = selectedThread();
+        if (thread) setTerminals(thread.hostId, (list) => list.filter((terminal) => terminal.id !== id));
       },
       async renameTerminal(id, label) {
-        const session = selectedSession();
-        if (!session) return;
-        setTerminals(session.hostId, (list) => list.map((terminal) => {
+        const thread = selectedThread();
+        if (!thread) return;
+        setTerminals(thread.hostId, (list) => list.map((terminal) => {
           if (terminal.id !== id) return terminal;
           const { label: _previous, ...rest } = terminal;
           return label?.trim() ? { ...rest, label: label.trim() } : rest;
@@ -621,5 +621,5 @@ export function useMockController(scenario: MockScenario, options: { turnMs?: nu
     // The actions read the latest state through refs, so they never change.
   }, []);
 
-  return { model: { ...model, session }, actions };
+  return { model: { ...model, thread }, actions };
 }

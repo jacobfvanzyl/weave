@@ -7,7 +7,7 @@ the live issue and the spec, `docs/specs/wve-91-host-client.md`, before implemen
 the repository's pinned Linear CLI and tracker conventions from `../docs/agents/issue-tracker.md`.
 
 WVE-199 reworks it. Projects, and Sessions laying out Blocks of threads and terminals, replace
-the session list (ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell
+the thread list (ADR 0031). The same React runs on the Mac in Tauri beside the Capacitor shell
 (ADR 0032). Until those issues land, the layout below is current.
 
 ## Boundaries
@@ -16,8 +16,9 @@ the session list (ADR 0031). The same React runs on the Mac in Tauri beside the 
   (`../docs/specs/wve-85-host-protocol.md`, `../docs/specs/wve-90-remote-clients.md`)
   and never ACP or MCP; ACP's content arrives as the Host protocol's payload.
 - Use the glossary's terms (`../CONTEXT.md`): threads, Hosts, directories, turns, steers,
-  pending requests. A Session is ADR 0031's, not a thread; code still says session for threads
-  until WVE-200. Alpha's Threads, Connections, Workspaces and archiving are gone.
+  pending requests. A Session is ADR 0031's, not a thread. The code says thread too (WVE-200),
+  and keeps session for ACP's names and payloads. Alpha's Threads, Connections, Workspaces and
+  archiving are gone.
 - Portal, Workspaces, the Host Browser, the Client Browser and Electron stay in history. Bring
   something back only when an issue asks for it. Terminals came back in WVE-153 (ADR 0022): a
   worktree's terminals in a panel beside a thread, drawn natively.
@@ -26,10 +27,10 @@ the session list (ADR 0031). The same React runs on the Mac in Tauri beside the 
 
 | Path | Owns |
 | --- | --- |
-| `src/app` | The controller seam (`app-controller.ts`), the session list's rules (`session-list.ts`), read state, the mock and Host controllers, and hooks. |
+| `src/app` | The controller seam (`app-controller.ts`), the thread list's rules (`thread-list.ts`), read state (`thread-read-state.ts`), the mock and Host controllers, and hooks. |
 | `src/host` | The Host protocol's generated types (`protocol.ts`, never edited by hand), the connection, device keys, journal following, and the store behind the Host controller (`host-store.ts`). |
 | `src/chat` | The ACP transcript (`acp-transcript.ts`) and its views: the chat pane, tool calls and their terminals, plans, subagents, elicitations; the recorded journals its tests read (`fixtures/journals`). |
-| `src/components` | The shell (`app-shell.tsx`), the session list and view, the banner and dialogs, and the thread's status sheet (`thread-status-sheet.tsx`, WVE-160: its MCP servers, from the header's menu); `ui` and `ai-elements` are shadcn and AI Elements components. |
+| `src/components` | The shell (`app-shell.tsx`), the thread list and view (`thread-list.tsx`, `thread-view.tsx`), the banner and dialogs, and the thread's status sheet (`thread-status-sheet.tsx`, WVE-160: its MCP servers, from the header's menu); `ui` and `ai-elements` are shadcn and AI Elements components. |
 | `src/markdown` | What agent Markdown renders as beyond Streamdown's defaults (WVE-122), kept inert: no script, no fetch, no navigation without consent. `MessageResponse` (`src/components/ai-elements/message.tsx`) puts it together. |
 | `src/surface` | A Surface (WVE-183): the messages and the projection the iPhone sends (`surface-messages.ts`), the link between the two web views (`surface-link.ts`, a BroadcastChannel between tabs in a browser), the iPhone's hook and scrubber, and the Surface's page (`surface-app.tsx`). |
 | `src/terminal` | Terminals beside a thread (WVE-153): the native plugin's bridge, the hook that lays a surface out and keeps it attached, and the layout this device keeps for each thread (`terminal-layout.ts`). The panel is `src/components/terminal-panel.tsx`. |
@@ -51,7 +52,7 @@ Run from `app/`, with Bun 1.4.3:
 ```bash
 bun install
 bun run check                # tests, type check and build
-bun run dev                  # http://localhost:5174/?mock=session&idiom=phone
+bun run dev                  # http://localhost:5174/?mock=thread&idiom=phone
 bun run cap:sync             # build and copy into the iOS project
 bun run ios:build            # signed build for any iOS device; --unsigned to only compile
 bun run ios:install -- --device <udid>   # install and launch it (`xcrun devicectl list devices`)
@@ -72,7 +73,7 @@ The transcript's tests read journals recorded from a dev Host (`src/chat/fixture
 Record them again with `scripts/record-journals.ts` after the Host or fake agent changes what it
 journals, and review the snapshot's diff.
 
-`?mock=` picks a fixture scenario (`list`, `session`, `running`, `unreachable`, `banner`,
+`?mock=` picks a fixture scenario (`list`, `thread`, `running`, `unreachable`, `banner`,
 `empty`, `markdown`, the fake agent's rich Markdown reply, and `terminals`, a thread with its
 worktree's terminals); `?surface` in another tab is a Surface for a phone tab at `?mock=…&idiom=phone`; `?idiom=phone` or `?idiom=pad`
 stands in for the device in a browser, since the layout follows the device, not the window's width. A debug build takes the scenario as a launch argument

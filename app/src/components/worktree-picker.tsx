@@ -9,9 +9,9 @@ import { Label } from '@/components/ui/label';
 import { directoryName } from '@/lib/display-path';
 
 /**
- * Picks one of a repository's worktrees for a new session, or creates one beside the repository:
+ * Picks one of a repository's worktrees for a new thread, or creates one beside the repository:
  * on a new branch from what it starts from (else the default branch), or on a branch that exists.
- * Creating happens at once, so the worktree is there whether or not the session then starts.
+ * Creating happens at once, so the worktree is there whether or not the thread then starts.
  */
 export function WorktreePicker({ repository, selected, create, onChoose, onCancel }: {
   repository: RepositoryListing;
@@ -45,7 +45,7 @@ export function WorktreePicker({ repository, selected, create, onChoose, onCance
       <ul aria-label='Worktrees' className='max-h-[min(40vh,18rem)] overflow-y-auto rounded-md border'>
         {repository.worktrees.map((worktree) => {
           const current = worktree.path === selected;
-          const sessions = worktree.sessions.length;
+          const threads = worktree.threads.length;
           return (
             <li key={worktree.path}>
               <button type='button' aria-current={current ? 'true' : undefined} title={worktree.path}
@@ -58,7 +58,7 @@ export function WorktreePicker({ repository, selected, create, onChoose, onCance
                     {[
                       directoryName(worktree.path),
                       worktree.changes && 'changed',
-                      sessions > 0 && `${sessions} ${sessions === 1 ? 'thread' : 'threads'}`,
+                      threads > 0 && `${threads} ${threads === 1 ? 'thread' : 'threads'}`,
                     ].filter(Boolean).join(' · ')}
                   </span>
                 </span>

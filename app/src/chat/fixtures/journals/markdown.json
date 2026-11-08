@@ -1,7 +1,7 @@
 {
   "name": "markdown",
   "state": {
-    "sessionId": "fake-18e1c126073f6fe0",
+    "threadId": "fake-18e60411ca4bfcb0",
     "agent": {
       "id": "fake",
       "name": "Fake Agent",
@@ -150,20 +150,28 @@
     "pending": [],
     "subagents": [],
     "journal": {
-      "id": "1792926495748",
+      "id": "1794125976011",
       "head": 1
     },
-    "notices": []
+    "notices": [],
+    "mcpServers": [
+      {
+        "name": "weave",
+        "source": "host",
+        "transport": "stdio",
+        "state": "declared"
+      }
+    ]
   },
   "events": [
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 1,
-      "at": 1792926495749,
+      "at": 1794125976012,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "available_commands_update",
             "availableCommands": [
@@ -215,6 +223,13 @@
                 "description": "Ask a few questions with a form"
               },
               {
+                "name": "questions",
+                "description": "Ask as Claude's and Codex's adapters do, with Other and a note",
+                "input": {
+                  "hint": "claude or codex, to ask only that one"
+                }
+              },
+              {
                 "name": "connect",
                 "description": "Connect an account through a URL"
               },
@@ -225,6 +240,13 @@
               {
                 "name": "think",
                 "description": "Reason out loud, then answer"
+              },
+              {
+                "name": "work",
+                "description": "Think, then make five tool calls a moment apart",
+                "input": {
+                  "hint": "fail, to fail one"
+                }
               },
               {
                 "name": "compact",
@@ -256,12 +278,12 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 2,
-      "at": 1792926495772,
+      "at": 1794125976014,
       "event": {
         "kind": "turnStarted",
-        "sessionId": "fake-18e1c126073f6fe0",
+        "threadId": "fake-18e60411ca4bfcb0",
         "prompt": [
           {
             "type": "text",
@@ -271,35 +293,36 @@
         "origin": {
           "client": {
             "name": "weave-tui",
-            "id": "c1"
+            "id": "c7"
           }
-        }
+        },
+        "turnId": "q-PZoggTUL"
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 3,
-      "at": 1792926495774,
+      "at": 1794125976015,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "session_info_update",
             "title": "/markdown",
-            "updatedAt": "2026-10-25T11:08:15.773950Z"
+            "updatedAt": "2026-11-08T08:19:36.015004Z"
           }
         }
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 4,
-      "at": 1792926495774,
+      "at": 1794125976015,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -311,13 +334,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 5,
-      "at": 1792926495790,
+      "at": 1794125976033,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -329,13 +352,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 6,
-      "at": 1792926495808,
+      "at": 1794125976051,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -347,13 +370,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 7,
-      "at": 1792926495826,
+      "at": 1794125976069,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -365,13 +388,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 8,
-      "at": 1792926495844,
+      "at": 1794125976087,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -383,13 +406,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 9,
-      "at": 1792926495862,
+      "at": 1794125976105,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -401,13 +424,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 10,
-      "at": 1792926495878,
+      "at": 1794125976123,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -419,13 +442,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 11,
-      "at": 1792926495897,
+      "at": 1794125976140,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -437,13 +460,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 12,
-      "at": 1792926495915,
+      "at": 1794125976159,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -455,13 +478,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 13,
-      "at": 1792926495933,
+      "at": 1794125976177,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -473,13 +496,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 14,
-      "at": 1792926495951,
+      "at": 1794125976195,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -491,13 +514,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 15,
-      "at": 1792926495970,
+      "at": 1794125976213,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -509,13 +532,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 16,
-      "at": 1792926495986,
+      "at": 1794125976230,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -527,13 +550,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 17,
-      "at": 1792926496005,
+      "at": 1794125976247,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -545,13 +568,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 18,
-      "at": 1792926496023,
+      "at": 1794125976263,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -563,13 +586,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 19,
-      "at": 1792926496040,
+      "at": 1794125976282,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -581,13 +604,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 20,
-      "at": 1792926496058,
+      "at": 1794125976298,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -599,13 +622,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 21,
-      "at": 1792926496076,
+      "at": 1794125976315,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -617,13 +640,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 22,
-      "at": 1792926496095,
+      "at": 1794125976333,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -635,13 +658,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 23,
-      "at": 1792926496111,
+      "at": 1794125976351,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -653,13 +676,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 24,
-      "at": 1792926496129,
+      "at": 1794125976369,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -671,13 +694,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 25,
-      "at": 1792926496147,
+      "at": 1794125976386,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -689,13 +712,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 26,
-      "at": 1792926496165,
+      "at": 1794125976403,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -707,13 +730,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 27,
-      "at": 1792926496183,
+      "at": 1794125976419,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -725,13 +748,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 28,
-      "at": 1792926496202,
+      "at": 1794125976437,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -743,13 +766,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 29,
-      "at": 1792926496220,
+      "at": 1794125976456,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -761,13 +784,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 30,
-      "at": 1792926496236,
+      "at": 1794125976474,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -779,13 +802,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 31,
-      "at": 1792926496254,
+      "at": 1794125976492,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -797,13 +820,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 32,
-      "at": 1792926496273,
+      "at": 1794125976510,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -815,13 +838,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 33,
-      "at": 1792926496289,
+      "at": 1794125976526,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -833,13 +856,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 34,
-      "at": 1792926496307,
+      "at": 1794125976545,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -851,13 +874,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 35,
-      "at": 1792926496324,
+      "at": 1794125976562,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -869,13 +892,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 36,
-      "at": 1792926496340,
+      "at": 1794125976579,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -887,13 +910,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 37,
-      "at": 1792926496358,
+      "at": 1794125976598,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -905,13 +928,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 38,
-      "at": 1792926496377,
+      "at": 1794125976616,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -923,13 +946,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 39,
-      "at": 1792926496393,
+      "at": 1794125976633,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -941,13 +964,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 40,
-      "at": 1792926496411,
+      "at": 1794125976650,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -959,13 +982,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 41,
-      "at": 1792926496429,
+      "at": 1794125976668,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -977,13 +1000,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 42,
-      "at": 1792926496447,
+      "at": 1794125976686,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -995,13 +1018,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 43,
-      "at": 1792926496465,
+      "at": 1794125976703,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1013,13 +1036,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 44,
-      "at": 1792926496484,
+      "at": 1794125976721,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1031,13 +1054,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 45,
-      "at": 1792926496501,
+      "at": 1794125976739,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1049,13 +1072,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 46,
-      "at": 1792926496517,
+      "at": 1794125976757,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1067,13 +1090,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 47,
-      "at": 1792926496535,
+      "at": 1794125976774,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1085,13 +1108,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 48,
-      "at": 1792926496553,
+      "at": 1794125976793,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1103,13 +1126,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 49,
-      "at": 1792926496569,
+      "at": 1794125976809,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1121,13 +1144,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 50,
-      "at": 1792926496586,
+      "at": 1794125976826,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1139,13 +1162,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 51,
-      "at": 1792926496603,
+      "at": 1794125976843,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1157,13 +1180,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 52,
-      "at": 1792926496620,
+      "at": 1794125976860,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1175,13 +1198,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 53,
-      "at": 1792926496637,
+      "at": 1794125976877,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1193,13 +1216,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 54,
-      "at": 1792926496655,
+      "at": 1794125976896,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1211,13 +1234,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 55,
-      "at": 1792926496672,
+      "at": 1794125976913,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1229,13 +1252,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 56,
-      "at": 1792926496690,
+      "at": 1794125976931,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1247,13 +1270,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 57,
-      "at": 1792926496709,
+      "at": 1794125976949,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1265,13 +1288,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 58,
-      "at": 1792926496726,
+      "at": 1794125976967,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1283,13 +1306,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 59,
-      "at": 1792926496743,
+      "at": 1794125976983,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1301,13 +1324,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 60,
-      "at": 1792926496760,
+      "at": 1794125977001,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1319,13 +1342,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 61,
-      "at": 1792926496778,
+      "at": 1794125977019,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1337,13 +1360,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 62,
-      "at": 1792926496795,
+      "at": 1794125977035,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1355,13 +1378,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 63,
-      "at": 1792926496813,
+      "at": 1794125977052,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1373,13 +1396,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 64,
-      "at": 1792926496832,
+      "at": 1794125977070,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1391,13 +1414,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 65,
-      "at": 1792926496849,
+      "at": 1794125977088,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1409,13 +1432,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 66,
-      "at": 1792926496867,
+      "at": 1794125977105,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1427,13 +1450,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 67,
-      "at": 1792926496885,
+      "at": 1794125977123,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1445,13 +1468,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 68,
-      "at": 1792926496903,
+      "at": 1794125977140,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1463,13 +1486,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 69,
-      "at": 1792926496921,
+      "at": 1794125977158,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1481,13 +1504,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 70,
-      "at": 1792926496939,
+      "at": 1794125977176,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1499,13 +1522,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 71,
-      "at": 1792926496957,
+      "at": 1794125977193,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1517,13 +1540,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 72,
-      "at": 1792926496974,
+      "at": 1794125977211,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1535,13 +1558,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 73,
-      "at": 1792926496992,
+      "at": 1794125977228,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1553,13 +1576,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 74,
-      "at": 1792926497009,
+      "at": 1794125977245,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1571,13 +1594,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 75,
-      "at": 1792926497027,
+      "at": 1794125977262,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1589,13 +1612,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 76,
-      "at": 1792926497045,
+      "at": 1794125977280,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1607,13 +1630,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 77,
-      "at": 1792926497061,
+      "at": 1794125977298,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1625,13 +1648,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 78,
-      "at": 1792926497079,
+      "at": 1794125977316,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1643,13 +1666,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 79,
-      "at": 1792926497097,
+      "at": 1794125977334,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1661,13 +1684,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 80,
-      "at": 1792926497114,
+      "at": 1794125977350,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1679,13 +1702,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 81,
-      "at": 1792926497132,
+      "at": 1794125977368,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1697,13 +1720,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 82,
-      "at": 1792926497151,
+      "at": 1794125977387,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1715,13 +1738,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 83,
-      "at": 1792926497168,
+      "at": 1794125977403,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1733,13 +1756,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 84,
-      "at": 1792926497186,
+      "at": 1794125977421,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1751,13 +1774,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 85,
-      "at": 1792926497204,
+      "at": 1794125977438,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1769,13 +1792,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 86,
-      "at": 1792926497221,
+      "at": 1794125977455,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1787,13 +1810,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 87,
-      "at": 1792926497239,
+      "at": 1794125977472,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1805,13 +1828,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 88,
-      "at": 1792926497255,
+      "at": 1794125977490,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1823,13 +1846,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 89,
-      "at": 1792926497272,
+      "at": 1794125977507,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1841,13 +1864,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 90,
-      "at": 1792926497290,
+      "at": 1794125977526,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {
@@ -1859,13 +1882,13 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 91,
-      "at": 1792926497310,
+      "at": 1794125977551,
       "event": {
         "kind": "update",
         "notification": {
-          "sessionId": "fake-18e1c126073f6fe0",
+          "sessionId": "fake-18e60411ca4bfcb0",
           "update": {
             "sessionUpdate": "usage_update",
             "used": 2139,
@@ -1875,12 +1898,12 @@
       }
     },
     {
-      "sessionId": "fake-18e1c126073f6fe0",
+      "threadId": "fake-18e60411ca4bfcb0",
       "seq": 92,
-      "at": 1792926497311,
+      "at": 1794125977551,
       "event": {
         "kind": "turnEnded",
-        "sessionId": "fake-18e1c126073f6fe0",
+        "threadId": "fake-18e60411ca4bfcb0",
         "response": {
           "stopReason": "end_turn"
         }

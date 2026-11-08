@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AppController, SessionGit } from '@/app/app-controller';
+import type { AppController, ThreadGit } from '@/app/app-controller';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -14,13 +14,13 @@ import { Button } from '@/components/ui/button';
 import { directoryName } from '@/lib/display-path';
 
 /**
- * Confirms removing a thread's worktree, from its row in the list. Its open sessions close first, and
+ * Confirms removing a thread's worktree, from its row in the list. Its open threads close first, and
  * its branch goes with it when merged. A worktree with changes asks again before they're lost.
  */
 export function RemoveWorktreeDialog({ hostId, worktree, actions, open, onOpenChange }: {
   hostId: string;
   /** Where the thread is: its worktree, and the branch that goes too when merged. */
-  worktree: SessionGit;
+  worktree: ThreadGit;
   actions: AppController['actions'];
   open: boolean;
   onOpenChange(open: boolean): void;

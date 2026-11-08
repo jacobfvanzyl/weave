@@ -17,16 +17,16 @@ import type {
   PromptImage,
   QueuedPrompt,
   RepositoryListing,
-  SessionGit,
-  SessionSummary,
   TerminalSummary,
   TerminalTicket,
+  ThreadGit,
+  ThreadSummary,
   WorktreeRemoval,
 } from '@/app/app-controller';
-import { sessionKey } from '@/app/app-controller';
-import { SessionReadState } from '@/app/session-read-state';
+import { threadKey } from '@/app/app-controller';
+import { ThreadReadState } from '@/app/thread-read-state';
 import { type ClientTool, toolError } from './client-tools';
-import { CONNECTION_CLOSED, ConnectError, type Connector, HostConnection, HostError, type HostEvent, type OpenedSession } from './connection';
+import { CONNECTION_CLOSED, ConnectError, type Connector, HostConnection, HostError, type HostEvent, type OpenedThread } from './connection';
 import type { DeviceKey } from './device-key';
 import { JournalFollower, originLabel, transcriptEvents } from './journal';
 import {
@@ -41,9 +41,9 @@ import {
   type PendingRequest,
   type PendingResolvedNotification,
   type QueuedPrompt as HostQueuedPrompt,
-  type SessionEventNotification,
-  type SessionListing,
-  type SessionState,
+  type ThreadEventNotification,
+  type ThreadListing,
+  type ThreadState,
   type TurnOrigin,
 } from './protocol';
 import { type HostStorage, type PairedHostRecord, websocketUrl } from './storage';
@@ -85,7 +85,7 @@ type HostEntry = {
   connecting?: AbortController;
   /** Whether it connected before, so a try is reconnecting, as is any after the first. */
   connected: boolean;
-  sessions: SessionListing[];
+  threads: ThreadListing[];
   agents: AgentSummary[];
   attempt: number;
   retry?: ReturnType<typeof setTimeout>;
@@ -95,16 +95,16 @@ type HostEntry = {
   stopped: boolean;
 };
 
-/** A session this client follows: where its journal is up to, what it shows, and what waits to be sent. */
+/** A thread this client follows: where its journal is up to, what it shows, and what waits to be sent. */
 type Followed = {
   hostId: string;
-  sessionId: string;
+  threadId: string;
   follower: JournalFollower;
   transcript: AcpTranscript;
   /** The tag of the attach whose answer it waits for. */
   tag?: number;
-  /** The session as attaching gave it, kept up to date: its agent, whether it's blank, its activity. */
-  state?: SessionState;
+  /** The thread as attaching gave it, kept up to date: its agent, whether it's blank, its activity. */
+  state?: ThreadState;
   /** The Host's queue, which holds messages for after the running turn (feature `queue`). */
   held: QueuedPrompt[];
   /** The Host's queue waits for someone to start it again. */
@@ -113,11 +113,11 @@ type Followed = {
   queued: QueuedPrompt[];
   /** Steers on their way, until the agent takes them or the Host says no turn runs. */
   steering: QueuedPrompt[];
-  /** A newer version is out (`agents/updateAvailable`, or `SessionState.update`). */
+  /** A newer version is out (`agents/updateAvailable`, or `ThreadState.update`). */
   update?: Omit<AgentUpdateNotice, 'available'>;
   updating: boolean;
   reopening: boolean;
-  /** What waits in it now, as the Host says (`SessionState.pending`, then `pending/added` and `pending/resolved`). */
+  /** What waits in it now, as the Host says (`ThreadState.pending`, then `pending/added` and `pending/resolved`). */
   pending: PendingRequest[];
   /**
    * Whether the transcript shows what's pending. Not while an attach replays history: a request
@@ -137,7 +137,7 @@ type Followed = {
 
 type PendingKind<K extends PendingRequest['kind']> = Extract<PendingRequest, { kind: K }>;
 
-/** A `session/create` waiting for its answer. */
+/** A `thread/create` waiting for its answer. */
 type Creating = { hostId: string; agentId: string; resolve(): void; reject(error: Error): void };
 
 /** ACP's error for an agent that needs signing in, passed through by the Host. */
@@ -169,7 +169,7 @@ const terminalSummary = (terminal: HostTerminal): TerminalSummary => ({
   startedAt: terminal.startedAt,
 });
 
-const sessionGit = (git: GitLocation): SessionGit => ({
+const threadGit = (git: GitLocation): ThreadGit => ({
   repo: git.repo,
   worktree: git.worktree,
   ...(git.branch ? { branch: git.branch } : {}),
@@ -178,8 +178,8 @@ const sessionGit = (git: GitLocation): SessionGit => ({
 /** What failed, and why as the Host says it: its error's text, when it gave one, says more than its message. */
 /** Why a worktree can't go: its threads at work, its terminals running commands, or both. */
 const busyWorktree = (error: unknown) => {
-  const data = error instanceof HostError ? error.data as { sessions?: unknown[]; terminals?: unknown[] } | undefined : undefined;
-  const threads = (data?.sessions?.length ?? 0) > 0 || !data?.terminals?.length;
+  const data = error instanceof HostError ? error.data as { threads?: unknown[]; terminals?: unknown[] } | undefined : undefined;
+  const threads = (data?.threads?.length ?? 0) > 0 || !data?.terminals?.length;
   const terminals = (data?.terminals?.length ?? 0) > 0;
   const busy = [
     ...(threads ? ['a thread in it is running a turn or waiting on you'] : []),
@@ -206,7 +206,7 @@ const meta = (value: unknown, ...path: string[]): unknown =>
   path.reduce<unknown>((current, key) => typeof current === 'object' && current !== null ? (current as Record<string, unknown>)[key] : undefined, value);
 
 /**
- * The app's Hosts and the session on screen, kept up to date from their connections, for the
+ * The app's Hosts and the thread on screen, kept up to date from their connections, for the
  * app's controller (`use-host-controller.ts`).
  */
 export class HostStore {
@@ -216,7 +216,7 @@ export class HostStore {
   readonly #creating = new Map<number, Creating>();
   /** Client tool calls running on this device, by pending id. */
   readonly #running = new Set<string>();
-  readonly #read = new SessionReadState();
+  readonly #read = new ThreadReadState();
   readonly #listeners = new Set<() => void>();
   #selectedKey?: string;
   #error?: string;
@@ -261,9 +261,9 @@ export class HostStore {
   }
 
   /**
-   * Lists every Host's sessions again, and reconnects at once to the ones that dropped, or whose
+   * Lists every Host's threads again, and reconnects at once to the ones that dropped, or whose
    * connection doesn't answer within `probeTimeout`: the app came to the front, the network
-   * changed, or the list was pulled down. A Host that keeps the list live (`sessions/watch`) is
+   * changed, or the list was pulled down. A Host that keeps the list live (`threads/watch`) is
    * asked to start over, so nothing older than what it last said comes after it.
    */
   async refresh() {
@@ -283,7 +283,7 @@ export class HostStore {
     await this.#connect(entry);
   }
 
-  /** Whether a connection still answers: it lists the sessions again within `probeTimeout`. */
+  /** Whether a connection still answers: it lists the threads again within `probeTimeout`. */
   async #answers(entry: HostEntry, connection: HostConnection): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const silent = new Promise<false>((resolve) => {
@@ -297,7 +297,7 @@ export class HostStore {
   }
 
   readonly actions: AppActions = {
-    selectSession: (key) => this.#select(key),
+    selectThread: (key) => this.#select(key),
     refresh: () => this.refresh(),
     pairHost: (input) => this.#pair(input),
     forgetHost: (hostId) => this.#forget(hostId),
@@ -310,14 +310,14 @@ export class HostStore {
       entry.attempt = 0;
       await this.#connect(entry);
     },
-    createSession: (input) => this.#create(input),
+    createThread: (input) => this.#create(input),
     listDirectory: (input) => this.#listDirectory(input),
     listWorktrees: (input) => this.#listWorktrees(input),
     createWorktree: (input) => this.#createWorktree(input),
     removeWorktree: (input) => this.#removeWorktree(input),
-    closeSession: (key) => this.#report(() => this.#close(key)),
-    renameSession: (key, title) => this.#rename(key, title),
-    deleteSession: (key) => this.#report(() => this.#delete(key)),
+    closeThread: (key) => this.#report(() => this.#close(key)),
+    renameThread: (key, title) => this.#rename(key, title),
+    deleteThread: (key) => this.#report(() => this.#delete(key)),
     send: (text, images) => this.#send(text, images),
     removeQueued: (id) => {
       const followed = this.#selected();
@@ -325,7 +325,7 @@ export class HostStore {
       if (followed.held.some((prompt) => prompt.id === id)) {
         // It leaves when the Host's `unqueued` event says so.
         void this.#report(async () => {
-          await this.#connection(followed).request('queue/remove', { sessionId: followed.sessionId, queuedId: id });
+          await this.#connection(followed).request('queue/remove', { threadId: followed.threadId, queuedId: id });
         });
         return;
       }
@@ -335,14 +335,14 @@ export class HostStore {
     resumeQueue: () => this.#report(async () => {
       const followed = this.#selected();
       if (!followed) return;
-      await this.#connection(followed).request('queue/resume', { sessionId: followed.sessionId });
+      await this.#connection(followed).request('queue/resume', { threadId: followed.threadId });
     }),
     cancelTurn: () => this.#report(async () => {
       const followed = this.#selected();
       if (!followed) return;
-      await this.#connection(followed).request('turn/cancel', { sessionId: followed.sessionId });
+      await this.#connection(followed).request('turn/cancel', { threadId: followed.threadId });
     }),
-    reopenSession: () => this.#report(() => this.#reopen()),
+    reopenThread: () => this.#report(() => this.#reopen()),
     updateAgent: () => this.#report(() => this.#updateAgent()),
     respondToPermission: (requestId, optionId) => this.#answer(
       requestId,
@@ -357,15 +357,15 @@ export class HostStore {
     setMode: (modeId) => this.#report(async () => {
       const followed = this.#selected();
       if (!followed) return;
-      await this.#connection(followed).request('session/setMode', { sessionId: followed.sessionId, modeId });
+      await this.#connection(followed).request('thread/setMode', { threadId: followed.threadId, modeId });
     }),
     setConfigOption: (configId, value) => this.#report(async () => {
       const followed = this.#selected();
       if (!followed) return;
       // The change reaches every client, this one too, through the journal.
-      await this.#connection(followed).request('session/setConfigOption', typeof value === 'boolean'
-        ? { sessionId: followed.sessionId, configId, type: 'boolean', value }
-        : { sessionId: followed.sessionId, configId, value });
+      await this.#connection(followed).request('thread/setConfigOption', typeof value === 'boolean'
+        ? { threadId: followed.threadId, configId, type: 'boolean', value }
+        : { threadId: followed.threadId, configId, value });
     }),
     newTerminal: () => this.#newTerminal(),
     closeTerminal: async (id) => {
@@ -404,7 +404,7 @@ export class HostStore {
   }
 
   #entry(record: PairedHostRecord): HostEntry {
-    return { record, status: 'connecting', connected: false, sessions: [], agents: [], attempt: 0, stopped: false };
+    return { record, status: 'connecting', connected: false, threads: [], agents: [], attempt: 0, stopped: false };
   }
 
   #changed() {
@@ -419,7 +419,7 @@ export class HostStore {
 
   /**
    * Proves the device to the Host again, and once connected attaches after the last position of
-   * the session on screen. A try still under way, as on a network that has since changed, is
+   * the thread on screen. A try still under way, as on a network that has since changed, is
    * abandoned.
    */
   async #connect(entry: HostEntry) {
@@ -472,7 +472,7 @@ export class HostStore {
     this.#changed();
     await this.#loadAgents(entry);
     await this.#list(entry);
-    // Catch up on the session on screen, after the last event this client handled.
+    // Catch up on the thread on screen, after the last event this client handled.
     const selected = this.#selected();
     if (selected && selected.hostId === entry.record.hostId && entry.connection === connection) this.#attach(selected);
   }
@@ -540,7 +540,7 @@ export class HostStore {
   async #revoked(entry: HostEntry) {
     const { hostId, keyId } = entry.record;
     this.#halt(entry, 'revoked', 'This device was revoked on the Host, and has forgotten the pairing. Pair it again to see its threads.');
-    entry.sessions = [];
+    entry.threads = [];
     entry.agents = [];
     this.#unfollow(hostId);
     this.#changed();
@@ -548,7 +548,7 @@ export class HostStore {
     await this.#save();
   }
 
-  /** Forgets what the app followed in a Host's sessions, and leaves the one on screen. */
+  /** Forgets what the app followed in a Host's threads, and leaves the one on screen. */
   #unfollow(hostId: string) {
     for (const [key, followed] of this.#followed) {
       if (followed.hostId === hostId) this.#followed.delete(key);
@@ -556,7 +556,7 @@ export class HostStore {
     if (this.#selectedKey?.startsWith(`${hostId}/`)) this.#selectedKey = undefined;
   }
 
-  /** The Host's agents, and the version each one's new sessions launch. */
+  /** The Host's agents, and the version each one's new threads launch. */
   async #loadAgents(entry: HostEntry) {
     const connection = entry.connection;
     if (!connection) return;
@@ -569,18 +569,18 @@ export class HostStore {
   }
 
   /**
-   * The Host's sessions: watched, so they stay up to date (`sessions/watch`), or listed once
-   * (`sessions/list`) from a Host that can't.
+   * The Host's threads: watched, so they stay up to date (`threads/watch`), or listed once
+   * (`threads/list`) from a Host that can't.
    */
   async #list(entry: HostEntry) {
     const connection = entry.connection;
     if (!connection) return;
     try {
-      entry.sessions = connection.supports(HOST_PROTOCOL.features.watch)
-        ? (await connection.request('sessions/watch', {})).sessions
-        : (await connection.request('sessions/list', {})).sessions;
-      for (const listing of entry.sessions) {
-        this.#read.observe(sessionKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
+      entry.threads = connection.supports(HOST_PROTOCOL.features.watch)
+        ? (await connection.request('threads/watch', {})).threads
+        : (await connection.request('threads/list', {})).threads;
+      for (const listing of entry.threads) {
+        this.#read.observe(threadKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
       }
       this.#changed();
     } catch (error) {
@@ -591,17 +591,17 @@ export class HostStore {
     }
   }
 
-  /** A watched session appeared or changed. */
-  #listed(entry: HostEntry, listing: SessionListing) {
-    const index = entry.sessions.findIndex(({ info }) => info.sessionId === listing.info.sessionId);
+  /** A watched thread appeared or changed. */
+  #listed(entry: HostEntry, listing: ThreadListing) {
+    const index = entry.threads.findIndex(({ info }) => info.sessionId === listing.info.sessionId);
     if (index === -1) {
-      entry.sessions = [...entry.sessions, listing];
+      entry.threads = [...entry.threads, listing];
     } else {
-      // The Host keeps no title for a session it no longer holds; the one it had still names it.
-      const title = listing.info.title ?? entry.sessions[index].info.title;
-      entry.sessions = entry.sessions.map((current, at) => at === index ? { ...listing, info: { ...listing.info, ...(title ? { title } : {}) } } : current);
+      // The Host keeps no title for a thread it no longer holds; the one it had still names it.
+      const title = listing.info.title ?? entry.threads[index].info.title;
+      entry.threads = entry.threads.map((current, at) => at === index ? { ...listing, info: { ...listing.info, ...(title ? { title } : {}) } } : current);
     }
-    this.#read.observe(sessionKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
+    this.#read.observe(threadKey(entry.record.hostId, listing.info.sessionId), listing.activity ?? undefined);
     this.#changed();
   }
 
@@ -643,12 +643,12 @@ export class HostStore {
       }
       case 'notification':
         switch (event.method) {
-          case 'session/event':
+          case 'thread/event':
             this.#journalEvent(entry, event.params);
             return;
-          case 'session/changed': {
-            const { sessionId, activity, clients, title, blank, mcpServers } = event.params;
-            const followed = this.#followed.get(sessionKey(entry.record.hostId, sessionId));
+          case 'thread/changed': {
+            const { threadId, activity, clients, title, blank, mcpServers } = event.params;
+            const followed = this.#followed.get(threadKey(entry.record.hostId, threadId));
             if (followed?.state) {
               followed.state = {
                 ...followed.state,
@@ -659,41 +659,41 @@ export class HostStore {
                 ...(mcpServers ? { mcpServers } : {}),
               };
             }
-            const listing = entry.sessions.find(({ info }) => info.sessionId === sessionId);
+            const listing = entry.threads.find(({ info }) => info.sessionId === threadId);
             if (listing) {
               if (activity) listing.activity = activity;
               if (clients !== undefined && clients !== null) listing.clients = clients;
               if (title) listing.info = { ...listing.info, title };
               listing.lastActivityAt = Date.now();
             } else if (followed?.state && !followed.state.blank && !connection.supports(HOST_PROTOCOL.features.watch)) {
-              // A new session's first prompt lists it; a watched list hears of it anyway.
+              // A new thread's first prompt lists it; a watched list hears of it anyway.
               void this.#list(entry);
             }
-            this.#read.observe(sessionKey(entry.record.hostId, sessionId), activity ?? listing?.activity ?? undefined);
+            this.#read.observe(threadKey(entry.record.hostId, threadId), activity ?? listing?.activity ?? undefined);
             this.#changed();
             return;
           }
-          case 'sessions/updated':
-            this.#listed(entry, event.params.session);
+          case 'threads/updated':
+            this.#listed(entry, event.params.thread);
             return;
-          case 'sessions/removed': {
-            const { sessionId } = event.params;
-            entry.sessions = entry.sessions.filter(({ info }) => info.sessionId !== sessionId);
+          case 'threads/removed': {
+            const { threadId } = event.params;
+            entry.threads = entry.threads.filter(({ info }) => info.sessionId !== threadId);
             this.#changed();
             return;
           }
           case 'pending/added': {
-            const followed = this.#followed.get(sessionKey(entry.record.hostId, event.params.sessionId));
+            const followed = this.#followed.get(threadKey(entry.record.hostId, event.params.threadId));
             if (followed) this.#pendingAdded(followed, connection, event.params.pending);
             return;
           }
           case 'pending/resolved': {
-            const followed = this.#followed.get(sessionKey(entry.record.hostId, event.params.sessionId));
+            const followed = this.#followed.get(threadKey(entry.record.hostId, event.params.threadId));
             if (followed) this.#pendingResolved(followed, connection, event.params);
             return;
           }
-          case 'session/elicitationCompleted': {
-            const followed = this.#followed.get(sessionKey(entry.record.hostId, event.params.sessionId));
+          case 'thread/elicitationCompleted': {
+            const followed = this.#followed.get(threadKey(entry.record.hostId, event.params.threadId));
             if (followed) this.#apply(followed, [{ type: 'elicitation/completed', notification: event.params.notification }]);
             return;
           }
@@ -710,13 +710,13 @@ export class HostStore {
             return;
           }
           case 'agents/updateAvailable': {
-            const { sessionId, agentId, name, running, latest } = event.params;
-            const followed = this.#followed.get(sessionKey(entry.record.hostId, sessionId));
+            const { threadId, agentId, name, running, latest } = event.params;
+            const followed = this.#followed.get(threadKey(entry.record.hostId, threadId));
             if (!followed) return;
             followed.update = { agentId, name, running, latest };
             this.#changed();
-            // The Host tells open sessions again once the agent is updated on it: what its new
-            // sessions launch may have changed.
+            // The Host tells open threads again once the agent is updated on it: what its new
+            // threads launch may have changed.
             void this.#loadAgents(entry);
             return;
           }
@@ -726,8 +726,8 @@ export class HostStore {
     }
   }
 
-  #journalEvent(entry: HostEntry, notification: SessionEventNotification) {
-    const followed = this.#followed.get(sessionKey(entry.record.hostId, notification.sessionId));
+  #journalEvent(entry: HostEntry, notification: ThreadEventNotification) {
+    const followed = this.#followed.get(threadKey(entry.record.hostId, notification.threadId));
     if (!followed || !followed.follower.accept(notification)) return;
     const history = followed.follower.isHistory(notification);
     const { event } = notification;
@@ -739,7 +739,7 @@ export class HostStore {
     // What waits shows once the history before it has.
     if (!followed.pendingShown && !followed.follower.replaying) this.#showPending(followed);
     if (history) return;
-    // The Host's queue, which a session's state gave up to the journal's head.
+    // The Host's queue, which a thread's state gave up to the journal's head.
     if (event.kind === 'queued') {
       followed.held.push(this.#heldPrompt(entry, { id: event.queuedId, prompt: event.prompt, origin: event.origin, queuedAt: notification.at }));
       this.#changed();
@@ -759,7 +759,7 @@ export class HostStore {
       if (followed.update && version) {
         followed.update = version === followed.update.latest ? undefined : { ...followed.update, running: version };
       }
-    } else if (event.kind === 'turnEnded' && event.sessionId === notification.sessionId) {
+    } else if (event.kind === 'turnEnded' && event.threadId === notification.threadId) {
       void this.#sendQueued(followed);
     }
   }
@@ -790,7 +790,7 @@ export class HostStore {
     return this.#selectedKey ? this.#followed.get(this.#selectedKey) : undefined;
   }
 
-  /** The connection to a followed session's Host, or why there isn't one. */
+  /** The connection to a followed thread's Host, or why there isn't one. */
   #connection(followed: Followed): HostConnection {
     const entry = this.#hosts.get(followed.hostId);
     const connection = entry?.connection;
@@ -806,10 +806,10 @@ export class HostStore {
     this.#error = undefined;
     if (key) {
       const [hostId, ...rest] = key.split('/');
-      const sessionId = rest.join('/');
+      const threadId = rest.join('/');
       let followed = this.#followed.get(key);
       if (!followed) {
-        followed = this.#follow(hostId, sessionId);
+        followed = this.#follow(hostId, threadId);
         this.#followed.set(key, followed);
       }
       this.#attach(followed);
@@ -817,12 +817,12 @@ export class HostStore {
     this.#changed();
   }
 
-  #follow(hostId: string, sessionId: string): Followed {
+  #follow(hostId: string, threadId: string): Followed {
     return {
       hostId,
-      sessionId,
+      threadId,
       follower: new JournalFollower(),
-      transcript: createTranscript(sessionId),
+      transcript: createTranscript(threadId),
       held: [],
       queuePaused: false,
       queued: [],
@@ -836,7 +836,7 @@ export class HostStore {
     };
   }
 
-  /** Stops receiving a session. One nobody has prompted closes, as the TUI leaves it. */
+  /** Stops receiving a thread. One nobody has prompted closes, as the TUI leaves it. */
   #leave(followed: Followed) {
     const connection = this.#hosts.get(followed.hostId)?.connection;
     if (followed.terminals) {
@@ -844,21 +844,21 @@ export class HostStore {
       followed.terminals = undefined;
     }
     const blank = followed.state?.blank ?? false;
-    void connection?.request('session/detach', { sessionId: followed.sessionId, close: blank ? 'ifUnused' : 'never' }).catch(() => {});
-    if (blank) this.#followed.delete(sessionKey(followed.hostId, followed.sessionId));
+    void connection?.request('thread/detach', { threadId: followed.threadId, close: blank ? 'ifUnused' : 'never' }).catch(() => {});
+    if (blank) this.#followed.delete(threadKey(followed.hostId, followed.threadId));
   }
 
   #attach(followed: Followed) {
     const entry = this.#hosts.get(followed.hostId);
     const connection = entry?.connection;
     if (!entry || !connection) return;
-    const listing = entry.sessions.find(({ info }) => info.sessionId === followed.sessionId);
+    const listing = entry.threads.find(({ info }) => info.sessionId === followed.threadId);
     followed.tag = this.#nextTag++;
     connection.open({
       attach: {
-        sessionId: followed.sessionId,
+        threadId: followed.threadId,
         ...(followed.follower.position ? { after: followed.follower.position } : {}),
-        // A session the Host has no record of is named by its agent and directory.
+        // A thread the Host has no record of is named by its agent and directory.
         ...(listing ? { agentId: listing.agentId, cwd: listing.info.cwd } : {}),
       },
     }, followed.tag);
@@ -872,7 +872,7 @@ export class HostStore {
         creating.reject(this.#explain(event.error, entry, creating.agentId));
         return;
       }
-      this.#created(entry, event.session);
+      this.#created(entry, event.thread);
       creating.resolve();
       return;
     }
@@ -885,24 +885,24 @@ export class HostStore {
       return;
     }
     if (event.type === 'openFailed') {
-      const agentId = entry.sessions.find(({ info }) => info.sessionId === followed.sessionId)?.agentId;
+      const agentId = entry.threads.find(({ info }) => info.sessionId === followed.threadId)?.agentId;
       this.#error = `Couldn't open the thread: ${this.#explain(event.error, entry, agentId).message}`;
       this.#changed();
       return;
     }
-    this.#opened(followed, event.session);
+    this.#opened(followed, event.thread);
   }
 
-  #opened(followed: Followed, session: OpenedSession) {
-    const { reset } = followed.follower.opened(session);
-    const { state } = session;
-    const base = reset ? createTranscript(state.sessionId) : followed.transcript;
+  #opened(followed: Followed, thread: OpenedThread) {
+    const { reset } = followed.follower.opened(thread);
+    const { state } = thread;
+    const base = reset ? createTranscript(state.threadId) : followed.transcript;
     // A thread on screen that catches up after a reconnect keeps showing; one that opens, or
     // whose opening replay a reconnect cut short, waits for its history.
     followed.loading = followed.follower.replaying && (followed.loading || base.entries.length === 0);
-    const events: AcpTranscriptEvent[] = [{ type: 'session/loaded', modes: state.modes, configOptions: state.configOptions }];
-    // Replayed history changes no turn state: what runs now is the session's.
-    const running = (state.turns ?? []).some(({ sessionId }) => sessionId === state.sessionId);
+    const events: AcpTranscriptEvent[] = [{ type: 'thread/loaded', modes: state.modes, configOptions: state.configOptions }];
+    // Replayed history changes no turn state: what runs now is the thread's.
+    const running = (state.turns ?? []).some(({ threadId }) => threadId === state.threadId);
     const loaded = events.reduce(reduceAcpEvent, base);
     followed.transcript = {
       ...loaded,
@@ -929,7 +929,7 @@ export class HostStore {
     void this.#watchTerminals(followed);
   }
 
-  /** Lists the open session's terminals, and keeps the list up to date while it's on screen. */
+  /** Lists the open thread's terminals, and keeps the list up to date while it's on screen. */
   async #watchTerminals(followed: Followed) {
     const connection = this.#hosts.get(followed.hostId)?.connection;
     const cwd = followed.state?.cwd;
@@ -960,7 +960,7 @@ export class HostStore {
     this.#changed();
   }
 
-  /** The open session, for a request about its terminals, or why there's none. */
+  /** The open thread, for a request about its terminals, or why there's none. */
   #terminalsOf(): Followed {
     const followed = this.#selected();
     if (!followed?.state) throw new Error('No thread is open.');
@@ -971,7 +971,7 @@ export class HostStore {
     const followed = this.#terminalsOf();
     const connection = this.#connection(followed);
     try {
-      const { terminal } = await connection.request('terminals/new', { directory: followed.state!.cwd, openedFrom: followed.sessionId });
+      const { terminal } = await connection.request('terminals/new', { directory: followed.state!.cwd, openedFrom: followed.threadId });
       this.#terminalUpdated(followed.hostId, terminal);
       return terminal.id;
     } catch (error) {
@@ -988,7 +988,7 @@ export class HostStore {
     return { url: entry!.record.url, ticket };
   }
 
-  /** Shows what waits in a session, once its replay is done. */
+  /** Shows what waits in a thread, once its replay is done. */
   #showPending(followed: Followed) {
     followed.pendingShown = true;
     const connection = this.#hosts.get(followed.hostId)?.connection;
@@ -997,15 +997,15 @@ export class HostStore {
 
   /** A pending request as the transcript shows it; a client tool call this device runs shows only as the agent's tool call. */
   #pendingEvents(followed: Followed, pending: PendingRequest, connection?: HostConnection): AcpTranscriptEvent[] {
-    const sessionId = pending.sessionId ?? undefined;
+    const threadId = pending.threadId ?? undefined;
     switch (pending.kind) {
       case 'permission':
-        return [{ type: 'permission/requested', requestId: pending.id, request: pending.request, sessionId }];
+        return [{ type: 'permission/requested', requestId: pending.id, request: pending.request, threadId }];
       case 'elicitation':
-        return [{ type: 'elicitation/requested', requestId: pending.id, request: pending.request, sessionId }];
+        return [{ type: 'elicitation/requested', requestId: pending.id, request: pending.request, threadId }];
       case 'clientTool':
         if (pending.target === connection?.clientId) return [];
-        return [{ type: 'clientTool/requested', requestId: pending.id, tool: pending.tool, runner: followed.clients.get(pending.target) ?? 'another client', sessionId }];
+        return [{ type: 'clientTool/requested', requestId: pending.id, tool: pending.tool, runner: followed.clients.get(pending.target) ?? 'another client', threadId }];
       default:
         return [];
     }
@@ -1028,7 +1028,7 @@ export class HostStore {
   }
 
   /**
-   * Answers a pending request of the session on screen, showing the answer at once. Another
+   * Answers a pending request of the thread on screen, showing the answer at once. Another
    * client's answer, the turn ending or the agent withdrawing it may have come first: the Host
    * says so with `pending/resolved`, which the card shows, and the answer isn't tried again.
    */
@@ -1040,7 +1040,7 @@ export class HostStore {
     this.#error = undefined;
     this.#apply(followed, [shown]);
     try {
-      await this.#connection(followed).request('pending/answer', { sessionId: followed.sessionId, pendingId: requestId, ...answer });
+      await this.#connection(followed).request('pending/answer', { threadId: followed.threadId, pendingId: requestId, ...answer });
     } catch (error) {
       const waiting = followed.pending.some(({ id }) => id === requestId);
       if (failedWith(error, HOST_PROTOCOL.errors.alreadyResolved)) {
@@ -1071,7 +1071,7 @@ export class HostStore {
         ? await tool(pending.arguments).catch((error: unknown) => toolError(describe(error)))
         : toolError(`This client doesn't run ${pending.tool}.`);
       try {
-        await connection.request('pending/answer', { sessionId: followed.sessionId, pendingId: pending.id, clientTool: result });
+        await connection.request('pending/answer', { threadId: followed.threadId, pendingId: pending.id, clientTool: result });
       } catch (error) {
         // Cancelled meanwhile, or the connection ended, which cancels it too.
         if (!failedWith(error, HOST_PROTOCOL.errors.alreadyResolved) && !failedWith(error, CONNECTION_CLOSED)) {
@@ -1084,7 +1084,7 @@ export class HostStore {
     })();
   }
 
-  /** Applies events to a followed session's transcript; a journal event's `at` dates the entries it touches. */
+  /** Applies events to a followed thread's transcript; a journal event's `at` dates the entries it touches. */
   #apply(followed: Followed, events: AcpTranscriptEvent[], at?: number) {
     if (events.length === 0) return;
     followed.transcript = events.reduce(
@@ -1134,7 +1134,7 @@ export class HostStore {
           ...(worktree.branch ? { branch: worktree.branch } : {}),
           primary: worktree.primary ?? false,
           changes: worktree.changes ?? false,
-          sessions: worktree.sessions ?? [],
+          threads: worktree.threads ?? [],
         })),
       };
     } catch (error) {
@@ -1165,7 +1165,7 @@ export class HostStore {
     }
   }
 
-  /** Starts a session and opens it; it rejects saying why the Host couldn't. */
+  /** Starts a thread and opens it; it rejects saying why the Host couldn't. */
   #create(input: { hostId: string; cwd: string; agentId: string }): Promise<void> {
     const entry = this.#hosts.get(input.hostId);
     const connection = entry?.connection;
@@ -1179,16 +1179,16 @@ export class HostStore {
     });
   }
 
-  #created(entry: HostEntry, session: OpenedSession) {
-    const key = sessionKey(entry.record.hostId, session.state.sessionId);
+  #created(entry: HostEntry, thread: OpenedThread) {
+    const key = threadKey(entry.record.hostId, thread.state.threadId);
     const previous = this.#selected();
     if (previous) this.#leave(previous);
-    const followed = this.#follow(entry.record.hostId, session.state.sessionId);
+    const followed = this.#follow(entry.record.hostId, thread.state.threadId);
     this.#followed.set(key, followed);
     this.#selectedKey = key;
     this.#read.focus(key);
     this.#error = undefined;
-    this.#opened(followed, session);
+    this.#opened(followed, thread);
   }
 
   async #send(text: string, images: PromptImage[] = []) {
@@ -1219,7 +1219,7 @@ export class HostStore {
     followed.steering.push({ ...prompt, steering: true });
     this.#changed();
     try {
-      const answer = await connection.request('turn/steer', { sessionId: followed.sessionId, prompt: promptBlocks(prompt.text, prompt.images) });
+      const answer = await connection.request('turn/steer', { threadId: followed.threadId, prompt: promptBlocks(prompt.text, prompt.images) });
       // A steer the agent took shows where it joined the turn, from the journal.
       return answer.outcome === 'steered';
     } finally {
@@ -1230,13 +1230,13 @@ export class HostStore {
 
   /** Starts a turn with the prompt, shown at once; one already running (another client's) queues it. */
   async #start(followed: Followed, connection: HostConnection, prompt: QueuedPrompt) {
-    const localId = `${followed.sessionId}:local:${prompt.id}`;
+    const localId = `${followed.threadId}:local:${prompt.id}`;
     const blocks = promptBlocks(prompt.text, prompt.images);
     const before = followed.transcript.turn;
     followed.transcript = reduceAcpEvent(queueOptimisticPrompt(followed.transcript, localId, blocks), { type: 'turn/started' });
     this.#changed();
     try {
-      await connection.request('turn/start', { sessionId: followed.sessionId, prompt: blocks });
+      await connection.request('turn/start', { threadId: followed.threadId, prompt: blocks });
     } catch (error) {
       const entries = followed.transcript.entries.filter(({ id }) => id !== localId);
       if (error instanceof HostError && error.code === HOST_PROTOCOL.errors.turnRunning) {
@@ -1258,7 +1258,7 @@ export class HostStore {
   async #enqueue(followed: Followed, connection: HostConnection, prompt: QueuedPrompt, first = false) {
     if (connection.supports(HOST_PROTOCOL.features.queue)) {
       // It shows when the Host's `queued` event says so.
-      await connection.request('queue/add', { sessionId: followed.sessionId, prompt: promptBlocks(prompt.text, prompt.images) });
+      await connection.request('queue/add', { threadId: followed.threadId, prompt: promptBlocks(prompt.text, prompt.images) });
       return;
     }
     if (first) followed.queued.unshift(prompt);
@@ -1281,13 +1281,13 @@ export class HostStore {
     }
   }
 
-  /** A newer version is out; it's `available` once the Host's new sessions launch another version than the session runs. */
+  /** A newer version is out; it's `available` once the Host's new threads launch another version than the thread runs. */
   #updateNotice(update: NonNullable<Followed['update']>, entry?: HostEntry): AgentUpdateNotice {
     const launches = entry?.agents.find(({ id }) => id === update.agentId)?.version;
     return launches && launches !== update.running ? { ...update, available: launches } : update;
   }
 
-  /** Whether Send steers: the Host takes steers and the session's agent advertises them. */
+  /** Whether Send steers: the Host takes steers and the thread's agent advertises them. */
   #canSteer(followed: Followed, connection = this.#hosts.get(followed.hostId)?.connection): boolean {
     if (!connection?.supports(HOST_PROTOCOL.features.steer)) return false;
     return meta(followed.state?.agent.initialize, '_meta', 'steering', 'supported') === true;
@@ -1299,7 +1299,7 @@ export class HostStore {
     followed.reopening = true;
     this.#changed();
     try {
-      await connection.request('session/reopen', { sessionId: followed.sessionId });
+      await connection.request('thread/reopen', { threadId: followed.threadId });
     } finally {
       followed.reopening = false;
       this.#changed();
@@ -1307,8 +1307,8 @@ export class HostStore {
   }
 
   /**
-   * The Host takes the session's agent to its newest version, then the session moves there, unless
-   * it runs that version already. The session moves even if the person has gone to another.
+   * The Host takes the thread's agent to its newest version, then the thread moves there, unless
+   * it runs that version already. The thread moves even if the person has gone to another.
    */
   async #updateAgent() {
     const followed = this.#selected();
@@ -1339,8 +1339,8 @@ export class HostStore {
     const connection = entry?.connection;
     if (!entry || !connection || connection.closed) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
     try {
-      // The new title comes back to every client: in the journal, and as the session's change.
-      await connection.request('session/rename', { sessionId: rest.join('/'), title });
+      // The new title comes back to every client: in the journal, and as the thread's change.
+      await connection.request('thread/rename', { threadId: rest.join('/'), title });
     } catch (error) {
       if (error instanceof HostError && typeof error.data === 'string') throw new Error(`Couldn't rename it: ${error.data}.`);
       throw error;
@@ -1353,7 +1353,7 @@ export class HostStore {
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
     if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
-    await connection.request('session/close', { sessionId: rest.join('/') }).catch((error: unknown) => {
+    await connection.request('thread/close', { threadId: rest.join('/') }).catch((error: unknown) => {
       throw failed("Couldn't close the thread", error);
     });
     if (followed) this.#followed.delete(key);
@@ -1363,18 +1363,18 @@ export class HostStore {
 
   async #delete(key: string) {
     const [hostId, ...rest] = key.split('/');
-    const sessionId = rest.join('/');
+    const threadId = rest.join('/');
     const entry = this.#hosts.get(hostId);
     const connection = entry?.connection;
     if (!entry || !connection) throw new Error(`${entry?.record.name ?? 'The Host'} isn't connected.`);
-    const agentId = entry.sessions.find(({ info }) => info.sessionId === sessionId)?.agentId ?? this.#followed.get(key)?.state?.agent.id;
-    await connection.request('session/delete', { sessionId, ...(agentId ? { agentId } : {}) }).catch((error: unknown) => {
+    const agentId = entry.threads.find(({ info }) => info.sessionId === threadId)?.agentId ?? this.#followed.get(key)?.state?.agent.id;
+    await connection.request('thread/delete', { threadId, ...(agentId ? { agentId } : {}) }).catch((error: unknown) => {
       throw failed("Couldn't delete the thread", error);
     });
     this.#followed.delete(key);
     this.#read.forget(key);
     if (this.#selectedKey === key) this.#selectedKey = undefined;
-    entry.sessions = entry.sessions.filter(({ info }) => info.sessionId !== sessionId);
+    entry.threads = entry.threads.filter(({ info }) => info.sessionId !== threadId);
     this.#changed();
     await this.#list(entry);
   }
@@ -1456,7 +1456,7 @@ export class HostStore {
 
   #model(): AppModel {
     const hosts: PairedHost[] = [];
-    const sessions: SessionSummary[] = [];
+    const threads: ThreadSummary[] = [];
     const agents: Record<string, AgentChoice[]> = {};
     const selected = this.#selected();
     for (const entry of this.#hosts.values()) {
@@ -1474,37 +1474,37 @@ export class HostStore {
       });
       agents[record.hostId] = entry.agents.map(({ id, name }) => ({ id, name }));
       const agentName = (agentId: string) => entry.agents.find(({ id }) => id === agentId)?.name ?? agentId;
-      for (const listing of entry.sessions) {
-        sessions.push({
-          key: sessionKey(record.hostId, listing.info.sessionId),
+      for (const listing of entry.threads) {
+        threads.push({
+          key: threadKey(record.hostId, listing.info.sessionId),
           hostId: record.hostId,
-          sessionId: listing.info.sessionId,
+          threadId: listing.info.sessionId,
           ...(listing.info.title ? { title: listing.info.title } : {}),
           agentId: listing.agentId,
           agentName: agentName(listing.agentId),
           cwd: listing.info.cwd,
-          ...(listing.git ? { git: sessionGit(listing.git) } : {}),
+          ...(listing.git ? { git: threadGit(listing.git) } : {}),
           state: listing.state,
           ...(listing.activity ? { activity: listing.activity } : {}),
           clients: listing.clients ?? 0,
           headless: listing.headless ?? false,
           lastActivityAt: listing.lastActivityAt ?? (listing.info.updatedAt ? Date.parse(listing.info.updatedAt) : undefined),
-          ...(listing.startedBy ? { startedBy: { key: sessionKey(listing.startedByHost ?? record.hostId, listing.startedBy), label: '' } } : {}),
-          ...(listing.continuedIn ? { continuedIn: { key: sessionKey(record.hostId, listing.continuedIn), label: '' } } : {}),
+          ...(listing.startedBy ? { startedBy: { key: threadKey(listing.startedByHost ?? record.hostId, listing.startedBy), label: '' } } : {}),
+          ...(listing.continuedIn ? { continuedIn: { key: threadKey(record.hostId, listing.continuedIn), label: '' } } : {}),
         });
       }
-      // A session on screen the list doesn't have yet, such as a new one nobody has prompted.
+      // A thread on screen the list doesn't have yet, such as a new one nobody has prompted.
       const state = selected?.hostId === record.hostId ? selected.state : undefined;
-      if (state && !entry.sessions.some(({ info }) => info.sessionId === state.sessionId)) {
-        sessions.push({
-          key: sessionKey(record.hostId, state.sessionId),
+      if (state && !entry.threads.some(({ info }) => info.sessionId === state.threadId)) {
+        threads.push({
+          key: threadKey(record.hostId, state.threadId),
           hostId: record.hostId,
-          sessionId: state.sessionId,
+          threadId: state.threadId,
           ...(state.title ? { title: state.title } : {}),
           agentId: state.agent.id,
           agentName: state.agent.name,
           cwd: state.cwd,
-          ...(state.git ? { git: sessionGit(state.git) } : {}),
+          ...(state.git ? { git: threadGit(state.git) } : {}),
           state: 'open',
           activity: state.activity,
           clients: state.clients,
@@ -1513,13 +1513,13 @@ export class HostStore {
         });
       }
     }
-    labelStarters(sessions, hosts);
+    labelStarters(threads, hosts);
     return {
       hosts,
-      sessions,
+      threads,
       agents,
       selectedKey: this.#selectedKey,
-      session: selected && this.#selectedKey
+      thread: selected && this.#selectedKey
         ? {
             key: this.#selectedKey,
             transcript: selected.transcript,
@@ -1549,20 +1549,20 @@ export class HostStore {
  * may be on a Host this device doesn't pair with, or gone, and is named as well as it can be
  * then. A thread's successor is named by its title too (WVE-168).
  */
-export function labelStarters(sessions: SessionSummary[], hosts: readonly PairedHost[]) {
-  const byKey = new Map(sessions.map((session) => [session.key, session]));
-  for (const session of sessions) {
-    if (session.continuedIn) {
-      const successor = byKey.get(session.continuedIn.key);
+export function labelStarters(threads: ThreadSummary[], hosts: readonly PairedHost[]) {
+  const byKey = new Map(threads.map((thread) => [thread.key, thread]));
+  for (const thread of threads) {
+    if (thread.continuedIn) {
+      const successor = byKey.get(thread.continuedIn.key);
       const label = successor?.title ? `“${successor.title}”` : 'another thread';
-      session.continuedIn = { key: session.continuedIn.key, label };
+      thread.continuedIn = { key: thread.continuedIn.key, label };
     }
-    if (!session.startedBy) continue;
-    const { key } = session.startedBy;
+    if (!thread.startedBy) continue;
+    const { key } = thread.startedBy;
     const hostId = key.slice(0, key.indexOf('/'));
     const starter = byKey.get(key);
-    const thread = starter?.title ? `“${starter.title}”` : 'another thread';
-    const host = hostId === session.hostId ? '' : ` on ${hosts.find(({ id }) => id === hostId)?.name ?? 'another Host'}`;
-    session.startedBy = { key, label: `from ${thread}${host}` };
+    const starterName = starter?.title ? `“${starter.title}”` : 'another thread';
+    const host = hostId === thread.hostId ? '' : ` on ${hosts.find(({ id }) => id === hostId)?.name ?? 'another Host'}`;
+    thread.startedBy = { key, label: `from ${starterName}${host}` };
   }
 }

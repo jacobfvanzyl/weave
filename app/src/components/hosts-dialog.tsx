@@ -126,7 +126,7 @@ function HostRow({ host, actions, onPairAgain }: {
               <AlertDialogHeader>
                 <AlertDialogTitle>Forget {host.name}?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This device deletes its key for the Host and stops showing its sessions. The threads keep running on the
+                  This device deletes its key for the Host and stops showing its threads. They keep running on the
                   Host. To cut this device off on the Host too, run <code>weave devices revoke</code> there.
                 </AlertDialogDescription>
               </AlertDialogHeader>

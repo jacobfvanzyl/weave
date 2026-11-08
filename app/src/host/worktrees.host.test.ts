@@ -87,7 +87,7 @@ describe.skipIf(!devHostAvailable())('worktrees through the Host store with a de
     await host?.stop();
   });
 
-  it('makes a worktree beside the repository, starts a session in it, and removes it', async () => {
+  it('makes a worktree beside the repository, starts a thread in it, and removes it', async () => {
     const [paired] = store.snapshot().hosts;
     expect(paired).toMatchObject({ status: 'connected', canWorktree: true });
     const hostId = paired.id;
@@ -96,18 +96,18 @@ describe.skipIf(!devHostAvailable())('worktrees through the Host store with a de
     expect(listed).toEqual({
       repo,
       defaultBranch: 'main',
-      worktrees: [{ path: repo, branch: 'main', primary: true, changes: false, sessions: [] }],
+      worktrees: [{ path: repo, branch: 'main', primary: true, changes: false, threads: [] }],
     });
 
     const path = await store.actions.createWorktree({ hostId, repo, branch: 'feature/auth' });
     expect(path).toBe(`${repo}.feature-auth`);
     await expect(store.actions.createWorktree({ hostId, repo, branch: 'feature/auth' })).rejects.toThrow(/checked out/);
-    await store.actions.createSession({ hostId, cwd: path, agentId: 'fake' });
-    const session = await waitFor(
-      () => store.snapshot().sessions.find((summary) => summary.cwd === path),
-      'the session in the worktree',
+    await store.actions.createThread({ hostId, cwd: path, agentId: 'fake' });
+    const thread = await waitFor(
+      () => store.snapshot().threads.find((summary) => summary.cwd === path),
+      'the thread in the worktree',
     );
-    expect(session.git).toEqual({ repo, worktree: path, branch: 'feature/auth' });
+    expect(thread.git).toEqual({ repo, worktree: path, branch: 'feature/auth' });
 
     const removal = await store.actions.removeWorktree({ hostId, path });
     expect(removal).toEqual({ outcome: 'removed', branch: 'feature/auth', branchDeleted: true });

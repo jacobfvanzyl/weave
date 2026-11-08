@@ -31,7 +31,7 @@ export function useSurface(model: AppModel, link: SurfaceLink | undefined): Devi
   const latest = useRef(model);
   latest.current = model;
   const last = useRef<{ key: string; transcript: AcpTranscript }>(undefined);
-  if (model.session && !model.session.loading) last.current = { key: model.session.key, transcript: model.session.transcript };
+  if (model.thread && !model.thread.loading) last.current = { key: model.thread.key, transcript: model.thread.transcript };
   const sentShow = useRef<string>(undefined);
   const sentTranscript = useRef<SentTranscript>(undefined);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -62,7 +62,7 @@ export function useSurface(model: AppModel, link: SurfaceLink | undefined): Devi
     };
   }, [link]);
 
-  const shownKey = model.session?.key ?? last.current?.key;
+  const shownKey = model.thread?.key ?? last.current?.key;
   useEffect(() => setPosition(undefined), [shownKey]);
 
   useEffect(() => {

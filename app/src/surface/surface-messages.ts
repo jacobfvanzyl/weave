@@ -1,5 +1,5 @@
-import type { AppModel, SessionActivity } from '@/app/app-controller';
-import { waitingCount } from '@/app/session-list';
+import type { AppModel, ThreadActivity } from '@/app/app-controller';
+import { waitingCount } from '@/app/thread-list';
 import type { AcpTranscript, TranscriptEntry } from '@/chat/acp-transcript';
 
 /**
@@ -14,7 +14,7 @@ export type SurfaceThread = {
   branch?: string;
   /** The Host's name, when the device has more than one. */
   host?: string;
-  activity?: SessionActivity;
+  activity?: ThreadActivity;
   /** Its history is still replaying on the device. */
   loading?: boolean;
 };
@@ -73,7 +73,7 @@ export function applyTranscript(current: { key: string; transcript: AcpTranscrip
 
 /** The thread's header on a Surface, from the device's list. */
 export function surfaceThread(model: AppModel, key: string, loading?: boolean): SurfaceThread {
-  const summary = model.sessions.find((session) => session.key === key);
+  const summary = model.threads.find((thread) => thread.key === key);
   const host = summary ? model.hosts.find(({ id }) => id === summary.hostId) : undefined;
   return {
     key,
@@ -93,11 +93,11 @@ export function surfaceThread(model: AppModel, key: string, loading?: boolean): 
  * one shown.
  */
 export function showMessage(model: AppModel, lastKey: string | undefined): Extract<ToSurface, { kind: 'show' }> {
-  const key = model.session?.key ?? lastKey;
+  const key = model.thread?.key ?? lastKey;
   return {
     kind: 'show',
-    thread: key ? surfaceThread(model, key, model.session?.loading) : undefined,
-    dimmed: !model.session,
-    waiting: waitingCount(model.sessions, model.session?.key),
+    thread: key ? surfaceThread(model, key, model.thread?.loading) : undefined,
+    dimmed: !model.thread,
+    waiting: waitingCount(model.threads, model.thread?.key),
   };
 }
