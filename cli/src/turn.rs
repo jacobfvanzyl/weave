@@ -21,7 +21,6 @@ use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::PromptResponse;
 use weave_acp_core::schema::SessionUpdate;
 use weave_acp_core::schema::StopReason;
-use weave_host::DaemonPaths;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_protocol::errors;
@@ -39,7 +38,7 @@ use weave_host_protocol::turns::TurnId;
 
 use crate::exit;
 use crate::exit::Status;
-use crate::host::control_with_events;
+use crate::host::Again;
 
 /// How long to wait for a turn, and whether through its waiting on a person.
 #[derive(Args, Clone, Debug, Default)]
@@ -108,31 +107,32 @@ const RECONNECT_INTERVAL: Duration = Duration::from_millis(250);
 pub(crate) struct Link {
     pub(crate) connection: HostConnection,
     pub(crate) events: UnboundedReceiver<HostEvent>,
-    /// The shared Host's; none for a Host in this process, which ends with it.
-    paths: Option<DaemonPaths>,
+    /// The shared Host's, or another computer's through the Dispatcher; none for a Host in this
+    /// process, which ends with it.
+    again: Option<Again>,
 }
 
 impl Link {
     pub(crate) fn new(
         connection: HostConnection,
         events: UnboundedReceiver<HostEvent>,
-        paths: Option<DaemonPaths>,
+        again: Option<Again>,
     ) -> Self {
         Self {
             connection,
             events,
-            paths,
+            again,
         }
     }
 
     /// Reach the Host again, waiting for it to come back until `until`.
     async fn reconnect(&mut self, until: Instant) -> anyhow::Result<()> {
-        let paths = self
-            .paths
+        let again = self
+            .again
             .clone()
             .ok_or_else(|| exit::unreachable(anyhow!("lost the weave Host")))?;
         loop {
-            match control_with_events(&paths).await {
+            match again.connect("weave-cli").await {
                 Ok(Some((connection, events))) => {
                     let old = std::mem::replace(&mut self.connection, connection);
                     old.shutdown().await;

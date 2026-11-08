@@ -49,6 +49,8 @@ use crate::clock::ago;
 use crate::clock::now_ms;
 use crate::exit;
 use crate::exit::Status;
+use crate::host::Again;
+use crate::host::Target;
 use crate::host::control_with_events;
 use crate::host::paths;
 use crate::turn::Follower;
@@ -67,6 +69,11 @@ pub const LOG: &str = "warn";
 pub struct ThreadsArgs {
     #[command(subcommand)]
     command: Option<ThreadsCommand>,
+
+    /// The threads of another of your Hosts, by its id or name as `weave hosts` lists them,
+    /// through the Dispatcher.
+    #[arg(long, global = true, value_name = "HOST")]
+    host: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -218,11 +225,22 @@ struct FollowArgs {
 }
 
 pub async fn command(args: ThreadsArgs) -> anyhow::Result<ExitCode> {
-    let paths = paths()?;
+    let target = match args.host.as_deref() {
+        Some(host) => Target::choose(false, Some(host)).await?,
+        None => Target::Shared(paths()?),
+    };
     let command = args
         .command
         .unwrap_or_else(|| ThreadsCommand::List(ListArgs::default()));
-    let Some((connection, events)) = control_with_events(&paths).await? else {
+    let (connected, again) = match target {
+        Target::Shared(paths) => (control_with_events(&paths).await?, Again::Shared(paths)),
+        Target::Carried(carry) => (
+            Some(carry.connect("weave-cli").await?),
+            Again::Carried(carry),
+        ),
+        Target::InProcess => bail!("a Host inside this process has no threads to list"),
+    };
+    let Some((connection, events)) = connected else {
         return match command {
             ThreadsCommand::List(ListArgs { json: true, .. }) => {
                 println!("[]");
@@ -248,13 +266,13 @@ pub async fn command(args: ThreadsArgs) -> anyhow::Result<ExitCode> {
     // Following a turn waits for a Host that goes away to come back.
     let (connection, events) = match command {
         ThreadsCommand::Follow(args) => {
-            let mut link = Link::new(connection, events, Some(paths));
+            let mut link = Link::new(connection, events, Some(again));
             let result = follow(&mut link, args).await;
             link.connection.shutdown().await;
             return result.map(ExitCode::from);
         }
         ThreadsCommand::Prompt(args) if args.wait => {
-            let mut link = Link::new(connection, events, Some(paths));
+            let mut link = Link::new(connection, events, Some(again));
             let result = prompt_and_wait(&mut link, args).await;
             link.connection.shutdown().await;
             return result.map(ExitCode::from);

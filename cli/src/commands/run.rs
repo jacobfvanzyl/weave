@@ -100,6 +100,12 @@ pub struct RunArgs {
     /// Run the agent in this process rather than the weave Host.
     #[arg(long, conflicts_with_all = ["detach", "timeout"])]
     no_daemon: bool,
+
+    /// Run it on another of your Hosts, by its id or name as `weave hosts` lists them, through
+    /// the Dispatcher. A new thread works in this directory's counterpart under the home there,
+    /// unless --cwd names one there.
+    #[arg(long, value_name = "HOST", conflicts_with = "no_daemon")]
+    host: Option<String>,
 }
 
 pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
@@ -111,20 +117,26 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     }
     let recent = Recent::default_location();
     let disabled = args.agent.load_config()?.daemon.enabled == Some(false);
-    let target = Target::choose(args.no_daemon || disabled)?;
+    let on = args.host.as_deref();
+    let target = Target::choose(on.is_none() && (args.no_daemon || disabled), on).await?;
     let chosen = choose(
         &mode,
         args.agent.choice(),
         &args.workspace,
         &target,
         recent.as_ref(),
-    )?;
+    )
+    .await?;
     if let Some(note) = &chosen.note {
         eprintln!("weave: {note}");
     }
-    let launch = args
-        .agent
-        .host_launch(&args.workspace, chosen.agent, chosen.cwd)?;
+    let elsewhere = target.carried().map(|carry| carry.host.clone());
+    let launch = args.agent.host_launch(
+        &args.workspace,
+        chosen.agent,
+        chosen.cwd,
+        elsewhere.as_deref(),
+    )?;
     if let Some(notice) = &launch.config.notice {
         eprintln!("weave: {notice}");
     }
@@ -180,7 +192,8 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     };
     let response = match connection.send(request).await {
         Ok(response) => {
-            if let Some(recent) = &recent {
+            // Another computer's directories aren't this one's to remember.
+            if let Some(recent) = recent.as_ref().filter(|_| elsewhere.is_none()) {
                 recent.record(&launch.cwd, &launch.agent);
             }
             response
@@ -211,10 +224,14 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
         }
         eprintln!(
             "Running in the weave Host; attach with: {}",
-            reopen_command(&launch.agent, &thread_id.to_string())
+            reopen_command(&launch.agent, &thread_id.to_string(), elsewhere.as_deref())
         );
         if let Some(turn) = &response.turn_id {
-            eprintln!("`weave threads follow {thread_id} --turn {turn}` waits for its turn.");
+            let on = elsewhere
+                .as_deref()
+                .map(|host| format!("--host {host} "))
+                .unwrap_or_default();
+            eprintln!("`weave threads {on}follow {thread_id} --turn {turn}` waits for its turn.");
         }
         return Ok(ExitCode::SUCCESS);
     }
@@ -260,7 +277,7 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
         Some(turn) => Pick::Turn(turn.clone()),
         None => Pick::After(state.journal.head),
     };
-    let mut link = Link::new(connection, events, host.paths());
+    let mut link = Link::new(connection, events, host.again());
     // A Host in this process ends with it, and the turn too, so it waits through everything.
     let in_process = matches!(target, Target::InProcess);
     let mut follower =
@@ -332,7 +349,7 @@ pub async fn command(args: RunArgs) -> anyhow::Result<ExitCode> {
     ) {
         eprintln!(
             "weave: thread {thread_id}; continue it with {}",
-            reopen_command(&launch.agent, &thread_id.to_string())
+            reopen_command(&launch.agent, &thread_id.to_string(), elsewhere.as_deref())
         );
     }
     let status = report(outcome, &thread_id, follower.turn(), args.json, false)?;

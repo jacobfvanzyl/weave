@@ -149,7 +149,7 @@ pub(crate) fn new_key() -> anyhow::Result<DeviceKey> {
 }
 
 /// The key this computer proves itself to the Dispatcher with.
-fn key() -> anyhow::Result<DeviceKey> {
+pub(crate) fn key() -> anyhow::Result<DeviceKey> {
     let path = key_path()?;
     DeviceKey::read(&path)
         .map_err(anyhow::Error::msg)?

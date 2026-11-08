@@ -151,6 +151,10 @@ pub struct Connected {
     pub opened: Option<weave_host_client::OpenedThread>,
     /// Things worth telling the user at startup.
     pub notices: Vec<String>,
+    /// The Host the thread is on, when it's another computer's, reached through the Dispatcher
+    /// (WVE-195): the status line names it. Its directories aren't this computer's, so the
+    /// terminal isn't told them, and its terminals don't show in Rex panes here.
+    pub host: Option<String>,
 }
 
 /// How the client looks.
@@ -280,6 +284,7 @@ pub async fn run(connected: Connected, ui: UiOptions) -> anyhow::Result<Exit> {
         trace,
         opened,
         notices,
+        host,
     } = connected;
     let abilities = ThreadAbilities {
         // The Host lists threads whatever the agent offers.
@@ -317,7 +322,11 @@ pub async fn run(connected: Connected, ui: UiOptions) -> anyhow::Result<Exit> {
         .iter()
         .any(|feature| feature == TERMINALS_FEATURE);
     // Terminals show in Rex panes only when another process can attach to the Host's.
-    let rex = (has_terminals && detachable).then(Rex::detect).flatten();
+    // A pane's `weave terminals attach` reaches this computer's Host only.
+    let rex = (has_terminals && detachable && host.is_none())
+        .then(Rex::detect)
+        .flatten();
+    let elsewhere = host.is_some();
     let mut tui = Tui::init(screen, images)?;
     let size = tui.size()?;
     // The thread works where the Host says, and so does this client.
@@ -333,6 +342,7 @@ pub async fn run(connected: Connected, ui: UiOptions) -> anyhow::Result<Exit> {
         .with_host_queue(queueable)
         .with_mcp_servers(reports_mcp_servers)
         .with_rex(rex.is_some())
+        .with_host(host)
         .with_thumbnails(tui.shows_images());
     chat.set_size(size.width, size.height);
     if screen == ScreenMode::Fullscreen {
@@ -367,6 +377,7 @@ pub async fn run(connected: Connected, ui: UiOptions) -> anyhow::Result<Exit> {
         rex,
         panes: Vec::new(),
         closed_elsewhere: false,
+        elsewhere,
     };
     let startup = match opened {
         Some(opened) => {
@@ -466,6 +477,8 @@ struct App {
     /// Another client closed the thread for everyone, so this TUI quits, and leaves Rex as it
     /// found it.
     closed_elsewhere: bool,
+    /// The Host is another computer's, whose directories the terminal isn't told.
+    elsewhere: bool,
 }
 
 impl App {
@@ -493,7 +506,7 @@ impl App {
                 tui.set_title(&chat.terminal_title(Instant::now()));
             }
             tui.set_program_status(chat.program_status());
-            if chat.active_thread().is_some() {
+            if chat.active_thread().is_some() && !self.elsewhere {
                 tui.set_directory(&self.cwd);
             }
             draw(tui, chat)?;
@@ -1397,6 +1410,18 @@ impl App {
                 AppCommand::OpenUrl(url) => open_in_browser(&url),
                 AppCommand::RunShell { id, command } => {
                     if let Some(results) = self.results.clone() {
+                        // The shell is this computer's, and the thread's directory another's.
+                        if self.elsewhere {
+                            let _ = results.send(AppEvent::ShellOutput(
+                                id.clone(),
+                                "Shell commands run on this computer, and this thread works on \
+                                 another: run them in one of its terminals (/thread)\n"
+                                    .to_owned(),
+                            ));
+                            let status = TerminalExitStatus::new().exit_code(1);
+                            let _ = results.send(AppEvent::ShellExited(id, status));
+                            continue;
+                        }
                         let (kill, killed) = oneshot::channel();
                         self.shells.insert(id.clone(), kill);
                         let cwd = self.cwd.clone();

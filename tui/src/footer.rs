@@ -25,6 +25,9 @@ const ITEM_WIDTH: usize = 40;
 /// What a status line item shows; configured as `[tui] status_line`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusItem {
+    /// The Host the thread is on, when it's another computer's, reached through the Dispatcher;
+    /// nothing for this computer's own.
+    Host,
     /// The model and its reasoning level, or the agent's name in its place when the agent
     /// offers no model choice and `Agent` isn't shown.
     Model,
@@ -42,9 +45,10 @@ pub enum StatusItem {
 }
 
 impl StatusItem {
-    /// The agent, the model, the mode, the context used, the thread's title, and its cost.
-    /// Codex also shows the directory; weave leaves it to `directory`.
-    pub const DEFAULT: [Self; 6] = [
+    /// Another computer's Host, the agent, the model, the mode, the context used, the thread's
+    /// title, and its cost. Codex also shows the directory; weave leaves it to `directory`.
+    pub const DEFAULT: [Self; 7] = [
+        Self::Host,
         Self::Agent,
         Self::Model,
         Self::Mode,
@@ -55,6 +59,7 @@ impl StatusItem {
 
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
+            "host" => Self::Host,
             "model" => Self::Model,
             "agent" => Self::Agent,
             "mode" => Self::Mode,
@@ -68,6 +73,7 @@ impl StatusItem {
 
     pub fn names() -> &'static [&'static str] {
         &[
+            "host",
             "model",
             "agent",
             "mode",
@@ -81,6 +87,7 @@ impl StatusItem {
     /// Theme scopes to color the item by, as Codex does.
     fn scopes(self) -> &'static [&'static str] {
         match self {
+            Self::Host => &["entity.name.namespace", "entity.name.tag", "keyword"],
             Self::Model | Self::Agent => &["entity.name.type", "support.type", "variable"],
             Self::Mode => &["storage.modifier", "keyword.operator"],
             Self::Directory => &["string", "markup.underline.link"],
@@ -93,6 +100,8 @@ impl StatusItem {
 /// The values status line items show, when known.
 #[derive(Clone, Debug, Default)]
 pub struct StatusValues {
+    /// Another computer's Host the thread is on.
+    pub host: Option<String>,
     pub agent: String,
     pub model: Option<String>,
     pub reasoning: Option<String>,
@@ -132,6 +141,7 @@ impl StatusValues {
                     .chain(self.reasoning.as_ref().map(|level| level.to_lowercase()))
                     .collect();
             }
+            StatusItem::Host => self.host.as_ref().map(|host| format!("on {host}")),
             StatusItem::Agent => Some(self.agent.clone()),
             StatusItem::Mode => self.mode.clone(),
             StatusItem::Directory => Some(self.directory.clone()),
@@ -185,7 +195,12 @@ pub fn footer_line(props: &FooterProps<'_>, width: usize) -> Line<'static> {
             Style::default().fg(Color::Red),
         )],
         FooterMode::Reconnecting => vec![Span::styled(
-            "reconnecting to the weave Host… · ⌃c to quit",
+            match &props.values.host {
+                Some(host) => {
+                    format!("reconnecting to {host} through the Dispatcher… · ⌃c to quit")
+                }
+                None => "reconnecting to the weave Host… · ⌃c to quit".to_owned(),
+            },
             secondary(),
         )],
         FooterMode::Overlay => Vec::new(),
@@ -550,6 +565,7 @@ mod tests {
 
     fn values() -> StatusValues {
         StatusValues {
+            host: None,
             agent: "Claude".into(),
             model: Some("Opus 5.5".into()),
             reasoning: Some("High".into()),
@@ -630,6 +646,33 @@ mod tests {
             footer_line(&props, 100).to_string().trim_end(),
             "  Opus 5.5 · high · Plan · ~/repo"
         );
+    }
+
+    #[test]
+    fn a_thread_on_another_computers_host_names_it_first() {
+        let values = StatusValues {
+            host: Some("homelab".into()),
+            ..values()
+        };
+        let props = |mode| FooterProps {
+            mode,
+            items: &StatusItem::DEFAULT,
+            values: &values,
+            vim: false,
+        };
+        let line = footer_line(&props(IDLE), 100).to_string();
+        assert!(
+            line.starts_with("  on homelab · Claude · Opus 5.5"),
+            "{line}"
+        );
+        let reconnecting = footer_line(&props(FooterMode::Reconnecting), 100).to_string();
+        assert!(
+            reconnecting.starts_with("  reconnecting to homelab through the Dispatcher…"),
+            "{reconnecting}"
+        );
+        assert_eq!(StatusItem::parse("host"), Some(StatusItem::Host));
+        // This computer's own Host goes without saying.
+        assert!(render(IDLE, &StatusItem::DEFAULT, 100).starts_with("  Claude · "));
     }
 
     #[test]

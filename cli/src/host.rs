@@ -1,11 +1,14 @@
 //! Reaching the weave Host, which runs agents so threads outlive the TUI: the per-user one
-//! over its socket, started on first use, or one inside this process (`--no-daemon`); and
-//! stopping the per-user one. `weave daemon` manages it ([`crate::commands::daemon`]).
+//! over its socket, started on first use, or one inside this process (`--no-daemon`); one of
+//! the person's Hosts on another computer, through the Dispatcher (`--host`, ADR 0030,
+//! WVE-195); and stopping the per-user one. `weave daemon` manages it
+//! ([`crate::commands::daemon`]).
 
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -20,6 +23,9 @@ use weave_host::socket;
 use weave_host_client::ConnectError;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
+use weave_host_client::carry;
+use weave_host_client::carry::CarryError;
+use weave_host_client::carry::Via;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::host::DRAIN_FEATURE;
@@ -35,12 +41,16 @@ use crate::args::HostLaunch;
 use crate::args::WorkspaceArgs;
 use crate::background;
 use crate::exit;
+use crate::paired;
 use crate::service;
 
 /// A background Host exits once nothing has been open or connected for this long.
 const BACKGROUND_IDLE_EXIT: Duration = Duration::from_secs(10 * 60);
 /// How long to wait for a Host to start listening, or to stop.
 const STARTUP_WAIT: Duration = Duration::from_secs(10);
+/// How long the Dispatcher has to carry a connection to another computer's Host and the Host to
+/// answer its hello.
+const CARRY_WAIT: Duration = Duration::from_secs(20);
 
 /// Where this invocation's agents run, before it knows which agent.
 pub enum Target {
@@ -48,20 +58,177 @@ pub enum Target {
     Shared(DaemonPaths),
     /// A Host inside this process, which ends with it.
     InProcess,
+    /// One of the person's Hosts on another computer, through the Dispatcher.
+    Carried(Carry),
 }
 
 /// The Host this invocation talks to.
 pub enum Host {
     Shared(DaemonPaths),
     InProcess(weave_host::Daemon),
+    Carried(Carry),
+}
+
+/// One of the person's Hosts on another computer, which the Dispatcher carries this client's
+/// connections to (ADR 0030, WVE-195): through the Dispatcher running here, or the one this
+/// computer is paired with ([`crate::paired`]).
+#[derive(Clone)]
+pub struct Carry {
+    /// As `--host` named it: its id, or what the Dispatcher calls it.
+    pub host: String,
+    via: Via,
+    /// What the Dispatcher calls it, once it has carried a connection there.
+    name: Arc<OnceLock<String>>,
+}
+
+impl Carry {
+    /// The Host `host` names, through the Dispatcher running from this computer's Dispatcher
+    /// directory if one answers there, and otherwise the one this computer is paired with.
+    pub async fn to(host: &str) -> anyhow::Result<Self> {
+        let paths = crate::dispatcher::paths()?;
+        let via = if tokio::net::UnixStream::connect(paths.socket())
+            .await
+            .is_ok()
+        {
+            Via::Socket(paths.socket())
+        } else if let Some(paired) = crate::dispatcher::remote_pairing()? {
+            Via::Paired {
+                url: paired.url,
+                dispatcher_id: paired.dispatcher_id,
+                device_id: paired.device_id,
+                key: paired::key()?,
+            }
+        } else {
+            bail!(
+                "--host reaches your other Hosts through the Dispatcher, but none runs here and \
+                 this computer isn't paired with one: `weave dispatcher connect <its computer>` \
+                 pairs it"
+            );
+        };
+        Ok(Self {
+            host: host.to_owned(),
+            via,
+            name: Arc::default(),
+        })
+    }
+
+    /// What the Dispatcher calls the Host, or as `--host` named it until it's been reached.
+    pub fn name(&self) -> String {
+        self.name
+            .get()
+            .cloned()
+            .unwrap_or_else(|| self.host.clone())
+    }
+
+    /// Connect to the Host through the Dispatcher and say hello as `client`.
+    pub async fn connect(
+        &self,
+        client: &str,
+    ) -> anyhow::Result<(HostConnection, UnboundedReceiver<HostEvent>)> {
+        match self.reach(client).await {
+            Ok(connected) => Ok(connected),
+            Err(error) => Err(self.failed(error)),
+        }
+    }
+
+    async fn reach(
+        &self,
+        client: &str,
+    ) -> Result<(HostConnection, UnboundedReceiver<HostEvent>), CarryError> {
+        let reached = carry::reach(
+            &self.via,
+            client_info(client),
+            ClientCapabilities {
+                // Sign-in runs on the Host's computer.
+                terminal_sign_in: false,
+                ..capabilities(client)
+            },
+            &self.host,
+            CARRY_WAIT,
+        )
+        .await?;
+        let _ = self.name.set(reached.host.name);
+        Ok((reached.connection, reached.events))
+    }
+
+    /// Why the Host couldn't be reached, exiting as an unreachable Host does when waiting may
+    /// help.
+    fn failed(&self, error: CarryError) -> anyhow::Error {
+        let host = &self.host;
+        match error {
+            CarryError::Dispatcher { .. } | CarryError::Unavailable(_) => {
+                exit::unreachable(anyhow::anyhow!("couldn't reach {host}: {error}"))
+            }
+            CarryError::Refused(_) => anyhow::anyhow!(
+                "couldn't reach {host}: {error}; `weave dispatcher connect` pairs this computer \
+                 again"
+            ),
+            CarryError::Refusal(_) => anyhow::anyhow!("couldn't reach {host}: {error}"),
+            CarryError::Hello(error) => {
+                anyhow::Error::from(error).context(format!("couldn't reach {host}"))
+            }
+        }
+    }
+
+    /// Reach the Host again, as after it went away: `None` while it can't be yet.
+    async fn again(
+        &self,
+        client: &str,
+    ) -> anyhow::Result<Option<(HostConnection, UnboundedReceiver<HostEvent>)>> {
+        match self.reach(client).await {
+            Ok(connected) => Ok(Some(connected)),
+            Err(error) if error.may_pass() => Ok(None),
+            Err(error) => Err(self.failed(error)),
+        }
+    }
+}
+
+/// How a command reaches its Host again once it goes away, without starting one.
+#[derive(Clone)]
+pub(crate) enum Again {
+    Shared(DaemonPaths),
+    Carried(Carry),
+}
+
+impl Again {
+    /// The Host, if it's there: `None` while it isn't yet.
+    pub(crate) async fn connect(
+        &self,
+        client: &str,
+    ) -> anyhow::Result<Option<(HostConnection, UnboundedReceiver<HostEvent>)>> {
+        match self {
+            Self::Shared(paths) => control_with_events(paths).await,
+            Self::Carried(carry) => carry.again(client).await,
+        }
+    }
 }
 
 impl Target {
-    pub fn choose(no_daemon: bool) -> anyhow::Result<Self> {
+    /// The per-user Host, or one in this process with `no_daemon`; with `host`, the person's
+    /// Host that names, through the Dispatcher, unless it's this computer's own.
+    pub async fn choose(no_daemon: bool, host: Option<&str>) -> anyhow::Result<Self> {
+        if let Some(host) = host {
+            let paths = paths()?;
+            let here = weave_host::known_as(&paths)
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(host));
+            if here {
+                return Ok(Self::Shared(paths));
+            }
+            return Ok(Self::Carried(Carry::to(host).await?));
+        }
         if no_daemon {
             return Ok(Self::InProcess);
         }
         Ok(Self::Shared(paths()?))
+    }
+
+    /// The Host on another computer, when it's one.
+    pub fn carried(&self) -> Option<&Carry> {
+        match self {
+            Self::Carried(carry) => Some(carry),
+            Self::Shared(_) | Self::InProcess => None,
+        }
     }
 
     /// The Host for `launch`. One in this process is given a custom command as an agent of
@@ -73,22 +240,29 @@ impl Target {
         config_file: Option<PathBuf>,
     ) -> anyhow::Result<Host> {
         let withheld = workspace.withheld();
+        let shared = || {
+            if let AgentChoice::Command(_) = &launch.agent {
+                bail!(
+                    "the weave Host runs agents its config defines: add this one under \
+                     [agents.<id>] with its command, and use --agent <id>; or use --no-daemon"
+                );
+            }
+            if withheld != Withheld::default() {
+                bail!(
+                    "--no-fs and --no-terminal apply with --no-daemon; for the weave Host, set \
+                     fs = false or terminal = false under the agent in the config"
+                );
+            }
+            Ok(())
+        };
         match self {
             Self::Shared(paths) => {
-                if let AgentChoice::Command(_) = &launch.agent {
-                    bail!(
-                        "the weave Host runs agents its config defines: add this one under \
-                         [agents.<id>] with its command, and use --agent <id>; or use \
-                         --no-daemon"
-                    );
-                }
-                if withheld != Withheld::default() {
-                    bail!(
-                        "--no-fs and --no-terminal apply with --no-daemon; for the weave Host, \
-                         set fs = false or terminal = false under the agent in the config"
-                    );
-                }
+                shared()?;
                 Ok(Host::Shared(paths.clone()))
+            }
+            Self::Carried(carry) => {
+                shared()?;
+                Ok(Host::Carried(carry.clone()))
             }
             Self::InProcess => {
                 let mut config = DaemonConfig::in_process(config_file);
@@ -128,34 +302,54 @@ impl Host {
                 )
                 .await
             }
+            Self::Carried(carry) => return carry.connect(client).await,
         };
         connected.map_err(anyhow::Error::from)
     }
 
-    /// The shared Host's paths, to reach it again; none in-process.
-    pub(crate) fn paths(&self) -> Option<DaemonPaths> {
+    /// How to reach the Host again after it goes away; none in-process.
+    pub(crate) fn again(&self) -> Option<Again> {
         match self {
-            Self::Shared(paths) => Some(paths.clone()),
+            Self::Shared(paths) => Some(Again::Shared(paths.clone())),
             Self::InProcess(_) => None,
+            Self::Carried(carry) => Some(Again::Carried(carry.clone())),
         }
     }
 
     /// Whether threads outlive this process.
     pub fn is_shared(&self) -> bool {
-        matches!(self, Self::Shared(_))
+        matches!(self, Self::Shared(_) | Self::Carried(_))
     }
 
-    /// How the TUI reaches the per-user Host again after it goes away, without starting one:
-    /// a restarted Host is picked up, a stopped one stays stopped. None in-process.
+    /// The Host's name, when it's another computer's, reached through the Dispatcher.
+    pub fn elsewhere(&self) -> Option<String> {
+        match self {
+            Self::Carried(carry) => Some(carry.name()),
+            Self::Shared(_) | Self::InProcess(_) => None,
+        }
+    }
+
+    /// How the TUI reaches the Host again after it goes away, without starting one: a
+    /// restarted Host is picked up, a stopped one stays stopped, and another computer's is
+    /// reached through the Dispatcher again. None in-process.
     pub fn reconnector(&self) -> Option<Reconnector> {
-        let Self::Shared(paths) = self else {
-            return None;
-        };
-        let paths = paths.clone();
-        Some(Arc::new(move || {
-            let paths = paths.clone();
-            Box::pin(async move { reconnect(&paths).await })
-        }))
+        match self {
+            Self::Shared(paths) => {
+                let paths = paths.clone();
+                Some(Arc::new(move || {
+                    let paths = paths.clone();
+                    Box::pin(async move { reconnect(&paths).await })
+                }))
+            }
+            Self::Carried(carry) => {
+                let carry = carry.clone();
+                Some(Arc::new(move || {
+                    let carry = carry.clone();
+                    Box::pin(async move { reconnect_carried(&carry).await })
+                }))
+            }
+            Self::InProcess(_) => None,
+        }
     }
 
     /// Stop an in-process Host's agents; the shared one keeps running.
@@ -198,6 +392,16 @@ async fn reconnect(paths: &DaemonPaths) -> Reconnection {
         Ok((connection, events)) => Reconnection::Connected(Box::new(connection), events),
         Err(ConnectError::Incompatible(why)) => Reconnection::Incompatible(why),
         // Still starting up, say.
+        Err(_) => Reconnection::NotYet,
+    }
+}
+
+/// One attempt to reach another computer's Host again through the Dispatcher.
+async fn reconnect_carried(carry: &Carry) -> Reconnection {
+    match carry.reach(TUI).await {
+        Ok((connection, events)) => Reconnection::Connected(Box::new(connection), events),
+        Err(CarryError::Hello(ConnectError::Incompatible(why))) => Reconnection::Incompatible(why),
+        // The Dispatcher or the Host may come back; a revoked device waits out the window.
         Err(_) => Reconnection::NotYet,
     }
 }

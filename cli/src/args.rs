@@ -3,6 +3,7 @@
 
 use std::io::IsTerminal;
 use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -164,15 +165,20 @@ const ALL_KINDS: [(&str, ToolKind); 10] = [
     ("other", ToolKind::Other),
 ];
 
-/// The command that reopens `thread_id` with `agent`.
-pub fn reopen_command(agent: &AgentChoice, thread_id: &str) -> String {
+/// The command that reopens `thread_id` with `agent`, on another computer's Host, `host`, when
+/// it's there.
+pub fn reopen_command(agent: &AgentChoice, thread_id: &str, host: Option<&str>) -> String {
+    let on: Vec<String> = host
+        .map(|host| vec!["--host".to_owned(), host.to_owned()])
+        .unwrap_or_default();
     let words: Vec<String> = match agent {
-        AgentChoice::Named(id) => ["weave", "--agent", id, "--resume", thread_id]
-            .map(str::to_owned)
-            .to_vec(),
-        AgentChoice::Command(command) => ["weave", "--resume", thread_id, "--"]
-            .map(str::to_owned)
-            .into_iter()
+        AgentChoice::Named(id) => std::iter::once("weave".to_owned())
+            .chain(on)
+            .chain(["--agent", id, "--resume", thread_id].map(str::to_owned))
+            .collect(),
+        AgentChoice::Command(command) => std::iter::once("weave".to_owned())
+            .chain(on)
+            .chain(["--resume", thread_id, "--"].map(str::to_owned))
             .chain(command.iter().cloned())
             .collect(),
     };
@@ -251,26 +257,35 @@ impl AgentArgs {
 
     /// `agent` (else the config's `default_agent`), for a thread through the Host in `cwd`
     /// or else the workspace's directory, with the rest of the workspace's settings. The Host
-    /// resolves the agent.
+    /// resolves the agent. On another computer's Host, `elsewhere`, the workspace's directories
+    /// are those there ([`WorkspaceArgs::cwd_on`]).
     pub fn host_launch(
         &self,
         workspace: &WorkspaceArgs,
         agent: Option<AgentChoice>,
         cwd: Option<PathBuf>,
+        elsewhere: Option<&str>,
     ) -> anyhow::Result<HostLaunch> {
         let config = Config::load(self.config.as_deref())?;
         let agent = match agent {
             Some(agent) => agent,
             None => default_agent(&config)?,
         };
+        let (cwd, additional_directories) = match elsewhere {
+            Some(host) => (
+                cwd.map_or_else(|| workspace.cwd_on(host), Ok)?,
+                workspace.additional_directories_on(host)?,
+            ),
+            None => (
+                cwd.map_or_else(|| workspace.cwd(), Ok)?,
+                workspace.additional_directories()?,
+            ),
+        };
         Ok(HostLaunch {
             config,
             agent,
-            cwd: match cwd {
-                Some(cwd) => cwd,
-                None => workspace.cwd()?,
-            },
-            additional_directories: workspace.additional_directories()?,
+            cwd,
+            additional_directories,
             trace: self.trace.is_some(),
         })
     }
@@ -359,6 +374,47 @@ impl WorkspaceArgs {
         }
     }
 
+    /// The thread's directory on another computer's Host, `host` (WVE-195): `--cwd` as given,
+    /// a directory there, or else this one's, the same path under the home there (`~/…`), as
+    /// the thread tools name a directory on another Host. The Host says so if there's none.
+    pub fn cwd_on(&self, host: &str) -> anyhow::Result<PathBuf> {
+        if let Some(cwd) = &self.cwd {
+            return there(cwd, "--cwd");
+        }
+        let here = self.cwd()?;
+        under_home(&here).with_context(|| {
+            format!(
+                "{} is outside your home, so it has no counterpart on {host}: give --cwd, a \
+                 directory there",
+                here.display()
+            )
+        })
+    }
+
+    /// The extra workspace roots on another computer's Host, `host`: each as given when it's
+    /// a whole path or under `~`, a directory there, and otherwise this computer's, the same
+    /// path under the home there, as [`Self::cwd_on`] names the thread's.
+    pub fn additional_directories_on(&self, host: &str) -> anyhow::Result<Vec<PathBuf>> {
+        self.add_dirs
+            .iter()
+            .map(|dir| {
+                if dir.is_absolute() || dir.starts_with("~") {
+                    return there(dir, "--add-dir");
+                }
+                let here = dir
+                    .canonicalize()
+                    .with_context(|| format!("directory {}", dir.display()))?;
+                under_home(&here).with_context(|| {
+                    format!(
+                        "{} is outside your home, so it has no counterpart on {host}: give \
+                         --add-dir a whole path there",
+                        here.display()
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// The absolute session directory ACP requires.
     pub fn cwd(&self) -> anyhow::Result<PathBuf> {
         let cwd = match &self.cwd {
@@ -368,6 +424,32 @@ impl WorkspaceArgs {
         cwd.canonicalize()
             .with_context(|| format!("thread directory {}", cwd.display()))
     }
+}
+
+/// `path`, given with `flag` for another computer's Host, if it names a directory there whole:
+/// from its root, or under the home there.
+fn there(path: &Path, flag: &str) -> anyhow::Result<PathBuf> {
+    if path.is_absolute() || path.starts_with("~") {
+        return Ok(path.to_path_buf());
+    }
+    bail!(
+        "with --host, {flag} names a directory on that computer: give it whole, or under ~, \
+         not {}",
+        path.display()
+    )
+}
+
+/// `path`, a directory on this computer, as the same one under the home on another: `~/…`.
+fn under_home(path: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)?;
+    let home = home.canonicalize().unwrap_or(home);
+    let under = path.strip_prefix(&home).ok()?;
+    Some(match under.as_os_str().is_empty() {
+        true => PathBuf::from("~"),
+        false => Path::new("~").join(under),
+    })
 }
 
 /// The agent `id` names: one the config defines, a preset, or else an ACP registry agent,
@@ -426,13 +508,18 @@ mod tests {
     #[test]
     fn a_reopen_command_names_the_agent_as_it_was_chosen() {
         assert_eq!(
-            reopen_command(&AgentChoice::Named("claude".into()), "s1"),
+            reopen_command(&AgentChoice::Named("claude".into()), "s1", None),
             "weave --agent claude --resume s1"
+        );
+        assert_eq!(
+            reopen_command(&AgentChoice::Named("claude".into()), "s1", Some("studio")),
+            "weave --host studio --agent claude --resume s1"
         );
         assert_eq!(
             reopen_command(
                 &AgentChoice::Command(vec!["my agent".into(), "--acp".into()]),
-                "s1"
+                "s1",
+                None
             ),
             "weave --resume s1 -- 'my agent' --acp"
         );

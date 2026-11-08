@@ -1338,3 +1338,23 @@ impl Daemon {
 pub fn recorded_thread(paths: &DaemonPaths, thread_id: &ThreadId) -> Option<Recorded> {
     journal::recorded(&paths.journals(), thread_id)
 }
+
+/// What the Host in `paths` is known by among the person's Hosts: its id, and the name the
+/// Dispatcher it joined calls it. Read from disk, so the Host needn't be running: a client
+/// asked for a Host by either reaches this one over its socket rather than through the
+/// Dispatcher (WVE-195).
+pub fn known_as(paths: &DaemonPaths) -> Vec<String> {
+    let read = |path: PathBuf, field: &str| {
+        let bytes = std::fs::read(path).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        value.get(field)?.as_str().map(str::to_owned)
+    };
+    [
+        read(paths.devices(), "hostId"),
+        read(paths.dispatcher(), "hostName"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|known| !known.is_empty())
+    .collect()
+}

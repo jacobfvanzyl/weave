@@ -489,6 +489,8 @@ pub struct ChatWidget {
     shown_terminals: BTreeSet<String>,
     /// The TUI runs in Rex, which shows terminals in panes.
     in_rex: bool,
+    /// The Host the thread is on, when it's another computer's, reached through the Dispatcher.
+    host: Option<String>,
     /// Messages between this thread and another, while they stream.
     messages: Vec<SessionMessageEntry>,
     /// In a subagent's own chat: what its parent is called.
@@ -665,6 +667,7 @@ impl ChatWidget {
             worktree_terminals: None,
             shown_terminals: BTreeSet::new(),
             in_rex: false,
+            host: None,
             messages: Vec::new(),
             parent_label: None,
             updatable: false,
@@ -696,6 +699,13 @@ impl ChatWidget {
     /// The TUI runs in Rex, so the thread panel shows terminals in panes beside it.
     pub fn with_rex(mut self, in_rex: bool) -> Self {
         self.in_rex = in_rex;
+        self
+    }
+
+    /// The thread is on another computer's Host, `host`, through the Dispatcher, which the
+    /// status line names (WVE-195).
+    pub fn with_host(mut self, host: Option<String>) -> Self {
+        self.host = host;
         self
     }
 
@@ -4205,6 +4215,7 @@ impl ChatWidget {
         let current =
             |category| settings::current(&self.config_options, self.modes.as_ref(), &category);
         StatusValues {
+            host: self.host.clone(),
             agent: self.agent_name.clone(),
             model: current(SessionConfigOptionCategory::Model),
             // The level, then model settings that are on, as "high fast".

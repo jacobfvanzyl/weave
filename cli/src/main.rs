@@ -73,6 +73,12 @@ struct Cli {
     /// threads end when weave does. Also `enabled = false` under `[daemon]` in the config.
     #[arg(long)]
     no_daemon: bool,
+
+    /// Open the thread on another of your Hosts, by its id or name as `weave hosts` lists them,
+    /// through the Dispatcher. A new thread works in this directory's counterpart under the
+    /// home there, unless --cwd names one there.
+    #[arg(long, value_name = "HOST", conflicts_with = "no_daemon")]
+    host: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -214,20 +220,26 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
     let explicit = cli.agent.choice();
     let recent = Recent::default_location();
     let disabled = cli.agent.load_config()?.daemon.enabled == Some(false);
-    let target = Target::choose(cli.no_daemon || disabled)?;
+    let host = cli.host.as_deref();
+    let target = Target::choose(host.is_none() && (cli.no_daemon || disabled), host).await?;
     let chosen = start::choose(
         &mode,
         explicit.clone(),
         &cli.workspace,
         &target,
         recent.as_ref(),
-    )?;
+    )
+    .await?;
     if let Some(note) = &chosen.note {
         eprintln!("{note}");
     }
-    let launch = cli
-        .agent
-        .host_launch(&cli.workspace, chosen.agent, chosen.cwd)?;
+    let elsewhere = target.carried().map(|carry| carry.host.clone());
+    let launch = cli.agent.host_launch(
+        &cli.workspace,
+        chosen.agent,
+        chosen.cwd,
+        elsewhere.as_deref(),
+    )?;
     let host = target.host(&launch, &cli.workspace, cli.agent.config_file())?;
     let no_alt_screen = cli.no_alt_screen;
     let screen = match (no_alt_screen, launch.config.tui.alternate_screen) {
@@ -237,7 +249,8 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
         }
     };
     let started = start::start(&launch, &host, &mode).await?;
-    if let Some(recent) = &recent {
+    // Another computer's directories aren't this one's to remember.
+    if let Some(recent) = recent.as_ref().filter(|_| elsewhere.is_none()) {
         recent.record(&launch.cwd, &launch.agent);
     }
     let (agent_name, agent_version) = match started.agent.agent_info.clone() {
@@ -273,6 +286,7 @@ async fn run_tui(cli: Cli) -> anyhow::Result<()> {
             trace: launch.trace,
             opened: started.opened,
             notices,
+            host: host.elsewhere(),
         },
         weave_tui::UiOptions {
             screen,

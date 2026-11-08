@@ -63,6 +63,9 @@ Options:
       --no-daemon
           Run the agent in a Host inside this process rather than the shared weave Host, so its threads end when weave does. Also `enabled = false` under `[daemon]` in the config
 
+      --host <HOST>
+          Open the thread on another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher. A new thread works in this directory's counterpart under the home there, unless --cwd names one there
+
   -h, --help
           Print help
 
@@ -136,13 +139,16 @@ Options:
       --no-daemon
           Run the agent in this process rather than the weave Host
 
+      --host <HOST>
+          Run it on another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher. A new thread works in this directory's counterpart under the home there, unless --cwd names one there
+
   -h, --help
           Print help
 
 $ weave threads --help
 Threads open in the weave Host: list, read, prompt or steer them, stop a turn, or close one
 
-Usage: weave threads [COMMAND]
+Usage: weave threads [OPTIONS] [COMMAND]
 
 Commands:
   list           List the threads open in the weave Host (the default)
@@ -158,6 +164,9 @@ Commands:
   help           Print this message or the help of the given subcommand(s)
 
 Options:
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
@@ -178,6 +187,9 @@ Options:
       --json
           Print them as JSON
 
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
@@ -196,6 +208,9 @@ Options:
 
       --json
           Print the Host's answer (`threads/get`) as JSON
+
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
 
   -h, --help
           Print help
@@ -228,6 +243,9 @@ Options:
       --keep-waiting
           Wait on while the turn waits on a person to answer it, rather than exiting 7
 
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
@@ -247,41 +265,53 @@ Options:
       --json
           Print the Host's answer (`queue/add`, or `turn/steer`) as JSON; with --wait, the turn's journal events as JSON lines
 
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
 $ weave threads cancel --help
 Stop the turn a thread is running, as Esc does in the TUI
 
-Usage: weave threads cancel <THREAD_ID>
+Usage: weave threads cancel [OPTIONS] <THREAD_ID>
 
 Arguments:
   <THREAD_ID>
           
 
 Options:
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
 $ weave threads close --help
 Close a thread for every client: its turn ends and its agent stops. `weave --resume` can still reopen it from the agent's history
 
-Usage: weave threads close <THREAD_ID>
+Usage: weave threads close [OPTIONS] <THREAD_ID>
 
 Arguments:
   <THREAD_ID>
           
 
 Options:
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
 $ weave threads watch --help
 Print the Host's threads as they open, change and close, as JSON lines: a `threads/updated` for each at first, then one for every change, until stopped
 
-Usage: weave threads watch
+Usage: weave threads watch [OPTIONS]
 
 Options:
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
@@ -313,13 +343,16 @@ Options:
       --json
           Print its journal events as JSON lines
 
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
 $ weave threads set-successor --help
 Name the thread an open thread's work goes on in, its successor: clients following it may follow that, and reports to it go there. Named once
 
-Usage: weave threads set-successor <THREAD_ID> <SUCCESSOR_ID>
+Usage: weave threads set-successor [OPTIONS] <THREAD_ID> <SUCCESSOR_ID>
 
 Arguments:
   <THREAD_ID>
@@ -329,6 +362,9 @@ Arguments:
           The thread its work goes on in
 
 Options:
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
+
   -h, --help
           Print help
 
@@ -347,6 +383,9 @@ Options:
 
       --remove <LABEL>
           A label to take off
+
+      --host <HOST>
+          The threads of another of your Hosts, by its id or name as `weave hosts` lists them, through the Dispatcher
 
   -h, --help
           Print help

@@ -29,6 +29,7 @@ use weave_host_protocol::agents::GetAgentRequest;
 use weave_host_protocol::agents::TerminalSignInRequest;
 use weave_host_protocol::threads::AttachThreadRequest;
 use weave_host_protocol::threads::CreateThreadRequest;
+use weave_host_protocol::threads::GetThreadRequest;
 use weave_host_protocol::threads::ListThreadsRequest;
 use weave_host_protocol::threads::ThreadId;
 
@@ -36,6 +37,7 @@ use crate::args::AgentChoice;
 use crate::args::HostLaunch;
 use crate::args::Launch;
 use crate::args::WorkspaceArgs;
+use crate::host::Carry;
 use crate::host::Host;
 use crate::host::TUI;
 use crate::host::Target;
@@ -53,9 +55,9 @@ pub struct Chosen {
 
 /// The agent and directory for `mode`. `--resume <id>` reopens the thread with the agent and
 /// directory it was started with, whatever `--agent` and `--cwd` say, when the Host's journal
-/// records them. `--continue` without an agent uses the one last used in the directory.
-/// Otherwise it's what the command line says.
-pub fn choose(
+/// records them, or another computer's Host says. `--continue` without an agent uses the one
+/// last used in the directory. Otherwise it's what the command line says.
+pub async fn choose(
     mode: &StartMode,
     explicit: Option<AgentChoice>,
     workspace: &WorkspaceArgs,
@@ -82,25 +84,26 @@ pub fn choose(
                 RecordedChoice::Named(id) => AgentChoice::Named(id.clone()),
                 RecordedChoice::Command(words) => AgentChoice::Command(words.clone()),
             });
-            let agent = recorded_agent.or(explicit.clone());
-            let note = match (&agent, &explicit) {
-                (Some(agent), Some(given)) if agent != given => Some(format!(
-                    "Resuming {thread_id} with {}, the agent it was started with (not {}){elsewhere}",
-                    agent.describe(),
-                    given.describe()
-                )),
-                (Some(agent), None) => Some(format!(
-                    "Resuming {thread_id} with {}{elsewhere}",
-                    agent.describe()
-                )),
-                _ if !elsewhere.is_empty() => Some(format!("Resuming {thread_id}{elsewhere}")),
-                _ => None,
+            Ok(resumed(
+                thread_id,
+                recorded_agent,
+                recorded.cwd,
+                explicit,
+                &elsewhere,
+            ))
+        }
+        (StartMode::Resume(thread_id), Target::Carried(carry)) => {
+            let Some((agent_id, cwd)) = carried_thread(carry, thread_id).await? else {
+                return Ok(as_given(explicit));
             };
-            Ok(Chosen {
-                agent,
-                cwd: Some(recorded.cwd),
-                note,
-            })
+            let elsewhere = format!(" in {} on {}", cwd.display(), carry.name());
+            Ok(resumed(
+                thread_id,
+                Some(AgentChoice::Named(agent_id)),
+                cwd,
+                explicit,
+                &elsewhere,
+            ))
         }
         (StartMode::Continue, _) if explicit.is_none() => {
             let remembered = match recent {
@@ -121,6 +124,55 @@ pub fn choose(
         }
         _ => Ok(as_given(explicit)),
     }
+}
+
+/// Reopening `thread_id`, which was started with `recorded_agent` in `cwd`, `elsewhere` saying
+/// where when it isn't here.
+fn resumed(
+    thread_id: &ThreadId,
+    recorded_agent: Option<AgentChoice>,
+    cwd: PathBuf,
+    explicit: Option<AgentChoice>,
+    elsewhere: &str,
+) -> Chosen {
+    let agent = recorded_agent.or(explicit.clone());
+    let note = match (&agent, &explicit) {
+        (Some(agent), Some(given)) if agent != given => Some(format!(
+            "Resuming {thread_id} with {}, the agent it was started with (not {}){elsewhere}",
+            agent.describe(),
+            given.describe()
+        )),
+        (Some(agent), None) => Some(format!(
+            "Resuming {thread_id} with {}{elsewhere}",
+            agent.describe()
+        )),
+        _ if !elsewhere.is_empty() => Some(format!("Resuming {thread_id}{elsewhere}")),
+        _ => None,
+    };
+    Chosen {
+        agent,
+        cwd: Some(cwd),
+        note,
+    }
+}
+
+/// The agent and directory of `thread_id` on another computer's Host, as the Host lists it;
+/// none for a thread it doesn't know.
+async fn carried_thread(
+    carry: &Carry,
+    thread_id: &ThreadId,
+) -> anyhow::Result<Option<(String, PathBuf)>> {
+    let (connection, _events) = carry.connect("weave-cli").await?;
+    let got = connection
+        .send(GetThreadRequest {
+            thread_id: thread_id.clone(),
+            turn_id: None,
+        })
+        .await;
+    connection.shutdown().await;
+    Ok(got
+        .ok()
+        .map(|got| (got.thread.agent_id, got.thread.info.cwd)))
 }
 
 /// Which thread to start in.
@@ -174,6 +226,19 @@ pub async fn start(launch: &HostLaunch, host: &Host, mode: &StartMode) -> anyhow
     let (opened, notices) = loop {
         match establish(&handle, launch, mode).await {
             Ok(opened) => break opened,
+            // An agent signs in on its Host's computer.
+            Err(error)
+                if is_auth_required(&error)
+                    && let Some(elsewhere) = host.elsewhere() =>
+            {
+                connection.shutdown().await;
+                let agent = launch.agent_id();
+                bail!(
+                    "{agent} needs you to sign in on {elsewhere}: run `weave agents login \
+                     --agent {agent}` there, or `ssh -t <its computer> weave agents login \
+                     --agent {agent}`"
+                );
+            }
             Err(error) if is_auth_required(&error) && attempts < SIGN_IN_ATTEMPTS => {
                 attempts += 1;
                 if let Err(error) = sign_in_through(&handle, launch.agent_id(), None).await {
@@ -532,8 +597,8 @@ mod tests {
         .expect("journal");
     }
 
-    #[test]
-    fn resuming_a_thread_uses_the_agent_and_directory_it_started_with() {
+    #[tokio::test]
+    async fn resuming_a_thread_uses_the_agent_and_directory_it_started_with() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = DaemonPaths::in_dir(dir.path().to_path_buf());
         record(&paths, "s1", "codex", "/elsewhere/repo");
@@ -542,7 +607,9 @@ mod tests {
         let claude = Some(AgentChoice::Named("claude".into()));
         let workspace = WorkspaceArgs::default();
 
-        let chosen = choose(&resume, claude.clone(), &workspace, &target, None).expect("choose");
+        let chosen = choose(&resume, claude.clone(), &workspace, &target, None)
+            .await
+            .expect("choose");
         assert_eq!(chosen.agent, Some(AgentChoice::Named("codex".into())));
         assert_eq!(chosen.cwd, Some(PathBuf::from("/elsewhere/repo")));
         assert_eq!(
@@ -555,15 +622,17 @@ mod tests {
 
         // A thread weave has no record of opens as the command line says.
         let unknown = StartMode::Resume("s2".into());
-        let chosen = choose(&unknown, claude.clone(), &workspace, &target, None).expect("choose");
+        let chosen = choose(&unknown, claude.clone(), &workspace, &target, None)
+            .await
+            .expect("choose");
         assert_eq!(
             (chosen.agent, chosen.cwd, chosen.note),
             (claude, None, None)
         );
     }
 
-    #[test]
-    fn continuing_uses_the_agent_last_used_here_unless_one_is_given() {
+    #[tokio::test]
+    async fn continuing_uses_the_agent_last_used_here_unless_one_is_given() {
         let dir = tempfile::tempdir().expect("tempdir");
         let recent = Recent::at(dir.path().join("recent.json"));
         let workspace = WorkspaceArgs::default();
@@ -578,6 +647,7 @@ mod tests {
             &target,
             Some(&recent),
         )
+        .await
         .expect("choose");
         assert_eq!(chosen.agent, Some(AgentChoice::Named("gemini".into())));
         let given = Some(AgentChoice::Named("claude".into()));
@@ -588,6 +658,7 @@ mod tests {
             &target,
             Some(&recent),
         )
+        .await
         .expect("choose");
         assert_eq!(chosen.agent, given);
     }

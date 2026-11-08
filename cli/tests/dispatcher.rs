@@ -2,7 +2,9 @@
 //! WebSocket with a fake Tailscale Serve, as a Dispatcher on another computer: then `weave hosts`
 //! and `weave schedules` reach it through the pairing, and `disconnect` forgets it. With a Host
 //! on this computer, also in the test, `connect` offers to have it join the Dispatcher too, and
-//! `weave hosts add` has it join, here, over SSH, or with a code (ADR 0030).
+//! `weave hosts add` has it join, here, over SSH, or with a code (ADR 0030). With a Host on
+//! another computer that joined it, `weave run`, `weave threads` and the TUI reach that Host
+//! through the Dispatcher with `--host` (WVE-195).
 
 #![allow(clippy::expect_used)]
 
@@ -29,6 +31,8 @@ use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::DispatcherAddress;
+use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinedDispatcher;
 use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
@@ -56,6 +60,8 @@ struct World {
     dispatcher: Dispatcher,
     /// This computer's Host, when the test runs one.
     host: Option<Daemon>,
+    /// A Host on another computer, with the fake agent, when the test runs one.
+    elsewhere: Option<Daemon>,
     runtime: Runtime,
 }
 
@@ -87,8 +93,77 @@ impl World {
             paths,
             dispatcher,
             host: None,
+            elsewhere: None,
             runtime,
         }
+    }
+
+    /// Run a Host as on another computer, whose agent `fake` is the fake agent and whose home
+    /// is `elsewhere/home`, and have it join the Dispatcher as `name`.
+    fn start_host_elsewhere(&mut self, name: &str) {
+        let dir = self.dir.path().join("elsewhere");
+        std::fs::create_dir_all(dir.join("home/work")).expect("its home");
+        std::fs::write(
+            dir.join("config.toml"),
+            "[agents.fake]\ncommand = \"fake-agent\"\n",
+        )
+        .expect("its config");
+        let paths = weave_host::DaemonPaths::in_dir(dir.join("host"));
+        paths.prepare().expect("its directory");
+        let state = dir.join("agent-state.json");
+        let launcher: weave_host::Launcher = Arc::new(move |_, options, _| {
+            let config = weave_fake_agent::FakeAgentConfig {
+                state_path: Some(state.clone()),
+                ..weave_fake_agent::FakeAgentConfig::default()
+            };
+            Box::pin(async move {
+                let (client, agent) = agent_client_protocol::Channel::duplex();
+                tokio::spawn(weave_fake_agent::serve_with(agent, config));
+                weave_acp_core::AgentConnection::connect(client, options)
+                    .await
+                    .map_err(|error| {
+                        agent_client_protocol::Error::internal_error().data(error.to_string())
+                    })
+            })
+        });
+        let mut config = DaemonConfig::in_process(Some(dir.join("config.toml")));
+        config.devices = Some(paths.devices());
+        config.traces = dir.join("traces");
+        config.launcher = launcher;
+        config.home = Some(dir.join("home"));
+        config.dispatcher = Some(DispatcherSettings {
+            secure_enclave: false,
+            ..DispatcherSettings::in_dir(&paths)
+        });
+        let host = Daemon::new(config);
+        let hosts_socket = self.paths.hosts_socket();
+        self.runtime.block_on(async {
+            let code = self
+                .dispatcher
+                .offer_host(true)
+                .await
+                .expect("hosts/offer")
+                .code;
+            host.join_dispatcher(JoinDispatcherRequest {
+                address: DispatcherAddress::Socket(hosts_socket),
+                code,
+                name: Some(name.to_owned()),
+            })
+            .await
+            .expect("joined");
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !self
+            .dispatcher
+            .hosts()
+            .expect("its Hosts")
+            .iter()
+            .any(|host| host.name == name && host.connected)
+        {
+            assert!(std::time::Instant::now() < deadline, "connected in time");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        self.elsewhere = Some(host);
     }
 
     /// Run a Host on this computer, where `weave` finds it, which can join the Dispatcher.
@@ -222,6 +297,9 @@ impl Drop for World {
         self.runtime
             .block_on(async move { dispatcher.stop().await });
         if let Some(host) = &self.host {
+            host.stop();
+        }
+        if let Some(host) = &self.elsewhere {
             host.stop();
         }
     }
@@ -539,4 +617,123 @@ fn hosts_add_joins_a_host_with_a_code_or_over_ssh() {
         said(&over_ssh)
     );
     assert_eq!(world.names(), vec!["studio"]);
+}
+
+#[test]
+fn weave_reaches_a_host_elsewhere_through_the_dispatcher() {
+    let mut world = World::new();
+    world.start_host_elsewhere("studio");
+    let (url, code) = world.offer();
+    let paired = world.weave(&["dispatcher", "connect", &url, &code, "--name", "laptop"]);
+    assert!(paired.status.success(), "{}", said(&paired));
+    let home = world.dir.path().join("here/home");
+    std::fs::create_dir_all(home.join("work")).expect("this computer's home");
+    let weave = |cwd: &std::path::Path, args: &[&str]| {
+        world
+            .command(args)
+            .current_dir(cwd)
+            .env("HOME", &home)
+            .output()
+            .expect("run weave")
+    };
+
+    // A run there works in this directory's counterpart under the home there.
+    let ran = weave(
+        &home.join("work"),
+        &[
+            "run", "--host", "studio", "--agent", "fake", "hello", "there",
+        ],
+    );
+    assert!(ran.status.success(), "{}", said(&ran));
+    assert!(
+        String::from_utf8_lossy(&ran.stdout).contains("You said: hello there"),
+        "{}",
+        said(&ran)
+    );
+    assert!(
+        said(&ran).contains("weave --host studio --agent fake --resume"),
+        "{}",
+        said(&ran)
+    );
+
+    // A run left running there lists there, in the same directory, and reads.
+    let detached = weave(
+        &home.join("work"),
+        &[
+            "run", "--host", "studio", "--agent", "fake", "--detach", "again",
+        ],
+    );
+    assert!(detached.status.success(), "{}", said(&detached));
+    let thread_id = String::from_utf8_lossy(&detached.stdout).trim().to_owned();
+    assert!(
+        said(&detached).contains("weave threads --host studio follow"),
+        "{}",
+        said(&detached)
+    );
+    let listed = json(&weave(
+        &home,
+        &["threads", "--host", "studio", "list", "--json"],
+    ));
+    let threads = listed.as_array().expect("a list");
+    assert_eq!(threads.len(), 1, "{listed}");
+    assert_eq!(
+        threads[0]["info"]["sessionId"].as_str(),
+        Some(thread_id.as_str())
+    );
+    assert_eq!(
+        threads[0]["info"]["cwd"]
+            .as_str()
+            .map(std::path::PathBuf::from),
+        Some(world.dir.path().join("elsewhere/home/work"))
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let read = weave(&home, &["threads", "read", &thread_id, "--host", "studio"]);
+        assert!(read.status.success(), "{}", said(&read));
+        if String::from_utf8_lossy(&read.stdout).contains("You said: again") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{}", said(&read));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // `--cwd` names a directory there; one that isn't there, the Host says so.
+    let missing = weave(
+        &home,
+        &[
+            "run",
+            "--host",
+            "studio",
+            "--agent",
+            "fake",
+            "--cwd",
+            "~/nowhere",
+            "hi",
+        ],
+    );
+    assert!(!missing.status.success());
+    assert!(
+        said(&missing).contains("isn't a directory on this Host"),
+        "{}",
+        said(&missing)
+    );
+    // Outside the home, a directory has no counterpart there.
+    let outside = weave(
+        world.dir.path(),
+        &["run", "--host", "studio", "--agent", "fake", "hi"],
+    );
+    assert!(!outside.status.success());
+    assert!(
+        said(&outside).contains("outside your home"),
+        "{}",
+        said(&outside)
+    );
+    // A Host that never joined.
+    let unknown = weave(&home, &["threads", "--host", "nowhere"]);
+    assert!(!unknown.status.success());
+    assert!(
+        said(&unknown).contains("no Host called nowhere"),
+        "{}",
+        said(&unknown)
+    );
 }
