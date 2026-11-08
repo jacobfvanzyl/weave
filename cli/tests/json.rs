@@ -12,7 +12,6 @@ use std::time::Instant;
 
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
-use weave_host_protocol::devices::Device;
 use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::events::ThreadEventNotification;
 use weave_host_protocol::host::HostStatus;
@@ -136,11 +135,4 @@ fn threads_and_their_turns_are_the_hosts_answers() {
     let steered: SteerTurnResponse =
         parsed(&host.weave(&["threads", "steer", &id, "--json", "late"]), 1);
     assert_eq!(steered.outcome, SteerOutcome::NotRunning);
-}
-
-#[test]
-fn devices_are_the_hosts_listing() {
-    let host = TestHost::start();
-    let devices: Vec<Device> = parsed(&host.weave(&["devices", "list", "--json"]), 0);
-    assert!(devices.is_empty());
 }

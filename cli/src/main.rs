@@ -98,9 +98,10 @@ enum Command {
     Schedules(schedules::SchedulesArgs),
     /// Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one.
     Hosts(hosts::HostsArgs),
-    /// Pair another of your devices with the weave Host, to reach it over your tailnet.
+    /// Pair one of your devices, or another computer, with the Dispatcher, through which it
+    /// reaches your Hosts. Run it where the Dispatcher runs.
     Pair(devices::PairArgs),
-    /// Devices paired with the weave Host: list them, or revoke one.
+    /// Devices paired with the Dispatcher: list them, or revoke one.
     Devices(devices::DevicesArgs),
     /// The weave Host's terminals: show one here, as the TUI does in a Rex pane.
     #[command(name = "terminals", alias = "terminal")]
@@ -478,6 +479,11 @@ mod tests {
         assert!(parses(&["weave", "threads", "list", "--json"]));
         // "Session" names ADR 0031's Sessions now, so threads' old name is gone (WVE-200).
         assert!(!parses(&["weave", "sessions", "list"]));
+        // Pairing is the Dispatcher's alone, by the names the person manages (WVE-197).
+        assert!(!parses(&["weave", "dispatcher", "pair"]));
+        assert!(!parses(&["weave", "dispatcher", "devices"]));
+        assert!(parses(&["weave", "pair", "--json"]));
+        assert!(parses(&["weave", "devices", "revoke", "d-1"]));
     }
 
     /// Names commands had before, which messages, scripts and open panes still give.

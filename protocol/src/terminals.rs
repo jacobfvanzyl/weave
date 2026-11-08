@@ -314,8 +314,9 @@ pub struct AttachTerminalResponse {
     pub expires_at: Timestamp,
 }
 
-/// A terminal's stream: a WebSocket of its own on the Host's remote listener, with subprotocol
-/// [`stream::SUBPROTOCOL`] and the same `Origin` rules as the Host protocol's.
+/// A terminal's stream: a WebSocket of its own, with subprotocol [`stream::SUBPROTOCOL`], on the
+/// Host's terminal socket for a client on its computer, or on a connection the Dispatcher carries
+/// for one of the person's devices (`stream: "terminal"`, ADR 0030).
 ///
 /// The client's first text frame is a [`stream::Open`]; the Host answers with a
 /// [`stream::Opened`], then binary frames of a kind byte and a payload, and text frames of

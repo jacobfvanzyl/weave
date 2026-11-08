@@ -26,7 +26,6 @@ use weave_dispatcher::socket;
 use weave_host::Daemon;
 use weave_host::DaemonConfig;
 use weave_host::DispatcherSettings;
-use weave_host_client::HostConnection;
 use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::devices::OfferDeviceRequest;
@@ -34,7 +33,6 @@ use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinedDispatcher;
-use weave_host_protocol::hello::ClientCapabilities;
 use weave_host_protocol::hello::ClientInfo;
 use weave_remote::access::RemoteSettings;
 use weave_remote::access::Serve;
@@ -73,8 +71,10 @@ impl World {
             .enable_all()
             .build()
             .expect("runtime");
-        let mut remote = RemoteSettings::new(Arc::new(FakeServe));
-        remote.listen = "127.0.0.1:0".parse().expect("an address");
+        let remote = RemoteSettings::new(
+            "127.0.0.1:0".parse().expect("an address"),
+            Arc::new(FakeServe),
+        );
         let config = DispatcherConfig {
             name: "Dispatcher".to_owned(),
             secure_enclave: false,
@@ -213,30 +213,6 @@ impl World {
             .collect()
     }
 
-    /// The devices this computer's Host is paired with.
-    fn host_devices(&self) -> Vec<Device> {
-        let host = self.host.as_ref().expect("a Host here");
-        self.runtime.block_on(async {
-            let (connection, _events) = HostConnection::connect(
-                host.connect_in_process(),
-                ClientInfo {
-                    name: "test".to_owned(),
-                    version: "0".to_owned(),
-                },
-                ClientCapabilities::default(),
-            )
-            .await
-            .expect("hello");
-            let devices = connection
-                .send(ListDevicesRequest {})
-                .await
-                .expect("devices/list")
-                .devices;
-            connection.shutdown().await;
-            devices
-        })
-    }
-
     /// The Dispatcher's own CLI, on its socket.
     fn local(&self) -> DispatcherConnection {
         self.runtime.block_on(async {
@@ -288,6 +264,14 @@ impl World {
 
     fn weave(&self, args: &[&str]) -> Output {
         self.command(args).output().expect("run weave")
+    }
+
+    /// `weave args…` on the Dispatcher's own computer.
+    fn weave_there(&self, args: &[&str]) -> Output {
+        self.command(args)
+            .env("WEAVE_DISPATCHER_DIR", &self.paths.dir)
+            .output()
+            .expect("run weave")
     }
 }
 
@@ -388,13 +372,19 @@ fn a_computer_paired_with_the_dispatcher_asks_it_from_there() {
         "{}",
         said(&start)
     );
-    let devices = world.weave(&["dispatcher", "devices"]);
-    assert!(!devices.status.success());
-    assert!(
-        said(&devices).contains("managed there"),
-        "{}",
-        said(&devices)
-    );
+    for asked in [
+        &["devices"][..],
+        &["pair"],
+        &["devices", "revoke", &device_id],
+    ] {
+        let refused = world.weave(asked);
+        assert!(!refused.status.success(), "{asked:?}");
+        assert!(
+            said(&refused).contains("managed there"),
+            "{asked:?}: {}",
+            said(&refused)
+        );
+    }
 
     // A development Dispatcher directory never reaches the paired one.
     let development = world
@@ -438,6 +428,39 @@ fn a_computer_paired_with_the_dispatcher_asks_it_from_there() {
     let alone = world.weave(&["hosts"]);
     assert!(said(&alone).contains("isn't running"), "{}", said(&alone));
     world.runtime.block_on(local.shutdown());
+}
+
+#[test]
+fn pair_and_devices_are_the_dispatchers_on_its_computer() {
+    let world = World::new();
+    let offered = json(&world.weave_there(&["pair", "--json"]));
+    let url = offered["url"].as_str().expect("a URL");
+    let code = offered["code"].as_str().expect("a code");
+    assert!(offered["expiresAt"].as_u64().is_some(), "{offered}");
+    let connected = world.weave(&["dispatcher", "connect", url, code, "--name", "laptop"]);
+    assert!(connected.status.success(), "{}", said(&connected));
+
+    let devices: Vec<Device> =
+        serde_json::from_value(json(&world.weave_there(&["devices", "list", "--json"])))
+            .expect("the Dispatcher's Devices");
+    assert_eq!(
+        devices
+            .iter()
+            .map(|device| device.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["laptop"]
+    );
+    let listed = world.weave_there(&["devices"]);
+    assert!(said(&listed).contains("laptop"), "{}", said(&listed));
+    let revoked = world.weave_there(&["devices", "revoke", &devices[0].id]);
+    assert!(revoked.status.success(), "{}", said(&revoked));
+    assert!(said(&revoked).contains("Revoked"), "{}", said(&revoked));
+    let none = world.weave_there(&["devices"]);
+    assert!(
+        said(&none).contains("No device is paired"),
+        "{}",
+        said(&none)
+    );
 }
 
 #[test]
@@ -540,10 +563,6 @@ fn connect_offers_to_have_this_computers_host_join_too() {
     assert_eq!(world.names(), vec!["laptop"]);
     let joined = world.joined().expect("joined");
     assert_eq!(joined.host_name, "laptop");
-    assert!(
-        world.host_devices().is_empty(),
-        "the Dispatcher it joined isn't one of its devices"
-    );
 
     // Joined already, it leaves it.
     let (url, code) = world.offer();

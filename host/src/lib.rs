@@ -24,11 +24,11 @@
 //! it, and `thread/reopen` an open thread, which keeps its id and journal (`updates`).
 //!
 //! A Host serves a Unix socket ([`socket`]), or, without one, a single client in the same
-//! process ([`Daemon::connect_in_process`]). Remote clients, on the person's other devices,
-//! reach it through a loopback WebSocket and prove a paired device. Pairing turns that on
-//! (ADR 0016, [`weave_remote::access`]), with the Host's own Tailscale Serve entry
-//! ([`tailscale`]); tests
-//! serve a WebSocket of their own with [`Daemon::serve_remote`].
+//! process ([`Daemon::connect_in_process`]). It listens for nothing else: the person's devices
+//! reach it through the Dispatcher it joined, which carries their connections to it over
+//! connections the Host opens itself ([`dispatcher`], ADR 0030). Hosts listened for them behind a
+//! Tailscale Serve entry of their own until WVE-197, which a Host removes when it starts
+//! ([`serve_entry`]).
 
 mod admissions;
 mod client;
@@ -43,12 +43,12 @@ pub mod mcp;
 mod modes;
 pub mod paths;
 mod queue;
+mod serve_entry;
 mod service_tools;
 pub mod socket;
 pub mod terminals;
 mod thread;
 mod updates;
-mod websocket;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -91,7 +91,6 @@ use weave_host_protocol::threads::ThreadListing;
 use weave_host_protocol::threads::ThreadRemovedNotification;
 use weave_host_protocol::threads::ThreadUpdatedNotification;
 use weave_host_protocol::worktrees::GitLocation;
-pub use weave_remote::access::RemoteSettings;
 pub use weave_remote::access::Serve;
 pub use weave_remote::tailscale;
 pub use weave_remote::websocket::RemoteConfig;
@@ -107,6 +106,7 @@ pub use crate::journal::Recorded;
 pub use crate::journal::RecordedChoice;
 use crate::journal::now_ms;
 pub use crate::paths::DaemonPaths;
+pub use crate::serve_entry::FormerServe;
 use crate::thread::Command;
 use crate::thread::Summary;
 use crate::thread::ThreadHandle;
@@ -156,7 +156,7 @@ pub struct DaemonConfig {
     pub service: Service,
     /// Where protocol traces are written.
     pub traces: PathBuf,
-    /// The record of paired devices and the Host's id; none keeps them in memory only.
+    /// The record of the Host's id and the Dispatcher it joined; none keeps them in memory only.
     pub devices: Option<PathBuf>,
     /// Where newer versions of agents come from: npm and the ACP registry, or a test's.
     pub upstream: Arc<dyn Upstream>,
@@ -165,9 +165,10 @@ pub struct DaemonConfig {
     pub mcp_socket: Option<PathBuf>,
     /// The command, with its arguments, agents run as the Host MCP server's stdio bridge.
     pub mcp_bridge: Vec<String>,
-    /// How the Host serves remote clients once pairing turns that on; none for a Host that
-    /// doesn't, as one inside a client.
-    pub remote: Option<RemoteSettings>,
+    /// The Tailscale Serve entry the Host made for remote clients before WVE-197, which it
+    /// removes if its `devices` show it served them; none for a Host that touches no Serve
+    /// entry, as one inside a client, or one a test runs.
+    pub former_serve: Option<FormerServe>,
     /// What keeps terminals alive for clients (ADR 0022); none for a Host without terminals, as
     /// one inside a client, or one installed without `weave-holder`.
     pub terminals: Option<Arc<dyn terminals::Owner>>,
@@ -208,7 +209,7 @@ impl DaemonConfig {
             upstream: Arc::new(weave_agents::update::Network),
             mcp_socket: None,
             mcp_bridge: bridge_command(),
-            remote: None,
+            former_serve: None,
             terminals: None,
             home: None,
             retired: Vec::new(),
@@ -310,8 +311,8 @@ pub(crate) struct Shared {
     /// The connections serving services' tools, and calls waiting on them (WVE-171).
     pub(crate) service_tools: service_tools::ServiceTools,
     pub(crate) updates: updates::Updates,
-    /// Remote access: the WebSocket and the Serve entry, while pairing has them on.
-    pub(crate) remote: weave_remote::access::Remote,
+    /// The Serve entry the Host made for remote clients before WVE-197, while it's left.
+    pub(crate) serve_entry: serve_entry::ServeEntry,
     started_ms: u64,
     pub(crate) next_client: AtomicU64,
     pub(crate) stop: watch::Sender<bool>,
@@ -841,7 +842,7 @@ impl Shared {
                 weave_agents::environment::Source::Process => EnvironmentSource::Process,
             },
             threads: threads.iter().map(thread::Summary::listing).collect(),
-            remote: self.remote.address(),
+            serve_entry: self.serve_entry.left(),
             dispatcher: self.dispatcher.status(),
         }
     }
@@ -931,7 +932,7 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new(config: DaemonConfig) -> Self {
+    pub fn new(mut config: DaemonConfig) -> Self {
         let known = match &config.journals {
             Some(journals) => {
                 match journal::move_from_version_2(journals) {
@@ -982,7 +983,7 @@ impl Daemon {
                 dispatcher: joined,
                 service_tools: service_tools::ServiceTools::default(),
                 updates: updates::Updates::default(),
-                remote: weave_remote::access::Remote::new("Host", config.remote.clone()),
+                serve_entry: serve_entry::ServeEntry::new(config.former_serve.take()),
                 config,
                 registry: Mutex::new(Registry {
                     known,
@@ -1086,8 +1087,7 @@ impl Daemon {
                     let quiet = {
                         let registry = self.shared.registry();
                         registry.threads.is_empty() && registry.clients == 0
-                    } && !self.shared.remote.is_on()
-                        && !self.shared.dispatcher.is_joined();
+                    } && !self.shared.dispatcher.is_joined();
                     if !quiet {
                         idle_since = None;
                     } else if let Some(limit) = idle_exit
@@ -1114,20 +1114,6 @@ impl Daemon {
         Ok(())
     }
 
-    /// Accept remote clients on `listener`, a loopback address Tailscale Serve forwards to,
-    /// until the Host stops. Each has to prove a paired device at hello.
-    pub async fn serve_remote(&self, listener: tokio::net::TcpListener, config: RemoteConfig) {
-        self.shared.remote.serving(
-            listener
-                .local_addr()
-                .ok()
-                .map(|address| address.to_string()),
-        );
-        let forever = tokio_util::sync::CancellationToken::new();
-        websocket::serve(Arc::clone(&self.shared), listener, config, forever).await;
-        self.shared.remote.serving(None);
-    }
-
     /// At startup, connect to the Dispatcher the Host joined, if it joined one (ADR 0030).
     pub fn resume_dispatcher(&self) {
         dispatcher::resume(&self.shared);
@@ -1147,14 +1133,11 @@ impl Daemon {
         self.shared.dispatcher.status()
     }
 
-    /// At startup, turn remote access back on when a device is paired (ADR 0016).
-    pub async fn resume_remote(&self) {
-        let shared = &self.shared;
-        let paired = shared.devices.any_paired();
-        shared
-            .remote
-            .resume(&websocket::accept(shared), paired)
-            .await;
+    /// At startup, remove the Tailscale Serve entry the Host made for remote clients before
+    /// they reached it through the Dispatcher (WVE-197), if its directory shows it served them;
+    /// a Host that can't says so in `host/status`, with the command for the person.
+    pub async fn remove_serve_entry(&self) {
+        self.shared.serve_entry.remove(&self.shared.devices).await;
     }
 
     /// Remove journals untouched for the retention period, except open and labelled threads',

@@ -1,10 +1,8 @@
-//! A terminal's stream (spec, "The terminal stream"): a WebSocket of its own on the Host's
-//! remote listener, with subprotocol `weave-terminal`, which the listener hands here, or the
-//! same WebSocket on the Host's terminal socket for local clients ([`serve_local`]).
-//!
-//! A stream the Dispatcher carries (WVE-195) comes over a connection the Host opened to it, for
-//! the device the Dispatcher named, whose ticket it must be; the Dispatcher closes it when it
-//! revokes the device.
+//! A terminal's stream (spec, "The terminal stream"): a WebSocket of its own, with subprotocol
+//! `weave-terminal`, on the Host's terminal socket for local clients ([`serve_local`]), or on a
+//! connection the Dispatcher carries (WVE-195), which comes over a connection the Host opened to
+//! it, for the device the Dispatcher named, whose ticket it must be; the Dispatcher closes it
+//! when it revokes the device. The Host listens for no other (WVE-197).
 //!
 //! The client's first text frame names a ticket `terminals/attach` gave its device; the Host
 //! takes a connection of its own to the terminal's owner and attaches, with a snapshot for a
@@ -52,25 +50,15 @@ use super::Control;
 use super::Incoming;
 use super::Terminals;
 use crate::Shared;
-use crate::devices::Closer;
 
-/// What a stream's WebSocket runs over: a TCP connection on the remote listener, or a Unix one
-/// on the terminal socket.
+/// What a stream's WebSocket runs over: a Unix connection on the terminal socket, or one the
+/// Host opened to the Dispatcher, over TCP or its socket.
 pub(crate) trait Transport: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
 
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for T {}
 
-/// Closes a stream from elsewhere, as revoking its device does.
-struct StreamCloser(mpsc::UnboundedSender<u16>);
-
-impl Closer for StreamCloser {
-    fn close(&self, code: u16) {
-        let _ = self.0.send(code);
-    }
-}
-
 /// Accepts local clients' streams on `listener`, the Host's terminal socket, until the Host
-/// stops: the same WebSocket as on the remote listener, from peers of the Host's own user only.
+/// stops: the same WebSocket as the Dispatcher carries, from peers of the Host's own user only.
 pub(crate) async fn serve_local(shared: Arc<Shared>, listener: UnixListener) {
     let owner = crate::socket::owner(&listener);
     let config = Arc::new(RemoteConfig::default());
@@ -163,8 +151,6 @@ pub(crate) async fn serve<T: Transport>(
         close(&mut socket, CLOSE_TICKET, "the ticket is another device's").await;
         return;
     }
-    // A carried stream's device is the Dispatcher's, which closes its streams when it revokes it.
-    let device = ticket.device.filter(|_| carried.is_none());
     let id = ticket.terminal;
     let restore = if terminals.codec(&id).as_deref() == Some(open.codec.as_str()) {
         Restore::Snapshot
@@ -212,12 +198,6 @@ pub(crate) async fn serve<T: Transport>(
         }
     };
 
-    let (closer, closed) = mpsc::unbounded_channel();
-    if let Some(device) = &device {
-        shared
-            .devices
-            .connected(device, stream, Arc::new(StreamCloser(closer.clone())));
-    }
     let text = serde_json::to_string(&opened).unwrap_or_default();
     let relay = if socket.send(Frame::text(text)).await.is_ok() {
         let link = Link {
@@ -227,7 +207,7 @@ pub(crate) async fn serve<T: Transport>(
             control: &control,
             restore,
         };
-        link.relay(socket, incoming, updates, closed, config.ping_interval)
+        link.relay(socket, incoming, updates, config.ping_interval)
             .await
     } else {
         None
@@ -236,9 +216,6 @@ pub(crate) async fn serve<T: Transport>(
         tracing::debug!(code, "a terminal stream closed");
     }
     terminals.leave(&id, stream);
-    if let Some(device) = &device {
-        shared.devices.disconnected(device, stream);
-    }
 }
 
 fn restore_name(restore: Restore) -> &'static str {
@@ -288,7 +265,6 @@ impl Link<'_> {
         socket: WebSocketStream<T>,
         mut incoming: mpsc::Receiver<Incoming>,
         mut updates: broadcast::Receiver<Terminal>,
-        mut closed: mpsc::UnboundedReceiver<u16>,
         ping_interval: Duration,
     ) -> Option<u16> {
         let (mut sink, mut frames) = socket.split();
@@ -297,7 +273,6 @@ impl Link<'_> {
         let mut answered = true;
         let code = loop {
             tokio::select! {
-                code = closed.recv() => break code,
                 message = incoming.recv() => {
                     let Some(message) = message else { break Some(CLOSE_EXITED) };
                     let (frame, then_close) = self.frame_for(message);

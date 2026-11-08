@@ -2,7 +2,10 @@
 // Dispatcher's API (protocol/tests/snapshots/schema__host_protocol.snap). Don't edit it by hand.
 
 /**
- * How a connection authenticates.
+ * How a connection authenticates. The Dispatcher's own hello takes it too
+ * ([`crate::dispatcher::DispatcherHelloRequest`]), where a device pairs and proves its key; a
+ * Host takes only `local`, the Dispatcher it joined proving its key with `device`, and
+ * `dispatcher`.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "Auth".
@@ -1276,7 +1279,7 @@ export interface NewDevice {
   name: string;
   publicKey: Jwk;
   /**
-   * A service pairing, such as the Dispatcher, which may do only what it needs (ADR 0027).
+   * A service pairing, which may do only what it needs (ADR 0027).
    */
   service?: boolean;
 }
@@ -1352,7 +1355,9 @@ export interface HelloResponse {
   features?: string[];
   acp: AcpInfo;
   /**
-   * The paired device a remote client connected as; none for a local client.
+   * The device a remote client connected as: the one the Dispatcher named for a connection
+   * it carries, or the Dispatcher itself on the Host's own connection to it. None for a local
+   * client.
    */
   device?: DeviceInfo | null;
 }
@@ -1400,8 +1405,8 @@ export interface DeviceInfo {
   service?: boolean;
 }
 /**
- * `host/challenge`: what a paired device signs in its `host/hello`. Only on the WebSocket,
- * before hello.
+ * `host/challenge`: what the Dispatcher a Host joined signs in its `host/hello`. Only on the
+ * connection the Host opened to it, before hello.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "ChallengeRequest".
@@ -1413,7 +1418,7 @@ export interface ChallengeRequest {}
  */
 export interface ChallengeResponse {
   /**
-   * The Host's id, which the device checks is the Host it paired with.
+   * The Host's id, which the Dispatcher checks is the Host that joined it.
    */
   hostId: string;
   /**
@@ -1445,9 +1450,10 @@ export interface HostStatus {
    */
   threads: ThreadListing[];
   /**
-   * The loopback address of the WebSocket remote clients reach, when the Host serves one.
+   * The Tailscale Serve entry the Host made for remote clients before they reached it through
+   * the Dispatcher (ADR 0030, WVE-197), while it's there and the Host couldn't remove it.
    */
-  remote?: string | null;
+  serveEntry?: ServeEntryLeft | null;
   /**
    * The Dispatcher the Host joined, and its connection to it (ADR 0030).
    */
@@ -1601,6 +1607,28 @@ export interface ContextUsage {
 export interface LastCompaction {
   at: number;
   used?: number | null;
+}
+/**
+ * A Tailscale Serve entry the Host made for remote clients before they reached it through the
+ * Dispatcher, which it couldn't remove itself, as where only root may change Serve.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ServeEntryLeft".
+ */
+export interface ServeEntryLeft {
+  /**
+   * The HTTPS port it serves on the computer's tailnet name.
+   */
+  port: number;
+  /**
+   * What removes it, for the person to run on the Host's computer, such as
+   * `sudo tailscale serve --https=7341 off`.
+   */
+  command: string;
+  /**
+   * Why the Host couldn't.
+   */
+  why: string;
 }
 /**
  * The Dispatcher a Host joined, and its connection to it.
@@ -2369,80 +2397,6 @@ export interface UpdateAgentResponse {
    * The version the agent's new threads launch now: the newest, or the one already there.
    */
   version: string;
-}
-/**
- * `devices/offer`: a one-time code a device pairs with, good for five minutes.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "OfferDeviceRequest".
- */
-export interface OfferDeviceRequest {
-  /**
-   * The name the device gets, instead of the one it gives.
-   */
-  name?: string | null;
-}
-/**
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "OfferDeviceResponse".
- */
-export interface OfferDeviceResponse {
-  /**
-   * 128 random bits in Crockford base32.
-   */
-  code: string;
-  expiresAt: number;
-  /**
-   * What devices connect to: the Host's Tailscale Serve URL, or `[remote] url`. Offering
-   * turns remote access on, so a Host gives one whenever it serves remote clients.
-   */
-  url?: string | null;
-}
-/**
- * `devices/list`.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ListDevicesRequest".
- */
-export interface ListDevicesRequest {}
-/**
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "ListDevicesResponse".
- */
-export interface ListDevicesResponse {
-  devices: Device[];
-}
-/**
- * A paired device, as `devices/list` shows it.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "Device".
- */
-export interface Device {
-  id: string;
-  name: string;
-  pairedAt: number;
-  /**
-   * When it last said hello, if it has since pairing.
-   */
-  lastSeenAt?: number | null;
-  /**
-   * Its connections now.
-   */
-  connections: number;
-  /**
-   * Whether the device is a service.
-   */
-  service?: boolean;
-}
-/**
- * `devices/revoke`: forget a device and close its connections. It has to pair again.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "RevokeDeviceRequest".
- */
-export interface RevokeDeviceRequest {
-  deviceId: string;
 }
 /**
  * `dispatcher/join`, in the Host protocol: have the Host join the Dispatcher at `address` with
@@ -6734,15 +6688,6 @@ export interface UpdateAvailableNotification {
   latest: string;
 }
 /**
- * `devices/paired`: a device took the offer this connection made.
- *
- * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
- * via the `definition` "DevicePairedNotification".
- */
-export interface DevicePairedNotification {
-  device: Device;
-}
-/**
  * `terminals/updated`, to clients watching its scope: a terminal started or changed.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -6947,6 +6892,80 @@ export interface DispatcherStatus {
    * The devices paired with it.
    */
   devices?: number;
+}
+/**
+ * `devices/offer`: a one-time code a device pairs with, good for five minutes.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "OfferDeviceRequest".
+ */
+export interface OfferDeviceRequest {
+  /**
+   * The name the device gets, instead of the one it gives.
+   */
+  name?: string | null;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "OfferDeviceResponse".
+ */
+export interface OfferDeviceResponse {
+  /**
+   * 128 random bits in Crockford base32.
+   */
+  code: string;
+  expiresAt: number;
+  /**
+   * What devices connect to: the Dispatcher's Tailscale Serve URL, or the one its `--url`
+   * gives. Offering turns its WebSocket on, so it gives one whenever it takes devices.
+   */
+  url?: string | null;
+}
+/**
+ * `devices/list`.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListDevicesRequest".
+ */
+export interface ListDevicesRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListDevicesResponse".
+ */
+export interface ListDevicesResponse {
+  devices: Device[];
+}
+/**
+ * A paired device, as `devices/list` shows it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Device".
+ */
+export interface Device {
+  id: string;
+  name: string;
+  pairedAt: number;
+  /**
+   * When it last said hello, if it has since pairing.
+   */
+  lastSeenAt?: number | null;
+  /**
+   * Its connections now.
+   */
+  connections: number;
+  /**
+   * Whether the device is a service.
+   */
+  service?: boolean;
+}
+/**
+ * `devices/revoke`: forget a device and close its connections. It has to pair again.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RevokeDeviceRequest".
+ */
+export interface RevokeDeviceRequest {
+  deviceId: string;
 }
 /**
  * `hosts/list`.
@@ -7414,6 +7433,15 @@ export interface ListOccurrencesResponse {
   occurrences: Occurrence[];
 }
 /**
+ * `devices/paired`: a device took the offer this connection made.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "DevicePairedNotification".
+ */
+export interface DevicePairedNotification {
+  device: Device;
+}
+/**
  * Why the Dispatcher can't carry a connection to a Host: the `data` of the
  * [`crate::errors::HOST_UNAVAILABLE`] that `hosts/open` answers, as `hosts/list` says it.
  *
@@ -7475,7 +7503,6 @@ export const HOST_PROTOCOL = {
     "oldestSupported": 3
   },
   "websocket": {
-    "subprotocol": "weave-host",
     "appOrigin": "capacitor://localhost",
     "maxMessage": 33554432,
     "closeRevoked": 4000,
@@ -7525,7 +7552,6 @@ export const HOST_PROTOCOL = {
   },
   "features": {
     "steer": "turn/steer",
-    "devices": "devices",
     "agentUpdates": "agents/updates",
     "clientTools": "clientTools",
     "watch": "threads/watch",
@@ -7580,9 +7606,6 @@ export interface HostRequests {
   "agents/terminalSignIn": { params: TerminalSignInRequest; result: TerminalSignInResponse };
   "agents/logout": { params: LogoutAgentRequest; result: Empty };
   "agents/update": { params: UpdateAgentRequest; result: UpdateAgentResponse };
-  "devices/offer": { params: OfferDeviceRequest; result: OfferDeviceResponse };
-  "devices/list": { params: ListDevicesRequest; result: ListDevicesResponse };
-  "devices/revoke": { params: RevokeDeviceRequest; result: Empty };
   "dispatcher/join": { params: JoinDispatcherRequest; result: JoinDispatcherResponse };
   "dispatcher/leave": { params: LeaveDispatcherRequest; result: Empty };
   "dispatcher/carry": { params: CarryRequest; result: Empty };
@@ -7638,7 +7661,6 @@ export interface HostNotifications {
   "pending/added": PendingAddedNotification;
   "pending/resolved": PendingResolvedNotification;
   "agents/updateAvailable": UpdateAvailableNotification;
-  "devices/paired": DevicePairedNotification;
   "terminals/updated": TerminalUpdatedNotification;
   "terminals/removed": TerminalRemovedNotification;
   "service/toolCall": ToolCallNotification;

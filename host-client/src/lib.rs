@@ -6,15 +6,14 @@
 //! answer on the wire, so a client knows whether to reset its transcript before the replay
 //! arrives.
 //!
-//! Local clients use the Unix socket; remote ones, the Host's WebSocket and a paired device
-//! ([`remote`]), or the Dispatcher, which carries their connections to any of the person's Hosts
-//! ([`carry`]).
+//! Local clients use the Unix socket. Remote ones reach a Host through the Dispatcher, which
+//! carries their connections to any of the person's Hosts ([`carry`]), as a device paired with it
+//! ([`remote`]); a Host listens for none of their own (WVE-197).
 
 pub mod carry;
 #[cfg(target_os = "macos")]
 mod enclave;
 mod key_file;
-pub mod reach;
 pub mod remote;
 
 use agent_client_protocol::ConnectTo;
@@ -30,7 +29,6 @@ use weave_host_protocol::Host;
 use weave_host_protocol::HostClient;
 use weave_host_protocol::VersionRange;
 use weave_host_protocol::agents::UpdateAvailableNotification;
-use weave_host_protocol::devices::DevicePairedNotification;
 use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::errors;
@@ -69,8 +67,6 @@ pub enum HostEvent {
     PendingAdded(Box<PendingAddedNotification>),
     PendingResolved(PendingResolvedNotification),
     ElicitationCompleted(ElicitationCompletedNotification),
-    /// A device took the offer this client made (`devices/offer`).
-    DevicePaired(DevicePairedNotification),
     /// A newer version of an attached thread's agent is out.
     UpdateAvailable(UpdateAvailableNotification),
     /// A thread appeared or changed, while this client watches the Host's threads.
@@ -177,7 +173,6 @@ impl HostConnection {
         let on_added = events.clone();
         let on_resolved = events.clone();
         let on_completed = events.clone();
-        let on_paired = events.clone();
         let on_update = events.clone();
         let on_thread_updated = events.clone();
         let on_thread_removed = events.clone();
@@ -222,13 +217,6 @@ impl HostConnection {
             .on_receive_notification(
                 async move |notification: ElicitationCompletedNotification, _cx| {
                     let _ = on_completed.send(HostEvent::ElicitationCompleted(notification));
-                    Ok(())
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                async move |notification: DevicePairedNotification, _cx| {
-                    let _ = on_paired.send(HostEvent::DevicePaired(notification));
                     Ok(())
                 },
                 agent_client_protocol::on_receive_notification!(),
@@ -345,7 +333,8 @@ impl HostConnection {
     }
 }
 
-/// `host/hello` with `credentials`, after the challenge a paired device signs.
+/// `host/hello` with `credentials`, after the challenge the Dispatcher signs on a Host's
+/// connection to it.
 async fn say_hello(
     cx: &ConnectionTo<Host>,
     client: ClientInfo,

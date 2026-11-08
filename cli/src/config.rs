@@ -1,12 +1,11 @@
-//! The config file as this client reads it: its own sections, `[tui]` and `[daemon]`, the
-//! `[remote]` the Host's command reads, and the Host's (`weave_agents::config`), for running
-//! agents outside the Host.
+//! The config file as this client reads it: its own sections, `[tui]`, `[daemon]` and `[rex]`, a
+//! `[remote]` left from before WVE-197, and the Host's (`weave_agents::config`), for running agents
+//! outside the Host.
 
 use std::net::SocketAddr;
 use std::path::Path;
 
 use anyhow::Context;
-use anyhow::bail;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
@@ -15,7 +14,7 @@ pub struct Config {
     pub agents: weave_agents::Config,
     pub tui: TuiConfig,
     pub daemon: DaemonSettings,
-    /// Remote clients: the Host takes them only when the file has a `[remote]`.
+    /// `[remote]`, which does nothing now; the Host's command says so.
     pub remote: Option<RemoteSettings>,
     pub rex: RexSettings,
     /// Worth telling the user: the file read is `tui.toml`, which should be renamed.
@@ -40,39 +39,34 @@ pub struct RexSettings {
     pub open_threads: Option<bool>,
 }
 
-/// Where the Host listens for remote clients, which reach it through Tailscale Serve
-/// (`docs/specs/wve-90-remote-clients.md`).
+/// `[remote]`, where the Host listened for remote clients behind its own Tailscale Serve entry
+/// until they reached it through the Dispatcher (WVE-197). It does nothing now but say where that
+/// entry forwarded, so the Host removes it and no other; an unreadable one is as none.
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RemoteSettings {
-    /// A loopback address (default `127.0.0.1:7341`); Serve forwards to it.
+    /// The loopback address the Host listened on (default `127.0.0.1:7341`).
     pub listen: Option<String>,
-    /// What `weave pair` tells devices to connect to. Without it, `weave pair` finds the Serve
-    /// entry that forwards to `listen`.
+    /// What `weave pair` told devices to connect to, routed by the person, in which case the
+    /// Host made no Serve entry.
     pub url: Option<String>,
-    /// `Origin` values allowed besides none, which native clients send.
-    #[serde(default)]
-    pub origins: Vec<String>,
 }
 
-/// Where the Host listens for remote clients when the config doesn't say.
-pub const DEFAULT_LISTEN: &str = "127.0.0.1:7341";
+/// Where the Host listened for remote clients when the config didn't say.
+pub const FORMER_LISTEN: &str = "127.0.0.1:7341";
 
 impl RemoteSettings {
-    /// The address to listen on, which must be loopback: the tailnet reaches it only through
-    /// Serve.
-    pub fn listen(&self) -> anyhow::Result<SocketAddr> {
-        let text = self.listen.as_deref().unwrap_or(DEFAULT_LISTEN);
-        let address: SocketAddr = text
-            .parse()
-            .with_context(|| format!("[remote] listen = {text:?} isn't an address and port"))?;
-        if !address.ip().is_loopback() {
-            bail!(
-                "[remote] listen = {text:?} isn't a loopback address; the Host listens on \
-                 loopback only, and Tailscale Serve forwards to it"
-            );
+    /// Where the Serve entry the Host made forwarded to: `listen`, or the default when it isn't
+    /// a loopback address and port, as the Host used then. None with a `url`: then it made none.
+    pub fn former_listen(&self) -> Option<SocketAddr> {
+        if self.url.is_some() {
+            return None;
         }
-        Ok(address)
+        let configured = self
+            .listen
+            .as_deref()
+            .and_then(|text| text.parse::<SocketAddr>().ok())
+            .filter(|address| address.ip().is_loopback());
+        configured.or_else(|| FORMER_LISTEN.parse().ok())
     }
 }
 
@@ -139,8 +133,7 @@ impl Config {
                 .config
                 .remote
                 .as_ref()
-                .map(|table| section(table, "remote"))
-                .transpose()?,
+                .map(|table| section(table, "remote").unwrap_or_default()),
             agents: loaded.config,
             notice: loaded.notice,
         })
@@ -175,32 +168,36 @@ mod tests {
     }
 
     #[test]
-    fn remote_clients_listen_on_loopback_only() {
-        let remote = |text: &str| -> RemoteSettings {
+    fn a_remote_says_only_where_the_hosts_serve_entry_forwarded() {
+        let remote = |text: &str| -> Option<RemoteSettings> {
             let config: weave_agents::Config = toml::from_str(text).expect("valid");
-            section(config.remote.as_ref().expect("a [remote]"), "remote").expect("remote")
+            config
+                .remote
+                .as_ref()
+                .map(|table| section(table, "remote").unwrap_or_default())
         };
-        let default = remote("[remote]\n").listen().expect("the default");
-        assert_eq!(default.to_string(), DEFAULT_LISTEN);
-        let v6 = remote("[remote]\nlisten = \"[::1]:9000\"")
-            .listen()
-            .expect("loopback");
-        assert_eq!(v6.port(), 9000);
-        assert!(
-            remote("[remote]\nlisten = \"0.0.0.0:7341\"")
-                .listen()
-                .is_err()
-        );
-        assert!(
-            remote("[remote]\nlisten = \"100.64.0.1:7341\"")
-                .listen()
-                .is_err()
-        );
-        let config: weave_agents::Config = toml::from_str("[remote]\nport = 1").expect("kept");
-        assert!(
-            section::<RemoteSettings>(config.remote.as_ref().expect("table"), "remote").is_err()
-        );
         let none: weave_agents::Config = toml::from_str("").expect("empty");
         assert!(none.remote.is_none());
+        let former = |text: &str| remote(text).expect("a [remote]").former_listen();
+        assert_eq!(
+            former("[remote]\n").map(|address| address.to_string()),
+            Some(FORMER_LISTEN.to_owned())
+        );
+        assert_eq!(
+            former("[remote]\nlisten = \"[::1]:9000\"").map(|address| address.port()),
+            Some(9000)
+        );
+        // What the Host refused to listen on, it didn't: it used the default.
+        assert_eq!(
+            former("[remote]\nlisten = \"0.0.0.0:7400\"").map(|address| address.port()),
+            Some(7341)
+        );
+        // With a URL the person routed devices themselves, and the Host made no entry.
+        assert_eq!(
+            former("[remote]\nlisten = \"127.0.0.1:7400\"\nurl = \"wss://mac.example.ts.net\""),
+            None
+        );
+        // Whatever else it says, it's read, and does nothing.
+        assert!(remote("[remote]\norigins = []\nport = 1").is_some());
     }
 }

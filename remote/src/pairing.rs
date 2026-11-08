@@ -1,6 +1,8 @@
-//! Pairing and proving a device, as both programs do it: the one-time codes a device pairs
+//! Pairing and proving a device, as the Dispatcher does it: the one-time codes a device pairs
 //! with, good for five minutes; the device's P-256 public key and its signature of a
-//! connection's challenge; and each device's open connections, so revoking it closes them.
+//! connection's challenge; and each device's open connections, so revoking it closes them. A
+//! Host pairs with nothing (WVE-197), and uses only the signature checks and random ids, for the
+//! Dispatcher it joined.
 //!
 //! A program keeps no secret for a device: a device proves itself by signing its connection's
 //! challenge with a key that never leaves it. Offers live in memory only.

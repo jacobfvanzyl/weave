@@ -38,7 +38,10 @@ pub struct ClientInfo {
     pub version: String,
 }
 
-/// How a connection authenticates.
+/// How a connection authenticates. The Dispatcher's own hello takes it too
+/// ([`crate::dispatcher::DispatcherHelloRequest`]), where a device pairs and proves its key; a
+/// Host takes only `local`, the Dispatcher it joined proving its key with `device`, and
+/// `dispatcher`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "method", rename_all = "camelCase")]
@@ -47,16 +50,20 @@ pub enum Auth {
     Local,
     /// Reserved, and refused everywhere; the next major version removes it.
     Token { token: String },
-    /// A paired device, on the WebSocket: its signature of the connection's challenge
-    /// ([`ChallengeRequest`]), as [`crate::devices::auth_message`] spells it.
+    /// A paired device's signature of the connection's challenge. To a Host, only the Dispatcher
+    /// it joined says it, on the connection the Host opened to it, signing its
+    /// [`ChallengeRequest`] as [`crate::devices::auth_message`] spells it.
+    /// To the Dispatcher, a device it paired with, as
+    /// [`crate::dispatcher::dispatcher_auth_message`] spells it.
     #[serde(rename_all = "camelCase")]
     Device {
         device_id: DeviceId,
         /// The DER-encoded ECDSA P-256 SHA-256 signature, in unpadded base64url.
         signature: String,
     },
-    /// A device pairing, on the WebSocket, with the code `weave pair` showed. The
-    /// connection is that device's from then on.
+    /// A device pairing with the Dispatcher, on its WebSocket, with the code `weave pair`
+    /// showed. The connection is that device's from then on. Hosts refuse it: they pair with
+    /// nothing (WVE-197).
     Pair { code: String, device: NewDevice },
     /// The device the Dispatcher named in `dispatcher/carry` (ADR 0030, WVE-195), on a
     /// connection the Host opened to the Dispatcher to carry that device's: only there.
@@ -88,7 +95,9 @@ pub struct HelloResponse {
     #[serde(default)]
     pub features: Vec<String>,
     pub acp: AcpInfo,
-    /// The paired device a remote client connected as; none for a local client.
+    /// The device a remote client connected as: the one the Dispatcher named for a connection
+    /// it carries, or the Dispatcher itself on the Host's own connection to it. None for a local
+    /// client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<DeviceInfo>,
 }
@@ -117,8 +126,8 @@ pub struct AcpInfo {
     pub unstable: Vec<String>,
 }
 
-/// `host/challenge`: what a paired device signs in its `host/hello`. Only on the WebSocket,
-/// before hello.
+/// `host/challenge`: what the Dispatcher a Host joined signs in its `host/hello`. Only on the
+/// connection the Host opened to it, before hello.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[request(method = "host/challenge", response = ChallengeResponse)]
@@ -128,7 +137,7 @@ pub struct ChallengeRequest {}
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ChallengeResponse {
-    /// The Host's id, which the device checks is the Host it paired with.
+    /// The Host's id, which the Dispatcher checks is the Host that joined it.
     pub host_id: String,
     /// 32 random bytes, in unpadded base64url, good for one hello on this connection.
     pub nonce: String,

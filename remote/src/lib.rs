@@ -1,12 +1,16 @@
 //! The server's end of remote access (ADR 0016), which the weave Host and the Dispatcher share:
-//! what `weave-host-client` is for clients. The person's other devices reach a program through
-//! a loopback WebSocket that Tailscale Serve brings the tailnet to, pair with a one-time code,
-//! and prove themselves at every hello by signing the connection's challenge (WVE-90, WVE-176).
+//! what `weave-host-client` is for clients. The person's devices reach the Dispatcher through a
+//! loopback WebSocket that Tailscale Serve brings the tailnet to, pair with a one-time code, and
+//! prove themselves at every hello by signing the connection's challenge (WVE-90, WVE-176); they
+//! reach the person's Hosts through it (ADR 0030). A Host listens for nothing (WVE-197): it opens
+//! connections to the Dispatcher it joined, and serves them with the same WebSocket code.
 //!
-//! - [`websocket`]: the WebSocket, its upgrade, pings, the backlog limit and the challenge.
-//! - [`access`]: turning it on when a device pairs and off when none is left, with its Serve
-//!   entry ([`access::Serve`], [`tailscale`]).
-//! - [`pairing`]: pairing offers and their codes, and checking a device's signature.
+//! - [`websocket`]: the WebSocket, its upgrade, pings, the backlog limit and the challenge, for
+//!   connections a program accepts and those a Host opens to the Dispatcher alike.
+//! - [`access`]: turning the Dispatcher's on when a device pairs and off when none is left, with
+//!   its Serve entry ([`access::Serve`], [`tailscale`]); a Host uses [`access::Serve`] only to
+//!   remove the entry it made before.
+//! - [`pairing`]: pairing offers and their codes, and checking a signature.
 //! - [`preamble`]: the requests on a WebSocket before the ACP SDK takes it, as a Host joining
 //!   the Dispatcher sends them (WVE-194).
 //!

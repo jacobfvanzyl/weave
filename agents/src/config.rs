@@ -1,7 +1,7 @@
 //! `~/.config/weave/config.toml`, owned by section: the Host reads `default_agent`,
 //! `[agents.*]`, `[[mcp_servers]]` and `[delegation]`, parsed here; clients read `[tui]` and `[daemon]`, and
-//! the CLI that runs the Host reads `[remote]` and `[rex]`, which this keeps as tables for them
-//! to parse.
+//! the CLI that runs the Host reads `[rex]`, and `[remote]`, left from before devices reached
+//! Hosts through the Dispatcher (WVE-197), which this keeps as tables for them to parse.
 //!
 //! ```toml
 //! default_agent = "claude"
@@ -15,10 +15,6 @@
 //!
 //! [daemon]
 //! enabled = false            # run agents inside each weave, not the shared Host (`--no-daemon`)
-//!
-//! [remote]                   # let paired devices connect, through Tailscale Serve
-//! listen = "127.0.0.1:7341"  # the default; loopback only
-//! url = "https://mac.example.ts.net:7341" # what `weave pair` gives devices; found when absent
 //!
 //! [rex]                      # threads opened from the app get tabs in this computer's Rex (ADR 0025)
 //! open_threads = true        # off by default
@@ -104,7 +100,8 @@ pub struct Config {
     /// The daemon section clients read, for them to parse.
     #[serde(default)]
     pub daemon: toml::Table,
-    /// Remote clients, for the CLI to parse; absent, the Host takes none.
+    /// What configured the Host's own remote access before WVE-197, for the CLI to say it does
+    /// nothing now, and to find the Serve entry the Host made.
     #[serde(default)]
     pub remote: Option<toml::Table>,
     /// Threads in the Rex on this computer, for the CLI that runs the Host to parse.

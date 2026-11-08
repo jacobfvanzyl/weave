@@ -59,7 +59,6 @@ use weave_host_protocol::agents::UPDATES_FEATURE;
 use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::agents::UpdateAgentResponse;
 use weave_host_protocol::agents::UpdateAvailableNotification;
-use weave_host_protocol::devices::DEVICES_FEATURE;
 use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::DeviceInfo;
 use weave_host_protocol::devices::DevicePairedNotification;
@@ -70,6 +69,7 @@ use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::CARRY_FEATURE;
 use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
@@ -105,6 +105,7 @@ use weave_host_protocol::host::DrainRequest;
 use weave_host_protocol::host::DrainResponse;
 use weave_host_protocol::host::EnvironmentSource;
 use weave_host_protocol::host::HostStatus;
+use weave_host_protocol::host::ServeEntryLeft;
 use weave_host_protocol::host::Service;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
@@ -516,7 +517,7 @@ fn hello() {
             protocol: PROTOCOL_VERSION,
             client_id: "c9".to_owned(),
             host: host_info(),
-            features: vec![DEVICES_FEATURE.to_owned()],
+            features: vec![CARRY_FEATURE.to_owned()],
             acp: acp_info(),
             device: Some(DeviceInfo {
                 id: "d-3q8Hf0aZ".to_owned(),
@@ -2134,7 +2135,12 @@ fn host() {
             service: Service::OnDemand,
             environment: EnvironmentSource::LoginShell,
             threads: vec![listing()],
-            remote: Some("127.0.0.1:7341".to_owned()),
+            serve_entry: Some(ServeEntryLeft {
+                port: 7341,
+                command: "sudo tailscale serve --https=7341 off".to_owned(),
+                why: "Tailscale lets only root change Serve while its config serves a Unix socket"
+                    .to_owned(),
+            }),
             dispatcher: Some(joined()),
         })
     );

@@ -196,15 +196,6 @@ fn ssh_advice(shell: &str, weave: &Path) -> String {
     )
 }
 
-/// Whether the installed service keeps running after the person logs out and after this
-/// computer restarts, and if not, how to have it.
-pub fn lingering_note(paths: &DaemonPaths) -> Option<String> {
-    match Manager::here() {
-        Some(Manager::Systemd) => systemd::lingering_note(paths),
-        Some(Manager::Launchd) | None => None,
-    }
-}
-
 /// The name a Host directory of its own gives its service; none for the default Host's.
 fn instance(paths: &DaemonPaths) -> Option<String> {
     named_after(&paths.dir, DaemonPaths::default_dir().as_deref())

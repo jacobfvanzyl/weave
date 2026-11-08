@@ -170,7 +170,7 @@ impl World {
             upstream: Arc::clone(&self.npm) as Arc<dyn Upstream>,
             mcp_socket: None,
             mcp_bridge: vec!["weave-mcp-bridge".to_owned()],
-            remote: None,
+            former_serve: None,
             terminals: None,
             home: None,
             retired: Vec::new(),

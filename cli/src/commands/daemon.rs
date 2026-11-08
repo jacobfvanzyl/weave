@@ -33,6 +33,12 @@ use crate::host::stop;
 use crate::host::wait_until_listening;
 use crate::service;
 
+/// What `weave daemon run` logs, and `weave daemon status` says, while the config has a
+/// `[remote]` (WVE-197).
+const REMOTE_NOTICE: &str = "The config's [remote] does nothing now: Hosts don't listen for remote \
+                             clients, which reach them through the Dispatcher, and `weave pair` \
+                             pairs a device with it. Remove [remote] from the config.";
+
 /// A Host's stderr is its log, agents' stderr included, as `--log-file` has it.
 pub const LOG: &str = "info,agent_stderr=debug";
 
@@ -135,7 +141,7 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
     let login_path = environment.vars.get("PATH").cloned();
     let open_threads = open_threads(run.config.as_deref());
     let mut config = DaemonConfig::persistent(paths, service, environment);
-    config.remote = Some(remote_settings(run.config.as_deref()));
+    config.former_serve = former_serve(run.config.as_deref());
     config.config_file = run.config;
     let daemon = weave_host::Daemon::new(config);
     if open_threads {
@@ -159,14 +165,14 @@ async fn serve(paths: &DaemonPaths, run: RunArgs) -> anyhow::Result<()> {
         "weave Host serving"
     );
     // A service keeps it running; one started on demand goes when it's no longer used, unless
-    // paired devices need it, which can't start it again.
+    // it joined a Dispatcher, through which devices reach it and which can't start it again.
     let idle_exit = if run.launchd || run.systemd {
         None
     } else {
         run.idle_exit.map(Duration::from_secs)
     };
-    let resuming = daemon.clone();
-    tokio::spawn(async move { resuming.resume_remote().await });
+    let removing = daemon.clone();
+    tokio::spawn(async move { removing.remove_serve_entry().await });
     daemon.resume_dispatcher();
     let queues = daemon.clone();
     tokio::spawn(async move { queues.resume_queues().await });
@@ -214,29 +220,37 @@ fn follow_threads_in_rex(
     tokio::spawn(async move { crate::rex_threads::follow(daemon, rex, record).await });
 }
 
-/// How the Host serves remote clients once pairing turns that on (ADR 0016): the defaults,
-/// with the config's `[remote]` over them. A `[remote]` that can't be used is logged, and the
-/// defaults stand.
-fn remote_settings(config: Option<&Path>) -> weave_host::RemoteSettings {
-    let mut settings =
-        weave_host::RemoteSettings::new(Arc::new(weave_host::tailscale::TailscaleServe::HOST));
-    let configured = match crate::config::Config::load(config) {
+/// The Tailscale Serve entry the Host made for remote clients before they reached it through the
+/// Dispatcher (WVE-197), which it removes if its directory shows it served them: the one that
+/// forwarded to 127.0.0.1:7341, or to the config's `[remote] listen`, which `[remote]` is still
+/// read for, and logged as doing nothing else. With `[remote] url` it made none.
+fn former_serve(config: Option<&Path>) -> Option<weave_host::FormerServe> {
+    let remote = match crate::config::Config::load(config) {
         Ok(config) => config.remote,
         Err(error) => {
-            tracing::error!(error = %format!("{error:#}"), "the config can't be read; remote access uses its defaults");
+            tracing::error!(error = %format!("{error:#}"), "the config can't be read; the Host looks for the Serve entry it made on its default port");
             None
         }
     };
-    let Some(configured) = configured else {
-        return settings;
-    };
-    match configured.listen() {
-        Ok(address) => settings.listen = address,
-        Err(error) => tracing::error!(error = %format!("{error:#}"), "[remote] listen ignored"),
+    if remote.is_some() {
+        tracing::warn!("{REMOTE_NOTICE}");
     }
-    settings.url = configured.url;
-    settings.websocket.origins = configured.origins;
-    settings
+    let listen = match remote {
+        Some(remote) => remote.former_listen()?,
+        None => crate::config::FORMER_LISTEN.parse().ok()?,
+    };
+    Some(weave_host::FormerServe::new(
+        listen,
+        Arc::new(weave_host::tailscale::TailscaleServe::HOST),
+    ))
+}
+
+/// [`REMOTE_NOTICE`], while the default config has a `[remote]`.
+fn remote_notice() -> Option<String> {
+    crate::config::Config::load(None)
+        .ok()?
+        .remote
+        .map(|_| REMOTE_NOTICE.to_owned())
 }
 
 async fn start(paths: &DaemonPaths) -> anyhow::Result<()> {
@@ -285,11 +299,12 @@ async fn restart(paths: &DaemonPaths, now: bool) -> anyhow::Result<()> {
 /// and what's said about the service goes to stderr.
 async fn status(paths: &DaemonPaths, json: bool) -> anyhow::Result<Status> {
     let installed = service::installed(paths);
-    let notes = if installed {
+    let mut notes = if installed {
         service::notes(paths)
     } else {
         Vec::new()
     };
+    notes.extend(remote_notice());
     let Some(connection) = control(paths).await? else {
         let service = if installed {
             format!("; its {} service is installed", service::manager_name())
@@ -363,10 +378,17 @@ fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
             "its own (the login shell's couldn't be read)"
         }
     };
-    let remote = status
-        .remote
+    let serve_entry = status
+        .serve_entry
         .as_ref()
-        .map(|address| format!("  remote   {address}, for paired devices (`weave devices`)\n"))
+        .map(|left| {
+            format!(
+                "\nRemote clients reach this Host through the Dispatcher now, but it couldn't \
+                 remove the Tailscale Serve entry it made for them on HTTPS port {}: {}. Remove it \
+                 with:\n  {}\n",
+                left.port, left.why, left.command
+            )
+        })
         .unwrap_or_default();
     let dispatcher = status
         .dispatcher
@@ -385,7 +407,7 @@ fn describe(status: &HostStatus, paths: &DaemonPaths, now_ms: u64) -> String {
         })
         .unwrap_or_default();
     format!(
-        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n{remote}{dispatcher}  agents get {environment} environment\n\n{threads}\n",
+        "weave Host {} (pid {}), up {}, run {service}\n  socket   {}\n  journals {}\n{dispatcher}  agents get {environment} environment\n\n{threads}\n{serve_entry}",
         status.version,
         status.pid,
         ago(now_ms, status.started_at),
@@ -405,6 +427,14 @@ mod tests {
 
     use super::*;
 
+    fn serve_entry_left() -> weave_host_protocol::host::ServeEntryLeft {
+        weave_host_protocol::host::ServeEntryLeft {
+            port: 7341,
+            command: "sudo tailscale serve --https=7341 off".to_owned(),
+            why: "only root may".to_owned(),
+        }
+    }
+
     #[test]
     fn status_says_what_the_host_has_open() {
         let paths = DaemonPaths::in_dir("/state/weave/daemon".into());
@@ -416,7 +446,7 @@ mod tests {
             service: Service::OnDemand,
             environment: EnvironmentSource::LoginShell,
             threads: Vec::new(),
-            remote: None,
+            serve_entry: None,
             dispatcher: None,
         };
         assert!(describe(&status, &paths, 90_000).ends_with("No threads open.\n"));
@@ -445,11 +475,13 @@ mod tests {
              get your login shell's environment\n\n1 thread open, at work; `weave threads` \
              lists it.\n"
         );
-        status.remote = Some("127.0.0.1:7341".to_owned());
-        assert!(
-            describe(&status, &paths, 7_230_000)
-                .contains("\n  remote   127.0.0.1:7341, for paired devices (`weave devices`)\n")
-        );
+        status.serve_entry = Some(serve_entry_left());
+        assert!(describe(&status, &paths, 7_230_000).ends_with(
+            "lists it.\n\nRemote clients reach this Host through the Dispatcher now, but it \
+             couldn't remove the Tailscale Serve entry it made for them on HTTPS port 7341: only \
+             root may. Remove it with:\n  sudo tailscale serve --https=7341 off\n"
+        ));
+        status.serve_entry = None;
         status.dispatcher = Some(weave_host_protocol::dispatcher::JoinedDispatcher {
             id: "D1".to_owned(),
             name: "Dispatcher on homelab-1".to_owned(),

@@ -217,8 +217,10 @@ async fn a_host_elsewhere_joins_over_the_websocket_which_stays_on_for_it() {
     let studio = World::new().await;
     let dir = tempfile::tempdir().expect("tempdir");
     let serve = Arc::new(FakeServe::default());
-    let mut remote = RemoteSettings::new(Arc::clone(&serve) as Arc<dyn Serve>);
-    remote.listen = "127.0.0.1:0".parse().expect("an address");
+    let mut remote = RemoteSettings::new(
+        "127.0.0.1:0".parse().expect("an address"),
+        Arc::clone(&serve) as Arc<dyn Serve>,
+    );
     remote.offer_lifetime = Duration::from_millis(200);
     let config = weave_dispatcher::DispatcherConfig {
         remote: Some(remote),

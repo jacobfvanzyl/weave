@@ -208,10 +208,6 @@ pub(super) fn notes(paths: &DaemonPaths) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn lingering_note(paths: &DaemonPaths) -> Option<String> {
-    lingering_note_for(user_id(paths).ok()?)
-}
-
 fn lingering_note_for(uid: u32) -> Option<String> {
     (lingering(uid) == Some(false)).then(|| {
         "Lingering is off for you, so the Host stops when you log out, and after this computer \

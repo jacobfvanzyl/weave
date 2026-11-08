@@ -20,8 +20,8 @@ use weave_dispatcher::socket;
 use weave_host_client::Credentials;
 use weave_host_client::remote::CloseReason;
 use weave_host_client::remote::DeviceKey;
-use weave_host_client::remote::connect_websocket;
 use weave_host_client::remote::connect_websocket_as;
+use weave_host_client::remote::open_websocket;
 use weave_host_protocol::Dispatcher as DispatcherRole;
 use weave_host_protocol::DispatcherClient;
 use weave_host_protocol::devices::DeviceInfo;
@@ -85,8 +85,7 @@ fn start(
     dir: &std::path::Path,
     serve: Arc<FakeServe>,
 ) -> (Dispatcher, tokio::task::JoinHandle<()>) {
-    let mut remote = RemoteSettings::new(serve);
-    remote.listen = "127.0.0.1:0".parse().expect("an address");
+    let remote = RemoteSettings::new("127.0.0.1:0".parse().expect("an address"), serve);
     let config = weave_dispatcher::DispatcherConfig {
         remote: Some(remote),
         ..dispatcher_config(dir)
@@ -396,8 +395,9 @@ async fn a_device_that_cant_prove_itself_is_refused_and_closed() {
     .await;
     assert!(as_device.is_err(), "devices connect over the WebSocket");
 
-    // And a client asking for the Host's subprotocol isn't upgraded.
-    assert!(connect_websocket(&url).await.is_err());
+    // And a client asking for what Hosts' own WebSockets took, before devices reached them
+    // through the Dispatcher (WVE-197), isn't upgraded.
+    assert!(open_websocket(&url, "weave-host").await.is_err());
     cli.shutdown().await;
     dispatcher.stop().await;
 }
@@ -472,8 +472,10 @@ async fn devices_are_managed_only_on_the_dispatchers_computer_and_revoking_one_c
 async fn an_offer_nobody_takes_turns_remote_access_off_again() {
     let dir = tempfile::tempdir().expect("tempdir");
     let serve = Arc::new(FakeServe::default());
-    let mut remote = RemoteSettings::new(Arc::clone(&serve) as Arc<dyn Serve>);
-    remote.listen = "127.0.0.1:0".parse().expect("an address");
+    let mut remote = RemoteSettings::new(
+        "127.0.0.1:0".parse().expect("an address"),
+        Arc::clone(&serve) as Arc<dyn Serve>,
+    );
     remote.offer_lifetime = Duration::from_millis(100);
     let config = weave_dispatcher::DispatcherConfig {
         remote: Some(remote),

@@ -1,7 +1,7 @@
 //! Reaching another of the person's computers to have its Host join the Dispatcher, or to pair
 //! with the Dispatcher there: over SSH, where `weave hosts add studio` runs `weave hosts add
-//! <url> <code> --json` (and `weave dispatcher connect homelab` runs `weave dispatcher pair
-//! --json`), or with the URL and code shown elsewhere.
+//! <url> <code> --json` (and `weave dispatcher connect homelab` runs `weave pair --json`), or
+//! with the URL and code shown elsewhere.
 
 use std::process::Command;
 use std::process::Stdio;
@@ -28,10 +28,10 @@ pub(crate) struct Pairing {
     command: &'static str,
 }
 
-/// Pairing with the Dispatcher, as `weave dispatcher pair` offers it.
+/// Pairing with the Dispatcher, as `weave pair` offers it.
 pub(crate) const DISPATCHER: Pairing = Pairing {
     link: "weave://pair-dispatcher?",
-    command: "weave dispatcher pair",
+    command: "weave pair",
 };
 
 /// A Host joining the Dispatcher with the URL and code `weave hosts add --code` shows (ADR 0030),

@@ -442,9 +442,8 @@ impl Connection {
         })
     }
 
-    /// `devices/offer`: a code `weave dispatcher pair` shows, and this connection is told who
-    /// takes it. It turns remote access on, and back off once the offer expires if no device
-    /// took one.
+    /// `devices/offer`: a code `weave pair` shows, and this connection is told who takes it.
+    /// It turns remote access on, and back off once the offer expires if no device took one.
     async fn offer_device(
         &self,
         request: OfferDeviceRequest,

@@ -1,9 +1,10 @@
 //! The Dispatcher's API (ADR 0027, WVE-175): what the `weave` CLI asks the Dispatcher, over its
 //! Unix socket on its own computer, or over its WebSocket from the person's other devices,
-//! paired with it as they pair with a Host (WVE-176). The Dispatcher is a client of the
+//! paired with it (WVE-176). The Dispatcher is a client of the
 //! person's Hosts, which join it and keep a connection open to it (ADR 0030, WVE-194): the
 //! Hosts that joined and how each stands, and its schedules (WVE-145) and their occurrences.
-//! Its devices are managed with the Host's `devices/*` requests, on its own computer only.
+//! Its devices are managed with `devices/*`, on its own computer only; Hosts pair with nothing
+//! since WVE-197, and take the Dispatcher's word for the devices it carries to them.
 //!
 //! A Host's own connection begins with `dispatcher/challenge` and [`ConnectHostRequest`], after
 //! which the Dispatcher says `host/hello` to it on the same connection. The Host's side of

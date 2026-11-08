@@ -1,5 +1,6 @@
-//! The person's devices paired with the Dispatcher (WVE-176), as they pair with a Host: a
-//! one-time code `weave dispatcher pair` shows, good for five minutes, then a signature of each
+//! The person's devices paired with the Dispatcher (WVE-176), the only program they pair with
+//! since Hosts stopped taking them (WVE-197): a one-time code `weave pair` shows, good for five
+//! minutes, then a signature of each
 //! connection's challenge with a P-256 key that never leaves the device. Devices are kept in
 //! SQLite ([`crate::store`]); offers, and which connections each device has open, in memory,
 //! so revoking a device closes them.

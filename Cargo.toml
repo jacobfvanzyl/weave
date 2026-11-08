@@ -77,7 +77,7 @@ tar = "0.4.46"
 tempfile = "3"
 thiserror = "2"
 tokio = "1"
-# The Host's WebSocket for remote clients, and a client's end of it, as Codex uses.
+# The Dispatcher's WebSocket, the connections Hosts open to it, and a client's end, as Codex uses.
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The daemon's Unix socket, as byte streams for the ACP SDK.
 tokio-util = { version = "0.7", features = ["compat"] }

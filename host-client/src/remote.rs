@@ -1,10 +1,13 @@
-//! A remote client's end: the Host's WebSocket, reached through Tailscale Serve, and the
-//! paired device the client proves at hello.
+//! A remote client's end: the Dispatcher's WebSocket, reached through Tailscale Serve, and the
+//! paired device the client proves at hello; and the connections a Host opens to the
+//! Dispatcher it joined ([`open_dispatcher`]).
 //!
-//! A device pairs once with the code `weave pair` shows ([`Credentials::Pair`]), then signs
-//! each connection's challenge with its key ([`Credentials::Device`]). Real devices keep that
-//! key in the Secure Enclave. A [`DeviceKey`] is one in memory, for tests and the live check,
-//! or one in this Mac's Secure Enclave, as the Dispatcher keeps its own.
+//! A device pairs once with the Dispatcher, with the code `weave pair` shows
+//! ([`Credentials::Pair`]), then signs each connection's challenge with its key
+//! ([`Credentials::Device`]); the Dispatcher signs a Host's the same way. Real devices keep that
+//! key in the Secure Enclave. A [`DeviceKey`] is one in memory, for tests, or one in this Mac's
+//! Secure Enclave, as the Dispatcher and a Host keep their own. Hosts listen for no remote
+//! clients (WVE-197): devices reach them through the Dispatcher ([`crate::carry`]).
 
 use std::io;
 use std::sync::Arc;
@@ -28,27 +31,26 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use weave_host_protocol::HostClient;
 use weave_host_protocol::devices::DeviceId;
 use weave_host_protocol::devices::Jwk;
 use weave_host_protocol::dispatcher::DispatcherAddress;
 use weave_host_protocol::websocket::MAX_MESSAGE;
-use weave_host_protocol::websocket::SUBPROTOCOL;
 
 /// How a connection authenticates at hello.
 #[derive(Clone, Debug)]
 pub enum Credentials {
     /// A local client, on the Unix socket or in-process.
     Local,
-    /// A paired device. With `host_id`, the client checks the challenge comes from the Host
-    /// it paired with before signing it; for the Dispatcher, the Dispatcher's id.
+    /// A paired device: one of the person's to the Dispatcher, or the Dispatcher to a Host that
+    /// joined it. With `host_id`, the client checks the challenge comes from the program it
+    /// paired with before signing it: the Dispatcher's id, or the Host's.
     Device {
         device_id: DeviceId,
         key: DeviceKey,
         host_id: Option<String>,
     },
-    /// A device pairing with the code `weave pair` (or `weave dispatcher pair`) showed; a
-    /// service, such as the Dispatcher, says so with `service`.
+    /// A device pairing with the Dispatcher with the code `weave pair` showed; a service says so
+    /// with `service`.
     Pair {
         code: String,
         name: String,
@@ -192,14 +194,6 @@ impl CloseReason {
     }
 }
 
-/// Open the Host's WebSocket at `url` (`wss://` through Tailscale Serve, or `ws://` on
-/// loopback), for [`crate::HostConnection::connect_with`].
-pub async fn connect_websocket(
-    url: &str,
-) -> io::Result<(impl ConnectTo<HostClient> + 'static, CloseReason)> {
-    connect_websocket_as(url, SUBPROTOCOL).await
-}
-
 /// A WebSocket this program opened: over TCP, with TLS for `wss://`, or over a Unix socket, as
 /// a Host opens one to the Dispatcher on its own computer (ADR 0030).
 pub enum Opened {
@@ -300,19 +294,6 @@ where
         })
     });
     (Lines::new(Box::pin(outgoing), incoming), reason)
-}
-
-/// The HTTP status a server answered [`connect_websocket`] with instead of taking the
-/// WebSocket: something answered at the URL, but no weave Host did, as when Tailscale Serve
-/// answers for a Host that isn't running.
-pub fn answered_without_host(error: &io::Error) -> Option<u16> {
-    match error
-        .get_ref()?
-        .downcast_ref::<tokio_tungstenite::tungstenite::Error>()?
-    {
-        tokio_tungstenite::tungstenite::Error::Http(response) => Some(response.status().as_u16()),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

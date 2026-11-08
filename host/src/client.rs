@@ -59,13 +59,7 @@ use weave_host_protocol::agents::TerminalSignInResponse;
 use weave_host_protocol::agents::UPDATES_FEATURE;
 use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::agents::UpdateAgentResponse;
-use weave_host_protocol::devices::DEVICES_FEATURE;
 use weave_host_protocol::devices::DeviceInfo;
-use weave_host_protocol::devices::ListDevicesRequest;
-use weave_host_protocol::devices::ListDevicesResponse;
-use weave_host_protocol::devices::OfferDeviceRequest;
-use weave_host_protocol::devices::OfferDeviceResponse;
-use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::CARRY_FEATURE;
 use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherRequest;
@@ -87,6 +81,7 @@ use weave_host_protocol::hello::HostInfo;
 use weave_host_protocol::host::DRAIN_FEATURE;
 use weave_host_protocol::host::DrainRequest;
 use weave_host_protocol::host::DrainResponse;
+use weave_host_protocol::host::HostStatus;
 use weave_host_protocol::host::ShutdownRequest;
 use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::mcp::FEATURE as MCP_SERVERS_FEATURE;
@@ -170,7 +165,6 @@ use weave_host_protocol::turns::StartTurnResponse;
 use weave_host_protocol::turns::SteerTurnRequest;
 use weave_host_protocol::turns::SteerTurnResponse;
 use weave_host_protocol::turns::TURN_IDS_FEATURE;
-use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_host_protocol::worktrees::CreateWorktreeRequest;
 use weave_host_protocol::worktrees::CreateWorktreeResponse;
@@ -189,7 +183,6 @@ use crate::MAX_SUCCESSORS;
 use crate::Shared;
 use crate::admissions;
 use crate::admissions::Admitted;
-use crate::devices::Closer;
 use crate::files;
 use crate::git;
 use crate::instance::Instance;
@@ -229,12 +222,11 @@ struct Hello {
     capabilities: ClientCapabilities,
 }
 
-/// Where a connection comes from.
+/// Where a connection comes from. A Host listens for nothing but its socket: the person's devices
+/// pair with the Dispatcher and reach the Host through it (ADR 0030, WVE-197).
 enum Peer {
     /// The Unix socket, whose peers are checked when they connect, or the same process.
     Local,
-    /// The WebSocket: a remote client, which proves a paired device at hello.
-    Remote(Arc<Link>),
     /// The connection the Host opened to the Dispatcher it joined (ADR 0030), whose hello takes
     /// only that Dispatcher's key.
     Joined(Arc<Link>),
@@ -248,7 +240,8 @@ struct Connection {
     shared: Arc<Shared>,
     peer: Peer,
     hello: Mutex<Option<Hello>>,
-    /// The paired device a remote client proved at hello.
+    /// Who a remote client is, as its hello settled: the Dispatcher the Host joined, on the
+    /// connection to it, or the device it named, on one it carries.
     device: Mutex<Option<DeviceInfo>>,
     /// Open threads this client is attached to.
     attached: Mutex<HashSet<ThreadId>>,
@@ -278,17 +271,8 @@ pub(crate) async fn serve_beside(
     serve_as(shared, transport, Peer::Local, false).await
 }
 
-/// Serve one WebSocket client, which has to prove a paired device at hello.
-pub(crate) async fn serve_remote(
-    shared: Arc<Shared>,
-    transport: impl ConnectTo<Host> + 'static,
-    link: Arc<Link>,
-) -> Result<(), Error> {
-    serve_as(shared, transport, Peer::Remote(link), true).await
-}
-
 /// Serve the Dispatcher the Host joined over the connection the Host opened to it
-/// ([`crate::dispatcher`]): it proves its key at hello, as a remote client does.
+/// ([`crate::dispatcher`]): it proves its key at hello.
 pub(crate) async fn serve_joined(
     shared: Arc<Shared>,
     transport: impl ConnectTo<Host> + 'static,
@@ -337,9 +321,6 @@ async fn serve_as(
     }
     shared.lapse_drain(connection.id);
     shared.service_tools.disconnected(connection.id);
-    if let Some(device) = lock(&connection.device).take() {
-        shared.devices.disconnected(&device.id, connection.id);
-    }
     let attached: Vec<ThreadId> = lock(&connection.attached).drain().collect();
     for thread_id in attached {
         if let Some(thread) = shared.registry().live(&thread_id) {
@@ -373,10 +354,6 @@ async fn handlers(
 ) -> Result<(), Error> {
     let on_hello = Arc::clone(connection);
     let on_challenge = Arc::clone(connection);
-    let on_offer = Arc::clone(connection);
-    let on_devices = Arc::clone(connection);
-    let on_revoke = Arc::clone(connection);
-    let on_status = Arc::clone(connection);
     let on_shutdown = Arc::clone(connection);
     let on_create = Arc::clone(connection);
     let on_watch = Arc::clone(connection);
@@ -417,43 +394,7 @@ async fn handlers(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: OfferDeviceRequest, responder, cx: ConnectionTo<HostClient>| {
-                responder.respond_with_result(on_offer.offer_device(request, cx).await)
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |_request: ListDevicesRequest, responder, _cx| {
-                responder.respond_with_result(on_devices.local_hello().map(|_| {
-                    ListDevicesResponse {
-                        devices: on_devices.shared.devices.list(),
-                    }
-                }))
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |request: RevokeDeviceRequest, responder, _cx| {
-                let revoked = on_revoke.local_hello().and_then(|_| {
-                    on_revoke
-                        .shared
-                        .devices
-                        .revoke(&request.device_id, CLOSE_REVOKED)
-                        .map(|()| Empty {})
-                });
-                // The last device gone turns remote access off (ADR 0016).
-                if revoked.is_ok() {
-                    crate::websocket::stop_if_unused(&on_revoke.shared).await;
-                }
-                responder.respond_with_result(revoked)
-            },
-            agent_client_protocol::on_receive_request!(),
-        )
-        .on_receive_request(
-            async move |_request: StatusRequest, responder, _cx| {
-                responder
-                    .respond_with_result(on_status.hello_info().map(|_| on_status.shared.status()))
-            },
+            answer!(connection, status),
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
@@ -885,7 +826,7 @@ impl Connection {
     fn backlog(&self) -> Option<Arc<dyn Backlog>> {
         match &self.peer {
             Peer::Local => None,
-            Peer::Remote(link) | Peer::Joined(link) | Peer::Carried { link, .. } => {
+            Peer::Joined(link) | Peer::Carried { link, .. } => {
                 Some(Arc::clone(link) as Arc<dyn Backlog>)
             }
         }
@@ -897,7 +838,16 @@ impl Connection {
             .ok_or_else(|| errors::unauthenticated("say host/hello first"))
     }
 
-    /// The client's hello, if it's local: remote clients may not administer the Host.
+    /// `host/status`. A local client asking while the Host couldn't remove the Serve entry it
+    /// made for remote clients before has it look again first (WVE-197).
+    async fn status(&self, _request: StatusRequest) -> Result<HostStatus, Error> {
+        self.hello_info()?;
+        if matches!(self.peer, Peer::Local) {
+            self.shared.serve_entry.recheck(&self.shared.devices).await;
+        }
+        Ok(self.shared.status())
+    }
+
     /// `host/drain`: start no new turns, and with `wait` answer once no turn runs but
     /// `except`'s, or the drain timeout passes.
     async fn drain(&self, request: DrainRequest) -> Result<DrainResponse, Error> {
@@ -944,15 +894,16 @@ impl Connection {
             .map(|()| Empty {})
     }
 
+    /// The client's hello, if it's local: remote clients may not administer the Host.
     fn local_hello(&self) -> Result<Hello, Error> {
         let hello = self.hello_info()?;
         match self.peer {
             Peer::Local => Ok(hello),
-            Peer::Remote(_) | Peer::Joined(_) | Peer::Carried { .. } => Err(errors::forbidden()),
+            Peer::Joined(_) | Peer::Carried { .. } => Err(errors::forbidden()),
         }
     }
 
-    /// The name of the device a remote client proved, for its turns' origins.
+    /// The name of the device a remote client is, for its turns' origins.
     fn device_name(&self) -> Option<String> {
         lock(&self.device)
             .as_ref()
@@ -1036,27 +987,16 @@ impl Connection {
             .ok_or_else(|| errors::incompatible_protocol(supported))?;
         let device = self.identify(request.auth)?;
         let mut capabilities = request.capabilities;
-        match (&device, &self.peer) {
-            (Some(device), Peer::Remote(link) | Peer::Joined(link)) => {
-                // Only local clients may run a sign-in command on the Host's computer.
-                capabilities.terminal_sign_in = false;
-                let mut current = lock(&self.device);
-                if let Some(previous) = current.take() {
-                    self.shared.devices.disconnected(&previous.id, self.id);
-                }
-                link.proved();
-                let closer: Arc<dyn Closer> = Arc::clone(link) as Arc<dyn Closer>;
-                self.shared.devices.connected(&device.id, self.id, closer);
-                *current = Some(device.clone());
-            }
-            // The Dispatcher's device, which the Dispatcher revokes: the Host keeps no record of
-            // it, and its connection closes when the Dispatcher closes the device's end.
-            (Some(device), Peer::Carried { link, .. }) => {
-                capabilities.terminal_sign_in = false;
-                link.proved();
-                *lock(&self.device) = Some(device.clone());
-            }
-            _ => {}
+        // The Dispatcher, or a device of the Dispatcher's, which the Dispatcher revokes: the Host
+        // keeps no record of it, and its connection closes when the Dispatcher closes the
+        // device's end.
+        if let (Some(device), Peer::Joined(link) | Peer::Carried { link, .. }) =
+            (&device, &self.peer)
+        {
+            // Only local clients may run a sign-in command on the Host's computer.
+            capabilities.terminal_sign_in = false;
+            link.proved();
+            *lock(&self.device) = Some(device.clone());
         }
         *lock(&self.hello) = Some(Hello {
             client: request.client,
@@ -1074,7 +1014,6 @@ impl Connection {
             },
             features: vec![
                 STEER_FEATURE.to_owned(),
-                DEVICES_FEATURE.to_owned(),
                 UPDATES_FEATURE.to_owned(),
                 CLIENT_TOOLS_FEATURE.to_owned(),
                 WATCH_FEATURE.to_owned(),
@@ -1112,113 +1051,80 @@ impl Connection {
     }
 
     /// Who the connection is, by where it comes from and what it says: nobody in particular
-    /// for a local client, and the device it proves for a remote one. A remote client that
-    /// proves none is closed after the error.
+    /// for a local client; the Dispatcher the Host joined, proving its key, on the connection the
+    /// Host opened to it; and the device the Dispatcher named, on one it carries. A Host pairs
+    /// with nothing (WVE-197): devices pair with the Dispatcher and reach the Host through it, so
+    /// it refuses `pair` everywhere, and `token`, which stays reserved. A connection to the
+    /// Dispatcher that proves nothing is closed after the error.
     fn identify(&self, auth: Auth) -> Result<Option<DeviceInfo>, Error> {
-        let (link, joined) = match &self.peer {
-            Peer::Remote(link) => (link, false),
-            Peer::Joined(link) => (link, true),
+        match &self.peer {
+            Peer::Local => match auth {
+                Auth::Local => Ok(None),
+                Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
+                Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
+                    "devices pair with the Dispatcher and reach this Host through it",
+                )),
+                Auth::Dispatcher => Err(errors::unauthenticated(
+                    "only a connection the Host opened for the Dispatcher takes its word for a \
+                     device",
+                )),
+            },
+            Peer::Joined(link) => {
+                let dispatcher = match auth {
+                    Auth::Device {
+                        device_id,
+                        signature,
+                    } => link.take_challenge().and_then(|nonce| {
+                        self.shared.devices.verify(&device_id, &nonce, &signature)
+                    }),
+                    Auth::Local | Auth::Token { .. } | Auth::Pair { .. } | Auth::Dispatcher => None,
+                };
+                if dispatcher.is_none() {
+                    tracing::info!(
+                        "refused a hello on the connection to the Dispatcher that didn't prove its key"
+                    );
+                    link.close_after_next(CLOSE_UNAUTHENTICATED);
+                    return Err(errors::unauthenticated(
+                        "this device couldn't be authenticated",
+                    ));
+                }
+                Ok(dispatcher)
+            }
             Peer::Carried { link, device } => {
                 if matches!(auth, Auth::Dispatcher) {
                     return Ok(Some(device.clone()));
                 }
                 tracing::info!("refused a carried connection's hello that wasn't the Dispatcher's");
                 link.close_after_next(CLOSE_UNAUTHENTICATED);
-                return Err(errors::unauthenticated(
+                Err(errors::unauthenticated(
                     "a connection the Dispatcher carries says auth: dispatcher, for the device it \
                      named",
-                ));
+                ))
             }
-            Peer::Local => {
-                return match auth {
-                    Auth::Local => Ok(None),
-                    Auth::Token { .. } => Err(errors::unauthenticated("tokens aren't accepted")),
-                    Auth::Device { .. } | Auth::Pair { .. } => Err(errors::unauthenticated(
-                        "devices connect over the Host's WebSocket",
-                    )),
-                    Auth::Dispatcher => Err(errors::unauthenticated(
-                        "only a connection the Host opened for the Dispatcher takes its word for \
-                         a device",
-                    )),
-                };
-            }
-        };
-        let device = match auth {
-            Auth::Device {
-                device_id,
-                signature,
-            } => link.take_challenge().and_then(|nonce| {
-                self.shared
-                    .devices
-                    .verify(&device_id, &nonce, &signature, joined)
-            }),
-            Auth::Pair { .. } if joined => None,
-            Auth::Pair { code, device } => self.shared.devices.pair(&code, device),
-            // The Dispatcher's word for a device counts only on a connection the Host opened for
-            // it: anyone can say it here.
-            Auth::Local | Auth::Token { .. } | Auth::Dispatcher => None,
-        };
-        if device.is_none() {
-            tracing::info!("refused a remote client's hello");
-            link.close_after_next(CLOSE_UNAUTHENTICATED);
-            return Err(errors::unauthenticated(
-                "this device couldn't be authenticated",
-            ));
         }
-        Ok(device)
     }
 
-    /// `host/challenge`, for a remote client to sign at hello.
+    /// `host/challenge`, for the Dispatcher the Host joined to sign at hello, on the connection
+    /// the Host opened to it.
     fn challenge(&self) -> Result<ChallengeResponse, Error> {
-        let (Peer::Remote(link) | Peer::Joined(link)) = &self.peer else {
-            if matches!(self.peer, Peer::Carried { .. }) {
+        let link = match &self.peer {
+            Peer::Joined(link) => link,
+            Peer::Carried { .. } => {
                 return Err(errors::unauthenticated(
                     "a carried connection signs nothing: it says auth: dispatcher",
                 ));
             }
-            return Err(errors::unauthenticated(
-                "challenges are for the Host's WebSocket",
-            ));
+            Peer::Local => {
+                return Err(errors::unauthenticated(
+                    "challenges are for the Dispatcher this Host joined",
+                ));
+            }
         };
         let (nonce, expires_at) = link.challenge();
         Ok(ChallengeResponse {
             host_id: self.shared.devices.host_id(),
             nonce,
             expires_at,
-        })
-    }
-
-    /// `devices/offer`: a code `weave pair` shows, and this connection is told who takes it.
-    /// It turns remote access on (ADR 0016), and back off once the offer expires if no device
-    /// took one.
-    async fn offer_device(
-        &self,
-        request: OfferDeviceRequest,
-        cx: ConnectionTo<HostClient>,
-    ) -> Result<OfferDeviceResponse, Error> {
-        self.local_hello()?;
-        let remote = self.shared.remote.settings().is_some();
-        let url = match remote {
-            true => Some(crate::websocket::start(&self.shared).await?),
-            false => None,
-        };
-        let lifetime = self.shared.remote.offer_lifetime();
-        let lifetime_ms = u64::try_from(lifetime.as_millis()).unwrap_or(u64::MAX);
-        let (code, expires_at) = self
-            .shared
-            .devices
-            .offer(request.name, Some(cx), lifetime_ms);
-        if remote {
-            let shared = Arc::clone(&self.shared);
-            tokio::spawn(async move {
-                tokio::time::sleep(lifetime + std::time::Duration::from_millis(100)).await;
-                crate::websocket::stop_if_unused(&shared).await;
-            });
-        }
-        Ok(OfferDeviceResponse {
-            code,
-            expires_at,
-            url,
         })
     }
 

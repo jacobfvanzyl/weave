@@ -27,7 +27,6 @@ use weave_acp_core::schema::SelectedPermissionOutcome;
 use weave_dispatcher::Dispatcher;
 use weave_dispatcher::client::DispatcherConnection;
 use weave_dispatcher::socket;
-use weave_host::RemoteConfig;
 use weave_host_client::Credentials;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
@@ -37,7 +36,6 @@ use weave_host_client::carry::CarryError;
 use weave_host_client::carry::Reached;
 use weave_host_client::carry::Via;
 use weave_host_client::remote::DeviceKey;
-use weave_host_client::remote::connect_websocket;
 use weave_host_client::remote::connect_websocket_as;
 use weave_host_protocol::devices::DeviceInfo;
 use weave_host_protocol::devices::OfferDeviceRequest;
@@ -121,8 +119,10 @@ impl Hub {
 
     async fn with(studio: World, mini: World) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut remote = RemoteSettings::new(Arc::new(FakeServe));
-        remote.listen = "127.0.0.1:0".parse().expect("an address");
+        let remote = RemoteSettings::new(
+            "127.0.0.1:0".parse().expect("an address"),
+            Arc::new(FakeServe),
+        );
         let config = weave_dispatcher::DispatcherConfig {
             remote: Some(remote),
             ..dispatcher_config(dir.path())
@@ -590,30 +590,6 @@ async fn a_host_takes_the_dispatchers_word_only_on_connections_it_opened() {
         .expect_err("not the Dispatcher it joined");
     assert!(errors::is(&forbidden, errors::FORBIDDEN), "{forbidden}");
     local.shutdown().await;
-
-    // Nor may a client of its own WebSocket.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a listener");
-    let url = format!("ws://{}", listener.local_addr().expect("its address"));
-    let daemon = hub.studio.daemon.clone();
-    let listening =
-        tokio::spawn(async move { daemon.serve_remote(listener, RemoteConfig::default()).await });
-    let (transport, _) = connect_websocket(&url).await.expect("the WebSocket");
-    let refused = HostConnection::connect_with(
-        transport,
-        info("weave"),
-        ClientCapabilities::default(),
-        Credentials::Dispatcher,
-    )
-    .await
-    .err()
-    .expect("refused");
-    assert!(
-        refused.to_string().contains("couldn't be authenticated"),
-        "{refused}"
-    );
-    listening.abort();
 
     // And a carried connection takes nothing else.
     let (carried, _) = carry::open(&hub.via, &info("weave-test"), "studio", CarriedStream::Host)

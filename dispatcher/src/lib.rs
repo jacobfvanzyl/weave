@@ -79,8 +79,9 @@ pub use crate::store::Work;
 /// How long a Host has to answer the Dispatcher's hello on the connection it opened.
 pub const DEFAULT_REACH_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The loopback address the Dispatcher's WebSocket listens on for the person's devices, beside
-/// the Host's 7341; its Tailscale Serve entry is on HTTPS port 7342.
+/// The loopback address the Dispatcher's WebSocket listens on for the person's devices and
+/// Hosts; its Tailscale Serve entry is on HTTPS port 7342. (Hosts listened on 7341 until devices
+/// reached them through the Dispatcher, WVE-197.)
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:7342";
 
 /// The client name the Dispatcher says hello to Hosts with.

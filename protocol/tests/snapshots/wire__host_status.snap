@@ -1,6 +1,6 @@
 ---
 source: protocol/tests/wire.rs
-expression: "round_trip(&HostStatus\n{\n    protocol: PROTOCOL_VERSION, version: \"0.1.0\".to_owned(), pid: 4242,\n    started_at: 1_760_180_000_000, service: Service::OnDemand, environment:\n    EnvironmentSource::LoginShell, threads: vec![listing()], remote:\n    Some(\"127.0.0.1:7341\".to_owned()), dispatcher: Some(joined()),\n})"
+expression: "round_trip(&HostStatus\n{\n    protocol: PROTOCOL_VERSION, version: \"0.1.0\".to_owned(), pid: 4242,\n    started_at: 1_760_180_000_000, service: Service::OnDemand, environment:\n    EnvironmentSource::LoginShell, threads: vec![listing()], serve_entry:\n    Some(ServeEntryLeft\n    {\n        port: 7341, command:\n        \"sudo tailscale serve --https=7341 off\".to_owned(), why:\n        \"Tailscale lets only root change Serve while its config serves a Unix socket\".to_owned(),\n    }), dispatcher: Some(joined()),\n})"
 ---
 {
   "protocol": 3,
@@ -38,7 +38,11 @@ expression: "round_trip(&HostStatus\n{\n    protocol: PROTOCOL_VERSION, version:
       "openedAt": 1760180000500
     }
   ],
-  "remote": "127.0.0.1:7341",
+  "serveEntry": {
+    "port": 7341,
+    "command": "sudo tailscale serve --https=7341 off",
+    "why": "Tailscale lets only root change Serve while its config serves a Unix socket"
+  },
   "dispatcher": {
     "id": "D7qK2mN4pR8sT1vX",
     "name": "Dispatcher on homelab-1",

@@ -52,18 +52,6 @@ expression: schema()
       "params": "UpdateAgentRequest",
       "result": "UpdateAgentResponse"
     },
-    "devices/offer": {
-      "params": "OfferDeviceRequest",
-      "result": "OfferDeviceResponse"
-    },
-    "devices/list": {
-      "params": "ListDevicesRequest",
-      "result": "ListDevicesResponse"
-    },
-    "devices/revoke": {
-      "params": "RevokeDeviceRequest",
-      "result": "Empty"
-    },
     "dispatcher/join": {
       "params": "JoinDispatcherRequest",
       "result": "JoinDispatcherResponse"
@@ -246,7 +234,6 @@ expression: schema()
     "pending/added": "PendingAddedNotification",
     "pending/resolved": "PendingResolvedNotification",
     "agents/updateAvailable": "UpdateAvailableNotification",
-    "devices/paired": "DevicePairedNotification",
     "terminals/updated": "TerminalUpdatedNotification",
     "terminals/removed": "TerminalRemovedNotification",
     "service/toolCall": "ToolCallNotification",
@@ -346,7 +333,6 @@ expression: schema()
       "oldestSupported": 3
     },
     "websocket": {
-      "subprotocol": "weave-host",
       "appOrigin": "capacitor://localhost",
       "maxMessage": 33554432,
       "closeRevoked": 4000,
@@ -396,7 +382,6 @@ expression: schema()
     },
     "features": {
       "steer": "turn/steer",
-      "devices": "devices",
       "agentUpdates": "agents/updates",
       "clientTools": "clientTools",
       "watch": "threads/watch",
@@ -552,7 +537,7 @@ expression: schema()
             "deviceId",
             "signature"
           ],
-          "description": "A paired device, on the WebSocket: its signature of the connection's challenge\n([`ChallengeRequest`]), as [`crate::devices::auth_message`] spells it."
+          "description": "A paired device's signature of the connection's challenge. To a Host, only the Dispatcher\nit joined says it, on the connection the Host opened to it, signing its\n[`ChallengeRequest`] as [`crate::devices::auth_message`] spells it.\nTo the Dispatcher, a device it paired with, as\n[`crate::dispatcher::dispatcher_auth_message`] spells it."
         },
         {
           "type": "object",
@@ -573,7 +558,7 @@ expression: schema()
             "code",
             "device"
           ],
-          "description": "A device pairing, on the WebSocket, with the code `weave pair` showed. The\nconnection is that device's from then on."
+          "description": "A device pairing with the Dispatcher, on its WebSocket, with the code `weave pair`\nshowed. The connection is that device's from then on. Hosts refuse it: they pair with\nnothing (WVE-197)."
         },
         {
           "type": "object",
@@ -589,7 +574,7 @@ expression: schema()
           "description": "The device the Dispatcher named in `dispatcher/carry` (ADR 0030, WVE-195), on a\nconnection the Host opened to the Dispatcher to carry that device's: only there."
         }
       ],
-      "description": "How a connection authenticates."
+      "description": "How a connection authenticates. The Dispatcher's own hello takes it too\n([`crate::dispatcher::DispatcherHelloRequest`]), where a device pairs and proves its key; a\nHost takes only `local`, the Dispatcher it joined proving its key with `device`, and\n`dispatcher`."
     },
     "NewDevice": {
       "type": "object",
@@ -603,7 +588,7 @@ expression: schema()
         },
         "service": {
           "type": "boolean",
-          "description": "A service pairing, such as the Dispatcher, which may do only what it needs (ADR 0027)."
+          "description": "A service pairing, which may do only what it needs (ADR 0027)."
         }
       },
       "required": [
@@ -690,7 +675,7 @@ expression: schema()
               "type": "null"
             }
           ],
-          "description": "The paired device a remote client connected as; none for a local client."
+          "description": "The device a remote client connected as: the one the Dispatcher named for a connection\nit carries, or the Dispatcher itself on the Host's own connection to it. None for a local\nclient."
         }
       },
       "required": [
@@ -774,14 +759,14 @@ expression: schema()
     },
     "ChallengeRequest": {
       "type": "object",
-      "description": "`host/challenge`: what a paired device signs in its `host/hello`. Only on the WebSocket,\nbefore hello."
+      "description": "`host/challenge`: what the Dispatcher a Host joined signs in its `host/hello`. Only on the\nconnection the Host opened to it, before hello."
     },
     "ChallengeResponse": {
       "type": "object",
       "properties": {
         "hostId": {
           "type": "string",
-          "description": "The Host's id, which the device checks is the Host it paired with."
+          "description": "The Host's id, which the Dispatcher checks is the Host that joined it."
         },
         "nonce": {
           "type": "string",
@@ -837,12 +822,16 @@ expression: schema()
           },
           "description": "The open threads."
         },
-        "remote": {
-          "type": [
-            "string",
-            "null"
+        "serveEntry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServeEntryLeft"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "description": "The loopback address of the WebSocket remote clients reach, when the Host serves one."
+          "description": "The Tailscale Serve entry the Host made for remote clients before they reached it through\nthe Dispatcher (ADR 0030, WVE-197), while it's there and the Host couldn't remove it."
         },
         "dispatcher": {
           "anyOf": [
@@ -1330,6 +1319,32 @@ expression: schema()
         }
       ],
       "description": "Who started a turn."
+    },
+    "ServeEntryLeft": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The HTTPS port it serves on the computer's tailnet name."
+        },
+        "command": {
+          "type": "string",
+          "description": "What removes it, for the person to run on the Host's computer, such as\n`sudo tailscale serve --https=7341 off`."
+        },
+        "why": {
+          "type": "string",
+          "description": "Why the Host couldn't."
+        }
+      },
+      "required": [
+        "port",
+        "command",
+        "why"
+      ],
+      "description": "A Tailscale Serve entry the Host made for remote clients before they reached it through the\nDispatcher, which it couldn't remove itself, as where only root may change Serve."
     },
     "JoinedDispatcher": {
       "type": "object",
@@ -2187,116 +2202,6 @@ expression: schema()
       "required": [
         "version"
       ]
-    },
-    "OfferDeviceRequest": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "The name the device gets, instead of the one it gives."
-        }
-      },
-      "description": "`devices/offer`: a one-time code a device pairs with, good for five minutes."
-    },
-    "OfferDeviceResponse": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "string",
-          "description": "128 random bits in Crockford base32."
-        },
-        "expiresAt": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "What devices connect to: the Host's Tailscale Serve URL, or `[remote] url`. Offering\nturns remote access on, so a Host gives one whenever it serves remote clients."
-        }
-      },
-      "required": [
-        "code",
-        "expiresAt"
-      ]
-    },
-    "ListDevicesRequest": {
-      "type": "object",
-      "description": "`devices/list`."
-    },
-    "ListDevicesResponse": {
-      "type": "object",
-      "properties": {
-        "devices": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Device"
-          }
-        }
-      },
-      "required": [
-        "devices"
-      ]
-    },
-    "Device": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "pairedAt": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "lastSeenAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "description": "When it last said hello, if it has since pairing."
-        },
-        "connections": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0,
-          "description": "Its connections now."
-        },
-        "service": {
-          "type": "boolean",
-          "description": "Whether the device is a service."
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "pairedAt",
-        "connections"
-      ],
-      "description": "A paired device, as `devices/list` shows it."
-    },
-    "RevokeDeviceRequest": {
-      "type": "object",
-      "properties": {
-        "deviceId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "deviceId"
-      ],
-      "description": "`devices/revoke`: forget a device and close its connections. It has to pair again."
     },
     "JoinDispatcherRequest": {
       "type": "object",
@@ -9759,18 +9664,6 @@ expression: schema()
       ],
       "description": "`agents/updateAvailable`: a newer version of an attached thread's agent is out. The Host\nlooks when a thread opens, at most once an hour for each agent."
     },
-    "DevicePairedNotification": {
-      "type": "object",
-      "properties": {
-        "device": {
-          "$ref": "#/$defs/Device"
-        }
-      },
-      "required": [
-        "device"
-      ],
-      "description": "`devices/paired`: a device took the offer this connection made."
-    },
     "TerminalUpdatedNotification": {
       "type": "object",
       "properties": {
@@ -10195,6 +10088,116 @@ expression: schema()
         "database",
         "pending"
       ]
+    },
+    "OfferDeviceRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The name the device gets, instead of the one it gives."
+        }
+      },
+      "description": "`devices/offer`: a one-time code a device pairs with, good for five minutes."
+    },
+    "OfferDeviceResponse": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "128 random bits in Crockford base32."
+        },
+        "expiresAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What devices connect to: the Dispatcher's Tailscale Serve URL, or the one its `--url`\ngives. Offering turns its WebSocket on, so it gives one whenever it takes devices."
+        }
+      },
+      "required": [
+        "code",
+        "expiresAt"
+      ]
+    },
+    "ListDevicesRequest": {
+      "type": "object",
+      "description": "`devices/list`."
+    },
+    "ListDevicesResponse": {
+      "type": "object",
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Device"
+          }
+        }
+      },
+      "required": [
+        "devices"
+      ]
+    },
+    "Device": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pairedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "lastSeenAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it last said hello, if it has since pairing."
+        },
+        "connections": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its connections now."
+        },
+        "service": {
+          "type": "boolean",
+          "description": "Whether the device is a service."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "pairedAt",
+        "connections"
+      ],
+      "description": "A paired device, as `devices/list` shows it."
+    },
+    "RevokeDeviceRequest": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deviceId"
+      ],
+      "description": "`devices/revoke`: forget a device and close its connections. It has to pair again."
     },
     "ListHostsRequest": {
       "type": "object",
@@ -10991,6 +10994,18 @@ expression: schema()
       "required": [
         "occurrences"
       ]
+    },
+    "DevicePairedNotification": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "$ref": "#/$defs/Device"
+        }
+      },
+      "required": [
+        "device"
+      ],
+      "description": "`devices/paired`: a device took the offer this connection made."
     },
     "HostUnavailable": {
       "type": "object",

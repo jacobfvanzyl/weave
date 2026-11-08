@@ -102,9 +102,6 @@ fn schema() -> Value {
         "agents/terminalSignIn" => agents::TerminalSignInRequest,
         "agents/logout" => agents::LogoutAgentRequest,
         "agents/update" => agents::UpdateAgentRequest,
-        "devices/offer" => devices::OfferDeviceRequest,
-        "devices/list" => devices::ListDevicesRequest,
-        "devices/revoke" => devices::RevokeDeviceRequest,
         "dispatcher/join" => dispatcher::JoinDispatcherRequest,
         "dispatcher/leave" => dispatcher::LeaveDispatcherRequest,
         "dispatcher/carry" => dispatcher::CarryRequest,
@@ -158,7 +155,6 @@ fn schema() -> Value {
         "pending/added" => pending::PendingAddedNotification,
         "pending/resolved" => pending::PendingResolvedNotification,
         "agents/updateAvailable" => agents::UpdateAvailableNotification,
-        "devices/paired" => devices::DevicePairedNotification,
         "terminals/updated" => terminals::TerminalUpdatedNotification,
         "terminals/removed" => terminals::TerminalRemovedNotification,
         "service/toolCall" => tools::ToolCallNotification,
@@ -167,7 +163,8 @@ fn schema() -> Value {
     };
     // The Dispatcher's API (`docs/specs/wve-175-dispatcher.md`): what a client asks it, on its
     // socket or its WebSocket, and what a Host and a device carried to one ask it before the Host
-    // protocol takes over. Its devices are managed with the Host's own `devices/*` messages.
+    // protocol takes over. Its devices are managed with `devices/*`, which only the Dispatcher
+    // answers: Hosts pair with nothing since WVE-197.
     let dispatcher_requests = requests! { generator, inlined;
         "dispatcher/challenge" => dispatcher::DispatcherChallengeRequest,
         "dispatcher/hello" => dispatcher::DispatcherHelloRequest,
@@ -225,7 +222,6 @@ fn schema() -> Value {
         "x-weave-constants": {
             "protocol": {"version": PROTOCOL_VERSION, "oldestSupported": OLDEST_SUPPORTED_VERSION},
             "websocket": {
-                "subprotocol": websocket::SUBPROTOCOL,
                 "appOrigin": websocket::APP_ORIGIN,
                 "maxMessage": websocket::MAX_MESSAGE,
                 "closeRevoked": websocket::CLOSE_REVOKED,
@@ -275,7 +271,6 @@ fn schema() -> Value {
             },
             "features": {
                 "steer": turns::STEER_FEATURE,
-                "devices": devices::DEVICES_FEATURE,
                 "agentUpdates": agents::UPDATES_FEATURE,
                 "clientTools": tools::CLIENT_TOOLS_FEATURE,
                 "watch": threads::WATCH_FEATURE,

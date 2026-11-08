@@ -81,10 +81,11 @@ describe.skipIf(!devHostAvailable())('the Host store with a dev Dispatcher and H
     const model = store.snapshot();
     expect(model.dispatcher).toMatchObject({ url: dispatcher.url, status: 'connected' });
     expect(model.hosts).toMatchObject([{ id: hostId, name: 'studio', status: 'connected' }]);
-    // The Dispatcher pairs the device, and the Host keeps no record of it.
+    // The Dispatcher pairs the device, and the Host keeps no record of it: it pairs with nothing
+    // (WVE-197), and says no `devices` feature.
     const { devices } = await (await dispatcher.local()).request('devices/list', {});
     expect(devices.map(({ name }) => name)).toEqual(['Test iPhone']);
-    expect((await local.request('devices/list', {})).devices).toEqual([]);
+    expect(local.hello.features).not.toContain('devices');
     const listed = await waitFor(() => store.snapshot().threads.find((thread) => thread.threadId === threadId), 'the thread in the list');
     expect(listed).toMatchObject({ hostId, agentId: 'fake', cwd: host.cwd, state: 'open' });
   });

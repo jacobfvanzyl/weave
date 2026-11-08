@@ -608,10 +608,8 @@ impl App {
                 self.panes.retain(|pane| pane.terminal != removed.id);
                 Vec::new()
             }
-            // The TUI makes no pairing offers, and watches no threads.
-            // What the TUI doesn't ask for: watching, offers, and calls to a service.
-            HostEvent::DevicePaired(_)
-            | HostEvent::ThreadUpdated(_)
+            // What the TUI doesn't ask for: watching threads, and calls to a service.
+            HostEvent::ThreadUpdated(_)
             | HostEvent::ThreadRemoved(_)
             | HostEvent::ToolCall(_)
             | HostEvent::HostCall(_)

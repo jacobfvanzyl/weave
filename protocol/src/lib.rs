@@ -1,14 +1,15 @@
 //! The weave Host protocol: what clients and the Host say to each other.
 //!
-//! JSON-RPC 2.0, one message per line on the Host's Unix socket, one per text frame on its
-//! WebSocket ([`websocket`]) and one per item in-process.
+//! JSON-RPC 2.0, one message per line on the Host's Unix socket, one per text frame on a
+//! WebSocket ([`websocket`]): the connection a Host keeps open to the Dispatcher it joined, and
+//! those it opens there for the person's devices; and one per item in-process.
 //! Clients send requests; the Host answers them and sends notifications, never requests.
 //! Whatever an agent produced or consumes travels as ACP's own JSON, from
 //! [`agent_client_protocol::schema::v1`]; the messages around it are this crate's. The
 //! specification is `docs/specs/wve-85-host-protocol.md`.
 //!
 //! - [`hello`]: the first request on every connection: version, authentication, client.
-//! - [`devices`]: pairing the person's other devices, whose remote clients use the WebSocket.
+//! - [`devices`]: the person's devices, which pair with the Dispatcher and reach Hosts through it.
 //! - [`agents`]: the agents the Host can run, signing in to them, and updating them.
 //! - [`files`]: files on the Host's computer, for clients that aren't on it.
 //! - [`worktrees`]: git repositories on the Host's computer, their worktrees, and where a
@@ -27,7 +28,8 @@
 //! - [`host`]: the Host's status, and stopping it.
 //! - [`dispatcher`]: the Dispatcher's own API, which its CLI asks over its socket.
 //!
-//! Remote clients follow `docs/specs/wve-90-remote-clients.md`.
+//! Remote clients, which reach Hosts through the Dispatcher, follow
+//! `docs/specs/wve-90-remote-clients.md`.
 
 pub mod agents;
 pub mod devices;
@@ -70,12 +72,12 @@ pub const OLDEST_SUPPORTED_VERSION: u32 = 3;
 /// Milliseconds since the Unix epoch.
 pub type Timestamp = u64;
 
-/// The WebSocket remote clients connect over, through Tailscale Serve.
+/// The WebSockets the Host protocol goes over: the Dispatcher's, which the person's devices
+/// reach through Tailscale Serve and which carries their connections to Hosts (ADR 0030), and
+/// the connections Hosts open to it. Hosts listen for none of their own (WVE-197).
 pub mod websocket {
-    /// The subprotocol an upgrade must ask for.
-    pub const SUBPROTOCOL: &str = "weave-host";
-    /// The `Origin` the app's web view sends, which the Host accepts without configuration
-    /// (ADR 0016); native clients send none.
+    /// The `Origin` the app's web view sends, which the Dispatcher accepts without
+    /// configuration (ADR 0016); native clients send none.
     pub const APP_ORIGIN: &str = "capacitor://localhost";
     /// The largest message either end sends: room for a prompt's screenshots.
     pub const MAX_MESSAGE: usize = 32 * 1024 * 1024;

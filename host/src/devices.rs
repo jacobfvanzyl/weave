@@ -1,67 +1,51 @@
-//! Paired devices: the Host's id, the devices it accepts remote clients from and their public
-//! keys (`devices.json`, 0600), the pairing offers `weave pair` makes, and which connections
-//! each device has open, so revoking it closes them.
+//! The Host's id and the Dispatcher it joined (`devices.json`, 0600).
 //!
-//! The Host keeps no secret for a device: a device proves itself by signing its connection's
-//! challenge with a key that never leaves it. Offers live in memory only. A service, such as the
-//! Dispatcher, pairs as a device does and is kept as one, with the tools it declared and
-//! whether it reaches the person's other Hosts (ADR 0029).
+//! The Dispatcher the Host joined (ADR 0030) is kept as a service, so the tools it declared and
+//! whether it reaches the person's other Hosts (ADR 0029) outlive its connections, and marked
+//! joined. It is taken at hello only on the connection the Host opened to it
+//! ([`crate::dispatcher`]), proving its key by signing the connection's challenge; the Host keeps
+//! no secret for it.
 //!
-//! The Dispatcher the Host joined (ADR 0030) is kept as a service too, so the tools it declared
-//! outlive its connections, but marked joined: it is taken at hello only on the connection the
-//! Host opened to it ([`crate::dispatcher`]), it keeps no remote access on, and the person's
-//! devices aren't listed with it.
-//!
-//! Hosts used to pair with each other as peer Hosts (ADR 0017), kept as devices naming their
-//! Host id; ADR 0029 retired that, and a Host revokes such a pairing when it loads one.
+//! The person's devices pair with the Dispatcher and reach the Host through it, and a Host pairs
+//! with nothing (WVE-197). Hosts before kept the devices and services that paired with them here,
+//! and before ADR 0029 their peer Hosts (ADR 0017). A Host drops them when it loads them, and
+//! notes that it served remote clients, so it removes the Tailscale Serve entry it made for them
+//! ([`crate::serve_entry`]) and nothing else does.
 
-use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::Mutex;
 
-use agent_client_protocol::ConnectionTo;
-use agent_client_protocol::Error;
 use serde::Deserialize;
 use serde::Serialize;
-use weave_host_protocol::HostClient;
 use weave_host_protocol::Timestamp;
-use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::DeviceId;
 use weave_host_protocol::devices::DeviceInfo;
-use weave_host_protocol::devices::DevicePairedNotification;
 use weave_host_protocol::devices::Jwk;
-use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::auth_message;
 use weave_host_protocol::tools::Tool;
-pub(crate) use weave_remote::pairing::Closer;
-use weave_remote::pairing::Connections;
-use weave_remote::pairing::Offers;
-use weave_remote::pairing::device_id;
 pub(crate) use weave_remote::pairing::random_bytes;
 pub(crate) use weave_remote::pairing::random_id;
 use weave_remote::pairing::signed;
-use weave_remote::pairing::verifying_key;
 
 use crate::journal::now_ms;
 use crate::service_tools;
 use crate::thread::lock;
 
 pub(crate) struct Devices {
-    /// `devices.json`; none for a Host whose devices live in memory.
+    /// `devices.json`; none for a Host that keeps it in memory only.
     path: Option<PathBuf>,
     state: Mutex<State>,
 }
 
 struct State {
     host_id: String,
-    devices: BTreeMap<DeviceId, Stored>,
-    /// Each told, when a device takes it, to the connection that asked for it.
-    offers: Offers<Option<ConnectionTo<HostClient>>>,
-    /// Each device's open connections, by client.
-    live: Connections,
+    /// The Dispatcher the Host joined, if it joined one.
+    joined: Option<Stored>,
+    /// The Host served remote clients before WVE-197, and may have the Serve entry it made for
+    /// them left.
+    serve_entry_left: bool,
 }
 
 /// `devices.json`.
@@ -69,8 +53,11 @@ struct State {
 #[serde(rename_all = "camelCase")]
 struct File {
     host_id: String,
+    /// The Dispatcher the Host joined, and before WVE-197 the devices that paired with it.
     #[serde(default)]
     devices: Vec<Stored>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    serve_entry_left: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -82,19 +69,17 @@ struct Stored {
     paired_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_seen_at: Option<Timestamp>,
-    /// The Host id of a peer Host pairing (ADR 0017), which a Host revokes when it loads one.
-    #[serde(default, rename = "host", skip_serializing)]
-    peer_host: Option<String>,
-    /// A service, such as the Dispatcher (ADR 0027).
+    /// A service: the Dispatcher always, and before WVE-197 a service that paired (ADR 0027).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     service: bool,
-    /// The tools a service declared, which threads offer (WVE-171).
+    /// The tools it declared, which threads offer (WVE-171).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     tools: Vec<Tool>,
-    /// The service reaches the person's other Hosts, as it declared with its tools (ADR 0029).
+    /// It reaches the person's other Hosts, as it declared with its tools (ADR 0029).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     hosts: bool,
-    /// The Dispatcher the Host joined (ADR 0030), rather than a device that paired.
+    /// The Dispatcher the Host joined (ADR 0030), rather than a device that paired before
+    /// WVE-197. Written still, so an older weave reading the file doesn't take it for one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     joined: bool,
 }
@@ -110,8 +95,8 @@ impl Stored {
 }
 
 impl Devices {
-    /// The devices `path` records, or none yet; without a path, in memory only. A Host
-    /// without a record gets an id and writes one.
+    /// What `path` records, or a new id; without a path, in memory only. Devices that paired
+    /// with the Host before WVE-197 are dropped, the file noting it served remote clients.
     pub(crate) fn load(path: Option<PathBuf>) -> Self {
         let read = path.as_deref().and_then(|path| match std::fs::read(path) {
             Ok(bytes) => match serde_json::from_slice::<File>(&bytes) {
@@ -128,34 +113,25 @@ impl Devices {
             }
         });
         let fresh = read.is_none();
-        let mut file = read.unwrap_or_else(|| File {
+        let file = read.unwrap_or_else(|| File {
             host_id: random_id(16),
             devices: Vec::new(),
+            serve_entry_left: false,
         });
-        // Peer Hosts are retired (ADR 0029): their pairings go.
-        let paired = file.devices.len();
-        file.devices.retain(|device| {
-            let Some(host) = &device.peer_host else {
-                return true;
-            };
-            tracing::info!(device = %device.id, name = %device.name, %host, "revoked a peer Host's pairing: Hosts reach each other through the Dispatcher now");
-            false
-        });
-        let revoked = file.devices.len() < paired;
+        let (joined, paired): (Vec<Stored>, Vec<Stored>) =
+            file.devices.into_iter().partition(|stored| stored.joined);
+        for device in &paired {
+            tracing::info!(device = %device.id, name = %device.name, "forgot a device that paired with this Host: devices pair with the Dispatcher and reach Hosts through it now");
+        }
         let devices = Self {
             path,
             state: Mutex::new(State {
                 host_id: file.host_id,
-                devices: file
-                    .devices
-                    .into_iter()
-                    .map(|device| (device.id.clone(), device))
-                    .collect(),
-                offers: Offers::default(),
-                live: Connections::default(),
+                joined: joined.into_iter().next_back(),
+                serve_entry_left: file.serve_entry_left || !paired.is_empty(),
             }),
         };
-        if fresh || revoked {
+        if fresh || !paired.is_empty() {
             devices.save(&lock(&devices.state));
         }
         devices
@@ -165,72 +141,20 @@ impl Devices {
         lock(&self.state).host_id.clone()
     }
 
-    /// A new offer, good for `lifetime_ms` ([`OFFER_LIFETIME_MS`] but in tests). Returns its
-    /// code and when it expires.
-    pub(crate) fn offer(
-        &self,
-        name: Option<String>,
-        offered_by: Option<ConnectionTo<HostClient>>,
-        lifetime_ms: Timestamp,
-    ) -> (String, Timestamp) {
-        lock(&self.state)
-            .offers
-            .offer(name, offered_by, lifetime_ms)
-    }
-
-    /// Pair `device` with the offer whose code is `code`, which no one can take again.
-    /// `None` when there's no such live offer or the key isn't a P-256 point.
-    pub(crate) fn pair(&self, code: &str, device: NewDevice) -> Option<DeviceInfo> {
-        verifying_key(&device.public_key)?;
-        let mut state = lock(&self.state);
-        let now = now_ms();
-        let offer = state.offers.take(code)?;
-        let id = device_id(|id| state.devices.contains_key(id));
-        let stored = Stored {
-            id: id.clone(),
-            name: offer.name.unwrap_or(device.name),
-            public_key: device.public_key,
-            paired_at: now,
-            last_seen_at: Some(now),
-            peer_host: None,
-            service: device.service,
-            tools: Vec::new(),
-            hosts: false,
-            joined: false,
-        };
-        state.devices.insert(id, stored.clone());
-        self.save(&state);
-        drop(state);
-        let info = stored.info();
-        if let Some(offered_by) = offer.by {
-            let device = listing(&stored, 1);
-            let _ = offered_by.send_notification(DevicePairedNotification { device });
-        }
-        if info.service {
-            tracing::info!(device = %info.id, name = %info.name, "a service paired");
-        } else {
-            tracing::info!(device = %info.id, name = %info.name, "a device paired");
-        }
-        Some(info)
-    }
-
-    /// The device `device_id`, when `signature` is its signature of the challenge `nonce`. On
-    /// the connection the Host opened to the Dispatcher it joined (`joined`), only that
-    /// Dispatcher; on any other, only a device that paired.
+    /// The Dispatcher the Host joined, `device_id`, when `signature` is its signature of the
+    /// connection's challenge `nonce`.
     pub(crate) fn verify(
         &self,
         device_id: &str,
         nonce: &str,
         signature: &str,
-        joined: bool,
     ) -> Option<DeviceInfo> {
         let mut state = lock(&self.state);
-        let host_id = state.host_id.clone();
+        let message = auth_message(&state.host_id, device_id, nonce);
         let stored = state
-            .devices
-            .get_mut(device_id)
-            .filter(|stored| stored.joined == joined)?;
-        let message = auth_message(&host_id, device_id, nonce);
+            .joined
+            .as_mut()
+            .filter(|stored| stored.id == device_id)?;
         if !signed(&stored.public_key, &message, signature) {
             return None;
         }
@@ -249,103 +173,56 @@ impl Devices {
         signature: &str,
     ) -> bool {
         lock(&self.state)
-            .devices
-            .get(dispatcher_id)
-            .filter(|stored| stored.joined)
+            .joined
+            .as_ref()
+            .filter(|stored| stored.id == dispatcher_id)
             .is_some_and(|stored| signed(&stored.public_key, message, signature))
     }
 
-    /// Note a device's connection, for listing and revoking.
-    pub(crate) fn connected(&self, device_id: &str, client: u64, closer: Arc<dyn Closer>) {
-        lock(&self.state).live.connected(device_id, client, closer);
-    }
-
-    pub(crate) fn disconnected(&self, device_id: &str, client: u64) {
-        lock(&self.state).live.disconnected(device_id, client);
-    }
-
-    /// Whether any device is paired, which keeps remote access on.
-    pub(crate) fn any_paired(&self) -> bool {
-        lock(&self.state)
-            .devices
-            .values()
-            .any(|stored| !stored.joined)
-    }
-
     /// Keep the Dispatcher the Host joined, `id` with `public_key`, as a service, in place of
-    /// any it joined before. Devices paired with the same key, as the Dispatcher was before
-    /// Hosts joined it, are revoked, closing their connections with `code`; their tools pass
-    /// to it when it declares its own.
-    pub(crate) fn join(&self, id: &str, name: &str, public_key: Jwk, code: u16) {
-        let closers: Vec<Arc<dyn Closer>> = {
-            let mut state = lock(&self.state);
-            let gone: Vec<DeviceId> = state
-                .devices
-                .values()
-                .filter(|stored| stored.joined || stored.public_key == public_key)
-                .map(|stored| stored.id.clone())
-                .collect();
-            let mut closers = Vec::new();
-            for device in gone {
-                if let Some(stored) = state.devices.remove(&device)
-                    && !stored.joined
-                {
-                    tracing::info!(device = %stored.id, name = %stored.name, "revoked the Dispatcher's pairing from before Hosts joined it");
-                    closers.extend(state.live.remove(&device));
-                }
-            }
-            state.devices.insert(
-                id.to_owned(),
-                Stored {
-                    id: id.to_owned(),
-                    name: name.to_owned(),
-                    public_key,
-                    paired_at: now_ms(),
-                    last_seen_at: None,
-                    peer_host: None,
-                    service: true,
-                    tools: Vec::new(),
-                    hosts: false,
-                    joined: true,
-                },
-            );
-            self.save(&state);
-            closers
-        };
-        for closer in closers {
-            closer.close(code);
-        }
+    /// any it joined before.
+    pub(crate) fn join(&self, id: &str, name: &str, public_key: Jwk) {
+        let mut state = lock(&self.state);
+        state.joined = Some(Stored {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            public_key,
+            paired_at: now_ms(),
+            last_seen_at: None,
+            service: true,
+            tools: Vec::new(),
+            hosts: false,
+            joined: true,
+        });
+        self.save(&state);
     }
 
     /// Forget the Dispatcher the Host joined, and the tools it declared.
     pub(crate) fn leave(&self) {
         let mut state = lock(&self.state);
-        let before = state.devices.len();
-        state.devices.retain(|_, stored| !stored.joined);
-        if state.devices.len() != before {
+        if state.joined.take().is_some() {
             self.save(&state);
         }
     }
 
-    /// Whether an offer is still good, which keeps remote access on while it is.
-    pub(crate) fn offering(&self) -> bool {
-        lock(&self.state).offers.any_live()
+    /// Whether the Host served remote clients before WVE-197 and may have the Serve entry it
+    /// made for them left: only then may it touch Tailscale Serve.
+    pub(crate) fn serve_entry_left(&self) -> bool {
+        lock(&self.state).serve_entry_left
     }
 
-    pub(crate) fn list(&self) -> Vec<Device> {
-        let state = lock(&self.state);
-        state
-            .devices
-            .values()
-            .filter(|stored| !stored.joined)
-            .map(|stored| listing(stored, state.live.count(&stored.id)))
-            .collect()
+    /// The Serve entry the Host made for remote clients is gone.
+    pub(crate) fn serve_entry_removed(&self) {
+        let mut state = lock(&self.state);
+        if state.serve_entry_left {
+            state.serve_entry_left = false;
+            self.save(&state);
+        }
     }
 
     /// Replace the tools the service `device_id` serves with `tools`, and say whether it reaches
-    /// the person's other Hosts: the names agents see, or why they can't be declared. Another
-    /// service paired under the same name, as one paired again without revoking the first is,
-    /// gives its tools up to this one, and one that reached the Hosts stops when this one does.
+    /// the person's other Hosts: the names agents see, or why they can't be declared. Only the
+    /// Dispatcher the Host joined is a service.
     pub(crate) fn declare_tools(
         &self,
         device_id: &str,
@@ -353,39 +230,26 @@ impl Devices {
         hosts: bool,
     ) -> Result<Vec<String>, String> {
         let mut state = lock(&self.state);
-        let prefix = match state.devices.get(device_id) {
-            Some(stored) if stored.service => service_tools::prefix(&stored.name),
-            _ => return Err("only a service declares tools".to_owned()),
+        let Some(stored) = state
+            .joined
+            .as_mut()
+            .filter(|stored| stored.id == device_id && stored.service)
+        else {
+            return Err("only a service declares tools".to_owned());
         };
-        let names = service_tools::named(&prefix, &tools)?;
-        for other in state.devices.values_mut() {
-            if other.id != device_id
-                && other.service
-                && !other.tools.is_empty()
-                && service_tools::prefix(&other.name) == prefix
-            {
-                tracing::info!(service = %other.id, by = %device_id, "a service paired under the same name took its tools over");
-                other.tools.clear();
-            }
-            if hosts && other.id != device_id && other.hosts {
-                tracing::info!(service = %other.id, by = %device_id, "another service reaches the person's Hosts now");
-                other.hosts = false;
-            }
-        }
-        if let Some(stored) = state.devices.get_mut(device_id) {
-            stored.tools = tools;
-            stored.hosts = hosts;
-        }
+        let names = service_tools::named(&service_tools::prefix(&stored.name), &tools)?;
+        stored.tools = tools;
+        stored.hosts = hosts;
         self.save(&state);
         Ok(names)
     }
 
-    /// Every tool services declared, as threads offer them.
+    /// Every tool the Dispatcher declared, as threads offer them.
     pub(crate) fn service_tools(&self) -> Vec<service_tools::Offered> {
         let state = lock(&self.state);
         state
-            .devices
-            .values()
+            .joined
+            .iter()
             .filter(|stored| stored.service)
             .flat_map(|stored| {
                 let prefix = service_tools::prefix(&stored.name);
@@ -402,60 +266,29 @@ impl Devices {
             .collect()
     }
 
-    /// The service that reaches the person's other Hosts, if one said so: its id and name.
+    /// The service that reaches the person's other Hosts, if the Dispatcher said so: its id and
+    /// name.
     pub(crate) fn hosts_service(&self) -> Option<(DeviceId, String)> {
         lock(&self.state)
-            .devices
-            .values()
-            .find(|stored| stored.service && stored.hosts)
+            .joined
+            .as_ref()
+            .filter(|stored| stored.service && stored.hosts)
             .map(|stored| (stored.id.clone(), stored.name.clone()))
     }
 
-    /// Forget a device and close its connections with `code`.
-    pub(crate) fn revoke(&self, device_id: &str, code: u16) -> Result<(), Error> {
-        let closers: Vec<Arc<dyn Closer>> = {
-            let mut state = lock(&self.state);
-            if state
-                .devices
-                .get(device_id)
-                .is_none_or(|stored| stored.joined)
-            {
-                return Err(Error::invalid_params().data(format!("no device {device_id}")));
-            }
-            state.devices.remove(device_id);
-            self.save(&state);
-            state.live.remove(device_id)
-        };
-        for closer in closers {
-            closer.close(code);
-        }
-        tracing::info!(device = %device_id, "a device was revoked");
-        Ok(())
-    }
-
-    /// Write `state`'s devices, replacing the file whole.
+    /// Write `state`, replacing the file whole.
     fn save(&self, state: &State) {
         let Some(path) = &self.path else {
             return;
         };
         let file = File {
             host_id: state.host_id.clone(),
-            devices: state.devices.values().cloned().collect(),
+            devices: state.joined.iter().cloned().collect(),
+            serve_entry_left: state.serve_entry_left,
         };
         if let Err(error) = write_private(path, &file) {
             tracing::warn!(%error, path = %path.display(), "writing devices failed");
         }
-    }
-}
-
-fn listing(stored: &Stored, connections: u32) -> Device {
-    Device {
-        id: stored.id.clone(),
-        name: stored.name.clone(),
-        paired_at: stored.paired_at,
-        last_seen_at: stored.last_seen_at,
-        connections,
-        service: stored.service,
     }
 }
 
@@ -483,7 +316,6 @@ mod tests {
     use p256::ecdsa::SigningKey;
     use p256::ecdsa::signature::Signer as _;
     use pretty_assertions::assert_eq;
-    use weave_remote::pairing::OFFER_LIFETIME_MS;
 
     use super::*;
 
@@ -505,238 +337,159 @@ mod tests {
         URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes())
     }
 
-    fn new_device(jwk: Jwk) -> NewDevice {
-        NewDevice {
-            name: "iPad".to_owned(),
-            public_key: jwk,
-            service: false,
-        }
+    fn read(path: &Path) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(path).expect("devices.json")).expect("JSON")
     }
 
     #[test]
-    fn a_service_is_recorded_as_one_and_one_at_a_time_reaches_the_hosts() {
+    fn a_host_in_a_new_directory_served_no_remote_clients() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("devices.json");
         let devices = Devices::load(Some(path.clone()));
-        let mut paired = Vec::new();
-        for name in ["Dispatcher", "Dispatcher on mini"] {
-            let (code, _) = devices.offer(Some(name.to_owned()), None, OFFER_LIFETIME_MS);
-            let (_, jwk) = key();
-            let service = NewDevice {
-                service: true,
-                ..new_device(jwk)
-            };
-            let info = devices.pair(&code, service).expect("a good offer");
-            assert!(info.service);
-            paired.push(info.id);
-        }
-        assert_eq!(devices.hosts_service(), None);
-        devices
-            .declare_tools(&paired[0], Vec::new(), true)
-            .expect("declared");
-        assert_eq!(
-            devices.hosts_service(),
-            Some((paired[0].clone(), "Dispatcher".to_owned()))
-        );
-        devices
-            .declare_tools(&paired[1], Vec::new(), true)
-            .expect("declared");
-        let reloaded = Devices::load(Some(path));
-        assert!(reloaded.list().iter().all(|device| device.service));
-        assert_eq!(
-            reloaded.hosts_service().map(|(id, _)| id),
-            Some(paired[1].clone())
-        );
-    }
-
-    #[test]
-    fn a_peer_hosts_pairing_is_revoked_when_the_host_loads_it() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("devices.json");
-        let (_, jwk) = key();
-        let file = serde_json::json!({
-            "hostId": "h-1",
-            "devices": [
-                {"id": "d-peer", "name": "mini", "publicKey": jwk, "pairedAt": 1, "host": "h-2"},
-                {"id": "d-ipad", "name": "iPad", "publicKey": jwk, "pairedAt": 1}
-            ]
-        });
-        std::fs::write(&path, file.to_string()).expect("write");
-        let devices = Devices::load(Some(path.clone()));
-        let ids = |devices: &Devices| -> Vec<String> {
-            devices.list().into_iter().map(|device| device.id).collect()
-        };
-        assert_eq!(ids(&devices), vec!["d-ipad".to_owned()]);
-        let written = std::fs::read_to_string(&path).expect("read");
-        assert!(!written.contains("d-peer"), "{written}");
-        assert_eq!(ids(&Devices::load(Some(path))), vec!["d-ipad".to_owned()]);
-    }
-
-    #[test]
-    fn the_dispatcher_it_joined_is_kept_apart_from_the_devices_that_paired() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("devices.json");
-        let devices = Devices::load(Some(path.clone()));
-        let (signing, jwk) = key();
-        // The Dispatcher paired as a service before Hosts joined it, with the key it keeps.
-        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
-        let old = devices
-            .pair(
-                &code,
-                NewDevice {
-                    service: true,
-                    ..new_device(jwk.clone())
-                },
-            )
-            .expect("pairs");
-        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
-        let (_, ipad) = key();
-        devices
-            .pair(&code, new_device(ipad))
-            .expect("an iPad pairs");
-
-        devices.join("D-1", "Dispatcher on homelab-1", jwk, 4001);
-        let listed: Vec<String> = devices
-            .list()
-            .into_iter()
-            .map(|device| device.name)
-            .collect();
-        assert_eq!(
-            listed,
-            vec!["iPad".to_owned()],
-            "its old pairing is revoked"
-        );
-        assert!(devices.verify(&old.id, "n", "", false).is_none());
-
-        // Only on the connection the Host opened to it, and as a service.
-        let host_id = devices.host_id();
-        let signature = sign(&signing, &host_id, "D-1", "n1");
-        assert_eq!(devices.verify("D-1", "n1", &signature, false), None);
-        let joined = devices
-            .verify("D-1", "n1", &signature, true)
-            .expect("the Dispatcher");
-        assert!(joined.service);
-        assert!(
-            devices.revoke("D-1", 4001).is_err(),
-            "it isn't revoked as a device"
-        );
-
-        // It keeps no remote access on, and leaving forgets it, across a restart too.
-        devices
-            .revoke(&devices.list()[0].id, 4001)
-            .expect("the iPad revoked");
-        assert!(!devices.any_paired());
-        let reloaded = Devices::load(Some(path.clone()));
-        assert!(reloaded.verify("D-1", "n1", &signature, true).is_some());
-        reloaded.leave();
-        assert!(
-            Devices::load(Some(path))
-                .verify("D-1", "n1", &signature, true)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn a_device_pairs_once_and_proves_itself_with_its_key() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("devices.json");
-        let devices = Devices::load(Some(path.clone()));
-        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
-        let (signing, jwk) = key();
-        let paired = devices.pair(&code, new_device(jwk.clone())).expect("pairs");
-        assert_eq!(paired.name, "iPad");
-        assert!(
-            devices.pair(&code, new_device(jwk)).is_none(),
-            "an offer pairs once"
-        );
-
-        let host_id = devices.host_id();
-        let signature = sign(&signing, &host_id, &paired.id, "n1");
-        assert_eq!(
-            devices.verify(&paired.id, "n1", &signature, false),
-            Some(paired.clone())
-        );
-        assert!(
-            devices
-                .verify(&paired.id, "n2", &signature, false)
-                .is_none(),
-            "another nonce"
-        );
-        let (other, _) = key();
-        let forged = sign(&other, &host_id, &paired.id, "n1");
-        assert!(
-            devices.verify(&paired.id, "n1", &forged, false).is_none(),
-            "another key"
-        );
-
-        // The record outlives the Host, and holds no secret.
-        let reloaded = Devices::load(Some(path.clone()));
-        assert_eq!(reloaded.host_id(), host_id);
-        assert_eq!(
-            reloaded.verify(&paired.id, "n1", &signature, false),
-            Some(paired)
-        );
+        assert!(!devices.serve_entry_left());
+        let written = read(&path);
+        assert_eq!(written["hostId"], devices.host_id().as_str());
+        assert_eq!(written.get("serveEntryLeft"), None);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).expect("file").permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
-    }
-
-    #[test]
-    fn an_offer_names_the_device_and_codes_are_read_forgivingly() {
-        let devices = Devices::load(None);
-        let (code, _) = devices.offer(Some("Jaco's iPad".to_owned()), None, OFFER_LIFETIME_MS);
-        assert_eq!(code.len(), 26);
-        let typed = format!("{}-{}", &code[..13], &code[13..]).to_lowercase();
+        // Joining a Dispatcher is no sign of remote clients either.
         let (_, jwk) = key();
-        let paired = devices.pair(&typed, new_device(jwk)).expect("pairs");
-        assert_eq!(paired.name, "Jaco's iPad");
+        devices.join("D-1", "Dispatcher on homelab-1", jwk);
+        assert!(!Devices::load(Some(path)).serve_entry_left());
     }
 
     #[test]
-    fn only_the_newest_offers_are_live() {
-        let devices = Devices::load(None);
-        let codes: Vec<String> = (0..4)
-            .map(|_| devices.offer(None, None, OFFER_LIFETIME_MS).0)
+    fn devices_that_paired_with_the_host_are_dropped_and_it_notes_it_served_them() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("devices.json");
+        let (_, jwk) = key();
+        let file = serde_json::json!({
+            "hostId": "h-1",
+            "devices": [
+                {"id": "d-ipad", "name": "iPad", "publicKey": jwk, "pairedAt": 1, "lastSeenAt": 2},
+                {"id": "d-peer", "name": "mini", "publicKey": jwk, "pairedAt": 1, "host": "h-2"},
+                {"id": "d-bridge", "name": "Bridge", "publicKey": jwk, "pairedAt": 1, "service": true},
+                {"id": "D-1", "name": "Dispatcher", "publicKey": jwk, "pairedAt": 1, "service": true,
+                 "joined": true, "hosts": true}
+            ]
+        });
+        std::fs::write(&path, file.to_string()).expect("write");
+
+        let devices = Devices::load(Some(path.clone()));
+        assert_eq!(devices.host_id(), "h-1");
+        assert!(devices.serve_entry_left());
+        assert_eq!(
+            devices.hosts_service(),
+            Some(("D-1".to_owned(), "Dispatcher".to_owned()))
+        );
+        let written = read(&path);
+        let kept: Vec<&str> = written["devices"]
+            .as_array()
+            .expect("devices")
+            .iter()
+            .filter_map(|device| device["id"].as_str())
             .collect();
-        let (_, jwk) = key();
-        assert!(devices.pair(&codes[0], new_device(jwk.clone())).is_none());
-        assert!(devices.pair(&codes[3], new_device(jwk)).is_some());
+        assert_eq!(kept, vec!["D-1"]);
+        assert_eq!(written["devices"][0]["joined"], true);
+        assert_eq!(written["serveEntryLeft"], true);
+
+        // It stays noted until the entry is gone, across restarts.
+        let reloaded = Devices::load(Some(path.clone()));
+        assert!(reloaded.serve_entry_left());
+        reloaded.serve_entry_removed();
+        assert_eq!(read(&path).get("serveEntryLeft"), None);
+        assert!(!Devices::load(Some(path)).serve_entry_left());
     }
 
     #[test]
-    fn a_key_off_the_curve_is_refused() {
-        let devices = Devices::load(None);
-        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
-        let (_, mut jwk) = key();
-        jwk.y = URL_SAFE_NO_PAD.encode([7u8; 32]);
-        assert!(devices.pair(&code, new_device(jwk)).is_none());
-    }
-
-    struct Recorded(Mutex<Vec<u16>>);
-
-    impl Closer for Recorded {
-        fn close(&self, code: u16) {
-            lock(&self.0).push(code);
-        }
-    }
-
-    #[test]
-    fn revoking_closes_a_devices_connections_and_forgets_it() {
-        let devices = Devices::load(None);
-        let (code, _) = devices.offer(None, None, OFFER_LIFETIME_MS);
+    fn the_dispatcher_it_joined_proves_its_key_and_leaving_forgets_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("devices.json");
+        let devices = Devices::load(Some(path.clone()));
+        let host_id = devices.host_id();
         let (signing, jwk) = key();
-        let paired = devices.pair(&code, new_device(jwk)).expect("pairs");
-        let closer = Arc::new(Recorded(Mutex::new(Vec::new())));
-        devices.connected(&paired.id, 7, closer.clone());
-        assert_eq!(devices.list()[0].connections, 1);
-        devices.revoke(&paired.id, 4000).expect("revoked");
-        assert_eq!(*lock(&closer.0), vec![4000]);
-        let signature = sign(&signing, &devices.host_id(), &paired.id, "n");
-        assert!(devices.verify(&paired.id, "n", &signature, false).is_none());
-        assert!(devices.list().is_empty());
-        assert!(devices.revoke(&paired.id, 4000).is_err());
+        devices.join("D-1", "Dispatcher on homelab-1", jwk);
+
+        let signature = sign(&signing, &host_id, "D-1", "n1");
+        let joined = devices
+            .verify("D-1", "n1", &signature)
+            .expect("the Dispatcher");
+        assert!(joined.service);
+        assert_eq!(joined.name, "Dispatcher on homelab-1");
+        assert!(
+            devices.verify("D-1", "n2", &signature).is_none(),
+            "another nonce"
+        );
+        assert!(
+            devices.verify("D-2", "n1", &signature).is_none(),
+            "another id"
+        );
+        let (other, _) = key();
+        let forged = sign(&other, &host_id, "D-1", "n1");
+        assert!(
+            devices.verify("D-1", "n1", &forged).is_none(),
+            "another key"
+        );
+
+        // Joining another Dispatcher replaces it.
+        let (second, jwk) = key();
+        devices.join("D-2", "Dispatcher on studio", jwk);
+        assert!(devices.verify("D-1", "n1", &signature).is_none());
+        let signature = sign(&second, &host_id, "D-2", "n3");
+        assert!(devices.verify("D-2", "n3", &signature).is_some());
+
+        // It outlives the Host, and leaving forgets it.
+        let reloaded = Devices::load(Some(path.clone()));
+        assert_eq!(reloaded.host_id(), host_id);
+        assert!(reloaded.verify("D-2", "n3", &signature).is_some());
+        reloaded.leave();
+        assert!(
+            Devices::load(Some(path))
+                .verify("D-2", "n3", &signature)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_dispatcher_declares_tools_and_says_it_reaches_the_hosts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("devices.json");
+        let devices = Devices::load(Some(path.clone()));
+        let tool = Tool {
+            name: "add_schedule".to_owned(),
+            title: "Add a schedule".to_owned(),
+            description: "Add a schedule to the Dispatcher".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        };
+        assert!(
+            devices
+                .declare_tools("D-1", vec![tool.clone()], true)
+                .is_err(),
+            "only the Dispatcher it joined declares tools"
+        );
+        let (_, jwk) = key();
+        devices.join("D-1", "Dispatcher", jwk);
+        assert_eq!(devices.hosts_service(), None);
+        let names = devices
+            .declare_tools("D-1", vec![tool], true)
+            .expect("declared");
+        assert_eq!(names, vec!["dispatcher__add_schedule".to_owned()]);
+        let reloaded = Devices::load(Some(path));
+        assert_eq!(
+            reloaded.hosts_service(),
+            Some(("D-1".to_owned(), "Dispatcher".to_owned()))
+        );
+        assert_eq!(
+            reloaded
+                .service_tools()
+                .into_iter()
+                .map(|offered| offered.tool.name)
+                .collect::<Vec<_>>(),
+            vec!["dispatcher__add_schedule".to_owned()]
+        );
     }
 }

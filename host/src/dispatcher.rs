@@ -4,16 +4,16 @@
 //! Dispatcher's, which it keeps among its devices as the service it joined
 //! ([`crate::devices`]); `dispatcher.json` keeps where the Dispatcher is. From then on the Host
 //! connects again whenever the connection drops, with backoff, proving its key each time, and
-//! serves the Host protocol over the connection as it does a remote client's, the Dispatcher
-//! saying hello with its own key. A Host the Dispatcher removed is told so, by the connection
+//! serves the Host protocol over the connection, the Dispatcher saying hello with its own key. A Host the Dispatcher removed is told so, by the connection
 //! closing with [`CLOSE_REVOKED`] or by its key being refused, and forgets the Dispatcher.
 //!
 //! The Dispatcher carries the person's devices' connections to the Host (WVE-195): over the
 //! Host's connection it asks `dispatcher/carry` with a token and the device, and the Host opens
 //! another connection to it where it joined it, presents the token with a nonce of its own,
 //! checks the Dispatcher's signature of it with the key it learned when it joined, and only then
-//! serves that connection for the device as a remote client ([`carry`]). Leaving the Dispatcher, or its removing the
-//! Host, closes them.
+//! serves that connection for the device as a remote client ([`carry`]). Leaving the Dispatcher,
+//! or its removing the Host, closes them. These are the only ways the person's devices reach the
+//! Host: it listens for none of their connections (WVE-197).
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -60,10 +60,19 @@ use crate::devices::random_id;
 use crate::devices::write_private;
 use crate::journal::now_ms;
 use crate::paths::DaemonPaths;
+use crate::thread::Backlog;
 use crate::thread::lock;
 
 /// The WebSocket's own close code for a connection that ends as it should.
 const CLOSE_NORMAL: u16 = 1000;
+
+/// A connection to the Dispatcher keeps count of what waits to be sent, which an attach tells of
+/// its replay.
+impl Backlog for websocket::Link {
+    fn replaying(&self, bytes: usize) {
+        websocket::Link::replaying(self, bytes);
+    }
+}
 
 /// How a Host keeps the Dispatcher it joins.
 #[derive(Clone, Debug)]
@@ -240,12 +249,9 @@ pub(crate) async fn join(
             state.end_carried();
         }
     }
-    shared.devices.join(
-        &record.id,
-        &record.name,
-        connected.public_key,
-        CLOSE_REVOKED,
-    );
+    shared
+        .devices
+        .join(&record.id, &record.name, connected.public_key);
     write_private(&settings.record, &record)
         .map_err(|error| internal(format!("writing {}: {error}", settings.record.display())))?;
     {

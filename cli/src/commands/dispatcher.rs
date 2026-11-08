@@ -5,11 +5,12 @@
 //! `install` has launchd or systemd keep it running; `status`, the default, asks it. Its Hosts
 //! are [`crate::commands::hosts`]'s, its schedules [`crate::commands::schedules`]'.
 //!
-//! The person's other computers pair with it as devices (WVE-176): `pair` shows a code on its
-//! computer, `devices` lists and revokes them there, and `connect` on another computer pairs
-//! that one, over SSH or with the code, so `weave hosts` and `weave schedules` reach it from
-//! there ([`crate::paired`]); `disconnect` forgets it. `connect` offers to have that computer's
-//! Host join the Dispatcher too, so it starts work there.
+//! The person's devices and other computers pair with it (WVE-176): `weave pair` shows a code on
+//! its computer and `weave devices` lists and revokes them there ([`crate::commands::devices`]),
+//! and `connect` on another computer pairs that one, over SSH or with the code, so `weave hosts`
+//! and `weave schedules` reach it from there ([`crate::paired`]); `disconnect` forgets it.
+//! `connect` offers to have that computer's Host join the Dispatcher too, so it starts work
+//! there.
 
 use std::io::BufRead as _;
 use std::io::IsTerminal as _;
@@ -30,9 +31,6 @@ use weave_dispatcher::client::DispatcherConnection;
 use weave_dispatcher::computer_name;
 use weave_dispatcher::socket;
 use weave_host_client::Credentials;
-use weave_host_protocol::devices::ListDevicesRequest;
-use weave_host_protocol::devices::OfferDeviceRequest;
-use weave_host_protocol::devices::RevokeDeviceRequest;
 use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
@@ -43,7 +41,6 @@ use weave_remote::tailscale::TailscaleServe;
 use crate::background;
 use crate::clock::ago;
 use crate::clock::now_ms;
-use crate::commands::devices;
 use crate::commands::devices::Offered;
 use crate::commands::hosts;
 use crate::commands::stop_signal;
@@ -88,14 +85,9 @@ enum DispatcherCommand {
     Install,
     /// Stop the Dispatcher's service and remove it.
     Uninstall,
-    /// Show a code another of your computers pairs with the Dispatcher with, and wait for it
-    /// (`weave dispatcher connect` there runs this over SSH).
-    Pair(PairArgs),
-    /// List the computers paired with the Dispatcher, or revoke one.
-    Devices(DevicesArgs),
     /// Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect
-    /// homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to
-    /// have this computer's Host join the Dispatcher.
+    /// homelab`) or with the URL and code `weave pair` shows there, and offer to have this
+    /// computer's Host join the Dispatcher.
     Connect(ConnectArgs),
     /// Forget the Dispatcher this computer is paired with.
     Disconnect,
@@ -114,49 +106,10 @@ struct RunArgs {
 }
 
 #[derive(Args)]
-struct PairArgs {
-    /// What the Dispatcher calls the computer, instead of the name it gives.
-    #[arg(long)]
-    name: Option<String>,
-    /// Print the URL and code as JSON, and don't wait: for `weave dispatcher connect` on
-    /// another computer, which runs this over SSH.
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Args)]
-struct DevicesArgs {
-    #[command(subcommand)]
-    command: Option<DevicesCommand>,
-}
-
-#[derive(Subcommand)]
-enum DevicesCommand {
-    /// List the computers paired with the Dispatcher (the default).
-    List(ListArgs),
-    /// Forget a computer and close its connections. It has to pair again.
-    Revoke(RevokeArgs),
-}
-
-#[derive(Args, Default)]
-struct ListArgs {
-    /// Print them as JSON.
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Args)]
-struct RevokeArgs {
-    /// The computer's device id, as `weave dispatcher devices` lists it.
-    device_id: String,
-}
-
-#[derive(Args)]
 struct ConnectArgs {
-    /// The computer SSH reaches the Dispatcher on, or the URL `weave dispatcher pair` shows
-    /// there.
+    /// The computer SSH reaches the Dispatcher on, or the URL `weave pair` shows there.
     dispatcher: String,
-    /// The code `weave dispatcher pair` shows there, after its URL.
+    /// The code `weave pair` shows there, after its URL.
     code: Option<String>,
     /// What the Dispatcher calls this computer, and its Host; its name by default.
     #[arg(long)]
@@ -213,8 +166,6 @@ pub async fn command(args: DispatcherArgs) -> anyhow::Result<ExitCode> {
             eprintln!("Removed the Dispatcher's service; it no longer runs.");
             Ok(())
         }
-        DispatcherCommand::Pair(args) => pair(&paths, args).await,
-        DispatcherCommand::Devices(args) => devices(&paths, args).await,
         DispatcherCommand::Connect(args) => connect(&paths, args).await,
         DispatcherCommand::Disconnect => disconnect(),
     };
@@ -244,8 +195,8 @@ async fn run(paths: DispatcherPaths, args: RunArgs) -> anyhow::Result<()> {
 }
 
 /// Where the WebSocket listens, and whether Tailscale Serve brings devices to it: loopback port
-/// 7342 and its own Serve entry, unless `--listen` and `--url` say otherwise, as the Host's
-/// `[remote] listen` and `url` do. A URL leaves Serve alone.
+/// 7342 and its own Serve entry, unless `--listen` and `--url` say otherwise. A URL leaves Serve
+/// alone.
 fn remote_settings(args: &RunArgs) -> anyhow::Result<RemoteSettings> {
     let text = args.listen.as_deref().unwrap_or(DEFAULT_LISTEN);
     let listen: SocketAddr = text
@@ -258,9 +209,8 @@ fn remote_settings(args: &RunArgs) -> anyhow::Result<RemoteSettings> {
         );
     }
     Ok(RemoteSettings {
-        listen,
         url: args.url.clone(),
-        ..RemoteSettings::new(Arc::new(TailscaleServe::DISPATCHER))
+        ..RemoteSettings::new(listen, Arc::new(TailscaleServe::DISPATCHER))
     })
 }
 
@@ -284,8 +234,9 @@ async fn install(paths: &DispatcherPaths) -> anyhow::Result<()> {
     let lingering = lingering.map(|note| format!(" {note}")).unwrap_or_default();
     eprintln!(
         "Installed the Dispatcher as a {} service. It runs {} and restarts it if it stops; \
-         `weave dispatcher uninstall` removes it.{lingering} Pair it with a Host with `weave hosts \
-         add <computer>`, and your other computers with it with `weave dispatcher connect` there.",
+         `weave dispatcher uninstall` removes it.{lingering} Have a Host join it with `weave hosts \
+         add <computer>`, pair your devices with `weave pair`, and your other computers with \
+         `weave dispatcher connect` there.",
         service::manager_name(),
         executable.display()
     );
@@ -424,8 +375,8 @@ async fn status(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()> {
     let devices = match (status.devices, &reached.paired) {
         (_, Some(_)) => String::new(),
         (0, None) => String::new(),
-        (1, None) => " 1 other computer is paired with it.".to_owned(),
-        (devices, None) => format!(" {devices} other computers are paired with it."),
+        (1, None) => " 1 device is paired with it.".to_owned(),
+        (devices, None) => format!(" {devices} devices are paired with it."),
     };
     println!(
         "The Dispatcher {} (pid {}) has run for {} {place}. Hosts that join it know it as \"{}\", and it {} \
@@ -444,129 +395,8 @@ async fn status(paths: &DispatcherPaths, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The Dispatcher on this computer, for what only its own computer may ask: pairing and
-/// revoking devices.
-async fn here(paths: &DispatcherPaths) -> anyhow::Result<DispatcherConnection> {
-    match connect_here(paths).await {
-        Ok(connection) => Ok(connection),
-        Err(error) => match remote_pairing()? {
-            Some(paired) => bail!(
-                "the Dispatcher runs on {}, and its devices are managed there: run this on that \
-                 computer",
-                paired.place()
-            ),
-            None => Err(error),
-        },
-    }
-}
-
-/// `weave dispatcher pair`: show a code another computer pairs with, and wait for it. The offer
-/// turns the Dispatcher's WebSocket on, Tailscale Serve entry and all.
-async fn pair(paths: &DispatcherPaths, args: PairArgs) -> anyhow::Result<()> {
-    let mut dispatcher = here(paths).await?;
-    let offer = dispatcher
-        .send(OfferDeviceRequest { name: args.name })
-        .await
-        .map_err(|error| anyhow::anyhow!("{}", error.message));
-    let offer = match offer {
-        Ok(offer) => offer,
-        Err(error) => {
-            dispatcher.shutdown().await;
-            return Err(error);
-        }
-    };
-    let Some(url) = offer.url else {
-        dispatcher.shutdown().await;
-        bail!("the Dispatcher gave no URL to pair with");
-    };
-    if args.json {
-        let offered = Offered {
-            url,
-            code: offer.code,
-            expires_at: offer.expires_at,
-        };
-        println!("{}", serde_json::to_string_pretty(&offered)?);
-        dispatcher.shutdown().await;
-        return Ok(());
-    }
-    println!(
-        "{}\n",
-        devices::qr_code(&devices::link(
-            "weave://pair-dispatcher?",
-            &url,
-            &offer.code
-        ))?
-    );
-    println!(
-        "On the computer to pair, run:\n  weave dispatcher connect {url} {}\n\nor scan this with \
-         a device. The code works once, for five minutes.",
-        offer.code
-    );
-    let expires_in = offer.expires_at.saturating_sub(now_ms());
-    let paired = tokio::select! {
-        paired = dispatcher.paired() => paired,
-        () = tokio::time::sleep(std::time::Duration::from_millis(expires_in)) => {
-            println!("\nNothing paired, and the code has expired.");
-            dispatcher.shutdown().await;
-            return Ok(());
-        }
-        _ = tokio::signal::ctrl_c() => {
-            println!("\nStopped waiting; the code stays good until it expires.");
-            dispatcher.shutdown().await;
-            return Ok(());
-        }
-    };
-    dispatcher.shutdown().await;
-    let device = paired.context("the Dispatcher went away")?;
-    println!(
-        "\nPaired {} ({}), as code {}.",
-        device.name,
-        device.id,
-        devices::grouped(&offer.code)
-    );
-    Ok(())
-}
-
-/// `weave dispatcher devices`: list or revoke the computers paired with it.
-async fn devices(paths: &DispatcherPaths, args: DevicesArgs) -> anyhow::Result<()> {
-    let dispatcher = here(paths).await?;
-    let result = match args
-        .command
-        .unwrap_or_else(|| DevicesCommand::List(ListArgs::default()))
-    {
-        DevicesCommand::List(ListArgs { json }) => {
-            match dispatcher.send(ListDevicesRequest {}).await {
-                Ok(listed) if json => serde_json::to_string_pretty(&listed.devices)
-                    .map(|text| println!("{text}"))
-                    .map_err(anyhow::Error::from),
-                Ok(listed) if listed.devices.is_empty() => {
-                    println!(
-                        "No other computer is paired with the Dispatcher; `weave dispatcher \
-                         connect <this computer>` on one pairs it."
-                    );
-                    Ok(())
-                }
-                Ok(listed) => {
-                    print!("{}", devices::listing(&listed.devices, now_ms()));
-                    Ok(())
-                }
-                Err(error) => Err(anyhow::anyhow!("{}", error.message)),
-            }
-        }
-        DevicesCommand::Revoke(RevokeArgs { device_id }) => dispatcher
-            .send(RevokeDeviceRequest {
-                device_id: device_id.clone(),
-            })
-            .await
-            .map(|_| println!("Revoked {device_id}; it has to pair again."))
-            .map_err(|error| anyhow::anyhow!("{}", error.message)),
-    };
-    dispatcher.shutdown().await;
-    result
-}
-
 /// `weave dispatcher connect`: pair this computer with the Dispatcher on another, with a code
-/// from `weave dispatcher pair` there, which this runs over SSH unless given one, and keep the
+/// from `weave pair` there, which this runs over SSH unless given one, and keep the
 /// pairing. Then offer to have this computer's Host join the Dispatcher.
 async fn connect(paths: &DispatcherPaths, args: ConnectArgs) -> anyhow::Result<()> {
     if std::env::var_os(weave_dispatcher::paths::DIR_VARIABLE).is_some_and(|dir| !dir.is_empty()) {
@@ -587,10 +417,9 @@ async fn connect(paths: &DispatcherPaths, args: ConnectArgs) -> anyhow::Result<(
         Reach::Code { url, code } => (url, code, None),
         Reach::Ssh(destination) => {
             let offered: Offered = serde_json::from_str(
-                &ssh(&destination, &["dispatcher", "pair", "--json"])
-                    .context("asking it for a code")?,
+                &ssh(&destination, &["pair", "--json"]).context("asking it for a code")?,
             )
-            .context("reading what `weave dispatcher pair --json` said there")?;
+            .context("reading what `weave pair --json` said there")?;
             (offered.url, offered.code, Some(ssh_name(&destination)))
         }
     };
@@ -737,7 +566,7 @@ fn disconnect() -> anyhow::Result<()> {
     match paired::forget()? {
         Some(paired) => println!(
             "Forgot the Dispatcher on {}. It lists this computer as {} until you run `weave \
-             dispatcher devices revoke {}` there.",
+             devices revoke {}` there.",
             paired.place(),
             paired.device_id,
             paired.device_id

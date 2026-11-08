@@ -1,9 +1,10 @@
-//! Remote access (ADR 0016): the loopback WebSocket the person's other devices use, and the
-//! Tailscale Serve entry that brings the tailnet to it. Pairing turns both on: an offer starts
-//! them, and they stay on while any device is paired, across restarts. Revoking the last
-//! device, or an offer expiring with none paired, turns them off and removes the entry. A
-//! configured URL means the person routes devices to the program themselves, and it leaves
-//! Serve alone.
+//! Remote access (ADR 0016): the loopback WebSocket the person's devices use, and the Tailscale
+//! Serve entry that brings the tailnet to it. It's the Dispatcher's: Hosts listen for nothing of
+//! their own since devices reach them through it (ADR 0030, WVE-197), and use only [`Serve`], to
+//! remove the entry they made before. Pairing turns both on: an offer starts them, and they stay
+//! on while any device is paired, across restarts. Revoking the last device, or an offer
+//! expiring with none paired, turns them off and removes the entry. A configured URL means the
+//! person routes devices to the program themselves, and it leaves Serve alone.
 //!
 //! The program says what to do with the listener ([`Accept`]) and whether a device or an offer
 //! needs remote access ([`Remote::stop_if_unused`]); [`Remote`] does the rest.
@@ -47,16 +48,11 @@ pub struct RemoteSettings {
     pub serve_retry: Duration,
 }
 
-/// The loopback address the Host listens on for remote clients when its config doesn't say.
-pub const HOST_LISTEN: &str = "127.0.0.1:7341";
-
 impl RemoteSettings {
-    /// The Host's defaults: loopback port 7341, and its own entry in Tailscale Serve. Another
-    /// program sets its own `listen`.
-    pub fn new(serve: Arc<dyn Serve>) -> Self {
+    /// Listening on `listen`, a loopback address, with an entry of its own in `serve`.
+    pub fn new(listen: SocketAddr, serve: Arc<dyn Serve>) -> Self {
         Self {
-            #[allow(clippy::expect_used)]
-            listen: HOST_LISTEN.parse().expect("the default address parses"),
+            listen,
             url: None,
             websocket: RemoteConfig::default(),
             serve,

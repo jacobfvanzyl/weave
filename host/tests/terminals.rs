@@ -608,27 +608,21 @@ async fn a_holder_that_died_is_forgotten() {
 
 // Streams.
 
-type Socket =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type Socket = tokio_tungstenite::WebSocketStream<tokio::net::UnixStream>;
 
-/// What a stream's WebSocket runs over: TCP to the remote listener, or the terminal socket.
+/// What a stream's WebSocket runs over: the terminal socket, here, or a connection the
+/// Dispatcher carries (`dispatcher/tests/carry.rs`).
 trait Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {}
 
 impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> Stream for S {}
 
-/// `daemon`'s WebSocket on a loopback port of its own.
-async fn listen(daemon: &Daemon) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a port");
-    let address = listener.local_addr().expect("its address");
+/// `daemon`'s terminal socket, in `dir`, which local clients' streams use.
+fn listen(daemon: &Daemon, dir: &Path) -> PathBuf {
+    let path = dir.join("terminals.sock");
     let serving = daemon.clone();
-    tokio::spawn(async move {
-        serving
-            .serve_remote(listener, weave_host::RemoteConfig::default())
-            .await;
-    });
-    format!("ws://{address}")
+    let socket = path.clone();
+    tokio::spawn(async move { serving.serve_terminal_streams(&socket).await });
+    path
 }
 
 /// What `weave-holder --version` says its snapshots are.
@@ -643,15 +637,23 @@ fn holder_codec() -> String {
     version[start..end].to_owned()
 }
 
-/// A terminal stream of `ticket`, opened at `size` with `codec`.
-async fn stream(url: &str, ticket: &str, size: (u16, u16), codec: &str) -> Socket {
+/// A terminal stream of `ticket` on the terminal socket at `path`, opened at `size` with `codec`.
+async fn stream(path: &Path, ticket: &str, size: (u16, u16), codec: &str) -> Socket {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-    let mut request = url.into_client_request().expect("a request");
+    let deadline = tokio::time::Instant::now() + WAIT;
+    let unix = loop {
+        match tokio::net::UnixStream::connect(path).await {
+            Ok(unix) => break unix,
+            Err(error) => assert!(tokio::time::Instant::now() < deadline, "{error}"),
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let mut request = "ws://localhost/".into_client_request().expect("a request");
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         "weave-terminal".parse().expect("a header"),
     );
-    let (mut socket, _) = tokio_tungstenite::connect_async(request)
+    let (mut socket, _) = tokio_tungstenite::client_async(request, unix)
         .await
         .expect("the stream");
     let open = json!({"ticket": ticket, "size": {"cols": size.0, "rows": size.1}, "codec": codec});
@@ -731,7 +733,7 @@ async fn a_stream_relays_a_holders_terminal_to_a_ticket() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cwd = dir.path().canonicalize().expect("canonical");
     let daemon = daemon(dir.path(), Some(holders(dir.path())));
-    let url = listen(&daemon).await;
+    let url = listen(&daemon, dir.path());
     let client = client(&daemon).await;
     let terminal = client.new_terminal(&cwd).await;
     client
@@ -916,7 +918,7 @@ async fn a_local_client_streams_on_the_terminal_socket_with_history_and_asks_aga
         "{again}"
     );
 
-    // Input and output as on the remote listener.
+    // Input and output, as on any stream.
     type_(&mut socket, "echo local-$((2+2))\r").await;
     read_until(&mut socket, &mut received, |received| {
         String::from_utf8_lossy(&received.output).contains("local-4")
@@ -936,7 +938,7 @@ async fn the_last_device_to_type_sets_the_size() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cwd = dir.path().canonicalize().expect("canonical");
     let daemon = daemon(dir.path(), Some(holders(dir.path())));
-    let url = listen(&daemon).await;
+    let url = listen(&daemon, dir.path());
     let client = client(&daemon).await;
     let terminal = client.new_terminal(&cwd).await;
     let attach = || async {
@@ -1019,7 +1021,7 @@ async fn the_last_device_to_type_sets_the_size() {
 async fn a_stream_without_a_good_ticket_is_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let daemon = daemon(dir.path(), Some(Arc::new(FakeOwner::default())));
-    let url = listen(&daemon).await;
+    let url = listen(&daemon, dir.path());
     let mut socket = stream(&url, "made-up", (80, 24), "x").await;
     let mut received = Received::default();
     read_until(&mut socket, &mut received, |received| {
@@ -1027,73 +1029,4 @@ async fn a_stream_without_a_good_ticket_is_closed() {
     })
     .await;
     assert_eq!(received.close, Some(4010));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn revoking_a_device_closes_its_terminal_streams() {
-    use weave_host_client::Credentials;
-    use weave_host_client::remote::DeviceKey;
-    use weave_host_client::remote::connect_websocket;
-    use weave_host_protocol::devices::OfferDeviceRequest;
-    use weave_host_protocol::devices::RevokeDeviceRequest;
-    use weave_host_protocol::terminals::AttachTerminalRequest;
-    use weave_host_protocol::websocket::CLOSE_REVOKED;
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let cwd = dir.path().canonicalize().expect("canonical");
-    let daemon = daemon(dir.path(), Some(Arc::new(FakeOwner::default())));
-    let url = listen(&daemon).await;
-    let local = client(&daemon).await;
-    let offer = local
-        .connection
-        .send(OfferDeviceRequest { name: None })
-        .await
-        .expect("devices/offer");
-    let (transport, _reason) = connect_websocket(&url).await.expect("the WebSocket");
-    let (ipad, _events) = HostConnection::connect_with(
-        transport,
-        ClientInfo {
-            name: "weave-ios".to_owned(),
-            version: "0".to_owned(),
-        },
-        ClientCapabilities::default(),
-        Credentials::Pair {
-            code: offer.code,
-            name: "iPad".to_owned(),
-            key: DeviceKey::generate(),
-            service: false,
-        },
-    )
-    .await
-    .expect("paired");
-    let device = ipad.hello().device.clone().expect("a device");
-
-    let terminal = local.new_terminal(&cwd).await;
-    let ticket = ipad
-        .send(AttachTerminalRequest {
-            id: terminal.id.clone(),
-        })
-        .await
-        .expect("terminals/attach")
-        .ticket;
-    let mut socket = stream(&url, &ticket, (80, 24), "x").await;
-    let mut received = Received::default();
-    read_until(&mut socket, &mut received, |received| {
-        !received.restore.is_empty()
-    })
-    .await;
-    assert_eq!(received.restore, b"fake");
-
-    local
-        .connection
-        .send(RevokeDeviceRequest {
-            device_id: device.id,
-        })
-        .await
-        .expect("devices/revoke");
-    read_until(&mut socket, &mut received, |received| {
-        received.close.is_some()
-    })
-    .await;
-    assert_eq!(received.close, Some(CLOSE_REVOKED));
 }

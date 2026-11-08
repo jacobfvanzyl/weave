@@ -1,9 +1,10 @@
-//! Paired devices: the person's other devices, whose remote clients reach the Host over the
-//! WebSocket. A device pairs once, with a code `weave pair` shows on the Host's computer, and
-//! proves itself on every connection after that by signing the connection's challenge with a
-//! P-256 key that never leaves it. Managing devices is for local clients only.
-//!
-//! A service, such as the Dispatcher (ADR 0027), pairs the same way and says it's one.
+//! Paired devices: the person's devices, which pair with the Dispatcher and reach every Host
+//! through it (ADR 0030, WVE-196). A device pairs once, with a code `weave pair` shows on the
+//! Dispatcher's computer, and proves itself on every connection after that by signing the
+//! connection's challenge with a P-256 key that never leaves it. Managing devices is for the
+//! Dispatcher's own computer only. Hosts pair with nothing since WVE-197: a Host joins the
+//! Dispatcher (`crate::dispatcher`), and takes the Dispatcher's word for the device each
+//! connection it carries is for.
 
 use agent_client_protocol::JsonRpcNotification;
 use agent_client_protocol::JsonRpcRequest;
@@ -14,13 +15,11 @@ use serde::Serialize;
 use crate::Empty;
 use crate::Timestamp;
 
-/// The Host's name for a paired device, which stays the same until it's revoked.
+/// The Dispatcher's name for a paired device, which stays the same until it's revoked.
 pub type DeviceId = String;
 
-/// The [`crate::hello::HelloResponse::features`] entry of a Host that pairs devices.
-pub const DEVICES_FEATURE: &str = "devices";
-
-/// What a device signs in `host/hello`: the UTF-8 bytes of this line.
+/// What the Dispatcher signs in `host/hello` on the connection a Host opened to it: the UTF-8
+/// bytes of this line, with its id as the device's.
 pub fn auth_message(host_id: &str, device_id: &str, nonce: &str) -> String {
     format!("weave-host-auth/1 {host_id} {device_id} {nonce}")
 }
@@ -47,7 +46,7 @@ pub struct NewDevice {
     /// instead.
     pub name: String,
     pub public_key: Jwk,
-    /// A service pairing, such as the Dispatcher, which may do only what it needs (ADR 0027).
+    /// A service pairing, which may do only what it needs (ADR 0027).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub service: bool,
 }
@@ -99,8 +98,8 @@ pub struct OfferDeviceResponse {
     /// 128 random bits in Crockford base32.
     pub code: String,
     pub expires_at: Timestamp,
-    /// What devices connect to: the Host's Tailscale Serve URL, or `[remote] url`. Offering
-    /// turns remote access on, so a Host gives one whenever it serves remote clients.
+    /// What devices connect to: the Dispatcher's Tailscale Serve URL, or the one its `--url`
+    /// gives. Offering turns its WebSocket on, so it gives one whenever it takes devices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }

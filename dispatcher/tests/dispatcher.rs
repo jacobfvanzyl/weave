@@ -9,7 +9,6 @@ mod common;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
-use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
@@ -52,17 +51,6 @@ async fn the_dispatcher_starts_work_on_each_host_once_across_restarts() {
         added.push(world.host_id().await);
     }
     let (studio_id, mini_id) = (added[0].clone(), added[1].clone());
-    let local = studio.local().await;
-    let devices = local
-        .send(ListDevicesRequest {})
-        .await
-        .expect("devices/list")
-        .devices;
-    assert!(
-        devices.is_empty(),
-        "the Dispatcher it joined isn't one of its devices: {devices:?}"
-    );
-    local.shutdown().await;
     for host_id in [&studio_id, &mini_id] {
         host_until(&dispatcher, host_id, |host| host.connected).await;
     }

@@ -118,7 +118,7 @@ struct Watcher {
 #[derive(Clone, Debug)]
 pub(crate) struct Ticket {
     pub(crate) terminal: String,
-    /// The paired device that asked; none for a local client.
+    /// The device that asked, which the Dispatcher carries a client for; none for a local one.
     pub(crate) device: Option<String>,
     expires_at: Timestamp,
 }

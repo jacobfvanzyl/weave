@@ -180,7 +180,7 @@ describe.skipIf(!devHostAvailable())('a device paired with a dev Dispatcher', ()
 
   it('is forbidden to administer the Host', async () => {
     const { connection } = await carried();
-    await expect(connection.request('devices/list', {})).rejects.toMatchObject({ code: HOST_PROTOCOL.errors.forbidden });
+    await expect(connection.request('host/shutdown', {})).rejects.toMatchObject({ code: HOST_PROTOCOL.errors.forbidden });
     connection.close();
   });
 

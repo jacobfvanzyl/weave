@@ -1,7 +1,9 @@
-//! The WebSocket remote clients reach a weave program on: the person's other devices, through
-//! Tailscale Serve. It listens on loopback only, and since Serve's connections and local
-//! processes' look the same from there, every connection has to prove a paired device at hello;
-//! a local client's hello is never accepted on it.
+//! The WebSocket remote clients reach the Dispatcher on: the person's devices, through Tailscale
+//! Serve, and the Hosts that joined it. It listens on loopback only, and since Serve's
+//! connections and local processes' look the same from there, every connection has to prove a
+//! paired device or a joined Host before it's served; a local client's hello is never accepted
+//! on it. A Host serves the Host protocol the same way over the connections it opens to the
+//! Dispatcher ([`serve_rpc`] takes one it opened as well as one it accepted).
 //!
 //! [`upgrade`] takes an upgrade that asks for one of the program's subprotocols and carries no
 //! `Origin`, the app's, or one the configuration allows. [`serve_rpc`] then carries one

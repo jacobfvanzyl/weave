@@ -1,9 +1,10 @@
 //! A program's Tailscale Serve entry (ADR 0016): the one that forwards an HTTPS port of its
 //! own, the port its loopback WebSocket listens on, so the tailnet's devices reach it. The
 //! program makes it when remote access turns on and removes it when it turns off, through the
-//! `tailscale` command, and touches no other entry: the Host's is on 7341, the Dispatcher's on
-//! 7342. Only an entry under the computer's tailnet name now counts: one under a name it had
-//! before being renamed gives a URL that no longer resolves.
+//! `tailscale` command, and touches no other entry: the Dispatcher's is on 7342. Hosts made one
+//! on 7341 until devices reached them through the Dispatcher (WVE-197), and remove it now. Only
+//! an entry under the computer's tailnet name now counts: one under a name it had before being
+//! renamed gives a URL that no longer resolves.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -263,23 +264,18 @@ fn port_taken(status: &Value, port: u16, listen: SocketAddr) -> bool {
 
 /// The real Serve, through the `tailscale` command.
 pub struct TailscaleServe {
-    /// The program, in messages: "the Host".
+    /// The program, in messages: "the Dispatcher".
     pub what: &'static str,
-    /// How the person moves it to another port, in messages, if they can.
-    pub moved_by: Option<&'static str>,
 }
 
 impl TailscaleServe {
-    /// The Host's entry, which `[remote] listen` moves.
-    pub const HOST: Self = Self {
-        what: "the Host",
-        moved_by: Some("move the Host with [remote] listen in the config"),
-    };
+    /// The entry a Host made before WVE-197, on 7341 or where `[remote] listen` moved it,
+    /// which it removes now.
+    pub const HOST: Self = Self { what: "the Host" };
 
     /// The Dispatcher's entry, on port 7342.
     pub const DISPATCHER: Self = Self {
         what: "the Dispatcher",
-        moved_by: None,
     };
 
     async fn entry(&self, listen: SocketAddr) -> Result<String, String> {
@@ -290,12 +286,8 @@ impl TailscaleServe {
         }
         let port = listen.port();
         if port_taken(&status, port, listen) {
-            let or = self
-                .moved_by
-                .map(|moved_by| format!(", or {moved_by}"))
-                .unwrap_or_default();
             return Err(format!(
-                "Tailscale Serve already uses HTTPS port {port} for something else; free it{or}"
+                "Tailscale Serve already uses HTTPS port {port} for something else; free it"
             ));
         }
         tailscale(&[

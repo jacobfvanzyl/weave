@@ -28,12 +28,28 @@ pub struct HostStatus {
     pub environment: EnvironmentSource,
     /// The open threads.
     pub threads: Vec<ThreadListing>,
-    /// The loopback address of the WebSocket remote clients reach, when the Host serves one.
+    /// The Tailscale Serve entry the Host made for remote clients before they reached it through
+    /// the Dispatcher (ADR 0030, WVE-197), while it's there and the Host couldn't remove it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote: Option<String>,
+    pub serve_entry: Option<ServeEntryLeft>,
     /// The Dispatcher the Host joined, and its connection to it (ADR 0030).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatcher: Option<JoinedDispatcher>,
+}
+
+/// A Tailscale Serve entry the Host made for remote clients before they reached it through the
+/// Dispatcher, which it couldn't remove itself, as where only root may change Serve.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ServeEntryLeft {
+    /// The HTTPS port it serves on the computer's tailnet name.
+    pub port: u16,
+    /// What removes it, for the person to run on the Host's computer, such as
+    /// `sudo tailscale serve --https=7341 off`.
+    pub command: String,
+    /// Why the Host couldn't.
+    pub why: String,
 }
 
 /// How the Host runs.

@@ -14,12 +14,20 @@ describe('the generated Host protocol types', () => {
     expect(await readFile(OUTPUT, 'utf8')).toBe(generated);
   });
 
-  it('name every method the Host\'s golden fixtures use', async () => {
+  it('name every method the golden fixtures use, the Host\'s or the Dispatcher\'s', async () => {
     const schema = snapshotJson(await readFile(SCHEMA, 'utf8')) as {
       'x-weave-requests': Record<string, unknown>;
       'x-weave-notifications': Record<string, unknown>;
+      'x-weave-dispatcher-requests': Record<string, unknown>;
+      'x-weave-dispatcher-notifications': Record<string, unknown>;
     };
-    const methods = new Set([...Object.keys(schema['x-weave-requests']), ...Object.keys(schema['x-weave-notifications'])]);
+    // `devices/*` are the Dispatcher's alone since Hosts stopped pairing devices (WVE-197).
+    const methods = new Set([
+      'x-weave-requests',
+      'x-weave-notifications',
+      'x-weave-dispatcher-requests',
+      'x-weave-dispatcher-notifications',
+    ].flatMap((table) => Object.keys(schema[table as keyof typeof schema])));
     const files = (await readdir(fixtures)).filter((name) => name.startsWith('wire__'));
     expect(files.length).toBeGreaterThan(50);
     const unknown: string[] = [];
@@ -33,7 +41,7 @@ describe('the generated Host protocol types', () => {
 
   it('carry the protocol\'s constants', () => {
     expect(HOST_PROTOCOL.protocol.version).toBe(3);
-    expect(HOST_PROTOCOL.websocket.subprotocol).toBe('weave-host');
+    expect(HOST_PROTOCOL.websocket.closeRevoked).toBe(4000);
     expect(HOST_PROTOCOL.errors.notTarget).toBe(-32070);
   });
 });

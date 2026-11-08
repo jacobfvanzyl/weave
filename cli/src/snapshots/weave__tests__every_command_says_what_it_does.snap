@@ -14,8 +14,8 @@ Commands:
   agents      The agents weave launches: list them, move them to their newest releases, sign in to or out of one, or try one with a prompt
   schedules   The Dispatcher's schedules, which start a headless turn on one of your Hosts at the times a cron expression gives: list, add, remove, pause, resume or run one, or see what they did
   hosts       Your Hosts the Dispatcher starts work on: list them, have one join it, or remove one
-  pair        Pair another of your devices with the weave Host, to reach it over your tailnet
-  devices     Devices paired with the weave Host: list them, or revoke one
+  pair        Pair one of your devices, or another computer, with the Dispatcher, through which it reaches your Hosts. Run it where the Dispatcher runs
+  devices     Devices paired with the Dispatcher: list them, or revoke one
   terminals   The weave Host's terminals: show one here, as the TUI does in a Rex pane
   worktrees   Git worktrees: what worktrunk asks the weave Host before it removes one
   daemon      Manage the weave Host, which runs agents so their threads outlive the TUI
@@ -753,28 +753,28 @@ Options:
           Print help
 
 $ weave pair --help
-Pair another of your devices with the weave Host, to reach it over your tailnet
+Pair one of your devices, or another computer, with the Dispatcher, through which it reaches your Hosts. Run it where the Dispatcher runs
 
 Usage: weave pair [OPTIONS]
 
 Options:
       --name <NAME>
-          The name the device gets, instead of the one it gives
+          What the Dispatcher calls the device, instead of the name it gives
 
       --json
-          Print the URL and code as JSON, and don't wait for a device: for `weave hosts add` on another computer, which runs this over SSH
+          Print the URL and code as JSON, and don't wait: for `weave dispatcher connect` on another computer, which runs this over SSH
 
   -h, --help
           Print help
 
 $ weave devices --help
-Devices paired with the weave Host: list them, or revoke one
+Devices paired with the Dispatcher: list them, or revoke one
 
 Usage: weave devices [COMMAND]
 
 Commands:
-  list    List the paired devices (the default)
-  revoke  Forget a device and close its connections. It has to pair again
+  list    List the devices and computers paired with the Dispatcher (the default)
+  revoke  Forget a device and close its connections, those to your Hosts too. It has to pair again
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -782,7 +782,7 @@ Options:
           Print help
 
 $ weave devices list --help
-List the paired devices (the default)
+List the devices and computers paired with the Dispatcher (the default)
 
 Usage: weave devices list [OPTIONS]
 
@@ -794,13 +794,13 @@ Options:
           Print help
 
 $ weave devices revoke --help
-Forget a device and close its connections. It has to pair again
+Forget a device and close its connections, those to your Hosts too. It has to pair again
 
 Usage: weave devices revoke <DEVICE_ID>
 
 Arguments:
   <DEVICE_ID>
-          
+          The device's id, as `weave devices` lists it
 
 Options:
   -h, --help
@@ -981,9 +981,7 @@ Commands:
   status      Whether the Dispatcher runs, and how it reaches its Hosts (the default)
   install     Have launchd or systemd run the Dispatcher, from login or boot, and restart it if it stops
   uninstall   Stop the Dispatcher's service and remove it
-  pair        Show a code another of your computers pairs with the Dispatcher with, and wait for it (`weave dispatcher connect` there runs this over SSH)
-  devices     List the computers paired with the Dispatcher, or revoke one
-  connect     Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to have this computer's Host join the Dispatcher
+  connect     Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave pair` shows there, and offer to have this computer's Host join the Dispatcher
   disconnect  Forget the Dispatcher this computer is paired with
   help        Print this message or the help of the given subcommand(s)
 
@@ -1063,71 +1061,17 @@ Options:
   -h, --help
           Print help
 
-$ weave dispatcher pair --help
-Show a code another of your computers pairs with the Dispatcher with, and wait for it (`weave dispatcher connect` there runs this over SSH)
-
-Usage: weave dispatcher pair [OPTIONS]
-
-Options:
-      --name <NAME>
-          What the Dispatcher calls the computer, instead of the name it gives
-
-      --json
-          Print the URL and code as JSON, and don't wait: for `weave dispatcher connect` on another computer, which runs this over SSH
-
-  -h, --help
-          Print help
-
-$ weave dispatcher devices --help
-List the computers paired with the Dispatcher, or revoke one
-
-Usage: weave dispatcher devices [COMMAND]
-
-Commands:
-  list    List the computers paired with the Dispatcher (the default)
-  revoke  Forget a computer and close its connections. It has to pair again
-  help    Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help
-          Print help
-
-$ weave dispatcher devices list --help
-List the computers paired with the Dispatcher (the default)
-
-Usage: weave dispatcher devices list [OPTIONS]
-
-Options:
-      --json
-          Print them as JSON
-
-  -h, --help
-          Print help
-
-$ weave dispatcher devices revoke --help
-Forget a computer and close its connections. It has to pair again
-
-Usage: weave dispatcher devices revoke <DEVICE_ID>
-
-Arguments:
-  <DEVICE_ID>
-          The computer's device id, as `weave dispatcher devices` lists it
-
-Options:
-  -h, --help
-          Print help
-
 $ weave dispatcher connect --help
-Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave dispatcher pair` shows there, and offer to have this computer's Host join the Dispatcher
+Pair this computer with the Dispatcher on another, over SSH (`weave dispatcher connect homelab`) or with the URL and code `weave pair` shows there, and offer to have this computer's Host join the Dispatcher
 
 Usage: weave dispatcher connect [OPTIONS] <DISPATCHER> [CODE]
 
 Arguments:
   <DISPATCHER>
-          The computer SSH reaches the Dispatcher on, or the URL `weave dispatcher pair` shows there
+          The computer SSH reaches the Dispatcher on, or the URL `weave pair` shows there
 
   [CODE]
-          The code `weave dispatcher pair` shows there, after its URL
+          The code `weave pair` shows there, after its URL
 
 Options:
       --name <NAME>

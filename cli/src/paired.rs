@@ -30,8 +30,8 @@ pub(crate) struct Paired {
     pub(crate) url: String,
     /// The Dispatcher's id, which it checks is the one answering at `url`.
     pub(crate) dispatcher_id: String,
-    /// The device the Dispatcher knows this computer as, which `weave dispatcher devices
-    /// revoke` takes there.
+    /// The device the Dispatcher knows this computer as, which `weave devices revoke` takes
+    /// there.
     pub(crate) device_id: String,
     /// The computer SSH reached it on when pairing, if it did: what messages call it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

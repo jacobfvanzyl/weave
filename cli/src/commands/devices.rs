@@ -1,7 +1,9 @@
-//! `weave pair` and `weave devices`: pairing the person's other devices with the weave Host,
-//! listing them, and revoking them. Paired devices' remote clients reach the Host through
-//! Tailscale Serve, whose entry the Host makes when pairing turns remote access on
-//! (`docs/specs/wve-90-remote-clients.md`, ADR 0016).
+//! `weave pair` and `weave devices`: the person's devices and other computers paired with the
+//! Dispatcher (WVE-176), on the Dispatcher's computer: pairing one, listing them, and revoking
+//! one. Paired devices reach every Host through the Dispatcher (ADR 0030), and Hosts pair with
+//! nothing (WVE-197), so these name what the person manages, as WVE-188 has top-level commands do;
+//! they were `weave dispatcher pair` and `weave dispatcher devices` before, with no alias left.
+//! From a computer paired with a Dispatcher elsewhere they say where it runs.
 
 use std::io::IsTerminal as _;
 use std::process::ExitCode;
@@ -12,37 +14,35 @@ use clap::Args;
 use clap::Subcommand;
 use serde::Deserialize;
 use serde::Serialize;
-use weave_host::DaemonPaths;
-use weave_host_client::HostConnection;
-use weave_host_client::HostEvent;
+use weave_dispatcher::DispatcherPaths;
+use weave_dispatcher::client::DispatcherConnection;
 use weave_host_protocol::devices::Device;
 use weave_host_protocol::devices::ListDevicesRequest;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::RevokeDeviceRequest;
-use weave_host_protocol::errors;
-use weave_host_protocol::host::Service;
-use weave_host_protocol::host::StatusRequest;
 
 use crate::clock::ago;
 use crate::clock::now_ms;
-use crate::host;
+use crate::dispatcher;
+use crate::dispatcher::connect_here;
+use crate::dispatcher::remote_pairing;
 use crate::service;
 
 pub const LOG: &str = "warn";
 
 #[derive(Args)]
 pub struct PairArgs {
-    /// The name the device gets, instead of the one it gives.
+    /// What the Dispatcher calls the device, instead of the name it gives.
     #[arg(long)]
     name: Option<String>,
 
-    /// Print the URL and code as JSON, and don't wait for a device: for `weave hosts add` on
+    /// Print the URL and code as JSON, and don't wait: for `weave dispatcher connect` on
     /// another computer, which runs this over SSH.
     #[arg(long)]
     json: bool,
 }
 
-/// What `weave pair --json` prints: the URL and code a device or the Dispatcher pairs with.
+/// What `weave pair --json` prints: the URL and code a device or another computer pairs with.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Offered {
@@ -59,9 +59,10 @@ pub struct DevicesArgs {
 
 #[derive(Subcommand)]
 enum DevicesCommand {
-    /// List the paired devices (the default).
+    /// List the devices and computers paired with the Dispatcher (the default).
     List(ListArgs),
-    /// Forget a device and close its connections. It has to pair again.
+    /// Forget a device and close its connections, those to your Hosts too. It has to pair
+    /// again.
     Revoke(RevokeArgs),
 }
 
@@ -74,45 +75,47 @@ struct ListArgs {
 
 #[derive(Args)]
 struct RevokeArgs {
+    /// The device's id, as `weave devices` lists it.
     device_id: String,
 }
 
-/// `weave pair`: show a code a device pairs with, and wait for it. The offer turns the
-/// Host's remote access on, Tailscale Serve entry and all (ADR 0016).
+/// The Dispatcher on this computer, for what only its own computer may ask: pairing and
+/// revoking devices.
+async fn here(paths: &DispatcherPaths) -> anyhow::Result<DispatcherConnection> {
+    match connect_here(paths).await {
+        Ok(connection) => Ok(connection),
+        Err(error) => match remote_pairing()? {
+            Some(paired) => bail!(
+                "the Dispatcher runs on {}, and its devices are managed there: run this on that \
+                 computer",
+                paired.place()
+            ),
+            None => Err(error),
+        },
+    }
+}
+
+/// `weave pair`: show a code a device or another computer pairs with the Dispatcher with, and
+/// wait for it. The offer turns the Dispatcher's WebSocket on, Tailscale Serve entry and all.
 pub async fn pair(args: PairArgs) -> anyhow::Result<ExitCode> {
-    let paths = host::paths()?;
-    let transport = host::open(&paths).await?;
-    let (connection, mut events) = HostConnection::connect(
-        transport,
-        host::client_info("weave-cli"),
-        host::capabilities("weave-cli"),
-    )
-    .await?;
-    let result = offer(&connection, &mut events, args, &paths).await;
-    connection.shutdown().await;
+    let paths = dispatcher::paths()?;
+    let mut dispatcher = here(&paths).await?;
+    let result = offer(&mut dispatcher, &paths, args).await;
+    dispatcher.shutdown().await;
     result.map(|()| ExitCode::SUCCESS)
 }
 
 async fn offer(
-    connection: &HostConnection,
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
+    dispatcher: &mut DispatcherConnection,
+    paths: &DispatcherPaths,
     args: PairArgs,
-    paths: &DaemonPaths,
 ) -> anyhow::Result<()> {
-    let status = connection.send(StatusRequest {}).await?;
-    let offer = match connection
+    let offer = dispatcher
         .send(OfferDeviceRequest { name: args.name })
         .await
-    {
-        Ok(offer) => offer,
-        Err(error) if errors::is(&error, errors::REMOTE_UNAVAILABLE) => bail!("{}", error.message),
-        Err(error) => return Err(error.into()),
-    };
+        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
     let Some(url) = offer.url else {
-        bail!(
-            "the running weave Host is older than this weave and can't turn remote access on; \
-             restart it with `weave daemon restart`"
-        );
+        bail!("the Dispatcher gave no URL to pair with");
     };
     if args.json {
         let offered = Offered {
@@ -123,29 +126,24 @@ async fn offer(
         println!("{}", serde_json::to_string_pretty(&offered)?);
         return Ok(());
     }
-    let url = url.as_str();
-    println!("{}\n", qr_code(&pairing_link(url, &offer.code))?);
+    println!("{}\n", qr_code(&pairing_link(&url, &offer.code))?);
     println!(
-        "Scan this with the device, or enter:\n  Host  {url}\n  Code  {}\n\nThe code works \
-         once, for five minutes. To pair the Dispatcher with this Host, run where it runs:\n  \
-         weave hosts add {url} {}",
-        grouped(&offer.code),
+        "Scan this with the device, or on a computer to pair, run:\n  weave dispatcher connect \
+         {url} {}\n\nThe code works once, for five minutes.",
         offer.code
     );
-    if !matches!(status.service, Service::Launchd | Service::Systemd) {
+    if !service::dispatcher_installed(paths) {
         eprintln!(
-            "\nThe Host isn't installed as a service, so after this computer restarts your \
-             devices can't reach it until something here starts it. `weave daemon install` \
-             keeps it running."
+            "\nThe Dispatcher isn't installed as a service, so after this computer restarts your \
+             devices can't reach it, or your Hosts through it, until something here starts it. \
+             `weave dispatcher install` keeps it running."
         );
-    } else if let Some(note) = service::lingering_note(paths) {
-        eprintln!("\n{note}");
     }
     let expires_in = offer.expires_at.saturating_sub(now_ms());
     let paired = tokio::select! {
-        paired = paired(events) => paired,
+        paired = dispatcher.paired() => paired,
         () = tokio::time::sleep(std::time::Duration::from_millis(expires_in)) => {
-            println!("\nNo device paired, and the code has expired.");
+            println!("\nNothing paired, and the code has expired.");
             return Ok(());
         }
         _ = tokio::signal::ctrl_c() => {
@@ -153,29 +151,22 @@ async fn offer(
             return Ok(());
         }
     };
-    let device = paired.context("the weave Host went away")?;
-    println!("\nPaired {} ({}).", device.name, device.id);
+    let device = paired.context("the Dispatcher went away")?;
+    println!(
+        "\nPaired {} ({}), as code {}.",
+        device.name,
+        device.id,
+        grouped(&offer.code)
+    );
     Ok(())
 }
 
-/// The device that takes this connection's offer.
-async fn paired(events: &mut tokio::sync::mpsc::UnboundedReceiver<HostEvent>) -> Option<Device> {
-    while let Some(event) = events.recv().await {
-        match event {
-            HostEvent::DevicePaired(notification) => return Some(notification.device),
-            HostEvent::Disconnected(_) => return None,
-            _ => {}
-        }
-    }
-    None
-}
-
-/// The link the QR code holds, which the mobile client opens.
+/// The link the QR code holds, which the app opens.
 fn pairing_link(url: &str, code: &str) -> String {
-    link("weave://pair?", url, code)
+    link("weave://pair-dispatcher?", url, code)
 }
 
-/// `prefix`, such as `weave://pair?`, with `url` and `code`.
+/// `prefix`, such as `weave://pair-dispatcher?`, with `url` and `code`.
 pub(crate) fn link(prefix: &str, url: &str, code: &str) -> String {
     format!("{prefix}url={}&code={code}", percent_encode(url))
 }
@@ -221,55 +212,49 @@ pub(crate) fn qr_code(text: &str) -> anyhow::Result<String> {
         .join("\n"))
 }
 
-/// `weave devices`: list or revoke paired devices.
+/// `weave devices`: list or revoke the devices paired with the Dispatcher.
 pub async fn command(args: DevicesArgs) -> anyhow::Result<ExitCode> {
-    let paths = host::paths()?;
+    let paths = dispatcher::paths()?;
     let command = args
         .command
         .unwrap_or_else(|| DevicesCommand::List(ListArgs::default()));
-    let transport = host::open(&paths).await?;
-    let (connection, _events) = HostConnection::connect(
-        transport,
-        host::client_info("weave-cli"),
-        host::capabilities("weave-cli"),
-    )
-    .await?;
+    let dispatcher = here(&paths).await?;
     let result = match command {
         DevicesCommand::List(ListArgs { json }) => {
-            let devices = connection
-                .send(ListDevicesRequest {})
-                .await
-                .map(|list| list.devices);
-            devices.map_err(anyhow::Error::from).and_then(|devices| {
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&devices)?);
-                } else {
-                    print!("{}", describe(&devices, now_ms()));
+            match dispatcher.send(ListDevicesRequest {}).await {
+                Ok(listed) if json => serde_json::to_string_pretty(&listed.devices)
+                    .map(|text| println!("{text}"))
+                    .map_err(anyhow::Error::from),
+                Ok(listed) => {
+                    print!("{}", describe(&listed.devices, now_ms()));
+                    Ok(())
                 }
-                Ok(())
-            })
+                Err(error) => Err(anyhow::anyhow!("{}", error.message)),
+            }
         }
-        DevicesCommand::Revoke(RevokeArgs { device_id }) => connection
+        DevicesCommand::Revoke(RevokeArgs { device_id }) => dispatcher
             .send(RevokeDeviceRequest {
                 device_id: device_id.clone(),
             })
             .await
             .map(|_| println!("Revoked {device_id}; it has to pair again."))
-            .map_err(anyhow::Error::from),
+            .map_err(|error| anyhow::anyhow!("{}", error.message)),
     };
-    connection.shutdown().await;
+    dispatcher.shutdown().await;
     result.map(|()| ExitCode::SUCCESS)
 }
 
 fn describe(devices: &[Device], now_ms: u64) -> String {
     if devices.is_empty() {
-        return "No devices are paired; `weave pair` pairs one.\n".to_owned();
+        return "No device is paired with the Dispatcher. `weave pair` pairs one, and `weave \
+                dispatcher connect <this computer>` on another computer pairs that.\n"
+            .to_owned();
     }
     listing(devices, now_ms)
 }
 
 /// Each device, with when it was paired and last seen.
-pub(crate) fn listing(devices: &[Device], now_ms: u64) -> String {
+fn listing(devices: &[Device], now_ms: u64) -> String {
     let width = devices
         .iter()
         .map(|device| device.name.chars().count())
@@ -302,13 +287,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_link_carries_the_url_encoded() {
+    fn the_link_is_the_dispatchers_and_carries_the_url_encoded() {
         assert_eq!(
-            pairing_link("wss://mac.example.ts.net:7341", "ABC"),
-            "weave://pair?url=wss%3A%2F%2Fmac.example.ts.net%3A7341&code=ABC"
+            pairing_link("wss://homelab.example.ts.net:7342", "ABC"),
+            "weave://pair-dispatcher?url=wss%3A%2F%2Fhomelab.example.ts.net%3A7342&code=ABC"
         );
         assert_eq!(grouped("ABCDEFGHIJKL"), "ABCDE-FGHIJ-KL");
-        assert!(qr_code("weave://pair").is_ok());
+        assert!(qr_code("weave://pair-dispatcher").is_ok());
     }
 
     #[test]
@@ -329,6 +314,6 @@ mod tests {
             ),
             "d-1  iPad  paired 2d ago, connected\nd-2  iPad  paired 2d ago, seen 1d ago\n"
         );
-        assert!(describe(&[], 0).starts_with("No devices"));
+        assert!(describe(&[], 0).starts_with("No device is paired"));
     }
 }
