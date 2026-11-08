@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_client_protocol::UntypedMessage;
 use futures::SinkExt as _;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
@@ -27,6 +28,7 @@ use weave_acp_core::schema::SelectedPermissionOutcome;
 use weave_dispatcher::Dispatcher;
 use weave_dispatcher::client::DispatcherConnection;
 use weave_dispatcher::socket;
+use weave_host::RemoteConfig;
 use weave_host_client::Credentials;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
@@ -37,6 +39,8 @@ use weave_host_client::carry::Reached;
 use weave_host_client::carry::Via;
 use weave_host_client::remote::DeviceKey;
 use weave_host_client::remote::connect_websocket_as;
+use weave_host_protocol::agents::LogoutAgentRequest;
+use weave_host_protocol::agents::UpdateAgentRequest;
 use weave_host_protocol::devices::DeviceInfo;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::RevokeDeviceRequest;
@@ -50,11 +54,15 @@ use weave_host_protocol::dispatcher::DispatcherStatusRequest;
 use weave_host_protocol::dispatcher::HostCarried;
 use weave_host_protocol::dispatcher::HostCarryRequest;
 use weave_host_protocol::dispatcher::LOCAL_DEVICE;
+use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
 use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::ThreadEvent;
+use weave_host_protocol::files::ListFilesRequest;
 use weave_host_protocol::hello::ClientCapabilities;
+use weave_host_protocol::host::ShutdownRequest;
+use weave_host_protocol::host::StatusRequest;
 use weave_host_protocol::pending::AnswerPendingRequest;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::terminals::AttachTerminalRequest;
@@ -72,6 +80,7 @@ use weave_host_protocol::threads::ListThreadsRequest;
 use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::threads::ThreadState;
 use weave_host_protocol::threads::TurnOrigin;
+use weave_host_protocol::threads::WatchThreadsRequest;
 use weave_host_protocol::turns::StartTurnRequest;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
@@ -967,5 +976,136 @@ async fn a_host_serves_nothing_where_the_dispatcher_proves_no_key() {
         .relay
         .point(&dispatcher_config(hub.dir.path()).paths.hosts_socket());
     hub.reach("studio").await.connection.shutdown().await;
+    hub.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_carried_device_does_everything_but_administer_the_host() {
+    let hub = Hub::new().await;
+    let Reached { connection, .. } = hub.reach("studio").await;
+    for refused in [
+        connection.send(ShutdownRequest {}).await.map(|_| ()),
+        connection.send(LeaveDispatcherRequest {}).await.map(|_| ()),
+        connection
+            .send(LogoutAgentRequest {
+                agent_id: "fake".to_owned(),
+            })
+            .await
+            .map(|_| ()),
+    ] {
+        let error = refused.expect_err("forbidden");
+        assert!(errors::is(&error, errors::FORBIDDEN), "{error}");
+    }
+    // The Host pairs no devices of its own (WVE-197).
+    let devices = UntypedMessage::new("devices/list", serde_json::json!({})).expect("a request");
+    let error = connection.send(devices).await.expect_err("no devices/list");
+    assert_eq!(
+        error.code,
+        agent_client_protocol::Error::method_not_found().code
+    );
+    // Updating an agent isn't administering the Host: it only takes the agent to its newest
+    // version. This one runs the command its configuration gives, so that's the person's to do.
+    let update = connection
+        .send(UpdateAgentRequest {
+            agent_id: "fake".to_owned(),
+        })
+        .await
+        .expect_err("a configured agent");
+    assert!(!errors::is(&update, errors::FORBIDDEN), "{update}");
+    assert!(update.to_string().contains("yours to do"), "{update}");
+    // Nor is asking how it is, watching its threads or listing a directory.
+    let status = connection
+        .send(StatusRequest {})
+        .await
+        .expect("host/status");
+    assert_eq!(status.serve_entry, None);
+    connection
+        .send(WatchThreadsRequest::default())
+        .await
+        .expect("threads/watch");
+    let listed = connection
+        .send(ListFilesRequest {
+            path: Some(hub.studio.home()),
+            hidden: false,
+        })
+        .await
+        .expect("files/list");
+    assert_eq!(listed.path, hub.studio.home());
+    connection.shutdown().await;
+    hub.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replay_many_times_the_limit_arrives_whole_through_the_dispatcher() {
+    let limit = 64 * 1024;
+    let studio = World::with_websocket(RemoteConfig {
+        behind_limit: limit,
+        ..RemoteConfig::default()
+    })
+    .await;
+    let hub = Hub::with(studio, World::new().await).await;
+
+    // A thread with a long journal: each prompt and the agent's echo of it are twice the limit.
+    let (local, mut local_events) = HostConnection::connect(
+        hub.studio.daemon.connect_in_process(),
+        info("weave"),
+        ClientCapabilities::default(),
+    )
+    .await
+    .expect("a local client");
+    let state = create(&local, &hub.studio.home().display().to_string()).await;
+    for _ in 0..4 {
+        local
+            .send(StartTurnRequest {
+                thread_id: state.thread_id.clone(),
+                prompt: vec![ContentBlock::from("x".repeat(limit * 2))],
+                key: None,
+            })
+            .await
+            .expect("turn/start");
+        until_turn_ends(&mut local_events, &state.thread_id, |_| {}).await;
+    }
+
+    // A phone opening it through the Dispatcher gets all of it, though it all waits to be sent
+    // from the Host at once.
+    let Reached {
+        connection,
+        mut events,
+        closed,
+        ..
+    } = hub.reach("studio").await;
+    let attached = connection
+        .send(AttachThreadRequest {
+            thread_id: state.thread_id.clone(),
+            after: None,
+            agent_id: None,
+            cwd: None,
+            trace: false,
+            observe: false,
+        })
+        .await
+        .expect("thread/attach");
+    let head = attached.state.journal.head;
+    let mut replayed = 0;
+    loop {
+        match next(&mut events).await {
+            HostEvent::Event(notification) => {
+                replayed += serde_json::to_vec(&notification).expect("JSON").len();
+                if notification.seq == head {
+                    break;
+                }
+            }
+            HostEvent::Disconnected(_) => panic!("closed: {:?}", closed.get()),
+            _ => {}
+        }
+    }
+    assert!(replayed > 8 * limit, "{replayed} bytes replayed");
+    connection
+        .send(StatusRequest {})
+        .await
+        .expect("still connected");
+    assert_eq!(closed.get(), None);
+    connection.shutdown().await;
+    local.shutdown().await;
     hub.stop().await;
 }

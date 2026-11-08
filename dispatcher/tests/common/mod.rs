@@ -88,39 +88,75 @@ pub struct World {
     journals: bool,
     /// Its terminals' owner, if it has terminals.
     terminals: Option<Arc<dyn Owner>>,
+    /// Its connections to the Dispatcher's pings and backlog.
+    websocket: RemoteConfig,
 }
 
 impl World {
     pub async fn new() -> Self {
-        Self::with(false, None).await
+        Self::with(false, None, RemoteConfig::default()).await
     }
 
     /// A Host that keeps journals, whose restarts interrupt the turns it ran, and continue
     /// headless threads' (WVE-144).
     pub async fn with_journals() -> Self {
-        Self::with(true, None).await
+        Self::with(true, None, RemoteConfig::default()).await
     }
 
     /// A Host with terminals, which a fake owner keeps: each echoes what's typed into it.
     pub async fn with_terminals() -> Self {
-        Self::with(false, Some(Arc::new(EchoingOwner::default()))).await
+        Self::with(
+            false,
+            Some(Arc::new(EchoingOwner::default())),
+            RemoteConfig::default(),
+        )
+        .await
     }
 
-    async fn with(journals: bool, terminals: Option<Arc<dyn Owner>>) -> Self {
+    /// A Host whose connections to the Dispatcher, its own and those it carries, have
+    /// `websocket`'s pings and backlog.
+    pub async fn with_websocket(websocket: RemoteConfig) -> Self {
+        Self::with(false, None, websocket).await
+    }
+
+    async fn with(
+        journals: bool,
+        terminals: Option<Arc<dyn Owner>>,
+        websocket: RemoteConfig,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("config.toml"), CONFIG).expect("config");
         std::fs::create_dir_all(dir.path().join("home")).expect("home");
         let relay = Relay::new(&dir.path().join("relay.sock")).await;
-        let daemon = Daemon::new(DaemonConfig {
-            terminals: terminals.clone(),
-            ..config_with(dir.path().to_path_buf(), journals)
-        });
+        let daemon = Daemon::new(Self::config(
+            dir.path(),
+            journals,
+            terminals.clone(),
+            websocket.clone(),
+        ));
         Self {
             dir,
             relay,
             daemon,
             journals,
             terminals,
+            websocket,
+        }
+    }
+
+    fn config(
+        dir: &Path,
+        journals: bool,
+        terminals: Option<Arc<dyn Owner>>,
+        websocket: RemoteConfig,
+    ) -> DaemonConfig {
+        let mut config = config_with(dir.to_path_buf(), journals);
+        if let Some(dispatcher) = config.dispatcher.as_mut() {
+            dispatcher.websocket = websocket;
+        }
+        DaemonConfig {
+            terminals,
+            ..config
         }
     }
 
@@ -188,10 +224,12 @@ impl World {
     pub async fn restart(&mut self) {
         self.relay.cut();
         self.daemon.shutdown().await;
-        self.daemon = Daemon::new(DaemonConfig {
-            terminals: self.terminals.clone(),
-            ..config_with(self.dir.path().to_path_buf(), self.journals)
-        });
+        self.daemon = Daemon::new(Self::config(
+            self.dir.path(),
+            self.journals,
+            self.terminals.clone(),
+            self.websocket.clone(),
+        ));
         self.relay.resume();
         self.daemon.resume_dispatcher();
         self.daemon.resume_queues().await;

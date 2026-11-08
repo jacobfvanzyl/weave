@@ -1,6 +1,7 @@
 //! The person's devices and the Dispatcher (WVE-176): pairing with a code over its loopback
-//! WebSocket, proving a device at every hello, what a device may ask, revoking it, and the Serve
-//! entry pairing makes and the last revoke removes.
+//! WebSocket, proving a device at every hello, what a device may ask, revoking it, the Serve
+//! entry pairing makes and the last revoke removes, and the WebSocket's upgrade, deadline and
+//! pings.
 
 #![allow(clippy::expect_used)]
 
@@ -41,10 +42,12 @@ use weave_host_protocol::dispatcher::OfferHostRequest;
 use weave_host_protocol::dispatcher::dispatcher_auth_message;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::Auth;
+use weave_host_protocol::websocket::APP_ORIGIN;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
 use weave_host_protocol::websocket::CLOSE_UNAUTHENTICATED;
 use weave_remote::access::RemoteSettings;
 use weave_remote::access::Serve;
+use weave_remote::websocket::RemoteConfig;
 
 use crate::common::WAIT;
 use crate::common::World;
@@ -85,7 +88,19 @@ fn start(
     dir: &std::path::Path,
     serve: Arc<FakeServe>,
 ) -> (Dispatcher, tokio::task::JoinHandle<()>) {
-    let remote = RemoteSettings::new("127.0.0.1:0".parse().expect("an address"), serve);
+    start_with(dir, serve, RemoteConfig::default())
+}
+
+/// As [`start`], its WebSocket's pings, deadline and origins as `websocket` has them.
+fn start_with(
+    dir: &std::path::Path,
+    serve: Arc<FakeServe>,
+    websocket: RemoteConfig,
+) -> (Dispatcher, tokio::task::JoinHandle<()>) {
+    let remote = RemoteSettings {
+        websocket,
+        ..RemoteSettings::new("127.0.0.1:0".parse().expect("an address"), serve)
+    };
     let config = weave_dispatcher::DispatcherConfig {
         remote: Some(remote),
         ..dispatcher_config(dir)
@@ -496,6 +511,175 @@ async fn an_offer_nobody_takes_turns_remote_access_off_again() {
     .expect("turned off once the offer expired");
     let status = cli.send(DispatcherStatusRequest {}).await.expect("status");
     assert_eq!(status.remote, None);
+    cli.shutdown().await;
+    dispatcher.stop().await;
+}
+
+// The WebSocket itself, which the person's devices reach their Hosts through since Hosts stopped
+// listening for them (WVE-197).
+
+/// An upgrade with `subprotocol` and `origin`, answered or refused with its HTTP status.
+async fn upgrade(
+    url: &str,
+    subprotocol: Option<&str>,
+    origin: Option<&str>,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    u16,
+> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    use tokio_tungstenite::tungstenite::http::HeaderValue;
+    let mut request = url.into_client_request().expect("a request");
+    if let Some(subprotocol) = subprotocol {
+        request.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            HeaderValue::from_str(subprotocol).expect("a header"),
+        );
+    }
+    if let Some(origin) = origin {
+        request
+            .headers_mut()
+            .insert("Origin", HeaderValue::from_str(origin).expect("a header"));
+    }
+    match tokio_tungstenite::connect_async(request).await {
+        Ok((socket, _)) => Ok(socket),
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            Err(response.status().as_u16())
+        }
+        Err(error) => panic!("{error}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn upgrades_need_the_subprotocol_and_an_allowed_origin() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let websocket = RemoteConfig {
+        origins: vec!["https://allowed.example.com".to_owned()],
+        ..RemoteConfig::default()
+    };
+    let (dispatcher, _serving) = start_with(dir.path(), Arc::default(), websocket);
+    let cli = ask(dir.path()).await;
+    let (url, _) = offer(&cli).await;
+    assert_eq!(upgrade(&url, None, None).await.err(), Some(400));
+    assert_eq!(
+        upgrade(
+            &url,
+            Some(DISPATCHER_SUBPROTOCOL),
+            Some("https://example.com")
+        )
+        .await
+        .err(),
+        Some(403)
+    );
+    assert!(
+        upgrade(&url, Some(DISPATCHER_SUBPROTOCOL), None)
+            .await
+            .is_ok()
+    );
+    // The app's origin needs no config (ADR 0016); others need listing.
+    assert!(
+        upgrade(
+            &url,
+            Some(&format!("other, {DISPATCHER_SUBPROTOCOL}")),
+            Some(APP_ORIGIN)
+        )
+        .await
+        .is_ok()
+    );
+    assert!(
+        upgrade(
+            &url,
+            Some(DISPATCHER_SUBPROTOCOL),
+            Some("https://allowed.example.com")
+        )
+        .await
+        .is_ok()
+    );
+    cli.shutdown().await;
+    dispatcher.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_proves_no_device_in_time_is_closed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let websocket = RemoteConfig {
+        hello_deadline: Duration::from_millis(200),
+        ..RemoteConfig::default()
+    };
+    let (dispatcher, _serving) = start_with(dir.path(), Arc::default(), websocket);
+    let cli = ask(dir.path()).await;
+    let (url, code) = offer(&cli).await;
+    let (proved, _, _) = pair(&url, &code).await;
+
+    let (transport, reason) = connect_websocket_as(&url, DISPATCHER_SUBPROTOCOL)
+        .await
+        .expect("the WebSocket");
+    let (cx_tx, cx_rx) = tokio::sync::oneshot::channel();
+    let silent = tokio::spawn(async move {
+        let _ = DispatcherClient
+            .builder()
+            .connect_with(transport, async move |cx: ConnectionTo<DispatcherRole>| {
+                let _ = cx_tx.send(cx.clone());
+                cx.incoming_closed().await;
+                Ok(())
+            })
+            .await;
+    });
+    drop(cx_rx.await.expect("connected"));
+    tokio::time::timeout(WAIT, silent)
+        .await
+        .expect("closed in time")
+        .expect("ended");
+    assert_eq!(closed(&reason).await, CLOSE_UNAUTHENTICATED);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    proved
+        .send(DispatcherStatusRequest {})
+        .await
+        .expect("a proved device stays");
+    proved.shutdown().await;
+    cli.shutdown().await;
+    dispatcher.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_stops_answering_pings_is_closed() {
+    use futures::StreamExt as _;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let websocket = RemoteConfig {
+        ping_interval: Duration::from_millis(100),
+        ..RemoteConfig::default()
+    };
+    let (dispatcher, _serving) = start_with(dir.path(), Arc::default(), websocket);
+    let cli = ask(dir.path()).await;
+    let (url, code) = offer(&cli).await;
+
+    // One that answers stays.
+    let (answering, _, _) = pair(&url, &code).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    answering
+        .send(DispatcherStatusRequest {})
+        .await
+        .expect("still connected");
+
+    // One that reads nothing never answers, and is closed.
+    let mut silent = upgrade(&url, Some(DISPATCHER_SUBPROTOCOL), None)
+        .await
+        .expect("upgrades");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let ended = tokio::time::timeout(WAIT, async {
+        loop {
+            match silent.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
+                Some(Ok(_)) => {}
+            }
+        }
+    })
+    .await;
+    assert!(ended.is_ok(), "the Dispatcher closed it");
+    let _ = silent.close(None).await;
+    answering.shutdown().await;
     cli.shutdown().await;
     dispatcher.stop().await;
 }
