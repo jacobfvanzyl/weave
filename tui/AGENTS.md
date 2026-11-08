@@ -36,7 +36,8 @@ request's text, ahead of `working`; `done` or `error` from a live turn's end unt
 types or the terminal regains focus; `idle` after a cancel; `error` while the thread can't go
 on; cleared on exit), while `notify` reports the thread's directory with OSC 7 and gives the
 shell's back on exit (ADR 0018), each written only when it changes; `highlight` wraps syntect and
-two-face; `footer` and `status` are the bottom pane; `elicitation` draws forms and URL
+two-face; `footer` and `status` are the bottom pane (the status line's `host` item names the Host a thread
+on another computer is on, through the Dispatcher, `Connected::host`, and is empty otherwise); `elicitation` draws forms and URL
 elicitations there, each choice a numbered list of its options with their descriptions (Space,
 a digit or Enter picks; picking again, Backspace or Delete clears unless it's required), with
 the free text an agent's question carries (`conventions::companion_of`: Claude's Other, which

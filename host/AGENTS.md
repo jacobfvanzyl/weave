@@ -231,6 +231,23 @@ when it closes with `CLOSE_REVOKED` or refuses the Host's key; `dispatcher/leave
 and `Daemon::shutdown` closes the connection (`dispatcher::stop`); `resume_dispatcher` connects
 again at startup. The tests are the Dispatcher's (`dispatcher/tests/joins.rs`).
 
+The Dispatcher carries the person's devices' connections to the Host (ADR 0030, WVE-195; the
+Host protocol's Connections the Dispatcher carries; feature `carry`). `dispatcher/carry`, which
+`Connection::carry` takes only on `Peer::Joined` (it's in `FOR_SERVICES`), has
+`dispatcher::carry` open another connection where the Host joined the Dispatcher, check its id at
+`dispatcher/challenge` and present the token with `hosts/carry`, then answer and serve it in a
+task of its own (`serve_carried`, boxed as `websocket::serve` is, for the same cycle): the Host
+protocol as `Peer::Carried { link, device }` (`client::serve_carried`), whose hello takes only
+`Auth::Dispatcher` and gives the device the Dispatcher named, or a terminal's stream
+(`terminals::stream::serve` with the device, whose ticket it must be). A carried device is the
+Dispatcher's: it isn't in `devices.json`, nor in `Devices::connected`, so revoking it is the
+Dispatcher's to do, by closing its end. `Auth::Dispatcher` anywhere else is refused. The
+connections carried for a Dispatcher close with `State::carried`, a token `leave`, `forget`,
+joining another and `stop` cancel. `thread/create`, `thread/attach`, `threads/list` and
+`thread/run` expand a leading `~` under the Host's home (`under_home`), as a client on another
+computer names its directory there, and a new thread's directory must exist here
+(`directory_here`). The tests are the Dispatcher's (`dispatcher/tests/carry.rs`).
+
 Other Hosts (WVE-185, ADR 0029; the Host protocol's Other Hosts section) are reached through the
 Dispatcher: Hosts don't pair with each other. A service that declared `hosts`
 (`Devices::declare_tools`, `hosts_service`) gets the Host tool calls given another Host's `host`:

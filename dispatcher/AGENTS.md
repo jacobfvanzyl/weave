@@ -66,6 +66,19 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   (`dispatcher_auth_message`) or pairs with a code, and may ask everything but `devices/*` and
   `hosts/offer` with `here` (`local_first`, `forbidden`). A Host's own connection asks for
   `weave-dispatcher-host` and goes to `joins.rs` instead.
+- `carry.rs` (WVE-195, ADR 0030): the person's devices' connections carried to their Hosts. A
+  device asks on the WebSocket with `weave-dispatcher-carry` (`device`: its challenge, hello and
+  `hosts/open`, read with `weave_remote::preamble`), or on the socket after a hello there, which
+  `api::local` answers itself to see what follows it (`carry::local`, one line a message, the
+  device `local` named after the computer). `open` asks the Host's link `dispatcher/carry` with a
+  token (`Carries::expect`) and waits for the Host's own connection, whose `hosts/carry`
+  `joins.rs` hands over (`Carries::arrive`); a Host the link isn't connected to answers
+  `host_unavailable` with `hosts/list`'s status and why. `splice` passes frames between the two
+  `Side`s unread: a writer per side with its own pings, a bounded channel each way so a side is
+  read no faster than the other takes it, and either side's close passed on, after what it sent
+  before it. Each carried connection is in `Carries::live` by Host, which `remove_host` and a
+  Host leaving close (`close_host`), and among its device's connections in `Devices`, so revoking
+  closes it with `CLOSE_REVOKED`.
 - `devices.rs`, `store/devices.rs` (WVE-176): the person's devices paired with it, as with a
   Host: offers and live connections in memory (`weave_remote::pairing`), the devices and the
   Dispatcher's own id (`identity`) in SQLite. The WebSocket is `weave-remote`'s, turned on by
@@ -91,6 +104,8 @@ relay that a restart cuts, as a Host process exiting closes its connections (`te
 `tests/devices.rs` pairs devices over a loopback WebSocket with a fake Serve, and checks
 what proves a device and what doesn't, what a device may ask, revoking, and the Serve entry.
 `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
-other, the relay deafened to lose an answer. `tests/dispatcher.rs` drives the Dispatcher through
+other, the relay deafened to lose an answer. `tests/carry.rs` has a paired device reach two
+Hosts through the Dispatcher, a terminal's stream through a fake owner that echoes
+(`EchoingOwner`), and a client on its socket. `tests/dispatcher.rs` drives the Dispatcher through
 its socket across Host and Dispatcher restarts. `tests/joins.rs` checks joining: a code once,
 keys both ways, removal, a Host paired before Hosts joined, and one joining over the WebSocket.

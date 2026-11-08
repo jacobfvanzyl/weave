@@ -90,6 +90,7 @@ Messages are JSON-RPC 2.0, UTF-8. Batches aren't used.
 | Unix socket | One message per line (newline-delimited JSON) | `local` |
 | In-process channel (`--no-daemon`, tests) | One message per item | `local` |
 | WebSocket, on loopback behind Tailscale Serve | One message per text frame | `device`, or `pair` once |
+| WebSocket the Host opens to the Dispatcher it joined, for a device's connection ([carried](#connections-the-dispatcher-carries)) | One message per text frame | `dispatcher` |
 
 The socket and its directory stay where they are (`DaemonPaths`): mode 0600, in a 0700
 directory, with one Host per directory guarded by `daemon.lock`. The WebSocket is for remote
@@ -129,8 +130,12 @@ request with `unauthenticated`.
   in-process, and only when the socket's peer has the Host's own user id (`getpeereid`,
   checked when it connects), on top of the socket's file mode. On the WebSocket, `device`
   (after `host/challenge`) and `pair` prove a paired device, as WVE-90 specifies; the
-  answer then names it in `device`. `token` stays reserved and refused everywhere. A client
-  that hasn't said a successful hello gets `unauthenticated` for everything else.
+  answer then names it in `device`. `dispatcher` succeeds only on a connection the Host
+  opened to the Dispatcher it joined to carry a device's, and names the device the Dispatcher
+  named ([Connections the Dispatcher carries](#connections-the-dispatcher-carries)); anywhere
+  else it's refused, and it's all such a connection takes. `token` stays reserved and refused
+  everywhere. A client that hasn't said a successful hello gets `unauthenticated` for
+  everything else.
 - `capabilities.terminalSignIn` says the client can run an agent's sign-in command in a
   terminal on the Host's computer. Only `local` clients may claim it.
 - `capabilities.clientTools` lists the client tools the client runs on its device, such as
@@ -173,12 +178,43 @@ request with `unauthenticated`.
   [Labels](#labels)), and `context` (WVE-174): listings' `context` and `lastCompaction` (see
   [Context usage](#context-usage)), and `serviceTools` (WVE-171): `service/declareTools`,
   `service/toolCall`, `service/toolCallCancelled` and `service/answerTool` (see
-  [Service tools](#service-tools)).
+  [Service tools](#service-tools)), and `carry` (WVE-195): `dispatcher/carry` and the
+  `dispatcher` auth (see [Connections the Dispatcher carries](#connections-the-dispatcher-carries)).
 - `acp` says which ACP payloads to expect: the ACP protocol version the Host speaks to
   agents and the unstable features it may pass through.
 
 A connection ends when either side closes it. The Host detaches the client from every
 thread it was attached to; nothing else changes.
+
+### Connections the Dispatcher carries
+
+Feature `carry` (WVE-195, ADR 0030). The person's devices reach every Host through the Dispatcher
+the Host joined, which passes the Host protocol through unchanged
+([the Dispatcher spec](wve-175-dispatcher.md#devices-reaching-hosts)).
+
+**`dispatcher/carry`** `{token, device: {id, name}, stream: "host" | "terminal"}` → `{}`
+
+Only the Dispatcher the Host joined asks it, over the connection the Host opened to it; anyone
+else gets `forbidden`. The Host opens another connection to the Dispatcher where it joined it
+(its WebSocket, or `hosts.sock` on its computer, with `weave-dispatcher-host`), asks
+`dispatcher/challenge` and checks the Dispatcher's id is the one it joined, as its own connection
+does, presents the token with `hosts/carry {token}`, and answers once the Dispatcher has taken
+it. The token is good once, for a few seconds. Then it serves that connection:
+
+- **`host`:** the Host protocol, for `device`, a paired device of the Dispatcher's. Its
+  `host/hello` says `auth: {method: "dispatcher"}`, and the answer's `device` is the device the
+  Dispatcher named; any other auth is refused and the connection closed (4002), and a
+  `host/challenge` there is refused too. From then on it's a remote client like any other
+  ([What a remote client may do](wve-90-remote-clients.md#what-a-remote-client-may-do)): its
+  turns' origin names the device, its pings, backlog and fallen-behind close (4001) are a
+  WebSocket client's, and `terminals/attach` gives tickets in the device's name. The Host keeps
+  no record of the device: it isn't in `devices.json` or `devices/list`, as it's the
+  Dispatcher's, which revokes it.
+- **`terminal`:** a terminal's stream ([The terminal stream](#the-terminal-stream)), whose
+  ticket has to be one `terminals/attach` gave `device`; another's closes it with 4010.
+
+Leaving the Dispatcher, its removing the Host, joining another and the Host stopping close the
+connections the Host carries for it.
 
 ## Agents
 
@@ -1491,7 +1527,10 @@ Text frames from the Host:
   the client's screen takes it where the owner's did;
 * `{"exited": {"exitCode"}}`, after which the Host closes the stream (4011).
 
-A stream whose ticket is missing, used, late or another device's is closed with 4010.
+A stream whose ticket is missing, used, late or another device's is closed with 4010. A device
+that reaches the Host through the Dispatcher opens its stream there, carried as its Host
+protocol connection is, with `stream: "terminal"`
+([Connections the Dispatcher carries](#connections-the-dispatcher-carries)).
 
 Text frames from the client: `{"resize": {"cols", "rows"}}`, and `{"resync": {}}`, which asks
 for a fresh restore, in a `resync`, for a client that stopped drawing while another device's
@@ -1723,8 +1762,10 @@ the WebSocket binds loopback only and Tailscale Serve is the way in; every conne
 a paired device by signing a challenge; a paired device may do what a local client can,
 except `host/shutdown`, `devices/*`, and agent sign-in and sign-out, which answer
 `forbidden`. A service such as the Dispatcher (ADR 0027) is a paired device of this kind, and
-may do less (see [Services](wve-90-remote-clients.md#services)). The Host keeps no secret of
-its own: the Dispatcher, not the Host, reaches the person's other Hosts (ADR 0029).
+may do less (see [Services](wve-90-remote-clients.md#services)). The Host takes the
+Dispatcher's word for a device only on a connection it opened to the Dispatcher it joined, whose
+key it checked at that Dispatcher's hello on its own connection (ADR 0030). The Dispatcher, not
+the Host, reaches the person's other Hosts (ADR 0029).
 
 ## Clients
 
@@ -1799,6 +1840,14 @@ its own: the Dispatcher, not the Host, reaches the person's other Hosts (ADR 002
 - `weave run`, `weave threads` (`cancel`, `close`) and `weave daemon status|stop` use
   `thread/run`, `threads/list`, `turn/cancel`, `thread/close`, `host/status` and
   `host/shutdown`.
+- `--host <id or name>` on `weave`, `weave threads` and `weave run` reaches another of the
+  person's Hosts through the Dispatcher (WVE-195): the one running on this computer, or the one
+  it's paired with. A new thread's directory is this one's counterpart under the home there,
+  `~/…`, which the Host expands in `thread/create`, `thread/attach`, `threads/list` and
+  `thread/run` and says so when there's no such directory; `--cwd` names one there instead.
+  This computer's own Host, by either name, is reached over its socket. The TUI reconnects
+  through the Dispatcher and catches up after its position as it does locally, and its status
+  line names the Host.
 - `weave agents` reads the same configuration and registry through `weave-agents`, as
   `smoke`, `login` and `logout` do, so listing agents doesn't start a Host.
 - `weave --resume <id>` and `--continue` choose through `threads/list`. `--continue` keeps

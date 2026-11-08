@@ -6,9 +6,11 @@ entry (WVE-100). From 2026-10-30 the person's other Hosts paired and connected a
 (WVE-109), until 2026-11-04, when the Dispatcher took that over and peer Hosts were retired
 (WVE-185). Since 2026-11-06 the person's devices pair with the Dispatcher the same way, with the
 server's end shared in `weave-remote` ([WVE-175's Devices](wve-175-dispatcher.md#devices),
-WVE-176), and since 2026-11-07 a Host joins the Dispatcher and connects to it itself, over the
-same WebSocket code ([WVE-175's Hosts](wve-175-dispatcher.md#hosts), WVE-194). The decisions are
-recorded in
+WVE-176), since 2026-11-07 a Host joins the Dispatcher and connects to it itself, over the
+same WebSocket code ([WVE-175's Hosts](wve-175-dispatcher.md#hosts), WVE-194), and since
+2026-11-08 a device paired with the Dispatcher reaches every Host through it, which carries its
+connection to the Host ([WVE-175's Devices reaching Hosts](wve-175-dispatcher.md#devices-reaching-hosts),
+WVE-195). The decisions are recorded in
 [ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md),
 [ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md),
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
@@ -109,6 +111,25 @@ origins = []                                        # Origin values allowed besi
 | --- | --- | --- |
 | WebSocket on `listen` | One JSON-RPC message per text frame | `device`, or `pair` once |
 | WebSocket on `listen`, subprotocol `weave-terminal` (proposed, WVE-148) | One terminal's stream ([Terminals](wve-85-host-protocol.md#the-terminal-stream)) | A ticket from `terminals/attach` |
+| A connection the Host opened to the Dispatcher it joined, carrying a device's (WVE-195) | One JSON-RPC message per text frame, or a terminal's stream | `dispatcher`, the device the Dispatcher named |
+
+### Through the Dispatcher
+
+A device paired with the Dispatcher reaches the Host through it, on a connection the Host opens
+itself ([the Host protocol](wve-85-host-protocol.md#connections-the-dispatcher-carries)), so
+the Host needs no listener, Serve entry or pairing for it:
+
+- The device proves its key to the Dispatcher, and names the Host in `hosts/open`. Over the
+  Host's own connection the Dispatcher asks `dispatcher/carry` with a one-time token and the
+  device; the Host opens another connection where it joined the Dispatcher and presents the
+  token; the Dispatcher joins the two and passes the frames through unread.
+- The device's `host/hello` says `auth: {method: "dispatcher"}`, which the Host takes on such a
+  connection only, and refuses on its WebSocket, its socket and in-process. Its answer names the
+  device the Dispatcher named in `device`.
+- Pings stay with each side. The Host's fallen-behind close (4001) and the rest pass through to
+  the device, which reconnects and attaches after its position, as here.
+- A terminal's stream is carried the same way, with `stream: "terminal"`, and a ticket the
+  Host gave the same device.
 
 - The upgrade must offer the subprotocol `weave-host`, or `weave-terminal` for a terminal's
   stream. Others are refused before any message.
@@ -188,8 +209,9 @@ Every other connection from a paired device:
   nonce) answers `unauthenticated` with the same message, and the Host closes the connection
   (4002).
 - `local` and `token` are refused on the WebSocket. `device`, `pair` and `host/challenge` are
-  refused on the Unix socket. `token` stays reserved and refused; a later major version
-  removes it.
+  refused on the Unix socket. `dispatcher` is refused everywhere but a connection the Host
+  opened for the Dispatcher it joined, which takes nothing else, and no `host/challenge`.
+  `token` stays reserved and refused; a later major version removes it.
 
 ## What a remote client may do
 
@@ -208,6 +230,11 @@ agent and then `thread/reopen` their thread onto it, as the TUI's `/update` does
 
 A remote client's turn origin names its device, so transcripts can say where a prompt came
 from: `{"client": {"name": "weave-ios", "id": "c9", "device": "Jaco's iPad"}}`.
+
+A device the Dispatcher carries may do the same, and its origins name it the same way, by the
+name the Dispatcher knows it by; a client on the Dispatcher's own computer is named after that
+computer. The Host keeps no record of such a device: revoking it on the Dispatcher closes its
+connections.
 
 ## Devices
 
@@ -257,7 +284,9 @@ Hosts for this Host's agents (ADR 0029) need:
 - `thread/run` without `attach`, `thread/attach` with `observe`, `thread/detach`,
   `thread/rename`, `thread/setSuccessor`, `thread/label`, `thread/report`;
 - `service/declareTools`, `service/answerTool`;
-- `queue/add`, `turn/steer`, `turn/cancel`.
+- `queue/add`, `turn/steer`, `turn/cancel`;
+- `dispatcher/carry`, which only the Dispatcher the Host joined may ask, on the connection the
+  Host opened to it ([the Host protocol](wve-85-host-protocol.md#connections-the-dispatcher-carries)).
 
 Everything else answers `forbidden`, before any handler sees it: the computer's files,
 terminals and worktrees, opening or attaching to a thread as a client of it, answering a
@@ -275,7 +304,9 @@ It protects against:
 - tailnet devices that aren't paired;
 - a captured proof, since a nonce is good once and keys never leave devices;
 - web pages, through `Origin` and the subprotocol;
-- revoked devices, which are disconnected at once.
+- revoked devices, which are disconnected at once, from the Dispatcher too;
+- anyone saying they're the Dispatcher's device: the Host takes that only on a connection it
+  opened to the Dispatcher whose key it checked.
 
 It doesn't protect against someone using the Host computer's account, who can read
 `devices.json`, run `weave pair` or use the Unix socket, or against someone holding an unlocked
@@ -293,7 +324,7 @@ revoking a device, not turning Serve off, is what cuts one off.
 | `protocol` | `device` and `pair` auth, `host/challenge`, `devices/*`, `host.id`, the hello's `device`, the turn origin's `device`, `forbidden`, the close codes; golden fixtures for each |
 | `remote` | The server's end, which the Host and the Dispatcher share (WVE-176): the WebSocket listener (`tokio-tungstenite`, as Codex uses), pings and the 8 MiB limit (`websocket.rs`); turning remote access on and off with pairing (`access.rs`) and its Serve entry (`tailscale.rs`); offers, codes and signature checks (RustCrypto `p256`, `pairing.rs`) |
 | `daemon` | `devices.json`, `host/challenge` and `host/hello`'s check, what remote clients may call, and the terminal stream's upgrade |
-| `host-client` | A WebSocket transport (`remote::connect_websocket`), device credentials and a software key (`remote::DeviceKey`), for tests and the live check's client (`examples/remote.rs`) |
+| `host-client` | A WebSocket transport (`remote::connect_websocket`), device credentials and a software key (`remote::DeviceKey`), for tests and the live check's client (`examples/remote.rs`); and opening a connection the Dispatcher carries to a Host (`carry`, WVE-195), which the CLI's `--host` uses |
 | `cli` | `[remote]` as overrides, `weave pair` with a QR code in the terminal, and `weave devices` |
 
 `host/status` says where the WebSocket listens (`remote`) while remote access is on. The ping
@@ -327,6 +358,5 @@ interval and the 8 MiB limit are the Host's defaults; tests shorten them through
 
 ## Later
 
-- A remote mode for the TUI or `weave` CLI on another computer.
 - Replacing a device's key, and renaming devices.
 - TLS in the Host, for networks without Tailscale.
