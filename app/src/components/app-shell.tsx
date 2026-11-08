@@ -104,7 +104,7 @@ function SplitShell({ controller, onOpenHosts }: { controller: AppController; on
  */
 export function AppShell({ controller, pairingOffer, surfaceLink }: {
   controller: AppController;
-  /** A `weave dispatcher pair` link the app was opened with, for the person to confirm. */
+  /** A `weave pair` link the app was opened with, for the person to confirm. */
   pairingOffer?: { url: string; code: string };
   /** The iPhone's way to a Surface, a display it's connected to (WVE-183). */
   surfaceLink?: SurfaceLink;

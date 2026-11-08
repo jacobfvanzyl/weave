@@ -3,9 +3,10 @@
 // (`WEAVE_DAEMON_DIR`), so it never touches an installed Host, with the fake agent as `fake`.
 // `fake-minimal` is the fake agent advertising nothing optional, steering included, and
 // `fake-auth` one that needs signing in. With the debug holder beside `weave`, it has terminals
-// too. The app reaches it through a dev Dispatcher it joins (`dev-dispatcher.ts`); its own
-// WebSocket, which nothing turns on, is on a free loopback port with `[remote] url` set, so it
-// would make no Tailscale Serve entry either. Build the binaries first:
+// too. The app reaches it through a dev Dispatcher it joins (`dev-dispatcher.ts`), and tests on
+// its computer through its Unix socket (`unixConnector`): a Host listens for nothing else
+// (WVE-197). Its directory is new, so it never touches Tailscale Serve, which only a Host that
+// served remote clients before does, to remove its old entry. Build the binaries first:
 //
 //   (cd .. && cargo build -p weave-cli -p weave-fake-agent -p weave-holder)
 import { existsSync } from 'node:fs';
@@ -32,7 +33,7 @@ export type DevHost = {
   cwd: string;
   /**
    * Stops the Host as `weave daemon restart --now` does, its running turns cut off and its open
-   * threads suspended, and starts it again in the same directory, with the same config and port.
+   * threads suspended, and starts it again in the same directory, with the same config.
    */
   restart(): Promise<void>;
   /** Stops it as `restart` does, and leaves it stopped until `up`. */
@@ -60,8 +61,6 @@ export async function startDevHost(): Promise<DevHost> {
   // Its sockets, a holder's among them, need a short path: macOS allows 104 bytes, and its
   // per-user temporary directory takes half of them.
   const root = await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'weave-host-'));
-  const port = freePort();
-  const url = `ws://127.0.0.1:${port}`;
   const config = join(root, 'config.toml');
   const cwd = join(root, 'work');
   await Bun.write(join(cwd, 'README.md'), 'A directory for test threads.\n');
@@ -76,10 +75,6 @@ export async function startDevHost(): Promise<DevHost> {
     '[agents.fake-auth]',
     `command = ${JSON.stringify(fakeAgent)}`,
     `env = { WEAVE_FAKE_AGENT_REQUIRE_AUTH = "1", WEAVE_FAKE_AGENT_STATE = ${JSON.stringify(join(root, 'fake-auth.json'))} }`,
-    '',
-    '[remote]',
-    `listen = "127.0.0.1:${port}"`,
-    `url = ${JSON.stringify(url)}`,
     '',
   ].join('\n'));
   const daemon = join(root, 'daemon');
@@ -102,8 +97,6 @@ export async function startDevHost(): Promise<DevHost> {
     await halt();
     await rm(root, { recursive: true, force: true });
   };
-  // Its own WebSocket would listen only once a pairing offer turned remote access on (ADR 0016),
-  // which nothing here asks for; with `[remote] url` set, it would make no Tailscale Serve entry.
   const started = async () => {
     try {
       await until(() => existsSync(socket), 'its socket');

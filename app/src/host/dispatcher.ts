@@ -46,7 +46,7 @@ export type DispatcherCredentials =
   | { method: 'local' }
   /** A paired device, which signs the connection's challenge. */
   | ({ method: 'device' } & Omit<DispatcherPairing, 'url'>)
-  /** A device pairing with the code `weave dispatcher pair` showed. */
+  /** A device pairing with the code `weave pair` showed. */
   | { method: 'pair'; code: string; name: string; key: DeviceKey };
 
 /** JSON-RPC 2.0's own code for a method the other side doesn't have. */

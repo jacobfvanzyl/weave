@@ -23,7 +23,7 @@ const hostName = (url: string) => {
 };
 
 /**
- * Pairs with the Dispatcher at the URL and code `weave dispatcher pair` shows, in place of any
+ * Pairs with the Dispatcher at the URL and code `weave pair` shows, in place of any
  * pairing before (ADR 0030): the one pairing this device has, which reaches every Host.
  */
 export function PairDispatcherForm({ controller, offer, onPaired }: {
@@ -71,10 +71,10 @@ export function PairDispatcherForm({ controller, offer, onPaired }: {
         Pair with the Dispatcher
       </div>
       {offered
-        ? <p>Pair with the Dispatcher on <strong>{offered}</strong>? Only pair with one you just ran <code>weave dispatcher pair</code> for.</p>
+        ? <p>Pair with the Dispatcher on <strong>{offered}</strong>? Only pair with one you just ran <code>weave pair</code> for.</p>
         : (
           <p className='text-muted-foreground'>
-            Run <code>weave dispatcher pair</code> on the Dispatcher's computer and scan its QR code with the Camera, or enter
+            Run <code>weave pair</code> on the Dispatcher's computer and scan its QR code with the Camera, or enter
             the URL and code it shows. This device reaches every Host through it.
           </p>
         )}

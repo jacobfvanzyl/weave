@@ -16,7 +16,7 @@ the thread list (ADR 0031). The same React runs on the Mac in Tauri beside the C
 - The app is a remote client of the Host (ADR 0010). It speaks the Host protocol
   (`../docs/specs/wve-85-host-protocol.md`, `../docs/specs/wve-90-remote-clients.md`)
   and never ACP or MCP; ACP's content arrives as the Host protocol's payload.
-- It pairs only with the Dispatcher, from `weave dispatcher pair`'s QR code
+- It pairs only with the Dispatcher, from `weave pair`'s QR code
   (`weave://pair-dispatcher?url=…&code=…`), lists the person's Hosts from it (`hosts/list`), and
   reaches each through a connection the Dispatcher carries, terminals' streams included (ADR 0030,
   `../docs/specs/wve-175-dispatcher.md`, "Devices reaching Hosts"). It never connects to a Host

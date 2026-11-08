@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { pairingLink } from '@/host/storage';
 
 /**
- * The `weave dispatcher pair` link the app was opened with: the Camera opens its QR code's
+ * The `weave pair` link the app was opened with: the Camera opens its QR code's
  * `weave://pair-dispatcher?url=…&code=…` in the app. Each link is offered once, for the person
  * to confirm.
  */

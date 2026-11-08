@@ -3,7 +3,11 @@
 Status: structure settled 2026-10-20 (WVE-99); connecting to Hosts 2026-10-20 (WVE-100); the
 whole journal in the transcript (WVE-101), prompting (WVE-102), pending requests and client
 tools (WVE-103), the live thread list (WVE-104), and browsing for a thread's directory
-(WVE-112) 2026-10-21; reconnecting and several Hosts (WVE-105) 2026-10-22.
+(WVE-112) 2026-10-21; reconnecting and several Hosts (WVE-105) 2026-10-22. Since 2026-11-08 the
+app pairs only with the Dispatcher and reaches every Host through it (WVE-196,
+[WVE-175's app](../../../docs/specs/wve-175-dispatcher.md#the-app)), and Hosts take no remote
+connections of their own (WVE-197), so the pairing with each Host that [The
+connection](#the-connection) and [Device keys](#device-keys) describe is how it worked before.
 
 Decision: [ADR 0015](../../../docs/adr/0015-bring-alpha-back-as-the-host-client-in-capacitor.md).
 Glossary: [`CONTEXT.md`](../../../CONTEXT.md). Host protocol:

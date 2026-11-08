@@ -4,8 +4,8 @@ import type { PromptImage } from '@/app/app-controller';
 export const MAX_IMAGE_EDGE = 2048;
 
 /**
- * How much encoded image one message may carry. The Host's WebSocket takes messages up to 32 MiB;
- * this keeps a prompt well under that.
+ * How much encoded image one message may carry. A connection to a Host, through the Dispatcher,
+ * takes messages up to 32 MiB; this keeps a prompt well under that.
  */
 export const MAX_PROMPT_IMAGE_BYTES = 12 * 1024 * 1024;
 

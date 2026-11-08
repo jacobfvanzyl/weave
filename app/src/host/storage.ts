@@ -80,7 +80,7 @@ export const memoryStorage = (record?: DispatcherRecord, oldHosts: string[] = []
 });
 
 /**
- * The WebSocket URL for what `weave dispatcher pair` gives: its link carries the Dispatcher's
+ * The WebSocket URL for what `weave pair` gives: its link carries the Dispatcher's
  * WebSocket, `wss://…`, or a Serve URL, `https://…`, whose WebSocket is `wss://…` on the same host
  * and port.
  */
@@ -92,7 +92,7 @@ export function websocketUrl(url: string): string {
   return parsed.toString().replace(/\/$/, '');
 }
 
-/** `weave dispatcher pair`'s link: `weave://pair-dispatcher?url=…&code=…`. */
+/** `weave pair`'s link: `weave://pair-dispatcher?url=…&code=…`. */
 export function pairingLink(link: string): { url: string; code: string } | undefined {
   try {
     const parsed = new URL(link);

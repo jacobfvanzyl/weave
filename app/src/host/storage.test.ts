@@ -8,7 +8,7 @@ it('turns the Serve URL into its WebSocket', () => {
   expect(() => websocketUrl('ftp://example.com')).toThrow("isn't a weave Dispatcher's address");
 });
 
-it("reads weave dispatcher pair's link, and no other", () => {
+it("reads weave pair's link, and no other", () => {
   expect(pairingLink('weave://pair-dispatcher?url=wss%3A%2F%2Fhomelab.example.ts.net%3A7342&code=ABCDE12345')).toEqual({
     url: 'wss://homelab.example.ts.net:7342',
     code: 'ABCDE12345',

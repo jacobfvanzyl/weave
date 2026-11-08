@@ -1724,7 +1724,7 @@ export class HostStore {
   }
 
   /**
-   * Pairs with the Dispatcher with a code `weave dispatcher pair` showed, in place of any pairing
+   * Pairs with the Dispatcher with a code `weave pair` showed, in place of any pairing
    * before, then lists its Hosts. The Hosts an earlier version paired with go.
    */
   async #pair(input: { url: string; code: string; name?: string }) {

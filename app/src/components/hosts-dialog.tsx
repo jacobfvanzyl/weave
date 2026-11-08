@@ -67,7 +67,7 @@ function DispatcherRow({ dispatcher, actions }: { dispatcher: DispatcherSummary;
               <AlertDialogTitle>Forget the Dispatcher on {dispatcher.name}?</AlertDialogTitle>
               <AlertDialogDescription>
                 This device deletes its key and reaches no Host until it pairs again. Your threads keep running on your
-                Hosts. To cut this device off on the Dispatcher too, run <code>weave dispatcher devices revoke</code> there.
+                Hosts. To cut this device off on the Dispatcher too, run <code>weave devices revoke</code> there.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -109,7 +109,7 @@ function HostRow({ host, away, actions }: { host: HostSummary; away: boolean; ac
 /**
  * The Dispatcher this device is paired with and the Hosts it lists, each saying how the
  * Dispatcher reaches it; and pairing with the Dispatcher, again or for the first time, with the URL
- * and code `weave dispatcher pair` shows.
+ * and code `weave pair` shows.
  */
 export function HostsDialog({ controller, open, onOpenChange, offer }: {
   controller: AppController;

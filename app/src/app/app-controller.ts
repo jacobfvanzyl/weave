@@ -274,7 +274,7 @@ export type AppActions = {
   renameThread(key: string, title: string): Promise<void> | void;
   deleteThread(key: string): Promise<void> | void;
   /**
-   * Pairs with the Dispatcher at the URL and code `weave dispatcher pair` shows, in place of any
+   * Pairs with the Dispatcher at the URL and code `weave pair` shows, in place of any
    * pairing before; `name` is what the Dispatcher calls this device. Rejects saying why not.
    */
   pairDispatcher(input: { url: string; code: string; name?: string }): Promise<void> | void;
