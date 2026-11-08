@@ -57,9 +57,10 @@ export type NativeTerminalBridge = {
 export const nativeTerminalAvailable = () => Capacitor.getPlatform() === 'ios';
 export const nativeTerminal = registerPlugin<NativeTerminalBridge>('NativeTerminal');
 
-/** The stream's close codes. */
+/** The stream's close codes: the Dispatcher's that carries it, and the Host's. */
 export const CLOSE = {
   revoked: HOST_PROTOCOL.websocket.closeRevoked,
+  unauthenticated: HOST_PROTOCOL.websocket.closeUnauthenticated,
   ticket: HOST_PROTOCOL.terminalStream.closeTicket,
   exited: HOST_PROTOCOL.terminalStream.closeExited,
 } as const;

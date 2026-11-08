@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import Security
 
 // The web view paints over the native terminals beneath it (`NativeTerminalPlugin`). Touches over
 // a terminal's exposed region go to it; elsewhere, and over overlays, WebKit's hit testing holds.
@@ -92,19 +93,26 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             let mock = "history.replaceState(null, '', '?mock=\(arguments[index + 1])');"
             webView.configuration.userContentController.addUserScript(WKUserScript(source: mock, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
-        // And `--terminal-stream <ws url> <ticket>` opens that terminal's stream over the whole
-        // window, without the web view, for checking the native terminal (`scripts/terminal-check.ts`).
-        if let index = arguments.firstIndex(of: "--terminal-stream"), arguments.indices.contains(index + 2),
-           let url = URL(string: arguments[index + 1]), let renderer = WeaveTerminalRenderer(fontSize: 13) {
+        // And `--terminal-stream <dispatcher ws url> <ticket> <dispatcher id> <device id> <host>
+        // <key>` opens that terminal's stream through a dev Dispatcher over the whole window,
+        // without the web view, for checking the native terminal (`scripts/terminal-check.ts`).
+        // The key is the paired device's private key, 04 || x || y || d in base64url, which signs
+        // the Dispatcher's challenge in memory: nothing goes in the Keychain.
+        if let index = arguments.firstIndex(of: "--terminal-stream"), arguments.indices.contains(index + 6),
+           let url = URL(string: arguments[index + 1]), let renderer = WeaveTerminalRenderer(fontSize: 13),
+           let key = Self.checkKey(arguments[index + 6]) {
             let terminal = TerminalView(terminal: renderer)
             terminal.inputBlocked = false
             terminal.frame = container.bounds
             terminal.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             container.addSubview(terminal)
             let ticket = arguments[index + 2]
+            let carry = TerminalStream.Carry(dispatcherId: arguments[index + 3], deviceId: arguments[index + 4], host: arguments[index + 5]) { payload in
+                try DeviceKeys.sign(payload, with: key)
+            }
             DispatchQueue.main.async {
                 let grid = renderer.grid(forViewportSize: terminal.bounds.size)
-                let stream = TerminalStream(url: url, ticket: ticket, grid: (Int(grid.width), Int(grid.height)), renderer: renderer)
+                let stream = TerminalStream(url: url, ticket: ticket, carry: carry, grid: (Int(grid.width), Int(grid.height)), renderer: renderer)
                 stream.onScreen = { [weak terminal] in terminal?.setNeedsDisplay() }
                 stream.onMessage = { message in NSLog("weave-terminal-check %@", String(describing: message["kind"] ?? "")) }
                 stream.onClose = { code, reason in NSLog("weave-terminal-check closed %d %@", code, reason) }
@@ -130,6 +138,22 @@ final class WeaveBridgeViewController: CAPBridgeViewController {
             webView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
         ])
     }
+
+#if DEBUG
+    /// A paired device's private key for the terminal check, 04 || x || y || d in base64url, held
+    /// in memory only.
+    private static func checkKey(_ text: String) -> SecKey? {
+        var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+            kSecAttrKeySizeInBits as String: 256
+        ]
+        return SecKeyCreateWithData(data as CFData, attributes as CFDictionary, nil)
+    }
+#endif
 }
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {

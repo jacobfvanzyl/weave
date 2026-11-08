@@ -1,7 +1,7 @@
 // The native terminals beneath the web view (ADR 0022, WVE-153), after e30f6e93
 // (product/alpha/ios/App/App/NativeTerminalPlugin.swift) by way of the WVE-150 spike. The web view
-// lays each one out over a transparent element of its own, and gives it the stream's address and
-// ticket; the stream's bytes stay here.
+// lays each one out over a transparent element of its own, and gives it the Dispatcher's address,
+// what its preamble needs and the stream's ticket (ADR 0030); the stream's bytes stay here.
 import Capacitor
 import UIKit
 import WebKit
@@ -95,14 +95,22 @@ final class NativeTerminalPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    /// Opens the terminal's stream, `url` being the Host's WebSocket and `ticket` one
+    /// Opens the terminal's stream through the Dispatcher: `url` is its WebSocket, `carry` names
+    /// the Dispatcher, this device, its Keychain key and the Host, and `ticket` is one
     /// `terminals/attach` gave this device. A stream already open is closed first.
     @objc func attach(_ call: CAPPluginCall) {
         withSurface(call) { id, view in
             guard let address = call.getString("url"), let url = URL(string: address), ["ws", "wss"].contains(url.scheme ?? ""),
-                  let ticket = call.getString("ticket"), !ticket.isEmpty else { call.reject("The stream needs the Host's address and a ticket."); return }
+                  let ticket = call.getString("ticket"), !ticket.isEmpty,
+                  let carry = call.getObject("carry"),
+                  let dispatcherId = carry["dispatcherId"] as? String, let deviceId = carry["deviceId"] as? String,
+                  let keyId = carry["keyId"] as? String, let host = carry["host"] as? String
+            else { call.reject("The stream needs the Dispatcher's address, this device's pairing with it, the Host and a ticket."); return }
             view.stream?.stop()
-            let stream = TerminalStream(url: url, ticket: ticket, grid: self.grid(view), renderer: view.terminal)
+            let carried = TerminalStream.Carry(dispatcherId: dispatcherId, deviceId: deviceId, host: host) { payload in
+                try DeviceKeys.sign(payload, keyId: keyId)
+            }
+            let stream = TerminalStream(url: url, ticket: ticket, carry: carried, grid: self.grid(view), renderer: view.terminal)
             stream.onScreen = { [weak view] in view?.setNeedsDisplay() }
             stream.onMessage = { [weak self] message in self?.event(id, message) }
             stream.onClose = { [weak self, weak view, weak stream] code, reason in

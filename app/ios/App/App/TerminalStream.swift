@@ -1,11 +1,21 @@
 // A terminal's stream (`docs/specs/wve-85-host-protocol.md`, "The terminal stream"), held here
 // rather than in the web view, so a terminal's bytes never cross the bridge: base64 there held the
 // WVE-150 spike to 5 to 10 MiB/s. The web view hears everything else.
+//
+// The Dispatcher carries it, as it carries the app's connections to its Hosts (ADR 0030): on its
+// WebSocket with the carry subprotocol, the stream proves the device with the device's own key and
+// asks `hosts/open` for the Host's terminal stream (`docs/specs/wve-175-dispatcher.md`, "Devices
+// reaching Hosts"), then opens it with its ticket. Terminal bytes still never cross the bridge.
 import Foundation
 import UIKit
 
 final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
-    private static let subprotocol = "weave-terminal"
+    private static let subprotocol = "weave-dispatcher-carry"
+    /// The Dispatcher API's version.
+    private static let dispatcherProtocol = 2
+    /// The Dispatcher refused the device's hello, and closes the connection.
+    private static let unauthenticated = -32060
+    private static let closeUnauthenticated = 4002
     private static let restoreFrame: UInt8 = 0x01
     private static let outputFrame: UInt8 = 0x03
     private static let inputFrame: UInt8 = 0x10
@@ -16,6 +26,15 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
     private static let maxRestore = 64 * 1024 * 1024
 
     typealias Size = (cols: Int, rows: Int)
+
+    /// What the Dispatcher's preamble needs: which Dispatcher and device, the Host, and the
+    /// device's key to sign the Dispatcher's challenge with.
+    struct Carry {
+        let dispatcherId: String
+        let deviceId: String
+        let host: String
+        let sign: (String) throws -> String
+    }
 
     /// The stream's messages for the web view, as `{kind, …}`: `opened`, `updated`, `bell`,
     /// `notification`, `progress`, `clipboard` (without its text), `resized`, `resync`, `exited`.
@@ -34,6 +53,9 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
     private let renderer: WeaveTerminalRenderer
     private let url: URL
     private let ticket: String
+    private let carry: Carry
+    /// The preamble's request whose answer comes next; none once the Dispatcher carries the stream.
+    private var asked: Int? = 1
     /// The view's grid, and the one the Host last heard.
     private var grid: Size
     private var sentGrid: Size
@@ -54,9 +76,10 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
     private var held: [Held] = []
     private var restoring: Bool { expected > 0 || decoding != nil }
 
-    init(url: URL, ticket: String, grid: Size, renderer: WeaveTerminalRenderer) {
+    init(url: URL, ticket: String, carry: Carry, grid: Size, renderer: WeaveTerminalRenderer) {
         self.url = url
         self.ticket = ticket
+        self.carry = carry
         self.grid = grid
         self.sentGrid = grid
         self.size = grid
@@ -130,6 +153,10 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
 
     private func text(_ text: String) {
         guard let data = text.data(using: .utf8), let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        if asked != nil {
+            preamble(message)
+            return
+        }
         if !opened {
             guard let terminal = message["terminal"] as? [String: Any], let restore = message["restore"] as? String else {
                 finish(0, "the Host didn't open the stream")
@@ -168,6 +195,52 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
             var forwarded = payload as? [String: Any] ?? [:]
             forwarded["kind"] = kind
             onMessage?(forwarded)
+        }
+    }
+
+    private func ask(_ id: Int, _ method: String, _ params: [String: Any]) {
+        asked = id
+        sendJSON(["jsonrpc": "2.0", "id": id, "method": method, "params": params])
+    }
+
+    /// The Dispatcher's answers to the preamble: its challenge, signed at hello, then the Host's
+    /// terminal stream, which the ticket opens.
+    private func preamble(_ message: [String: Any]) {
+        guard let id = (message["id"] as? NSNumber)?.intValue, id == asked else { return }
+        if let error = message["error"] as? [String: Any] {
+            // An unauthenticated hello: the Dispatcher refused the device, and closes with 4002.
+            let refused = (error["code"] as? NSNumber)?.intValue == Self.unauthenticated
+            finish(refused ? Self.closeUnauthenticated : 0, error["message"] as? String ?? "the Dispatcher refused")
+            return
+        }
+        let result = message["result"] as? [String: Any] ?? [:]
+        switch id {
+        case 1:
+            guard let dispatcherId = result["dispatcherId"] as? String, let nonce = result["nonce"] as? String else {
+                finish(0, "the Dispatcher didn't give a challenge"); return
+            }
+            guard dispatcherId == carry.dispatcherId else {
+                finish(Self.closeUnauthenticated, "another Dispatcher answers there now"); return
+            }
+            let signature: String
+            do {
+                signature = try carry.sign("weave-dispatcher-auth/1 \(dispatcherId) \(carry.deviceId) \(nonce)")
+            } catch {
+                finish(Self.closeUnauthenticated, error.localizedDescription); return
+            }
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+            ask(2, "dispatcher/hello", [
+                "protocol": Self.dispatcherProtocol,
+                "client": ["name": "weave-ios", "version": version],
+                "auth": ["method": "device", "deviceId": carry.deviceId, "signature": signature]
+            ])
+        case 2:
+            ask(3, "hosts/open", ["host": carry.host, "stream": "terminal"])
+        default:
+            // Carried: from here the stream is the Host's.
+            asked = nil
+            sentGrid = grid
+            sendJSON(["ticket": ticket, "size": ["cols": grid.cols, "rows": grid.rows], "codec": WeaveTerminalRenderer.codec()])
         }
     }
 
@@ -259,8 +332,7 @@ final class TerminalStream: NSObject, URLSessionWebSocketDelegate {
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         guard !ended else { return }
-        sentGrid = grid
-        sendJSON(["ticket": ticket, "size": ["cols": grid.cols, "rows": grid.rows], "codec": WeaveTerminalRenderer.codec()])
+        ask(1, "dispatcher/challenge", [:])
         receive()
     }
 

@@ -1,7 +1,10 @@
 /// <reference types="bun" />
-// Checks the native terminal in a simulator against a dev Host (WVE-153): the app's debug
-// `--terminal-stream` opens one terminal's stream over the whole window, and the Host's side types
-// into it, floods it and reads its screen, while screenshots record what the app drew.
+// Checks the native terminal in a simulator against a dev Host, through a dev Dispatcher it joined
+// (WVE-153, WVE-196): the app's debug `--terminal-stream` proves a paired device to the
+// Dispatcher, asks it for the Host's terminal stream and opens it over the whole window, and the
+// Host's side types into it, floods it and reads its screen, while screenshots record what the
+// app drew. The device's key is made here and handed to the app at launch, which signs with it
+// in memory; the dev Dispatcher listens with `--url`, so nothing touches Tailscale Serve.
 //
 //   bun scripts/terminal-check.ts [--simulator "<name>"] [--out <dir>]
 //
@@ -10,7 +13,11 @@
 import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { HostConnection } from '../src/host/connection';
+import { HostConnection, websocketConnector } from '../src/host/connection';
+import { toBase64Url, fromBase64Url } from '../src/host/base64url';
+import { type DeviceKey, rawSignatureToDer } from '../src/host/device-key';
+import { DISPATCHER, DispatcherConnection, carriedConnector } from '../src/host/dispatcher';
+import { startDevDispatcher } from '../src/host/testing/dev-dispatcher';
 import { startDevHost, unixConnector } from '../src/host/testing/dev-host';
 
 const root = resolve(import.meta.dir, '..');
@@ -66,15 +73,50 @@ void (async () => {
   for await (const chunk of log.stdout) logged.push(...new TextDecoder().decode(chunk).split('\n').filter((line) => line.includes('weave-terminal-check')));
 })();
 
-const host = await startDevHost();
+/**
+ * A device key this check can hand to the app: WebCrypto's, exported as 04 || x || y || d, which
+ * is how Security takes a P-256 private key.
+ */
+async function checkKey(): Promise<{ key: DeviceKey; x963: string }> {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+  if (!jwk.x || !jwk.y || !jwk.d) throw new Error('WebCrypto gave no key.');
+  const x963 = toBase64Url(Uint8Array.of(0x04, ...fromBase64Url(jwk.x), ...fromBase64Url(jwk.y), ...fromBase64Url(jwk.d)));
+  const key: DeviceKey = {
+    publicKey: async () => ({ kty: 'EC', crv: 'P-256', x: jwk.x!, y: jwk.y! }),
+    sign: async (message) => toBase64Url(rawSignatureToDer(new Uint8Array(
+      await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, new TextEncoder().encode(message))))),
+    forget: async () => {},
+  };
+  return { key, x963 };
+}
+
+const client = { name: 'terminal-check', version: '0' };
+const [dispatcher, host] = await Promise.all([startDevDispatcher(), startDevHost()]);
+const hostId = await dispatcher.join(host, 'check');
 const local = await HostConnection.connect({
   connector: unixConnector(host.socket),
-  client: { name: 'terminal-check', version: '0' },
+  client,
   credentials: { method: 'local' },
   onEvent: () => {},
 });
-// A pairing offer turns the Host's WebSocket on (ADR 0016); the offer itself goes unused.
-await local.request('devices/offer', {});
+// The device pairs with the Dispatcher, which turns its WebSocket on (no Serve entry: `--url`),
+// and a connection it carries to the Host gives the device's tickets.
+const { key, x963 } = await checkKey();
+const socket = (url: string, subprotocol: string) => websocketConnector(url, subprotocol);
+const paired = await DispatcherConnection.connect({
+  connector: socket(dispatcher.url, DISPATCHER.subprotocol),
+  client,
+  credentials: { method: 'pair', code: await dispatcher.offer(), name: 'Simulator', key },
+});
+const pairing = { url: dispatcher.url, dispatcherId: paired.hello.id ?? '', deviceId: paired.hello.device?.id ?? '', key };
+paired.close();
+const carried = await HostConnection.connect({
+  connector: carriedConnector(socket, pairing, hostId, client),
+  client,
+  credentials: { method: 'dispatcher' },
+  onEvent: () => {},
+});
 const screen = async (id: string) => (await local.request('terminals/format', { id, trim: true })).content;
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -82,8 +124,9 @@ const check = (ok: boolean, what: string) => {
   if (!ok) failures += 1;
 };
 const launch = async (id: string) => {
-  const { ticket } = await local.request('terminals/attach', { id });
-  must(['xcrun', 'simctl', 'launch', '--terminate-running-process', device.udid, bundleId, '--terminal-stream', host.url, ticket]);
+  const { ticket } = await carried.request('terminals/attach', { id });
+  must(['xcrun', 'simctl', 'launch', '--terminate-running-process', device.udid, bundleId,
+    '--terminal-stream', dispatcher.url, ticket, pairing.dispatcherId, pairing.deviceId, hostId, x963]);
 };
 
 let terminalId: string | undefined;
@@ -133,8 +176,10 @@ try {
   await Bun.sleep(500);
   run(['xcrun', 'simctl', 'terminate', device.udid, bundleId]);
   log.kill();
+  carried.close();
   local.close();
   await host.stop();
+  await dispatcher.stop();
   await rm(shots, { recursive: true, force: true });
 }
 console.log(failures ? `${failures} failed` : 'all passed');

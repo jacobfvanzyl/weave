@@ -109,7 +109,11 @@ export function useNativeTerminal(host: RefObject<HTMLElement | null>, { termina
             return;
           }
           if (event.code === CLOSE.revoked) {
-            setState({ kind: 'failed', message: 'The Host revoked this device. Pair it again to see its terminals.' });
+            setState({ kind: 'failed', message: 'The Dispatcher revoked this device. Pair it again to see your terminals.' });
+            return;
+          }
+          if (event.code === CLOSE.unauthenticated) {
+            setState({ kind: 'failed', message: `The Dispatcher refused this device${event.reason ? ` (${event.reason})` : ''}. Pair it again to see your terminals.` });
             return;
           }
           // A dropped network, a Host restart or a late ticket: attach again, backing off, once

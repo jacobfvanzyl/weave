@@ -2,30 +2,25 @@ import Foundation
 import Capacitor
 import Security
 
-// This device's P-256 keys, one per paired Host, in the Secure Enclave where there is one and
-// otherwise a ThisDeviceOnly Keychain key. Keys never leave the device.
+// This device's P-256 key for the Dispatcher it pairs with (ADR 0030), in the Secure Enclave
+// where there is one and otherwise a ThisDeviceOnly Keychain key; earlier versions kept one per
+// paired Host, which the app deletes once it's paired with the Dispatcher. Keys never leave the
+// device.
 //
-// It answers as the weave Host expects (docs/specs/wve-90-remote-clients.md): the public key
-// as a JWK, and signatures of a message's UTF-8 bytes as DER ECDSA P-256 SHA-256, in unpadded
-// base64url.
-@objc(DeviceKeyPlugin)
-final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
-    let identifier = "DeviceKeyPlugin"
-    let jsName = "DeviceKey"
-    let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "generate", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "sign", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "delete", returnType: CAPPluginReturnPromise)
-    ]
-
-    private func tag(_ keyId: String) throws -> Data {
+// It answers as the Dispatcher expects (docs/specs/wve-175-dispatcher.md, Devices): the public
+// key as a JWK, and signatures of a message's UTF-8 bytes as DER ECDSA P-256 SHA-256, in unpadded
+// base64url. `DeviceKeys` signs for the native terminal too, which proves the device to the
+// Dispatcher itself before a terminal's stream (`TerminalStream.swift`).
+/// The device's keys in the Keychain, by the id the app names each with.
+enum DeviceKeys {
+    static func tag(_ keyId: String) throws -> Data {
         guard keyId.range(of: #"^[A-Za-z0-9._-]{1,120}$"#, options: .regularExpression) != nil else {
             throw NSError(domain: "DeviceKey", code: 1, userInfo: [NSLocalizedDescriptionKey: "The key id is invalid."])
         }
         return Data("dev.weave.device.\(keyId)".utf8)
     }
 
-    private func privateKey(_ keyId: String) throws -> SecKey? {
+    static func privateKey(_ keyId: String) throws -> SecKey? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
@@ -41,6 +36,39 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
         return (key as! SecKey)
     }
 
+    /// `payload`'s UTF-8 bytes signed with `key`, DER ECDSA P-256 SHA-256, in unpadded base64url.
+    static func sign(_ payload: String, with key: SecKey) throws -> String {
+        var error: Unmanaged<CFError>?
+        guard let signature = SecKeyCreateSignature(
+            key,
+            .ecdsaSignatureMessageX962SHA256,
+            Data(payload.utf8) as CFData,
+            &error
+        ) as Data? else {
+            throw error?.takeRetainedValue() ?? NSError(domain: "DeviceKey", code: 12)
+        }
+        return signature.base64URLEncodedString()
+    }
+
+    /// `payload` signed with the key `keyId` names.
+    static func sign(_ payload: String, keyId: String) throws -> String {
+        guard let key = try privateKey(keyId) else {
+            throw NSError(domain: "DeviceKey", code: 11, userInfo: [NSLocalizedDescriptionKey: "This device no longer has its key for the Dispatcher."])
+        }
+        return try sign(payload, with: key)
+    }
+}
+
+@objc(DeviceKeyPlugin)
+final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
+    let identifier = "DeviceKeyPlugin"
+    let jsName = "DeviceKey"
+    let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "generate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sign", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "delete", returnType: CAPPluginReturnPromise)
+    ]
+
     private func createKey(_ keyId: String, secureEnclave: Bool) throws -> SecKey {
         let access = SecAccessControlCreateWithFlags(
             nil,
@@ -50,7 +78,7 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
         )!
         var privateAttributes: [String: Any] = [
             kSecAttrIsPermanent as String: true,
-            kSecAttrApplicationTag as String: try tag(keyId)
+            kSecAttrApplicationTag as String: try DeviceKeys.tag(keyId)
         ]
         if secureEnclave {
             privateAttributes[kSecAttrAccessControl as String] = access
@@ -95,7 +123,7 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
         guard let keyId = call.getString("keyId") else { return call.reject("keyId is required.") }
         do {
             let key: SecKey
-            if let existing = try privateKey(keyId) {
+            if let existing = try DeviceKeys.privateKey(keyId) {
                 key = existing
             } else {
                 do { key = try createKey(keyId, secureEnclave: true) }
@@ -112,19 +140,9 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
             return call.reject("keyId and payload are required.")
         }
         do {
-            guard let key = try privateKey(keyId) else { throw NSError(domain: "DeviceKey", code: 11) }
-            var error: Unmanaged<CFError>?
-            guard let signature = SecKeyCreateSignature(
-                key,
-                .ecdsaSignatureMessageX962SHA256,
-                Data(payload.utf8) as CFData,
-                &error
-            ) as Data? else {
-                throw error?.takeRetainedValue() ?? NSError(domain: "DeviceKey", code: 12)
-            }
-            call.resolve(["signature": signature.base64URLEncodedString()])
+            call.resolve(["signature": try DeviceKeys.sign(payload, keyId: keyId)])
         } catch {
-            call.reject("Could not sign the Host challenge.", "SIGNING_FAILED", error)
+            call.reject("Could not sign the Dispatcher's challenge.", "SIGNING_FAILED", error)
         }
     }
 
@@ -134,7 +152,7 @@ final class DeviceKeyPlugin: CAPPlugin, CAPBridgedPlugin {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassKey,
                 kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-                kSecAttrApplicationTag as String: try tag(keyId)
+                kSecAttrApplicationTag as String: try DeviceKeys.tag(keyId)
             ]
             let status = SecItemDelete(query as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else {
