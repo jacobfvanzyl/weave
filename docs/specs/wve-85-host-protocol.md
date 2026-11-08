@@ -1263,8 +1263,9 @@ Host A (mini)                     Dispatcher                         Host B (stu
   agent started, or that one of those started, reaches no other Host: its Host tools fail if
   given `host`, and the service refuses such a call too.
 - **Clients.** A thread another Host's agent started shows its `startedBy` and `startedByHost`,
-  and a turn's origin its `hostName`: the TUI says "A thread on mini", and the app, which pairs
-  with several Hosts, names the thread that started it and that thread's Host when it lists both.
+  and a turn's origin its `hostName`: the TUI says "A thread on mini", and the app, which reaches
+  every Host the Dispatcher lists, names the thread that started it and that thread's Host when it
+  lists both.
 - **Peer Hosts retired.** A Host that paired with peers revokes those pairings (paired devices
   that named a Host id) and removes `peers.json` and `host-key.json` when it starts: a Host
   keeps no secret of its own again (ADR 0010).
@@ -1742,7 +1743,9 @@ returns the agent's error unchanged.
 - The protocol is also kept as one JSON Schema (`protocol/tests/schema.rs`, behind the
   crate's `schema` feature): every request, answer and notification, the ACP types they
   carry, which method takes and gives which, and the protocol's constants. Clients in other
-  languages generate their types from it; the app's TypeScript (WVE-100) is checked against it.
+  languages generate their types from it; the app's TypeScript (WVE-100) is checked against it,
+  and the Dispatcher's API is kept beside it, for the app, which pairs with the Dispatcher
+  (WVE-196).
 
 The TUI and the Host ship in one binary, so they normally agree. A TUI that meets an
 incompatible Host after `weave daemon restart` `/reload`s itself into the current binary,

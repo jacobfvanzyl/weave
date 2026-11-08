@@ -85,9 +85,10 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   Dispatcher's own id (`identity`) in SQLite. The WebSocket is `weave-remote`'s, turned on by
   `devices/offer` and `hosts/offer` and kept on while a device is paired or a Host joined over
   it (`DispatcherConfig::remote`, loopback 7342 with its own Tailscale Serve entry as `weave
-  dispatcher run` sets it; none in tests unless they give a fake Serve), and off with the last
-  revoke or removal (`api::stop_if_unused`). It asks for `weave-dispatcher`, so a client
-  pointed at a Host fails at the upgrade.
+  dispatcher run` sets it, or where its `--listen` and `--url` say, a URL leaving Serve alone,
+  as the app's dev Dispatcher has it; none in tests unless they give a fake Serve), and off with
+  the last revoke or removal (`api::stop_if_unused`). It asks for `weave-dispatcher`, so a
+  client pointed at a Host fails at the upgrade.
 
 Work reaches a Host through a **delivery** only: written to SQLite first, under a request key
 (its own, or `dispatcher/<delivery id>`), then sent, and sent again on each connection until

@@ -10,7 +10,9 @@ WVE-176), since 2026-11-07 a Host joins the Dispatcher and connects to it itself
 same WebSocket code ([WVE-175's Hosts](wve-175-dispatcher.md#hosts), WVE-194), and since
 2026-11-08 a device paired with the Dispatcher reaches every Host through it, which carries its
 connection to the Host ([WVE-175's Devices reaching Hosts](wve-175-dispatcher.md#devices-reaching-hosts),
-WVE-195). The decisions are recorded in
+WVE-195). The app pairs with the Dispatcher alone and reaches every Host that way (WVE-196,
+[WVE-175's app](wve-175-dispatcher.md#the-app)), so it no longer uses the Host's own WebSocket,
+pairing or devices below, which stay until WVE-197 retires them. The decisions are recorded in
 [ADR 0010](../adr/0010-remote-clients-through-the-tailnet-with-device-keys.md),
 [ADR 0016](../adr/0016-pairing-turns-on-remote-access-and-the-host-keeps-its-serve-entry.md),
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
@@ -19,8 +21,8 @@ WVE-195). The decisions are recorded in
 
 ## Purpose
 
-Let a client on another of the person's devices, starting with the mobile client (WVE-91),
-connect to the Host and use it as the TUI does: list, open and attach to threads, prompt and
+Let a client on another of the person's devices, starting with the mobile client (WVE-91, which
+now goes through the Dispatcher), connect to the Host and use it as the TUI does: list, open and attach to threads, prompt and
 steer, and answer pending requests. They speak the Host protocol
 ([`wve-85-host-protocol.md`](wve-85-host-protocol.md)). This adds a WebSocket transport,
 pairing and device authentication, and what a remote client may do.
@@ -168,7 +170,8 @@ gives it as `host.id`, so a client tells Hosts apart, and challenges are bound t
 1. On the Host's computer, `weave pair [--name <device>]` asks the Host for an offer
    (`devices/offer`), which turns remote access on and answers with the URL, and shows it as a
    QR code and as text: the URL and a code. The QR code
-   encodes `weave://pair?url=<url>&code=<code>`, a link the mobile client opens. An offer is
+   encodes `weave://pair?url=<url>&code=<code>`, a link the mobile client opened until it paired
+   with the Dispatcher alone (WVE-196); it opens `weave://pair-dispatcher` now. An offer is
    good for one pairing within five minutes, lives only in the Host's memory, and at most three
    are live. `weave pair` waits and says which device paired.
 2. The device shows the URL's host name and has the person confirm it before it connects.

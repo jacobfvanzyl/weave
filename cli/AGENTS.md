@@ -205,12 +205,14 @@ journals and traces) beside the installed one; its log is `daemon.log` there, an
 `restart` go through the manager. Otherwise `start` runs `weave dispatcher run` in the background
 (`background.rs`, logging to `dispatcher.log`) and waits for it to answer, and `stop` sends SIGTERM
 to whatever listens on its socket (`weave_host::socket::terminate_listener`). It keeps its work as it
-goes, so stopping drains nothing. `weave hosts` and `weave schedules` ask it over its socket
-(`src/dispatcher.rs`), or, when none runs here, the one this computer is paired with, over its
-WebSocket (WVE-176): `weave dispatcher connect <computer>` runs `weave dispatcher pair --json`
-there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests), or takes the URL and
-code, pairs with a new device key (`DeviceKey::kept`, in the Secure Enclave on a Mac that has
-one) and keeps the pairing in `$XDG_STATE_HOME/weave/client` (`src/paired.rs`, 0600;
+goes, so stopping drains nothing. `run --listen <loopback address> --url <url>` puts its
+WebSocket elsewhere and leaves Tailscale Serve alone, for a development Dispatcher such as the
+app's tests run (`app/src/host/testing/dev-dispatcher.ts`). `weave hosts` and `weave schedules`
+ask it over its socket (`src/dispatcher.rs`), or, when none runs here, the one this computer is
+paired with, over its WebSocket (WVE-176): `weave dispatcher connect <computer>` runs `weave
+dispatcher pair --json` there over SSH (`src/ssh.rs`, which `WEAVE_SSH` stands in for in tests),
+or takes the URL and code, pairs with a new device key (`DeviceKey::kept`, in the Secure Enclave on
+a Mac that has one) and keeps the pairing in `$XDG_STATE_HOME/weave/client` (`src/paired.rs`, 0600;
 `disconnect` removes it). Then it offers to have this computer's Host join the Dispatcher
 (`hosts::join_from`: a `hosts/offer` code handed to the Host's `dispatcher/join`, which `weave
 hosts add` with no computer runs too, over the Dispatcher's `hosts.sock` when it runs here),

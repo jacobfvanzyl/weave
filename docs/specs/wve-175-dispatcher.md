@@ -5,8 +5,9 @@ macOS and a systemd user service on Debian 13, each restarting a Dispatcher that
 Schedules (WVE-145) since 2026-11-04, calls from Hosts' agents to the person's other Hosts
 (WVE-185) since 2026-11-04, the person's devices pairing with it and reaching it over the
 tailnet (WVE-176) since 2026-11-06, Hosts joining it and keeping a connection open to it
-(WVE-194) since 2026-11-07, and the person's devices reaching every Host through it (WVE-195)
-since 2026-11-08. The decisions are in
+(WVE-194) since 2026-11-07, the person's devices reaching every Host through it (WVE-195)
+since 2026-11-08, and the app pairing with it alone and reaching every Host through it (WVE-196),
+built 2026-11-08 and not yet on the person's devices. The decisions are in
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
 [ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md) and
 [ADR 0030](../adr/0030-the-dispatcher-is-the-hub-hosts-dial-out-to-it-and-devices-reach-every-host-through-it.md);
@@ -61,7 +62,10 @@ a Host ([remote clients](wve-90-remote-clients.md)); the server's end is the Hos
 CLI on every other computer asks it there.
 
 - **A WebSocket of its own,** on loopback port 7342 beside the Host's 7341, with its own
-  Tailscale Serve entry on HTTPS port 7342. `devices/offer` and `hosts/offer` turn both on;
+  Tailscale Serve entry on HTTPS port 7342. `weave dispatcher run --listen <loopback address>
+  --url <url>` puts it elsewhere, and with a URL makes and removes no Serve entry, as the Host's
+  `[remote] listen` and `url` do: the app's tests run a dev Dispatcher so. `devices/offer` and
+  `hosts/offer` turn both on;
   they stay on while a device is paired or a Host joined over them, across restarts, and go
   when the last is revoked or removed, or an offer expires with neither. The upgrade asks for
   the `weave-dispatcher` subprotocol, so a client pointed at a Host's URL fails there, and the
@@ -183,6 +187,31 @@ device                       Dispatcher                              Host
 - **Revoking and removing.** The Dispatcher keeps each connection it carries, by device and by
   Host. Revoking a device closes its end of each with 4000 and the Host's normally; removing a
   Host, or the Host leaving, closes everything carried to it.
+
+### The app
+
+The app on the iPad and iPhone (WVE-196) pairs only with the Dispatcher and reaches every Host
+through it; it never connects to a Host directly, and has no fallback while the Dispatcher is away
+(ADR 0030).
+
+- **One pairing.** It scans the QR code `weave dispatcher pair` shows
+  (`weave://pair-dispatcher?url=…&code=…`), shows the address's host name for the person to
+  confirm, makes a key in the Secure Enclave and pairs at `dispatcher/hello`. It keeps the
+  Dispatcher's id, name (`dispatcher/status`) and URL, its device id there, its key's name, and
+  the Hosts it last listed. Until it's paired it shows the pairing screen; once it is, it deletes
+  the records it kept per Host before and their keys.
+- **Its Hosts** are `hosts/list`'s, on one connection to the API it keeps open, listed when it
+  connects, when the app comes to the front, and after a Host's connection fails, then again,
+  backing off, while one is away. There's no notification of a Host coming back. A Host the
+  Dispatcher isn't connected to says why, `why` or its status.
+- **Each Host** has a connection of its own the Dispatcher carries, said hello to with
+  `auth: {method: "dispatcher"}`; attaching, replay, pending requests and reconnecting are as
+  before. A terminal's stream is carried by the native terminal itself, which says the same
+  preamble with `stream: "terminal"`, signing with the same key, before the stream's first frame.
+- **When things fail.** While the Dispatcher can't be reached, a banner says so and the sidebar
+  keeps the Hosts it last listed, greyed out. A device it refuses at hello is told to pair again;
+  one it revokes (4000, on any of its connections) forgets the pairing and its key, and is told to
+  pair again.
 
 ## Deliveries
 
@@ -446,7 +475,7 @@ Newest first, 50 by default.
 
 | Command | What it does |
 | --- | --- |
-| `weave dispatcher run` | runs it here until SIGTERM or SIGINT; its stderr is its log |
+| `weave dispatcher run [--listen <addr>] [--url <url>]` | runs it here until SIGTERM or SIGINT; its stderr is its log. `--listen` puts its WebSocket on another loopback address, and `--url`, what devices and Hosts connect to, leaves Tailscale Serve alone ([Devices](#devices)) |
 | `weave dispatcher start \| stop \| restart` | through the service once it's installed, and otherwise runs `weave dispatcher run` in the background, logging to `dispatcher.log`, or stops it with SIGTERM; `start` and `restart` wait for it to answer. Stopping it drains nothing: its work is kept as it goes. |
 | `weave dispatcher install` | has launchd (`local.weave.dispatcher`) or systemd (`weave-dispatcher.service`) run `weave dispatcher run` from login or boot and restart it, then waits for it to answer; on Linux it turns lingering on as `weave daemon install` does. A Dispatcher directory of its own (`WEAVE_DISPATCHER_DIR`, which the service is given) gets a service of its own, named after it. launchd won't start a weave in `~/Documents`, `~/Desktop` or `~/Downloads`, and a process it starts can't use a removable volume without the person's leave, so install from a copy elsewhere, such as `~/.local/bin/weave`. |
 | `weave dispatcher uninstall` | stops the service and removes it |
@@ -524,6 +553,14 @@ directory if one answers, and otherwise the paired one, and says both when neith
   with another device's ticket and closed when the device is revoked. CLI `tests/dispatcher.rs`:
   `weave run --host` and `weave threads --host` reach a Host as on another computer, in the
   directory's counterpart under the home there.
+- The app (WVE-196), `app/src/host/*.host.test.ts` against a dev Dispatcher whose WebSocket has a
+  URL of its own, so nothing touches Serve, and dev Hosts that joined it over its socket: pairing,
+  proving the device and listing Hosts; threads opened, prompted, steered and answered through
+  it; a network dropped mid-turn and a Host restarting, caught up with nothing missing or
+  repeated; the Dispatcher stopping and starting again, its last Hosts shown meanwhile; a Host it
+  can't reach, and one it removes; a revoked device; a terminal's stream through it. The app's
+  unit tests do the same against a scripted Dispatcher, and `app/scripts/terminal-check.ts` runs
+  the native terminal through a dev Dispatcher in a simulator.
 - Live: the Dispatcher on the homelab as a systemd user service, and `weave hosts` and
   `weave schedules` from the Mac; the Mac's and homelab-1's Hosts join it, and a schedule works
   without the Dispatcher dialing either. A thread on homelab-1 opened from the Mac's CLI through
@@ -533,8 +570,8 @@ directory if one answers, and otherwise the paired one, and says both when neith
 
 - Webhooks (WVE-146) make deliveries as schedules do; the edge (WVE-117) holds webhook
   deliveries and pushes for it.
-- The app pairs with the Dispatcher alone and reaches every Host through it (WVE-196), and Hosts
-  stop taking remote connections of their own (WVE-197).
+- The app pairs with the Dispatcher alone and reaches every Host through it (WVE-196), on the
+  person's iPad and iPhone; then Hosts stop taking remote connections of their own (WVE-197).
 - The Dispatcher's own tools, declared with `service/declareTools` (WVE-171), and Bots
   (WVE-118).
 - Choosing the Host a piece of work runs on, which a delivery's Host can become a rule for.
