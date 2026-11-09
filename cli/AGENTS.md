@@ -74,7 +74,26 @@ journals.
 ./target/debug/weave dispatcher connect homelab   # pair this computer with the Dispatcher there, over SSH, and offer to have its Host join
 ./target/debug/weave hosts add studio     # have studio's Host join the Dispatcher, over SSH
 ./target/debug/weave schedules            # the Dispatcher's schedules; also add, pause, run, occurrences
+./target/debug/weave projects             # the Dispatcher's Projects; also add, show, rename, update, remove
+./target/debug/weave projects add --host homelab ~/code/odin   # register a directory there
+./target/debug/weave --project odin --host homelab   # the TUI in odin's location on homelab
 ```
+
+`weave projects` (`src/commands/projects.rs`, WVE-189, ADR 0031) manages the Projects the
+Dispatcher keeps; what other commands use of them is in `src/projects.rs`. `add` asks the Host the
+directory is on, this computer's or `--host`'s through the Dispatcher, where it lies in git
+(`worktrees/list`; `not_a_repository` makes a `directory` Project), with `~/…` resolved there by
+`files/list`'s `home`, and sends the Dispatcher the primary worktree, kind and remote. A clone
+whose remote matches a Project with no location on that Host is offered to it when `ask::can`,
+and otherwise refused with how to say `--to` or `--name`. Every listing it gets (`projects::list`,
+and after each change) is kept in `$XDG_STATE_HOME/weave/client/projects.json`, which a command
+goes by, saying how old it is on stderr, when the Dispatcher doesn't answer; with
+`$WEAVE_DISPATCHER_DIR` set nothing is kept. `--project` on `weave`, `weave run` and `weave
+schedules add` is `projects::directory`: the Project's location on `--host`'s Host, or this
+computer's (`weave_host::own_id`, from its directory) without it, set with
+`WorkspaceArgs::in_project`, which `cwd` and `cwd_on` give in place of `--cwd`; it never falls
+back to another Host. `weave threads list --project` filters with
+`weave_host_protocol::projects::containing` and the Host's id from its hello.
 
 `--host <id or name>` on `weave`, `weave threads` and `weave run` reaches another of the person's
 Hosts through the Dispatcher (WVE-195, ADR 0030): `host::Target::Carried`, a `Carry` through the
@@ -127,9 +146,10 @@ follow the protocol's versioning rather than a shape kept for the CLI: `daemon s
 (`host/status`'s `HostStatus`; nothing on stdout when the Host isn't running, and the service's
 notes on stderr), `threads list` (`ThreadListing`s), `threads read` (`threads/get`), `threads
 prompt` (`queue/add`, whose `queuedId` is the turn's id) and `steer` (`turn/steer`), `devices`
-(the Dispatcher's `Device`s), `run --detach` (`thread/run`), and `run` and `prompt --wait`, whose
+(the Dispatcher's `Device`s), `projects` (its `Project`s; `remove`, `Empty`), `run --detach`
+(`thread/run`), and `run` and `prompt --wait`, whose
 thread's journal events (`thread/event`) stream as JSON lines. CLI tests check each parses as the
-type it claims (`tests/json.rs`; `devices` in `tests/dispatcher.rs`).
+type it claims (`tests/json.rs`; `devices` and `projects` in `tests/dispatcher.rs`).
 
 The exit status tells a script how a command went (`cli/src/exit.rs`, WVE-108): 0, it worked, or
 the turn ended (`end_turn`); 1, any other error; 2, arguments clap refused; 3, the weave Host

@@ -7,8 +7,9 @@ Schedules (WVE-145) since 2026-11-04, calls from Hosts' agents to the person's o
 tailnet (WVE-176) since 2026-11-06, Hosts joining it and keeping a connection open to it
 (WVE-194) since 2026-11-07, the person's devices reaching every Host through it (WVE-195)
 since 2026-11-08, the app pairing with it alone and reaching every Host through it (WVE-196)
-since 2026-11-08, on the person's iPad and iPhone, and Hosts taking no remote connections of
-their own (WVE-197), built 2026-11-08. The decisions are in
+since 2026-11-08, on the person's iPad and iPhone, Hosts taking no remote connections of
+their own (WVE-197), built 2026-11-08, and the person's Projects (WVE-189, ADR 0031), built
+2026-11-08. The decisions are in
 [ADR 0027](../adr/0027-the-dispatcher-starts-work-on-the-persons-hosts-as-a-client-of-them.md),
 [ADR 0029](../adr/0029-agents-reach-the-persons-other-hosts-through-the-dispatcher.md) and
 [ADR 0030](../adr/0030-the-dispatcher-is-the-hub-hosts-dial-out-to-it-and-devices-reach-every-host-through-it.md);
@@ -22,7 +23,8 @@ person's Hosts. This is its core: its state, its key, the Hosts that join it and
 each keeps open to it, the one path work takes to a Host, schedules (WVE-145), and the calls a
 Host's agents make to the person's other Hosts (WVE-185), and the person's devices, which pair
 with it, reach its API over the tailnet (WVE-176) and reach every Host through it (WVE-195).
-Webhooks (WVE-146) and Bots (WVE-118) build on it.
+It keeps the person's Projects too ([Projects](#projects), WVE-189). Webhooks (WVE-146) and
+Bots (WVE-118) build on it.
 
 ## Decisions
 
@@ -45,7 +47,7 @@ Webhooks (WVE-146) and Bots (WVE-118) build on it.
 
 | File | What it holds |
 | --- | --- |
-| `dispatcher.db` | SQLite (WAL), 0600: `hosts`, `deliveries`, `schedules`, `occurrences`, `calls` and `follows`; its own id (`identity`) and its paired `devices`; later issues add other triggers and Bots |
+| `dispatcher.db` | SQLite (WAL), 0600: `hosts`, `deliveries`, `schedules`, `occurrences`, `calls` and `follows`; its own id (`identity`) and its paired `devices`; `projects` and their `project_locations`; later issues add other triggers and Bots |
 | `key.json` | its key, 0600: the Secure Enclave's wrapped form of it on a Mac that has one, otherwise the key itself |
 | `dispatcher.sock` | its API, 0600 |
 | `hosts.sock` | where Hosts on its own computer connect to it, 0600 ([Hosts](#hosts)) |
@@ -345,6 +347,36 @@ Not yet: agents creating schedules, through tools the Dispatcher serves under th
 thread's policy (WVE-173); a per-schedule hourly cap, which matters once they can; changing a
 schedule in place (remove it and add it again).
 
+## Projects
+
+A Project (ADR 0031, WVE-189) is a named piece of the person's work with at most one location on
+each of their Hosts. The Dispatcher keeps them, as the one of the person's programs that sees
+every Host; Hosts know nothing of them, and the Host protocol is unchanged.
+
+- **The record.** `{id, name, kind, remote?, locations: [{hostId, path}], createdAt,
+  updatedAt}`. `kind` is `git` or `directory`, fixed when the Project is made. A git Project
+  keeps its repository's remote (`GitLocation.remote`, such as `github.com/owner/name`) if it
+  has one, and takes the first a location brings if it hasn't. Names are unique ignoring case;
+  ids are `p-` and 20 hex digits. Host names aren't kept: `hosts/list` gives them, so a renamed
+  Host doesn't go stale.
+- **Locations.** At most one on each Host, and a directory is one Project's location at most. A
+  repository is recorded by its primary worktree, so all its worktrees are in the Project; a
+  directory outside one, as given. The client works that out from the directory's Host
+  (`worktrees/list`, which answers `not_a_repository` outside one), since only the Host's
+  computer can read git there, and tells the Dispatcher the kind and remote with the path. A
+  location joins a Project only of its kind, and a git one only with the Project's remote or
+  none.
+- **Hosts.** A location is only on a Host that joined. Removing a Host (`hosts/remove`) removes
+  its locations, and a Project left with none stays, listed with none. A Host that leaves keeps
+  them, as it keeps its row.
+- **Who may change them.** The Dispatcher's own computer, on its socket, and its paired devices.
+  Hosts and their agents can't yet (WVE-208): a Host's own connection doesn't reach the API.
+- **Which Project a thread is in** is a client's to work out, with
+  `weave_host_protocol::projects::containing(projects, hostId, listing)`: the Project with a
+  location on the thread's Host that is the thread's repository (`git.repo`) or contains its
+  directory, the deepest winning.
+- **Not yet:** `projects/watch`; clients list once (WVE-203 adds watching for the app).
+
 ## Its API
 
 JSON-RPC 2.0 over its Unix socket, one message per line, as the Host's socket carries the Host
@@ -363,10 +395,12 @@ Only on a Host's own connection, after its challenge ([Hosts](#hosts)); then the
 `host/hello` there.
 
 **`dispatcher/hello`** `{protocol: 2, client: {name, version}, auth?}` → `{protocol, version,
-id, device?}`
+id, device?, features}`
 
 Another `protocol` answers `incompatible_protocol`. `auth` is the Host's (`device` or `pair`),
 and none on the socket; `device` is the paired device a WebSocket client connected as.
+`features` names the optional parts of the API it answers: `projects` for `projects/*`
+(WVE-189). One from before them says none, and the API's version stays 2.
 
 **`dispatcher/status`** `{}` → `{version, pid, startedAt, name, database, pending, id, remote?,
 devices}`
@@ -474,6 +508,42 @@ Runs it now, paused or not, as an occurrence of its own (`manual`), which overla
 
 Newest first, 50 by default.
 
+**`projects/list`** `{}` → `{projects: Project[]}`
+
+```ts
+type Project = {
+  id: string; name: string;
+  kind: "git" | "directory";
+  remote?: string;            // a git Project's repository's remote: "github.com/owner/name"
+  locations: {hostId: string; path: string}[];   // at most one per Host, as they were added
+  createdAt: number; updatedAt: number;
+};
+type NewLocation = {hostId: string; path: string; kind: "git" | "directory"; remote?: string};
+```
+
+By name. Only with the `projects` feature, as are the rest.
+
+**`projects/get`** `{project}` → `{project}`
+
+By id or name, ignoring case; invalid params, "there's no Project …", for none.
+
+**`projects/add`** `{name, location: NewLocation}` → `{project}`
+
+A new Project of the kind its first location is. Invalid params, saying why, for an empty name or
+one of more than one line, a name another Project has ignoring case, a Host that hasn't joined,
+a path that isn't whole, or a location another Project has.
+
+**`projects/update`** `{project, name?, removeHost?, add?: NewLocation}` → `{project}`
+
+In that order, all or none: renames it, removes its location on a Host (by id or name), and adds
+one. Adding is refused for a location of another kind, a repository with another remote, or a
+Host it has a location on still (removing that one in the same request moves it); the same
+location again changes nothing. `updatedAt` moves when anything changed.
+
+**`projects/remove`** `{project}` → `{}`
+
+Forgets it and its locations; what's in its directories stays.
+
 ## The CLI
 
 | Command | What it does |
@@ -491,12 +561,20 @@ Newest first, 50 by default.
 | `weave hosts add [computer \| url code] [--name] [--json]` | has a Host join it: this computer's, given neither, over the Dispatcher's socket when it runs here; another's over SSH, which runs `weave hosts add <url> <code>` there; or, on the Host's computer, with a URL and code; `--json` prints what the Host joined |
 | `weave hosts add --code [--json]` | a URL and code for `weave hosts add <url> <code>` on a computer SSH doesn't reach |
 | `weave hosts [list] [--json]` | the Hosts that joined it, and how each stands |
-| `weave hosts remove <host>` | removes one, which forgets the Dispatcher |
+| `weave hosts remove <host>` | removes one, which forgets the Dispatcher, and its Projects' locations |
 | `weave daemon status` | names the Dispatcher the Host joined and whether it's connected |
 | `weave schedules [list] [--json]` | the schedules, when each runs next and how it last went |
 | `weave schedules add <name> --cron <expr> --host <host> --agent <id> [--cwd] [--zone] [--thread \| --mode] [--approve <kinds>] [--missed latest\|skip] [--allow-overlap] -- <prompt>` | adds one; `--cwd` is this directory when omitted, `--approve` is `weave run`'s, and the prompt is read from stdin when omitted |
 | `weave schedules remove \| pause \| resume \| run <schedule>` | as the API's methods |
 | `weave schedules occurrences [<schedule>] [--limit] [--json]` | what they did, newest first |
+| `weave projects [list] [--json]` | the Projects and where each is, Hosts by the names `hosts/list` gives; while the Dispatcher doesn't answer, the list it gave last, which the CLI keeps in `$XDG_STATE_HOME/weave/client/projects.json`, saying how old it is on stderr (none is kept for a Dispatcher named with `$WEAVE_DISPATCHER_DIR`) |
+| `weave projects add [DIR] [--name N] [--to P] [--host H] [--json]` | registers DIR, this directory by default, on this computer's Host or with `--host` another's (a `~/` path there under the home there, as `--cwd` takes it): asks that Host where it lies in git (`worktrees/list`, and `files/list` for the home there), then the Dispatcher. A new Project is called `--name`, or after its directory. `--to` adds it to a Project as that Host's location. A clone whose remote a Project with no location on that Host has is offered to it, "odin has this repository on homelab; add this clone to odin? [Y/n]"; with no terminal, or with `--json`, it's refused, saying to give `--to` or `--name`. A plain directory joins only with `--to`. A location registered already is said to be so |
+| `weave projects show <project> [--json]` | one, and its id |
+| `weave projects rename <project> <name> [--json]` | `projects/update` with `name` |
+| `weave projects update <project> --remove-host <host> [--json]` | removes its location on one Host |
+| `weave projects remove <project> [--json]` | forgets it; `--json` prints `{}` |
+| `weave --project <p>`, `weave run --project <p>`, `weave schedules add --project <p>` | work in the Project's location on the Host in question: `--host`'s, or this computer's without it (`schedules add` always names one), a git Project's primary worktree. Never another Host's: a Project with no location there is refused, saying where it is and `weave projects add --to <p> [--host <h>] <dir>`. Refused with `--cwd`. While the Dispatcher doesn't answer, it goes by the last list |
+| `weave threads [list] --project <p> [--host <h>]` | only the threads `containing` places in that Project on that Host, the thread's Host id from its hello |
 
 A command that asks the Dispatcher asks the one running from this computer's Dispatcher
 directory if one answers, and otherwise the paired one, and says both when neither does. With
@@ -569,6 +647,19 @@ directory if one answers, and otherwise the paired one, and says both when neith
   can't reach, and one it removes; a revoked device; a terminal's stream through it. The app's
   unit tests do the same against a scripted Dispatcher, and `app/scripts/terminal-check.ts` runs
   the native terminal through a dev Dispatcher in a simulator.
+- `tests/projects.rs` (WVE-189), two Hosts, through the socket and through a paired device: a
+  Project added, renamed, given a second Host's location and removed; a name taken ignoring
+  case, a second location on one Host and a clone of another repository refused; a directory
+  Project refusing a repository, and a Host that never joined; removing a Host drops its
+  locations, all of them leaving the Project with none; Projects outlive a restart. The store's
+  unit tests check moving a location and a git Project taking a remote. `containing`'s unit
+  tests in `protocol/src/projects.rs`: a registered repository's worktrees, a Project in a
+  subdirectory of another's, a directory outside any repository, and other Hosts. CLI
+  `tests/dispatcher.rs`: `weave projects add --host` on another computer's Host and in a clone
+  here, refused without a terminal and joined with `--to`; listing, showing, renaming, removing a
+  location and a Project, each `--json` parsing as the protocol type it claims; `weave run
+  --project --host` and `weave threads --project`; `--project` refused where the Project has no
+  location; and the last listing, and `--project`, while the Dispatcher is away.
 - Live: the Dispatcher on the homelab as a systemd user service, and `weave hosts` and
   `weave schedules` from the Mac; the Mac's and homelab-1's Hosts join it, and a schedule works
   without the Dispatcher dialing either. A thread on homelab-1 opened from the Mac's CLI through
@@ -581,3 +672,5 @@ directory if one answers, and otherwise the paired one, and says both when neith
 - The Dispatcher's own tools, declared with `service/declareTools` (WVE-171), and Bots
   (WVE-118).
 - Choosing the Host a piece of work runs on, which a delivery's Host can become a rule for.
+- Projects: `projects/watch` and the app's Projects (WVE-203), agents naming Projects through the
+  Host tools (WVE-208), and Sessions of a Project's worktrees (WVE-202).

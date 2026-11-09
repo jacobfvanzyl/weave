@@ -26,7 +26,7 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
 - `store.rs`: its state in SQLite (`rusqlite`, bundled): `hosts` and `deliveries`, and in
   `store/calls.rs` the `calls` from Hosts' agents and the turns they began (`follows`). Migrations are
   numbered SQL in `MIGRATIONS`, applied in order and recorded in `PRAGMA user_version`; never
-  edit one once released, add the next. The sixth (WVE-200) renamed the `session_id` columns to
+  edit one once released, add the next. The seventh (WVE-189) added Projects. The sixth (WVE-200) renamed the `session_id` columns to
   `thread_id` and moved stored work to the Host protocol's version 3; Hosts' answers stored
   before keep `sessionId`, which `answered_thread` reads too. Times are milliseconds, kept signed.
 - `link.rs`: one task per Host connection, which says hello with the Dispatcher's key over it
@@ -46,6 +46,14 @@ on a computer of its own; `weave-host` is only a dev-dependency, for the tests' 
   and the minute's grace are here; overlap and pausing are in the store, inside the
   transaction that writes an occurrence down. A thread an occurrence starts is labelled
   `dispatcher` (`LABEL`) and `schedule:<id>` (WVE-173).
+- `projects.rs`, `store/projects.rs` (WVE-189, ADR 0031): the person's Projects, the seventh
+  migration's `projects` and `project_locations`, behind the `projects` feature its hello names
+  (`api::features`). A location's Host must have joined (a foreign key, so `remove_host` takes
+  its locations, and touches their Projects' `updatedAt`); one per Project and Host, one Project
+  per Host and path. Each change checks names (unique ignoring case, folded in Rust), kinds and
+  remotes in the transaction that makes it (`ProjectError::Refused` is invalid params). The client
+  says where a directory lies in git, from its Host; the Dispatcher never reads a Host's
+  directories, and Hosts' own connections never reach `projects/*` (WVE-208).
 - `store/schedules.rs`: `schedules` and `occurrences`. An occurrence and its delivery are
   written in one transaction, unique on schedule, scheduled time and `manual`; delivering it,
   the Host refusing it and its turn ending update it from `store.rs` and `link.rs`.
@@ -109,6 +117,8 @@ relay that a restart cuts, as a Host process exiting closes its connections (`te
 what proves a device and what doesn't, what a device may ask, revoking, the Serve entry, and the
 WebSocket's subprotocol and `Origin` checks, hello deadline and pings, which moved here from the
 Host's tests when the Host stopped listening (WVE-197).
+`tests/projects.rs` runs a Project's life through the socket and through a paired device, and
+checks a Host's removal and a restart.
 `tests/hosts.rs` runs two or three Hosts whose fake agents call Host tools naming each
 other, the relay deafened to lose an answer. `tests/carry.rs` has a paired device reach two
 Hosts through the Dispatcher, a Host serve nothing where something without the Dispatcher's key
