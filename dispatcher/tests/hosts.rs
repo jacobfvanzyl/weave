@@ -26,6 +26,10 @@ use weave_dispatcher::Dispatcher;
 use weave_host_client::HostConnection;
 use weave_host_client::HostEvent;
 use weave_host_client::HostHandle;
+use weave_host_protocol::dispatcher::AddProjectRequest;
+use weave_host_protocol::dispatcher::NewLocation;
+use weave_host_protocol::dispatcher::ProjectKind;
+use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::events::ThreadEvent;
 use weave_host_protocol::hello::ClientCapabilities;
@@ -1262,5 +1266,331 @@ async fn a_turn_its_host_stops_under_is_followed_into_its_continuation() {
         }
     );
     a_local.shutdown().await;
+    running.stop().await;
+}
+
+/// A location for a Project: `path` on `host_id`, a repository with `remote` or, with none, a
+/// directory, by its real path as `worktrees/list` gives it.
+fn location(host_id: &str, path: &Path, remote: Option<&str>) -> NewLocation {
+    NewLocation {
+        host_id: host_id.to_owned(),
+        path: std::fs::canonicalize(path).expect("a real path"),
+        kind: if remote.is_some() {
+            ProjectKind::Git
+        } else {
+            ProjectKind::Directory
+        },
+        remote: remote.map(str::to_owned),
+    }
+}
+
+/// Where `thread_id` on `local`'s Host works, by its real path.
+async fn real_cwd(local: &HostConnection, thread_id: &ThreadId) -> std::path::PathBuf {
+    let got = get(local, thread_id).await;
+    std::fs::canonicalize(&got.thread.info.cwd).expect("its directory")
+}
+
+/// The ids of the threads a list_threads answer lists.
+fn ids(answer: &serde_json::Value) -> Vec<ThreadId> {
+    answer["threads"]
+        .as_array()
+        .expect("threads")
+        .iter()
+        .map(|thread| ThreadId::new(thread["info"]["sessionId"].as_str().expect("an id").to_owned()))
+        .collect()
+}
+
+/// Odin on two Hosts at different paths, and a directory Project only on the second: an agent
+/// lists them, and starts and lists threads in them by name, on either Host, without knowing
+/// where they are (WVE-208).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_works_in_a_project_by_name_on_whichever_host_has_it() {
+    let mini = World::new().await;
+    let studio = World::new().await;
+    let running = Running::new();
+    let a_id = running.pair(&mini, "mini").await;
+    let b_id = running.pair(&studio, "studio").await;
+    let (a_local, mut a_events) = local(&mini).await;
+    let (b_local, _b_events) = local(&studio).await;
+
+    let odin_here = mini.home().join("code/odin");
+    repository(&odin_here, "https://github.com/jaco/odin.git");
+    std::fs::create_dir_all(odin_here.join("app")).expect("a subdirectory");
+    let odin_there = studio.home().join("work/clones/odin-main");
+    repository(&odin_there, "git@github.com:jaco/odin.git");
+    std::fs::create_dir_all(odin_there.join("app")).expect("a subdirectory there");
+    let notes = studio.home().join("notes");
+    std::fs::create_dir_all(&notes).expect("notes");
+    let remote = Some("github.com/jaco/odin");
+    running
+        .dispatcher
+        .add_project(AddProjectRequest {
+            name: "Odin".to_owned(),
+            location: location(&a_id, &odin_here, remote),
+        })
+        .expect("Odin");
+    running
+        .dispatcher
+        .update_project(UpdateProjectRequest {
+            project: "Odin".to_owned(),
+            name: None,
+            remove_host: None,
+            add: Some(location(&b_id, &odin_there, remote)),
+        })
+        .expect("Odin on studio");
+    running
+        .dispatcher
+        .add_project(AddProjectRequest {
+            name: "notes".to_owned(),
+            location: location(&b_id, &notes, None),
+        })
+        .expect("notes");
+
+    // A thread outside any Project lists them, with every Host's name.
+    let caller = new_thread(&a_local, &mini.home()).await;
+    let listed = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "list_projects",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(listed["hostId"], a_id.as_str());
+    let names: Vec<&str> = listed["projects"]
+        .as_array()
+        .expect("projects")
+        .iter()
+        .map(|project| project["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(names, ["notes", "Odin"]);
+    let odin = &listed["projects"][1];
+    assert_eq!(odin["kind"], "git");
+    assert_eq!(odin["remote"], "github.com/jaco/odin");
+    assert_eq!(odin["locations"][1]["hostId"], b_id.as_str());
+    let hosts: Vec<(&str, &str)> = listed["hosts"]
+        .as_array()
+        .expect("hosts")
+        .iter()
+        .map(|host| {
+            (
+                host["hostId"].as_str().expect("an id"),
+                host["name"].as_str().expect("a name"),
+            )
+        })
+        .collect();
+    assert!(hosts.contains(&(a_id.as_str(), "mini")), "{hosts:?}");
+    assert!(hosts.contains(&(b_id.as_str(), "studio")), "{hosts:?}");
+
+    // On this Host, and on the other, in a directory inside the Project there.
+    let here = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "start_thread",
+        serde_json::json!({"project": "odin", "agentId": "fake", "prompt": "hello"}),
+    )
+    .await;
+    let here = thread_id(&here);
+    assert_eq!(
+        real_cwd(&a_local, &here).await,
+        std::fs::canonicalize(&odin_here).expect("Odin here")
+    );
+    let there = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "start_thread",
+        serde_json::json!({
+            "project": "Odin",
+            "host": "studio",
+            "cwd": "app",
+            "agentId": "fake",
+            "prompt": "hello",
+        }),
+    )
+    .await;
+    assert_eq!(there["host"], b_id.as_str());
+    let there = thread_id(&there);
+    assert_eq!(
+        real_cwd(&b_local, &there).await,
+        std::fs::canonicalize(odin_there.join("app")).expect("Odin's app there")
+    );
+
+    // A Project with no location on the Host named, or none called that, or a directory of
+    // the agent's own as well, is refused.
+    let refused = call_fails(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "start_thread",
+        serde_json::json!({"project": "notes", "agentId": "fake", "prompt": "hello"}),
+    )
+    .await;
+    assert!(
+        refused.contains("notes has no location on mini; it's on studio."),
+        "{refused}"
+    );
+    let refused = call_fails(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "start_thread",
+        serde_json::json!({"project": "thor", "host": "studio", "agentId": "fake", "prompt": "hi"}),
+    )
+    .await;
+    assert!(
+        refused.contains("There's no Project thor: list_projects lists"),
+        "{refused}"
+    );
+    let refused = call_fails(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "start_thread",
+        serde_json::json!({
+            "project": "Odin",
+            "cwd": "/tmp",
+            "agentId": "fake",
+            "prompt": "hello",
+        }),
+    )
+    .await;
+    assert!(refused.contains("relative to it"), "{refused}");
+
+    // Listing by Project, here and there, lists only the threads in it, and none on a Host
+    // where it has no location.
+    let listed = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "list_threads",
+        serde_json::json!({"project": "Odin"}),
+    )
+    .await;
+    assert_eq!(ids(&listed), std::slice::from_ref(&here));
+    let listed = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "list_threads",
+        serde_json::json!({"project": "Odin", "host": "studio"}),
+    )
+    .await;
+    assert_eq!(ids(&listed), std::slice::from_ref(&there));
+    let listed = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "list_threads",
+        serde_json::json!({"project": "notes"}),
+    )
+    .await;
+    assert_eq!(ids(&listed), Vec::<ThreadId>::new());
+    let refused = call_fails(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "list_threads",
+        serde_json::json!({"project": "Odin", "repo": odin_here}),
+    )
+    .await;
+    assert!(refused.contains("not both"), "{refused}");
+    a_local.shutdown().await;
+    b_local.shutdown().await;
+    running.stop().await;
+}
+
+/// A thread in a Project that starts one on another Host with no directory starts it in the
+/// Project's location there, at whatever path that is, rather than the same path under the
+/// home; and fails, naming the Hosts that have it, when the Project has none there (WVE-208).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_replaces_the_path_guess_on_another_host() {
+    let mini = World::new().await;
+    let studio = World::new().await;
+    let running = Running::new();
+    let a_id = running.pair(&mini, "mini").await;
+    let b_id = running.pair(&studio, "studio").await;
+    let (a_local, mut a_events) = local(&mini).await;
+    let (b_local, _b_events) = local(&studio).await;
+
+    // Odin here, and in another worktree of it, on a branch the other Host doesn't have; and
+    // somewhere else entirely there.
+    let odin_here = mini.home().join("code/odin");
+    repository(&odin_here, "https://github.com/jaco/odin.git");
+    let feature = mini.home().join("code/odin.feature");
+    git(
+        &odin_here,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            feature.to_str().expect("UTF-8"),
+        ],
+    );
+    std::fs::create_dir_all(feature.join("app")).expect("a subdirectory");
+    let odin_there = studio.home().join("work/odin");
+    repository(&odin_there, "git@github.com:jaco/odin.git");
+    std::fs::create_dir_all(odin_there.join("app")).expect("a subdirectory there");
+    let remote = Some("github.com/jaco/odin");
+    running
+        .dispatcher
+        .add_project(AddProjectRequest {
+            name: "Odin".to_owned(),
+            location: location(&a_id, &odin_here, remote),
+        })
+        .expect("Odin");
+    running
+        .dispatcher
+        .update_project(UpdateProjectRequest {
+            project: "Odin".to_owned(),
+            name: None,
+            remove_host: None,
+            add: Some(location(&b_id, &odin_there, remote)),
+        })
+        .expect("Odin on studio");
+
+    let caller = new_thread(&a_local, &feature.join("app")).await;
+    let started = call(
+        &a_local,
+        &mut a_events,
+        &caller,
+        "start_thread",
+        serde_json::json!({"host": "studio", "agentId": "fake", "prompt": "hello"}),
+    )
+    .await;
+    assert_eq!(
+        real_cwd(&b_local, &thread_id(&started)).await,
+        std::fs::canonicalize(odin_there.join("app")).expect("Odin's app there")
+    );
+
+    // A Project only here: no guess under the home there, though that directory exists.
+    let solo = mini.home().join("solo");
+    std::fs::create_dir_all(&solo).expect("solo");
+    std::fs::create_dir_all(studio.home().join("solo")).expect("solo there");
+    running
+        .dispatcher
+        .add_project(AddProjectRequest {
+            name: "solo".to_owned(),
+            location: location(&a_id, &solo, None),
+        })
+        .expect("solo");
+    let alone = new_thread(&a_local, &solo).await;
+    let refused = call_fails(
+        &a_local,
+        &mut a_events,
+        &alone,
+        "start_thread",
+        serde_json::json!({"host": "studio", "agentId": "fake", "prompt": "hello"}),
+    )
+    .await;
+    assert!(
+        refused.contains("solo has no location on studio; it's on mini."),
+        "{refused}"
+    );
+    a_local.shutdown().await;
+    b_local.shutdown().await;
     running.stop().await;
 }
