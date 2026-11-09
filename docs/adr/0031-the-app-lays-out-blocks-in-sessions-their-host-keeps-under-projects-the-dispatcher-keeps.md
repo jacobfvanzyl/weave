@@ -61,4 +61,9 @@ So the app is organised as Project → Session → Blocks.
 - **Directories no Project names** keep their threads and terminals under their Host, as now, until the person names the directory as a Project.
 - **Left to the issues:**
   - WVE-202 settles the document's shape, and whether its schema lives in the Host protocol or in the app.
+    Settled there (2026-11-09): the shape is typed in `weave-host-protocol` (`sessions::layout`), with
+    golden fixtures and in the schema the app's types come from, while the Host keeps the document as
+    JSON it doesn't read. The Host makes a Session for any directory a thread or terminal starts in,
+    inside a Project or not. `sessions/set` may name the revision it builds on, and a client may end a
+    Session by hand.
   - WVE-189 settles the Project record and its commands.

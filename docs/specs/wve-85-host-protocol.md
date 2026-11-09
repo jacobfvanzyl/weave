@@ -1409,14 +1409,137 @@ Removes a worktree other than the primary one, which must be its top directory:
    can still be deleted, as threads whose directory is gone (WVE-120).
 4. `git worktree remove`; then its branch goes when git counts it merged (`git branch -d`),
    or regardless with `deleteBranch`.
+5. Its Session ends (see [Sessions](#sessions)).
 
 **`worktrees/release`** `{path}` → `{closed: threadId[]}`
 
 What `worktrees/remove` does before git removes the worktree, for removals the Host doesn't
 make: refused with `worktree_busy` while a thread in the worktree runs a turn or waits on a
-request; otherwise its open threads close. `weave worktrees pre-remove` asks it as a worktrunk
-`pre-remove` hook, so `wt remove`, `wt merge` and `wt step prune` stop while a thread needs the
-worktree.
+request; otherwise its open threads close and its Session ends. `weave worktrees pre-remove`
+asks it as a worktrunk `pre-remove` hook, so `wt remove`, `wt merge` and `wt step prune` stop
+while a thread needs the worktree.
+
+## Sessions
+
+Status: Built in the Host, 2026-11-09 (WVE-202). ADR 0031; part of
+[WVE-199](https://linear.app/jacobfvanzyl/issue/WVE-199).
+
+A Session is one directory on the Host's computer, and the layout clients show it in: tabs of
+split panes holding Blocks, each of which points at a thread, a terminal or something else on
+this Host. The Host keeps the layout so that every device shows the same one, as Herdr's core
+keeps its spaces' layout. It stores and versions the layout but never reads it.
+
+**Identity.** A Session is known by its directory, which is a terminal's scope: the deepest
+worktree a directory is in, or the directory itself outside a repository, with symlinks
+resolved. Every worktree of a repository is a Session of its own, there is one Session per
+directory, and a request may name any directory inside one. The Host knows nothing of Projects
+(ADR 0031), so a directory outside every Project has a Session too, and clients group Sessions
+under Projects with the Dispatcher's `projects/list`, by `git.repo`.
+
+**Lifetime.**
+
+- The Host makes a Session, without a layout, when a thread is first prompted in a directory
+  that has none (a blank thread makes none), when a terminal starts in one, and when a client
+  sets a layout for one.
+- A Session ends with its worktree, through `worktrees/remove` or `worktrees/release`, and when
+  its directory is gone, as when git removed the worktree without the Host: such a Session
+  ends as the Host starts, and as a client lists Sessions. A client may also end one with
+  `sessions/end`.
+- Ending a Session forgets its layout and nothing else: its threads and terminals carry on, and
+  the next thread or terminal to start there makes it again.
+
+Sessions are kept with the Host's other state, one file each in `layouts/` in the Host's
+directory, written whole, so they survive the Host's restarts and updates. A Host inside a
+client keeps them in memory. These methods are feature `sessions`; remote clients may use them.
+
+```ts
+type HostSession = {
+  directory: string;     // a worktree, or a directory outside a repository
+  revision: number;      // 0 before any client set a layout, then one more with each write
+  layout?: SessionLayout; // absent before any client set one, and in sessions/list
+  git?: GitLocation;     // absent outside a repository
+  createdAt: number;
+  updatedAt?: number;    // when its layout was last set
+  threads: threadId[];   // the threads the Host has a record of in it, blank ones aside, most recently active first
+  terminals: string[];   // its terminals' ids, oldest first
+};
+```
+
+`threads` and `terminals` let a client place again a thread or terminal that no Block shows.
+They are as of the answer: `threads/watch` and `terminals/watch` follow them, and
+`sessions/updated` isn't sent when they change.
+
+**`sessions/list`** `{}` → `{sessions: HostSession[]}`
+
+Every Session, by directory, without its layout. The Host reads where in a repository each one
+is again, and ends those whose directory is gone first.
+
+**`sessions/get`** `{directory}` → `{session}`
+
+The Session `directory` is in, with its layout; `no_session` when there's none.
+
+**`sessions/set`** `{directory, layout, ifRevision?}` → `{session}`
+
+A new layout for the Session `directory` is in, which is made first if there's none. The newest
+write wins: the layout replaces whatever was there under the next revision, so revisions only
+go up, and every client watching the Session is sent it. With `ifRevision` (0 for a Session
+without a layout), the write happens only while that is still the Session's revision, and is
+otherwise refused with `revision_conflict` and `data: {revision}`, so a client can merge rather
+than overwrite. A layout over 1 MiB serialized (`maxLayout`) is refused as invalid params. The
+directory must exist.
+
+**`sessions/watch`** `{directory?}` → `{directory?, sessions: HostSession[]}`
+
+The Session `directory` is in, as the Host resolved the directory, or with no `directory` every
+Session, with their layouts. Then, until the connection ends or the client sends
+`sessions/unwatch`, `sessions/updated` `{session}` when one is made or its layout set, with the
+layout, and `sessions/ended` `{directory}` when one ends. Nothing reaches the watcher between
+the answer and the first notification. A directory with no Session yet may be watched: the
+answer has no Session, and `sessions/updated` follows when one is made. A device showing a
+Session watches it; a sidebar watches every Session.
+
+**`sessions/unwatch`** `{directory?}` → `{}`
+
+Stops what `sessions/watch` sends for `directory`, as its answer gave it, or for every Session
+without one.
+
+**`sessions/end`** `{directory}` → `{}`
+
+Ends the Session `directory` is in, forgetting its layout, as above. Refused with `session_busy`
+while a thread in it runs a turn or waits on a request, or a terminal in it runs a command
+(`data: {threads, terminals}`); `no_session` when there's none.
+
+### The layout
+
+The layout is the clients' document, not the Host's: the Host keeps it as JSON it doesn't read,
+so new Block types never change the protocol. Its shape is in `weave-host-protocol`
+(`sessions::layout`), with golden fixtures and in the JSON Schema the app's types come from, so
+every client agrees on it. A client checks `version` (1 now, `layoutVersion`) before it trusts
+the rest.
+
+```ts
+type SessionLayout = { version: 1; tabs: SessionTab[] };
+type SessionTab = {
+  id: string;                    // unique in the layout
+  title?: string;                // the person's name for it
+  root?: SessionNode;            // absent for an empty tab
+  floating?: { block: SessionBlock; frame: { x; y; width; height } }[]; // fractions of the tab, last on top
+};
+type SessionNode =
+  | { kind: "row" | "column"; children: SessionNode[]; sizes?: number[] } // relative shares
+  | { kind: "stack"; children: SessionBlock[] }                          // one behind another
+  | ({ kind: "block" } & SessionBlock);
+type SessionBlock = {
+  id: string;                    // unique in the layout
+  type: string;                  // reverse-DNS: weave.thread {threadId}, weave.terminal {terminalId}, …
+  props?: Record<string, unknown>;
+};
+```
+
+What stays on each device is never written to it: focus, zoom, the tab in front, the Block in
+front of a stack, scroll positions, and how a device presents the layout, as a phone shows each
+tab as a stack. A client without a Block's type shows the type and props as text (ADR 0018's
+text floor). A Block owns nothing: closing it hides what it shows, which keeps running.
 
 ## Terminals
 
@@ -1761,7 +1884,12 @@ returns the agent's error unchanged.
 | -32077 | `host_stopping` | the Host is draining before it stops and starts no new turns (see `host/drain`) |
 | -32080 | `unknown_turn` | the thread's journal has no turn by that id (see [Turn ids](#turn-ids)) |
 | -32081 | `host_unavailable` | the Dispatcher couldn't reach a Host or the Host refused it; the message says why. Peer Hosts gave it as `peer_unavailable` |
+| -32078 | `unknown_terminal` | no terminal has that id |
+| -32079 | `terminal_unavailable` | the terminal's holder couldn't be started or reached; the message says why |
 | -32082 | `interrupted` | in a turn's `turnEnded`, not a request's answer: the Host stopped while the turn ran (see [Interrupted turns](#interrupted-turns)) |
+| -32083 | `no_session` | the directory has no Session (see [Sessions](#sessions)) |
+| -32084 | `revision_conflict` | `sessions/set`'s `ifRevision` isn't the Session's revision; `data: {revision}` |
+| -32085 | `session_busy` | a thread in the Session runs a turn or waits on a request, or a terminal in it runs a command; `data: {threads, terminals}` |
 
 ## Versioning
 

@@ -141,7 +141,7 @@ A named piece of the person's work, kept by the Dispatcher, with at most one loc
 _Avoid_: workspace, space, repo
 
 **Session**:
-One directory of a Project on one Host, for a repository one of its worktrees, holding a layout of Blocks that every device shares.
+One directory on one Host, for a repository one of its worktrees, holding a layout of Blocks that every device shares. Its Host keeps it; a Project's Sessions are those in its locations.
 _Avoid_: workspace, space, window
 
 **Block**:

@@ -191,6 +191,19 @@ reader holds its owner back rather than the Host buffering.
 - **Tests:** `tests/terminals.rs` drives it all through a real client, against a fake owner that
   leaves out `command` and `opened_from`, and against real holders it builds with cargo.
 
+Sessions (ADR 0031, WVE-202, `sessions.rs`, spec section Sessions) are directories, known by a
+terminal's scope (`Shared::session_scope`), with a layout document the Host stores and versions
+but never reads. `Sessions` keeps the records, one file each in `layouts/` named by a hash of the
+directory and written whole (not `sessions/`, which version 2 journals were moved out of), and the
+`sessions/watch` watchers; `Shared` gives each one its threads and terminals
+(`session_contents`), which are worked out on every answer rather than kept. A thread makes its
+directory's Session when it's first reported not blank (`Actor::update_summary`), a terminal as
+`terminals/new` starts it, and `sessions/set` when there's none. `worktrees/remove` and
+`worktrees/release` end the Sessions in the worktree (`Sessions::end_inside`), and ones whose
+directory is gone end when the Host starts and when a client lists them. Take the Sessions' lock
+before the registry and the terminals' state, never while holding either. Tests: the `sessions`
+module of `tests/daemon.rs`.
+
 Remote clients (WVE-90, spec `../docs/specs/wve-90-remote-clients.md`) reach the Host only through
 the Dispatcher it joined (ADR 0030): the Host listens for nothing but its Unix socket, and opens
 every connection to the Dispatcher itself (below). Until WVE-197 it listened on a loopback
