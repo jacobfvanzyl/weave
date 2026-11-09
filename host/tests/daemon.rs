@@ -297,6 +297,7 @@ impl World {
     ) -> DaemonConfig {
         DaemonConfig {
             journals: journals.then(|| self.journals()),
+            sessions: journals.then(|| self.dir.path().join("layouts")),
             idle_grace,
             drain_timeout: weave_host::DEFAULT_DRAIN_TIMEOUT,
             blank_grace,
@@ -5463,4 +5464,430 @@ async fn a_signal_waits_for_running_turns_unless_a_client_drained_first() {
             .expect("no wait"),
         1
     );
+}
+
+/// Sessions and their layouts (WVE-202).
+mod sessions {
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use weave_host_protocol::sessions::EndSessionRequest;
+    use weave_host_protocol::sessions::FEATURE as SESSIONS_FEATURE;
+    use weave_host_protocol::sessions::GetSessionRequest;
+    use weave_host_protocol::sessions::ListSessionsRequest;
+    use weave_host_protocol::sessions::Session;
+    use weave_host_protocol::sessions::SetSessionRequest;
+    use weave_host_protocol::sessions::UnwatchSessionsRequest;
+    use weave_host_protocol::sessions::WatchSessionsRequest;
+
+    use super::*;
+
+    /// A layout with one tab showing `block`.
+    fn layout(block: &str) -> serde_json::Value {
+        json!({
+            "version": 1,
+            "tabs": [{"id": "tab-1", "root": {"kind": "block", "id": block, "type": "weave.thread"}}],
+        })
+    }
+
+    fn set(
+        directory: &Path,
+        layout: serde_json::Value,
+        if_revision: Option<u64>,
+    ) -> SetSessionRequest {
+        SetSessionRequest {
+            directory: directory.to_path_buf(),
+            layout,
+            if_revision,
+        }
+    }
+
+    impl TestClient {
+        /// The next Session notification, past whatever else comes.
+        async fn session_event(&mut self) -> HostEvent {
+            loop {
+                let event = self.next().await;
+                if matches!(
+                    event,
+                    HostEvent::SessionUpdated(_) | HostEvent::SessionEnded(_)
+                ) {
+                    return event;
+                }
+            }
+        }
+
+        async fn updated(&mut self) -> Session {
+            match self.session_event().await {
+                HostEvent::SessionUpdated(updated) => updated.session,
+                other => panic!("expected sessions/updated, got {other:?}"),
+            }
+        }
+
+        async fn ended(&mut self) -> PathBuf {
+            match self.session_event().await {
+                HostEvent::SessionEnded(ended) => ended.directory,
+                other => panic!("expected sessions/ended, got {other:?}"),
+            }
+        }
+
+        /// Whether a Session notification comes soon.
+        async fn hears_of_a_session(&mut self) -> bool {
+            tokio::time::timeout(Duration::from_millis(300), self.session_event())
+                .await
+                .is_ok()
+        }
+
+        async fn sessions(&self) -> Vec<Session> {
+            self.connection
+                .send(ListSessionsRequest {})
+                .await
+                .expect("sessions/list")
+                .sessions
+        }
+
+        async fn session(&self, directory: &Path) -> Result<Session, Error> {
+            self.connection
+                .send(GetSessionRequest {
+                    directory: directory.to_path_buf(),
+                })
+                .await
+                .map(|response| response.session)
+        }
+    }
+
+    #[tokio::test]
+    async fn two_clients_set_get_and_watch_a_session_and_the_newest_write_wins() {
+        let world = World::new();
+        let repo = world.repository();
+        let app = repo.join("app");
+        std::fs::create_dir(&app).expect("a subdirectory");
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let mut mac = world.client(&daemon).await;
+        let mut ipad = world.client(&daemon).await;
+        assert!(
+            mac.connection
+                .hello()
+                .features
+                .iter()
+                .any(|feature| feature == SESSIONS_FEATURE)
+        );
+
+        // One watches every Session, the other the one its subdirectory is in, which has none
+        // yet.
+        let all = mac
+            .connection
+            .send(WatchSessionsRequest::default())
+            .await
+            .expect("sessions/watch");
+        assert_eq!((all.directory, all.sessions), (None, Vec::new()));
+        let one = ipad
+            .connection
+            .send(WatchSessionsRequest {
+                directory: Some(app.clone()),
+            })
+            .await
+            .expect("sessions/watch");
+        assert_eq!(one.directory, Some(repo.clone()));
+        assert!(one.sessions.is_empty());
+        assert!(errors::is(
+            &ipad.session(&app).await.expect_err("no Session yet"),
+            errors::NO_SESSION
+        ));
+
+        // The first write makes the Session, at the worktree, and both hear it.
+        let first = mac
+            .connection
+            .send(set(&app, layout("a"), Some(0)))
+            .await
+            .expect("sessions/set")
+            .session;
+        assert_eq!(first.directory, repo);
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.layout, Some(layout("a")));
+        assert_eq!(
+            first.git.as_ref().and_then(|git| git.branch.as_deref()),
+            Some("main")
+        );
+        assert_eq!(mac.updated().await, first);
+        assert_eq!(ipad.updated().await, first);
+        assert_eq!(ipad.session(&repo).await.expect("sessions/get"), first);
+
+        // A write from a revision that's gone is refused, saying the current one.
+        let stale = ipad
+            .connection
+            .send(set(&repo, layout("b"), Some(0)))
+            .await
+            .expect_err("a stale revision");
+        assert!(errors::is(&stale, errors::REVISION_CONFLICT));
+        assert_eq!(stale.data, Some(json!({"revision": 1})));
+
+        // Without one, the newest write wins, under the next revision.
+        let second = ipad
+            .connection
+            .send(set(&repo, layout("b"), None))
+            .await
+            .expect("sessions/set")
+            .session;
+        assert_eq!(second.revision, 2);
+        assert_eq!(mac.updated().await, second);
+        assert_eq!(ipad.updated().await, second);
+        assert_eq!(mac.session(&app).await.expect("sessions/get"), second);
+
+        // Listed, without the layout.
+        let listed = mac.sessions().await;
+        assert_eq!(
+            listed,
+            vec![Session {
+                layout: None,
+                ..second.clone()
+            }]
+        );
+
+        // Revisions only go up, and one that stops watching hears no more.
+        ipad.connection
+            .send(UnwatchSessionsRequest {
+                directory: Some(repo.clone()),
+            })
+            .await
+            .expect("sessions/unwatch");
+        let third = mac
+            .connection
+            .send(set(&repo, layout("c"), Some(2)))
+            .await
+            .expect("sessions/set")
+            .session;
+        assert_eq!(third.revision, 3);
+        assert_eq!(mac.updated().await.revision, 3);
+        assert!(!ipad.hears_of_a_session().await);
+
+        // A layout past the limit is refused.
+        let huge = json!({"version": 1, "tabs": [], "padding": "x".repeat(1024 * 1024)});
+        assert!(mac.connection.send(set(&repo, huge, None)).await.is_err());
+        assert_eq!(mac.session(&repo).await.expect("sessions/get").revision, 3);
+    }
+
+    #[tokio::test]
+    async fn a_prompted_thread_makes_its_directorys_session_which_lists_it() {
+        let world = World::new();
+        let repo = world.repository();
+        let notes = world.cwd().join("notes");
+        std::fs::create_dir(&notes).expect("a directory");
+        let notes = notes.canonicalize().expect("canonical");
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let mut watcher = world.client(&daemon).await;
+        watcher
+            .connection
+            .send(WatchSessionsRequest::default())
+            .await
+            .expect("sessions/watch");
+        let mut client = world.client(&daemon).await;
+
+        // A blank thread makes none.
+        client
+            .connection
+            .send(CreateThreadRequest {
+                cwd: notes.clone(),
+                ..TestClient::create_request(&world, "fake")
+            })
+            .await
+            .expect("thread/create");
+        assert!(!watcher.hears_of_a_session().await);
+        assert_eq!(client.sessions().await, Vec::new());
+
+        // A prompted one does: in a subdirectory of a repository, the worktree's.
+        let sub = repo.join("src");
+        std::fs::create_dir(&sub).expect("a subdirectory");
+        let thread_id = client.thread_in(&world, &sub).await.thread_id;
+        let made = watcher.updated().await;
+        assert_eq!(made.directory, repo);
+        assert_eq!(made.revision, 0);
+        assert_eq!(made.layout, None);
+        assert_eq!(made.threads, vec![thread_id.clone()]);
+
+        // Outside a repository, the directory's own; the newest thread first.
+        let first = client.thread_in(&world, &notes).await.thread_id;
+        assert_eq!(watcher.updated().await.directory, notes);
+        let second = client.thread_in(&world, &notes).await.thread_id;
+        assert!(!watcher.hears_of_a_session().await);
+        let listed = client.sessions().await;
+        let directories: Vec<&Path> = listed
+            .iter()
+            .map(|session| session.directory.as_path())
+            .collect();
+        assert_eq!(directories, [repo.as_path(), notes.as_path()]);
+        assert_eq!(listed[0].threads, vec![thread_id]);
+        assert_eq!(listed[1].threads, vec![second, first]);
+        assert!(listed[1].git.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_session_survives_a_host_restart() {
+        let world = World::new();
+        let dir = world.cwd();
+        let kept = {
+            let daemon = world.daemon(true, Duration::from_secs(60));
+            let client = world.client(&daemon).await;
+            client
+                .connection
+                .send(set(&dir, layout("a"), None))
+                .await
+                .expect("sessions/set");
+            let kept = client
+                .connection
+                .send(set(&dir, layout("b"), Some(1)))
+                .await
+                .expect("sessions/set")
+                .session;
+            daemon.shutdown().await;
+            kept
+        };
+
+        let daemon = world.daemon(true, Duration::from_secs(60));
+        let client = world.client(&daemon).await;
+        assert_eq!(client.session(&dir).await.expect("sessions/get"), kept);
+        let next = client
+            .connection
+            .send(set(&dir, layout("c"), Some(2)))
+            .await
+            .expect("sessions/set")
+            .session;
+        assert_eq!(next.revision, 3);
+        assert_eq!(next.created_at, kept.created_at);
+    }
+
+    #[tokio::test]
+    async fn a_session_ends_with_its_worktree() {
+        let world = World::new();
+        let repo = world.repository();
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        client
+            .connection
+            .send(WatchSessionsRequest::default())
+            .await
+            .expect("sessions/watch");
+        let worktree = |branch: &str| CreateWorktreeRequest {
+            repo: repo.clone(),
+            branch: branch.to_owned(),
+            base: None,
+        };
+
+        // Removed through the Host.
+        let removed = client
+            .connection
+            .send(worktree("removed"))
+            .await
+            .expect("worktrees/create")
+            .path;
+        client
+            .connection
+            .send(set(&removed, layout("a"), None))
+            .await
+            .expect("sessions/set");
+        assert_eq!(client.updated().await.directory, removed);
+        client
+            .connection
+            .send(RemoveWorktreeRequest {
+                path: removed.clone(),
+                force: false,
+                delete_branch: false,
+            })
+            .await
+            .expect("worktrees/remove");
+        assert_eq!(client.ended().await, removed);
+
+        // Released before something else removes it, as worktrunk does.
+        let released = client
+            .connection
+            .send(worktree("released"))
+            .await
+            .expect("worktrees/create")
+            .path;
+        client
+            .connection
+            .send(set(&released, layout("a"), None))
+            .await
+            .expect("sessions/set");
+        client.updated().await;
+        client
+            .connection
+            .send(ReleaseWorktreeRequest {
+                path: released.clone(),
+            })
+            .await
+            .expect("worktrees/release");
+        assert_eq!(client.ended().await, released);
+        git(
+            &repo,
+            &["worktree", "remove", released.to_str().expect("utf-8")],
+        );
+
+        // Removed behind the Host's back: it ends when the Host next lists them.
+        let behind = client
+            .connection
+            .send(worktree("behind"))
+            .await
+            .expect("worktrees/create")
+            .path;
+        client
+            .connection
+            .send(set(&behind, layout("a"), None))
+            .await
+            .expect("sessions/set");
+        client.updated().await;
+        git(
+            &repo,
+            &["worktree", "remove", behind.to_str().expect("utf-8")],
+        );
+        assert_eq!(client.sessions().await, Vec::new());
+        assert_eq!(client.ended().await, behind);
+    }
+
+    #[tokio::test]
+    async fn a_session_ends_by_hand_unless_something_in_it_is_busy() {
+        let world = World::new();
+        let dir = world.cwd().canonicalize().expect("canonical");
+        let daemon = world.daemon(false, Duration::from_secs(60));
+        let mut client = world.client(&daemon).await;
+        let thread_id = client.thread_in(&world, &dir).await.thread_id;
+        assert_eq!(
+            client.session(&dir).await.expect("sessions/get").threads,
+            vec![thread_id.clone()]
+        );
+
+        // Not while its thread waits on a person.
+        let target = dir.join("out.txt");
+        client
+            .prompt(&thread_id, &format!("write {} hello", target.display()))
+            .await;
+        let (_, asked) = client.asked(&mut Seen::default()).await;
+        let end = || EndSessionRequest {
+            directory: dir.clone(),
+        };
+        let busy = client.connection.send(end()).await.expect_err("busy");
+        assert!(errors::is(&busy, errors::SESSION_BUSY), "{busy:?}");
+        client
+            .allow(&thread_id, &asked, "allow")
+            .await
+            .expect("answered");
+        client.until_turn_ends(&mut Seen::default(), None).await;
+
+        // Then it ends, leaving its thread open.
+        client.connection.send(end()).await.expect("sessions/end");
+        assert!(errors::is(
+            &client.session(&dir).await.expect_err("ended"),
+            errors::NO_SESSION
+        ));
+        let again = client.connection.send(end()).await.expect_err("ended");
+        assert!(errors::is(&again, errors::NO_SESSION));
+        let listed = client
+            .connection
+            .send(ListThreadsRequest {
+                cwd: Some(dir.clone()),
+                ..ListThreadsRequest::default()
+            })
+            .await
+            .expect("threads/list")
+            .threads;
+        assert_eq!(listed[0].state, ThreadStatus::Open);
+    }
 }
