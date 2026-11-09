@@ -15,7 +15,14 @@
 //! Hosts, the Dispatcher, as a `service/hostCall` naming the calling thread. The Dispatcher
 //! sends it there, follows a turn it began, and reports on it with `thread/report`, which
 //! [`tell`] answers as for this Host's own threads; this Host keeps no record of it.
-//! `list_hosts` lists the Hosts the Dispatcher reaches. Reach is one hop: a turn another Host's
+//! `list_hosts` lists the Hosts the Dispatcher reaches.
+//!
+//! Given `project`, `start_thread` and `list_threads` work in one of the person's Projects
+//! (WVE-208), which the Dispatcher keeps: `list_projects` lists them, and a call that names one
+//! asks the Dispatcher for them first and works out the Project's location on the Host it acts
+//! on. A thread started on another Host with no directory goes to the location there of the
+//! Project the calling thread's directory is in, when it's in one, rather than the same path
+//! under the home there. Reach is one hop: a turn another Host's
 //! agent began here, and a thread one started here or anything that thread started, reaches
 //! no other Host.
 
@@ -33,13 +40,20 @@ use serde_json::json;
 use weave_acp_core::schema::ContentBlock;
 use weave_acp_core::schema::ToolKind;
 use weave_host_protocol::agents::ListAgentsRequest;
+use weave_host_protocol::dispatcher::Project;
+use weave_host_protocol::dispatcher::ProjectKind;
 use weave_host_protocol::policy::PermissionPolicy;
 use weave_host_protocol::policy::Unapproved;
+use weave_host_protocol::projects::ListedProjects;
+use weave_host_protocol::projects::containing;
+use weave_host_protocol::projects::containing_directory;
+use weave_host_protocol::projects::inside;
 use weave_host_protocol::queue::AddQueuedRequest;
 use weave_host_protocol::reports::why;
 use weave_host_protocol::threads::Activity;
 use weave_host_protocol::threads::GetThreadRequest;
 use weave_host_protocol::threads::ListThreadsRequest;
+use weave_host_protocol::threads::ListThreadsResponse;
 use weave_host_protocol::threads::RunRequest;
 use weave_host_protocol::threads::RunResponse;
 use weave_host_protocol::threads::ThreadId;
@@ -49,6 +63,7 @@ use weave_host_protocol::tools::ClientToolResult;
 use weave_host_protocol::tools::HostCall;
 use weave_host_protocol::tools::LIST_AGENTS;
 use weave_host_protocol::tools::LIST_HOSTS;
+use weave_host_protocol::tools::LIST_PROJECTS;
 use weave_host_protocol::tools::LIST_THREADS;
 use weave_host_protocol::tools::PROMPT_THREAD;
 use weave_host_protocol::tools::READ_THREAD;
@@ -79,23 +94,85 @@ pub(crate) async fn call(
     arguments: &Map<String, Value>,
     cancelled: impl Future<Output = ()>,
 ) -> Option<ClientToolResult> {
+    let mut cancelled = std::pin::pin!(cancelled);
     let mut arguments = arguments.clone();
-    let answered = match arguments.remove("host") {
-        None if tool == LIST_HOSTS => return hosts(shared, caller, cancelled).await,
-        None => here(shared, caller, tool, &arguments).await,
+    let host = match arguments.remove("host") {
+        None => None,
         // This Host, by the id list_hosts gives it.
-        Some(Value::String(host)) if host == shared.devices.host_id() => {
-            here(shared, caller, tool, &arguments).await
+        Some(Value::String(host)) if host == shared.devices.host_id() => None,
+        Some(Value::String(host)) => Some(host),
+        Some(_) => {
+            return Some(ClientToolResult::error(
+                "host is another Host's id or name, as a string.",
+            ));
         }
-        Some(Value::String(host)) => {
-            return elsewhere(shared, caller, tool, host, &arguments, cancelled).await;
+    };
+    let project = match (tool, arguments.remove("project")) {
+        (_, None) => None,
+        (LIST_THREADS | START_THREAD, Some(Value::String(project))) => Some(project),
+        (LIST_THREADS | START_THREAD, Some(_)) => {
+            return Some(ClientToolResult::error(
+                "project is a Project's name or id, as a string.",
+            ));
         }
-        Some(_) => Err("host is another Host's id or name, as a string.".to_owned()),
+        (_, Some(_)) => {
+            return Some(ClientToolResult::error(format!("{tool} takes no project.")));
+        }
+    };
+    if host.is_none() {
+        match tool {
+            LIST_HOSTS => return dispatcher(shared, caller, HostCall::ListHosts, cancelled).await,
+            LIST_PROJECTS => {
+                return dispatcher(shared, caller, HostCall::ListProjects, cancelled).await;
+            }
+            _ => {}
+        }
+    }
+    // A Project named, or a thread started elsewhere with no directory, which goes where the
+    // caller's Project is there, if it's in one.
+    let guess = tool == START_THREAD && host.is_some() && !arguments.contains_key("cwd");
+    let listed = if project.is_some() || guess {
+        match projects(shared, caller, cancelled.as_mut()).await? {
+            Ok(listed) => Some(listed),
+            Err(why) => return Some(ClientToolResult::error(why)),
+        }
+    } else {
+        None
+    };
+    let scope = Scope {
+        named: project.as_deref(),
+        listed: listed.as_ref(),
+    };
+    let answered = match host {
+        None => here(shared, caller, tool, &arguments, scope).await,
+        Some(host) => {
+            return elsewhere(shared, caller, tool, host, &arguments, scope, cancelled).await;
+        }
     };
     Some(match answered {
         Ok(text) => ClientToolResult::text(text),
         Err(why) => ClientToolResult::error(why),
     })
+}
+
+/// The Projects a call works with.
+#[derive(Clone, Copy)]
+struct Scope<'a> {
+    /// The Project its agent named, as `project`.
+    named: Option<&'a str>,
+    /// The person's Projects, as the Dispatcher listed them, when the call needs them: always
+    /// when it names one.
+    listed: Option<&'a ListedProjects>,
+}
+
+impl<'a> Scope<'a> {
+    /// The Project named, among those listed; or why there's none of that name.
+    fn named(&self) -> Result<Option<(&'a Project, &'a ListedProjects)>, String> {
+        match (self.named, self.listed) {
+            (Some(by), Some(listed)) => Ok(Some((listed.project(by)?, listed))),
+            _ => Ok(None),
+        }
+    }
 }
 
 /// `tool`'s answer on this Host.
@@ -104,19 +181,17 @@ async fn here(
     caller: &ThreadHandle,
     tool: &str,
     arguments: &Map<String, Value>,
+    scope: Scope<'_>,
 ) -> Result<String, String> {
     match tool {
         RENAME_THREAD => rename(caller, arguments).await,
-        LIST_THREADS => match parse::<ListThreadsRequest>(arguments) {
-            Ok(request) => answer(client::list_threads(shared, request).await),
-            Err(why) => Err(why),
-        },
+        LIST_THREADS => list(shared, arguments, scope).await,
         LIST_AGENTS => answer(client::list_agents(shared, ListAgentsRequest::default()).await),
         READ_THREAD => match parse::<GetThreadRequest>(arguments) {
             Ok(request) => answer(client::get_thread(shared, request).await),
             Err(why) => Err(why),
         },
-        START_THREAD => start(shared, caller, arguments).await,
+        START_THREAD => start(shared, caller, arguments, scope).await,
         PROMPT_THREAD => prompt(shared, caller, arguments).await,
         STEER_THREAD => steer(shared, caller, arguments).await,
         CANCEL_THREAD_TURN => cancel(shared, arguments),
@@ -124,10 +199,12 @@ async fn here(
     }
 }
 
-/// `list_hosts`: the Hosts the service that reaches them lists, and this one's id.
-async fn hosts(
+/// `call`, which the service that reaches the person's Hosts answers itself: `list_hosts` or
+/// `list_projects`.
+async fn dispatcher(
     shared: &Arc<Shared>,
     caller: &ThreadHandle,
+    call: HostCall,
     cancelled: impl Future<Output = ()>,
 ) -> Option<ClientToolResult> {
     let Some((service, name)) = shared.devices.hosts_service() else {
@@ -136,16 +213,123 @@ async fn hosts(
     let me = service_tools::caller(&caller.summary());
     shared
         .service_tools
-        .call_host(
-            &service,
-            &name,
-            None,
-            HostCall::ListHosts,
-            me,
-            None,
-            cancelled,
-        )
+        .call_host(&service, &name, None, call, me, None, cancelled)
         .await
+}
+
+/// The person's Projects, which the service that reaches their Hosts keeps, for a call that
+/// names one or may fall in one; or why they can't be had.
+async fn projects(
+    shared: &Arc<Shared>,
+    caller: &ThreadHandle,
+    cancelled: impl Future<Output = ()>,
+) -> Option<Result<ListedProjects, String>> {
+    let answer = dispatcher(shared, caller, HostCall::ListProjects, cancelled).await?;
+    let text = text_of(&answer);
+    Some(if answer.is_error {
+        Err(text)
+    } else {
+        serde_json::from_str(&text)
+            .map_err(|error| format!("The Dispatcher listed the Projects oddly: {error}."))
+    })
+}
+
+/// The text of a tool's answer.
+fn text_of(answer: &ClientToolResult) -> String {
+    answer
+        .content
+        .iter()
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect()
+}
+
+/// `list_threads` on this Host, only those in the Project named when there is one.
+async fn list(
+    shared: &Arc<Shared>,
+    arguments: &Map<String, Value>,
+    scope: Scope<'_>,
+) -> Result<String, String> {
+    let request: ListThreadsRequest = parse(arguments)?;
+    let Some((project, listed)) = scope.named()? else {
+        return answer(client::list_threads(shared, request).await);
+    };
+    no_directory(&request)?;
+    let mut threads = client::list_threads(shared, request)
+        .await
+        .map_err(|error| why(&error))?;
+    let projects = real_here(listed);
+    threads.threads.retain(|thread| {
+        let cwd = real(&thread.info.cwd);
+        let repo = thread.git.as_ref().map(|git| real(&git.repo));
+        containing_directory(&projects, &listed.host_id, &cwd, repo.as_deref())
+            .is_some_and(|found| found.id == project.id)
+    });
+    to_text(&threads)
+}
+
+/// Refuse a `list_threads` that names a directory as well as a Project.
+fn no_directory(request: &ListThreadsRequest) -> Result<(), String> {
+    if request.cwd.is_some() || request.repo.is_some() {
+        return Err("list_threads takes project or a directory, cwd or repo, not both.".to_owned());
+    }
+    Ok(())
+}
+
+/// `answer`, threads another Host listed, with only those in `project` there, `host`.
+fn only_in(
+    answer: ClientToolResult,
+    project: &Project,
+    listed: &ListedProjects,
+    host: &str,
+) -> ClientToolResult {
+    if answer.is_error {
+        return answer;
+    }
+    let mut threads: ListThreadsResponse = match serde_json::from_str(&text_of(&answer)) {
+        Ok(threads) => threads,
+        Err(error) => {
+            return ClientToolResult::error(format!("{host} listed its threads oddly: {error}."));
+        }
+    };
+    let host_id = listed.host(host).map(|host| host.host_id.as_str());
+    threads.threads.retain(|thread| {
+        host_id.is_some_and(|host_id| {
+            containing(&listed.projects, host_id, thread)
+                .is_some_and(|found| found.id == project.id)
+        })
+    });
+    match to_text(&threads) {
+        Ok(text) => ClientToolResult::text(text),
+        Err(why) => ClientToolResult::error(why),
+    }
+}
+
+/// `listed`'s Projects, with their locations on this Host as their real paths, to compare with
+/// the real paths of directories here.
+fn real_here(listed: &ListedProjects) -> Vec<Project> {
+    let mut projects = listed.projects.clone();
+    for location in projects
+        .iter_mut()
+        .flat_map(|project| &mut project.locations)
+    {
+        if location.host_id == listed.host_id {
+            location.path = real(&location.path);
+        }
+    }
+    projects
+}
+
+/// `path` with its links resolved, or as it is when it can't be.
+fn real(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// A git Project's remote, which the Host it starts a thread on checks its clone has.
+fn remote_of(project: &Project) -> Option<String> {
+    match project.kind {
+        ProjectKind::Git => project.remote.clone(),
+        ProjectKind::Directory => None,
+    }
 }
 
 /// Why no call reaches another Host from this one.
@@ -165,10 +349,11 @@ async fn elsewhere(
     tool: &str,
     host: String,
     arguments: &Map<String, Value>,
+    scope: Scope<'_>,
     cancelled: impl Future<Output = ()>,
 ) -> Option<ClientToolResult> {
     let fail = |why: String| Some(ClientToolResult::error(why));
-    if matches!(tool, RENAME_THREAD | LIST_HOSTS) {
+    if matches!(tool, RENAME_THREAD | LIST_HOSTS | LIST_PROJECTS) {
         return fail(format!("{tool} acts on this Host, so it takes no host."));
     }
     let me = caller.summary();
@@ -178,18 +363,34 @@ async fn elsewhere(
              Host: a Host's agents reach the person's other Hosts only one hop away."
         ));
     }
-    let (call, room) = match request(shared, &me, tool, &host, arguments) {
+    let (call, room) = match request(shared, &me, tool, &host, arguments, scope) {
         Ok(asked) => asked,
+        Err(why) => return fail(why),
+    };
+    let named = match scope.named() {
+        Ok(named) => named.filter(|_| tool == LIST_THREADS),
         Err(why) => return fail(why),
     };
     let Some((service, name)) = shared.devices.hosts_service() else {
         return fail(no_dispatcher(shared));
     };
     let caller = service_tools::caller(&me);
-    shared
+    let answer = shared
         .service_tools
-        .call_host(&service, &name, Some(host), call, caller, room, cancelled)
-        .await
+        .call_host(
+            &service,
+            &name,
+            Some(host.clone()),
+            call,
+            caller,
+            room,
+            cancelled,
+        )
+        .await?;
+    Some(match named {
+        Some((project, listed)) => only_in(answer, project, listed, &host),
+        None => answer,
+    })
 }
 
 /// The request `tool` makes of another Host, `host`, for the thread `me`, and, for one that
@@ -200,9 +401,16 @@ fn request(
     tool: &str,
     host: &str,
     arguments: &Map<String, Value>,
+    scope: Scope<'_>,
 ) -> Result<(HostCall, Option<u32>), String> {
     let call = match tool {
-        LIST_THREADS => HostCall::ListThreads(parse(arguments)?),
+        LIST_THREADS => {
+            let request: ListThreadsRequest = parse(arguments)?;
+            if scope.named()?.is_some() {
+                no_directory(&request)?;
+            }
+            HostCall::ListThreads(request)
+        }
         LIST_AGENTS => HostCall::ListAgents(ListAgentsRequest::default()),
         READ_THREAD => HostCall::GetThread(parse(arguments)?),
         STEER_THREAD => {
@@ -225,7 +433,7 @@ fn request(
                 origin: None,
             })
         }
-        START_THREAD => return start_elsewhere(shared, me, host, arguments),
+        START_THREAD => return start_elsewhere(shared, me, host, arguments, scope),
         _ => return Err(format!("The Host doesn't answer {tool}.")),
     };
     Ok((call, None))
@@ -239,7 +447,6 @@ fn counterpart(
     me: &Summary,
     host: &str,
 ) -> Result<(PathBuf, Option<String>), String> {
-    let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let (dir, remote) = match &me.git {
         Some(git) => {
             let cwd = real(&me.cwd);
@@ -272,6 +479,36 @@ fn counterpart(
     Ok((there, remote))
 }
 
+/// Where a thread the thread `me` starts on another Host, `host`, works when its agent names
+/// no directory and `me`'s directory is in one of the person's Projects: the Project's location
+/// there, in the same subdirectory as `me` in its own. In a git Project that's the main
+/// checkout there, since another worktree's branch may not be there. None when `me`'s
+/// directory is in no Project; why not when the Project has no location there.
+fn in_project_there(
+    listed: &ListedProjects,
+    me: &Summary,
+    host: &str,
+) -> Option<Result<(PathBuf, Option<String>), String>> {
+    let projects = real_here(listed);
+    let cwd = real(&me.cwd);
+    let repo = me.git.as_ref().map(|git| real(&git.repo));
+    let project = containing_directory(&projects, &listed.host_id, &cwd, repo.as_deref())?;
+    let here = &project.location(&listed.host_id)?.path;
+    let within = match &me.git {
+        Some(git) if repo.as_ref() == Some(here) => cwd.strip_prefix(real(&git.worktree)),
+        _ => cwd.strip_prefix(here),
+    }
+    .unwrap_or(Path::new(""));
+    Some(listed.location(project, Some(host)).map(|location| {
+        let dir = if within.as_os_str().is_empty() {
+            location.path.clone()
+        } else {
+            location.path.join(within)
+        };
+        (dir, remote_of(project))
+    }))
+}
+
 /// The other Host the thread `me` works for, if one: one whose agent began its running turn,
 /// or, up the threads that started it, one whose agent started one of them.
 fn from_other_host(shared: &Shared, me: &Summary) -> Option<String> {
@@ -296,11 +533,22 @@ fn start_elsewhere(
     me: &Summary,
     host: &str,
     arguments: &Map<String, Value>,
+    scope: Scope<'_>,
 ) -> Result<(HostCall, Option<u32>), String> {
     let arguments: StartArguments = parse(arguments)?;
-    let (cwd, remote) = match arguments.cwd {
-        Some(cwd) => (cwd, None),
-        None => counterpart(shared, me, host)?,
+    let (cwd, remote) = match (scope.named()?, arguments.cwd) {
+        (Some((project, listed)), cwd) => {
+            let location = listed.location(project, Some(host))?;
+            (inside(&location.path, cwd.as_deref())?, remote_of(project))
+        }
+        (None, Some(cwd)) => (cwd, None),
+        (None, None) => match scope
+            .listed
+            .and_then(|listed| in_project_there(listed, me, host))
+        {
+            Some(there) => there?,
+            None => counterpart(shared, me, host)?,
+        },
     };
     let limits = shared
         .load_config()
@@ -384,9 +632,17 @@ async fn start(
     shared: &Arc<Shared>,
     caller: &ThreadHandle,
     arguments: &Map<String, Value>,
+    scope: Scope<'_>,
 ) -> Result<String, String> {
     let arguments: StartArguments = parse(arguments)?;
     let me = caller.summary();
+    let cwd = match scope.named()? {
+        Some((project, listed)) => {
+            let location = listed.location(project, None)?;
+            inside(&location.path, arguments.cwd.as_deref())?
+        }
+        None => arguments.cwd.clone().unwrap_or_else(|| me.cwd.clone()),
+    };
     let limits = shared
         .load_config()
         .map_err(|error| why(&error))?
@@ -408,7 +664,7 @@ async fn start(
     let policy = asked(&arguments.approve, arguments.otherwise, &me.policy);
     let request = RunRequest {
         agent_id: arguments.agent_id,
-        cwd: arguments.cwd.unwrap_or_else(|| me.cwd.clone()),
+        cwd,
         remote: None,
         thread_id: arguments.thread_id,
         additional_directories: Vec::new(),

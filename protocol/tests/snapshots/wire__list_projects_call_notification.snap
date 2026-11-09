@@ -1,0 +1,21 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&HostCallNotification\n{\n    call_id: \"c-4\".to_owned(), host: None, call: HostCall::ListProjects,\n    caller: tool_caller, room: None,\n})"
+---
+{
+  "method": "service/hostCall",
+  "params": {
+    "callId": "c-4",
+    "call": {
+      "method": "projects/list"
+    },
+    "caller": {
+      "threadId": "sess-a",
+      "agentId": "claude",
+      "cwd": "/Users/jaco/src/app",
+      "policy": {
+        "otherwise": "ask"
+      }
+    }
+  }
+}

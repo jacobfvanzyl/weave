@@ -1110,6 +1110,9 @@ export type HostCall =
       method: "hosts/list";
     }
   | {
+      method: "projects/list";
+    }
+  | {
       method: "threads/list";
       params: ListThreadsRequest;
     }
@@ -6774,7 +6777,7 @@ export interface HostCallNotification {
   callId: string;
   /**
    * The Host the agent named, by the id or name `list_hosts` gave; absent for
-   * [`HostCall::ListHosts`].
+   * [`HostCall::ListHosts`] and [`HostCall::ListProjects`].
    */
   host?: string | null;
   call: HostCall;

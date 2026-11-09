@@ -34,6 +34,16 @@ expression: round_trip(&host_catalog())
     }
   },
   {
+    "name": "list_projects",
+    "title": "List the person's Projects",
+    "description": "List the person's Projects: named pieces of their work, each a git repository or a directory, with at most one location on each of their weave Hosts, at whatever path it has there. Each has its id, name, kind (git or directory), its repository's remote, and its locations: a Host's id and the path there; hosts gives every Host's name. start_thread and list_threads take one as project, to work in it on a Host that has it without knowing its path there. Making and changing Projects is the person's to do, with `weave projects`. Answers with this Host's id, the Projects and the Hosts as JSON.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "list_threads",
     "title": "List threads",
     "description": "List the threads of the weave Host this thread runs in, across agents and directories, most recently active first: each one's id, agent, directory, title, whether it is open and running, and which thread started it. Answers with the Host's threads/list result as JSON.",
@@ -43,6 +53,10 @@ expression: round_trip(&host_catalog())
         "host": {
           "type": "string",
           "description": "Optional: another of the person's weave Hosts, by the id or name list_hosts gives, to act there instead of on this thread's Host."
+        },
+        "project": {
+          "type": "string",
+          "description": "Optional: one of the person's Projects, by the name or id list_projects gives, to list only the threads in it on the Host listed: none where it has no location. Not with cwd or repo."
         },
         "agentId": {
           "type": "string",
@@ -129,9 +143,13 @@ expression: round_trip(&host_catalog())
           "type": "string",
           "description": "What to ask of it: everything it needs to know, since it doesn't see this conversation."
         },
+        "project": {
+          "type": "string",
+          "description": "Optional: one of the person's Projects, by the name or id list_projects gives, to work in its location on the Host it starts on, which has to have one: in a git Project, the repository's main checkout."
+        },
         "cwd": {
           "type": "string",
-          "description": "The absolute directory it works in, or one under the home of its Host as ~/…; yours when absent. With host and no cwd, the same directory under the home there, which has to be a checkout of the same repository: its main checkout when yours is another worktree, since your branch may not be there."
+          "description": "The absolute directory it works in, or one under the home of its Host as ~/…; yours when absent. With project, a directory inside the Project relative to it instead, such as app. With host and neither: when your directory is in a Project, the Project's location there, in the same subdirectory; otherwise the same directory under the home there, which has to be a checkout of the same repository: its main checkout when yours is another worktree, since your branch may not be there."
         },
         "threadId": {
           "type": "string",

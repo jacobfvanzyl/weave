@@ -10,6 +10,10 @@
 //! Host's next connection, as any delivery is, and the calling thread is told then whether it
 //! started. The turn it began is followed there ([`crate::follows`]) and reported on.
 //!
+//! `list_projects` the Dispatcher answers itself, as `list_hosts`: Hosts know nothing of
+//! Projects, so a Host whose agent names one asks it for them first and works the directory
+//! out (WVE-208).
+//!
 //! Reach is one hop: a thread another Host's agent started can't reach a third. Its Host
 //! refuses such a call, and so does the Dispatcher, from the calling thread's listing.
 
@@ -21,6 +25,8 @@ use serde_json::Value;
 use serde_json::json;
 use weave_host_client::HostHandle;
 use weave_host_protocol::policy::PermissionPolicy;
+use weave_host_protocol::projects::ListedProjects;
+use weave_host_protocol::projects::NamedHost;
 use weave_host_protocol::reports::why;
 use weave_host_protocol::threads::OtherThread;
 use weave_host_protocol::threads::ReportThreadRequest;
@@ -73,8 +79,10 @@ async fn respond(
     caller: &ToolCaller,
     room: Option<u32>,
 ) -> Result<String, String> {
-    if matches!(call, HostCall::ListHosts) {
-        return hosts(shared, calling);
+    match call {
+        HostCall::ListHosts => return hosts(shared, calling),
+        HostCall::ListProjects => return projects(shared, calling),
+        _ => {}
     }
     let host = host.ok_or("A call to another Host names it.")?;
     let named = resolve(shared, calling, host)?;
@@ -102,6 +110,7 @@ async fn respond(
     };
     match call {
         HostCall::ListHosts => hosts(shared, calling),
+        HostCall::ListProjects => projects(shared, calling),
         HostCall::ListThreads(request) => to_text(&handle.send(request).await.map_err(there)?),
         HostCall::ListAgents(request) => to_text(&handle.send(request).await.map_err(there)?),
         HostCall::GetThread(request) => to_text(&handle.send(request).await.map_err(there)?),
@@ -350,6 +359,33 @@ fn hosts(shared: &Shared, calling: &StoredHost) -> Result<String, String> {
         })
         .collect();
     to_text(&json!({"hostId": calling.host_id, "hosts": hosts}))
+}
+
+/// `list_projects`: the person's Projects, and the names of every Host the Dispatcher is paired
+/// with, the calling one's too, which the Projects' locations name by id. The calling Host
+/// works out what `project` names to its thread tools from it (WVE-208).
+fn projects(shared: &Shared, calling: &StoredHost) -> Result<String, String> {
+    let projects = shared.projects().map_err(|error| {
+        format!(
+            "The Dispatcher couldn't list its Projects: {}.",
+            why(&error)
+        )
+    })?;
+    let hosts = shared
+        .store
+        .hosts()
+        .map_err(|why| format!("The Dispatcher couldn't read its Hosts: {why}."))?
+        .into_iter()
+        .map(|host| NamedHost {
+            host_id: host.host_id,
+            name: host.name,
+        })
+        .collect();
+    to_text(&ListedProjects {
+        host_id: calling.host_id.clone(),
+        projects,
+        hosts,
+    })
 }
 
 /// The Host `by` names, by id or name: one the Dispatcher is paired with, other than the

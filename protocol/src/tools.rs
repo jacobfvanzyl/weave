@@ -71,6 +71,10 @@ pub const LIST_AGENTS: &str = "list_agents";
 /// service that reaches them answers [`HostCall::ListHosts`].
 pub const LIST_HOSTS: &str = "list_hosts";
 
+/// The Host tool that lists the person's Projects (WVE-208), as the service that reaches the
+/// person's Hosts answers [`HostCall::ListProjects`].
+pub const LIST_PROJECTS: &str = "list_projects";
+
 /// The tool kinds a permission policy names, for the tools that take one.
 const TOOL_KINDS: [&str; 10] = [
     "read",
@@ -134,6 +138,15 @@ pub fn host_catalog() -> Vec<Tool> {
         "description": "Optional: another of the person's weave Hosts, by the id or name \
                         list_hosts gives, to act there instead of on this thread's Host."
     });
+    let project = |what: &str| {
+        json!({
+            "type": "string",
+            "description": format!(
+                "Optional: one of the person's Projects, by the name or id list_projects \
+                 gives, {what}"
+            )
+        })
+    };
     vec![
         rename_thread(),
         Tool {
@@ -155,6 +168,25 @@ pub fn host_catalog() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: LIST_PROJECTS.to_owned(),
+            title: "List the person's Projects".to_owned(),
+            description: "List the person's Projects: named pieces of their work, each a git \
+                          repository or a directory, with at most one location on each of \
+                          their weave Hosts, at whatever path it has there. Each has its id, \
+                          name, kind (git or directory), its repository's remote, and its \
+                          locations: a Host's id and the path there; hosts gives every Host's \
+                          name. start_thread and list_threads take one as project, to work in \
+                          it on a Host that has it without knowing its path there. Making and \
+                          changing Projects is the person's to do, with `weave projects`. \
+                          Answers with this Host's id, the Projects and the Hosts as JSON."
+                .to_owned(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        Tool {
             name: LIST_THREADS.to_owned(),
             title: "List threads".to_owned(),
             description: "List the threads of the weave Host this thread runs in, across \
@@ -167,6 +199,8 @@ pub fn host_catalog() -> Vec<Tool> {
                 "type": "object",
                 "properties": {
                     "host": host,
+                    "project": project("to list only the threads in it on the Host listed: \
+                        none where it has no location. Not with cwd or repo."),
                     "agentId": {"type": "string", "description": "Only this agent's threads, \
                         such as claude or codex, with the agent's own history of the directory."},
                     "cwd": {"type": "string", "description": "Only threads in this absolute \
@@ -235,11 +269,17 @@ pub fn host_catalog() -> Vec<Tool> {
                         list_agents says which there are and what each is for."},
                     "prompt": {"type": "string", "description": "What to ask of it: everything \
                         it needs to know, since it doesn't see this conversation."},
+                    "project": project("to work in its location on the Host it starts on, \
+                        which has to have one: in a git Project, the repository's main \
+                        checkout."),
                     "cwd": {"type": "string", "description": "The absolute directory it works \
                         in, or one under the home of its Host as ~/…; yours when absent. With \
-                        host and no cwd, the same directory under the home there, which has to \
-                        be a checkout of the same repository: its main checkout when yours is \
-                        another worktree, since your branch may not be there."},
+                        project, a directory inside the Project relative to it instead, such \
+                        as app. With host and neither: when your directory is in a Project, \
+                        the Project's location there, in the same subdirectory; otherwise the \
+                        same directory under the home there, which has to be a checkout of the \
+                        same repository: its main checkout when yours is another worktree, \
+                        since your branch may not be there."},
                     "threadId": {"type": "string", "description": "An existing thread, to \
                         prompt instead of starting one."},
                     "approve": {
@@ -418,6 +458,10 @@ pub enum HostCall {
     /// `list_hosts`: the Hosts the service reaches, and whether it's connected to each now.
     #[serde(rename = "hosts/list")]
     ListHosts,
+    /// `list_projects`, and what `project` names to the thread tools that take it: the
+    /// person's Projects, answered with [`crate::projects::ListedProjects`] (WVE-208).
+    #[serde(rename = "projects/list")]
+    ListProjects,
     #[serde(rename = "threads/list")]
     ListThreads(ListThreadsRequest),
     #[serde(rename = "agents/list")]
@@ -445,7 +489,7 @@ pub enum HostCall {
 pub struct HostCallNotification {
     pub call_id: String,
     /// The Host the agent named, by the id or name `list_hosts` gave; absent for
-    /// [`HostCall::ListHosts`].
+    /// [`HostCall::ListHosts`] and [`HostCall::ListProjects`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     pub call: HostCall,

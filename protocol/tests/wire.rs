@@ -754,6 +754,16 @@ fn services_and_other_hosts() {
             call_id: "c-3".to_owned(),
             host: None,
             call: HostCall::ListHosts,
+            caller: tool_caller.clone(),
+            room: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "list_projects_call_notification",
+        message(&HostCallNotification {
+            call_id: "c-4".to_owned(),
+            host: None,
+            call: HostCall::ListProjects,
             caller: tool_caller,
             room: None,
         })

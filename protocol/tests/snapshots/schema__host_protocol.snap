@@ -9791,7 +9791,7 @@ expression: schema()
             "string",
             "null"
           ],
-          "description": "The Host the agent named, by the id or name `list_hosts` gave; absent for\n[`HostCall::ListHosts`]."
+          "description": "The Host the agent named, by the id or name `list_hosts` gave; absent for\n[`HostCall::ListHosts`] and [`HostCall::ListProjects`]."
         },
         "call": {
           "$ref": "#/$defs/HostCall"
@@ -9830,6 +9830,19 @@ expression: schema()
             "method"
           ],
           "description": "`list_hosts`: the Hosts the service reaches, and whether it's connected to each now."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "projects/list"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "description": "`list_projects`, and what `project` names to the thread tools that take it: the\nperson's Projects, answered with [`crate::projects::ListedProjects`] (WVE-208)."
         },
         {
           "type": "object",

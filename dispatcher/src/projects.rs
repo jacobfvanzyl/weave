@@ -2,7 +2,8 @@
 //! programs that sees every Host: each named, with at most one location on each Host, a
 //! repository by its primary worktree or a directory outside one. Clients find out where a
 //! directory lies in git from its Host and say so here; Hosts know nothing of Projects. Its own
-//! computer and paired devices may change them; Hosts and their agents can't yet (WVE-208).
+//! computer and paired devices may change them. Hosts' agents read them, with the Host tool
+//! `list_projects` ([`crate::calls`]), and name one to the thread tools; they change none.
 
 use agent_client_protocol::Error;
 use weave_host_protocol::dispatcher::AddProjectRequest;
