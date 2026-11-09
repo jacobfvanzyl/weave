@@ -1296,7 +1296,14 @@ fn ids(answer: &serde_json::Value) -> Vec<ThreadId> {
         .as_array()
         .expect("threads")
         .iter()
-        .map(|thread| ThreadId::new(thread["info"]["sessionId"].as_str().expect("an id").to_owned()))
+        .map(|thread| {
+            ThreadId::new(
+                thread["info"]["sessionId"]
+                    .as_str()
+                    .expect("an id")
+                    .to_owned(),
+            )
+        })
         .collect()
 }
 
