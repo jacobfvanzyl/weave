@@ -1,0 +1,10 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&GetProjectRequest { project: \"odin\".to_owned(), })"
+---
+{
+  "method": "projects/get",
+  "params": {
+    "project": "odin"
+  }
+}

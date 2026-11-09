@@ -2,7 +2,8 @@
 //! Unix socket on its own computer, or over its WebSocket from the person's other devices,
 //! paired with it (WVE-176). The Dispatcher is a client of the
 //! person's Hosts, which join it and keep a connection open to it (ADR 0030, WVE-194): the
-//! Hosts that joined and how each stands, and its schedules (WVE-145) and their occurrences.
+//! Hosts that joined and how each stands, its schedules (WVE-145) and their occurrences, and
+//! the person's Projects (ADR 0031, WVE-189), which [`crate::projects`] places threads in.
 //! Its devices are managed with `devices/*`, on its own computer only; Hosts pair with nothing
 //! since WVE-197, and take the Dispatcher's word for the devices it carries to them.
 //!
@@ -83,6 +84,10 @@ pub const DISPATCHER_CARRY_SUBPROTOCOL: &str = "weave-dispatcher-carry";
 /// [`Auth::Dispatcher`] on the connections it opens for that.
 pub const CARRY_FEATURE: &str = "carry";
 
+/// The [`DispatcherHello::features`] entry of a Dispatcher that keeps Projects (ADR 0031,
+/// WVE-189): it answers `projects/*`.
+pub const PROJECTS_FEATURE: &str = "projects";
+
 /// The device the Dispatcher's own computer is, on a connection carried from its socket: it
 /// proves nothing, as the socket's peer is the Dispatcher's own user, and is named after the
 /// computer.
@@ -155,6 +160,17 @@ pub struct DispatcherHello {
     /// The paired device a remote client connected as; none for a local client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<DeviceInfo>,
+    /// Optional parts of its API it answers, such as [`PROJECTS_FEATURE`]. A Dispatcher from
+    /// before them says none.
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
+impl DispatcherHello {
+    /// Whether the Dispatcher answers the optional part of its API `feature` names.
+    pub fn offers(&self, feature: &str) -> bool {
+        self.features.iter().any(|offered| offered == feature)
+    }
 }
 
 /// `dispatcher/challenge`: what a paired device signs in its `dispatcher/hello`. Only on the
@@ -643,6 +659,161 @@ pub struct ListOccurrencesRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ListOccurrencesResponse {
     pub occurrences: Vec<Occurrence>,
+}
+
+/// What a Project's locations are, fixed when it's made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectKind {
+    /// A git repository on each Host, by its primary worktree, so all its worktrees are in
+    /// the Project.
+    Git,
+    /// A directory outside any repository, as given.
+    Directory,
+}
+
+impl ProjectKind {
+    /// How it's named in messages: "git" or "directory".
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Git => "git",
+            Self::Directory => "directory",
+        }
+    }
+}
+
+/// Where a Project is on one of the person's Hosts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLocation {
+    /// The Host, by its id; `hosts/list` gives its name.
+    pub host_id: String,
+    /// Absolute on that Host's computer: a git Project's repository by its primary worktree.
+    pub path: PathBuf,
+}
+
+/// A named piece of the person's work (ADR 0031, WVE-189), with at most one location on each of
+/// their Hosts: a repository there, or a directory outside one. The Dispatcher keeps it, as the
+/// only one of the person's programs that sees every Host; Hosts know nothing of it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    /// `p-` and 20 hex digits.
+    pub id: String,
+    /// What it's shown as and named by, with its id: unique among the Dispatcher's Projects,
+    /// ignoring case.
+    pub name: String,
+    pub kind: ProjectKind,
+    /// A git Project's repository's remote, as [`crate::worktrees::GitLocation::remote`] gives
+    /// it, such as `github.com/owner/name`: a clone with it on another Host may join the
+    /// Project. Absent for a repository without one, and for a directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// At most one for each Host, in the order they were added. Empty once every Host it was on
+    /// has been removed from the Dispatcher.
+    #[serde(default)]
+    pub locations: Vec<ProjectLocation>,
+    pub created_at: Timestamp,
+    /// When it was renamed, or a location added or removed, last.
+    pub updated_at: Timestamp,
+}
+
+impl Project {
+    /// Its location on `host_id`, if it has one there.
+    pub fn location(&self, host_id: &str) -> Option<&ProjectLocation> {
+        self.locations
+            .iter()
+            .find(|location| location.host_id == host_id)
+    }
+}
+
+/// A directory to make a location of a Project, as its Host's `worktrees/list` placed it: a
+/// repository by its primary worktree, with the repository's remote, or a directory outside one,
+/// as given.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct NewLocation {
+    /// A Host that joined the Dispatcher, by its id.
+    pub host_id: String,
+    /// Absolute on that Host's computer.
+    pub path: PathBuf,
+    pub kind: ProjectKind,
+    /// As [`crate::worktrees::GitLocation::remote`], for a repository that has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+}
+
+/// `projects/list`: the Projects, by name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "projects/list", response = ListProjectsResponse)]
+pub struct ListProjectsRequest {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ListProjectsResponse {
+    pub projects: Vec<Project>,
+}
+
+/// `projects/get`: one Project, by id or name, ignoring case.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "projects/get", response = ProjectResponse)]
+pub struct GetProjectRequest {
+    pub project: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcResponse)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProjectResponse {
+    pub project: Project,
+}
+
+/// `projects/add`: a new Project, of the kind its first location is. Invalid params, saying
+/// why, for an empty name, a name another Project has ignoring case, a Host that hasn't joined
+/// the Dispatcher, a path that isn't absolute, or a location another Project has.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "projects/add", response = ProjectResponse)]
+pub struct AddProjectRequest {
+    pub name: String,
+    pub location: NewLocation,
+}
+
+/// `projects/update`: rename a Project, remove its location on one Host, and add one, in that
+/// order and all or none. A location added is refused when it's another kind than the
+/// Project's, a repository whose remote isn't the Project's, or on a Host where the Project
+/// has a location still: one at the same path again changes nothing. A git Project without a
+/// remote takes the remote of a location added with one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "projects/update", response = ProjectResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProjectRequest {
+    /// By id or name.
+    pub project: String,
+    /// Its new name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Remove its location on this Host, by id or name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remove_host: Option<String>,
+    /// Add this location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add: Option<NewLocation>,
+}
+
+/// `projects/remove`: forget a Project, by id or name, and all its locations. What's in its
+/// directories stays.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonRpcRequest)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[request(method = "projects/remove", response = Empty)]
+pub struct RemoveProjectRequest {
+    pub project: String,
 }
 
 /// `dispatcher/join`, in the Host protocol: have the Host join the Dispatcher at `address` with

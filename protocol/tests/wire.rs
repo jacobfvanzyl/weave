@@ -69,10 +69,13 @@ use weave_host_protocol::devices::NewDevice;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::CARRY_FEATURE;
 use weave_host_protocol::dispatcher::CarriedStream;
 use weave_host_protocol::dispatcher::CarryRequest;
 use weave_host_protocol::dispatcher::DispatcherAddress;
+use weave_host_protocol::dispatcher::DispatcherHello;
+use weave_host_protocol::dispatcher::GetProjectRequest;
 use weave_host_protocol::dispatcher::HostCarried;
 use weave_host_protocol::dispatcher::HostCarryRequest;
 use weave_host_protocol::dispatcher::HostUnavailable;
@@ -80,9 +83,19 @@ use weave_host_protocol::dispatcher::JoinDispatcherRequest;
 use weave_host_protocol::dispatcher::JoinDispatcherResponse;
 use weave_host_protocol::dispatcher::JoinedDispatcher;
 use weave_host_protocol::dispatcher::LeaveDispatcherRequest;
+use weave_host_protocol::dispatcher::ListProjectsRequest;
+use weave_host_protocol::dispatcher::ListProjectsResponse;
+use weave_host_protocol::dispatcher::NewLocation;
 use weave_host_protocol::dispatcher::OpenHostRequest;
 use weave_host_protocol::dispatcher::OpenedHost;
+use weave_host_protocol::dispatcher::PROJECTS_FEATURE;
+use weave_host_protocol::dispatcher::Project;
+use weave_host_protocol::dispatcher::ProjectKind;
+use weave_host_protocol::dispatcher::ProjectLocation;
+use weave_host_protocol::dispatcher::ProjectResponse;
 use weave_host_protocol::dispatcher::Reachability;
+use weave_host_protocol::dispatcher::RemoveProjectRequest;
+use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::dispatcher::carry_message;
 use weave_host_protocol::events::ElicitationCompletedNotification;
 use weave_host_protocol::events::ThreadChangedNotification;
@@ -2120,6 +2133,115 @@ fn carrying_a_devices_connection() {
          Zt5mV8qL2xN7rK4wP9sB3dF6gH1jC0aE q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c"
     );
     insta::assert_json_snapshot!("auth_dispatcher", round_trip(&Auth::Dispatcher));
+}
+
+/// The person's Projects (ADR 0031, WVE-189), in the Dispatcher's API: a git Project on two
+/// Hosts, and what clients ask about them. The Dispatcher's hello names the feature.
+#[test]
+fn projects() {
+    insta::assert_json_snapshot!(
+        "dispatcher_hello",
+        round_trip(&DispatcherHello {
+            protocol: 2,
+            version: "0.1.0".to_owned(),
+            id: "D7qK2mN4pR8sT1vX".to_owned(),
+            device: None,
+            features: vec![PROJECTS_FEATURE.to_owned()],
+        })
+    );
+    let odin = Project {
+        id: "p-3f9c2e7d0a1b4c5d6e7f".to_owned(),
+        name: "Odin".to_owned(),
+        kind: ProjectKind::Git,
+        remote: Some("github.com/jacobfvanzyl/odin".to_owned()),
+        locations: vec![
+            ProjectLocation {
+                host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+                path: "/Users/jaco/Projects/odin".into(),
+            },
+            ProjectLocation {
+                host_id: "Lw4nB7cR2tY9uI0oP5aS3d".to_owned(),
+                path: "/home/jaco/odin".into(),
+            },
+        ],
+        created_at: 1_760_180_000_000,
+        updated_at: 1_760_180_500_000,
+    };
+    insta::assert_json_snapshot!("list_projects_request", message(&ListProjectsRequest {}));
+    insta::assert_json_snapshot!(
+        "list_projects_response",
+        round_trip(&ListProjectsResponse {
+            projects: vec![
+                odin.clone(),
+                Project {
+                    id: "p-0a1b2c3d4e5f60718293".to_owned(),
+                    name: "notes".to_owned(),
+                    kind: ProjectKind::Directory,
+                    remote: None,
+                    locations: Vec::new(),
+                    created_at: 1_760_180_000_000,
+                    updated_at: 1_760_180_000_000,
+                },
+            ],
+        })
+    );
+    insta::assert_json_snapshot!(
+        "get_project_request",
+        message(&GetProjectRequest {
+            project: "odin".to_owned(),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "project_response",
+        round_trip(&ProjectResponse { project: odin })
+    );
+    insta::assert_json_snapshot!(
+        "add_project_request",
+        message(&AddProjectRequest {
+            name: "Odin".to_owned(),
+            location: NewLocation {
+                host_id: "8ZpX3kqW1m0aLr9TQv2cYw".to_owned(),
+                path: "/Users/jaco/Projects/odin".into(),
+                kind: ProjectKind::Git,
+                remote: Some("github.com/jacobfvanzyl/odin".to_owned()),
+            },
+        })
+    );
+    insta::assert_json_snapshot!(
+        "update_project_request",
+        message(&UpdateProjectRequest {
+            project: "p-3f9c2e7d0a1b4c5d6e7f".to_owned(),
+            name: None,
+            remove_host: None,
+            add: Some(NewLocation {
+                host_id: "Lw4nB7cR2tY9uI0oP5aS3d".to_owned(),
+                path: "/home/jaco/odin".into(),
+                kind: ProjectKind::Git,
+                remote: Some("github.com/jacobfvanzyl/odin".to_owned()),
+            }),
+        })
+    );
+    insta::assert_json_snapshot!(
+        "update_project_rename_and_remove_host_request",
+        message(&UpdateProjectRequest {
+            project: "odin".to_owned(),
+            name: Some("odin-engine".to_owned()),
+            remove_host: Some("homelab".to_owned()),
+            add: None,
+        })
+    );
+    insta::assert_json_snapshot!(
+        "remove_project_request",
+        message(&RemoveProjectRequest {
+            project: "odin".to_owned(),
+        })
+    );
+    // A Dispatcher from before Projects said no features, and a client reads its hello still.
+    let older: DispatcherHello = serde_json::from_value(json!({
+        "protocol": 2, "version": "0.1.0", "id": "D7qK2mN4pR8sT1vX"
+    }))
+    .expect("an older hello parses");
+    assert!(!older.offers(PROJECTS_FEATURE));
 }
 
 #[test]

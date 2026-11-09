@@ -1,0 +1,16 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&AddProjectRequest\n{\n    name: \"Odin\".to_owned(), location: NewLocation\n    {\n        host_id: \"8ZpX3kqW1m0aLr9TQv2cYw\".to_owned(), path:\n        \"/Users/jaco/Projects/odin\".into(), kind: ProjectKind::Git, remote:\n        Some(\"github.com/jacobfvanzyl/odin\".to_owned()),\n    },\n})"
+---
+{
+  "method": "projects/add",
+  "params": {
+    "name": "Odin",
+    "location": {
+      "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",
+      "path": "/Users/jaco/Projects/odin",
+      "kind": "git",
+      "remote": "github.com/jacobfvanzyl/odin"
+    }
+  }
+}

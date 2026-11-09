@@ -325,6 +325,7 @@ async fn prove<S: AsyncRead + AsyncWrite + Unpin>(
         version: env!("CARGO_PKG_VERSION").to_owned(),
         id: shared.id.clone(),
         device: Some(device.clone()),
+        features: crate::api::features(),
     };
     if !preamble::answer(socket, asked.id, Ok(said)).await {
         return None;

@@ -1,0 +1,34 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ListProjectsResponse\n{\n    projects:\n    vec![odin.clone(), Project\n    {\n        id: \"p-0a1b2c3d4e5f60718293\".to_owned(), name: \"notes\".to_owned(),\n        kind: ProjectKind::Directory, remote: None, locations: Vec::new(),\n        created_at: 1_760_180_000_000, updated_at: 1_760_180_000_000,\n    },],\n})"
+---
+{
+  "projects": [
+    {
+      "id": "p-3f9c2e7d0a1b4c5d6e7f",
+      "name": "Odin",
+      "kind": "git",
+      "remote": "github.com/jacobfvanzyl/odin",
+      "locations": [
+        {
+          "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",
+          "path": "/Users/jaco/Projects/odin"
+        },
+        {
+          "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
+          "path": "/home/jaco/odin"
+        }
+      ],
+      "createdAt": 1760180000000,
+      "updatedAt": 1760180500000
+    },
+    {
+      "id": "p-0a1b2c3d4e5f60718293",
+      "name": "notes",
+      "kind": "directory",
+      "locations": [],
+      "createdAt": 1760180000000,
+      "updatedAt": 1760180000000
+    }
+  ]
+}

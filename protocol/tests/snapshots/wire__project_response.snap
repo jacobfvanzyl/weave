@@ -1,0 +1,24 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&ProjectResponse { project: odin })"
+---
+{
+  "project": {
+    "id": "p-3f9c2e7d0a1b4c5d6e7f",
+    "name": "Odin",
+    "kind": "git",
+    "remote": "github.com/jacobfvanzyl/odin",
+    "locations": [
+      {
+        "hostId": "8ZpX3kqW1m0aLr9TQv2cYw",
+        "path": "/Users/jaco/Projects/odin"
+      },
+      {
+        "hostId": "Lw4nB7cR2tY9uI0oP5aS3d",
+        "path": "/home/jaco/odin"
+      }
+    ],
+    "createdAt": 1760180000000,
+    "updatedAt": 1760180500000
+  }
+}

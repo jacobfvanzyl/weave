@@ -322,6 +322,26 @@ expression: schema()
     "occurrences/list": {
       "params": "ListOccurrencesRequest",
       "result": "ListOccurrencesResponse"
+    },
+    "projects/list": {
+      "params": "ListProjectsRequest",
+      "result": "ListProjectsResponse"
+    },
+    "projects/get": {
+      "params": "GetProjectRequest",
+      "result": "ProjectResponse"
+    },
+    "projects/add": {
+      "params": "AddProjectRequest",
+      "result": "ProjectResponse"
+    },
+    "projects/update": {
+      "params": "UpdateProjectRequest",
+      "result": "ProjectResponse"
+    },
+    "projects/remove": {
+      "params": "RemoveProjectRequest",
+      "result": "Empty"
     }
   },
   "x-weave-dispatcher-notifications": {
@@ -344,7 +364,10 @@ expression: schema()
       "subprotocol": "weave-dispatcher",
       "hostSubprotocol": "weave-dispatcher-host",
       "carrySubprotocol": "weave-dispatcher-carry",
-      "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}"
+      "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}",
+      "features": {
+        "projects": "projects"
+      }
     },
     "terminalStream": {
       "subprotocol": "weave-terminal",
@@ -10019,6 +10042,14 @@ expression: schema()
             }
           ],
           "description": "The paired device a remote client connected as; none for a local client."
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional parts of its API it answers, such as [`PROJECTS_FEATURE`]. A Dispatcher from\nbefore them says none.",
+          "default": []
         }
       },
       "required": [
@@ -10994,6 +11025,225 @@ expression: schema()
       "required": [
         "occurrences"
       ]
+    },
+    "ListProjectsRequest": {
+      "type": "object",
+      "description": "`projects/list`: the Projects, by name."
+    },
+    "ListProjectsResponse": {
+      "type": "object",
+      "properties": {
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Project"
+          }
+        }
+      },
+      "required": [
+        "projects"
+      ]
+    },
+    "Project": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "`p-` and 20 hex digits."
+        },
+        "name": {
+          "type": "string",
+          "description": "What it's shown as and named by, with its id: unique among the Dispatcher's Projects,\nignoring case."
+        },
+        "kind": {
+          "$ref": "#/$defs/ProjectKind"
+        },
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A git Project's repository's remote, as [`crate::worktrees::GitLocation::remote`] gives\nit, such as `github.com/owner/name`: a clone with it on another Host may join the\nProject. Absent for a repository without one, and for a directory."
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectLocation"
+          },
+          "description": "At most one for each Host, in the order they were added. Empty once every Host it was on\nhas been removed from the Dispatcher.",
+          "default": []
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When it was renamed, or a location added or removed, last."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "createdAt",
+        "updatedAt"
+      ],
+      "description": "A named piece of the person's work (ADR 0031, WVE-189), with at most one location on each of\ntheir Hosts: a repository there, or a directory outside one. The Dispatcher keeps it, as the\nonly one of the person's programs that sees every Host; Hosts know nothing of it."
+    },
+    "ProjectKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "git",
+          "description": "A git repository on each Host, by its primary worktree, so all its worktrees are in\nthe Project."
+        },
+        {
+          "type": "string",
+          "const": "directory",
+          "description": "A directory outside any repository, as given."
+        }
+      ],
+      "description": "What a Project's locations are, fixed when it's made."
+    },
+    "ProjectLocation": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string",
+          "description": "The Host, by its id; `hosts/list` gives its name."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute on that Host's computer: a git Project's repository by its primary worktree."
+        }
+      },
+      "required": [
+        "hostId",
+        "path"
+      ],
+      "description": "Where a Project is on one of the person's Hosts."
+    },
+    "GetProjectRequest": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "description": "`projects/get`: one Project, by id or name, ignoring case."
+    },
+    "ProjectResponse": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "$ref": "#/$defs/Project"
+        }
+      },
+      "required": [
+        "project"
+      ]
+    },
+    "AddProjectRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/NewLocation"
+        }
+      },
+      "required": [
+        "name",
+        "location"
+      ],
+      "description": "`projects/add`: a new Project, of the kind its first location is. Invalid params, saying\nwhy, for an empty name, a name another Project has ignoring case, a Host that hasn't joined\nthe Dispatcher, a path that isn't absolute, or a location another Project has."
+    },
+    "NewLocation": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "type": "string",
+          "description": "A Host that joined the Dispatcher, by its id."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute on that Host's computer."
+        },
+        "kind": {
+          "$ref": "#/$defs/ProjectKind"
+        },
+        "remote": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "As [`crate::worktrees::GitLocation::remote`], for a repository that has one."
+        }
+      },
+      "required": [
+        "hostId",
+        "path",
+        "kind"
+      ],
+      "description": "A directory to make a location of a Project, as its Host's `worktrees/list` placed it: a\nrepository by its primary worktree, with the repository's remote, or a directory outside one,\nas given."
+    },
+    "UpdateProjectRequest": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "By id or name."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its new name."
+        },
+        "removeHost": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Remove its location on this Host, by id or name."
+        },
+        "add": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NewLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Add this location."
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "description": "`projects/update`: rename a Project, remove its location on one Host, and add one, in that\norder and all or none. A location added is refused when it's another kind than the\nProject's, a repository whose remote isn't the Project's, or on a Host where the Project\nhas a location still: one at the same path again changes nothing. A git Project without a\nremote takes the remote of a location added with one."
+    },
+    "RemoveProjectRequest": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ],
+      "description": "`projects/remove`: forget a Project, by id or name, and all its locations. What's in its\ndirectories stays."
     },
     "DevicePairedNotification": {
       "type": "object",

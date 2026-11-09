@@ -1167,6 +1167,13 @@ export type Overlap = "skip" | "allow";
  */
 export type OccurrenceState = "skipped" | "waiting" | "started" | "finished" | "failed";
 /**
+ * What a Project's locations are, fixed when it's made.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ProjectKind".
+ */
+export type ProjectKind = "git" | "directory";
+/**
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
  * via the `definition` "TerminalRestore".
  */
@@ -6851,6 +6858,11 @@ export interface DispatcherHello {
    * The paired device a remote client connected as; none for a local client.
    */
   device?: DeviceInfo | null;
+  /**
+   * Optional parts of its API it answers, such as [`PROJECTS_FEATURE`]. A Dispatcher from
+   * before them says none.
+   */
+  features?: string[];
 }
 /**
  * `dispatcher/status`.
@@ -7433,6 +7445,161 @@ export interface ListOccurrencesResponse {
   occurrences: Occurrence[];
 }
 /**
+ * `projects/list`: the Projects, by name.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListProjectsRequest".
+ */
+export interface ListProjectsRequest {}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ListProjectsResponse".
+ */
+export interface ListProjectsResponse {
+  projects: Project[];
+}
+/**
+ * A named piece of the person's work (ADR 0031, WVE-189), with at most one location on each of
+ * their Hosts: a repository there, or a directory outside one. The Dispatcher keeps it, as the
+ * only one of the person's programs that sees every Host; Hosts know nothing of it.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "Project".
+ */
+export interface Project {
+  /**
+   * `p-` and 20 hex digits.
+   */
+  id: string;
+  /**
+   * What it's shown as and named by, with its id: unique among the Dispatcher's Projects,
+   * ignoring case.
+   */
+  name: string;
+  kind: ProjectKind;
+  /**
+   * A git Project's repository's remote, as [`crate::worktrees::GitLocation::remote`] gives
+   * it, such as `github.com/owner/name`: a clone with it on another Host may join the
+   * Project. Absent for a repository without one, and for a directory.
+   */
+  remote?: string | null;
+  /**
+   * At most one for each Host, in the order they were added. Empty once every Host it was on
+   * has been removed from the Dispatcher.
+   */
+  locations?: ProjectLocation[];
+  createdAt: number;
+  /**
+   * When it was renamed, or a location added or removed, last.
+   */
+  updatedAt: number;
+}
+/**
+ * Where a Project is on one of the person's Hosts.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ProjectLocation".
+ */
+export interface ProjectLocation {
+  /**
+   * The Host, by its id; `hosts/list` gives its name.
+   */
+  hostId: string;
+  /**
+   * Absolute on that Host's computer: a git Project's repository by its primary worktree.
+   */
+  path: string;
+}
+/**
+ * `projects/get`: one Project, by id or name, ignoring case.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "GetProjectRequest".
+ */
+export interface GetProjectRequest {
+  project: string;
+}
+/**
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "ProjectResponse".
+ */
+export interface ProjectResponse {
+  project: Project;
+}
+/**
+ * `projects/add`: a new Project, of the kind its first location is. Invalid params, saying
+ * why, for an empty name, a name another Project has ignoring case, a Host that hasn't joined
+ * the Dispatcher, a path that isn't absolute, or a location another Project has.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "AddProjectRequest".
+ */
+export interface AddProjectRequest {
+  name: string;
+  location: NewLocation;
+}
+/**
+ * A directory to make a location of a Project, as its Host's `worktrees/list` placed it: a
+ * repository by its primary worktree, with the repository's remote, or a directory outside one,
+ * as given.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "NewLocation".
+ */
+export interface NewLocation {
+  /**
+   * A Host that joined the Dispatcher, by its id.
+   */
+  hostId: string;
+  /**
+   * Absolute on that Host's computer.
+   */
+  path: string;
+  kind: ProjectKind;
+  /**
+   * As [`crate::worktrees::GitLocation::remote`], for a repository that has one.
+   */
+  remote?: string | null;
+}
+/**
+ * `projects/update`: rename a Project, remove its location on one Host, and add one, in that
+ * order and all or none. A location added is refused when it's another kind than the
+ * Project's, a repository whose remote isn't the Project's, or on a Host where the Project
+ * has a location still: one at the same path again changes nothing. A git Project without a
+ * remote takes the remote of a location added with one.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "UpdateProjectRequest".
+ */
+export interface UpdateProjectRequest {
+  /**
+   * By id or name.
+   */
+  project: string;
+  /**
+   * Its new name.
+   */
+  name?: string | null;
+  /**
+   * Remove its location on this Host, by id or name.
+   */
+  removeHost?: string | null;
+  /**
+   * Add this location.
+   */
+  add?: NewLocation | null;
+}
+/**
+ * `projects/remove`: forget a Project, by id or name, and all its locations. What's in its
+ * directories stays.
+ *
+ * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
+ * via the `definition` "RemoveProjectRequest".
+ */
+export interface RemoveProjectRequest {
+  project: string;
+}
+/**
  * `devices/paired`: a device took the offer this connection made.
  *
  * This interface was referenced by `HostProtocolSchema`'s JSON-Schema
@@ -7514,7 +7681,10 @@ export const HOST_PROTOCOL = {
     "subprotocol": "weave-dispatcher",
     "hostSubprotocol": "weave-dispatcher-host",
     "carrySubprotocol": "weave-dispatcher-carry",
-    "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}"
+    "authMessage": "weave-dispatcher-auth/1 {dispatcherId} {deviceId} {nonce}",
+    "features": {
+      "projects": "projects"
+    }
   },
   "terminalStream": {
     "subprotocol": "weave-terminal",
@@ -7692,6 +7862,11 @@ export interface DispatcherRequests {
   "schedules/resume": { params: ResumeScheduleRequest; result: ScheduleResponse };
   "schedules/run": { params: RunScheduleRequest; result: OccurrenceResponse };
   "occurrences/list": { params: ListOccurrencesRequest; result: ListOccurrencesResponse };
+  "projects/list": { params: ListProjectsRequest; result: ListProjectsResponse };
+  "projects/get": { params: GetProjectRequest; result: ProjectResponse };
+  "projects/add": { params: AddProjectRequest; result: ProjectResponse };
+  "projects/update": { params: UpdateProjectRequest; result: ProjectResponse };
+  "projects/remove": { params: RemoveProjectRequest; result: Empty };
 }
 
 /** What each notification the Dispatcher sends carries. */

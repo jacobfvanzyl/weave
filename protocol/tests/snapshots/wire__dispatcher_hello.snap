@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "round_trip(&DispatcherHello\n{\n    protocol: 2, version: \"0.1.0\".to_owned(), id:\n    \"D7qK2mN4pR8sT1vX\".to_owned(), device: None, features:\n    vec![PROJECTS_FEATURE.to_owned()],\n})"
+---
+{
+  "protocol": 2,
+  "version": "0.1.0",
+  "id": "D7qK2mN4pR8sT1vX",
+  "features": [
+    "projects"
+  ]
+}

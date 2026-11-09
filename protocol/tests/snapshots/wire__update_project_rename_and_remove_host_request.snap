@@ -1,0 +1,12 @@
+---
+source: protocol/tests/wire.rs
+expression: "message(&UpdateProjectRequest\n{\n    project: \"odin\".to_owned(), name: Some(\"odin-engine\".to_owned()),\n    remove_host: Some(\"homelab\".to_owned()), add: None,\n})"
+---
+{
+  "method": "projects/update",
+  "params": {
+    "project": "odin",
+    "name": "odin-engine",
+    "removeHost": "homelab"
+  }
+}

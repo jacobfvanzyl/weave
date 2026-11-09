@@ -1,17 +1,21 @@
 //! The Dispatcher's state, in SQLite (ADR 0027): the Hosts it is paired with, the work
 //! written down for them, schedules and their occurrences ([`schedules`]), and the calls Hosts'
 //! agents make to the person's other Hosts and the turns they began there ([`calls`]), and its
-//! own id and the devices paired with it ([`devices`]). Later issues add other triggers and
-//! Bots, each as a migration of its own.
+//! own id and the devices paired with it ([`devices`]), and the person's Projects
+//! ([`projects`]). Later issues add other triggers and Bots, each as a migration of its own.
 
 mod calls;
 mod devices;
+mod projects;
 mod schedules;
 
 pub(crate) use calls::Call;
 pub(crate) use calls::Follow;
 
 pub(crate) use devices::StoredDevice;
+
+pub(crate) use projects::Change;
+pub(crate) use projects::ProjectError;
 
 pub(crate) use schedules::Fired;
 pub(crate) use schedules::StoredSchedule;
@@ -34,7 +38,7 @@ use crate::now_ms;
 
 /// Each migration takes the database from the version before it to its own number, its index
 /// plus one, which `PRAGMA user_version` records. They are never edited once released.
-const MIGRATIONS: [&str; 6] = [
+const MIGRATIONS: [&str; 7] = [
     "
     CREATE TABLE hosts (
         host_id TEXT PRIMARY KEY,
@@ -168,6 +172,27 @@ const MIGRATIONS: [&str; 6] = [
         SET work = json_set(json_remove(work, '$.report.about.sessionId'), '$.report.about.threadId',
             json_extract(work, '$.report.about.sessionId'))
         WHERE json_type(work, '$.report.about.sessionId') IS NOT NULL;
+",
+    // Projects (ADR 0031, WVE-189), each with at most one location on each Host. A Host's
+    // removal takes its locations; its leaving doesn't.
+    "
+    CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        remote TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX projects_by_name ON projects (name COLLATE NOCASE);
+    CREATE TABLE project_locations (
+        project_id TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+        host_id TEXT NOT NULL REFERENCES hosts (host_id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        added_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, host_id),
+        UNIQUE (host_id, path)
+    );
 ",
 ];
 
@@ -421,12 +446,23 @@ impl Store {
             .map_err(failed)
     }
 
-    /// Forget `host_id`, and the work written down for it. Whether there was one.
+    /// Forget `host_id`, the work written down for it and its Projects' locations, which
+    /// changes those Projects. Whether there was one.
     pub(crate) fn remove_host(&self, host_id: &str) -> Result<bool, String> {
-        self.lock()
+        let mut connection = self.lock();
+        let transaction = connection.transaction().map_err(failed)?;
+        transaction
+            .execute(
+                "UPDATE projects SET updated_at = ?2 WHERE id IN \
+                 (SELECT project_id FROM project_locations WHERE host_id = ?1)",
+                params![host_id, to_sql(now_ms())],
+            )
+            .map_err(failed)?;
+        let removed = transaction
             .execute("DELETE FROM hosts WHERE host_id = ?1", params![host_id])
-            .map(|removed| removed > 0)
-            .map_err(failed)
+            .map_err(failed)?;
+        transaction.commit().map_err(failed)?;
+        Ok(removed > 0)
     }
 
     /// Write `work` down for `host_id`, under its own request key or else one made from the

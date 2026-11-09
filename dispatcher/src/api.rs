@@ -1,5 +1,5 @@
 //! What the `weave` CLI asks the Dispatcher: its status, the Hosts that joined it and codes
-//! to join with, its schedules and their occurrences, and its devices. Each connection says
+//! to join with, its schedules and their occurrences, the person's Projects, and its devices. Each connection says
 //! hello first, with the API's version. On the Unix socket the CLI is the Dispatcher's own
 //! user; on the WebSocket (WVE-176), which `weave-remote` serves while a device is paired or a
 //! Host joined over it, every connection proves a paired device at hello, by signing its
@@ -43,6 +43,7 @@ use weave_host_protocol::devices::ListDevicesResponse;
 use weave_host_protocol::devices::OfferDeviceRequest;
 use weave_host_protocol::devices::OfferDeviceResponse;
 use weave_host_protocol::devices::RevokeDeviceRequest;
+use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::DISPATCHER_CARRY_SUBPROTOCOL;
 use weave_host_protocol::dispatcher::DISPATCHER_HOST_SUBPROTOCOL;
@@ -54,22 +55,29 @@ use weave_host_protocol::dispatcher::DispatcherChallengeRequest;
 use weave_host_protocol::dispatcher::DispatcherHello;
 use weave_host_protocol::dispatcher::DispatcherHelloRequest;
 use weave_host_protocol::dispatcher::DispatcherStatusRequest;
+use weave_host_protocol::dispatcher::GetProjectRequest;
 use weave_host_protocol::dispatcher::ListHostsRequest;
 use weave_host_protocol::dispatcher::ListHostsResponse;
 use weave_host_protocol::dispatcher::ListOccurrencesRequest;
 use weave_host_protocol::dispatcher::ListOccurrencesResponse;
+use weave_host_protocol::dispatcher::ListProjectsRequest;
+use weave_host_protocol::dispatcher::ListProjectsResponse;
 use weave_host_protocol::dispatcher::ListSchedulesRequest;
 use weave_host_protocol::dispatcher::ListSchedulesResponse;
 use weave_host_protocol::dispatcher::OccurrenceResponse;
 use weave_host_protocol::dispatcher::OfferHostRequest;
 use weave_host_protocol::dispatcher::OfferHostResponse;
 use weave_host_protocol::dispatcher::OpenHostRequest;
+use weave_host_protocol::dispatcher::PROJECTS_FEATURE;
 use weave_host_protocol::dispatcher::PauseScheduleRequest;
+use weave_host_protocol::dispatcher::ProjectResponse;
 use weave_host_protocol::dispatcher::RemoveHostRequest;
+use weave_host_protocol::dispatcher::RemoveProjectRequest;
 use weave_host_protocol::dispatcher::RemoveScheduleRequest;
 use weave_host_protocol::dispatcher::ResumeScheduleRequest;
 use weave_host_protocol::dispatcher::RunScheduleRequest;
 use weave_host_protocol::dispatcher::ScheduleResponse;
+use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::errors;
 use weave_host_protocol::hello::Auth;
 use weave_host_protocol::websocket::CLOSE_REVOKED;
@@ -180,7 +188,13 @@ fn local_hello(shared: &Shared, request: DispatcherHelloRequest) -> Result<Dispa
         version: env!("CARGO_PKG_VERSION").to_owned(),
         id: shared.id.clone(),
         device: None,
+        features: features(),
     })
+}
+
+/// The optional parts of the API this Dispatcher answers, which its hello names.
+pub(crate) fn features() -> Vec<String> {
+    vec![PROJECTS_FEATURE.to_owned()]
 }
 
 /// What a hello on the socket may say: nothing, which is the Dispatcher's own user.
@@ -390,6 +404,7 @@ impl Connection {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             id: self.shared.id.clone(),
             device,
+            features: features(),
         })
     }
 
@@ -637,6 +652,16 @@ async fn handlers(
         shared
             .occurrences(request.schedule.as_deref(), request.limit)
             .map(|occurrences| ListOccurrencesResponse { occurrences }));
+    handle!(builder, connection, shared, _request: ListProjectsRequest =>
+        shared.projects().map(|projects| ListProjectsResponse { projects }));
+    handle!(builder, connection, shared, request: GetProjectRequest =>
+        shared.project(&request.project).map(|project| ProjectResponse { project }));
+    handle!(builder, connection, shared, request: AddProjectRequest =>
+        shared.add_project(request).map(|project| ProjectResponse { project }));
+    handle!(builder, connection, shared, request: UpdateProjectRequest =>
+        shared.update_project(request).map(|project| ProjectResponse { project }));
+    handle!(builder, connection, shared, request: RemoveProjectRequest =>
+        shared.remove_project(&request.project).map(|()| Empty {}));
     builder
         .connect_with(
             transport,

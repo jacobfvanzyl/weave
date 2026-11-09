@@ -27,6 +27,7 @@
 //!   their streams.
 //! - [`host`]: the Host's status, and stopping it.
 //! - [`dispatcher`]: the Dispatcher's own API, which its CLI asks over its socket.
+//! - [`projects`]: which of the Projects the Dispatcher keeps a thread is in.
 //!
 //! Remote clients, which reach Hosts through the Dispatcher, follow
 //! `docs/specs/wve-90-remote-clients.md`.
@@ -42,6 +43,7 @@ pub mod host;
 pub mod mcp;
 pub mod pending;
 pub mod policy;
+pub mod projects;
 pub mod queue;
 pub mod reports;
 mod role;

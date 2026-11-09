@@ -12,6 +12,8 @@
 //! - [`calls`] and [`follows`]: the calls Hosts' agents make to the person's other Hosts
 //!   (ADR 0029), which the Dispatcher sends there, and the turns they began, which it follows
 //!   and reports on to the calling thread.
+//! - [`projects`]: the person's Projects (ADR 0031, WVE-189), each with at most one location on
+//!   each Host.
 //! - [`api`]: what the `weave` CLI asks over its socket ([`socket`]), and over its WebSocket
 //!   from the person's other devices once one pairs ([`devices`], WVE-176), which
 //!   `weave-remote` serves as it does the Host's.
@@ -31,6 +33,7 @@ mod follows;
 mod joins;
 mod link;
 pub mod paths;
+mod projects;
 mod scheduler;
 pub mod socket;
 mod store;
@@ -48,14 +51,17 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use weave_host_client::HostHandle;
 use weave_host_client::remote::DeviceKey;
+use weave_host_protocol::dispatcher::AddProjectRequest;
 use weave_host_protocol::dispatcher::AddScheduleRequest;
 use weave_host_protocol::dispatcher::DispatcherHost;
 use weave_host_protocol::dispatcher::DispatcherStatus;
 use weave_host_protocol::dispatcher::Occurrence;
 use weave_host_protocol::dispatcher::OfferHostResponse;
 use weave_host_protocol::dispatcher::Overlap;
+use weave_host_protocol::dispatcher::Project;
 use weave_host_protocol::dispatcher::Reachability;
 use weave_host_protocol::dispatcher::Schedule;
+use weave_host_protocol::dispatcher::UpdateProjectRequest;
 use weave_host_protocol::hello::ClientInfo;
 use weave_host_protocol::threads::ThreadId;
 use weave_host_protocol::threads::ThreadListing;
@@ -281,6 +287,24 @@ impl Dispatcher {
         limit: Option<u32>,
     ) -> Result<Vec<Occurrence>, Error> {
         self.shared.occurrences(by, limit)
+    }
+
+    /// The person's Projects, by name.
+    pub fn projects(&self) -> Result<Vec<Project>, Error> {
+        self.shared.projects()
+    }
+
+    pub fn add_project(&self, request: AddProjectRequest) -> Result<Project, Error> {
+        self.shared.add_project(request)
+    }
+
+    pub fn update_project(&self, request: UpdateProjectRequest) -> Result<Project, Error> {
+        self.shared.update_project(request)
+    }
+
+    /// Forget the Project `by` names, by id or name, and its locations.
+    pub fn remove_project(&self, by: &str) -> Result<(), Error> {
+        self.shared.remove_project(by)
     }
 
     /// The threads on `host_id` as the Dispatcher last saw them, while it is connected there.
